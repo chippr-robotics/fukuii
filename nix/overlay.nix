@@ -1,12 +1,12 @@
 inputs: final: prev: {
   jre = prev.jdk8.jre;
 
-  mantis = final.callPackage ./mantis.nix {
+  fukuii = final.callPackage ./fukuii.nix {
     src = ../.;
     depsSha256 = "sha256-4DTSCv7491nG4+jF2VptULubFkVTW0IXRpGqNzuXU90=";
   };
 
-  mantis-hash = final.mantis.override {
+  fukuii-hash = final.fukuii.override {
     depsSha256 = "sha256-0000000000000000000000000000000000000000000=";
   };
 
@@ -35,7 +35,7 @@ inputs: final: prev: {
           FAUCET_NODE_URL =
             "https://faucet-${prev.lib.toLower name}.portal.dev.cardano.org";
         });
-      target = "/mantis-faucet";
+      target = "/fukuii-faucet";
     });
   
   makeExplorer = MANTIS_VM:
@@ -49,18 +49,18 @@ inputs: final: prev: {
   mantis-explorer-kevm = final.makeExplorer "KEVM";
   mantis-faucet-web-kevm = final.makeFaucet "KEVM";
 
-  mantis-entrypoint-script = final.writeBashBinChecked "mantis-entrypoint" ''
+  fukuii-entrypoint-script = final.writeBashBinChecked "fukuii-entrypoint" ''
     export PATH=${
       final.lib.makeBinPath
-      (with final; [ coreutils restic gnugrep awscli diffutils mantis procps inputs.kevm.packages.${prev.system}.KEVM ])
+      (with final; [ coreutils restic gnugrep awscli diffutils fukuii procps inputs.kevm.packages.${prev.system}.KEVM ])
     }
 
     ${builtins.readFile ./entrypoint.sh}
   '';
 
-  mantis-entrypoint = final.symlinkJoin {
-    name = "mantis";
-    paths = with final; [ mantis mantis-entrypoint-script ];
+  fukuii-entrypoint = final.symlinkJoin {
+    name = "fukuii";
+    paths = with final; [ fukuii fukuii-entrypoint-script ];
   };
 
   retesteth = final.callPackage ./retesteth.nix { };

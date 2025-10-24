@@ -7,5 +7,5 @@ else
 
   mkShell {
     nativeBuildInputs = [ protobuf sbt ];
-    inputsFrom = [ mantis ];
+    inputsFrom = [ fukuii ];
   }

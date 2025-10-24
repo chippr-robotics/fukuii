@@ -7,4 +7,4 @@ if [[ $@ =~ "--" ]]; then
   separator=""
 fi
 
-retesteth $@ $separator --testpath $dir/tests --datadir $dir/config --clients mantis
+retesteth $@ $separator --testpath $dir/tests --datadir $dir/config --clients fukuii

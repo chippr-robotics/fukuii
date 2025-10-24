@@ -1,0 +1,32 @@
+package com.chipprbots.ethereum.consensus.mining
+
+import akka.util.ByteString
+
+import com.chipprbots.ethereum.Timeouts
+import com.chipprbots.ethereum.consensus.pow.EthashConfig
+import com.chipprbots.ethereum.domain.Address
+
+/** Provides utility values used throughout tests */
+object MiningConfigs {
+  final val blockCacheSize = 30
+  final val coinbaseAddressNum = 42
+  final val coinbase: Address = Address(coinbaseAddressNum)
+
+  //noinspection ScalaStyle
+  final val ethashConfig = new EthashConfig(
+    ommersPoolSize = 30,
+    ommerPoolQueryTimeout = Timeouts.normalTimeout,
+    ethashDir = "~/.ethash",
+    mineRounds = 100000
+  )
+
+  final val miningConfig: MiningConfig = new MiningConfig(
+    protocol = Protocol.PoW,
+    coinbase = coinbase,
+    headerExtraData = ByteString.empty,
+    blockCacheSize = blockCacheSize,
+    miningEnabled = false
+  )
+
+  final val fullMiningConfig: FullMiningConfig[EthashConfig] = FullMiningConfig(miningConfig, ethashConfig)
+}

@@ -249,9 +249,9 @@ find . -type f \( -name "*.scala" -o -name "*.conf" -o -name "*.sh" -o -name "*.
     ! -path "*/target/*" ! -path "*/.git/*" | while read -r file; do
     if [ -f "$file" ]; then
         # Check if file contains MANTIS env vars
-        if grep -q "MANTIS_" "$file" 2>/dev/null; then
+        if grep -q "FUKUII_" "$file" 2>/dev/null; then
             backup_file "$file"
-            sed -i 's/MANTIS_/FUKUII_/g' "$file" || true
+            sed -i 's/FUKUII_/FUKUII_/g' "$file" || true
         fi
     fi
 done

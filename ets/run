@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-# Boots Mantis and runs retesteth / ETS. Intended for running it locally.
+# Boots Fukuii and runs retesteth / ETS. Intended for running it locally.
 
 if [ -z "$SBT" ]; then
   SBT="sbt"
 fi
 
-echo "booting Mantis with log level WARN and waiting for RPC API to be up."
+echo "booting Fukuii with log level WARN and waiting for RPC API to be up."
 $SBT -Dconfig.file=./src/main/resources/conf/testmode.conf -Dlogging.logs-level=WARN run &
 
 while ! nc -z localhost 8546; do
@@ -44,7 +44,7 @@ function run_and_summarize {
 run_and_summarize "GeneralStateTests"
 run_and_summarize "BlockchainTests"
 
-echo "shutting down mantis"
+echo "shutting down fukuii"
 kill %1
 
 exit $final_exit_code

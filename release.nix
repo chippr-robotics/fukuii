@@ -6,7 +6,7 @@ let
   lib = import (sources.nixpkgs + "/lib");
 in
 {
-  mantis = lib.genAttrs supportedSystems (system: import src {
+  fukuii = lib.genAttrs supportedSystems (system: import src {
     inherit src system;
   });
 }

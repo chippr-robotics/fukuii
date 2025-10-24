@@ -15,16 +15,16 @@ val mantisDev = sys.props.get("mantisDev").contains("true") || sys.env.get("MANT
 lazy val compilerOptimizationsForProd = Seq(
   "-opt:l:method", // method-local optimizations
   "-opt:l:inline", // inlining optimizations
-  "-opt-inline-from:io.iohk.**" // inlining the project only
+  "-opt-inline-from:com.chipprbots.**" // inlining the project only
 )
 
 // Releasing. https://github.com/olafurpg/sbt-ci-release
 inThisBuild(
   List(
-    organization := "io.iohk",
-    homepage := Some(url("https://github.com/input-output-hk/mantis")),
+    organization := "com.chipprbots",
+    homepage := Some(url("https://github.com/chippr-robotics/chordodes_fukuii")),
     scmInfo := Some(
-      ScmInfo(url("https://github.com/input-output-hk/mantis"), "git@github.com:input-output-hk/mantis.git")
+      ScmInfo(url("https://github.com/chippr-robotics/chordodes_fukuii"), "git@github.com:chippr-robotics/chordodes_fukuii.git")
     ),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     developers := List()
@@ -74,7 +74,7 @@ val fatalWarnings = Seq(if (sys.env.get("MANTIS_FULL_WARNS").contains("true")) {
 
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   name := projectName,
-  organization := "io.iohk",
+  organization := "com.chipprbots",
   scalaVersion := `scala-2.13`,
   semanticdbEnabled := true, // enable SemanticDB
   semanticdbVersion := scalafixSemanticdb.revision, // use Scalafix compatible version
@@ -229,7 +229,7 @@ lazy val node = {
         gitUncommittedChanges,
         (Compile / libraryDependencies)
       ),
-      buildInfoPackage := "io.iohk.ethereum.utils",
+      buildInfoPackage := "com.chipprbots.ethereum.utils",
       (Test / fork) := true,
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap
     )
@@ -261,7 +261,7 @@ lazy val node = {
       // have the protobuf API version file as a resource
       (Compile / unmanagedResourceDirectories) += baseDirectory.value / "src" / "main" / "protobuf",
       // Packaging
-      (Compile / mainClass) := Some("io.iohk.ethereum.App"),
+      (Compile / mainClass) := Some("com.chipprbots.ethereum.App"),
       (Compile / discoveredMainClasses) := Seq(),
       // Requires the 'ant-javafx.jar' that comes with Oracle JDK
       // Enables creating an executable with the configuration files, has to be run on the OS corresponding to the desired version
@@ -285,7 +285,7 @@ lazy val node = {
 
 }
 
-coverageExcludedPackages := "io\\.iohk\\.ethereum\\.extvm\\.msg.*"
+coverageExcludedPackages := "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*"
 
 addCommandAlias(
   "compile-all",
