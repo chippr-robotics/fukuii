@@ -10,7 +10,7 @@ import com.typesafe.sbt.SbtGit.GitKeys._
 val nixBuild = sys.props.isDefinedAt("nix")
 
 // Enable dev mode: disable certain flags, etc.
-val mantisDev = sys.props.get("mantisDev").contains("true") || sys.env.get("MANTIS_DEV").contains("true")
+val fukuiiDev = sys.props.get("fukuiiDev").contains("true") || sys.env.get("FUKUII_DEV").contains("true")
 
 lazy val compilerOptimizationsForProd = Seq(
   "-opt:l:method", // method-local optimizations
@@ -57,7 +57,7 @@ val baseScalacOptions = Seq(
 // https://www.scala-lang.org/2021/01/12/configuring-and-suppressing-warnings.html
 // cat={warning-name}:ws prints a summary with the number of warnings of the given type
 // any:e turns all remaining warnings into errors
-val fatalWarnings = Seq(if (sys.env.get("MANTIS_FULL_WARNS").contains("true")) {
+val fatalWarnings = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("true")) {
   "-Wconf:any:w"
 } else {
   "-Wconf:" ++ Seq(
@@ -88,7 +88,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
   scalacOptions := baseScalacOptions ++ fatalWarnings,
-  scalacOptions ++= (if (mantisDev) Seq.empty else compilerOptimizationsForProd),
+  scalacOptions ++= (if (fukuiiDev) Seq.empty else compilerOptimizationsForProd),
   (Compile / console / scalacOptions) ~= (_.filterNot(
     Set(
       "-Ywarn-unused-import",
@@ -96,7 +96,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     )
   )),
   (Compile / doc / scalacOptions) := baseScalacOptions,
-  scalacOptions ~= (options => if (mantisDev) options.filterNot(_ == "-Xfatal-warnings") else options),
+  scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
   Test / parallelExecution := true,
   (Test / testOptions) += Tests.Argument("-oDG"),
   (Test / scalastyleConfig) := file("scalastyle-test-config.xml"),
@@ -117,7 +117,7 @@ lazy val bytes = {
   val bytes = project
     .in(file("bytes"))
     .configs(Integration)
-    .settings(commonSettings("mantis-bytes"))
+    .settings(commonSettings("fukuii-bytes"))
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
     .settings(publishSettings)
     .settings(
@@ -134,7 +134,7 @@ lazy val crypto = {
     .in(file("crypto"))
     .configs(Integration)
     .dependsOn(bytes)
-    .settings(commonSettings("mantis-crypto"))
+    .settings(commonSettings("fukuii-crypto"))
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
     .settings(publishSettings)
     .settings(
@@ -152,7 +152,7 @@ lazy val rlp = {
     .in(file("rlp"))
     .configs(Integration)
     .dependsOn(bytes)
-    .settings(commonSettings("mantis-rlp"))
+    .settings(commonSettings("fukuii-rlp"))
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
     .settings(publishSettings)
     .settings(
@@ -233,7 +233,7 @@ lazy val node = {
       (Test / fork) := true,
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap
     )
-    .settings(commonSettings("mantis"): _*)
+    .settings(commonSettings("fukuii"): _*)
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
     .settings(inConfig(Evm)(scalafixConfigSettings(Evm)))
     .settings(inConfig(Rpc)(scalafixConfigSettings(Rpc)))
