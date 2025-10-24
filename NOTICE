@@ -11,3 +11,25 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+================================================================================
+
+MODIFICATIONS AND DERIVATIVE WORK
+
+This software has been modified and is maintained as a derivative work by
+Chipper Robotics, LLC (2025-present) under the project name "Fukuii".
+
+The original software, known as "Mantis", was developed by Input Output
+(Hong Kong) Ltd. This derivative work has been rebranded and continues
+development under new management while maintaining compatibility with the
+Ethereum Classic network.
+
+Modifications include:
+- Rebranding from "Mantis" to "Fukuii"
+- Package restructuring from io.iohk to com.chipprbots
+- Ongoing maintenance and feature development
+
+The derivative work continues to be licensed under the Apache License,
+Version 2.0, as required by the original license terms.
+
+For more information about Fukuii, visit: https://github.com/chippr-robotics/chordodes_fukuii
