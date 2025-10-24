@@ -158,7 +158,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "send hello msg" in new TestSetup {
-    val blockchainConfig = io.iohk.ethereum.utils.Config.blockchains.blockchainConfig
+    val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
     val forkBlockNumbers: ForkBlockNumbers = blockchainConfig.forkBlockNumbers
     val expectedEthereumConfig = msg.EthereumConfig(
       frontierBlockNumber = forkBlockNumbers.frontierBlockNumber,

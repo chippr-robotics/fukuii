@@ -97,7 +97,7 @@ class EthUserServiceSpec
     import MerklePatriciaTrie.defaultByteArraySerializable
 
     val storageMpt =
-      io.iohk.ethereum.domain.EthereumUInt256Mpt
+      com.chipprbots.ethereum.domain.EthereumUInt256Mpt
         .storageMpt(
           ByteString(MerklePatriciaTrie.EmptyRootHash),
           storagesInstance.storages.stateStorage.getBackingStorage(0)

@@ -1160,9 +1160,9 @@ abstract class ScenarioSetup {
 
   // Some data from mantis config (this data is not exposed to built version so it is safe to load it here
   val config: Config = ConfigFactory.load("application.conf").getConfig("mantis")
-  val clientVersion: String = io.iohk.ethereum.utils.Config.clientVersion
-  val networkName: String = io.iohk.ethereum.utils.Config.blockchains.network
-  val capabilities: List[Capability] = io.iohk.ethereum.utils.Config.blockchains.blockchains(networkName).capabilities
+  val clientVersion: String = com.chipprbots.ethereum.utils.Config.clientVersion
+  val networkName: String = com.chipprbots.ethereum.utils.Config.blockchains.network
+  val capabilities: List[Capability] = com.chipprbots.ethereum.utils.Config.blockchains.blockchains(networkName).capabilities
   //
 
   val service: Admin = Admin.build(new HttpService(testConfig.mantisUrl))

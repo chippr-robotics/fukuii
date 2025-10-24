@@ -5,7 +5,7 @@ import java.net.InetAddress
 import scala.reflect.ClassTag
 import scala.util.Random
 
-import _root_.io.iohk.ethereum.rlp.RLPException
+import _root_.com.chipprbots.ethereum.rlp.RLPException
 import io.iohk.scalanet.discovery.crypto.PublicKey
 import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
 import io.iohk.scalanet.discovery.ethereum.Node

@@ -337,7 +337,7 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
   }
 
   trait TestSetup extends EphemBlockchainTestSetup {
-    val postEip161Config: EvmConfig = EvmConfig.PostEIP161ConfigBuilder(io.iohk.ethereum.vm.Fixtures.blockchainConfig)
+    val postEip161Config: EvmConfig = EvmConfig.PostEIP161ConfigBuilder(com.chipprbots.ethereum.vm.Fixtures.blockchainConfig)
 
     val worldState: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,

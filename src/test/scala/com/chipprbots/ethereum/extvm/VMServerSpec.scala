@@ -105,7 +105,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   trait TestSetup {
-    val blockchainConfig = io.iohk.ethereum.utils.Config.blockchains.blockchainConfig
+    val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
     val forkBlockNumbers = blockchainConfig.forkBlockNumbers
     val ethereumConfig: EthereumConfig = msg.EthereumConfig(
       frontierBlockNumber = forkBlockNumbers.frontierBlockNumber,

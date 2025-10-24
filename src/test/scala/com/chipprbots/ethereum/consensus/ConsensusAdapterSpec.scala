@@ -114,7 +114,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
     (blockQueue.removeSubtree _).expects(*)
 
     whenReady(consensusAdapter.evaluateBranchBlock(block).runToFuture)(
-      _ shouldBe BlockImportFailed("MPTError(io.iohk.ethereum.mpt.MerklePatriciaTrie$MPTException: Invalid Node)")
+      _ shouldBe BlockImportFailed("MPTError(com.chipprbots.ethereum.mpt.MerklePatriciaTrie$MPTException: Invalid Node)")
     )
   }
 

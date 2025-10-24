@@ -87,7 +87,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   val peerDiscoveryManager: ActorRef = TestProbe().ref
 
-  val nodeKey: AsymmetricCipherKeyPair = io.iohk.ethereum.crypto.generateKeyPair(secureRandom)
+  val nodeKey: AsymmetricCipherKeyPair = com.chipprbots.ethereum.crypto.generateKeyPair(secureRandom)
 
   private val nodeStatus =
     NodeStatus(

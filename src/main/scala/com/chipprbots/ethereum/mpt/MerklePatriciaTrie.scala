@@ -81,7 +81,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     *
     * @param key
     * @return Option object with value if there exists one.
-    * @throws io.iohk.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
     */
   def get(key: K): Option[V] =
     pathTraverse[Option[V]](None, mkKeyNibbles(key)) {
@@ -98,7 +98,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     *
     * @param key
     * @return Option object with proof if there exists one.
-    * @throws io.iohk.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
     */
   def getProof(key: K): Option[Vector[MptNode]] =
     pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key)) { case (acc, node) =>
@@ -172,7 +172,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     * @param key
     * @param value
     * @return New trie with the (key-value) pair inserted.
-    * @throws io.iohk.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
     */
   override def put(key: K, value: V): MerklePatriciaTrie[K, V] = {
     val keyNibbles = HexPrefix.bytesToNibbles(kSerializer.toBytes(key))
@@ -193,7 +193,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     *
     * @param key
     * @return New trie with the (key-value) pair associated with the key passed deleted from the trie.
-    * @throws io.iohk.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
     */
   override def remove(key: K): MerklePatriciaTrie[K, V] =
     rootNode
@@ -473,7 +473,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     * @param notStoredYet to obtain the nodes referenced in the node that may be in an invalid state,
     *                     if they were not yet inserted into the nodeStorage.
     * @return fixed node.
-    * @throws io.iohk.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
     */
   @tailrec
   private def fix(node: MptNode): MptNode = node match {
