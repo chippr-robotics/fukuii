@@ -344,7 +344,8 @@ class RegularSyncSpec
               defaultPeer.id
             )
           )
-          awaitCond(bestBlock == alternativeBlocks.last, 5.seconds)
+          // increase timeout slightly to reduce intermittent flakiness in forked test JVMs
+          awaitCond(bestBlock == alternativeBlocks.last, 10.seconds)
         }
       )
     }

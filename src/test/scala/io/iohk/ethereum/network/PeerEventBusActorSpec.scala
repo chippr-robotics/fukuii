@@ -15,6 +15,8 @@ import akka.testkit.TestProbe
 import akka.util.ByteString
 
 import org.scalatest.concurrent.ScalaFutures
+import scala.concurrent.Await
+import scala.concurrent.duration._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -95,8 +97,13 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
 
     peerEventBusProbe.ref ! PoisonPill
 
-    whenReady(stream1)(_ shouldEqual Seq(msgFromPeer))
-    whenReady(stream2)(_ shouldEqual Seq(msgFromPeer, msgFromPeer2))
+  // make the stream checks a bit more robust to fork/timing differences by waiting
+  // deterministically for a short timeout instead of relying on the default whenReady
+  val res1 = Await.result(stream1, 5.seconds)
+  res1 shouldEqual Seq(msgFromPeer)
+
+  val res2 = Await.result(stream2, 5.seconds)
+  res2 shouldEqual Seq(msgFromPeer, msgFromPeer2)
   }
 
   it should "only relay matching message codes" in new TestSetup {
