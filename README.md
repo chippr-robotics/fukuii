@@ -40,9 +40,29 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
 
-Getting started
+## Getting started
 
-## Option 1: GitHub Codespaces (Recommended for Quick Start)
+### Option 1: Docker (Recommended for Quick Start)
+
+The fastest way to run Fukuii is using Docker:
+
+```bash
+# Build the image
+./scripts/dev/docker-build.sh
+
+# Run the container
+./scripts/dev/docker-run.sh
+```
+
+Or using Docker Compose:
+
+```bash
+docker-compose up -d
+```
+
+See [DOCKER.md](DOCKER.md) for complete Docker documentation.
+
+### Option 2: GitHub Codespaces
 
 The fastest way to start developing is using GitHub Codespaces, which provides a pre-configured development environment:
 
@@ -52,7 +72,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
-## Option 2: Local Development
+### Option 3: Local Development
 
 To build Fukuii from source locally you will need:
 
