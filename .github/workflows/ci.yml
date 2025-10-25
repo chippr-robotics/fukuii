@@ -100,8 +100,7 @@ jobs:
         with:
           name: test-results-jdk${{ matrix.java }}
           path: |
-            **/target/test-reports/
-            **/target/test-results/
+            **/target/test-reports/**
           retention-days: 7
           if-no-files-found: warn
       
@@ -111,5 +110,6 @@ jobs:
           name: fukuii-distribution-jdk${{ matrix.java }}
           path: |
             target/universal/*.zip
-            target/scala-*/*.jar
+            **/target/scala-*/*-assembly-*.jar
           retention-days: 7
+          if-no-files-found: warn
