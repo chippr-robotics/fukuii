@@ -17,7 +17,24 @@ Licence: This project continues to be distributed under the Apache 2.0 licence.
 Origin: Fukuii is derived from the Mantis
  client. Mantis is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
 
-Chordoes Fukuii is a worm which controls a zombie mantis. 
+Chordoes Fukuii is a worm which controls a zombie mantis.
+
+## CI/CD and Project Hygiene
+
+This project uses GitHub Actions for continuous integration and delivery:
+
+- ✅ **Automated Testing**: All tests run on every push and PR
+- 🔍 **Code Quality**: Automated formatting and style checks
+- 🐳 **Docker Builds**: Automatic container image builds
+- 🚀 **Releases**: Automated release creation with milestone tracking
+- 📊 **Dependency Checks**: Weekly dependency monitoring
+
+**Quick Links:**
+- [Workflow Documentation](.github/workflows/README.md)
+- [Quick Start Guide](.github/QUICKSTART.md)
+- [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
+
+**For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
 
 Getting started
 Prerequisites
