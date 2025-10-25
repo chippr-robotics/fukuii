@@ -43,15 +43,19 @@ jobs:
       - name: Extract release notes
         id: extract-notes
         run: |
-          # Extract version from tag
-          VERSION=${GITHUB_REF#refs/tags/v}
+          # Extract version from tag or use version from version.sbt
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=$(grep -oP '(?<=version.*:= ")[\d.]+' version.sbt)
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           
           # Generate release notes
           echo "# Fukuii Release $VERSION" > release_notes.md
           echo "" >> release_notes.md
           echo "## Changes" >> release_notes.md
-          git log --pretty=format:"- %s (%h)" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> release_notes.md || echo "- Initial release" >> release_notes.md
+          git log --pretty=format:"- %s (%h)" $(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")..HEAD >> release_notes.md || echo "- Initial release" >> release_notes.md
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1

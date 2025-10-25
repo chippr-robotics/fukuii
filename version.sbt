@@ -1,6 +1,6 @@
-// NOTE: This is replaced with `sed` during release,
-// but it could also be removed, and be determined
-// based on `git` tags by https://github.com/dwijnand/sbt-dynver,
-// which is a dependency of `sbt-ci-release`.
+// NOTE: Version follows semantic versioning:
+// - Increment by 0.0.1 for each commit
+// - Increment by 0.1.0 at each milestone
+// - Version 1.0.0 at project completion
 
-(ThisBuild / version) := "3.4.0-SNAPSHOT"
+(ThisBuild / version) := "0.1.0"

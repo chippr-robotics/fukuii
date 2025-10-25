@@ -258,6 +258,10 @@ lazy val node = {
       (Compile / PB.targets) := Seq(
         scalapb.gen() -> (Compile / sourceManaged).value / "protobuf"
       ),
+      // Use local protobuf override directory with corrected package namespace
+      (Compile / PB.protoSources) := Seq(
+        baseDirectory.value / "src" / "main" / "protobuf_override"
+      ),
       // have the protobuf API version file as a resource
       (Compile / unmanagedResourceDirectories) += baseDirectory.value / "src" / "main" / "protobuf",
       // Packaging
