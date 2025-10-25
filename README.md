@@ -41,9 +41,20 @@ This project uses GitHub Actions for continuous integration and delivery:
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
 
 Getting started
-Prerequisites
 
-To build Fukuii from source you will need:
+## Option 1: GitHub Codespaces (Recommended for Quick Start)
+
+The fastest way to start developing is using GitHub Codespaces, which provides a pre-configured development environment:
+
+1. Click the green "Code" button on the repository page
+2. Select "Open with Codespaces"
+3. Wait for the environment to initialize (automatically installs JDK 11, SBT, and Scala)
+
+See [.devcontainer/README.md](.devcontainer/README.md) for more details.
+
+## Option 2: Local Development
+
+To build Fukuii from source locally you will need:
 
 JDK 8 or higher.
 
