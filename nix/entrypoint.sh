@@ -17,7 +17,7 @@ trap cleanup EXIT
 
 
 mkdir -p /tmp
-mkdir -p "$NOMAD_TASK_DIR/mantis"
+mkdir -p "$NOMAD_TASK_DIR/fukuii"
 cd "$NOMAD_TASK_DIR"
 name="java"
 
@@ -44,28 +44,28 @@ else
     --tag "$NAMESPACE" \
     --target / \
     || echo "couldn't restore backup, continue startup procedure..."
-      mkdir -p "$NOMAD_TASK_DIR/mantis"
-      rm -rf "$NOMAD_TASK_DIR/mantis/{keystore,node.key}"
-      rm -rf "$NOMAD_TASK_DIR/mantis/logs"
+      mkdir -p "$NOMAD_TASK_DIR/fukuii"
+      rm -rf "$NOMAD_TASK_DIR/fukuii/{keystore,node.key}"
+      rm -rf "$NOMAD_TASK_DIR/fukuii/logs"
 fi
 
-until [ "$(grep -c enode mantis.conf)" -ge "$REQUIRED_PEER_COUNT" ]; do
+until [ "$(grep -c enode fukuii.conf)" -ge "$REQUIRED_PEER_COUNT" ]; do
   sleep 1
 done
 
 ulimit -c unlimited
-cp mantis.conf running.conf
+cp fukuii.conf running.conf
 
 (
 while true; do
   set +x
-  while diff -u running.conf mantis.conf > /dev/stderr; do
+  while diff -u running.conf fukuii.conf > /dev/stderr; do
     sleep 900
   done
   set -x
 
-  if ! diff -u running.conf mantis.conf > /dev/stderr; then
-    echo "Found updated config file, restarting Mantis"
+  if ! diff -u running.conf fukuii.conf > /dev/stderr; then
+    echo "Found updated config file, restarting Fukuii"
     pkill "$name" || true
   fi
 done
@@ -75,9 +75,9 @@ starts=0
 while true; do
   starts="$((starts+1))"
   echo "Start Number $starts" > /dev/stderr
-  cp mantis.conf running.conf
+  cp fukuii.conf running.conf
   cat running.conf > /dev/stderr
-  rm -f "$NOMAD_TASK_DIR/mantis/rocksdb/LOCK"
-  mantis "-Duser.home=$NOMAD_TASK_DIR" "$@" || true
+  rm -f "$NOMAD_TASK_DIR/fukuii/rocksdb/LOCK"
+  fukuii "-Duser.home=$NOMAD_TASK_DIR" "$@" || true
   sleep 10
 done

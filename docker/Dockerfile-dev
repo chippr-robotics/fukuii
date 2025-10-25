@@ -1,7 +1,7 @@
-FROM mantis-base:latest
+FROM fukuii-base:latest
 
-# This "dev" image creates enough of a Mantis build environment,
-# so that the actual Mantis images can be built in less time.
+# This "dev" image creates enough of a Fukuii build environment,
+# so that the actual Fukuii images can be built in less time.
 # We are particularly interested in caching the dependencies needed
 # during the build process. This means that whenever those change,
 # the "dev" image must be recreated.
@@ -17,15 +17,15 @@ ENV MANTIS_TAG ${MANTIS_TAG:-phase/iele_testnet}
 
 USER root
 
-ADD scripts/install-nix-apps-dev.sh  /home/mantis/
-ADD scripts/install-mantis-dev.sh    /home/mantis/
-ADD scripts/install-mantis.sh        /home/mantis/
+ADD scripts/install-nix-apps-dev.sh  /home/fukuii/
+ADD scripts/install-fukuii-dev.sh    /home/fukuii/
+ADD scripts/install-fukuii.sh        /home/fukuii/
 
-RUN chown mantis:mantis /home/mantis/install-*.sh
+RUN chown fukuii:fukuii /home/fukuii/install-*.sh
 
-USER mantis
-WORKDIR /home/mantis
-ENV USER mantis
+USER fukuii
+WORKDIR /home/fukuii
+ENV USER fukuii
 
 RUN ~/install-nix-apps-dev.sh
-RUN ~/install-mantis-dev.sh $SBT_VERIFY_TAG $MANTIS_TAG
+RUN ~/install-fukuii-dev.sh $SBT_VERIFY_TAG $MANTIS_TAG

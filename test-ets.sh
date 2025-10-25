@@ -3,8 +3,8 @@
 git submodule init
 git submodule update
 
-echo "booting Mantis and waiting for RPC API to be up"
-$SBT -Dconfig.file=./src/main/resources/conf/testmode.conf run &> mantis-log.txt &
+echo "booting Fukuii and waiting for RPC API to be up"
+$SBT -Dconfig.file=./src/main/resources/conf/testmode.conf run &> fukuii-log.txt &
 
 while ! nc -z localhost 8546; do   
   sleep 0.1
@@ -44,7 +44,7 @@ EOF
 run_and_annotate "GeneralStateTests"
 run_and_annotate "BlockchainTests"
 
-echo "shutting down mantis"
+echo "shutting down fukuii"
 kill %1
 
 exit $final_exit_code

@@ -4,4 +4,4 @@ set -eux
 
 HERE=$(readlink -m $(dirname ${BASH_SOURCE[0]}))
 
-exec $HERE/buildhelper.sh mantis-base Dockerfile-base latest
+exec $HERE/buildhelper.sh fukuii-base Dockerfile-base latest

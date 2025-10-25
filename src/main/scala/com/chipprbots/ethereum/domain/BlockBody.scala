@@ -1,0 +1,81 @@
+package com.chipprbots.ethereum.domain
+
+import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
+import com.chipprbots.ethereum.rlp.RLPEncodeable
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPSerializable
+import com.chipprbots.ethereum.rlp.rawDecode
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+
+case class BlockBody(transactionList: Seq[SignedTransaction], uncleNodesList: Seq[BlockHeader]) {
+  override def toString: String =
+    s"BlockBody{ transactionList: $transactionList, uncleNodesList: $uncleNodesList }"
+
+  def toShortString: String =
+    s"BlockBody { transactionsList: ${transactionList.map(_.hash.toHex)}, uncleNodesList: ${uncleNodesList.map(_.hashAsHexString)} }"
+
+  lazy val numberOfTxs: Int = transactionList.size
+
+  lazy val numberOfUncles: Int = uncleNodesList.size
+}
+
+object BlockBody {
+
+  val empty: BlockBody = BlockBody(Seq.empty, Seq.empty)
+
+  import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.TypedTransaction._
+
+  def blockBodyToRlpEncodable(
+      blockBody: BlockBody,
+      signedTxToRlpEncodable: SignedTransaction => RLPEncodeable,
+      blockHeaderToRlpEncodable: BlockHeader => RLPEncodeable
+  ): RLPEncodeable =
+    RLPList(
+      RLPList(blockBody.transactionList.map(signedTxToRlpEncodable): _*),
+      RLPList(blockBody.uncleNodesList.map(blockHeaderToRlpEncodable): _*)
+    )
+
+  implicit class BlockBodyEnc(msg: BlockBody) extends RLPSerializable {
+    override def toRLPEncodable: RLPEncodeable = {
+      import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+
+      blockBodyToRlpEncodable(
+        msg,
+        stx => SignedTransactionEnc(stx).toRLPEncodable,
+        header => BlockHeaderEnc(header).toRLPEncodable
+      )
+    }
+  }
+
+  implicit class BlockBlodyDec(val bytes: Array[Byte]) extends AnyVal {
+    def toBlockBody: BlockBody = BlockBodyRLPEncodableDec(rawDecode(bytes)).toBlockBody
+  }
+
+  def rlpEncodableToBlockBody(
+      rlpEncodeable: RLPEncodeable,
+      rlpEncodableToSignedTransaction: RLPEncodeable => SignedTransaction,
+      rlpEncodableToBlockHeader: RLPEncodeable => BlockHeader
+  ): BlockBody =
+    rlpEncodeable match {
+      case RLPList((transactions: RLPList), (uncles: RLPList)) =>
+        BlockBody(
+          transactions.items.toTypedRLPEncodables.map(rlpEncodableToSignedTransaction),
+          uncles.items.map(rlpEncodableToBlockHeader)
+        )
+      case _ => throw new RuntimeException("Cannot decode BlockBody")
+    }
+
+  implicit class BlockBodyRLPEncodableDec(val rlpEncodeable: RLPEncodeable) {
+    def toBlockBody: BlockBody = {
+      import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+
+      rlpEncodableToBlockBody(
+        rlpEncodeable,
+        rlp => SignedTransactionRlpEncodableDec(rlp).toSignedTransaction,
+        rlp => BlockHeaderDec(rlp).toBlockHeader
+      )
+
+    }
+  }
+
+}

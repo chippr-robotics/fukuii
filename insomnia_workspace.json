@@ -10,12 +10,12 @@
       "modified": 1605909416772,
       "created": 1605907827178,
       "url": "{{node_url}}",
-      "name": "mantis_getAccountTransactions",
+      "name": "fukuii_getAccountTransactions",
       "description": "",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
-        "text": "{\n\t\"jsonrpc\": \"2.0\",\n\t\"id\": 1,\n\t\"method\": \"mantis_getAccountTransactions\",\n\t\"params\": [\"$address\", 1 , 999]\n}"
+        "text": "{\n\t\"jsonrpc\": \"2.0\",\n\t\"id\": 1,\n\t\"method\": \"fukuii_getAccountTransactions\",\n\t\"params\": [\"$address\", 1 , 999]\n}"
       },
       "parameters": [],
       "headers": [
@@ -41,7 +41,7 @@
       "parentId": "wrk_097d43914a4d4aea8b6f73f647921182",
       "modified": 1605907810643,
       "created": 1605907810643,
-      "name": "mantis",
+      "name": "fukuii",
       "description": "",
       "environment": {},
       "environmentPropertyOrder": null,
@@ -53,7 +53,7 @@
       "parentId": null,
       "modified": 1599825617921,
       "created": 1552662762769,
-      "name": "Mantis",
+      "name": "Fukuii",
       "description": "",
       "scope": null,
       "_type": "workspace"
@@ -1372,7 +1372,7 @@
       "parentId": "wrk_097d43914a4d4aea8b6f73f647921182",
       "modified": 1592230124247,
       "created": 1592230124247,
-      "fileName": "Mantis",
+      "fileName": "Fukuii",
       "contents": "",
       "contentType": "yaml",
       "_type": "api_spec"

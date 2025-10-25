@@ -2,4 +2,4 @@
 , src ? ./.
 , pkgs ? (import ./nix { inherit system src; }).pkgs
 }:
-pkgs.mantis
+pkgs.fukuii

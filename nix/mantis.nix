@@ -40,7 +40,7 @@ let
 
 in
 sbt.mkDerivation rec {
-  pname = "mantis";
+  pname = "fukuii";
   inherit src version;
 
   nativeBuildInputs = [ solc protobuf makeWrapper ];
@@ -67,7 +67,7 @@ sbt.mkDerivation rec {
     })
   ];
 
-  # This sha represents the change dependencies of mantis.
+  # This sha represents the change dependencies of fukuii.
   # Update this sha whenever you change the dependencies using the
   # update-nix.sh script
   inherit depsSha256;
@@ -90,7 +90,7 @@ sbt.mkDerivation rec {
     sbt stage
     mkdir -p $out/
     cp -r target/universal/stage/* $out/
-    mkdir -p $out/share/mantis
+    mkdir -p $out/share/fukuii
     mv $out/{LICENSE,RELEASE,mantis_config.txt} $_
 
     # wrap executable so that java is available at runtime

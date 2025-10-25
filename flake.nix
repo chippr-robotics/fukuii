@@ -1,5 +1,5 @@
 {
-  description = "Mantis flake";
+  description = "Fukuii flake";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
   inputs.nixpkgs.url =
@@ -46,16 +46,16 @@
       pkgs = pkgsForSystem system;
       legacyPackages = pkgs;
 
-      defaultPackage = pkgs.mantis;
+      defaultPackage = pkgs.fukuii;
       devShell = pkgs.mkShell { nativeBuildInputs = with pkgs; [ solc sbt ]; };
-      apps.mantis = flake-utils.lib.mkApp { drv = pkgs.mantis; };
-      defaultApp = apps.mantis;
+      apps.fukuii = flake-utils.lib.mkApp { drv = pkgs.fukuii; };
+      defaultApp = apps.fukuii;
     }) // (collectHydraSets
       (map (name: mkHydraSet [ name ] [ "x86_64-linux" ]) [
         "jdk8"
         "lllc"
-        "mantis"
-        "mantis-entrypoint"
+        "fukuii"
+        "fukuii-entrypoint"
         "netcat-gnu"
         "retesteth"
         "sbt"
