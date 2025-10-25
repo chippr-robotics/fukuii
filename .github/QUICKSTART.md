@@ -205,12 +205,12 @@ Artifacts are kept for 7-30 days depending on type.
 
 **Solution:**
 1. Check the workflow logs in the Actions tab
-2. Run the same check locally:
+2. Run the same checks locally (use the same commands as CI):
    ```bash
-   sbt compile-all  # for compilation errors
-   sbt testAll      # for test failures
-   sbt formatCheck  # for formatting issues
-   sbt scalastyle   # for style issues
+   sbt compile-all        # Compile all modules
+   sbt formatCheck        # Check code formatting
+   sbt bytes/scalastyle crypto/scalastyle rlp/scalastyle scalastyle  # Style checks
+   sbt testAll            # Run all tests
    ```
 3. Fix the issues and push again
 
@@ -254,7 +254,12 @@ Artifacts are kept for 7-30 days depending on type.
 
 ```bash
 # Edit dependencies in project/Dependencies.scala or build.sbt
+# Use your preferred editor (vim, nano, emacs, VS Code, etc.)
+# Example with vim:
 vim project/Dependencies.scala
+
+# Or with nano:
+# nano project/Dependencies.scala
 
 # Test changes
 sbt compile-all
