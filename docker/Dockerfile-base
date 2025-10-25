@@ -4,7 +4,7 @@ FROM ubuntu:xenial
 
 # See the accompanying `build-base.sh` script for tagging details.
 
-ENV DEBIAN_FRONTEND noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 
 ADD scripts/install-base-system.sh /root/
 RUN /root/install-base-system.sh
@@ -15,6 +15,6 @@ RUN chown fukuii:fukuii /home/fukuii/install-*.sh
 
 USER fukuii
 WORKDIR /home/fukuii
-ENV USER fukuii
+ENV USER=fukuii
 
 RUN ~/install-nix-apps-base.sh

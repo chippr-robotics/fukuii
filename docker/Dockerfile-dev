@@ -9,11 +9,8 @@ FROM fukuii-base:latest
 # See the `Dockerfile-base` for the parent image details. 
 # See the accompanying `build-dev.sh` script for tagging details.
 
-ARG SBT_VERIFY_TAG
-ENV SBT_VERIFY_TAG ${SBT_VERIFY_TAG:-v0.4.1}
-
-ARG MANTIS_TAG
-ENV MANTIS_TAG ${MANTIS_TAG:-phase/iele_testnet}
+ARG FUKUII_TAG
+ENV FUKUII_TAG=${FUKUII_TAG:-develop}
 
 USER root
 
@@ -25,7 +22,7 @@ RUN chown fukuii:fukuii /home/fukuii/install-*.sh
 
 USER fukuii
 WORKDIR /home/fukuii
-ENV USER fukuii
+ENV USER=fukuii
 
 RUN ~/install-nix-apps-dev.sh
-RUN ~/install-fukuii-dev.sh $SBT_VERIFY_TAG $MANTIS_TAG
+RUN ~/install-fukuii-dev.sh $FUKUII_TAG
