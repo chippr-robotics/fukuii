@@ -29,3 +29,6 @@ result
 # sonarScan
 .scannerwork/
 actionlint
+
+# Docker
+docker-data/

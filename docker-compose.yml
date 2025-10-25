@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  fukuii:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fukuii:latest
+    container_name: fukuii-node
+    restart: unless-stopped
+    ports:
+      - "9076:9076"  # P2P
+      - "8545:8545"  # HTTP RPC
+      - "8546:8546"  # WebSocket RPC
+    volumes:
+      - fukuii-data:/var/lib/mantis
+      - ./src/main/resources/conf:/opt/fukuii/conf:ro
+    environment:
+      - FUKUII_DATA_DIR=/var/lib/mantis
+      - FUKUII_NETWORK=etc
+      - JAVA_OPTS=-Xmx2g -Xms1g
+    healthcheck:
+      test: ["/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  fukuii-data:
+    driver: local
