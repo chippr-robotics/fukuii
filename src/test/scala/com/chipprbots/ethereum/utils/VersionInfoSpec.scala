@@ -13,8 +13,8 @@ class VersionInfoSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "augment the name with an identity" in {
-    val name = VersionInfo.nodeName(Some("iohk"))
-    name should startWith("fukuii/iohk/v")
+    val name = VersionInfo.nodeName(Some("chipprbots"))
+    name should startWith("fukuii/chipprbots/v")
     name.count(_ == '/') shouldBe 4
   }
 }
