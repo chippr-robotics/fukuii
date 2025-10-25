@@ -91,7 +91,7 @@ object DumpChainApp
     override val statSlotCount: Int = 30
   }
 
-  val actorSystem: ActorSystem = ActorSystem("mantis_system")
+  val actorSystem: ActorSystem = ActorSystem("fukuii_system")
   trait PruningConfig extends PruningModeComponent {
     override val pruningMode: PruningMode = ArchivePruning
   }
