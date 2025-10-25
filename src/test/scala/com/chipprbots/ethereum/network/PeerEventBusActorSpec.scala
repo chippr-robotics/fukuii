@@ -14,9 +14,10 @@ import akka.testkit.TestActor
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import org.scalatest.concurrent.ScalaFutures
 import scala.concurrent.Await
 import scala.concurrent.duration._
+
+import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
