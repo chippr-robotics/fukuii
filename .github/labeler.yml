@@ -1,0 +1,45 @@
+# Automatically label PRs based on changed files
+
+'documentation':
+  - changed-files:
+    - any-glob-to-any-file: ['**/*.md', 'docs/**/*', 'README.*']
+
+'dependencies':
+  - changed-files:
+    - any-glob-to-any-file: ['**/Dependencies.scala', 'project/plugins.sbt', 'build.sbt', '**/build.properties']
+
+'docker':
+  - changed-files:
+    - any-glob-to-any-file: ['docker/**/*', 'Dockerfile*', '.dockerignore']
+
+'ci/cd':
+  - changed-files:
+    - any-glob-to-any-file: ['.github/**/*', '.buildkite/**/*']
+
+'tests':
+  - changed-files:
+    - any-glob-to-any-file: ['**/test/**/*', '**/*Spec.scala', '**/*Test.scala']
+
+'crypto':
+  - changed-files:
+    - any-glob-to-any-file: ['crypto/**/*']
+
+'bytes':
+  - changed-files:
+    - any-glob-to-any-file: ['bytes/**/*']
+
+'rlp':
+  - changed-files:
+    - any-glob-to-any-file: ['rlp/**/*']
+
+'core':
+  - changed-files:
+    - any-glob-to-any-file: ['src/**/*']
+
+'configuration':
+  - changed-files:
+    - any-glob-to-any-file: ['**/*.conf', '**/*.config', '**/*.properties', '.scalafmt.conf', 'scalastyle*.xml']
+
+'build':
+  - changed-files:
+    - any-glob-to-any-file: ['build.sbt', 'project/**/*', '*.nix']
