@@ -10,15 +10,28 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 **Purpose:** Ensures code quality and tests pass before merging
 
+**Matrix Build:**
+- **JDK Versions:** 11, 17
+- **Operating System:** ubuntu-latest
+- **Caching:** Coursier, Ivy, and SBT for faster builds
+
 **Steps:**
 1. Checks out code with submodules
-2. Sets up Java 11 and SBT
-3. Compiles all modules (bytes, crypto, rlp, node)
-4. Checks code formatting (scalafmt/scalafix)
-5. Runs scalastyle checks
-6. Executes all tests
-7. Builds distribution package
-8. Uploads build artifacts
+2. Sets up Java (11 or 17) with Temurin distribution
+3. Configures Coursier and Ivy caching
+4. Installs SBT
+5. Compiles all modules (bytes, crypto, rlp, node)
+6. Checks code formatting (scalafmt/scalafix)
+7. Runs scalastyle checks
+8. Executes all tests
+9. Builds assembly artifacts
+10. Builds distribution package
+11. Uploads test results and build artifacts
+
+**Artifacts Published:**
+- Test results (for each JDK version)
+- Distribution packages (for each JDK version)
+- Assembly JARs
 
 **Required Status Check:** Yes - Must pass before merging to protected branches
 
