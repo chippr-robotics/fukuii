@@ -9,8 +9,8 @@ FROM fukuii-base:latest
 # See the `Dockerfile-base` for the parent image details. 
 # See the accompanying `build-dev.sh` script for tagging details.
 
-ARG MANTIS_TAG
-ENV MANTIS_TAG=${MANTIS_TAG:-develop}
+ARG FUKUII_TAG
+ENV FUKUII_TAG=${FUKUII_TAG:-develop}
 
 USER root
 
@@ -25,4 +25,4 @@ WORKDIR /home/fukuii
 ENV USER=fukuii
 
 RUN ~/install-nix-apps-dev.sh
-RUN ~/install-fukuii-dev.sh $MANTIS_TAG
+RUN ~/install-fukuii-dev.sh $FUKUII_TAG
