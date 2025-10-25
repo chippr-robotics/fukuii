@@ -20,8 +20,6 @@
         "ms-vscode.vscode-typescript-next"
       ],
       "settings": {
-        "metals.javaHome": "/usr/local/sdkman/candidates/java/11.0.20-tem",
-        "java.home": "/usr/local/sdkman/candidates/java/11.0.20-tem",
         "files.watcherExclude": {
           "**/target/**": true,
           "**/.bloop/**": true,
@@ -41,7 +39,7 @@
   "remoteUser": "vscode",
   
   "mounts": [
-    "source=${localWorkspaceFolder}/.ivy2,target=/home/vscode/.ivy2,type=bind,consistency=cached",
-    "source=${localWorkspaceFolder}/.sbt,target=/home/vscode/.sbt,type=bind,consistency=cached"
+    "source=fukuii-ivy2-cache,target=/home/vscode/.ivy2,type=volume",
+    "source=fukuii-sbt-cache,target=/home/vscode/.sbt,type=volume"
   ]
 }
