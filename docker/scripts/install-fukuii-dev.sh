@@ -2,8 +2,7 @@
 
 set -euxo pipefail
 
-SBT_VERIFY_TAG=$1
-FUKUII_TAG=$2
+FUKUII_TAG=$1
 
 HERE=$(readlink -m $(dirname ${BASH_SOURCE[0]}))
 . $HERE/install-nix-common.sh
