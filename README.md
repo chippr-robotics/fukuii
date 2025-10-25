@@ -47,13 +47,13 @@ Pre-built Docker images are available from Docker Hub and GitHub Container Regis
 
 ```bash
 # Latest stable release
-docker pull chipprrobotics/fukuii:latest
+docker pull chipprbots/fukuii:latest
 
 # Specific version
-docker pull chipprrobotics/fukuii:v1.0.0
+docker pull chipprbots/fukuii:v1.0.0
 
 # Latest nightly build
-docker pull chipprrobotics/fukuii:nightly
+docker pull chipprbots/fukuii:nightly
 ```
 
 **Documentation:**

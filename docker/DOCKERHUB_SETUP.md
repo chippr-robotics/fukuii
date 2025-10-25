@@ -11,7 +11,7 @@ The Fukuii project automatically builds and publishes Docker images to two regis
 ## Prerequisites
 
 - Admin access to the GitHub repository
-- Docker Hub account with access to `chipprrobotics` organization
+- Docker Hub account with access to `chipprbots` organization
 - Docker Hub access token with push permissions
 
 ## Step 1: Create Docker Hub Access Token
@@ -35,7 +35,7 @@ The Fukuii project automatically builds and publishes Docker images to two regis
 ### Secret 1: DOCKERHUB_USERNAME
 
 - **Name**: `DOCKERHUB_USERNAME`
-- **Value**: Your Docker Hub username (e.g., `chipprrobotics` or your personal username)
+- **Value**: Your Docker Hub username (e.g., `chipprbots` or your personal username)
 
 ### Secret 2: DOCKERHUB_TOKEN
 
@@ -55,10 +55,10 @@ After adding the secrets, the next push or workflow run will attempt to push to 
 
 ### Verify Images on Docker Hub
 
-Visit https://hub.docker.com/r/chipprrobotics/ to see your published images:
-- `chipprrobotics/fukuii`
-- `chipprrobotics/fukuii-base`
-- `chipprrobotics/fukuii-dev`
+Visit https://hub.docker.com/r/chipprbots/ to see your published images:
+- `chipprbots/fukuii`
+- `chipprbots/fukuii-base`
+- `chipprbots/fukuii-dev`
 
 ## Troubleshooting
 
@@ -87,7 +87,7 @@ DOCKERHUB_TOKEN
 
 **Problem**: Images are tagged incorrectly on Docker Hub.
 
-**Solution**: Check the workflow configuration in `.github/workflows/docker.yml`. The `DOCKERHUB_ORG` environment variable should be set to `chipprrobotics`.
+**Solution**: Check the workflow configuration in `.github/workflows/docker.yml`. The `DOCKERHUB_ORG` environment variable should be set to `chipprbots`.
 
 ## Security Best Practices
 
@@ -116,10 +116,10 @@ If you need to manually push an image (not recommended for production):
 docker login docker.io --username <your-username>
 
 # Tag image
-docker tag fukuii:latest chipprrobotics/fukuii:latest
+docker tag fukuii:latest chipprbots/fukuii:latest
 
 # Push image
-docker push chipprrobotics/fukuii:latest
+docker push chipprbots/fukuii:latest
 ```
 
 ## Support

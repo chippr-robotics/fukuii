@@ -22,7 +22,7 @@ env:
   GHCR_REGISTRY: ghcr.io
   DOCKERHUB_REGISTRY: docker.io
   IMAGE_NAME: ${{ github.repository }}
-  DOCKERHUB_ORG: chipprrobotics
+  DOCKERHUB_ORG: chipprbots
 
 jobs:
   docker-build:

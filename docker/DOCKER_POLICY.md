@@ -13,19 +13,19 @@ These images are built and maintained by Chippr Robotics and pushed to both GitH
 #### 1. **fukuii-base**
 - **Purpose**: Base Ubuntu image with system dependencies
 - **GHCR**: `ghcr.io/chippr-robotics/chordodes_fukuii-base`
-- **Docker Hub**: `chipprrobotics/fukuii-base`
+- **Docker Hub**: `chipprbots/fukuii-base`
 - **Source**: `docker/Dockerfile-base`
 
 #### 2. **fukuii-dev**
 - **Purpose**: Development image with build tools and cached dependencies
 - **GHCR**: `ghcr.io/chippr-robotics/chordodes_fukuii-dev`
-- **Docker Hub**: `chipprrobotics/fukuii-dev`
+- **Docker Hub**: `chipprbots/fukuii-dev`
 - **Source**: `docker/Dockerfile-dev`
 
 #### 3. **fukuii** (main image)
 - **Purpose**: Production-ready Fukuii Ethereum client
 - **GHCR**: `ghcr.io/chippr-robotics/chordodes_fukuii`
-- **Docker Hub**: `chipprrobotics/fukuii`
+- **Docker Hub**: `chipprbots/fukuii`
 - **Source**: `docker/Dockerfile`
 
 ### Third-Party Images
@@ -97,7 +97,7 @@ Pull request builds:
 
 To enable Docker Hub distribution, the following secrets must be configured in the GitHub repository:
 
-1. **DOCKERHUB_USERNAME**: Docker Hub username for chipprrobotics organization
+1. **DOCKERHUB_USERNAME**: Docker Hub username for chipprbots organization
 2. **DOCKERHUB_TOKEN**: Docker Hub access token with push permissions
 
 **Note**: GitHub Container Registry (GHCR) authentication uses the built-in `GITHUB_TOKEN` and requires no additional configuration.
@@ -108,34 +108,34 @@ To enable Docker Hub distribution, the following secrets must be configured in t
 
 #### Latest stable release:
 ```bash
-docker pull chipprrobotics/fukuii:latest
+docker pull chipprbots/fukuii:latest
 # or
 docker pull ghcr.io/chippr-robotics/chordodes_fukuii:latest
 ```
 
 #### Specific version:
 ```bash
-docker pull chipprrobotics/fukuii:v1.2.3
+docker pull chipprbots/fukuii:v1.2.3
 ```
 
 #### Latest nightly build:
 ```bash
-docker pull chipprrobotics/fukuii:nightly
+docker pull chipprbots/fukuii:nightly
 ```
 
 #### Specific nightly build:
 ```bash
-docker pull chipprrobotics/fukuii:nightly-20251025
+docker pull chipprbots/fukuii:nightly-20251025
 ```
 
 #### Development branch:
 ```bash
-docker pull chipprrobotics/fukuii:develop
+docker pull chipprbots/fukuii:develop
 ```
 
 #### Specific commit:
 ```bash
-docker pull chipprrobotics/fukuii:sha-abc1234
+docker pull chipprbots/fukuii:sha-abc1234
 ```
 
 ### Building Images Locally

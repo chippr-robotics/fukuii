@@ -24,13 +24,13 @@ docker/
 #### From Docker Hub (Recommended):
 ```bash
 # Latest stable release
-docker pull chipprrobotics/fukuii:latest
+docker pull chipprbots/fukuii:latest
 
 # Specific version
-docker pull chipprrobotics/fukuii:v1.0.0
+docker pull chipprbots/fukuii:v1.0.0
 
 # Latest nightly build
-docker pull chipprrobotics/fukuii:nightly
+docker pull chipprbots/fukuii:nightly
 ```
 
 #### From GitHub Container Registry:
@@ -67,7 +67,7 @@ The main Fukuii Ethereum client image for production use.
 
 **Usage**:
 ```bash
-docker run -it chipprrobotics/fukuii:latest fukuii etc
+docker run -it chipprbots/fukuii:latest fukuii etc
 ```
 
 ### Base Image (`fukuii-base`)
@@ -145,7 +145,7 @@ Mount configuration and data directories:
 ```bash
 docker run -v /path/to/conf:/app/conf \
            -v /path/to/data:/app/data \
-           chipprrobotics/fukuii:latest
+           chipprbots/fukuii:latest
 ```
 
 ## Development Workflow
@@ -170,10 +170,10 @@ All images should be scanned for vulnerabilities before deployment:
 
 ```bash
 # Using Trivy
-trivy image chipprrobotics/fukuii:latest
+trivy image chipprbots/fukuii:latest
 
 # Using Docker Scout
-docker scout cves chipprrobotics/fukuii:latest
+docker scout cves chipprbots/fukuii:latest
 ```
 
 ## Support

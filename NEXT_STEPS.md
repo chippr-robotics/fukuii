@@ -38,7 +38,7 @@ To enable Docker Hub distribution, you need to configure GitHub secrets:
 1. Go to repository Settings → Secrets and variables → Actions
 2. Add two secrets:
    - **Name**: `DOCKERHUB_USERNAME`
-     **Value**: `chipprrobotics` (or appropriate username)
+     **Value**: `chipprbots` (or appropriate username)
    - **Name**: `DOCKERHUB_TOKEN`
      **Value**: [Paste the token from Step 1]
 
@@ -78,12 +78,12 @@ docker pull ghcr.io/chippr-robotics/chordodes_fukuii:latest
 ### Docker Hub
 Available after configuring secrets:
 ```bash
-docker pull chipprrobotics/fukuii:latest
+docker pull chipprbots/fukuii:latest
 ```
 
 Check published images:
 - GHCR: https://github.com/chippr-robotics/chordodes_fukuii/pkgs/container/chordodes_fukuii
-- Docker Hub: https://hub.docker.com/r/chipprrobotics/fukuii
+- Docker Hub: https://hub.docker.com/r/chipprbots/fukuii
 
 ## 📋 Image Tags Available
 
@@ -131,7 +131,7 @@ Once workflow runs successfully, these tags will be available:
 
 ### Wrong image tags
 - Check `DOCKERHUB_ORG` in `.github/workflows/docker.yml`
-- Should be set to `chipprrobotics`
+- Should be set to `chipprbots`
 
 ## 📞 Support
 
