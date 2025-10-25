@@ -58,7 +58,8 @@ docker pull chipprbots/fukuii:nightly
 
 **Documentation:**
 - [Docker Quick Start](docker/README.md)
-- [Complete Docker Policy & Tagging Strategy](docker/DOCKER_POLICY.md)
+- [Docker Policy & Tagging Strategy](docs/docker-policy.md)
+- [Docker Hub Setup Guide](docs/docker-hub-setup.md)
 
 Getting started
 

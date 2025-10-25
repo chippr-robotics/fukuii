@@ -133,4 +133,4 @@ For issues with:
 
 - [Docker Hub Access Tokens Documentation](https://docs.docker.com/docker-hub/access-tokens/)
 - [GitHub Actions Secrets Documentation](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
-- [Project Docker Policy](DOCKER_POLICY.md)
+- [Project Docker Policy](docker-policy.md)

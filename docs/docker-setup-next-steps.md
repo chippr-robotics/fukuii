@@ -13,9 +13,9 @@ The following has been completed and is ready to use:
    - Manual workflow dispatch trigger
 
 2. **Documentation**: Created comprehensive guides:
-   - `docker/DOCKER_POLICY.md` - Complete tagging and distribution policy
+   - `docs/docker-policy.md` - Complete tagging and distribution policy
    - `docker/README.md` - Quick start and usage guide
-   - `docker/DOCKERHUB_SETUP.md` - Step-by-step setup instructions
+   - `docs/docker-hub-setup.md` - Step-by-step setup instructions
    - Updated main `README.md` with Docker information
 
 3. **Third-Party Image Clarification**: Updated besu and geth documentation to clarify use of official upstream images
@@ -42,7 +42,7 @@ To enable Docker Hub distribution, you need to configure GitHub secrets:
    - **Name**: `DOCKERHUB_TOKEN`
      **Value**: [Paste the token from Step 1]
 
-**Detailed instructions**: See `docker/DOCKERHUB_SETUP.md`
+**Detailed instructions**: See `docs/docker-hub-setup.md`
 
 ## 🧪 Testing the Workflow
 
@@ -112,9 +112,9 @@ Once workflow runs successfully, these tags will be available:
 
 ## 📚 Additional Resources
 
-- **Docker Policy**: `docker/DOCKER_POLICY.md` - Complete tagging strategy and policy
+- **Docker Policy**: `docs/docker-policy.md` - Complete tagging strategy and policy
 - **Quick Start**: `docker/README.md` - Usage examples and quick start
-- **Setup Guide**: `docker/DOCKERHUB_SETUP.md` - Detailed Docker Hub configuration
+- **Setup Guide**: `docs/docker-hub-setup.md` - Detailed Docker Hub configuration
 - **Main README**: Updated with Docker information
 
 ## 🐛 Troubleshooting
