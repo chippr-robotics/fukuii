@@ -54,9 +54,14 @@ jobs:
       
       - name: Build base image locally if needed
         if: matrix.image.name == 'dev'
-        run: |
-          cd docker
-          docker build -t fukuii-base:latest -f Dockerfile-base .
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile-base
+          load: true
+          tags: fukuii-base:latest
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
       
       - name: Extract metadata
         id: meta
@@ -109,9 +114,10 @@ jobs:
       
       - name: Build base and dev images locally
         run: |
-          cd docker
-          docker build -t fukuii-base:latest -f Dockerfile-base .
-          docker build -t fukuii-dev:latest -f Dockerfile-dev .
+          # Build base image with buildx and load it into docker
+          docker buildx build --load -t fukuii-base:latest -f docker/Dockerfile-base docker/
+          # Build dev image with buildx and load it into docker
+          docker buildx build --load -t fukuii-dev:latest -f docker/Dockerfile-dev docker/
       
       - name: Extract metadata for main image
         id: meta
