@@ -214,7 +214,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
   "A metric about mining a new block should be available" in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
-    import MantisRegistries._
+    import MetricsHelper._
 
     val minedMetricBefore = sampleMetric(TimerCountMetric, MinedBlockPropagation)
     val defaultMetricBefore = sampleMetric(TimerCountMetric, DefaultBlockPropagation)
@@ -236,7 +236,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     }
   }
 
-  object MantisRegistries {
+  object MetricsHelper {
     val TimerCountMetric = "app_regularsync_blocks_propagation_timer_seconds_count"
     val DefaultBlockPropagation = "DefaultBlockPropagation"
     val MinedBlockPropagation = "MinedBlockPropagation"

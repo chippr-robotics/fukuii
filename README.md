@@ -115,7 +115,14 @@ Review custom scripts or automation to ensure they invoke fukuii instead of mant
 
 Contributing
 
-We welcome contributions! Please submit issues and pull requests via our GitHub repository. When modifying code derived from Mantis, include a notice in the header of changed files stating that you changed the file and add your own copyright line.
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for detailed information on:
+
+- Setting up your development environment
+- Code quality standards and formatting tools
+- Pre-commit hooks for automated checks
+- Testing and submitting pull requests
+
+When modifying code derived from Mantis, include a notice in the header of changed files stating that you changed the file and add your own copyright line.
 
 Contact
 

@@ -21,7 +21,7 @@ object VmSetup extends Logger {
   ): VMImpl =
     (vmConfig.mode, vmConfig.externalConfig) match {
       case (Internal, _) =>
-        log.info("Using Mantis internal VM")
+        log.info("Using Fukuii internal VM")
         new VMImpl
 
       case (External, Some(extConf)) =>
