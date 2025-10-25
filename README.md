@@ -29,7 +29,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 - ✅ **Automated Testing**: All tests run on every push and PR
 - 🔍 **Code Quality**: Automated formatting and style checks
-- 🐳 **Docker Builds**: Automatic container image builds
+- 🐳 **Docker Builds**: Automatic container image builds and distribution
 - 🚀 **Releases**: Automated release creation with milestone tracking
 - 📊 **Dependency Checks**: Weekly dependency monitoring
 
@@ -37,8 +37,28 @@ This project uses GitHub Actions for continuous integration and delivery:
 - [Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
+- [Docker Images & Distribution](docker/README.md)
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
+
+## Docker Images
+
+Pre-built Docker images are available from Docker Hub and GitHub Container Registry:
+
+```bash
+# Latest stable release
+docker pull chipprrobotics/fukuii:latest
+
+# Specific version
+docker pull chipprrobotics/fukuii:v1.0.0
+
+# Latest nightly build
+docker pull chipprrobotics/fukuii:nightly
+```
+
+**Documentation:**
+- [Docker Quick Start](docker/README.md)
+- [Complete Docker Policy & Tagging Strategy](docker/DOCKER_POLICY.md)
 
 Getting started
 
