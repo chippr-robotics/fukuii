@@ -11,6 +11,7 @@ Thank you for your interest in contributing to Fukuii! This document provides gu
 - [Pre-commit Hooks](#pre-commit-hooks)
 - [Testing](#testing)
 - [Submitting Changes](#submitting-changes)
+- [Guidelines for LLM Agents](#guidelines-for-llm-agents)
 
 ## Code of Conduct
 
@@ -335,6 +336,104 @@ Our CI pipeline automatically runs:
 - ✅ Build artifacts (`assembly`, `dist`)
 
 All checks must pass before a PR can be merged.
+
+## Guidelines for LLM Agents
+
+This section provides rules, reminders, and prompts for LLM agents (AI coding assistants) working on this codebase to ensure consistency and quality.
+
+### Core Principles
+
+1. **Keep Documentation Essential**: Focus on clarity and brevity. Avoid unnecessary verbosity or redundant explanations.
+2. **Consistency Over Innovation**: Follow existing patterns in the codebase rather than introducing new approaches.
+3. **Minimal Changes**: Make the smallest possible changes to achieve the goal. Don't refactor unrelated code.
+
+### Rules
+
+1. **Code Style**
+   - Always run `sbt formatAll` before committing
+   - Follow existing Scala idioms and patterns in the codebase
+   - Use the same naming conventions as surrounding code
+   - Keep line length under 120 characters (configured in `.scalafmt.conf`)
+
+2. **Testing**
+   - Write tests that match the existing test structure and style
+   - Run `sbt testAll` to verify all tests pass
+   - Don't modify unrelated tests unless fixing a bug
+   - Integration tests go in `src/it/`, unit tests in `src/test/`
+
+3. **Documentation**
+   - Update documentation when changing public APIs
+   - Keep comments concise and focused on "why" not "what"
+   - Don't add comments for self-explanatory code
+   - Update README.md for user-facing changes
+
+4. **Package Structure**
+   - All code uses package prefix `com.chipprbots.ethereum`
+   - Previously used `io.iohk.ethereum` (from Mantis project) - update if found
+   - Configuration paths use `.fukuii/` not `.mantis/`
+
+5. **Dependencies**
+   - Don't add dependencies without justification
+   - Check for security vulnerabilities before adding dependencies
+   - Prefer libraries already in use in the project
+
+### Reminders
+
+- **JDK Compatibility**: Code must work on both JDK 11 and JDK 17
+- **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
+- **Logger Configuration**: Update logback configurations when adding new packages
+- **Rebranding**: This is a rebrand from "Mantis" to "Fukuii" - update any remaining "mantis" or "io.iohk" references
+- **Commit Messages**: Use clear, descriptive commit messages in imperative mood
+- **Git Hygiene**: Don't commit build artifacts, IDE files, or temporary files
+
+### Prompts for Common Tasks
+
+**When fixing tests:**
+```
+1. Identify the root cause of the failure
+2. Check if it's related to rebranding (mantis→fukuii, io.iohk→com.chipprbots)
+3. Check logger configurations in src/test/resources/ and src/it/resources/
+4. Run the specific test to verify the fix
+5. Run full test suite to ensure no regressions
+```
+
+**When adding new features:**
+```
+1. Follow existing patterns in similar features
+2. Add comprehensive tests (unit + integration if needed)
+3. Update documentation (README, scaladoc)
+4. Run formatCheck and linters
+5. Ensure JDK 11 and JDK 17 compatibility
+```
+
+**When refactoring:**
+```
+1. Keep changes minimal and focused
+2. Don't mix refactoring with feature work
+3. Ensure all tests pass before and after
+4. Maintain backward compatibility unless breaking changes are approved
+```
+
+**When updating dependencies:**
+```
+1. Check the GitHub Advisory Database for vulnerabilities
+2. Test thoroughly on both JDK 11 and JDK 17
+3. Update version numbers in build.sbt
+4. Document any breaking changes or migration steps
+```
+
+### Quality Checklist
+
+Before submitting a PR, verify:
+- [ ] `sbt formatCheck` passes
+- [ ] `sbt scalastyle test:scalastyle` passes
+- [ ] `sbt compile-all` succeeds
+- [ ] `sbt testAll` passes (both JDK 11 and 17 if possible)
+- [ ] `sbt it:test` passes for integration tests
+- [ ] No new compiler warnings introduced
+- [ ] Documentation updated for user-facing changes
+- [ ] Commit messages are clear and descriptive
+- [ ] No debugging code or print statements left in
 
 ## Additional Resources
 
