@@ -11,8 +11,8 @@ HERE=$(readlink -m $(dirname ${BASH_SOURCE[0]}))
 mkdir ~/repos
 
 cd ~/repos
-git clone https://github.com/input-output-hk/mantis.git
-cd mantis
+git clone https://github.com/chippr-robotics/chordodes_fukuii.git
+cd chordodes_fukuii
 git checkout $FUKUII_TAG
 git submodule update --init
 
