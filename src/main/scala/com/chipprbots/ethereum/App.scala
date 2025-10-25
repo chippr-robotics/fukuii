@@ -44,4 +44,3 @@ object App extends Logger {
 
   }
 }
-

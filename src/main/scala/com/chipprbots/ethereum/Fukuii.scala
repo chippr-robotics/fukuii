@@ -31,4 +31,3 @@ object Fukuii extends Logger {
     rocksdb.RocksDB.destroyDB(Config.Db.RocksDb.path, new rocksdb.Options())
   }
 }
-

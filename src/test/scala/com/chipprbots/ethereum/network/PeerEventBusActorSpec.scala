@@ -97,13 +97,13 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
 
     peerEventBusProbe.ref ! PoisonPill
 
-  // make the stream checks a bit more robust to fork/timing differences by waiting
-  // deterministically for a short timeout instead of relying on the default whenReady
-  val res1 = Await.result(stream1, 5.seconds)
-  res1 shouldEqual Seq(msgFromPeer)
+    // make the stream checks a bit more robust to fork/timing differences by waiting
+    // deterministically for a short timeout instead of relying on the default whenReady
+    val res1 = Await.result(stream1, 5.seconds)
+    res1 shouldEqual Seq(msgFromPeer)
 
-  val res2 = Await.result(stream2, 5.seconds)
-  res2 shouldEqual Seq(msgFromPeer, msgFromPeer2)
+    val res2 = Await.result(stream2, 5.seconds)
+    res2 shouldEqual Seq(msgFromPeer, msgFromPeer2)
   }
 
   it should "only relay matching message codes" in new TestSetup {
