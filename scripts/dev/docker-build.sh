@@ -14,7 +14,7 @@ IMAGE_TAG="${1:-latest}"
 BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 GIT_BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD)"
-VERSION="$(grep 'version :=' "${REPO_ROOT}/version.sbt" | sed 's/.*"\(.*\)".*/\1/' || echo 'unknown')"
+VERSION="$(grep 'version.*:=' "${REPO_ROOT}/version.sbt" | sed 's/.*"\(.*\)".*/\1/' || echo 'unknown')"
 
 echo "================================================"
 echo "Building Fukuii Docker Image"

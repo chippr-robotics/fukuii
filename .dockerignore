@@ -1,0 +1,51 @@
+# Git
+.git
+.gitignore
+.gitmodules
+
+# IDE
+.idea
+.vscode
+.metals
+.bloop
+.bsp
+metals.sbt
+
+# Build artifacts (will be built inside container)
+target/
+dist/
+result
+.nix/
+
+# Logs
+*.log
+*.log.zip
+
+# Documentation (except README)
+docs/
+*.md
+!README.md
+
+# Testing
+test-ets.sh
+
+# Misc
+.ensime
+.ensime_cache/
+.evm-runner_history
+.direnv
+.scannerwork/
+actionlint
+rebrand_backup_*
+insomnia_workspace.json
+
+# Docker
+docker-data/
+docker/
+docker-compose*.yml
+
+# Scripts not needed in image
+nix/
+tls/
+update-nix.sh
+rebrand.sh
