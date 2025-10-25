@@ -54,37 +54,84 @@ See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
 ## Option 2: Local Development
 
+### Prerequisites
+
 To build Fukuii from source locally you will need:
 
-JDK 11 or higher.
+**JDK 11** (pinned version for reproducible builds)
 
-sbt
- (Scala build tool).
+**sbt 1.5.4** (version is pinned in `project/build.properties`)
 
 Python (for certain auxiliary scripts).
 
-Building the client
+### Installing JDK 11 with SDKMAN
+
+The easiest way to install and manage JDK versions is with [SDKMAN](https://sdkman.io/):
+
+```bash
+# Install SDKMAN (if not already installed)
+curl -s "https://get.sdkman.io" | bash
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+
+# Install JDK 11 (Temurin distribution)
+sdk install java 11.0.21-tem
+
+# Set JDK 11 as default (optional)
+sdk default java 11.0.21-tem
+
+# Or use JDK 11 for current shell only
+sdk use java 11.0.21-tem
+```
+
+### Quick Build and Run
+
+Use the provided convenience scripts for development:
+
+```bash
+# Build the fat JAR
+./scripts/dev/build.sh
+
+# Run the client
+./scripts/dev/run.sh etc  # Join ETC network
+./scripts/dev/run.sh cli generate-private-key  # CLI example
+```
+
+### Manual Build Instructions
+
+**Building the client**
 
 Update git submodules:
 
+```bash
 git submodule update --init --recursive
-
+```
 
 Build the distribution using sbt:
 
+```bash
 sbt dist
-
+```
 
 After the build completes, a distribution zip archive will be placed under target/universal/. Unzip it to run the client.
 
-Running the client
+Alternatively, build a fat JAR:
 
-The distribution’s bin/ directory contains a launcher script named fukuii. To join the ETC network:
+```bash
+sbt assembly
+```
 
+The fat JAR will be created in `target/scala-2.13/fukuii-<version>.jar`.
+
+**Running the client**
+
+The distribution's bin/ directory contains a launcher script named fukuii. To join the ETC network:
+
+```bash
 ./bin/fukuii etc
-
+```
 
 The launcher accepts the same network names that Mantis did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+
 
 Command line interface (CLI)
 

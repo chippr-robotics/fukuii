@@ -280,6 +280,29 @@ lazy val node = {
     .settings(
       crossScalaVersions := List(`scala-2.13`)
     )
+    .settings(
+      // Assembly settings for creating fat JAR
+      assembly / mainClass := Some("com.chipprbots.ethereum.App"),
+      assembly / assemblyJarName := s"fukuii-${version.value}.jar",
+      assembly / test := {},
+      assembly / assemblyMergeStrategy := {
+        case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".SF")) => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".DSA")) => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".RSA")) => MergeStrategy.discard
+        case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.first
+        case PathList("META-INF", "native-image", xs @ _*) => MergeStrategy.first
+        case PathList("google", "protobuf", xs @ _*) => MergeStrategy.first
+        case PathList("com", "google", "protobuf", xs @ _*) => MergeStrategy.first
+        case "module-info.class" => MergeStrategy.discard
+        case "reference.conf" => MergeStrategy.concat
+        case "application.conf" => MergeStrategy.concat
+        case x if x.endsWith(".proto") => MergeStrategy.first
+        case x =>
+          val oldStrategy = (assembly / assemblyMergeStrategy).value
+          oldStrategy(x)
+      }
+    )
 
   if (!nixBuild)
     node
