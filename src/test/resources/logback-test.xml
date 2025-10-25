@@ -8,9 +8,9 @@
         </encoder>
     </appender>
 
-    <logger name="io.iohk.ethereum" level="INFO" />
-    <logger name="io.iohk.ethereum.consensus.pow.PoWMiningCoordinator" level="DEBUG" />
-    <logger name="io.iohk.ethereum.vm.VM" level="OFF" />
+    <logger name="com.chipprbots.ethereum" level="INFO" />
+    <logger name="com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
 
     <root level="INFO">
         <appender-ref ref="STDOUT" />

@@ -9,12 +9,12 @@ class VersionInfoSpec extends AnyFlatSpec with Matchers {
   it should "match ethstats expected structure and preserve major and minor Java version" in {
     (VersionInfo
       .nodeName() should fullyMatch)
-      .regex("""mantis/v\d(\.\d+)*(-SNAPSHOT)?-[a-z0-9]{7}/[^/]+-[^/]+/[^/]+-.[^/]+-java-\d+\.\d+[._0-9]*""")
+      .regex("""fukuii/v\d(\.\d+)*(-SNAPSHOT)?-[a-z0-9]{7}/[^/]+-[^/]+/[^/]+-.[^/]+-java-\d+\.\d+[._0-9]*""")
   }
 
   it should "augment the name with an identity" in {
     val name = VersionInfo.nodeName(Some("iohk"))
-    name should startWith("mantis/iohk/v")
+    name should startWith("fukuii/iohk/v")
     name.count(_ == '/') shouldBe 4
   }
 }
