@@ -25,6 +25,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        image:
+          - name: base
+            file: Dockerfile-base
+            suffix: -base
+          - name: dev
+            file: Dockerfile-dev
+            suffix: -dev
     
     steps:
       - name: Checkout code
@@ -43,51 +52,66 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Extract metadata for base image
-        id: meta-base
+      - name: Build base image locally if needed
+        if: matrix.image.name == 'dev'
+        run: |
+          cd docker
+          docker build -t fukuii-base:latest -f Dockerfile-base .
+      
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-base
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image.suffix }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
       
-      - name: Build and push base image
+      - name: Build and push image
         uses: docker/build-push-action@v5
         with:
           context: ./docker
-          file: ./docker/Dockerfile-base
+          file: ./docker/${{ matrix.image.file }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta-base.outputs.tags }}
-          labels: ${{ steps.meta-base.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      
-      - name: Extract metadata for dev image
-        id: meta-dev
-        uses: docker/metadata-action@v5
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}
+  
+  docker-build-main:
+    name: Build Main Docker Image
+    runs-on: ubuntu-latest
+    needs: docker-build
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-dev
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+          submodules: recursive
       
-      - name: Build and push dev image
-        uses: docker/build-push-action@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
-          context: ./docker
-          file: ./docker/Dockerfile-dev
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta-dev.outputs.tags }}
-          labels: ${{ steps.meta-dev.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build base and dev images locally
+        run: |
+          cd docker
+          docker build -t fukuii-base:latest -f Dockerfile-base .
+          docker build -t fukuii-dev:latest -f Dockerfile-dev .
       
       - name: Extract metadata for main image
         id: meta
@@ -110,5 +134,5 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=main
+          cache-to: type=gha,mode=max,scope=main
