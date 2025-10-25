@@ -1,5 +1,7 @@
 ## How to run Besu
 
+**Note**: This setup uses the **official Hyperledger Besu Docker image** from Docker Hub (`hyperledger/besu`). Chippr Robotics does not build or maintain the Besu image - we only provide this docker-compose configuration for testing and interoperability purposes.
+
 In `runBesu.sh` set the Besu `VERSION` you wish to test and then just run the script in a terminal 
 
 ```./runBesu.sh```
@@ -17,3 +19,8 @@ Some metrics are already being displayed in Grafana, using part of the dashboard
 
 ### JSON RPC API
 JSON-RPC service is available at port 8545
+
+### Official Besu Documentation
+For more information about Hyperledger Besu, visit:
+- Docker Hub: https://hub.docker.com/r/hyperledger/besu
+- Documentation: https://besu.hyperledger.org/

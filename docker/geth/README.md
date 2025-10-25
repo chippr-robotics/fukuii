@@ -1,5 +1,7 @@
 ## How to run Geth
 
+**Note**: This setup uses the **official Go Ethereum (Geth) Docker image** from Docker Hub (`ethereum/client-go`). Chippr Robotics does not build or maintain the Geth image - we only provide this docker-compose configuration for testing and interoperability purposes.
+
 Just run the script in a terminal
 
 ``` ./runGeth.sh```
@@ -20,6 +22,11 @@ https://gist.githubusercontent.com/karalabe/e7ca79abdec54755ceae09c08bd090cd/raw
 
 ### JSON RPC API
 JSON-RPC service is available at port 8545
+
+### Official Geth Documentation
+For more information about Go Ethereum (Geth), visit:
+- Docker Hub: https://hub.docker.com/r/ethereum/client-go
+- Documentation: https://geth.ethereum.org/
 
 
 
