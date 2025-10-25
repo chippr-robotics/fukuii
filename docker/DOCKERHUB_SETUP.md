@@ -113,7 +113,7 @@ If you need to manually push an image (not recommended for production):
 
 ```bash
 # Login to Docker Hub
-docker login docker.io
+docker login docker.io --username <your-username>
 
 # Tag image
 docker tag fukuii:latest chipprrobotics/fukuii:latest

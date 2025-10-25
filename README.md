@@ -29,7 +29,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 - ✅ **Automated Testing**: All tests run on every push and PR
 - 🔍 **Code Quality**: Automated formatting and style checks
-- 🐳 **Docker Builds**: Automatic container image builds and distribution
+- 🐳 **Docker Builds**: Automatic container image builds and multi-registry distribution (Docker Hub & GHCR)
 - 🚀 **Releases**: Automated release creation with milestone tracking
 - 📊 **Dependency Checks**: Weekly dependency monitoring
 
