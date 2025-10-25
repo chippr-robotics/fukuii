@@ -10,10 +10,10 @@
     </appender>
 
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${user.home}/.fukuii/logs/fukuii.log</file>
+        <file>${java.io.tmpdir}/fukuii-it-test/fukuii.log</file>
         <append>true</append>
         <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
-            <fileNamePattern>${user.home}/.fukuii/logs/fukuii.%i.log.zip</fileNamePattern>
+            <fileNamePattern>${java.io.tmpdir}/fukuii-it-test/fukuii.%i.log.zip</fileNamePattern>
             <minIndex>1</minIndex>
             <maxIndex>10</maxIndex>
         </rollingPolicy>
