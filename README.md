@@ -56,7 +56,7 @@ See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
 To build Fukuii from source locally you will need:
 
-JDK 8 or higher.
+JDK 11 or higher.
 
 sbt
  (Scala build tool).
