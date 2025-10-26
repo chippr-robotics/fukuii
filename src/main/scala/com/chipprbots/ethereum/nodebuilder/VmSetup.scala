@@ -1,20 +1,22 @@
 package com.chipprbots.ethereum.nodebuilder
 
-import java.lang.ProcessBuilder.Redirect
+// import java.lang.ProcessBuilder.Redirect
 
 import akka.actor.ActorSystem
 
-import com.chipprbots.ethereum.extvm.ExtVMInterface
-import com.chipprbots.ethereum.extvm.VmServerApp
+// HIBERNATED: External VM imports commented out
+// import com.chipprbots.ethereum.extvm.ExtVMInterface
+// import com.chipprbots.ethereum.extvm.VmServerApp
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.VmConfig
-import com.chipprbots.ethereum.utils.VmConfig.ExternalConfig
+// import com.chipprbots.ethereum.utils.VmConfig.ExternalConfig
 
 /** HIBERNATED: External VM features are currently in hibernation.
   * External VM support is experimental and not production-ready.
   * Default configuration uses vm.mode = "internal" which is fully supported.
+  * All external VM code paths have been commented out.
   */
 object VmSetup extends Logger {
 
@@ -28,15 +30,19 @@ object VmSetup extends Logger {
         log.info("Using Fukuii internal VM")
         new VMImpl
 
-      case (External, Some(extConf)) =>
-        log.warn("HIBERNATED: External VM features are experimental and not production-ready")
-        startExternalVm(extConf)
-        new ExtVMInterface(extConf, blockchainConfig, testMode)
+      // HIBERNATED: External VM code path commented out
+      // case (External, Some(extConf)) =>
+      //   log.warn("HIBERNATED: External VM features are experimental and not production-ready")
+      //   startExternalVm(extConf)
+      //   new ExtVMInterface(extConf, blockchainConfig, testMode)
 
       case _ =>
-        throw new RuntimeException("Missing vm.external config for external VM")
+        log.error("External VM mode is hibernated. Only vm.mode = 'internal' is supported.")
+        throw new RuntimeException("External VM features are hibernated. Use vm.mode = 'internal'")
     }
 
+  // HIBERNATED: All external VM methods commented out
+  /*
   private def startExternalVm(externalConfig: ExternalConfig): Unit =
     externalConfig.vmType match {
       case "iele" | "kevm" =>
@@ -53,7 +59,7 @@ object VmSetup extends Logger {
     }
 
   /** Runs a standard VM binary that takes $port and $host as input arguments
-    */
+   */
   private def startStandardVmProcess(externalConfig: ExternalConfig): Unit = {
     import externalConfig._
     require(executablePath.isDefined, s"VM type '$vmType' requires the path to binary to be provided")
@@ -72,5 +78,6 @@ object VmSetup extends Logger {
 
   private def startMantisVmInThisProcess(): Unit =
     VmServerApp.main(Array())
+   */
 
 }
