@@ -2,6 +2,98 @@
 
 This directory contains Dockerfiles for building and running Fukuii Ethereum Client in containerized environments.
 
+## Container Registries
+
+Fukuii maintains two container registries:
+
+### Official Release Registry (Recommended for Production)
+- **Registry:** `ghcr.io/chippr-robotics/chordodes_fukuii`
+- **Publishing:** Automated via `.github/workflows/release.yml` on version tags
+- **Security Features:**
+  - ✅ Images are signed with [Cosign](https://github.com/sigstore/cosign) (keyless signing using GitHub OIDC)
+  - ✅ SLSA Level 3 provenance attestations attached
+  - ✅ Software Bill of Materials (SBOM) included
+  - ✅ Immutable digest references
+- **Tags:** Semantic versions (e.g., `v1.0.0`, `1.0`, `1`, `latest`)
+
+### Development Registry
+- **Registry:** `ghcr.io/chippr-robotics/fukuii`
+- **Publishing:** Automated via `.github/workflows/docker.yml` on branch pushes
+- **Images:** `fukuii`, `fukuii-dev`, `fukuii-base`
+- **Tags:** Branch names, PR numbers, Git SHAs
+
+## Image Signature Verification
+
+Official release images are signed with Cosign for supply chain security.
+
+### Install Cosign
+
+**Option 1: Using Package Manager (Recommended)**
+```bash
+# macOS
+brew install cosign
+
+# Linux with snap
+snap install cosign --classic
+```
+
+**Option 2: Manual Installation with Verification**
+```bash
+# Download cosign for Linux
+VERSION="2.2.3"
+wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign-linux-amd64"
+wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign_checksums.txt"
+
+# Verify checksum
+grep cosign-linux-amd64 cosign_checksums.txt | sha256sum --check
+# Expected output: cosign-linux-amd64: OK
+
+# Install
+sudo install -m 755 cosign-linux-amd64 /usr/local/bin/cosign
+
+# Verify installation
+cosign version
+```
+
+**Option 3: Using GitHub CLI (Automatically Verified)**
+```bash
+VERSION="2.2.3"
+gh release download "v${VERSION}" --repo sigstore/cosign --pattern 'cosign-linux-amd64'
+sudo install -m 755 cosign-linux-amd64 /usr/local/bin/cosign
+```
+
+### Verify Image Signature
+
+```bash
+# Verify a signed release image
+cosign verify \
+  --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+```
+
+**What this verifies:**
+- The image was built by GitHub Actions in this repository
+- The image has not been tampered with since it was signed
+- The signature is valid and trusted
+
+### Verify SLSA Provenance
+
+```bash
+# Install slsa-verifier
+go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
+
+# Verify SLSA provenance
+slsa-verifier verify-image \
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0 \
+  --source-uri github.com/chippr-robotics/fukuii
+```
+
+**What this verifies:**
+- Build provenance meets SLSA Level 3 requirements
+- The image was built from the expected source repository
+- Build process integrity is maintained
+
 ## Available Images
 
 ### 1. Production Image (`Dockerfile`)
@@ -160,6 +252,53 @@ readinessProbe:
 
 ## Security Considerations
 
+### Trusted Supply Chain
+
+Release images published to `ghcr.io/chippr-robotics/chordodes_fukuii` follow supply chain security best practices:
+
+#### 1. Image Signing with Cosign
+- All release images are signed using [Sigstore Cosign](https://docs.sigstore.dev/cosign/overview/)
+- Uses keyless signing with GitHub OIDC (no keys to manage or rotate)
+- Signatures are stored in the Sigstore transparency log (Rekor)
+- Verifiable proof that images were built by our official GitHub Actions workflows
+
+#### 2. SLSA Provenance
+- [SLSA Level 3](https://slsa.dev/spec/v1.0/levels) provenance attestations are generated
+- Provides verifiable metadata about how the image was built
+- Includes source repository, commit SHA, build parameters, and builder identity
+- Helps prevent supply chain attacks by ensuring build integrity
+
+#### 3. Software Bill of Materials (SBOM)
+- Automatically generated SBOM in SPDX format
+- Lists all software components and dependencies in the image
+- Enables vulnerability tracking and compliance reporting
+- Attached as an attestation to the image
+
+#### 4. Immutable References
+- Every release includes an immutable digest reference (e.g., `sha256:abc123...`)
+- Digest references cannot be changed or overwritten
+- Provides strongest guarantee of image integrity
+
+**Verification Example:**
+```bash
+# 1. Pull the image by version tag
+docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+
+# 2. Verify the signature
+cosign verify \
+  --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+
+# 3. Verify SLSA provenance (optional)
+slsa-verifier verify-image \
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0 \
+  --source-uri github.com/chippr-robotics/fukuii
+
+# 4. Use the verified image with immutable digest
+docker pull ghcr.io/chippr-robotics/chordodes_fukuii@sha256:abc123...
+```
+
 ### Non-Root User
 All images run as the `fukuii` user (UID 1000, GID 1000) for security. This prevents privilege escalation attacks.
 
@@ -167,22 +306,25 @@ All images run as the `fukuii` user (UID 1000, GID 1000) for security. This prev
 Regularly scan images for vulnerabilities:
 ```bash
 # Using Docker Scout (if available)
-docker scout cves fukuii:latest
+docker scout cves ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
 
 # Using Trivy
-trivy image fukuii:latest
+trivy image ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
 
 # Using Grype
-grype fukuii:latest
+grype ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
 ```
 
 ### Best Practices
 - Always use specific version tags in production (avoid `:latest`)
+- Verify image signatures before deploying to production
+- Use immutable digest references for critical deployments
 - Regularly update base images to get security patches
 - Use distroless images when possible for maximum security
 - Limit exposed ports to only what's necessary
 - Use read-only root filesystem when possible
 - Set resource limits (memory, CPU) appropriately
+- Monitor the Sigstore transparency log for your images
 
 ## Environment Variables
 
@@ -233,17 +375,60 @@ volumes:
 
 ## CI/CD Integration
 
-The GitHub Actions workflow automatically builds and publishes images to GitHub Container Registry:
+Fukuii uses two automated workflows for container image publishing:
 
+### Release Workflow (`.github/workflows/release.yml`)
+
+**Triggered by:** Git tags starting with `v` (e.g., `v1.0.0`)
+
+**Registry:** `ghcr.io/chippr-robotics/chordodes_fukuii` (Official releases)
+
+**Security Features:**
+- ✅ Images signed with Cosign (keyless, GitHub OIDC)
+- ✅ SLSA Level 3 provenance attestations
+- ✅ SBOM (Software Bill of Materials) included
+- ✅ Immutable digest references logged
+
+**Tags Generated:**
+- Semantic version tags:
+  - `v1.0.0` - Full version
+  - `1.0` - Major.minor
+  - `1` - Major only (not applied to v0.x releases)
+  - `latest` - Latest stable release (excludes alpha/beta/rc)
+
+**Example Release:**
+```bash
+# Create and push a release tag
+git tag -a v1.0.0 -m "Release 1.0.0"
+git push origin v1.0.0
+
+# Workflow automatically:
+# 1. Builds the application
+# 2. Creates GitHub release with artifacts
+# 3. Builds and pushes Docker image
+# 4. Signs image with Cosign
+# 5. Generates SLSA provenance
+# 6. Logs immutable digest
+```
+
+### Development Workflow (`.github/workflows/docker.yml`)
+
+**Triggered by:** Push to main/develop branches, Pull Requests
+
+**Registry:** `ghcr.io/chippr-robotics/fukuii` (Development builds)
+
+**Images:**
 - **Main Image:** `ghcr.io/chippr-robotics/fukuii:latest`
 - **Dev Image:** `ghcr.io/chippr-robotics/fukuii-dev:latest`
 - **Base Image:** `ghcr.io/chippr-robotics/fukuii-base:latest`
 
-Images are tagged with:
+**Tags Generated:**
 - Branch names (e.g., `main`, `develop`)
 - Git SHA (e.g., `sha-a1b2c3d`)
-- Semantic versions (e.g., `v1.0.0`, `1.0`)
+- PR numbers (e.g., `pr-123`)
 - `latest` for the default branch
+
+**Note:** Development images are not signed and do not include provenance attestations. Use release images for production deployments.
 
 ## Migration from Old Images
 
