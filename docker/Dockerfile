@@ -15,9 +15,10 @@ WORKDIR /build
 # Copy source code
 COPY . /build
 
-# Initialize submodules and build distribution
-RUN git submodule update --init --recursive && \
-    ./sbt dist
+# Build distribution
+# Note: Submodules are already initialized by the GitHub Actions checkout step
+# or should be initialized manually before building (git submodule update --init --recursive)
+RUN ./sbt dist
 
 # Extract the distribution zip
 RUN cd target/universal && \
