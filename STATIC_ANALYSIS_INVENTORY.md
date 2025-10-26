@@ -249,36 +249,59 @@ scapegoatIgnoredFiles := Seq(
 - Configured in `build.sbt`
 
 **Version Information**:
-- **SBT Plugin**: org.scoverage:sbt-scoverage:1.6.1
+- **SBT Plugin**: org.scoverage:sbt-scoverage:2.0.10
 
 **Configuration Details**:
 ```scala
-coverageExcludedPackages := "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*"
+coverageEnabled := false // Disabled by default, enable with `sbt coverage`
+coverageMinimumStmtTotal := 70
+coverageFailOnMinimum := true
+coverageHighlighting := true
+coverageExcludedPackages := Seq(
+  "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*",  // Protobuf generated code
+  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo",  // BuildInfo generated code
+  ".*\\.protobuf\\..*"  // All protobuf packages
+).mkString(";")
+coverageExcludedFiles := Seq(
+  ".*/src_managed/.*",  // All managed sources
+  ".*/target/.*/src_managed/.*"  // Target managed sources
+).mkString(";")
 ```
 
-**Current State**: ⚠️ **NOT ACTIVELY USED**
-- Plugin is installed but not run in CI
-- Coverage exclusions configured for protobuf messages
-- No coverage reports being generated
+**Current State**: ✅ **CONFIGURED AND INTEGRATED** (October 26, 2025)
+- Updated to version 2.0.10 (latest stable)
+- Integrated into CI pipeline with `testCoverage` command
+- Coverage thresholds set to 70% minimum statement coverage
+- Comprehensive exclusions for generated code
+- Coverage reports published as artifacts (30-day retention)
 
 **SBT Commands**:
-- `sbt coverage test` - Run tests with coverage
+- `sbt testCoverage` - Run all tests with coverage and generate reports
+- `sbt coverage` - Enable coverage instrumentation
 - `sbt coverageReport` - Generate coverage reports
 - `sbt coverageAggregate` - Aggregate coverage across modules
+- `sbt coverageOff` - Disable coverage instrumentation
+
+**Report Locations**:
+- HTML report: `target/scala-2.13/scoverage-report/index.html`
+- XML report: `target/scala-2.13/scoverage-report/cobertura.xml`
 
 **Analysis**:
-- ⚠️ **Version**: 1.6.1 is outdated (latest is 2.x)
+- ✅ **Version**: 2.0.10 is the latest stable version for Scala 2.13
 - ✅ **Appropriateness**: Essential for measuring test coverage
-- ❌ **Current State**: Not being used despite being configured
-- ❓ **Ordering**: Would run during test phase (not currently in CI)
-- ⚠️ **Missing**: No coverage thresholds or enforcement
+- ✅ **Current State**: Actively used in CI pipeline
+- ✅ **Ordering**: Runs during test phase, appropriate placement
+- ✅ **Thresholds**: 70% minimum statement coverage with enforcement
+- ✅ **Exclusions**: Comprehensive exclusions for generated code
 
 **Recommendation**: 
-- Update to Scoverage 2.x for better performance and Scala 2.13 support
-- Add coverage execution to CI pipeline
-- Set minimum coverage thresholds
-- Configure proper exclusions for generated code
-- Publish coverage reports as artifacts
+- ✅ COMPLETED: Updated to Scoverage 2.0.10
+- ✅ COMPLETED: Added coverage execution to CI pipeline
+- ✅ COMPLETED: Set minimum coverage threshold to 70%
+- ✅ COMPLETED: Configured proper exclusions for generated code
+- ✅ COMPLETED: Publishing coverage reports as CI artifacts
+- Monitor coverage trends and consider increasing threshold gradually
+- Review coverage reports regularly to identify untested code
 
 ---
 
@@ -323,15 +346,16 @@ coverageExcludedPackages := "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*"
 1. **Compile** - `sbt compile-all` (compiles all modules)
 2. **Format Check** - `sbt formatCheck` (scalafmt + scalafix --check)
 3. **Scapegoat Analysis** - `sbt runScapegoat` (static bug detection)
-4. **Tests** - `sbt testAll` (runs all tests)
+4. **Tests with Coverage** - `sbt testCoverage` (runs all tests with coverage)
 5. **Build** - `sbt assembly` + `sbt dist`
 
 **Missing from CI**:
-- ❌ Code coverage measurement (scoverage)
-- ❌ SonarQube integration
+- ❌ SonarQube integration (optional enhancement)
 
 **Integrated in CI**:
 - ✅ Scapegoat analysis
+- ✅ Code coverage measurement with Scoverage
+- ✅ Coverage reports published as artifacts (30-day retention)
 
 ### Analysis of Ordering
 
@@ -339,21 +363,18 @@ coverageExcludedPackages := "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*"
 1. Compile first - Ensures code compiles before style checks
 2. Formatting check early - Fast feedback on style issues (includes Scalafmt + Scalafix)
 3. Scapegoat runs after compilation and formatting - Finds bugs and code smells
-4. Tests run after all static checks - Tests are slower
+4. Tests with coverage run after all static checks - Comprehensive test validation with metrics
 
 ✅ **Current Implementation**:
-The pipeline now follows the recommended ordering with Scapegoat integrated after formatting checks.
+The pipeline follows optimal ordering with all quality gates integrated:
+1. Compilation → 2. Formatting/Style → 3. Static Analysis → 4. Tests with Coverage → 5. Artifacts
 
-**Recommended Future Enhancements**:
-```
-1. Compile (all modules)
-2. Parallel:
-   - Format Check (scalafmt + scalafix)
-   - Scapegoat (static analysis)
-3. Tests with Coverage
-4. Build artifacts
-5. (Optional) SonarQube upload
-```
+**Achieved Goals**:
+- ✅ Fast feedback (fail early on style/formatting issues)
+- ✅ Comprehensive static analysis (Scapegoat + Scoverage)
+- ✅ Coverage measurement with 70% minimum threshold
+- ✅ Artifacts published for reports (Scapegoat + Coverage)
+
 
 ---
 
@@ -387,7 +408,16 @@ compile-all → scalafixAll --check → scalafmtCheckAll (all modules)
 compile-all → test (all modules + IntegrationTest)
 ```
 - Runs all tests
-- ⚠️ Missing coverage
+- Use `testCoverage` for tests with coverage measurement
+
+### `testCoverage`
+```
+coverage → testAll → coverageReport → coverageAggregate
+```
+- Runs all tests with coverage instrumentation
+- Generates HTML and XML coverage reports
+- Aggregates coverage across all modules
+- ✅ Used in CI
 
 ### `runScapegoat`
 ```
@@ -406,7 +436,7 @@ compile-all → scapegoat (all modules)
 | Scalafmt | 2.7.5 / 2.4.2 | ✅ Passing | ✅ Yes | 0 | Low |
 | Scalafix | 0.10.4 | ✅ Passing | ✅ Yes | 0 | ✅ Complete |
 | Scapegoat | 1.2.13 / 1.4.11 | ✅ Configured | ✅ Yes | 0 | ✅ Complete |
-| Scoverage | 1.6.1 | ⚠️ Inactive | ❌ No | N/A | Medium |
+| Scoverage | 2.0.10 | ✅ Configured | ✅ Yes | 0 | ✅ Complete |
 | SBT Sonar | 2.2.0 | ⚠️ Inactive | ❌ No | N/A | Low |
 
 **Note**: Scalastyle has been removed (October 26, 2025) as it was unmaintained since 2017. Its functionality has been migrated to Scalafix and Scalafmt.
@@ -440,11 +470,15 @@ compile-all → scapegoat (all modules)
 
 4. **Scalastyle**: ✅ **REMOVED** (October 26, 2025) - Unmaintained since 2017
 
-### Important Issues
-1. **Scoverage**: Not being used despite being configured
+5. **Scoverage**: ✅ **RESOLVED** (October 26, 2025)
+   - Updated to version 2.0.10 (latest stable)
+   - Integrated into CI pipeline with `testCoverage` command
+   - Set minimum coverage threshold to 70%
+   - Configured comprehensive exclusions for generated code
+   - Coverage reports published as artifacts
 
 ### Minor Issues
-2. **SBT Sonar**: Installed but not configured or used
+1. **SBT Sonar**: Installed but not configured or used
 
 ---
 
@@ -481,19 +515,25 @@ compile-all → scapegoat (all modules)
    - ✅ Updated CONTRIBUTING.md to remove Scalastyle documentation
    - ✅ Migrated critical checks to Scalafix DisableSyntax rule
 
-### Medium Priority
-1. **Enable Code Coverage**:
-   - Update scoverage to 2.x
-   - Add to CI pipeline
-   - Set minimum thresholds (e.g., 70% coverage)
-   - Publish reports
+5. **Code Coverage with Scoverage**: ✅ **COMPLETED** (October 26, 2025)
+   - ✅ Updated sbt-scoverage plugin to 2.0.10 (from 1.6.1)
+   - ✅ Added to CI pipeline with `testCoverage` command
+   - ✅ Set minimum coverage threshold to 70%
+   - ✅ Configured comprehensive exclusions for generated code:
+     - Protobuf generated packages
+     - BuildInfo generated code
+     - All managed sources
+   - ✅ Configured coverage to fail on minimum threshold
+   - ✅ Enabled coverage highlighting
+   - ✅ Publishing coverage reports as CI artifacts (30-day retention)
+   - ✅ Updated documentation (CONTRIBUTING.md, STATIC_ANALYSIS_INVENTORY.md)
 
-2. **Update Scalafmt**:
+### Low Priority
+1. **Update Scalafmt**:
    - Consider upgrading to 3.x series
    - Evaluate new features and rules
 
-### Low Priority
-3. **Evaluate SonarQube**:
+2. **Evaluate SonarQube**:
    - Decide if needed for the project
    - If yes: Set up and configure
    - If no: Remove plugin
@@ -509,7 +549,7 @@ compile-all → scapegoat (all modules)
 "ch.epfl.scala" % "sbt-scalafix" % "0.9.29"              → ✅ "0.10.4" (0.11.1 requires Scala 2.13.8+)
 "org.scalameta" % "sbt-scalafmt" % "2.4.2"               → "2.5.2"
 "com.sksamuel.scapegoat" % "sbt-scapegoat" % "1.1.0"    → ✅ "1.2.13"
-"org.scoverage" % "sbt-scoverage" % "1.6.1"              → "2.0.9"
+"org.scoverage" % "sbt-scoverage" % "1.6.1"              → ✅ "2.0.10"
 "org.scalastyle" %% "scalastyle-sbt-plugin" % "1.0.0"   → ✅ Removed (unmaintained)
 "com.github.mwz" % "sbt-sonar" % "2.2.0"                 → "2.3.0"
 
@@ -554,36 +594,36 @@ Based on CI logs and manual runs:
 - **Scalafmt check**: ~20s
 - **Scalafix check**: ~170s (2m 50s) - slowest check
 - **Scapegoat**: ~43s (estimated based on complexity)
-- **Tests**: Variable (several minutes)
+- **Tests with Coverage**: Variable (several minutes, longer than without coverage)
 
-**Total static analysis time**: ~3-4 minutes (with Scapegoat now integrated)
+**Total CI time**: ~5-8 minutes (including coverage measurement)
 
-**Optimization opportunities**:
-- Run some checks in parallel (formatCheck includes both scalafmt and scalafix)
-- Consider caching compiled artifacts
-- Scalafix is the bottleneck (may need optimization or newer version)
+**Note**: Coverage instrumentation adds ~20-30% overhead to test execution time, but provides valuable metrics.
 
 ---
 
 ## Conclusion
 
-The Fukuii project has a streamlined static analysis toolchain with excellent coverage of formatting, linting, and code quality:
+The Fukuii project has a comprehensive static analysis toolchain with excellent coverage of formatting, linting, code quality, and test coverage:
 
+1. ✅ **Formatting and linting unified** under Scalafmt and Scalafix
 1. ✅ **Formatting and linting unified** under Scalafmt and Scalafix
 2. ✅ **Removed unmaintained tools** (Scalastyle)
 3. ✅ **Integrated bug detection** (Scapegoat now in CI and passing)
-4. ✅ **Updated outdated tools** (Scapegoat to 1.4.11)
+4. ✅ **Updated outdated tools** (Scapegoat to 1.4.11, Scoverage to 2.0.10)
 5. ✅ **Fixed legitimate code issues** (6 critical unsafe code patterns resolved)
-6. ⚠️ **Remaining improvements** (code coverage, evaluate SBT Sonar)
+6. ✅ **Comprehensive code coverage** (Scoverage 2.0.10 with 70% threshold)
 
-**Overall Assessment**: 🟢 **Excellent - Comprehensive and modern toolchain**
+**Overall Assessment**: 🟢 **Excellent - Complete and modern toolchain**
 
-The toolchain has been fully modernized with:
+The toolchain has been fully modernized and is feature-complete:
 - Scalastyle removed and migrated to Scalafix
 - Scapegoat updated, configured, and integrated into CI with proper exclusions
+- Scoverage updated to 2.0.10 and integrated into CI with coverage thresholds
 - All static analysis tools now running in CI pipeline and passing
 - Critical unsafe code issues fixed in crypto and rlp modules
 - Overly strict inspections disabled to prevent false positive failures
+- Coverage reports published as CI artifacts for tracking trends
 
 ---
 
@@ -622,10 +662,14 @@ Based on this inventory, the following sub-issues should be addressed:
    - ✅ COMPLETED: Verified all tests pass (crypto: 65 tests, rlp: 24 tests)
    - Note: Scapegoat 3.x requires Scala 3; 1.4.11 is the latest for current Scala 2.13.6
 
-5. **Enable Code Coverage Tracking** (Future Work)
-   - Update scoverage to 2.x
-   - Add to CI pipeline
-   - Set thresholds
+5. **Enable Code Coverage Tracking** ✅ **COMPLETED** (October 26, 2025)
+   - ✅ COMPLETED: Updated sbt-scoverage to 2.0.10 (latest stable)
+   - ✅ COMPLETED: Added to CI pipeline with `testCoverage` command
+   - ✅ COMPLETED: Set minimum coverage threshold to 70%
+   - ✅ COMPLETED: Configured comprehensive exclusions for generated code
+   - ✅ COMPLETED: Enabled coverage highlighting and fail-on-minimum
+   - ✅ COMPLETED: Publishing coverage reports as CI artifacts (30-day retention)
+   - ✅ COMPLETED: Updated documentation (CONTRIBUTING.md, STATIC_ANALYSIS_INVENTORY.md)
 
 6. **Tool Maintenance and Cleanup** (Future Work)
    - Evaluate and configure or remove SBT Sonar
@@ -634,6 +678,6 @@ Based on this inventory, the following sub-issues should be addressed:
 
 ---
 
-**Document Version**: 1.3  
-**Last Updated**: October 26, 2025 (Scapegoat updated to 1.4.11 and integrated into CI)  
+**Document Version**: 1.4  
+**Last Updated**: October 26, 2025 (Scoverage updated to 2.0.10 and integrated into CI)  
 **Author**: Static Analysis Inventory Tool
