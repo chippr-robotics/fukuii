@@ -64,19 +64,6 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Run scalastyle
-        run: |
-          sbt "bytes / scalastyle"
-          sbt "bytes / Test / scalastyle"
-          sbt "crypto / scalastyle"
-          sbt "crypto / Test / scalastyle"
-          sbt "rlp / scalastyle"
-          sbt "rlp / Test / scalastyle"
-          sbt scalastyle
-          sbt "Test / scalastyle"
-        env:
-          FUKUII_DEV: true
-      
       - name: Run tests
         run: sbt testAll
         env:

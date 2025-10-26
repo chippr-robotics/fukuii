@@ -391,7 +391,7 @@ object PrecompiledContracts {
       while (bytes.hasNext)
         getPair(bytes.next()) match {
           case Some(part) => accum = part :: accum
-          case None       => return None // scalastyle:ignore
+          case None       => return None // scalafix:ok DisableSyntax.return
         }
       Some(accum)
     }

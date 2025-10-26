@@ -99,16 +99,6 @@ sbt scalafixAll
 sbt scalafixAll --check
 ```
 
-### Code Style with Scalastyle
-
-We use [Scalastyle](http://www.scalastyle.org/) for additional style checking. Configuration is in `scalastyle-config.xml` and `scalastyle-test-config.xml`.
-
-**Run style checks:**
-```bash
-sbt scalastyle
-sbt "Test / scalastyle"
-```
-
 ### Combined Commands
 
 **Format and fix all code (recommended before committing):**
@@ -157,14 +147,6 @@ Create a pre-commit hook that runs formatting and style checks:
      exit 1
    fi
    
-   # Run scalastyle
-   echo "Checking code style with scalastyle..."
-   sbt "scalastyle ; Test / scalastyle"
-   if [ $? -ne 0 ]; then
-     echo "❌ Style check failed. Review and fix the reported issues."
-     exit 1
-   fi
-   
    echo "✅ All pre-commit checks passed!"
    EOF
    ```
@@ -194,14 +176,6 @@ sbt scalafixAll
 
 # Add any formatted files back to the commit
 git add -u
-
-# Run scalastyle check
-echo "Checking code style with scalastyle..."
-sbt "scalastyle ; Test / scalastyle"
-if [ $? -ne 0 ]; then
-  echo "❌ Style check failed. Review and fix the reported issues."
-  exit 1
-fi
 
 echo "✅ Pre-commit auto-fix complete!"
 EOF
@@ -329,8 +303,7 @@ sbt "IntegrationTest / test"
 ### Continuous Integration
 
 Our CI pipeline automatically runs:
-- ✅ Code formatting checks (`formatCheck`)
-- ✅ Code style checks (`scalastyle`)
+- ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
 - ✅ Compilation (`compile-all`)
 - ✅ Test suite (`testAll`)
 - ✅ Build artifacts (`assembly`, `dist`)
@@ -426,7 +399,6 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 Before submitting a PR, verify:
 - [ ] `sbt formatCheck` passes
-- [ ] `sbt "scalastyle ; Test / scalastyle"` passes
 - [ ] `sbt compile-all` succeeds
 - [ ] `sbt testAll` passes (on JDK 17)
 - [ ] `sbt "IntegrationTest / test"` passes for integration tests
@@ -442,7 +414,6 @@ Before submitting a PR, verify:
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
 - [Scalafmt Documentation](https://scalameta.org/scalafmt/)
 - [Scalafix Documentation](https://scalacenter.github.io/scalafix/)
-- [Scalastyle Documentation](http://www.scalastyle.org/)
 
 ## Questions or Issues?
 

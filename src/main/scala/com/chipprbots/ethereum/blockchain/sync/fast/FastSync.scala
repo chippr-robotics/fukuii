@@ -471,7 +471,7 @@ class FastSync(
 
       if (!checkHeadersChain(headers)) {
         blacklist.add(peer.id, blacklistDuration, ErrorInBlockHeaders)
-        return processSyncing() // scalastyle:off return
+        return processSyncing() // scalafix:ok DisableSyntax.return
       }
 
       processHeaders(headers) match {
