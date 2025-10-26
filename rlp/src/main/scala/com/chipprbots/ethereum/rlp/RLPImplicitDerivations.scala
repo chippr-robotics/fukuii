@@ -182,7 +182,7 @@ object RLPImplicitDerivations {
         RLPException.decodeError(subject, "RLPList is empty.")
 
       case rlps =>
-        val rlpHead = rlps(0)  // Safe because we've already matched Nil
+        val rlpHead = rlps(0) // Safe because we've already matched Nil
         val rlpTail = rlps.drop(1)
         val (tail, tInfos) = tDecoder.value.decodeList(rlpTail)
         val value: H =
@@ -223,7 +223,7 @@ object RLPImplicitDerivations {
         RLPException.decodeError(subject, "RLPList is empty.")
 
       case rlps =>
-        val rlpHead = rlps(0)  // Safe because we've already matched Nil
+        val rlpHead = rlps(0) // Safe because we've already matched Nil
         val rlpTail = rlps.drop(1)
         val value: H =
           tryDecode(subject, rlpHead) {
