@@ -79,7 +79,7 @@ rewrite.rules = [AvoidInfix, RedundantBraces, RedundantParens, SortModifiers]
 - **SemanticDB**: Auto-configured via scalafixSemanticdb.revision
 
 **Rules Enabled**:
-1. `DisableSyntax` - Prevent usage of certain language features (null, return, finalize, println)
+1. `DisableSyntax` - Prevent usage of certain language features (return, finalize)
 2. `ExplicitResultTypes` - Require explicit return types
 3. `NoAutoTupling` - Prevent automatic tupling
 4. `NoValInForComprehension` - Prevent val in for comprehensions
@@ -94,16 +94,8 @@ rewrite.rules = [AvoidInfix, RedundantBraces, RedundantParens, SortModifiers]
 **Configuration Details**:
 ```scala
 DisableSyntax {
-  noNulls = true
   noReturns = true
   noFinalize = true
-  regex = [
-    {
-      id = noPrintln
-      pattern = "println"
-      message = "println statements should not be used; use proper logging instead"
-    }
-  ]
 }
 
 OrganizeImports {
@@ -121,6 +113,12 @@ OrganizeImports {
   removeUnused = true
 }
 ```
+
+**Note on Scalastyle Migration**:
+- Critical checks (return, finalize) migrated to DisableSyntax
+- Formatting rules now handled by Scalafmt
+- Some Scalastyle checks (null detection, println detection, code metrics) not replicated to maintain minimal changes
+- Existing return statements suppressed with `scalafix:ok DisableSyntax.return` comments
 
 **Current State**: ✅ **RESOLVED**
 - All Scalafix violations have been fixed
@@ -140,7 +138,7 @@ OrganizeImports {
 - ✅ **Ordering**: Runs after compilation, appropriate placement
 - ✅ **organize-imports**: Updated to 0.6.0
 - ✅ **scaluzzi**: Removed (was abandoned since 2020)
-- ✅ **DisableSyntax**: Added to prevent null, return, finalize, and println usage (migrated from Scalastyle)
+- ✅ **DisableSyntax**: Added to prevent return and finalize usage (migrated from Scalastyle)
 
 **Recommendation**: 
 - ✅ COMPLETED: All violations fixed
@@ -148,6 +146,7 @@ OrganizeImports {
 - ✅ COMPLETED: Updated organize-imports to 0.6.0
 - ✅ COMPLETED: Removed abandoned scaluzzi dependency
 - ✅ COMPLETED: Added DisableSyntax rule to replace key Scalastyle checks
+- ✅ COMPLETED: Updated suppression comments from scalastyle to scalafix format
 - Future: Consider Scala 2.13.8+ upgrade to enable Scalafix 0.11.x
 
 ---
@@ -163,9 +162,10 @@ OrganizeImports {
 
 **Migration Path**:
 - **Formatting rules** (tabs, whitespace, line length, brackets) → Handled by **Scalafmt**
-- **Semantic rules** (null, return, finalize, println checks) → Migrated to **Scalafix DisableSyntax** rule
+- **Semantic rules** (return, finalize checks) → Migrated to **Scalafix DisableSyntax** rule
 - **Type checking** (explicit result types) → Already covered by **Scalafix ExplicitResultTypes**
 - **Code quality metrics** (cyclomatic complexity, method length) → Not enforced in CI, but remain as best practices in documentation
+- **Other checks** (null detection, println detection) → Not migrated to maintain minimal changes; can be addressed in future improvements
 
 **Previous Configuration**:
 - Checked 401 main source files and 213 test files
