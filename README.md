@@ -106,28 +106,41 @@ See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
 To build Fukuii from source locally you will need:
 
-JDK 17.
+- **JDK 17**
+- **sbt** (Scala build tool, version 1.10.7+)
+- **Python** (for certain auxiliary scripts)
 
-sbt
- (Scala build tool).
+### Scala Version Support
 
-Python (for certain auxiliary scripts).
+Fukuii supports multiple Scala versions:
+- **Scala 2.13.6** (primary/default version)
+- **Scala 3.3.4** (LTS - for cross-compilation and forward compatibility)
 
-Building the client
+The codebase is configured for gradual migration to Scala 3 while maintaining full backward compatibility.
+
+### Building the client
 
 Update git submodules:
 
+```bash
 git submodule update --init --recursive
-
+```
 
 Build the distribution using sbt:
 
+```bash
 sbt dist
-
+```
 
 After the build completes, a distribution zip archive will be placed under target/universal/. Unzip it to run the client.
 
-Running the client
+**Building with Scala 3:**
+
+```bash
+sbt "++3.3.4" dist
+```
+
+### Running the client
 
 The distribution’s bin/ directory contains a launcher script named fukuii. To join the ETC network:
 
