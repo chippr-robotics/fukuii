@@ -64,6 +64,21 @@ jobs:
         env:
           FUKUII_DEV: true
       
+      - name: Run Scapegoat analysis
+        run: sbt runScapegoat
+        env:
+          FUKUII_DEV: true
+      
+      - name: Upload Scapegoat reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scapegoat-reports-jdk17
+          path: |
+            **/target/scala-*/scapegoat-report/**
+          retention-days: 7
+          if-no-files-found: warn
+      
       - name: Run tests
         run: sbt testAll
         env:

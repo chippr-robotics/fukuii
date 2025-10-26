@@ -99,6 +99,19 @@ sbt scalafixAll
 sbt scalafixAll --check
 ```
 
+### Static Bug Detection with Scapegoat
+
+We use [Scapegoat](https://github.com/scapegoat-scala/scapegoat) for static code analysis to detect common bugs, anti-patterns, and code smells. Configuration is in `build.sbt`.
+
+**Run Scapegoat analysis:**
+```bash
+sbt runScapegoat
+```
+
+This generates both XML and HTML reports in `target/scala-2.13/scapegoat-report/`. The HTML report is especially useful for reviewing findings in a browser.
+
+**Note**: Scapegoat automatically excludes generated code (protobuf files, BuildInfo, etc.) from analysis.
+
 ### Combined Commands
 
 **Format and fix all code (recommended before committing):**
@@ -303,8 +316,9 @@ sbt "IntegrationTest / test"
 ### Continuous Integration
 
 Our CI pipeline automatically runs:
-- ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
 - ✅ Compilation (`compile-all`)
+- ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
+- ✅ Static bug detection (`runScapegoat`)
 - ✅ Test suite (`testAll`)
 - ✅ Build artifacts (`assembly`, `dist`)
 
