@@ -97,7 +97,6 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
   Test / parallelExecution := true,
   (Test / testOptions) += Tests.Argument("-oDG"),
-  (Test / scalastyleConfig) := file("scalastyle-test-config.xml"),
   // Only publish selected libraries.
   (publish / skip) := true
 )
@@ -204,8 +203,6 @@ lazy val node = {
     ).flatten ++ malletDeps
   }
 
-  (Test / scalastyleSources) ++= (Integration / unmanagedSourceDirectories).value
-
   (Evm / test) := (Evm / test).dependsOn(solidityCompile).value
   (Evm / sourceDirectory) := baseDirectory.value / "src" / "evmTest"
 
@@ -307,17 +304,9 @@ addCommandAlias(
   "pp",
   """; compile-all
     |; bytes / scalafmtAll
-    |; bytes / scalastyle
-    |; bytes / Test / scalastyle
     |; crypto / scalafmtAll
-    |; crypto / scalastyle
-    |; crypto / Test / scalastyle
     |; rlp / scalafmtAll
-    |; rlp / scalastyle
-    |; rlp / Test / scalastyle
     |; scalafmtAll
-    |; scalastyle
-    |; Test / scalastyle
     |; rlp / test
     |; testQuick
     |; IntegrationTest / test
