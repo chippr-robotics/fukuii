@@ -20,10 +20,13 @@ import com.chipprbots.ethereum.utils.Config
 class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
   implicit val testScheduler: SchedulerService = Scheduler.fixedPool("test", 16)
 
-  override def beforeAll(): Unit =
+  override def beforeAll(): Unit = {
+    // Clear metrics registry to prevent pollution from previous test runs
+    CollectorRegistry.defaultRegistry.clear()
     Metrics.configure(
       MetricsConfig(Config.config.withValue("metrics.enabled", ConfigValueFactory.fromAnyRef(true)))
     )
+  }
 
   override def afterAll(): Unit = {
     testScheduler.shutdown()
@@ -240,10 +243,13 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     val TimerCountMetric = "app_regularsync_blocks_propagation_timer_seconds_count"
     val DefaultBlockPropagation = "DefaultBlockPropagation"
     val MinedBlockPropagation = "MinedBlockPropagation"
-    def sampleMetric(metricName: String, blockType: String): Double = CollectorRegistry.defaultRegistry.getSampleValue(
-      metricName,
-      Array("blocktype"),
-      Array(blockType)
-    )
+    def sampleMetric(metricName: String, blockType: String): Double = {
+      val value = CollectorRegistry.defaultRegistry.getSampleValue(
+        metricName,
+        Array("blocktype"),
+        Array(blockType)
+      )
+      if (value == null) 0.0 else value
+    }
   }
 }

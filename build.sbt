@@ -262,8 +262,7 @@ lazy val node = {
       (Compile / PB.protoSources) := Seq(
         baseDirectory.value / "src" / "main" / "protobuf_override"
       ),
-      // have the protobuf API version file as a resource
-      (Compile / unmanagedResourceDirectories) += baseDirectory.value / "src" / "main" / "protobuf",
+      // protobuf API version file is now provided in src/main/resources/extvm/VERSION
       // Packaging
       (Compile / mainClass) := Some("com.chipprbots.ethereum.App"),
       (Compile / discoveredMainClasses) := Seq(),
