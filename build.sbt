@@ -355,5 +355,22 @@ addCommandAlias(
     |""".stripMargin
 )
 
-(ThisBuild / scapegoatVersion) := "1.4.9"
-scapegoatReports := Seq("xml")
+// runScapegoat - Run scapegoat analysis on all modules
+addCommandAlias(
+  "runScapegoat",
+  """; compile-all
+    |; bytes / scapegoat
+    |; crypto / scapegoat
+    |; rlp / scapegoat
+    |; scapegoat
+    |""".stripMargin
+)
+
+// Scapegoat configuration
+(ThisBuild / scapegoatVersion) := "3.2.2"
+scapegoatReports := Seq("xml", "html")
+scapegoatIgnoredFiles := Seq(
+  ".*/src_managed/.*",           // All generated sources
+  ".*/target/.*protobuf/.*",     // Protobuf generated code
+  ".*/BuildInfo\\.scala"         // BuildInfo generated code
+)

@@ -2,7 +2,7 @@ logLevel := sbt.Level.Warn
 addSbtPlugin("com.eed3si9n" % "sbt-buildinfo" % "0.10.0")
 addSbtPlugin("com.github.mwz" % "sbt-sonar" % "2.2.0")
 addSbtPlugin("com.lightbend.sbt" % "sbt-javaagent" % "0.1.6")
-addSbtPlugin("com.sksamuel.scapegoat" % "sbt-scapegoat" % "1.1.0")
+addSbtPlugin("com.sksamuel.scapegoat" % "sbt-scapegoat" % "1.2.13")
 addSbtPlugin("com.thoughtworks.sbt-api-mappings" % "sbt-api-mappings" % "3.0.0")
 addSbtPlugin("com.timushev.sbt" % "sbt-updates" % "0.5.1")
 addSbtPlugin("com.typesafe.sbt" % "sbt-git" % "1.0.0")
