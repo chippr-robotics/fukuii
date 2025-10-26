@@ -41,21 +41,23 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 **Triggers:** Push to main branches, version tags, Pull Requests
 
-**Purpose:** Builds and publishes Docker images to GitHub Container Registry
+**Purpose:** Builds and publishes development Docker images to GitHub Container Registry
 
 **Images Built:**
 - `fukuii-base`: Base OS and dependencies
 - `fukuii-dev`: Development environment
 - `fukuii`: Production application image
 
-**Registry:** ghcr.io (GitHub Container Registry)
+**Registry:** `ghcr.io/chippr-robotics/fukuii` (Development builds)
 
 **Tags:**
 - Branch name (e.g., `main`, `develop`)
 - Pull request number (e.g., `pr-123`)
-- Semantic version (e.g., `1.0.0`, `1.0`)
+- Semantic version (e.g., `1.0.0`, `1.0`) - from tags
 - Git SHA (e.g., `sha-abc123`)
 - `latest` (default branch only)
+
+**Note:** Development images built by this workflow are **not signed** and do **not include provenance attestations**. For production deployments, use release images from `ghcr.io/chippr-robotics/chordodes_fukuii` which are built by `release.yml` with full security features.
 
 ---
 
@@ -63,16 +65,43 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 **Triggers:** Git tags starting with `v` (e.g., `v1.0.0`), Manual dispatch
 
-**Purpose:** Creates GitHub releases and manages milestones
+**Purpose:** Creates GitHub releases, builds and publishes signed container images, and manages milestones
 
 **Steps:**
 1. Builds optimized production distribution
 2. Extracts version from tag
 3. Generates release notes from commits
 4. Creates GitHub release with artifacts
-5. Closes matching milestone (for stable releases)
+5. Builds and publishes Docker image to `ghcr.io/chippr-robotics/chordodes_fukuii`
+6. Signs image with Cosign (keyless, using GitHub OIDC)
+7. Generates SLSA Level 3 provenance attestations
+8. Logs immutable image digest and tags
+9. Closes matching milestone (for stable releases)
+
+**Container Security Features:**
+- ✅ **Image Signing:** Uses [Cosign](https://docs.sigstore.dev/cosign/overview/) with keyless signing (GitHub OIDC)
+- ✅ **SLSA Provenance:** Generates [SLSA Level 3](https://slsa.dev/spec/v1.0/levels) attestations for build integrity
+- ✅ **SBOM:** Includes Software Bill of Materials in SPDX format
+- ✅ **Immutable Digests:** Outputs `sha256` digest for tamper-proof image references
+
+**Image Tags:**
+- `v1.0.0` - Full semantic version
+- `1.0` - Major.minor version
+- `1` - Major version (not applied to v0.x releases)
+- `latest` - Latest stable release (excludes alpha/beta/rc)
 
 **Pre-release Detection:** Tags containing `alpha`, `beta`, or `rc` are marked as pre-releases
+
+**Verification Example:**
+```bash
+# Pull and verify a signed release image
+docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+
+cosign verify \
+  --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+```
 
 **Usage:**
 ```bash
