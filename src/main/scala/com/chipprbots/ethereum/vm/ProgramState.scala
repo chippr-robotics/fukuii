@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.vm
 
 import akka.util.ByteString
 
-import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256

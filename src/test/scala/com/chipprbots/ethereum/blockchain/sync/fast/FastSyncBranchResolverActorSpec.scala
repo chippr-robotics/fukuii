@@ -358,7 +358,7 @@ object FastSyncBranchResolverActorSpec extends Logger {
         case EtcPeerManagerActor.GetHandshakedPeers =>
           sender ! EtcPeerManagerActor.HandshakedPeers(peers)
           peersConnected.complete(()).onErrorHandle(_ => ()).runSyncUnsafe()
-        case sendMsg @ EtcPeerManagerActor.SendMessage(rawMsg, peerId) =>
+        case EtcPeerManagerActor.SendMessage(rawMsg, peerId) =>
           val response = rawMsg.underlyingMsg match {
             case GetBlockHeaders(_, _, _, false) =>
               if (blockIndex < blocksSetSize)

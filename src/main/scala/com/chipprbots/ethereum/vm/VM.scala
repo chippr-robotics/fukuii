@@ -4,7 +4,6 @@ import akka.util.ByteString
 
 import scala.annotation.tailrec
 
-import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.Logger

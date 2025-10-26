@@ -16,7 +16,6 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
-import com.chipprbots.ethereum.domain.AccessListItem
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxyStorage
 import com.chipprbots.ethereum.utils.BlockchainConfig

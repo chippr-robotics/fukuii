@@ -5,7 +5,6 @@ import akka.util.ByteString
 import com.chipprbots.ethereum
 
 import com.chipprbots.ethereum.domain.AccessListItem
-import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.vm

@@ -149,7 +149,7 @@ class CheckpointingJRCSpec
     val request = pushCheckpointRequestBuilder(
       JArray(
         JString(ByteStringUtils.hash2string(block.hash))
-          :: JArray(signatures.map(sig => JBool(true)))
+          :: JArray(signatures.map(_ => JBool(true)))
           :: Nil
       )
     )

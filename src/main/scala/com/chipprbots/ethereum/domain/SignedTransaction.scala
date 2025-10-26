@@ -23,8 +23,6 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.Config
-import com.chipprbots.ethereum.utils.Hex
 
 object SignedTransaction {
 

@@ -14,7 +14,7 @@ final case class JsonRpcHealthcheck[Response](
     healthCheck
       .fold(
         HealthcheckResult.error(name, _),
-        result => HealthcheckResult.ok(name, info)
+        _ => HealthcheckResult.ok(name, info)
       )
 
   def withPredicate(message: String)(predicate: Response => Boolean): JsonRpcHealthcheck[Response] =
