@@ -1,10 +1,10 @@
 {
   "name": "Fukuii Scala Development",
-  "image": "mcr.microsoft.com/devcontainers/java:11",
+  "image": "mcr.microsoft.com/devcontainers/java:17",
   
   "features": {
     "ghcr.io/devcontainers/features/java:1": {
-      "version": "11",
+      "version": "17",
       "jdkDistro": "tem"
     },
     "ghcr.io/devcontainers/features/git:1": {
@@ -29,7 +29,7 @@
     }
   },
   
-  "postCreateCommand": "git submodule update --init --recursive && echo 'deb https://repo.scala-sbt.org/scalasbt/debian all main' | sudo tee /etc/apt/sources.list.d/sbt.list && echo 'deb https://repo.scala-sbt.org/scalasbt/debian /' | sudo tee /etc/apt/sources.list.d/sbt_old.list && curl -sL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823' | sudo apt-key add && sudo apt-get update && sudo apt-get install -y sbt",
+  "postCreateCommand": "bash -c 'sudo chown -R vscode:vscode $HOME/.sbt $HOME/.ivy2 || true && git submodule update --init --recursive && source /usr/local/sdkman/bin/sdkman-init.sh && sdk install sbt && echo \"source /usr/local/sdkman/bin/sdkman-init.sh\" >> $HOME/.bashrc && echo \"source /usr/local/sdkman/bin/sdkman-init.sh\" >> $HOME/.zshrc && sdk version && sbt sbtVersion'",
   
   "containerEnv": {
     "FUKUII_DEV": "true",
