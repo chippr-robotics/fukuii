@@ -39,6 +39,12 @@ crossPaths := true
 // patch for error on 'early-semver' problems
 ThisBuild / evictionErrorLevel := Level.Info
 
+// Declare library dependency schemes to resolve version conflicts
+// This tells SBT that scala-xml uses early-semver versioning
+ThisBuild / libraryDependencySchemes ++= Seq(
+  "org.scala-lang.modules" %% "scala-xml" % "early-semver"
+)
+
 val `scala-2.12` = "2.12.13"
 val `scala-2.13` = "2.13.6"
 val supportedScalaVersions = List(`scala-2.12`, `scala-2.13`)

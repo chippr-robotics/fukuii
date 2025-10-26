@@ -22,6 +22,7 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 - ✅ **REMOVED**: Abandoned scaluzzi dependency
 - ✅ **RESOLVED**: All scalafmt formatting violations
 - ✅ **REMOVED**: Scalastyle (unmaintained since 2017) - functionality migrated to Scalafix
+- ✅ **RESOLVED**: Version conflict with scala-xml dependency (October 26, 2025)
 - ⚠️ **REMAINING**: 976 scapegoat findings (190 errors, 215 warnings, 571 infos) - not currently blocking CI
 
 ---
@@ -476,6 +477,14 @@ compile-all → scapegoat (all modules)
    - Set minimum coverage threshold to 70%
    - Configured comprehensive exclusions for generated code
    - Coverage reports published as artifacts
+
+6. **Version Conflict**: ✅ **RESOLVED** (October 26, 2025)
+   - Fixed scala-xml dependency version conflict between scoverage (2.2.0) and sbt-native-packager (1.1.1)
+   - Added `libraryDependencySchemes` configuration in build.sbt
+   - Added `libraryDependencySchemes` configuration in project/plugins.sbt
+   - Created project/project/libraryDependencySchemes.sbt for build-of-build configuration
+   - Declared scala-xml uses "early-semver" versioning scheme
+   - This allows SBT to resolve the version conflict properly
 
 ### Minor Issues
 1. **SBT Sonar**: Installed but not configured or used

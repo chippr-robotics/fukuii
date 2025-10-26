@@ -1,4 +1,10 @@
 logLevel := sbt.Level.Warn
+
+// Configure library dependency schemes to resolve version conflicts
+// This tells SBT that scala-xml uses early-semver versioning
+ThisBuild / libraryDependencySchemes ++= Seq(
+  "org.scala-lang.modules" %% "scala-xml" % "early-semver"
+)
 addSbtPlugin("com.eed3si9n" % "sbt-buildinfo" % "0.10.0")
 addSbtPlugin("com.github.mwz" % "sbt-sonar" % "2.2.0")
 addSbtPlugin("com.lightbend.sbt" % "sbt-javaagent" % "0.1.6")
