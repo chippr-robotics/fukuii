@@ -4,9 +4,8 @@
 .gitmodules
 .gitattributes
 
-# Documentation
+# Documentation (not needed in production image)
 *.md
-!README.md
 docs/
 
 # IDE files

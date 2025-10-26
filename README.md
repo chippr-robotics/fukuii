@@ -50,8 +50,11 @@ Getting started
 The easiest way to run Fukuii is using Docker:
 
 ```bash
-# Pull the latest image
-docker pull ghcr.io/chippr-robotics/fukuii:latest
+# Pull a specific version (recommended)
+docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
+
+# Or pull the latest development version
+docker pull ghcr.io/chippr-robotics/fukuii:develop
 
 # Run Fukuii
 docker run -d \
@@ -61,7 +64,7 @@ docker run -d \
   -p 30303:30303 \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/fukuii:latest
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 See [docker/README.md](docker/README.md) for detailed Docker documentation, including:
