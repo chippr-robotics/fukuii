@@ -6,7 +6,7 @@ This directory contains the configuration for GitHub Codespaces development envi
 
 The devcontainer configuration sets up a complete Scala development environment with:
 
-- **JDK 11** (Temurin distribution) - Required for building Fukuii
+- **JDK 17** (Temurin distribution) - Required for building Fukuii
 - **SBT 1.5.4+** - Scala Build Tool for compiling and testing
 - **Scala 2.13.6** - Primary Scala version used by the project
 - **Metals** - Scala Language Server for VS Code
