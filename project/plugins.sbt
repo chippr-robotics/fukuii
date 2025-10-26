@@ -8,7 +8,8 @@ addSbtPlugin("com.timushev.sbt" % "sbt-updates" % "0.5.1")
 addSbtPlugin("com.typesafe.sbt" % "sbt-git" % "1.0.0")
 addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "1.7.5")
 addSbtPlugin("io.kamon" % "sbt-kanela-runner" % "2.0.5")
-addSbtPlugin("org.scalameta" % "sbt-scalafmt" % "2.4.2")
+addSbtPlugin("org.scalameta" % "sbt-scalafmt" % "2.5.2") // Updated for Scala 3 support
 addSbtPlugin("org.scoverage" % "sbt-scoverage" % "2.0.10")
 addSbtPlugin("com.geirsson" % "sbt-ci-release" % "1.5.6")
 addSbtPlugin("ch.epfl.scala" % "sbt-scalafix" % "0.10.4")
+addSbtPlugin("ch.epfl.scala" % "sbt-scala3-migrate" % "0.6.1") // Scala 3 migration tooling
