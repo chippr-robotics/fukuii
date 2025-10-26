@@ -1,20 +1,34 @@
-FROM ubuntu:xenial
+# Base image for Fukuii Docker builds
+# This provides a minimal Ubuntu base with essential tools
 
-# This "base" image contains the base OS along with some extra programs.
+FROM ubuntu:22.04
 
-# See the accompanying `build-base.sh` script for tagging details.
+LABEL org.opencontainers.image.title="Fukuii Base Image"
+LABEL org.opencontainers.image.description="Base image for Fukuii Ethereum Client"
+LABEL org.opencontainers.image.vendor="Chippr Robotics LLC"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ADD scripts/install-base-system.sh /root/
-RUN /root/install-base-system.sh
+# Install base system packages
+RUN apt-get update && \
+    apt-get dist-upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+        locales \
+    && locale-gen en_US.UTF-8 && \
+    update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 && \
+    apt-get clean && \
+    rm -rf /var/cache/debconf/* /var/lib/apt/lists/* /var/log/* /tmp/* /var/tmp/*
 
-ADD scripts/install-nix-common.sh    /home/fukuii/
-ADD scripts/install-nix-apps-base.sh /home/fukuii/
-RUN chown fukuii:fukuii /home/fukuii/install-*.sh
+# Create non-root user
+RUN groupadd -r fukuii --gid=1000 && \
+    useradd -r -g fukuii --uid=1000 --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
+    mkdir -p /home/fukuii && \
+    chown -R fukuii:fukuii /home/fukuii
 
 USER fukuii
 WORKDIR /home/fukuii
 ENV USER=fukuii
-
-RUN ~/install-nix-apps-base.sh
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
