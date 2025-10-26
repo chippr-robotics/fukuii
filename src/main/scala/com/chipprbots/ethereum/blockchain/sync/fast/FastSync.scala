@@ -11,12 +11,9 @@ import cats.data.NonEmptyList
 import cats.implicits._
 
 import scala.annotation.tailrec
-import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 import scala.util.Random
-import scala.util.Success
-import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 

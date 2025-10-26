@@ -91,8 +91,6 @@ class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBeha
       payload = ByteString.empty
     )
 
-    val expectedSigningData =
-      "ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080"
     val expectedSigningHash = "daf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53"
     val privateKey = "4646464646464646464646464646464646464646464646464646464646464646"
     val expectedSignatureV = 37

@@ -38,7 +38,7 @@ object Transaction {
   def accessList(tx: Transaction): List[AccessListItem] =
     tx match {
       case transaction: TransactionWithAccessList                                         => transaction.accessList
-      case LegacyTransaction(nonce, gasPrice, gasLimit, receivingAddress, value, payload) => Nil
+      case LegacyTransaction(_, _, _, _, _, _) => Nil
     }
 
   implicit class TransactionTypeValidator(val transactionType: Byte) extends AnyVal {

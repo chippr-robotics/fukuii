@@ -7,7 +7,6 @@ import boopickle.Default.Unpickle
 import boopickle.DefaultBasic._
 import boopickle.Pickler
 
-import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.storage.ReceiptStorage._
 import com.chipprbots.ethereum.domain.Address

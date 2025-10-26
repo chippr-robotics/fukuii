@@ -10,11 +10,9 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPCodec.Ops
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicitDerivations.RLPListDecoder
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
-import com.chipprbots.ethereum.utils.Config
 
 object BaseETH6XMessages {
   object Status {
