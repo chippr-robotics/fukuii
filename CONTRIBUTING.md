@@ -324,6 +324,25 @@ Our CI pipeline automatically runs:
 
 All checks must pass before a PR can be merged.
 
+### Releases and Supply Chain Security
+
+When a release is created (via git tag `vX.Y.Z`), the release workflow automatically:
+- ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/chordodes_fukuii`
+- ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/overview/) (keyless, GitHub OIDC)
+- ✅ Generates SLSA Level 3 provenance attestations
+- ✅ Includes Software Bill of Materials (SBOM)
+- ✅ Outputs immutable digest references for tamper-proof deployments
+
+Release images can be verified:
+```bash
+cosign verify \
+  --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+```
+
+See [docker/README.md](docker/README.md) for detailed information about container security.
+
 ## Guidelines for LLM Agents
 
 This section provides rules, reminders, and prompts for LLM agents (AI coding assistants) working on this codebase to ensure consistency and quality.
