@@ -42,7 +42,7 @@ object ECDSASignature {
 
   def fromBytes(bytes65: ByteString): Option[ECDSASignature] =
     if (bytes65.length == EncodedLength)
-      Some(apply(bytes65.take(RLength), bytes65.drop(RLength).take(SLength), bytes65.last))
+      Some(apply(bytes65.take(RLength), bytes65.drop(RLength).take(SLength), bytes65(64)))
     else
       None
 

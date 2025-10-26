@@ -125,7 +125,7 @@ sealed abstract class BN128[T: FiniteField] {
     * <a href=https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication#Double-and-add>Double-and-add</a>
     */
   def mul(p1: Point[T], s: BigInt): Point[T] =
-    if (s == 0 || p1.isZero)
+    if (s == BigInt(0) || p1.isZero)
       zero
     else {
       var i = s.bitLength - 1

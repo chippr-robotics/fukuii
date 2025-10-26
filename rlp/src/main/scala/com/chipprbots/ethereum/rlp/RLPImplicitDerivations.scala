@@ -182,9 +182,11 @@ object RLPImplicitDerivations {
         RLPException.decodeError(subject, "RLPList is empty.")
 
       case rlps =>
-        val (tail, tInfos) = tDecoder.value.decodeList(rlps.tail)
+        val rlpHead = rlps(0) // Safe because we've already matched Nil
+        val rlpTail = rlps.drop(1)
+        val (tail, tInfos) = tDecoder.value.decodeList(rlpTail)
         val value: H =
-          tryDecode(subject, rlps.head) { rlp =>
+          tryDecode(subject, rlpHead) { rlp =>
             if (policy.omitTrailingOptionals && tInfos.forall(_.isOptional)) {
               // Expect that it's a value. We have a decoder for optional fields, so we have to wrap it into a list.
               try hDecoder.value.decode(RLPList(rlp))
@@ -221,12 +223,14 @@ object RLPImplicitDerivations {
         RLPException.decodeError(subject, "RLPList is empty.")
 
       case rlps =>
+        val rlpHead = rlps(0) // Safe because we've already matched Nil
+        val rlpTail = rlps.drop(1)
         val value: H =
-          tryDecode(subject, rlps.head) {
+          tryDecode(subject, rlpHead) {
             hDecoder.value.decode(_)
           }
         val head: FieldType[K, H] = field[K](value)
-        val (tail, tInfos) = tDecoder.value.decodeList(rlps.tail)
+        val (tail, tInfos) = tDecoder.value.decodeList(rlpTail)
         (head :: tail) -> (hInfo :: tInfos)
     }
   }
