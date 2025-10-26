@@ -112,6 +112,34 @@ This generates both XML and HTML reports in `target/scala-2.13/scapegoat-report/
 
 **Note**: Scapegoat automatically excludes generated code (protobuf files, BuildInfo, etc.) from analysis.
 
+### Code Coverage with Scoverage
+
+We use [Scoverage](https://github.com/scoverage/sbt-scoverage) for measuring code coverage during test execution. Configuration is in `build.sbt`.
+
+**Run tests with coverage:**
+```bash
+sbt testCoverage
+```
+
+This will:
+1. Enable coverage instrumentation
+2. Run all tests across all modules
+3. Generate coverage reports in `target/scala-2.13/scoverage-report/`
+4. Aggregate coverage across all modules
+
+**Coverage reports locations:**
+- HTML report: `target/scala-2.13/scoverage-report/index.html`
+- XML report: `target/scala-2.13/scoverage-report/cobertura.xml`
+
+**Coverage thresholds:**
+- Minimum statement coverage: 70%
+- Coverage check will fail if minimum is not met
+
+**Note**: Scoverage automatically excludes:
+- Generated protobuf code
+- BuildInfo generated code
+- All managed sources
+
 ### Combined Commands
 
 **Format and fix all code (recommended before committing):**
@@ -319,7 +347,8 @@ Our CI pipeline automatically runs:
 - ✅ Compilation (`compile-all`)
 - ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
 - ✅ Static bug detection (`runScapegoat`)
-- ✅ Test suite (`testAll`)
+- ✅ Test suite with code coverage (`testCoverage`)
+- ✅ Coverage reports (published as artifacts)
 - ✅ Build artifacts (`assembly`, `dist`)
 
 All checks must pass before a PR can be merged.

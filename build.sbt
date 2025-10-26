@@ -280,7 +280,20 @@ lazy val node = {
 
 }
 
-coverageExcludedPackages := "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*"
+// Scoverage configuration
+coverageEnabled := false // Disabled by default, enable with `sbt coverage`
+coverageMinimumStmtTotal := 70
+coverageFailOnMinimum := true
+coverageHighlighting := true
+coverageExcludedPackages := Seq(
+  "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*",  // Protobuf generated code
+  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo",  // BuildInfo generated code
+  ".*\\.protobuf\\..*"  // All protobuf packages
+).mkString(";")
+coverageExcludedFiles := Seq(
+  ".*/src_managed/.*",  // All managed sources
+  ".*/target/.*/src_managed/.*"  // Target managed sources
+).mkString(";")
 
 addCommandAlias(
   "compile-all",
@@ -363,6 +376,24 @@ addCommandAlias(
     |; crypto / scapegoat
     |; rlp / scapegoat
     |; scapegoat
+    |""".stripMargin
+)
+
+// testCoverage - Run tests with coverage
+addCommandAlias(
+  "testCoverage",
+  """; coverage
+    |; testAll
+    |; coverageReport
+    |; coverageAggregate
+    |""".stripMargin
+)
+
+// testCoverageOff - Run tests without coverage (cleanup)
+addCommandAlias(
+  "testCoverageOff",
+  """; coverageOff
+    |; testAll
     |""".stripMargin
 )
 
