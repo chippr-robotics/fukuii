@@ -214,7 +214,9 @@ object RegularSyncItSpecUtils {
       val baseRetries = 90
       val additionalRetries = if (blockNumber > 1000) ((blockNumber - 1000) / 20).toInt else 0
       val maxRetries = baseRetries + additionalRetries
-      retryUntilWithDelay(Task(blockchainReader.getBestBlockNumber() == blockNumber), 1.second, maxRetries)(isDone => isDone)
+      retryUntilWithDelay(Task(blockchainReader.getBestBlockNumber() == blockNumber), 1.second, maxRetries)(isDone =>
+        isDone
+      )
     }
 
     def mineNewBlock(
