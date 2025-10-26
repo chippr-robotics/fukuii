@@ -2,11 +2,18 @@
 # Stage 1: Build stage using full JDK
 FROM eclipse-temurin:17-jdk-jammy AS builder
 
-# Install required build tools
+# Install required build tools including SBT
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
     git \
+    gnupg2 \
+    ca-certificates \
+    && echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | tee /etc/apt/sources.list.d/sbt.list && \
+    echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | tee /etc/apt/sources.list.d/sbt_old.list && \
+    curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | apt-key add && \
+    apt-get update && \
+    apt-get install -y sbt \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up build environment
@@ -18,7 +25,7 @@ COPY . /build
 # Build distribution
 # Note: Submodules are already initialized by the GitHub Actions checkout step
 # or should be initialized manually before building (git submodule update --init --recursive)
-RUN ./sbt dist
+RUN sbt dist
 
 # Extract the distribution zip
 RUN cd target/universal && \
