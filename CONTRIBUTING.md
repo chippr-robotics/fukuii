@@ -23,7 +23,7 @@ We are committed to providing a welcoming and inclusive environment for all cont
 
 To contribute to Fukuii, you'll need:
 
-- **JDK 11 or higher** - Required for building and running the project
+- **JDK 17** - Required for building and running the project
 - **sbt** - Scala build tool (version 1.5.4 or higher)
 - **Git** - For version control
 - **Optional**: Python (for auxiliary scripts)
@@ -379,7 +379,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 ### Reminders
 
-- **JDK Compatibility**: Code must work on both JDK 11 and JDK 17
+- **JDK Compatibility**: Code must work on JDK 17
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
 - **Rebranding**: This is a rebrand from "Mantis" to "Fukuii" - update any remaining "mantis" or "io.iohk" references
@@ -403,7 +403,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 2. Add comprehensive tests (unit + integration if needed)
 3. Update documentation (README, scaladoc)
 4. Run formatCheck and linters
-5. Ensure JDK 11 and JDK 17 compatibility
+5. Ensure JDK 17 compatibility
 ```
 
 **When refactoring:**
@@ -417,7 +417,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 **When updating dependencies:**
 ```
 1. Check the GitHub Advisory Database for vulnerabilities
-2. Test thoroughly on both JDK 11 and JDK 17
+2. Test thoroughly on JDK 17
 3. Update version numbers in build.sbt
 4. Document any breaking changes or migration steps
 ```
@@ -428,7 +428,7 @@ Before submitting a PR, verify:
 - [ ] `sbt formatCheck` passes
 - [ ] `sbt scalastyle test:scalastyle` passes
 - [ ] `sbt compile-all` succeeds
-- [ ] `sbt testAll` passes (both JDK 11 and 17 if possible)
+- [ ] `sbt testAll` passes (on JDK 17)
 - [ ] `sbt it:test` passes for integration tests
 - [ ] No new compiler warnings introduced
 - [ ] Documentation updated for user-facing changes
