@@ -65,18 +65,27 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 **Triggers:** Git tags starting with `v` (e.g., `v1.0.0`), Manual dispatch
 
-**Purpose:** Creates GitHub releases, builds and publishes signed container images, and manages milestones
+**Purpose:** Creates GitHub releases with full traceability, builds artifacts, generates CHANGELOG, and publishes signed container images
 
 **Steps:**
-1. Builds optimized production distribution
-2. Extracts version from tag
-3. Generates release notes from commits
-4. Creates GitHub release with artifacts
-5. Builds and publishes Docker image to `ghcr.io/chippr-robotics/chordodes_fukuii`
-6. Signs image with Cosign (keyless, using GitHub OIDC)
-7. Generates SLSA Level 3 provenance attestations
-8. Logs immutable image digest and tags
-9. Closes matching milestone (for stable releases)
+1. Builds optimized production distribution (ZIP)
+2. Builds assembly JAR (standalone executable)
+3. Extracts version from tag
+4. Generates SBOM (Software Bill of Materials) in CycloneDX format
+5. Generates CHANGELOG.md from commits since last release
+6. Creates GitHub release with all artifacts
+7. Builds and publishes Docker image to `ghcr.io/chippr-robotics/chordodes_fukuii`
+8. Signs image with Cosign (keyless, using GitHub OIDC)
+9. Generates SLSA Level 3 provenance attestations
+10. Logs immutable image digest and tags
+11. Closes matching milestone (for stable releases)
+
+**Release Artifacts:**
+- ✅ **Distribution ZIP:** Complete package with scripts, configs, and dependencies
+- ✅ **Assembly JAR:** Standalone executable JAR file
+- ✅ **SBOM:** Software Bill of Materials in CycloneDX JSON format
+- ✅ **CHANGELOG:** Automatically generated from commit history
+- ✅ **Docker Image:** Signed container image with SBOM and provenance
 
 **Container Security Features:**
 - ✅ **Image Signing:** Uses [Cosign](https://docs.sigstore.dev/cosign/overview/) with keyless signing (GitHub OIDC)
@@ -108,6 +117,37 @@ cosign verify \
 git tag -a v1.0.0 -m "Release 1.0.0"
 git push origin v1.0.0
 ```
+
+---
+
+### 📝 Release Drafter Workflow (`release-drafter.yml`)
+
+**Triggers:** Push to main/master/develop branches, Pull Request updates
+
+**Purpose:** Automatically generates and maintains draft releases with categorized changelog
+
+**Features:**
+1. **Auto-categorization:** Groups changes by type (Features, Bug Fixes, Security, etc.)
+2. **Draft Releases:** Creates and updates draft releases as PRs are merged
+3. **Version Management:** Suggests next version based on labels (major, minor, patch)
+4. **Contributor Attribution:** Automatically lists all contributors
+
+**Categories:**
+- 🚀 Features
+- 🐛 Bug Fixes
+- 🔒 Security
+- 📚 Documentation
+- 🏗️ Build & CI/CD
+- 🔧 Maintenance
+- ⚡ Performance
+- 🧪 Testing
+
+**Label-based Versioning:**
+- Labels `major` or `breaking` → Major version bump (1.0.0 → 2.0.0)
+- Labels `minor`, `feature`, or `milestone` → Minor version bump (1.0.0 → 1.1.0)
+- Default → Patch version bump (1.0.0 → 1.0.1)
+
+**Usage:** Simply merge PRs to main/master/develop. Release Drafter will automatically update the draft release. When ready to publish, create and push a version tag.
 
 ---
 
@@ -192,6 +232,36 @@ sbt pp
 
 ## Milestones and Releases
 
+### One-Click Release Process
+
+Fukuii uses an automated release process with full traceability:
+
+1. **Development:** Work on features and bug fixes in feature branches
+2. **Pull Requests:** Create PRs with appropriate labels (feature, bug, security, etc.)
+3. **Auto-Draft:** Release Drafter automatically updates draft releases as PRs are merged
+4. **Ready to Release:** When ready to publish:
+   ```bash
+   # Version is managed in version.sbt
+   git tag -a v1.0.0 -m "Release 1.0.0"
+   git push origin v1.0.0
+   ```
+5. **Automatic Build:** Release workflow automatically:
+   - Builds distribution ZIP and assembly JAR
+   - Generates CHANGELOG from commits since last release
+   - Creates SBOM (Software Bill of Materials)
+   - Publishes GitHub release with all artifacts
+   - Builds and signs Docker images
+   - Closes matching milestone
+
+### Release Artifacts
+
+Each release automatically includes:
+- ✅ **Distribution ZIP** - Full package with scripts and configs
+- ✅ **Assembly JAR** - Standalone executable JAR
+- ✅ **CHANGELOG.md** - Auto-generated from commit history
+- ✅ **SBOM** - Software Bill of Materials (CycloneDX JSON)
+- ✅ **Docker Image** - Signed with Cosign, includes provenance
+
 ### Creating a Milestone
 
 1. Go to **Issues** → **Milestones** → **New milestone**
@@ -200,19 +270,49 @@ sbt pp
 4. Due date: Set target completion date
 5. Assign issues and PRs to the milestone
 
+### Release Notes and Changelog
+
+**Automatic Generation:** Release notes and CHANGELOG are automatically generated from commit messages. Follow these best practices:
+
+**Good commit message format:**
+- `feat: Add support for EIP-1559 transactions`
+- `fix: Resolve memory leak in block processing`
+- `security: Patch vulnerability in RPC handler`
+- `docs: Update installation guide`
+
+**Commit prefixes for categorization:**
+- `feat:` / `add:` → Features section
+- `fix:` / `bug:` → Bug Fixes section
+- `security:` / `vuln:` → Security section
+- `change:` / `update:` / `refactor:` → Changed section
+
+**Label your PRs:** Use labels to help Release Drafter categorize changes:
+- `feature`, `enhancement` → Features
+- `bug`, `fix` → Bug Fixes
+- `security` → Security
+- `documentation` → Documentation
+- `ci/cd`, `build` → Build & CI/CD
+- `major`, `breaking` → Major version bump
+- `minor`, `milestone` → Minor version bump
+
 ### Making a Release
 
 1. Ensure all milestone issues/PRs are closed
-2. Update version in `version.sbt` if applicable
-3. Commit and push changes
-4. Create and push a version tag:
+2. Review the draft release created by Release Drafter
+3. Update version in `version.sbt` if needed
+4. Commit and push changes
+5. Create and push a version tag:
    ```bash
    git tag -a v1.0.0 -m "Release version 1.0.0"
    git push origin v1.0.0
    ```
-5. The release workflow will automatically:
-   - Build the distribution
-   - Create a GitHub release
+6. The release workflow will automatically:
+   - Build the distribution ZIP
+   - Build the assembly JAR
+   - Generate CHANGELOG from commits
+   - Generate SBOM (Software Bill of Materials)
+   - Create a GitHub release with all artifacts
+   - Build and sign Docker images
    - Close the matching milestone
 
 ### Release Notes
@@ -221,13 +321,15 @@ Release notes are automatically generated from commit messages. Write clear, des
 
 ```bash
 # Good commit messages
-git commit -m "Add support for EIP-1559 transactions"
-git commit -m "Fix memory leak in block processing"
-git commit -m "Improve RPC response performance by 20%"
+git commit -m "feat: Add support for EIP-1559 transactions"
+git commit -m "fix: Memory leak in block processing"
+git commit -m "security: Patch RPC handler vulnerability"
+git commit -m "docs: Improve RPC response performance by 20%"
 
-# Less helpful commit messages
+# Less helpful commit messages (avoid these)
 git commit -m "fix bug"
 git commit -m "updates"
+git commit -m "WIP"
 ```
 
 ---
