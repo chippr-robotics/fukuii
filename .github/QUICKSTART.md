@@ -101,8 +101,11 @@ git push origin v1.0.0
 
 # 4. The Release workflow will automatically:
 #    - Build the distribution
-#    - Create GitHub release
-#    - Attach artifacts
+#    - Create GitHub release with artifacts
+#    - Build and publish signed container image to ghcr.io/chippr-robotics/chordodes_fukuii
+#    - Sign image with Cosign (keyless, GitHub OIDC)
+#    - Generate SLSA Level 3 provenance attestations
+#    - Output immutable digest reference
 #    - Close milestone v1.0.0
 ```
 
@@ -146,17 +149,38 @@ Docker images are built automatically on:
 
 ### Published Images
 
-All images are published to GitHub Container Registry:
+Images are published to two registries:
+
+**Release Images (Production):**
+- Registry: `ghcr.io/chippr-robotics/chordodes_fukuii`
+- Built by: `release.yml` on version tags
+- Security: ✅ Signed with Cosign, ✅ SLSA provenance, ✅ SBOM included
 
 ```bash
-# Pull the latest production image
+# Pull and verify the latest signed release
 docker pull ghcr.io/chippr-robotics/chordodes_fukuii:latest
+
+# Verify signature (requires cosign)
+cosign verify \
+  --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  ghcr.io/chippr-robotics/chordodes_fukuii:latest
 
 # Pull a specific version
 docker pull ghcr.io/chippr-robotics/chordodes_fukuii:1.0.0
+```
 
+**Development Images:**
+- Registry: `ghcr.io/chippr-robotics/fukuii`
+- Built by: `docker.yml` on branch pushes
+- Note: Not signed, for development/testing only
+
+```bash
 # Pull dev environment
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii-dev:latest
+docker pull ghcr.io/chippr-robotics/fukuii-dev:latest
+
+# Pull development build from main branch
+docker pull ghcr.io/chippr-robotics/fukuii:main
 ```
 
 ### Running Locally

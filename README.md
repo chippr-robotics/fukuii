@@ -50,8 +50,14 @@ Getting started
 The easiest way to run Fukuii is using Docker:
 
 ```bash
-# Pull a specific version (recommended)
-docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
+# Pull a specific version (recommended - official releases are signed)
+docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+
+# Verify the image signature (requires cosign)
+cosign verify \
+  --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
 
 # Or pull the latest development version
 docker pull ghcr.io/chippr-robotics/fukuii:develop
@@ -64,13 +70,18 @@ docker run -d \
   -p 30303:30303 \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0
+  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
 ```
+
+**Security Note:** Release images published to `ghcr.io/chippr-robotics/chordodes_fukuii` are:
+- ✅ Signed with [Cosign](https://github.com/sigstore/cosign) (keyless, using GitHub OIDC)
+- ✅ Include SLSA provenance attestations for supply chain verification
+- ✅ Include Software Bill of Materials (SBOM)
 
 See [docker/README.md](docker/README.md) for detailed Docker documentation, including:
 - Available image variants (production, development, distroless)
 - Health checks and monitoring
-- Security considerations
+- Security considerations and signature verification
 - Docker Compose examples
 
 ## Option 2: GitHub Codespaces (Recommended for Development)
