@@ -41,6 +41,6 @@ class MGF1BytesGeneratorExt(digest: Digest) {
           ByteString(hashBuf).dropRight(digestSize - spaceLeft)
         }
       }
-      .reduce[ByteString] { case (a, b) => a ++ b }
+      .foldLeft(ByteString.empty) { case (acc, bs) => acc ++ bs }
   }
 }

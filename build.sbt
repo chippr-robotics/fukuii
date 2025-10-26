@@ -369,6 +369,11 @@ addCommandAlias(
 // Scapegoat configuration
 (ThisBuild / scapegoatVersion) := "1.4.11"
 scapegoatReports := Seq("xml", "html")
+// Set console output to false to reduce noise in CI logs
+scapegoatConsoleOutput := false
+// Disable UnsafeTraversableMethods inspection as it produces too many false positives
+// when pattern matching guarantees safety
+scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")
 scapegoatIgnoredFiles := Seq(
   ".*/src_managed/.*",           // All generated sources
   ".*/target/.*protobuf/.*",     // Protobuf generated code
