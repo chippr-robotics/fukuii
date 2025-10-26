@@ -29,14 +29,17 @@ Chordoes Fukuii is a worm which controls a zombie mantis.
 
 This project uses GitHub Actions for continuous integration and delivery:
 
-- ✅ **Automated Testing**: All tests run on every push and PR
-- 🔍 **Code Quality**: Automated formatting and style checks
+- ✅ **Automated Testing**: All tests run on every push and PR with code coverage tracking
+- 🔍 **Code Quality**: Automated formatting (Scalafmt), linting (Scalafix), and static bug detection (Scapegoat)
+- 📊 **Code Coverage**: Scoverage with 70% minimum threshold enforced
 - 🐳 **Docker Builds**: Automatic container image builds
 - 🚀 **Releases**: Automated release creation with milestone tracking
-- 📊 **Dependency Checks**: Weekly dependency monitoring
+- 📦 **Dependency Checks**: Weekly dependency monitoring
 
 **Quick Links:**
 - [Workflow Documentation](.github/workflows/README.md)
+- [CI Pipeline Analysis Report](CI_PIPELINE_ANALYSIS_REPORT.md)
+- [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
 - [Docker Documentation](docker/README.md)
