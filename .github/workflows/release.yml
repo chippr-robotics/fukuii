@@ -17,7 +17,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      version: ${{ steps.extract-notes.outputs.version }}
+      version: ${{ steps.extract-version.outputs.version }}
     
     steps:
       - name: Checkout code

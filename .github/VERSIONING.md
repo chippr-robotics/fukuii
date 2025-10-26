@@ -21,10 +21,24 @@ Versions follow semantic versioning: `MAJOR.MINOR.PATCH`
 
 ## Automation
 
-The versioning is automated through GitHub Actions:
+The versioning and release process is fully automated through GitHub Actions:
 
-- **auto-version.yml**: Automatically increments the version in `version.sbt` on every commit/merged PR
-- **release.yml**: Creates GitHub releases when version tags are pushed
+- **auto-version.yml**: Automatically increments the version in `version.sbt` on every commit/merged PR and creates version tags
+- **release.yml**: Creates GitHub releases when version tags are pushed, including:
+  - Distribution ZIP and assembly JAR
+  - Auto-generated CHANGELOG from commit history
+  - SBOM (Software Bill of Materials)
+  - Signed Docker images with SLSA provenance
+- **release-drafter.yml**: Maintains draft releases with categorized changes as PRs are merged
+
+**How It Works:**
+1. When you merge a PR to main/master/develop, `auto-version.yml` automatically:
+   - Increments the version (patch by default, minor if "milestone" label/keyword)
+   - Creates and pushes a version tag (e.g., `v0.1.1`)
+2. The version tag triggers `release.yml` which creates a full release with all artifacts
+3. `release-drafter.yml` keeps a draft release updated with categorized changes
+
+**Note:** Every merge to main/master/develop creates a new release. If you want to batch changes, work in feature branches and only merge to main when ready to release.
 
 ## Manual Version Updates
 
