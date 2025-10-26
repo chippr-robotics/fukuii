@@ -32,8 +32,22 @@ Official release images are signed with Cosign for supply chain security.
 # macOS
 brew install cosign
 
-# Linux
-wget https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+# Linux - verify checksums for supply chain security
+VERSION="2.2.3"
+wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign-linux-amd64"
+wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign-linux-amd64.sig"
+wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign-linux-amd64.pem"
+
+# Verify signature (requires cosign already installed, or use release keys)
+# Or verify checksums from release page
+sha256sum cosign-linux-amd64
+# Compare with SHA256 from: https://github.com/sigstore/cosign/releases/tag/v${VERSION}
+
+sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+sudo chmod +x /usr/local/bin/cosign
+
+# Alternative: Install via GitHub CLI for automatic verification
+gh release download v${VERSION} --repo sigstore/cosign --pattern 'cosign-linux-amd64'
 sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 sudo chmod +x /usr/local/bin/cosign
 ```
