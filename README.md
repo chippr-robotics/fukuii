@@ -39,12 +39,41 @@ This project uses GitHub Actions for continuous integration and delivery:
 - [Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
+- [Docker Documentation](docker/README.md)
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
 
 Getting started
 
-## Option 1: GitHub Codespaces (Recommended for Quick Start)
+## Option 1: Docker (Recommended for Production)
+
+The easiest way to run Fukuii is using Docker:
+
+```bash
+# Pull a specific version (recommended)
+docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
+
+# Or pull the latest development version
+docker pull ghcr.io/chippr-robotics/fukuii:develop
+
+# Run Fukuii
+docker run -d \
+  --name fukuii \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-data:/app/data \
+  -v fukuii-conf:/app/conf \
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
+```
+
+See [docker/README.md](docker/README.md) for detailed Docker documentation, including:
+- Available image variants (production, development, distroless)
+- Health checks and monitoring
+- Security considerations
+- Docker Compose examples
+
+## Option 2: GitHub Codespaces (Recommended for Development)
 
 The fastest way to start developing is using GitHub Codespaces, which provides a pre-configured development environment:
 
@@ -54,7 +83,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
-## Option 2: Local Development
+## Option 3: Local Development
 
 To build Fukuii from source locally you will need:
 
