@@ -1,5 +1,5 @@
 inputs: final: prev: {
-  jre = prev.jdk8.jre;
+  jre = prev.jdk17.jre;
 
   fukuii = final.callPackage ./fukuii.nix {
     src = ../.;
