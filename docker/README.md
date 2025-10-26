@@ -28,28 +28,38 @@ Official release images are signed with Cosign for supply chain security.
 
 ### Install Cosign
 
+**Option 1: Using Package Manager (Recommended)**
 ```bash
 # macOS
 brew install cosign
 
-# Linux - verify checksums for supply chain security
+# Linux with snap
+snap install cosign --classic
+```
+
+**Option 2: Manual Installation with Verification**
+```bash
+# Download cosign for Linux
 VERSION="2.2.3"
 wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign-linux-amd64"
-wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign-linux-amd64.sig"
-wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign-linux-amd64.pem"
+wget "https://github.com/sigstore/cosign/releases/download/v${VERSION}/cosign_checksums.txt"
 
-# Verify signature (requires cosign already installed, or use release keys)
-# Or verify checksums from release page
-sha256sum cosign-linux-amd64
-# Compare with SHA256 from: https://github.com/sigstore/cosign/releases/tag/v${VERSION}
+# Verify checksum
+grep cosign-linux-amd64 cosign_checksums.txt | sha256sum --check
+# Expected output: cosign-linux-amd64: OK
 
-sudo mv cosign-linux-amd64 /usr/local/bin/cosign
-sudo chmod +x /usr/local/bin/cosign
+# Install
+sudo install -m 755 cosign-linux-amd64 /usr/local/bin/cosign
 
-# Alternative: Install via GitHub CLI for automatic verification
-gh release download v${VERSION} --repo sigstore/cosign --pattern 'cosign-linux-amd64'
-sudo mv cosign-linux-amd64 /usr/local/bin/cosign
-sudo chmod +x /usr/local/bin/cosign
+# Verify installation
+cosign version
+```
+
+**Option 3: Using GitHub CLI (Automatically Verified)**
+```bash
+VERSION="2.2.3"
+gh release download "v${VERSION}" --repo sigstore/cosign --pattern 'cosign-linux-amd64'
+sudo install -m 755 cosign-linux-amd64 /usr/local/bin/cosign
 ```
 
 ### Verify Image Signature
