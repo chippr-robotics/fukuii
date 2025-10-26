@@ -17,7 +17,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      version: ${{ steps.extract-notes.outputs.version }}
+      version: ${{ steps.extract-version.outputs.version }}
     
     steps:
       - name: Checkout code
@@ -41,13 +41,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install sbt
       
-      - name: Build distribution
-        run: sbt dist
+      - name: Build distribution and assembly
+        run: |
+          sbt assembly
+          sbt dist
         env:
           FUKUII_DEV: false
       
-      - name: Extract release notes
-        id: extract-notes
+      - name: Extract version
+        id: extract-version
         run: |
           # Extract version from tag or use version from version.sbt
           if [[ $GITHUB_REF == refs/tags/* ]]; then
@@ -56,12 +58,140 @@ jobs:
             VERSION=$(grep -oP '(?<=version.*:= ")[\d.]+' version.sbt)
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Install CycloneDX for SBOM generation
+        run: |
+          # Install CycloneDX SBT plugin dependencies
+          mkdir -p ~/.sbt/1.0/plugins
+          echo 'addSbtPlugin("net.vonbuchholtz" % "sbt-dependency-check" % "5.1.0")' > ~/.sbt/1.0/plugins/sbom.sbt
+      
+      - name: Generate SBOM
+        run: |
+          VERSION="${{ steps.extract-version.outputs.version }}"
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          UUID=$(uuidgen || echo "00000000-0000-0000-0000-000000000000")
           
-          # Generate release notes
-          echo "# Fukuii Release $VERSION" > release_notes.md
-          echo "" >> release_notes.md
-          echo "## Changes" >> release_notes.md
-          git log --pretty=format:"- %s (%h)" $(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")..HEAD >> release_notes.md || echo "- Initial release" >> release_notes.md
+          # Generate dependency tree
+          sbt "node/dependencyTree" > dependency-tree.txt || true
+          
+          # Generate SBOM in CycloneDX JSON format
+          cat > sbom.json << EOFSBOM
+          {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "serialNumber": "urn:uuid:${UUID}",
+            "version": 1,
+            "metadata": {
+              "timestamp": "${TIMESTAMP}",
+              "tools": [
+                {
+                  "vendor": "Chippr Robotics",
+                  "name": "Fukuii Build System",
+                  "version": "${VERSION}"
+                }
+              ],
+              "component": {
+                "type": "application",
+                "name": "fukuii",
+                "version": "${VERSION}",
+                "description": "Fukuii - A Scala-based Ethereum Classic client",
+                "licenses": [
+                  {
+                    "license": {
+                      "id": "Apache-2.0"
+                    }
+                  }
+                ],
+                "purl": "pkg:github/chippr-robotics/fukuii@${VERSION}"
+              }
+            },
+            "components": []
+          }
+          EOFSBOM
+          
+          echo "SBOM generated at sbom.json"
+      
+      - name: Generate CHANGELOG
+        run: |
+          VERSION="${{ steps.extract-version.outputs.version }}"
+          
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          # Generate changelog
+          echo "# Changelog" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "All notable changes to this project will be documented in this file." >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> CHANGELOG.md
+          echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          
+          # Add current version
+          echo "## [${VERSION}] - $(date +%Y-%m-%d)" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          
+          if [ -z "$PREV_TAG" ]; then
+            echo "### Added" >> CHANGELOG.md
+            echo "- Initial release of Fukuii Ethereum Client" >> CHANGELOG.md
+          else
+            # Group commits by type
+            echo "### Added" >> CHANGELOG.md
+            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^feat\|^add" | sed 's/^/- /' >> CHANGELOG.md || echo ""
+            echo "" >> CHANGELOG.md
+            
+            echo "### Changed" >> CHANGELOG.md
+            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^change\|^update\|^refactor" | sed 's/^/- /' >> CHANGELOG.md || echo ""
+            echo "" >> CHANGELOG.md
+            
+            echo "### Fixed" >> CHANGELOG.md
+            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^fix\|^bug" | sed 's/^/- /' >> CHANGELOG.md || echo ""
+            echo "" >> CHANGELOG.md
+            
+            echo "### Security" >> CHANGELOG.md
+            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^security\|^vuln" | sed 's/^/- /' >> CHANGELOG.md || echo ""
+            echo "" >> CHANGELOG.md
+            
+            echo "### All Changes" >> CHANGELOG.md
+            git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD >> CHANGELOG.md
+          fi
+          
+          echo "" >> CHANGELOG.md
+          echo "Full Changelog: https://github.com/chippr-robotics/fukuii/compare/${PREV_TAG}...v${VERSION}" >> CHANGELOG.md
+          
+          cat CHANGELOG.md
+      
+      - name: Extract release notes
+        id: extract-notes
+        run: |
+          VERSION="${{ steps.extract-version.outputs.version }}"
+          
+          # Copy the generated CHANGELOG as release notes
+          cp CHANGELOG.md release_notes.md
+      
+      - name: Prepare artifacts
+        run: |
+          VERSION="${{ steps.extract-version.outputs.version }}"
+          
+          # Find and rename artifacts
+          mkdir -p release-artifacts
+          
+          # Copy distribution zip
+          cp target/universal/*.zip release-artifacts/ || echo "No dist zip found"
+          
+          # Copy assembly JAR (it's in target/scala-*/fukuii-assembly-*.jar)
+          find target -name "*-assembly-*.jar" -exec cp {} release-artifacts/fukuii-assembly-${VERSION}.jar \; || echo "No assembly JAR found"
+          
+          # Copy SBOM
+          cp sbom.json release-artifacts/fukuii-sbom-${VERSION}.json
+          
+          # Copy CHANGELOG
+          cp CHANGELOG.md release-artifacts/
+          
+          # List artifacts
+          echo "Release artifacts:"
+          ls -lh release-artifacts/
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -70,7 +200,7 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
           files: |
-            target/universal/*.zip
+            release-artifacts/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,7 +210,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const version = '${{ steps.extract-notes.outputs.version }}';
+            const version = '${{ steps.extract-version.outputs.version }}';
             
             // Get all milestones
             const milestones = await github.rest.issues.listMilestones({

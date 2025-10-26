@@ -32,8 +32,16 @@ This project uses GitHub Actions for continuous integration and delivery:
 - ✅ **Automated Testing**: All tests run on every push and PR
 - 🔍 **Code Quality**: Automated formatting and style checks
 - 🐳 **Docker Builds**: Automatic container image builds
-- 🚀 **Releases**: Automated release creation with milestone tracking
+- 🚀 **One-Click Releases**: Automated releases with CHANGELOG, SBOM, and artifacts
+- 📝 **Release Drafter**: Auto-generated release notes from PRs
 - 📊 **Dependency Checks**: Weekly dependency monitoring
+
+**Release Automation Features:**
+- Auto-generated CHANGELOG from commit history
+- JAR and distribution artifacts attached to releases
+- Software Bill of Materials (SBOM) in CycloneDX format
+- Signed Docker images with SLSA provenance
+- Milestone tracking and automatic closure
 
 **Quick Links:**
 - [Workflow Documentation](.github/workflows/README.md)
