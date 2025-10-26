@@ -355,14 +355,35 @@ All checks must pass before a PR can be merged.
 
 ### Releases and Supply Chain Security
 
+Fukuii uses an automated one-click release process with full traceability.
+
 When a release is created (via git tag `vX.Y.Z`), the release workflow automatically:
+- ✅ Builds distribution package (ZIP) and assembly JAR
+- ✅ Generates CHANGELOG from commits since last release
+- ✅ Creates Software Bill of Materials (SBOM) in CycloneDX format
+- ✅ Attaches all artifacts to GitHub release
 - ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/chordodes_fukuii`
 - ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/overview/) (keyless, GitHub OIDC)
 - ✅ Generates SLSA Level 3 provenance attestations
-- ✅ Includes Software Bill of Materials (SBOM)
 - ✅ Outputs immutable digest references for tamper-proof deployments
+- ✅ Closes matching milestone
 
-Release images can be verified:
+**Release Artifacts:**
+Each release includes:
+- Distribution ZIP with scripts and configs
+- Standalone assembly JAR
+- CHANGELOG.md with categorized changes
+- SBOM (Software Bill of Materials)
+- Signed Docker images with provenance
+
+**Making a Release:**
+```bash
+# Ensure version.sbt is updated
+git tag -a v1.0.0 -m "Release 1.0.0"
+git push origin v1.0.0
+```
+
+**Verify Release Images:**
 ```bash
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
@@ -370,7 +391,14 @@ cosign verify \
   ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
 ```
 
-See [docker/README.md](docker/README.md) for detailed information about container security.
+**Release Drafter:**
+Release notes are automatically drafted as PRs are merged. Use descriptive commit messages with prefixes:
+- `feat:` for features
+- `fix:` for bug fixes
+- `security:` for security fixes
+- `docs:` for documentation
+
+See [.github/workflows/README.md](.github/workflows/README.md) for detailed release process documentation.
 
 ## Guidelines for LLM Agents
 
