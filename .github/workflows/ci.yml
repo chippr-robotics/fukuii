@@ -91,7 +91,6 @@ jobs:
           name: coverage-reports-jdk17
           path: |
             **/target/scala-*/scoverage-report/**
-            **/target/scala-*/coverage-report/**
             **/target/scala-*/scoverage-data/**
           retention-days: 30
           if-no-files-found: warn
