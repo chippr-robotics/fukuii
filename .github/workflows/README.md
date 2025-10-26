@@ -21,17 +21,19 @@ This directory contains the GitHub Actions workflows for continuous integration,
 3. Configures Coursier and Ivy caching
 4. Installs SBT
 5. Compiles all modules (bytes, crypto, rlp, node)
-6. Checks code formatting (scalafmt/scalafix)
-7. Runs scalastyle checks
-8. Executes all tests
+6. Checks code formatting (scalafmt + scalafix)
+7. Runs Scapegoat static bug detection analysis
+8. Executes all tests with code coverage (Scoverage)
 9. Builds assembly artifacts
 10. Builds distribution package
-11. Uploads test results and build artifacts
+11. Uploads test results, coverage reports, and build artifacts
 
 **Artifacts Published:**
-- Test results
-- Distribution packages
-- Assembly JARs
+- Test results (7-day retention)
+- Scapegoat static analysis reports (7-day retention)
+- Code coverage reports from Scoverage (30-day retention)
+- Distribution packages (7-day retention)
+- Assembly JARs (7-day retention)
 
 **Required Status Check:** Yes - Must pass before merging to protected branches
 
@@ -178,13 +180,13 @@ sbt compile-all
 # Check formatting
 sbt formatCheck
 
-# Run style checks
-sbt "scalastyle ; Test / scalastyle"
+# Run static bug detection
+sbt runScapegoat
 
-# Run all tests
-sbt testAll
+# Run all tests with coverage
+sbt testCoverage
 
-# Or use the convenience alias that does all of the above
+# Or use the convenience alias that formats, checks, and tests
 sbt pp
 ```
 
