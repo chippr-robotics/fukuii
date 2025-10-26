@@ -52,7 +52,7 @@
       defaultApp = apps.fukuii;
     }) // (collectHydraSets
       (map (name: mkHydraSet [ name ] [ "x86_64-linux" ]) [
-        "jdk8"
+        "jdk17"
         "lllc"
         "fukuii"
         "fukuii-entrypoint"
