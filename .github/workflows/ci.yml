@@ -79,10 +79,21 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
       
-      - name: Run tests
-        run: sbt testAll
+      - name: Run tests with coverage
+        run: sbt testCoverage
         env:
           FUKUII_DEV: true
+      
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports-jdk17
+          path: |
+            **/target/scala-*/scoverage-report/**
+            **/target/scala-*/scoverage-data/**
+          retention-days: 30
+          if-no-files-found: warn
       
       - name: Build assembly
         run: sbt assembly
