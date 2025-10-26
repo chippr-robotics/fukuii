@@ -3,8 +3,6 @@ package com.chipprbots.ethereum
 import com.chipprbots.ethereum.cli.CliLauncher
 import com.chipprbots.ethereum.crypto.EcKeyGen
 import com.chipprbots.ethereum.crypto.SignatureValidator
-// HIBERNATED: External VM import commented out
-// import com.chipprbots.ethereum.extvm.VmServerApp
 import com.chipprbots.ethereum.faucet.Faucet
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger

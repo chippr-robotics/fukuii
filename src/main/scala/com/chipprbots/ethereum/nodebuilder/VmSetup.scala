@@ -4,9 +4,6 @@ package com.chipprbots.ethereum.nodebuilder
 
 import akka.actor.ActorSystem
 
-// HIBERNATED: External VM imports commented out
-// import com.chipprbots.ethereum.extvm.ExtVMInterface
-// import com.chipprbots.ethereum.extvm.VmServerApp
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
