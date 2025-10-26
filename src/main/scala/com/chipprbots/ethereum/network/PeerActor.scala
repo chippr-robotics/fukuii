@@ -131,7 +131,7 @@ class PeerActor[R <: HandshakeResult](
       .orElse(stashMessages)
       .orElse {
 
-        case RLPxConnectionHandler.InitialHelloReceived(msg, negotiatedProtocol) =>
+        case RLPxConnectionHandler.InitialHelloReceived(msg, _) =>
           // Processes the InitialHelloReceived, cancels the timeout and processes a new message but only if the handshaker
           // handles the received message
           // TODO pass capability to 'EtcHelloExchangeState'

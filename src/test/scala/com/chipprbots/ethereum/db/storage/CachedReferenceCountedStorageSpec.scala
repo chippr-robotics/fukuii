@@ -31,7 +31,7 @@ class CachedReferenceCountedStorageSpec
       val toDel = changes.take(changes.size / 2).map(_._1)
 
       changeLog.withChangeLog(blockNumber) { blockChangeLog =>
-        toUpdate.foreach { case (key, value) =>
+        toUpdate.foreach { case (key, _) =>
           blockChangeLog.registerChange(Increase(key), 1)
         }
 
@@ -64,7 +64,7 @@ class CachedReferenceCountedStorageSpec
       val toDel = changes.take(changes.size / 2).map(_._1)
 
       changeLog.withChangeLog(blockNumber) { blockChangeLog =>
-        toUpdate.foreach { case (key, value) =>
+        toUpdate.foreach { case (key, _) =>
           blockChangeLog.registerChange(Increase(key), 1)
         }
 

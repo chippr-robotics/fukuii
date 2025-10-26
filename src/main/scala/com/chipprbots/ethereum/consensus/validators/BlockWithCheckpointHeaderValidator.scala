@@ -64,7 +64,7 @@ object BlockWithCheckpointHeaderValidator {
 
         lazy val (validSignatures, invalidSignatures) = signaturesWithRecoveredKeys.partition {
           //signatures are valid if the signers are known AND distinct
-          case (sig, Some(pk)) => blockchainConfig.checkpointPubKeys.contains(pk) && !repeatedSigners.contains(pk)
+          case (_, Some(pk)) => blockchainConfig.checkpointPubKeys.contains(pk) && !repeatedSigners.contains(pk)
           case _               => false
         }
 
