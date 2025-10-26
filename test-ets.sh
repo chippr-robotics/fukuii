@@ -31,14 +31,10 @@ function run_and_annotate {
   passed=$(grep -oP 'Total Tests Run: \d+' "retesteth-$1-log.txt")
   failed=$(grep -oP 'TOTAL ERRORS DETECTED: \d+' "retesteth-$1-log.txt")
 
-  cat <<EOF | buildkite-agent annotate --context "retesteth-$1" --style "$style"
-<details>
-<summary>retesteth: $1 -- $passed -- $failed</summary>
-<pre class="term"><code>
-$summary
-</code></pre>
-</details>
-EOF
+  # Note: buildkite-agent annotate is only available in Buildkite CI
+  # This section can be used to generate annotations in other CI systems
+  echo "Summary for $1:"
+  echo "$summary"
 }
 
 run_and_annotate "GeneralStateTests"

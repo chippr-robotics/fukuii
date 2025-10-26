@@ -14,7 +14,7 @@
 
 'ci/cd':
   - changed-files:
-    - any-glob-to-any-file: ['.github/**/*', '.buildkite/**/*']
+    - any-glob-to-any-file: ['.github/**/*']
 
 'tests':
   - changed-files:
@@ -42,4 +42,4 @@
 
 'build':
   - changed-files:
-    - any-glob-to-any-file: ['build.sbt', 'project/**/*', '*.nix']
+    - any-glob-to-any-file: ['build.sbt', 'project/**/*']

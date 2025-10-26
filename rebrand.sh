@@ -141,28 +141,8 @@ echo "Step 5: Renaming mantis to fukuii"
 echo "----------------------------------------------------------------------"
 
 # Update script names and content
-# Update Nix files
-for nixfile in nix/mantis.nix nix/overlay.nix shell.nix default.nix release.nix flake.nix; do
-    if [ -f "$nixfile" ]; then
-        backup_file "$nixfile"
-        
-        # Rename variable names and references (but not in URLs or external dependencies)
-        # Be careful not to replace 'mantis' in github URLs or external package names
-        sed -i 's/\bmantis\b/fukuii/g' "$nixfile" || true
-        sed -i 's/\bMantis\b/Fukuii/g' "$nixfile" || true
-        sed -i 's/\bMANTIS\b/FUKUII/g' "$nixfile" || true
-        
-        # Restore external dependency references that should remain as mantis
-        sed -i 's|github:input-output-hk/fukuii-explorer|github:input-output-hk/mantis-explorer|g' "$nixfile" || true
-        sed -i 's|github:input-output-hk/fukuii-faucet-web|github:input-output-hk/mantis-faucet-web|g' "$nixfile" || true
-        sed -i 's|/fukuii-extvm-pb|/mantis-extvm-pb|g' "$nixfile" || true
-        sed -i 's/fukuii-extvm-pb/mantis-extvm-pb/g' "$nixfile" || true
-        sed -i 's/fukuii-explorer/mantis-explorer/g' "$nixfile" || true
-        sed -i 's/fukuii-faucet-web/mantis-faucet-web/g' "$nixfile" || true
-        sed -i 's/fukuii-ops\.cachix\.org/mantis-ops.cachix.org/g' "$nixfile" || true
-        sed -i 's/hydra\.fukuii\.ist/hydra.mantis.ist/g' "$nixfile" || true
-    fi
-done
+# Note: Nix configuration files have been removed from the repository
+# as the project now uses GitHub Actions for CI/CD instead of Buildkite with Nix
 
 # Update shell scripts
 for script in test-ets.sh ets/run; do
@@ -202,7 +182,7 @@ for dockerfile in docker/Dockerfile docker/Dockerfile-base docker/Dockerfile-dev
 done
 
 # Update docker scripts
-for script in docker/mantis/build.sh docker/build.sh docker/build-base.sh docker/build-dev.sh nix/entrypoint.sh; do
+for script in docker/mantis/build.sh docker/build.sh docker/build-base.sh docker/build-dev.sh; do
     if [ -f "$script" ]; then
         backup_file "$script"
         sed -i 's/\bmantis\b/fukuii/g' "$script" || true
@@ -230,15 +210,8 @@ if [ -f "insomnia_workspace.json" ]; then
     sed -i 's/"Mantis"/"Fukuii"/g' "insomnia_workspace.json" || true
 fi
 
-# Update nix-in-docker files
-if [ -f "nix-in-docker/run" ]; then
-    backup_file "nix-in-docker/run"
-    sed -i 's/mantis-root/fukuii-root/g' "nix-in-docker/run" || true
-    sed -i 's|/mantis|/fukuii|g' "nix-in-docker/run" || true
-    
-    # Restore external cache references
-    sed -i 's/fukuii-ops-nix/mantis-ops-nix/g' "nix-in-docker/run" || true
-fi
+# Note: nix-in-docker directory has been removed from the repository
+# as the project now uses GitHub Actions for CI/CD
 
 echo ""
 echo "Step 6: Updating environment variable references"

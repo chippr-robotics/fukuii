@@ -10,61 +10,45 @@ options. Oh, and this readme file is in there too, of course.
 
 ## Running locally
 
-Use the `ets/run` wrapper script to boot Mantis and run retesteth against it.
-On a Mac you will want to do this using Docker:
+Use the `test-ets.sh` script to boot Fukuii and run retesteth against it.
 
-    nix-in-docker/run --command "ets/run"
+## Continuous integration
 
-Read on for more fine-grained control over running Mantis and retesteth, by
-running them separately.
-
-## Continous integration
-
-The tests are run on CI. For more details look at `.buildkite/pipeline.nix` and
-`test-ets.sh`. Output is stored as artifacts and a summary is added as
-annotation.
+The tests can be run as part of CI using the `test-ets.sh` script. Output is stored as artifacts.
 
 Two test suites are run; GeneralStateTests and BlockchainTests. These seem to
 be the only ones maintained and recommended at the moment.
 
-## Running ETS in a Nix environment
+## Running ETS locally
 
-Start Mantis in test mode:
+Start Fukuii in test mode:
 
     sbt -Dconfig.file=./src/main/resources/conf/testmode.conf -Dlogging.logs-level=WARN run
 
 NB. raising the log level is a good idea as there will be a lot of output,
 depending on how many tests you run.
 
-Once the RPC API is up, run retesteth:
+Once the RPC API is up, run retesteth (requires retesteth to be installed separately):
 
     ets/retesteth -t GeneralStateTests
 
 You can also run parts of the suite; refer to `ets/retesteth --help` for details.
 
-## Running retesteth in Docker (eg. macOS)
+## Running retesteth separately
 
-You should run Mantis outside Nix as that is probably more convenient for your
+You should run Fukuii outside of any container as that is probably more convenient for your
 tooling (eg. attaching a debugger.)
 
     sbt -Dconfig.file=./src/main/resources/conf/testmode.conf -Dlogging.logs-level=WARN run
 
-Retesteth will need to be able to connect to Mantis, running on the host
-system. First, find the IP it should use:
-
-    nix-in-docker/run --command "getent hosts host.docker.internal"
-
-Finally, run retesteth in Nix in Docker:
-
-    nix-in-docker/run --command "ets/retesteth -t GeneralStateTests -- --nodes <ip>:8546"
+Retesteth will need to be able to connect to Fukuii. If running retesteth in a container,
+make sure it can access the host system where Fukuii is running.
 
 ## Useful options:
 
-You can run one test by selecting one suite and using `--singletest`, for instance: 
+You can run one test by selecting one suite and using `--singletest`, for instance:
 
-    nix-in-docker/run -t BlockchainTests/ValidBlocks/VMTests/vmArithmeticTest -- --nodes <ip>:8546 --singletest add0"
-
-However it's not always clear in wich subfolder the suite is when looking at the output of retesteth.
+However it's not always clear in which subfolder the suite is when looking at the output of retesteth.
 
 To get more insight about what is happening, you can use `--verbosity 6`. It will print every RPC call 
 made by retesteth and also print out the state by using our `debug_*` endpoints. Note however that 

@@ -1,4 +1,4 @@
-enablePlugins(JDKPackagerPlugin, JavaAppPackaging, SolidityPlugin, JavaAgent)
+enablePlugins(JavaAppPackaging, SolidityPlugin, JavaAgent)
 
 javaAgents += "io.kamon" % "kanela-agent" % "1.0.6"
 
@@ -21,7 +21,6 @@ lazy val compilerOptimizationsForProd = Seq(
 // Releasing. https://github.com/olafurpg/sbt-ci-release
 inThisBuild(
   List(
-    organization := "com.chipprbots",
     homepage := Some(url("https://github.com/chippr-robotics/chordodes_fukuii")),
     scmInfo := Some(
       ScmInfo(url("https://github.com/chippr-robotics/chordodes_fukuii"), "git@github.com:chippr-robotics/chordodes_fukuii.git")
@@ -266,9 +265,6 @@ lazy val node = {
       // Packaging
       (Compile / mainClass) := Some("com.chipprbots.ethereum.App"),
       (Compile / discoveredMainClasses) := Seq(),
-      // Requires the 'ant-javafx.jar' that comes with Oracle JDK
-      // Enables creating an executable with the configuration files, has to be run on the OS corresponding to the desired version
-      ThisBuild / jdkPackagerType := "image",
       (Universal / mappings) ++= directory((Compile / resourceDirectory).value / "conf"),
       (Universal / mappings) += (Compile / resourceDirectory).value / "logback.xml" -> "conf/logback.xml",
       bashScriptExtraDefines += """addJava "-Dconfig.file=${app_home}/../conf/app.conf"""",
