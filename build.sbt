@@ -367,7 +367,7 @@ addCommandAlias(
 )
 
 // Scapegoat configuration
-(ThisBuild / scapegoatVersion) := "3.2.2"
+(ThisBuild / scapegoatVersion) := "1.4.11"
 scapegoatReports := Seq("xml", "html")
 scapegoatIgnoredFiles := Seq(
   ".*/src_managed/.*",           // All generated sources

@@ -188,14 +188,14 @@ OrganizeImports {
 
 **Version Information**:
 - **SBT Plugin**: com.sksamuel.scapegoat:sbt-scapegoat:1.2.13
-- **Scapegoat Version**: 3.2.2
+- **Scapegoat Version**: 1.4.11 (latest for Scala 2.13.6)
 
 **Output Format**:
 - XML and HTML reports in `target/scala-2.13/scapegoat-report/`
 
 **Configuration Details**:
 ```scala
-(ThisBuild / scapegoatVersion) := "3.2.2"
+(ThisBuild / scapegoatVersion) := "1.4.11"
 scapegoatReports := Seq("xml", "html")
 scapegoatIgnoredFiles := Seq(
   ".*/src_managed/.*",           // All generated sources
@@ -205,7 +205,7 @@ scapegoatIgnoredFiles := Seq(
 ```
 
 **Current State**: ✅ **CONFIGURED AND INTEGRATED**
-- Updated to latest versions (plugin 1.2.13, analyzer 3.2.2)
+- Updated to latest versions (plugin 1.2.13, analyzer 1.4.11)
 - Configured exclusions for generated code
 - Integrated into CI pipeline
 - Generates both XML and HTML reports
@@ -216,18 +216,21 @@ scapegoatIgnoredFiles := Seq(
 - `sbt bytes/scapegoat`, `crypto/scapegoat`, `rlp/scapegoat` - Run analysis on individual modules
 
 **Analysis**:
-- ✅ **Version**: 1.2.13 (plugin) and 3.2.2 (analyzer) are up-to-date
+- ✅ **Version**: 1.2.13 (plugin) and 1.4.11 (analyzer) are up-to-date for Scala 2.13.6
 - ✅ **Appropriateness**: Excellent for finding bugs and code quality issues
 - ✅ **Configuration**: Properly excludes generated code directories
 - ✅ **Ordering**: Integrated into CI pipeline after formatting checks
 - ✅ **Reports**: Generates both XML and HTML for easy review
 
+**Note**: Scapegoat 3.x is only available for Scala 3. For Scala 2.13.6, version 1.4.11 is the latest.
+
 **Recommendation**: 
-- ✅ COMPLETED: Updated to Scapegoat 3.2.2 for better Scala 2.13 support
+- ✅ COMPLETED: Updated to Scapegoat 1.4.11 (latest for Scala 2.13.6)
 - ✅ COMPLETED: Added scapegoat to CI pipeline
 - ✅ COMPLETED: Configured to exclude generated code directories
 - Review scapegoat reports regularly to fix legitimate issues
 - Consider setting up thresholds for errors/warnings in future if needed
+- Consider upgrading to Scala 2.13.8+ to use newer Scapegoat versions
 
 ---
 
@@ -395,7 +398,7 @@ compile-all → scapegoat (all modules)
 |------|---------|--------|-------|--------|----------------|
 | Scalafmt | 2.7.5 / 2.4.2 | ✅ Passing | ✅ Yes | 0 | Low |
 | Scalafix | 0.10.4 | ✅ Passing | ✅ Yes | 0 | ✅ Complete |
-| Scapegoat | 1.2.13 / 3.2.2 | ✅ Configured | ✅ Yes | 0 | ✅ Complete |
+| Scapegoat | 1.2.13 / 1.4.11 | ✅ Configured | ✅ Yes | 0 | ✅ Complete |
 | Scoverage | 1.6.1 | ⚠️ Inactive | ❌ No | N/A | Medium |
 | SBT Sonar | 2.2.0 | ⚠️ Inactive | ❌ No | N/A | Low |
 
@@ -435,7 +438,7 @@ compile-all → scapegoat (all modules)
 ### Completed Actions ✅
 1. **Scapegoat Configuration**: ✅ **COMPLETED** (October 26, 2025)
    - ✅ Updated sbt-scapegoat plugin to 1.2.13 (from 1.1.0)
-   - ✅ Updated scapegoat analyzer to 3.2.2 (from 1.4.9)
+   - ✅ Updated scapegoat analyzer to 1.4.11 (from 1.4.9) - latest for Scala 2.13.6
    - ✅ Added to CI pipeline with `runScapegoat` command
    - ✅ Configured exclusions for generated code:
      - All files in `src_managed` directories
@@ -443,6 +446,7 @@ compile-all → scapegoat (all modules)
      - BuildInfo generated code
    - ✅ Enabled both XML and HTML report generation
    - ✅ Updated documentation
+   - Note: Scapegoat 3.x is only available for Scala 3; 1.4.11 is the latest for Scala 2.13.6
 
 2. **Scalafix Updates**: ✅ **COMPLETED**
    - ✅ Fixed all violations (unused imports and variables in 12 files)
@@ -498,10 +502,12 @@ compile-all → scapegoat (all modules)
 .scalafmt.conf: version = "2.7.5"                        → "3.7.17"
 
 // Build.sbt dependencies
-scapegoatVersion := "1.4.9"                              → ✅ "3.2.2"
+scapegoatVersion := "1.4.9"                              → ✅ "1.4.11"
 "com.github.liancheng" %% "organize-imports" % "0.5.0"   → ✅ "0.6.0"
 "com.github.vovapolu" %% "scaluzzi" % "0.1.16"           → ✅ Removed (abandoned)
 ```
+
+**Note**: Scapegoat 3.x (e.g., 3.2.2) is only available for Scala 3. For Scala 2.13.6, version 1.4.11 is the latest available.
 
 ---
 
@@ -587,11 +593,12 @@ Based on this inventory, the following sub-issues should be addressed:
 
 4. **Integrate Scapegoat into CI** ✅ **COMPLETED** (October 26, 2025)
    - ✅ COMPLETED: Updated sbt-scapegoat plugin to 1.2.13
-   - ✅ COMPLETED: Updated scapegoat analyzer to 3.2.2
+   - ✅ COMPLETED: Updated scapegoat analyzer to 1.4.11 (latest for Scala 2.13.6)
    - ✅ COMPLETED: Added to CI pipeline with `runScapegoat` command
    - ✅ COMPLETED: Configured exclusions for generated code
    - ✅ COMPLETED: Enabled XML and HTML report generation
    - ✅ COMPLETED: Updated documentation
+   - Note: Scapegoat 3.x requires Scala 3; 1.4.11 is the latest for current Scala 2.13.6
 
 5. **Enable Code Coverage Tracking** (Future Work)
    - Update scoverage to 2.x
@@ -606,5 +613,5 @@ Based on this inventory, the following sub-issues should be addressed:
 ---
 
 **Document Version**: 1.3  
-**Last Updated**: October 26, 2025 (Scapegoat updated to 3.2.2 and integrated into CI)  
+**Last Updated**: October 26, 2025 (Scapegoat updated to 1.4.11 and integrated into CI)  
 **Author**: Static Analysis Inventory Tool
