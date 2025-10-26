@@ -28,6 +28,11 @@ import com.chipprbots.ethereum.extvm.msg.AccessListData
 import com.chipprbots.ethereum.extvm.msg.StorageEntry
 import com.chipprbots.ethereum.utils._
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm
+
+/** HIBERNATED: External VM features are currently in hibernation.
+  * This component is experimental and not core to fukuii's functioning.
+  * Use vm.mode = "internal" in configuration (default setting).
+  */
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ProgramContext
 import com.chipprbots.ethereum.vm.ProgramResult

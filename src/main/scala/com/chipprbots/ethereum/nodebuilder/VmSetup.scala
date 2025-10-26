@@ -12,6 +12,10 @@ import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.VmConfig
 import com.chipprbots.ethereum.utils.VmConfig.ExternalConfig
 
+/** HIBERNATED: External VM features are currently in hibernation.
+  * External VM support is experimental and not production-ready.
+  * Default configuration uses vm.mode = "internal" which is fully supported.
+  */
 object VmSetup extends Logger {
 
   import VmConfig.VmMode._
@@ -25,6 +29,7 @@ object VmSetup extends Logger {
         new VMImpl
 
       case (External, Some(extConf)) =>
+        log.warn("HIBERNATED: External VM features are experimental and not production-ready")
         startExternalVm(extConf)
         new ExtVMInterface(extConf, blockchainConfig, testMode)
 
