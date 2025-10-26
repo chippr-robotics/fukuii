@@ -48,7 +48,7 @@ make sure it can access the host system where Fukuii is running.
 
 You can run one test by selecting one suite and using `--singletest`, for instance:
 
-However it's not always clear in wich subfolder the suite is when looking at the output of retesteth.
+However it's not always clear in which subfolder the suite is when looking at the output of retesteth.
 
 To get more insight about what is happening, you can use `--verbosity 6`. It will print every RPC call 
 made by retesteth and also print out the state by using our `debug_*` endpoints. Note however that 
