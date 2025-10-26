@@ -3,9 +3,9 @@ package com.chipprbots.ethereum.extvm
 import akka.util.ByteString
 
 import org.scalamock.scalatest.MockFactory
+import org.scalatest.Ignore
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatest.Ignore
 import scalapb.GeneratedMessageCompanion
 
 import com.chipprbots.ethereum.domain.Account
