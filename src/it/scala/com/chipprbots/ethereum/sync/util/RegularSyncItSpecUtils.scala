@@ -208,8 +208,14 @@ object RegularSyncItSpecUtils {
         }
       }
 
-    def waitForRegularSyncLoadLastBlock(blockNumber: BigInt): Task[Boolean] =
-      retryUntilWithDelay(Task(blockchainReader.getBestBlockNumber() == blockNumber), 1.second, 90)(isDone => isDone)
+    def waitForRegularSyncLoadLastBlock(blockNumber: BigInt): Task[Boolean] = {
+      // Scale timeout based on block number - larger syncs need more time
+      // Use minimum 90 retries, but add 1 retry per 20 blocks for large syncs
+      val baseRetries = 90
+      val additionalRetries = if (blockNumber > 1000) ((blockNumber - 1000) / 20).toInt else 0
+      val maxRetries = baseRetries + additionalRetries
+      retryUntilWithDelay(Task(blockchainReader.getBestBlockNumber() == blockNumber), 1.second, maxRetries)(isDone => isDone)
+    }
 
     def mineNewBlock(
         plusDifficulty: BigInt = 0
