@@ -583,6 +583,5 @@ Based on this inventory, the following sub-issues should be addressed:
 ---
 
 **Document Version**: 1.1  
-**Last Updated**: October 26, 2025 (Scalafix update completed)
-**Last Updated**: October 26, 2025  
+**Last Updated**: October 26, 2025 (Scalafix update completed)  
 **Author**: Static Analysis Inventory Tool
