@@ -24,6 +24,8 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 - ✅ **REMOVED**: Scalastyle (unmaintained since 2017) - functionality migrated to Scalafix
 - ⚠️ **REMAINING**: 976 scapegoat findings (190 errors, 215 warnings, 571 infos) - not currently blocking CI
 
+**Future Considerations**: See [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md) for detailed analysis of toolchain updates required for Scala 3 migration.
+
 ---
 
 ## Tool Inventory
