@@ -106,7 +106,7 @@ We use [Scalastyle](http://www.scalastyle.org/) for additional style checking. C
 **Run style checks:**
 ```bash
 sbt scalastyle
-sbt test:scalastyle
+sbt "Test / scalastyle"
 ```
 
 ### Combined Commands
@@ -159,7 +159,7 @@ Create a pre-commit hook that runs formatting and style checks:
    
    # Run scalastyle
    echo "Checking code style with scalastyle..."
-   sbt scalastyle test:scalastyle
+   sbt "scalastyle ; Test / scalastyle"
    if [ $? -ne 0 ]; then
      echo "❌ Style check failed. Review and fix the reported issues."
      exit 1
@@ -197,7 +197,7 @@ git add -u
 
 # Run scalastyle check
 echo "Checking code style with scalastyle..."
-sbt scalastyle test:scalastyle
+sbt "scalastyle ; Test / scalastyle"
 if [ $? -ne 0 ]; then
   echo "❌ Style check failed. Review and fix the reported issues."
   exit 1
@@ -292,7 +292,7 @@ sbt test
 
 **Run integration tests:**
 ```bash
-sbt it:test
+sbt "IntegrationTest / test"
 ```
 
 ## Submitting Changes
@@ -426,10 +426,10 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 Before submitting a PR, verify:
 - [ ] `sbt formatCheck` passes
-- [ ] `sbt scalastyle test:scalastyle` passes
+- [ ] `sbt "scalastyle ; Test / scalastyle"` passes
 - [ ] `sbt compile-all` succeeds
 - [ ] `sbt testAll` passes (on JDK 17)
-- [ ] `sbt it:test` passes for integration tests
+- [ ] `sbt "IntegrationTest / test"` passes for integration tests
 - [ ] No new compiler warnings introduced
 - [ ] Documentation updated for user-facing changes
 - [ ] Commit messages are clear and descriptive

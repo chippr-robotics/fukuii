@@ -20,7 +20,7 @@ Private keys for pre-funded accounts are located in `mantis/src/rpcTest/resource
 5. Ensure it has at least `150000` blocks.
 6. Go to `mantis` source dir and run 
 
-        sbt "rpcTest:testOnly -- -n MainNet"
+        sbt "RpcTest / testOnly -- -n MainNet"
         
 7. Turn off Mantis client in `~/mantis_build/mantis-3.2.1`
 8. Go to `~/mantis_build/mantis-3.2.1` directory and run mantis using command below (mantis will be run with miner so you need to wait till DAG is loaded):
@@ -28,7 +28,7 @@ Private keys for pre-funded accounts are located in `mantis/src/rpcTest/resource
         ./bin/mantis -Dmantis.mining.mining-enabled=true
 9. Go to `mantis` source dir and run 
 
-        sbt "rpcTest:testOnly -- -n PrivNet"
+        sbt "RpcTest / testOnly -- -n PrivNet"
         
 10. Turn off Mantis client
 11. Go to `~/mantis_build/mantis-3.2.1` directory and run Mantis with mining disabled using command
@@ -37,7 +37,7 @@ Private keys for pre-funded accounts are located in `mantis/src/rpcTest/resource
         
 12. Go to `mantis` source dir and run 
 
-        sbt "rpcTest:testOnly -- -n PrivNetNoMining"
+        sbt "RpcTest / testOnly -- -n PrivNetNoMining"
         
 13. Turn off Mantis client.
 
