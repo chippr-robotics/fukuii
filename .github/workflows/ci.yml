@@ -66,14 +66,14 @@ jobs:
       
       - name: Run scalastyle
         run: |
-          sbt bytes/scalastyle
-          sbt bytes/test:scalastyle
-          sbt crypto/scalastyle
-          sbt crypto/test:scalastyle
-          sbt rlp/scalastyle
-          sbt rlp/test:scalastyle
+          sbt "bytes / scalastyle"
+          sbt "bytes / Test / scalastyle"
+          sbt "crypto / scalastyle"
+          sbt "crypto / Test / scalastyle"
+          sbt "rlp / scalastyle"
+          sbt "rlp / Test / scalastyle"
           sbt scalastyle
-          sbt test:scalastyle
+          sbt "Test / scalastyle"
         env:
           FUKUII_DEV: true
       

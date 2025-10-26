@@ -216,7 +216,7 @@ lazy val node = {
     .enablePlugins(BuildInfoPlugin)
     .dependsOn(bytes, crypto, rlp)
     .settings(
-      buildInfoKeys := BuildInfoKey.ofN(
+      buildInfoKeys ++= Seq[BuildInfoKey](
         name,
         version,
         scalaVersion,
@@ -288,82 +288,82 @@ coverageExcludedPackages := "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*"
 
 addCommandAlias(
   "compile-all",
-  """;bytes/compile
-    |;bytes/test:compile
-    |;crypto/compile
-    |;crypto/test:compile
-    |;rlp/compile
-    |;rlp/test:compile
-    |;compile
-    |;test:compile
-    |;evm:compile
-    |;it:compile
-    |;rpcTest:compile
-    |;benchmark:compile
+  """; bytes / compile
+    |; bytes / Test / compile
+    |; crypto / compile
+    |; crypto / Test / compile
+    |; rlp / compile
+    |; rlp / Test / compile
+    |; compile
+    |; Test / compile
+    |; Evm / compile
+    |; IntegrationTest / compile
+    |; RpcTest / compile
+    |; Benchmark / compile
     |""".stripMargin
 )
 
 // prepare PR
 addCommandAlias(
   "pp",
-  """;compile-all
-    |;bytes/scalafmtAll
-    |;bytes/scalastyle
-    |;bytes/test:scalastyle
-    |;crypto/scalafmtAll
-    |;crypto/scalastyle
-    |;crypto/test:scalastyle
-    |;rlp/scalafmtAll
-    |;rlp/scalastyle
-    |;rlp/test:scalastyle
-    |;scalafmtAll
-    |;scalastyle
-    |;test:scalastyle
-    |;rlp/test
-    |;testQuick
-    |;it:test
+  """; compile-all
+    |; bytes / scalafmtAll
+    |; bytes / scalastyle
+    |; bytes / Test / scalastyle
+    |; crypto / scalafmtAll
+    |; crypto / scalastyle
+    |; crypto / Test / scalastyle
+    |; rlp / scalafmtAll
+    |; rlp / scalastyle
+    |; rlp / Test / scalastyle
+    |; scalafmtAll
+    |; scalastyle
+    |; Test / scalastyle
+    |; rlp / test
+    |; testQuick
+    |; IntegrationTest / test
     |""".stripMargin
 )
 
 // format all modules
 addCommandAlias(
   "formatAll",
-  """;compile-all
-    |;bytes/scalafixAll
-    |;bytes/scalafmtAll
-    |;crypto/scalafixAll
-    |;crypto/scalafmtAll
-    |;rlp/scalafixAll
-    |;rlp/scalafmtAll
-    |;scalafixAll
-    |;scalafmtAll
+  """; compile-all
+    |; bytes / scalafixAll
+    |; bytes / scalafmtAll
+    |; crypto / scalafixAll
+    |; crypto / scalafmtAll
+    |; rlp / scalafixAll
+    |; rlp / scalafmtAll
+    |; scalafixAll
+    |; scalafmtAll
     |""".stripMargin
 )
 
 // check modules formatting
 addCommandAlias(
   "formatCheck",
-  """;compile-all
-    |;bytes/scalafixAll --check
-    |;bytes/scalafmtCheckAll
-    |;crypto/scalafixAll --check
-    |;crypto/scalafmtCheckAll
-    |;rlp/scalafixAll --check
-    |;rlp/scalafmtCheckAll
-    |;scalafixAll --check
-    |;scalafmtCheckAll
+  """; compile-all
+    |; bytes / scalafixAll --check
+    |; bytes / scalafmtCheckAll
+    |; crypto / scalafixAll --check
+    |; crypto / scalafmtCheckAll
+    |; rlp / scalafixAll --check
+    |; rlp / scalafmtCheckAll
+    |; scalafixAll --check
+    |; scalafmtCheckAll
     |""".stripMargin
 )
 
 // testAll
 addCommandAlias(
   "testAll",
-  """;compile-all
-    |;rlp/test
-    |;bytes/test
-    |;crypto/test
-    |;test
-    |;it:test
+  """; compile-all
+    |; rlp / test
+    |; bytes / test
+    |; crypto / test
+    |; test
+    |; IntegrationTest / test
     |""".stripMargin
 )
 

@@ -150,7 +150,7 @@ sbt compile-all
 sbt formatCheck
 
 # Run style checks
-sbt scalastyle test:scalastyle
+sbt "scalastyle ; Test / scalastyle"
 
 # Run all tests
 sbt testAll
