@@ -1,0 +1,71 @@
+# Git files
+.git
+.gitignore
+.gitmodules
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# IDE files
+.idea/
+.vscode/
+.metals/
+.bloop/
+*.iml
+*.swp
+*.swo
+*~
+
+# Build artifacts
+target/
+project/target/
+project/project/
+
+# Test reports
+test-output/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Backup files
+*.bak
+*.old
+rebrand_backup_*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files (don't include old docker images in build)
+docker/Dockerfile.old
+docker/Dockerfile-base.old
+docker/Dockerfile-dev.old
+docker/*.tar
+
+# CI/CD (not needed in image)
+.github/
+.devcontainer/
+
+# Scripts not needed in production
+rebrand.sh
+test-ets.sh
+
+# Insomnia workspace
+insomnia_workspace.json
+
+# ETS test files (not needed in production image)
+ets/
+
+# RPC test resources
+src/rpcTest/
+
+# Integration test resources
+src/it/
