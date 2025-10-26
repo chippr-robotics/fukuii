@@ -17,8 +17,14 @@ The main production-ready image for running Fukuii.
 
 **Build:**
 ```bash
+# Important: Initialize submodules before building
+git submodule update --init --recursive
+
+# Build the Docker image
 docker build -f docker/Dockerfile -t fukuii:latest .
 ```
+
+**Note:** The build requires git submodules to be initialized before running Docker build. The GitHub Actions CI/CD pipeline handles this automatically via the checkout step with `submodules: recursive`.
 
 **Run:**
 ```bash
