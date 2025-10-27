@@ -2,8 +2,8 @@ package com.chipprbots.ethereum.forkid
 
 import akka.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.utils.Config._
 import ForkIdValidator._
 
 class ForkIdValidatorSpec extends AnyWordSpec with Matchers {
+
+  implicit val runtime: IORuntime = IORuntime.global
 
   val config = blockchains
 
@@ -30,8 +32,8 @@ class ForkIdValidatorSpec extends AnyWordSpec with Matchers {
 
       def validatePeer(head: BigInt, remoteForkId: ForkId) =
         ForkIdValidator
-          .validatePeer[Task](ethGenesisHash, ethForksList)(head, remoteForkId)
-          .runSyncUnsafe(Duration(1, SECONDS))
+          .validatePeer[IO](ethGenesisHash, ethForksList)(head, remoteForkId)
+          .unsafeRunSync()
 
       // Local is mainnet Petersburg, remote announces the same. No future fork is announced.
       validatePeer(7987396, ForkId(0x668db0afL, None)) shouldBe Connect
