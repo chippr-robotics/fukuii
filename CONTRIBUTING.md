@@ -32,7 +32,7 @@ To contribute to Fukuii, you'll need:
 
 Fukuii supports cross-compilation for multiple Scala versions:
 
-- **Scala 2.13.6** - Primary version (default)
+- **Scala 2.13.8** - Primary version (default - updated for Scala 3-ready dependencies)
 - **Scala 3.3.4** - LTS version for forward compatibility
 
 The project is configured for gradual migration to Scala 3 while maintaining backward compatibility with Scala 2.13.
@@ -112,7 +112,9 @@ sbt scalafixAll --check
 
 We use [Scapegoat](https://github.com/scapegoat-scala/scapegoat) for static code analysis to detect common bugs, anti-patterns, and code smells. Configuration is in `build.sbt`.
 
-**Run Scapegoat analysis:**
+**⚠️ Currently Disabled**: Scapegoat is temporarily disabled during the Scala 2.13.8 → 3.3.4 transition period. Scapegoat 1.x only supports specific Scala 2.13 patch versions (e.g., 2.13.6), while our dependencies now require Scala 2.13.8. Scapegoat will be re-enabled after the Scala 3 migration when Scapegoat 2.x/3.x can be used.
+
+**Run Scapegoat analysis (when re-enabled):**
 ```bash
 sbt runScapegoat
 ```
@@ -206,17 +208,18 @@ sbt "crypto/+test"    # Test crypto module for all Scala versions
 ```
 
 **Notes:**
-- The default Scala version is 2.13.6
+- The default Scala version is 2.13.8 (updated for Scala 3-ready dependencies)
 - Scala 3.3.4 (LTS) is available for cross-compilation
 - The project uses sbt-scala3-migrate plugin version 0.6.1 for migration tooling
+- **Phase 0 Migration Complete**: Dependencies updated to Scala 3-compatible versions (Akka 2.6.20, Cats 2.9.0, Circe 0.14.10, etc.)
 - **Phase 2 Migration Complete**: All modules (bytes, rlp, crypto, node) have been migrated using `migrateSyntax` (scala3-migrate 0.6.1) to fix Scala 3 syntax incompatibilities
 - **Phase 3 Migration Complete**: Manual fixes completed - compiler flags updated, linters verified, implicit conversions reviewed
 - **Phase 4 Migration Complete**: Validation & testing completed - codebase confirmed Scala 3-ready, test baselines established, dependency requirements documented
-- The codebase is now Scala 3-ready from a code perspective while maintaining full Scala 2.13 compatibility
+- The codebase is now fully prepared for Scala 3 migration - dependencies support Scala 3.3.4 and code is syntactically ready
 - CI tests both Scala 2.13 and 3.3 versions
-- Scapegoat analysis currently only runs on Scala 2.13 (not yet Scala 3 compatible)
-- Full Scala 3 compilation requires dependency updates (Akka 2.6.9 → 2.6.20+, and others as documented in Phase 4 validation report)
-- See [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md) for comprehensive validation results and next steps
+- Scapegoat analysis temporarily disabled during Scala 2.13.8 → 3.3.4 transition (will use Scapegoat 2.x/3.x after migration)
+- See [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md) for details on updated dependencies
+- See [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md) for comprehensive validation results
 
 ## Pre-commit Hooks
 
