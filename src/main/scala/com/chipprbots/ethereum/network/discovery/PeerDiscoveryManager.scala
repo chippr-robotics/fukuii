@@ -7,13 +7,11 @@ import akka.actor.Props
 import akka.pattern.pipe
 import akka.util.ByteString
 
+import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.unsafe.IORuntime
 
-import monix.catnap.ConsumerF
-import monix.eval.Task
-import monix.execution.BufferCapacity
-import monix.execution.Scheduler
-import monix.tail.Iterant
+import fs2.Stream
 
 import scala.util.Failure
 import scala.util.Random
@@ -31,42 +29,29 @@ class PeerDiscoveryManager(
     discoveryConfig: DiscoveryConfig,
     knownNodesStorage: KnownNodesStorage,
     // The manager only starts the DiscoveryService if discovery is enabled.
-    discoveryServiceResource: Resource[Task, v4.DiscoveryService],
+    discoveryServiceResource: Resource[IO, v4.DiscoveryService],
     randomNodeBufferSize: Int
-)(implicit scheduler: Scheduler)
+)(implicit runtime: IORuntime)
     extends Actor
     with ActorLogging {
 
-  // Derive a random nodes iterator on top of the service so the node can quickly ramp up its peers
+  // Derive a random nodes stream on top of the service so the node can quickly ramp up its peers
   // while it has demand to connect to more, rather than wait on the periodic lookups performed in
   // the background by the DiscoveryService.
-  val discoveryResources: Resource[Task, (v4.DiscoveryService, Iterant.Consumer[Task, Node])] = for {
+  val discoveryResources: Resource[IO, (v4.DiscoveryService, Stream[IO, Node])] = for {
     service <- discoveryServiceResource
 
-    // Create an Iterant (like a pull-based Observable) that repeatedly performs a random lookup
+    // Create a Stream that repeatedly performs a random lookup
     // (grabbing kademlia-bucket-size items at a time) and flattens the results. It will automatically
     // perform further lookups as the items are pulled from it.
-    randomNodes = Iterant
-      .repeatEvalF {
-        Task.defer(service.lookup(randomNodeId))
+    randomNodes = Stream
+      .repeatEval {
+        IO.defer(service.lookup(randomNodeId))
       }
-      .flatMap(ns => Iterant.fromList(ns.toList))
+      .flatMap(ns => Stream.emits(ns.toList))
       .map(toNode)
       .filter(!isLocalNode(_))
-
-    // Create a consumer on top of the iterant with a limited buffer capacity, so that the Iterant
-    // blocks trying to push items into it when it gets full, and thus stops making more random lookups.
-    // For example with buffer-size=45 and kademlia-bucket-size=16 the iterant would make 3 requests
-    // to fill the queue underlying the consumer, then be blocked trying to push the last 3 items.
-    // The first 2 items pulled from the consumer would not result in further lookups. After the 3rd
-    // pull the iterant would look up the next 16 items and try to add them to the queue, etc.
-    // Note that every `pull` from the consumer takes items from the same queue. To multicast one
-    // would have to instantiate a `ConcurrentChannel`, create multiple consumers, and use
-    // `Iterant.pushToChannel`. But here this is the only consumer of the underlying channel.
-    randomNodeConsumer <- randomNodes.consumeWithConfig(
-      ConsumerF.Config(capacity = Some(BufferCapacity.Bounded(randomNodeBufferSize)))
-    )
-  } yield (service, randomNodeConsumer)
+  } yield (service, randomNodes)
 
   import PeerDiscoveryManager._
 
@@ -132,7 +117,7 @@ class PeerDiscoveryManager(
   }
 
   // DiscoveryService started, we can ask it for nodes now.
-  def started(discovery: Discovery, release: Task[Unit]): Receive =
+  def started(discovery: Discovery, release: IO[Unit]): Receive =
     handleNodeInfoRequests(Some(discovery)).orElse {
       case Start =>
 
@@ -169,29 +154,29 @@ class PeerDiscoveryManager(
   }
 
   def startDiscoveryService(): Unit =
-    discoveryResources.allocated.runToFuture
+    discoveryResources.allocated.unsafeToFuture()
       .onComplete {
         case Failure(ex) =>
           self ! StartAttempt(Left(ex))
         case Success(result) =>
           self ! StartAttempt(Right(result))
-      }
+      }(runtime.compute)
 
-  def stopDiscoveryService(release: Task[Unit]): Unit =
-    release.runToFuture.onComplete {
+  def stopDiscoveryService(release: IO[Unit]): Unit =
+    release.unsafeToFuture().onComplete {
       case Failure(ex) =>
         self ! StopAttempt(Left(ex))
       case Success(result) =>
         self ! StopAttempt(Right(result))
-    }
+    }(runtime.compute)
 
   def sendDiscoveredNodesInfo(
       maybeDiscoveryService: Option[v4.DiscoveryService],
       recipient: ActorRef
   ): Unit = pipeToRecipient(recipient) {
 
-    val maybeDiscoveredNodes: Task[Set[Node]] =
-      maybeDiscoveryService.fold(Task.pure(Set.empty[Node])) {
+    val maybeDiscoveredNodes: IO[Set[Node]] =
+      maybeDiscoveryService.fold(IO.pure(Set.empty[Node])) {
         _.getNodes.map { nodes =>
           nodes.map(toNode)
         }
@@ -259,9 +244,9 @@ object PeerDiscoveryManager {
       localNodeId: ByteString,
       discoveryConfig: DiscoveryConfig,
       knownNodesStorage: KnownNodesStorage,
-      discoveryServiceResource: Resource[Task, v4.DiscoveryService],
+      discoveryServiceResource: Resource[IO, v4.DiscoveryService],
       randomNodeBufferSize: Int = 0
-  )(implicit scheduler: Scheduler): Props =
+  )(implicit runtime: IORuntime): Props =
     Props(
       new PeerDiscoveryManager(
         localNodeId,
@@ -276,11 +261,11 @@ object PeerDiscoveryManager {
   case object Stop
 
   // Iterate over random lookups.
-  private type RandomNodes = Iterant.Consumer[Task, Node]
+  private type RandomNodes = Stream[IO, Node]
   private type Discovery = (v4.DiscoveryService, RandomNodes)
 
   private case class StartAttempt(
-      result: Either[Throwable, (Discovery, Task[Unit])]
+      result: Either[Throwable, (Discovery, IO[Unit])]
   )
   private case class StopAttempt(result: Either[Throwable, Unit])
 

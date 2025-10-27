@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.consensus.pow.miners
 import akka.actor.{ActorRef => ClassicActorRef}
 import akka.util.ByteString
 
-import monix.execution.CancelableFuture
+import scala.concurrent.Future
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator
@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.utils.Logger
 trait Miner extends Logger {
   def processMining(bestBlock: Block)(implicit
       blockchainConfig: BlockchainConfig
-  ): CancelableFuture[CoordinatorProtocol]
+  ): Future[CoordinatorProtocol]
 
   def handleMiningResult(
       miningResult: MiningResult,

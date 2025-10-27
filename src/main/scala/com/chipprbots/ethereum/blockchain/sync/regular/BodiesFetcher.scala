@@ -8,7 +8,7 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.{ActorRef => ClassicActorRef}
 import akka.util.ByteString
 
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Failure
 import scala.util.Success
@@ -32,7 +32,7 @@ class BodiesFetcher(
     with FetchRequest[BodiesFetcherCommand] {
 
   val log = context.log
-  implicit val ec: Scheduler = Scheduler(context.executionContext)
+  implicit val ec: IORuntime = IORuntime.global
 
   import BodiesFetcher._
 
@@ -56,7 +56,7 @@ class BodiesFetcher(
 
   private def requestBodies(hashes: Seq[ByteString]): Unit = {
     val resp = makeRequest(Request.create(GetBlockBodies(hashes), BestPeer), BodiesFetcher.RetryBodiesRequest)
-    context.pipeToSelf(resp.runToFuture) {
+    context.pipeToSelf(resp.unsafeToFuture()) {
       case Success(res) => res
       case Failure(_)   => BodiesFetcher.RetryBodiesRequest
     }

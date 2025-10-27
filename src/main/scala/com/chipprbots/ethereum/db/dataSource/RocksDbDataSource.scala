@@ -3,9 +3,8 @@ package com.chipprbots.ethereum.db.dataSource
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 import cats.effect.Resource
-
-import monix.eval.Task
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
@@ -109,32 +108,32 @@ class RocksDbDataSource(
     } finally dbLock.writeLock().unlock()
   }
 
-  private def dbIterator: Resource[Task, RocksIterator] =
-    Resource.fromAutoCloseable(Task(db.newIterator()))
+  private def dbIterator: Resource[IO, RocksIterator] =
+    Resource.fromAutoCloseable(IO(db.newIterator()))
 
-  private def namespaceIterator(namespace: Namespace): Resource[Task, RocksIterator] =
-    Resource.fromAutoCloseable(Task(db.newIterator(handles(namespace))))
+  private def namespaceIterator(namespace: Namespace): Resource[IO, RocksIterator] =
+    Resource.fromAutoCloseable(IO(db.newIterator(handles(namespace))))
 
-  private def moveIterator(it: RocksIterator): Observable[Either[IterationError, (Array[Byte], Array[Byte])]] =
-    Observable
-      .fromTask(Task(it.seekToFirst()))
+  private def moveIterator(it: RocksIterator): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
+    Stream
+      .eval(IO(it.seekToFirst()))
       .flatMap { _ =>
-        Observable.repeatEvalF(for {
-          isValid <- Task(it.isValid)
-          item <- if (isValid) Task(Right((it.key(), it.value()))) else Task.raiseError(IterationFinished)
-          _ <- Task(it.next())
+        Stream.repeatEval(for {
+          isValid <- IO(it.isValid)
+          item <- if (isValid) IO(Right((it.key(), it.value()))) else IO.raiseError(IterationFinished)
+          _ <- IO(it.next())
         } yield item)
       }
-      .onErrorHandleWith {
-        case IterationFinished => Observable.empty
-        case ex                => Observable(Left(IterationError(ex)))
+      .handleErrorWith {
+        case IterationFinished => Stream.empty
+        case ex                => Stream.emit(Left(IterationError(ex)))
       }
 
-  def iterate(): Observable[Either[IterationError, (Array[Byte], Array[Byte])]] =
-    Observable.fromResource(dbIterator).flatMap(it => moveIterator(it))
+  def iterate(): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
+    Stream.resource(dbIterator).flatMap(it => moveIterator(it))
 
-  def iterate(namespace: Namespace): Observable[Either[IterationError, (Array[Byte], Array[Byte])]] =
-    Observable.fromResource(namespaceIterator(namespace)).flatMap(it => moveIterator(it))
+  def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
+    Stream.resource(namespaceIterator(namespace)).flatMap(it => moveIterator(it))
 
   /** This function is used only for tests. This function updates the DataSource by deleting all the (key-value) pairs
     * in it.

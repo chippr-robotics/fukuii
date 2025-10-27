@@ -6,7 +6,7 @@ import java.util.concurrent.ExecutorService
 import cats.effect.Resource
 import cats.implicits._
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
@@ -55,10 +55,10 @@ private object NoStreamServer extends StreamServer[StreamServerConfiguration] {
 object PortForwarder extends Logger {
   final private val description = "Mantis"
 
-  def openPorts(tcpPorts: Seq[Int], udpPorts: Seq[Int]): Resource[Task, Unit] =
+  def openPorts(tcpPorts: Seq[Int], udpPorts: Seq[Int]): Resource[IO, Unit] =
     Resource.make(startForwarding(tcpPorts, udpPorts))(stopForwarding).void
 
-  private def startForwarding(tcpPorts: Seq[Int], udpPorts: Seq[Int]): Task[UpnpService] = Task {
+  private def startForwarding(tcpPorts: Seq[Int], udpPorts: Seq[Int]): IO[UpnpService] = IO {
     log.info("Attempting port forwarding for TCP ports {} and UDP ports {}", tcpPorts, udpPorts)
     new UpnpServiceImpl(new ClientOnlyUpnpServiceConfiguration()).tap { service =>
       service.startup()
@@ -81,7 +81,7 @@ object PortForwarder extends Logger {
     }
   }
 
-  private def stopForwarding(service: UpnpService) = Task {
+  private def stopForwarding(service: UpnpService) = IO {
     service.shutdown()
   }
 }

@@ -7,7 +7,7 @@ import akka.actor.Props
 import akka.actor.Status.Failure
 import akka.util.ByteString
 
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -41,7 +41,7 @@ class MockedMiner(
     with ActorLogging {
   import configBuilder._
   import akka.pattern.pipe
-  implicit val scheduler: Scheduler = Scheduler(context.dispatcher)
+  implicit val scheduler: IORuntime = IORuntime(context.dispatcher)
 
   override def receive: Receive = stopped
 

@@ -10,6 +10,7 @@ import akka.testkit.TestProbe
 import akka.util.ByteString
 
 import cats.effect.Resource
+import cats.effect.IO
 import cats.syntax.traverse._
 
 import monix.eval.Task
@@ -74,9 +75,9 @@ class RegularSyncSpec
     with RegularSyncFixtures {
   type Fixture = RegularSyncFixture
 
-  val actorSystemResource: Resource[Task, ActorSystem] =
-    Resource.make(Task(ActorSystem()))(system => Task(TestKit.shutdownActorSystem(system)))
-  val fixtureResource: Resource[Task, Fixture] = actorSystemResource.map(new Fixture(_))
+  val actorSystemResource: Resource[IO, ActorSystem] =
+    Resource.make(IO(ActorSystem()))(system => IO(TestKit.shutdownActorSystem(system)))
+  val fixtureResource: Resource[IO, Fixture] = actorSystemResource.map(new Fixture(_))
 
   // Used only in sync tests
   var testSystem: ActorSystem = _
