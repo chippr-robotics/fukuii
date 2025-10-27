@@ -3,7 +3,9 @@
 **Date**: October 27, 2025  
 **Repository**: chippr-robotics/fukuii  
 **Purpose**: Evaluate scalanet dependency compatibility with Scala 3 and determine migration strategy  
-**Status**: Assessment Complete
+**Status**: ✅ **DECISION CONFIRMED - Fork Approved**  
+**Decision By**: @realcodywburns (Chippr Robotics)  
+**Action Plan**: See `SCALANET_FORK_ACTION_PLAN.md`
 
 ---
 
@@ -15,12 +17,15 @@
 | **Can it be removed?** | ❌ NO - Required for network participation |
 | **Scala 3 support available?** | ❌ NO - No artifacts published |
 | **Alternative libraries?** | ❌ NO - No suitable drop-in replacement |
-| **Recommended action?** | 🔧 **Fork and migrate to Scala 3** |
+| **Decision?** | ✅ **APPROVED: Fork and migrate** |
 | **Timeline impact?** | ⏱️ Adds 3-4 weeks to migration |
 | **Migration complexity?** | 📊 Medium (estimated 60-114 hours) |
 | **Risk level?** | ⚠️ Medium (well-understood scope) |
+| **Next steps?** | 📋 See `SCALANET_FORK_ACTION_PLAN.md` |
 
-**TL;DR**: Scalanet must be forked and migrated to Scala 3. No alternatives exist. This is a blocking dependency for Scala 3 migration.
+**DECISION**: Chippr Robotics will take over maintenance and continue development of scalanet. Fork approved and migration plan created.
+
+**Action Plan**: `docs/SCALANET_FORK_ACTION_PLAN.md` - Complete 20-day execution plan with phases, tasks, and success criteria.
 
 ---
 
@@ -569,9 +574,51 @@ trait SigAlg {
 
 ---
 
+## Decision and Next Steps (Updated October 27, 2025)
+
+### ✅ DECISION CONFIRMED
+
+**By**: @realcodywburns (Chippr Robotics)  
+**Decision**: Chippr Robotics will take over maintenance and continue development of scalanet as part of the Fukuii project.
+
+**Quote**: 
+> "we will take over maintenance and continue development of this asset since it is critical. Fork scalanet and migrate it to Scala 3 as a part of Fukuii"
+
+### 📋 Action Plan Created
+
+A comprehensive 20-day execution plan has been created with detailed phases, tasks, timelines, and success criteria.
+
+**Document**: [`docs/SCALANET_FORK_ACTION_PLAN.md`](./SCALANET_FORK_ACTION_PLAN.md)
+
+**Plan Overview**:
+- **Phase 1**: Repository Fork and Setup (Days 1-3)
+- **Phase 2**: Scala 3 Migration Preparation (Days 4-5)
+- **Phase 3**: Automated Migration (Days 6-10)
+- **Phase 4**: Testing and Validation (Days 11-15)
+- **Phase 5**: Release and Documentation (Days 16-20)
+- **Total**: 20 days + 5-day buffer = ~5 weeks
+
+**Key Resources**:
+- Source repository identified: https://github.com/input-output-hk/scalanet
+- License verified: Apache 2.0 (compatible)
+- Target organization: chippr-robotics
+- First release version: 0.7.0
+
+### Immediate Next Actions
+
+1. ✅ Fork https://github.com/input-output-hk/scalanet to chippr-robotics
+2. Clone and audit repository structure
+3. Set up CI/CD pipeline for cross-compilation
+4. Create migration branch
+5. Begin Scala 3 migration following action plan
+
+**Execution Status**: Ready to begin
+
+---
+
 **Document Control**:
-- **Version**: 1.0
+- **Version**: 1.1
 - **Date**: October 27, 2025
 - **Author**: Fukuii Development Team / Copilot Agent
-- **Status**: Assessment Complete - Ready for Decision
-- **Next Action**: Locate scalanet repository and begin fork process
+- **Status**: ✅ Decision Approved - Action Plan Created
+- **Next Action**: Execute fork (see SCALANET_FORK_ACTION_PLAN.md)

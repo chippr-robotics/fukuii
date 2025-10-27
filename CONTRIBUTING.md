@@ -586,6 +586,7 @@ Before submitting a PR, verify:
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
 - [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md)
 - [Scalanet Compatibility Assessment](docs/SCALANET_COMPATIBILITY_ASSESSMENT.md)
+- [Scalanet Fork Action Plan](docs/SCALANET_FORK_ACTION_PLAN.md)
 - [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md)
 - [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md)
 - [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)
