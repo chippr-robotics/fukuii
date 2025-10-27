@@ -37,16 +37,14 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
   def genRandomByteString(): ByteString =
     ByteString.fromArrayUnsafe(genRandomArray())
 
-  def writeNValuesToDb(n: Int, db: RocksDbDataSource, namespace: IndexedSeq[Byte]): IO[Unit] = {
-    val iterable = 0 until n
+  def writeNValuesToDb(n: Int, db: RocksDbDataSource, namespace: IndexedSeq[Byte]): IO[Unit] =
     Stream
-      .emits(iterable)
+      .range(0, n)
       .evalMap { _ =>
         IO(db.update(Seq(DataSourceUpdateOptimized(namespace, Seq(), Seq((genRandomArray(), genRandomArray()))))))
       }
       .compile
       .drain
-  }
 
   it should "cancel ongoing iteration" in testCaseT { db =>
     val largeNum = 1000000
