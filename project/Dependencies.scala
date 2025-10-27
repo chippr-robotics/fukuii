@@ -81,13 +81,9 @@ object Dependencies {
     "io.monix" %% "monix" % "3.4.1" // Updated for partial Scala 3 support
   )
 
-  val network: Seq[ModuleID] = {
-    val scalanetVersion = "0.6.0"
-    Seq(
-      "io.iohk" %% "scalanet" % scalanetVersion,
-      "io.iohk" %% "scalanet-discovery" % scalanetVersion
-    )
-  }
+  // Scalanet is now vendored locally in scalanet/ directory
+  // See scalanet/ATTRIBUTION.md for details
+  val network: Seq[ModuleID] = Seq.empty
 
   val logging = Seq(
     "ch.qos.logback" % "logback-classic" % "1.5.12", // Updated for better compatibility
