@@ -3,9 +3,8 @@ package com.chipprbots.ethereum.sync.util
 import akka.actor.ActorRef
 import akka.util.ByteString
 
+import cats.effect.IO
 import cats.effect.Resource
-
-import monix.eval.Task
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
@@ -51,12 +50,12 @@ object FastSyncItSpecUtils {
       )
     )
 
-    def startFastSync(): Task[Unit] = Task {
+    def startFastSync(): IO[Unit] = IO {
       fastSync ! SyncProtocol.Start
     }
 
-    def waitForFastSyncFinish(): Task[Boolean] =
-      retryUntilWithDelay(Task(storagesInstance.storages.appStateStorage.isFastSyncDone()), 1.second, 90) { isDone =>
+    def waitForFastSyncFinish(): IO[Boolean] =
+      retryUntilWithDelay(IO(storagesInstance.storages.appStateStorage.isFastSyncDone()), 1.second, 90) { isDone =>
         isDone
       }
 
@@ -103,8 +102,8 @@ object FastSyncItSpecUtils {
       go(0)
     }
 
-    def startWithState(): Task[Unit] =
-      Task {
+    def startWithState(): IO[Unit] =
+      IO {
         val currentBest = blockchainReader.getBestBlock().get.header
         val safeTarget = currentBest.number + syncConfig.fastSyncBlockValidationX
         val nextToValidate = currentBest.number + 1
@@ -121,22 +120,22 @@ object FastSyncItSpecUtils {
             nextBlockToFullyValidate = nextToValidate
           )
         storagesInstance.storages.fastSyncStateStorage.putSyncState(syncState)
-      }.map(_ => ())
+      }.void
 
   }
 
   object FakePeer {
 
-    def startFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCustomConfig): Task[FakePeer] =
+    def startFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCustomConfig): IO[FakePeer] =
       for {
-        peer <- Task(new FakePeer(peerName, fakePeerCustomConfig))
+        peer <- IO(new FakePeer(peerName, fakePeerCustomConfig))
         _ <- peer.startPeer()
       } yield peer
 
     def start1FakePeerRes(
         fakePeerCustomConfig: FakePeerCustomConfig = defaultConfig,
         name: String
-    ): Resource[Task, FakePeer] =
+    ): Resource[IO, FakePeer] =
       Resource.make {
         startFakePeer(name, fakePeerCustomConfig)
       } { peer =>
@@ -146,7 +145,7 @@ object FastSyncItSpecUtils {
     def start2FakePeersRes(
         fakePeerCustomConfig1: FakePeerCustomConfig = defaultConfig,
         fakePeerCustomConfig2: FakePeerCustomConfig = defaultConfig
-    ): Resource[Task, (FakePeer, FakePeer)] =
+    ): Resource[IO, (FakePeer, FakePeer)] =
       for {
         peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
         peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
@@ -156,7 +155,7 @@ object FastSyncItSpecUtils {
         fakePeerCustomConfig1: FakePeerCustomConfig = defaultConfig,
         fakePeerCustomConfig2: FakePeerCustomConfig = defaultConfig,
         fakePeerCustomConfig3: FakePeerCustomConfig = defaultConfig
-    ): Resource[Task, (FakePeer, FakePeer, FakePeer)] =
+    ): Resource[IO, (FakePeer, FakePeer, FakePeer)] =
       for {
         peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
         peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
@@ -168,7 +167,7 @@ object FastSyncItSpecUtils {
         fakePeerCustomConfig2: FakePeerCustomConfig = defaultConfig,
         fakePeerCustomConfig3: FakePeerCustomConfig = defaultConfig,
         fakePeerCustomConfig4: FakePeerCustomConfig = defaultConfig
-    ): Resource[Task, (FakePeer, FakePeer, FakePeer, FakePeer)] =
+    ): Resource[IO, (FakePeer, FakePeer, FakePeer, FakePeer)] =
       for {
         peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
         peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
