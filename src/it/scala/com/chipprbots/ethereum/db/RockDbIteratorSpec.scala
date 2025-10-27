@@ -8,8 +8,6 @@ import cats.effect.Resource
 import cats.effect.Deferred
 import cats.effect.Ref
 import cats.effect.IO
-
-import cats.effect.IO
 import fs2.Stream
 
 import scala.util.Random
