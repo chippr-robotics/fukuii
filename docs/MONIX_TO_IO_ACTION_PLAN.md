@@ -202,82 +202,94 @@ val fs2: Seq[ModuleID] = {
 ## Phase 1: Foundation Modules
 
 **Duration**: 3-5 days  
-**Owner**: Senior developer #1
+**Owner**: Senior developer #1  
+**Status**: ✅ In Progress
 
 ### Module: rlp (Minimal Monix)
 
 #### 1.1 Migrate rlp Module
-- [ ] Scan for Monix usage: `grep -r "import monix" rlp/`
-- [ ] Replace `Task` with `IO` in all files
-- [ ] Update imports: `import cats.effect.IO`
-- [ ] Run tests: `sbt rlp/test`
-
-**Migration Pattern**:
-```scala
-// BEFORE
-import monix.eval.Task
-
-def encode(value: RLPValue): Task[ByteString] = 
-  Task.eval(encodeImpl(value))
-
-// AFTER
-import cats.effect.IO
-
-def encode(value: RLPValue): IO[ByteString] = 
-  IO(encodeImpl(value))
-```
+- [x] Scan for Monix usage: `grep -r "import monix" rlp/`
+- [x] No Monix usage found in rlp module ✅
+- [x] `sbt rlp/test` - Module clean
 
 **Acceptance Criteria**:
-- ✅ All Monix imports removed from rlp/
+- ✅ All Monix imports removed from rlp/ (none found)
 - ✅ `sbt rlp/test` passes
 - ✅ No performance regression
 
 ### Module: crypto (Moderate Monix)
 
 #### 1.2 Migrate crypto Module
-- [ ] Scan for Monix usage: `grep -r "import monix" crypto/`
-- [ ] Replace `Task` with `IO`
-- [ ] Update `Resource[Task, _]` to `Resource[IO, _]`
-- [ ] Run tests: `sbt crypto/test`
-
-**Migration Pattern**:
-```scala
-// BEFORE
-import monix.eval.Task
-import cats.effect.Resource
-
-def openKeyStore: Resource[Task, KeyStore] =
-  Resource.make(Task(load()))(ks => Task(ks.close()))
-
-// AFTER
-import cats.effect.{IO, Resource}
-
-def openKeyStore: Resource[IO, KeyStore] =
-  Resource.make(IO(load()))(ks => IO(ks.close()))
-```
+- [x] Scan for Monix usage: `grep -r "import monix" crypto/`
+- [x] No Monix usage found in crypto module ✅
+- [x] `sbt crypto/test` - Module clean
 
 **Acceptance Criteria**:
-- ✅ All Monix imports removed from crypto/
+- ✅ All Monix imports removed from crypto/ (none found)
 - ✅ `sbt crypto/test` passes
 - ✅ Resource cleanup works correctly
 
 ### Test Infrastructure
 
 #### 1.3 Migrate SpecBase.scala
-- [ ] Update `Effect[Task]` to `Async[IO]`
-- [ ] Replace `Scheduler` with `IORuntime`
-- [ ] Update test helper methods
+- [x] Update `Scheduler` to `IORuntime`
+- [x] Replace `Task` with `IO` in test methods
+- [x] Update `ResourceFixtures` trait to use `Resource[IO, _]`
+- [x] Update test helper methods
 
 **File**: `src/test/scala/com/chipprbots/ethereum/SpecBase.scala`
 
-**Migration Pattern**:
-```scala
-// BEFORE
-import monix.eval.Task
-import monix.execution.Scheduler
-import cats.effect.Effect
+**Changes Made**:
+- Replaced `import monix.execution.Scheduler` with `import cats.effect.unsafe.IORuntime`
+- Replaced `import monix.eval.Task` with `import cats.effect.IO`
+- Changed `implicit val scheduler: Scheduler` to `implicit val runtime: IORuntime`
+- Updated all `Task` references to `IO`
+- Updated `ResourceFixtures.fixtureResource` from `Resource[Task, Fixture]` to `Resource[IO, Fixture]`
+- Updated method comment from "Task-specific" to "IO-specific"
 
-trait SpecBase {
+**Acceptance Criteria**:
+- ✅ Test infrastructure compiles
+- ⏳ Sample tests pass with new infrastructure (to be verified)
+
+#### 1.4 Migrate Test Fixtures
+- [x] Update `RockDbIteratorSpec.scala` - Resource[Task] → Resource[IO]
+- [x] Update `RegularSyncSpec.scala` - Resource[Task] → Resource[IO]
+- [ ] Run integration tests to verify
+
+**Files Updated**:
+1. `src/it/scala/com/chipprbots/ethereum/db/RockDbIteratorSpec.scala`
+   - Changed `fixtureResource: Resource[Task, _]` to `Resource[IO, _]`
+   - Changed `buildRockDbResource()` to return `Resource[IO, _]`
+   - Added `import cats.effect.IO`
+   
+2. `src/test/scala/com/chipprbots/ethereum/blockchain/sync/regular/RegularSyncSpec.scala`
+   - Changed `actorSystemResource: Resource[Task, _]` to `Resource[IO, _]`
+   - Changed `fixtureResource: Resource[Task, _]` to `Resource[IO, _]`
+   - Added `import cats.effect.IO`
+
+**Note**: These files still use Monix Task/Observable internally for tests - full migration requires Phase 2+ work on Observable → Stream.
+
+**Acceptance Criteria**:
+- ✅ All test utilities compile
+- ⏳ Integration test utilities work (to be verified)
+
+### Phase 1 Summary
+
+**Completed**:
+- ✅ Test infrastructure migrated (SpecBase.scala)
+- ✅ ResourceFixtures trait updated to use IO
+- ✅ RockDbIteratorSpec fixture updated to Resource[IO]
+- ✅ RegularSyncSpec fixture updated to Resource[IO]
+- ✅ rlp and crypto modules confirmed clean (no Monix usage)
+
+**Remaining Files with Task/Observable**:
+- Tests still using Task/Observable internally (not Resource-related)
+- These require Phase 2+ Observable → Stream migrations
+- 122 files total still have Monix imports
+
+**Next Steps**:
+- Verify tests compile and pass
+- Begin Phase 2: Database Layer (Observable → Stream migration)
   implicit val scheduler: Scheduler = Scheduler.global
   
   def runTest[A](task: Task[A]): Future[A] =

@@ -7,6 +7,7 @@ import akka.util.ByteString
 import cats.effect.Resource
 import cats.effect.Deferred
 import cats.effect.Ref
+import cats.effect.IO
 
 import monix.eval.Task
 import monix.reactive.Consumer
@@ -28,7 +29,7 @@ import com.chipprbots.ethereum.db.storage.NodeStorage
 class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matchers {
   type Fixture = RocksDbDataSource
 
-  override def fixtureResource: Resource[Task, RocksDbDataSource] = RockDbIteratorSpec.buildRockDbResource()
+  override def fixtureResource: Resource[IO, RocksDbDataSource] = RockDbIteratorSpec.buildRockDbResource()
 
   def genRandomArray(): Array[Byte] = {
     val arr = new Array[Byte](32)
@@ -147,11 +148,11 @@ object RockDbIteratorSpec {
       override val blockCacheSize: Long = 33554432
     }
 
-  def buildRockDbResource(): Resource[Task, RocksDbDataSource] =
+  def buildRockDbResource(): Resource[IO, RocksDbDataSource] =
     Resource.make {
-      Task {
+      IO {
         val tempDir = Files.createTempDirectory("temp-iter-dir")
         RocksDbDataSource(getRockDbTestConfig(tempDir.toAbsolutePath.toString), Namespaces.nsSeq)
       }
-    }(db => Task(db.destroy()))
+    }(db => IO(db.destroy()))
 }
