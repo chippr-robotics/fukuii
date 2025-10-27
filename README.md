@@ -187,7 +187,7 @@ When modifying code derived from Mantis, include a notice in the header of chang
 
 ## Development and Future Plans
 
-**Technology Stack**: This project uses Scala 2.13.6 with active migration to Scala 3.3.4 (LTS). **Phase 3 (Manual Fixes) of the migration is now complete**, with the codebase fully prepared for Scala 3 syntax. For detailed information about the migration strategy and progress, see our [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md).
+**Technology Stack**: This project uses Scala 2.13.6 with active migration to Scala 3.3.4 (LTS). **Phase 3 (Manual Fixes) and Phase 4 (Validation & Testing) of the migration are now complete**, with the codebase fully prepared for Scala 3 from a code perspective. The next step requires updating critical dependencies to versions that support Scala 3. For detailed information about the migration strategy, progress, and validation results, see our [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md) and [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md).
 
 **Static Analysis**: We maintain a comprehensive static analysis toolchain. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 
