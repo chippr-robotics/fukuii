@@ -107,14 +107,14 @@ trait DataSourceTestBehavior extends ScalaCheckPropertyChecks with ObjectGenerat
       withDir { path =>
         val dataSource = createDataSource(path)
 
-        //Insertion
+        // Insertion
         dataSource.update(prepareUpdate(namespace = OtherNamespace, toUpsert = Seq(someByteString -> someValue1)))
         dataSource.update(prepareUpdate(namespace = OtherNamespace2, toUpsert = Seq(someByteString -> someValue2)))
 
         assert(dataSource.get(OtherNamespace, someByteString).contains(someValue1))
         assert(dataSource.get(OtherNamespace2, someByteString).contains(someValue2))
 
-        //Removal
+        // Removal
         dataSource.update(prepareUpdate(namespace = OtherNamespace2, toRemove = Seq(someByteString)))
 
         assert(dataSource.get(OtherNamespace, someByteString).contains(someValue1))

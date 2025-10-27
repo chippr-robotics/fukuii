@@ -30,10 +30,7 @@ class OmmersPoolSpec
 
     "should not return ommers if there is no any" in new TestSetup {
 
-      /**   00 --> 11 --> 21 --> [31]  (chain1)
-        *      \-> 14                  (chain4)
-        *  [] new block, reference!
-        *  () ommer given the new block
+      /** 00 --> 11 --> 21 --> [31] (chain1) \-> 14 (chain4) [] new block, reference! () ommer given the new block
         */
       (blockchainReader.getBlockHeaderByHash _).expects(block2Chain1.hash).returns(Some(block2Chain1))
       (blockchainReader.getBlockHeaderByHash _).expects(block1Chain1.hash).returns(Some(block1Chain1))
@@ -54,12 +51,8 @@ class OmmersPoolSpec
 
       "in case of a chain with less length than the generation limit" in new TestSetup {
 
-        /**   00 --> (11) --> 21 --> 31  (chain1)
-          *    \        \        \-> 33  (chain3)
-          *     \        \--> 22 --> 32  (chain2)
-          *      \-> [14]                (chain4)
-          *  [] new block, reference!
-          *  () ommer given the new block
+        /** 00 --> (11) --> 21 --> 31 (chain1) \ \ \-> 33 (chain3) \ \--> 22 --> 32 (chain2) \-> [14] (chain4) [] new
+          * block, reference! () ommer given the new block
           */
         (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0))
         (blockchainReader.getBlockHeaderByHash _).expects(block0.parentHash).returns(None)
@@ -80,14 +73,8 @@ class OmmersPoolSpec
 
       "despite of start losing older ommers candidates" in new TestSetup {
 
-        /**   XX -->  (11) -->  21 --> 31  (chain1)
-          *    \         \         \-> 33  (chain3)
-          *     \         \-->  22 --> 32  (chain2)
-          *      \-->  14 ---> [24]        (chain4)
-          *       \-> (15)                 (chain5)
-          *  [] new block, reference!
-          *  () ommer given the new block
-          *  XX removed block
+        /** XX --> (11) --> 21 --> 31 (chain1) \ \ \-> 33 (chain3) \ \--> 22 --> 32 (chain2) \--> 14 ---> [24] (chain4)
+          * \-> (15) (chain5) [] new block, reference! () ommer given the new block XX removed block
           */
         (blockchainReader.getBlockHeaderByHash _).expects(block1Chain4.hash).returns(Some(block1Chain4)).once()
         (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0)).once()
@@ -114,12 +101,8 @@ class OmmersPoolSpec
 
       "by respecting size and generation limits" in new TestSetup {
 
-        /**   00 --> 11 -->  21  --> [31]  (chain1)
-          *    \      \          \-> (33)  (chain3)
-          *     \      \--> (22) -->  32   (chain2)
-          *      \-> 14                    (chain4)
-          *  [] new block, reference!
-          *  () ommer given the new block
+        /** 00 --> 11 --> 21 --> [31] (chain1) \ \ \-> (33) (chain3) \ \--> (22) --> 32 (chain2) \-> 14 (chain4) [] new
+          * block, reference! () ommer given the new block
           */
         (blockchainReader.getBlockHeaderByHash _).expects(block2Chain1.hash).returns(Some(block2Chain1))
         (blockchainReader.getBlockHeaderByHash _).expects(block1Chain1.hash).returns(Some(block1Chain1))
@@ -152,11 +135,8 @@ class OmmersPoolSpec
     val ommerGenerationLimit: Int = 2
     val returnedOmmerSizeLimit: Int = 2 // Max amount of ommers allowed per block
 
-    /**   00 ---> 11 --> 21 --> 31 (chain1)
-      *    \       \       \--> 33 (chain3)
-      *     \       \--> 22 --> 32 (chain2)
-      *      \--> 14 --> 24        (chain4)
-      *       \-> 15               (chain5)
+    /** 00 ---> 11 --> 21 --> 31 (chain1) \ \ \--> 33 (chain3) \ \--> 22 --> 32 (chain2) \--> 14 --> 24 (chain4) \-> 15
+      * (chain5)
       */
     val block0: BlockHeader = Block3125369.header.copy(number = 0, difficulty = 0)
 

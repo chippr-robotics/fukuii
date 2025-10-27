@@ -10,25 +10,25 @@ import com.chipprbots.ethereum.utils.Logger
 
 import encoding._
 
-/** This class helps to deal with two problems regarding MptNodes storage:
-  * 1) Define a way to delete ones that are no longer needed but allow rollbacks to be performed
-  * 2) Avoids removal of nodes that can be used in different trie branches because the hash is the same
+/** This class helps to deal with two problems regarding MptNodes storage: 1) Define a way to delete ones that are no
+  * longer needed but allow rollbacks to be performed 2) Avoids removal of nodes that can be used in different trie
+  * branches because the hash is the same
   *
-  * To deal with (1) when a node is no longer needed, block number alongside with a stored node snapshot is saved so
-  * it can be restored in case of rollback.
+  * To deal with (1) when a node is no longer needed, block number alongside with a stored node snapshot is saved so it
+  * can be restored in case of rollback.
   *
   * In order to solve (2), before saving a node, it's wrapped with the number of references it has.
   *
   * Using this storage will change data to be stored in nodeStorage in two ways (and it will, as consequence, make
   * different pruning mechanisms incompatible):
-  * - Instead of saving KEY -> VALUE, it will store KEY -> STORED_NODE(VALUE, REFERENCE_COUNT, LAST_USED_BY_BLOCK)
+  *   - Instead of saving KEY -> VALUE, it will store KEY -> STORED_NODE(VALUE, REFERENCE_COUNT, LAST_USED_BY_BLOCK)
   *
   * Also, additional data will be saved in this storage:
-  * - For each block: BLOCK_NUMBER_TAG -> NUMBER_OF_SNAPSHOTS
-  * - For each node changed within a block: (BLOCK_NUMBER_TAG ++ SNAPSHOT_INDEX) -> SNAPSHOT
+  *   - For each block: BLOCK_NUMBER_TAG -> NUMBER_OF_SNAPSHOTS
+  *   - For each node changed within a block: (BLOCK_NUMBER_TAG ++ SNAPSHOT_INDEX) -> SNAPSHOT
   *
-  * Storing snapshot info this way allows for easy construction of snapshot key (based on a block number
-  * and number of snapshots) and therefore, fast access to each snapshot individually.
+  * Storing snapshot info this way allows for easy construction of snapshot key (based on a block number and number of
+  * snapshots) and therefore, fast access to each snapshot individually.
   */
 class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends NodesKeyValueStorage {
 
@@ -136,13 +136,15 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger {
 
   type Changes = Map[NodeHash, (StoredNode, StoredNodeSnapshot)]
 
-  /** Fetches snapshots stored in the DB for the given block number and deletes the stored nodes, referred to
-    * by these snapshots, that meet criteria for deletion (see `getNodesToBeRemovedInPruning` for details).
+  /** Fetches snapshots stored in the DB for the given block number and deletes the stored nodes, referred to by these
+    * snapshots, that meet criteria for deletion (see `getNodesToBeRemovedInPruning` for details).
     *
     * All snapshots for this block are removed, which means state can no longer be rolled back to this point.
     *
-    * @param blockNumber BlockNumber to prune
-    * @param nodeStorage NodeStorage
+    * @param blockNumber
+    *   BlockNumber to prune
+    * @param nodeStorage
+    *   NodeStorage
     */
   override def prune(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit = {
     log.debug(s"Pruning block $blockNumber")
@@ -159,8 +161,10 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger {
 
   /** Looks for the StoredNode snapshots based on block number and saves (or deletes) them
     *
-    * @param blockNumber BlockNumber to rollback
-    * @param nodeStorage NodeStorage
+    * @param blockNumber
+    *   BlockNumber to rollback
+    * @param nodeStorage
+    *   NodeStorage
     */
   override def rollback(blockNumber: BigInt, nodeStorage: NodesStorage, inMemory: Boolean): Unit =
     withSnapshotCount(blockNumber, nodeStorage) { (snapshotsCountKey, snapshotCount) =>
@@ -196,8 +200,8 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger {
     (BigInt(0) until snapshotCount).map(snapshotIndex => getSnapshotKeyFn(snapshotIndex))
   }
 
-  /** Within death row of this block, it looks for Nodes that are not longer being used in order to remove them
-    * from DB. To do so, it checks if nodes marked in death row have still reference count equal to 0 and are not used by future
+  /** Within death row of this block, it looks for Nodes that are not longer being used in order to remove them from DB.
+    * To do so, it checks if nodes marked in death row have still reference count equal to 0 and are not used by future
     * blocks.
     * @param blockNumber
     * @param deadRowKey
@@ -224,9 +228,13 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger {
 
   /** Wrapper of MptNode in order to store number of references it has.
     *
-    * @param nodeEncoded Encoded Mpt Node to be used in MerklePatriciaTrie
-    * @param references  Number of references the node has. Each time it's updated references are increased and everytime it's deleted, decreased
-    * @param lastUsedByBlock Block Number where this node was last used
+    * @param nodeEncoded
+    *   Encoded Mpt Node to be used in MerklePatriciaTrie
+    * @param references
+    *   Number of references the node has. Each time it's updated references are increased and everytime it's deleted,
+    *   decreased
+    * @param lastUsedByBlock
+    *   Block Number where this node was last used
     */
   case class StoredNode(nodeEncoded: ByteString, references: Int, lastUsedByBlock: BigInt) {
     def incrementReferences(amount: Int, blockNumber: BigInt): StoredNode =
@@ -242,16 +250,20 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger {
 
   /** Key to be used to store BlockNumber -> Snapshots Count
     *
-    * @param blockNumber Block Number Tag
-    * @return Key
+    * @param blockNumber
+    *   Block Number Tag
+    * @return
+    *   Key
     */
   private def getSnapshotsCountKey(blockNumber: BigInt): ByteString = ByteString(
     "sck".getBytes ++ blockNumber.toByteArray
   )
 
   /** Returns a snapshot key given a block number and a snapshot index
-    * @param blockNumber Block Number Ta
-    * @param index Snapshot Index
+    * @param blockNumber
+    *   Block Number Ta
+    * @param index
+    *   Snapshot Index
     * @return
     */
   private def getSnapshotKey(blockNumber: BigInt)(index: BigInt): ByteString = ByteString(
@@ -259,8 +271,10 @@ object ReferenceCountNodeStorage extends PruneSupport with Logger {
   )
 
   /** Used to store a node snapshot in the db. This will be used to rollback a transaction.
-    * @param nodeKey Node's key
-    * @param storedNode Stored node that can be rolledback. If None, it means that node wasn't previously in the DB
+    * @param nodeKey
+    *   Node's key
+    * @param storedNode
+    *   Stored node that can be rolledback. If None, it means that node wasn't previously in the DB
     */
   case class StoredNodeSnapshot(nodeKey: NodeHash, storedNode: Option[StoredNode])
 

@@ -112,7 +112,7 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "decode branch node with values in leafs that looks like RLP list" in {
-    //given
+    // given
     val encodedMptBranch =
       Hex.decode(
         "f84d8080808080de9c32ea07b198667c460bb7d8bc9652f6ffbde7b195d81c17eb614e2b8901808080808080de9c3ffe8cb7f9cebdcb4eca6e682b56ab66f4f45827cf27c11b7f0a91620180808080"
@@ -155,24 +155,24 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
         None
       )
 
-    //when
+    // when
     val result: MptNode = encodedMptBranch.toMptNode
 
-    //then
+    // then
     result shouldBe decodedMptBranch
   }
 
   it should "obtain the same value when decoding and encoding an encoded node" in {
-    //given
+    // given
     val encodedMptBranch =
       Hex.decode(
         "f84d8080808080de9c32ea07b198667c460bb7d8bc9652f6ffbde7b195d81c17eb614e2b8901808080808080de9c3ffe8cb7f9cebdcb4eca6e682b56ab66f4f45827cf27c11b7f0a91620180808080"
       )
 
-    //when
+    // when
     val result: MptNode = encodedMptBranch.toMptNode
 
-    //then
-    (result.toBytes: Array[Byte]) shouldBe encodedMptBranch //This fails
+    // then
+    (result.toBytes: Array[Byte]) shouldBe encodedMptBranch // This fails
   }
 }

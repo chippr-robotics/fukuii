@@ -15,10 +15,9 @@ import com.chipprbots.ethereum.blockchain.sync.fast.FastSync.SyncState
 import com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor.GetStorage
 import com.chipprbots.ethereum.db.storage.FastSyncStateStorage
 
-/** Persists current state of fast sync to a storage. Can save only one state at a time.
-  * If during persisting new state is received then it will be saved immediately after current state
-  * was persisted.
-  * If during persisting more than one new state is received then only the last state will be kept in queue.
+/** Persists current state of fast sync to a storage. Can save only one state at a time. If during persisting new state
+  * is received then it will be saved immediately after current state was persisted. If during persisting more than one
+  * new state is received then only the last state will be kept in queue.
   */
 class StateStorageActor extends Actor with ActorLogging {
 

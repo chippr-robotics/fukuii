@@ -12,9 +12,7 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage._
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.utils.Hex
 
-/** This class is used to store app state variables
-  *   Key: see AppStateStorage.Keys
-  *   Value: stored string value
+/** This class is used to store app state variables Key: see AppStateStorage.Keys Value: stored string value
   */
 class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[Key, Value] {
 
@@ -25,7 +23,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def keyDeserializer: IndexedSeq[Byte] => Key = k => new String(k.toArray, StorageStringCharset.UTF8Charset)
   def valueSerializer: String => IndexedSeq[Byte] = k =>
     ArraySeq.unsafeWrapArray(k.getBytes(StorageStringCharset.UTF8Charset))
-  def valueDeserializer: IndexedSeq[Byte] => String = ((valueBytes: IndexedSeq[Byte])) =>
+  def valueDeserializer: IndexedSeq[Byte] => String = (valueBytes: IndexedSeq[Byte]) =>
     new String(valueBytes.toArray, StorageStringCharset.UTF8Charset)
 
   def getBestBlockNumber(): BigInt =
@@ -65,10 +63,11 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   private def getBigInt(key: Key): BigInt =
     get(key).map(BigInt(_)).getOrElse(BigInt(BigInteger.ZERO))
 
-  /** It is safe to return zero in case of not having any checkpoint block,
-    * because we assume that genesis block is a kinda stable checkpoint block (without real checkpoint)
+  /** It is safe to return zero in case of not having any checkpoint block, because we assume that genesis block is a
+    * kinda stable checkpoint block (without real checkpoint)
     *
-    * @return Latest CheckpointBlock Number
+    * @return
+    *   Latest CheckpointBlock Number
     */
   def getLatestCheckpointBlockNumber(): BigInt =
     getBigInt(Keys.LatestCheckpointBlockNumber)

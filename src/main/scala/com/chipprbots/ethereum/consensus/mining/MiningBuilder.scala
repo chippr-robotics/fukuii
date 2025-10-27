@@ -18,11 +18,11 @@ trait MiningBuilder {
   def mining: Mining
 }
 
-/** A mining builder is responsible to instantiate the consensus protocol.
-  * This is done dynamically when Mantis boots, based on its configuration.
+/** A mining builder is responsible to instantiate the consensus protocol. This is done dynamically when Mantis boots,
+  * based on its configuration.
   *
-  * @see [[Mining]],
-  *      [[com.chipprbots.ethereum.consensus.pow.PoWMining PoWConsensus]],
+  * @see
+  *   [[Mining]], [[com.chipprbots.ethereum.consensus.pow.PoWMining PoWConsensus]],
   */
 trait StdMiningBuilder extends MiningBuilder {
   self: VmBuilder
@@ -38,7 +38,7 @@ trait StdMiningBuilder extends MiningBuilder {
   private def newConfig[C <: AnyRef](c: C): FullMiningConfig[C] =
     FullMiningConfig(miningConfig, c)
 
-  //TODO [ETCM-397] refactor configs to avoid possibility of running mocked or
+  // TODO [ETCM-397] refactor configs to avoid possibility of running mocked or
   // restricted-pow mining on real network like ETC or Mordor
   protected def buildPoWMining(): PoWMining = {
     val specificConfig = EthashConfig(mantisConfig)

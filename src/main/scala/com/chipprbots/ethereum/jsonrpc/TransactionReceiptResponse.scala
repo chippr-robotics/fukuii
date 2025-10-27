@@ -17,21 +17,34 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
 
-/**  Params docs copied from - https://eth.wiki/json-rpc/API
+/** Params docs copied from - https://eth.wiki/json-rpc/API
   *
-  *  @param transactionHash DATA, 32 Bytes - hash of the transaction.
-  *  @param transactionIndex QUANTITY - integer of the transactions index position in the block.
-  *  @param blockHash DATA, 32 Bytes - hash of the block where this transaction was in.
-  *  @param blockNumber QUANTITY - block number where this transaction was in.
-  *  @param from DATA, 20 Bytes - address of the sender.
-  *  @param to DATA, 20 Bytes - address of the receiver. None when its a contract creation transaction.
-  *  @param cumulativeGasUsed QUANTITY  - The total amount of gas used when this transaction was executed in the block.
-  *  @param gasUsed QUANTITY  - The amount of gas used by this specific transaction alone.
-  *  @param contractAddress DATA, 20 Bytes - The contract address created, if the transaction was a contract creation, otherwise None.
-  *  @param logs Array - Array of log objects, which this transaction generated.
-  *  @param logsBloom DATA, 256 Bytes - Bloom filter for light clients to quickly retrieve related logs.
-  *  @param root DATA 32 bytes of post-transaction stateroot (pre Byzantium, otherwise None)
-  *  @param status QUANTITY either 1 (success) or 0 (failure) (post Byzantium, otherwise None)
+  * @param transactionHash
+  *   DATA, 32 Bytes - hash of the transaction.
+  * @param transactionIndex
+  *   QUANTITY - integer of the transactions index position in the block.
+  * @param blockHash
+  *   DATA, 32 Bytes - hash of the block where this transaction was in.
+  * @param blockNumber
+  *   QUANTITY - block number where this transaction was in.
+  * @param from
+  *   DATA, 20 Bytes - address of the sender.
+  * @param to
+  *   DATA, 20 Bytes - address of the receiver. None when its a contract creation transaction.
+  * @param cumulativeGasUsed
+  *   QUANTITY - The total amount of gas used when this transaction was executed in the block.
+  * @param gasUsed
+  *   QUANTITY - The amount of gas used by this specific transaction alone.
+  * @param contractAddress
+  *   DATA, 20 Bytes - The contract address created, if the transaction was a contract creation, otherwise None.
+  * @param logs
+  *   Array - Array of log objects, which this transaction generated.
+  * @param logsBloom
+  *   DATA, 256 Bytes - Bloom filter for light clients to quickly retrieve related logs.
+  * @param root
+  *   DATA 32 bytes of post-transaction stateroot (pre Byzantium, otherwise None)
+  * @param status
+  *   QUANTITY either 1 (success) or 0 (failure) (post Byzantium, otherwise None)
   */
 case class TransactionReceiptResponse(
     transactionHash: ByteString,
@@ -60,7 +73,7 @@ object TransactionReceiptResponse {
       gasUsedByTransaction: BigInt
   ): TransactionReceiptResponse = {
     val contractAddress = if (stx.tx.isContractInit) {
-      //do not subtract 1 from nonce because in transaction we have nonce of account before transaction execution
+      // do not subtract 1 from nonce because in transaction we have nonce of account before transaction execution
       val hash = kec256(rlp.encode(RLPList(signedTransactionSender.bytes, UInt256(stx.tx.nonce).toRLPEncodable)))
       Some(Address(hash))
     } else {

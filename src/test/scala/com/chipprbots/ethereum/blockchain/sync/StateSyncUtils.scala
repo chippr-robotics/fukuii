@@ -45,7 +45,7 @@ object StateSyncUtils extends EphemBlockchainTestSetup {
       val init = InMemoryWorldStateProxy(
         evmCodeStorage,
         blockchain.getBackingMptStorage(1),
-        ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+        (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
         blockchainConfig.accountStartNonce,
         existingTree.getOrElse(ByteString(MerklePatriciaTrie.EmptyRootHash)),
         noEmptyAccounts = true,

@@ -13,8 +13,7 @@ object Memory {
   private def zeros(size: Int): ByteString = ByteString(Array.fill[Byte](size)(0))
 }
 
-/** Volatile memory with 256 bit address space.
-  * Every mutating operation on a Memory returns a new updated copy of it.
+/** Volatile memory with 256 bit address space. Every mutating operation on a Memory returns a new updated copy of it.
   *
   * Related reading:
   * https://solidity.readthedocs.io/en/latest/frequently-asked-questions.html#what-is-the-memory-keyword-what-does-it-do
@@ -30,9 +29,8 @@ class Memory private (private val underlying: ByteString) {
 
   def store(offset: UInt256, bytes: Array[Byte]): Memory = store(offset, ByteString(bytes))
 
-  /** Stores data at the given offset.
-    * The memory is automatically expanded to accommodate new data - filling empty regions with zeroes if necessary -
-    * hence an OOM error may be thrown.
+  /** Stores data at the given offset. The memory is automatically expanded to accommodate new data - filling empty
+    * regions with zeroes if necessary - hence an OOM error may be thrown.
     */
   def store(offset: UInt256, data: ByteString): Memory = {
     val idx: Int = offset.toInt
@@ -78,9 +76,8 @@ class Memory private (private val underlying: ByteString) {
 
   def load(offset: UInt256, size: UInt256): (ByteString, Memory) = doLoad(offset, size.toInt)
 
-  /** Returns a ByteString of a given size starting at the given offset of the Memory.
-    * The memory is automatically expanded (with zeroes) when reading previously uninitialised regions,
-    * hence an OOM error may be thrown.
+  /** Returns a ByteString of a given size starting at the given offset of the Memory. The memory is automatically
+    * expanded (with zeroes) when reading previously uninitialised regions, hence an OOM error may be thrown.
     */
   private def doLoad(offset: UInt256, size: Int): (ByteString, Memory) =
     if (size <= 0)
@@ -98,10 +95,9 @@ class Memory private (private val underlying: ByteString) {
       (newUnderlying.slice(start, end), new Memory(newUnderlying))
     }
 
-  /** This function will expand the Memory size as if storing data given the `offset` and `size`.
-    * If the memory is already initialised at that region it will not be modified, otherwise it will be filled with
-    * zeroes.
-    * This is required to satisfy memory expansion semantics for *CALL* opcodes.
+  /** This function will expand the Memory size as if storing data given the `offset` and `size`. If the memory is
+    * already initialised at that region it will not be modified, otherwise it will be filled with zeroes. This is
+    * required to satisfy memory expansion semantics for *CALL* opcodes.
     */
   def expand(offset: UInt256, size: UInt256): Memory = {
     val totalSize = (offset + size).toInt
@@ -113,7 +109,8 @@ class Memory private (private val underlying: ByteString) {
     }
   }
 
-  /** @return memory size in bytes
+  /** @return
+    *   memory size in bytes
     */
   def size: Int = underlying.size
 

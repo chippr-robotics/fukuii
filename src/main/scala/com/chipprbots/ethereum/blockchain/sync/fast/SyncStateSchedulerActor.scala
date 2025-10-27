@@ -132,7 +132,7 @@ class SyncStateSchedulerActor(
   ): Unit = {
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
-    //TODO handle case when we already have root i.e state is synced up to this point
+    // TODO handle case when we already have root i.e state is synced up to this point
     val initState = sync.initState(root).get
     context.become(
       syncing(

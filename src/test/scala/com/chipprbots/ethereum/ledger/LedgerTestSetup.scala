@@ -48,14 +48,14 @@ import com.chipprbots.ethereum.vm.ProgramResult
 
 // scalastyle:off magic.number
 trait TestSetup extends SecureRandomBuilder with EphemBlockchainTestSetup {
-  //+ cake overrides
+  // + cake overrides
 
   val prep: BlockPreparator = mining.blockPreparator
-  //- cake overrides
+  // - cake overrides
 
   val originKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
   val receiverKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
-  //byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
+  // byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
   val originAddress: Address = Address(
     kec256(originKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail)
   )
@@ -104,7 +104,7 @@ trait TestSetup extends SecureRandomBuilder with EphemBlockchainTestSetup {
   val emptyWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
     storagesInstance.storages.evmCodeStorage,
     blockchain.getBackingMptStorage(-1),
-    ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+    (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
     UInt256.Zero,
     ByteString(MerklePatriciaTrie.EmptyRootHash),
     noEmptyAccounts = false,
@@ -158,7 +158,7 @@ trait TestSetup extends SecureRandomBuilder with EphemBlockchainTestSetup {
     val initialWorld = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       blockchain.getBackingMptStorage(-1),
-      ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       UInt256.Zero,
       stateRootHash,
       noEmptyAccounts = false,
@@ -278,12 +278,12 @@ trait BinarySimulationChopSetup {
 }
 
 trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
-  //+ cake overrides
+  // + cake overrides
   override lazy val vm: VMImpl = new VMImpl
 
   // Make type more specific
   override lazy val mining: TestMining = buildTestMining()
-  //- cake overrides
+  // - cake overrides
 
   val blockQueue: BlockQueue
 
@@ -399,7 +399,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
           val emptyWorld = InMemoryWorldStateProxy(
             storagesInstance.storages.evmCodeStorage,
             blockchain.getBackingMptStorage(-1),
-            ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+            (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
             blockchainConfig.accountStartNonce,
             ByteString(MerklePatriciaTrie.EmptyRootHash),
             noEmptyAccounts = false,
@@ -420,13 +420,13 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
 }
 
 trait MockBlockchain extends MockFactory { self: TestSetupWithVmAndValidators =>
-  //+ cake overrides
+  // + cake overrides
 
   override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
   override lazy val blockchainWriter: BlockchainWriter = mock[BlockchainWriter]
   (blockchainReader.getBestBranch _).expects().anyNumberOfTimes().returning(EmptyBranch)
   override lazy val blockchain: BlockchainImpl = mock[BlockchainImpl]
-  //- cake overrides
+  // - cake overrides
 
   override lazy val blockQueue: BlockQueue = mock[BlockQueue]
 

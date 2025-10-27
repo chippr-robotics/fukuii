@@ -22,17 +22,20 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHash
 // scalastyle:off number.of.methods
 /** State used by the BlockFetcher
   *
-  * @param importer the BlockImporter actor reference
+  * @param importer
+  *   the BlockImporter actor reference
   * @param readyBlocks
   * @param waitingHeaders
-  * @param fetchingHeadersState the current state of the headers fetching, whether we
-  *                             - haven't fetched any yet
-  *                             - are awaiting a response
-  *                             - are awaiting a response but it should be ignored due to blocks being invalidated
-  * @param fetchingBodiesState the current state of the bodies fetching, whether we
-  *                             - haven't fetched any yet
-  *                             - are awaiting a response
-  *                             - are awaiting a response but it should be ignored due to blocks being invalidated
+  * @param fetchingHeadersState
+  *   the current state of the headers fetching, whether we
+  *   - haven't fetched any yet
+  *   - are awaiting a response
+  *   - are awaiting a response but it should be ignored due to blocks being invalidated
+  * @param fetchingBodiesState
+  *   the current state of the bodies fetching, whether we
+  *   - haven't fetched any yet
+  *   - are awaiting a response
+  *   - are awaiting a response but it should be ignored due to blocks being invalidated
   * @param lastBlock
   * @param knownTop
   * @param blockProviders
@@ -65,10 +68,10 @@ case class BlockFetcherState(
       .orElse(waitingHeaders.headOption.map(_.number))
       .getOrElse(lastBlock)
 
-  /** Next block number to be fetched, calculated in a way to maintain local queues consistency,
-    * even if `lastBlock` property is much higher - it's more important to have this consistency
-    * here and allow standard rollback/reorganization mechanisms to kick in if we get too far with mining,
-    * therefore `lastBlock` is used here only if blocks and headers queues are empty
+  /** Next block number to be fetched, calculated in a way to maintain local queues consistency, even if `lastBlock`
+    * property is much higher - it's more important to have this consistency here and allow standard
+    * rollback/reorganization mechanisms to kick in if we get too far with mining, therefore `lastBlock` is used here
+    * only if blocks and headers queues are empty
     */
   def nextBlockToFetch: BigInt = waitingHeaders.lastOption
     .map(_.number)
@@ -117,9 +120,9 @@ case class BlockFetcherState(
         }
       )
 
-  /** When bodies are requested, the response don't need to be a complete sub chain,
-    * even more, we could receive an empty chain and that will be considered valid. Here we just
-    * validate that the received bodies corresponds to an ordered subset of the requested headers.
+  /** When bodies are requested, the response don't need to be a complete sub chain, even more, we could receive an
+    * empty chain and that will be considered valid. Here we just validate that the received bodies corresponds to an
+    * ordered subset of the requested headers.
     */
   def validateBodies(receivedBodies: Seq[BlockBody]): Either[BlacklistReason, Seq[Block]] =
     bodiesAreOrderedSubsetOfRequested(waitingHeaders.toList, receivedBodies)
@@ -145,8 +148,8 @@ case class BlockFetcherState(
 
   /** If blocks is empty collection - headers in queue are removed as the cause is:
     *   - the headers are from rejected fork and therefore it won't be possible to resolve blocks for them
-    *   - given peer is still syncing (quite unlikely due to preference of peers with best total difficulty
-    *     when making a request)
+    *   - given peer is still syncing (quite unlikely due to preference of peers with best total difficulty when making
+    *     a request)
     */
   def handleRequestedBlocks(blocks: Seq[Block], fromPeer: PeerId): BlockFetcherState =
     if (blocks.isEmpty)
@@ -158,8 +161,8 @@ case class BlockFetcherState(
         state.enqueueRequestedBlock(block, fromPeer)
       }
 
-  /** If the requested block is not the next in the line in the waiting headers queue,
-    * we opt for not adding it in the ready blocks queue.
+  /** If the requested block is not the next in the line in the waiting headers queue, we opt for not adding it in the
+    * ready blocks queue.
     */
   def enqueueRequestedBlock(block: Block, fromPeer: PeerId): BlockFetcherState =
     waitingHeaders.dequeueOption
@@ -188,8 +191,8 @@ case class BlockFetcherState(
     }
 
   /** Returns all the ready blocks but only if it includes blocks with number:
-    * - lower = min(from, atLeastWith)
-    * - upper = max(from, atLeastWith)
+    *   - lower = min(from, atLeastWith)
+    *   - upper = max(from, atLeastWith)
     */
   def strictPickBlocks(from: BigInt, atLeastWith: BigInt): Option[(NonEmptyList[Block], BlockFetcherState)] = {
     val lower = from.min(atLeastWith)
@@ -298,8 +301,8 @@ object BlockFetcherState {
   case object NotFetchingHeaders extends FetchingHeadersState
   case object AwaitingHeaders extends FetchingHeadersState
 
-  /** Headers request in progress but will be ignored due to invalidation
-    * State used to keep track of pending request to prevent multiple requests in parallel
+  /** Headers request in progress but will be ignored due to invalidation State used to keep track of pending request to
+    * prevent multiple requests in parallel
     */
   case object AwaitingHeadersToBeIgnored extends FetchingHeadersState
 
@@ -307,8 +310,8 @@ object BlockFetcherState {
   case object NotFetchingBodies extends FetchingBodiesState
   case object AwaitingBodies extends FetchingBodiesState
 
-  /** Bodies request in progress but will be ignored due to invalidation
-    * State used to keep track of pending request to prevent multiple requests in parallel
+  /** Bodies request in progress but will be ignored due to invalidation State used to keep track of pending request to
+    * prevent multiple requests in parallel
     */
   case object AwaitingBodiesToBeIgnored extends FetchingBodiesState
 

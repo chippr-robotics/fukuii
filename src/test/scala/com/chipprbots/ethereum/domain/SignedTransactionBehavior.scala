@@ -23,7 +23,7 @@ trait SignedTransactionBehavior extends Matchers with ScalaCheckPropertyChecks w
       forAll(signedTransactionGenerator, Arbitrary.arbitrary[Unit].map(_ => generateKeyPair(secureRandom))) {
         (tx, key) =>
           val chainId: Byte = 0x3d
-          //byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
+          // byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
           val address = Address(
             crypto
               .kec256(key.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail)

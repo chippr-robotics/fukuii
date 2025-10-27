@@ -237,7 +237,7 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
         storedValue,
         PUSH1,
         storageOffset,
-        SSTORE, //store an arbitrary value
+        SSTORE, // store an arbitrary value
         PUSH1,
         contractCode.size,
         DUP1,

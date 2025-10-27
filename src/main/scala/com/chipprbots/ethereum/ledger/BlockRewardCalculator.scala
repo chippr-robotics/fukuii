@@ -3,7 +3,8 @@ package com.chipprbots.ethereum.ledger
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
 
 /** Calculates rewards for mining blocks and ommers.
-  * https://github.com/ethereumproject/ECIPs/blob/master/ECIPs/ECIP-1039.md completely specifies eventual rounding issues.
+  * https://github.com/ethereumproject/ECIPs/blob/master/ECIPs/ECIP-1039.md completely specifies eventual rounding
+  * issues.
   */
 class BlockRewardCalculator(
     config: MonetaryPolicyConfig,
@@ -35,30 +36,28 @@ class BlockRewardCalculator(
   /** Reward to the block miner for inclusion of ommers as a fraction of block reward (denominator) */
   val ommerInclusionRewardDenom: BigInt = 32
 
-  /** Reward to the miner of an included ommer as a fraction of block reward (numerator).
-    * For era 2+
+  /** Reward to the miner of an included ommer as a fraction of block reward (numerator). For era 2+
     */
   val ommerMiningRewardNumer: BigInt = 1
 
-  /** Reward to the miner of an included ommer as a fraction of block reward (denominator).
-    * For era 2+
+  /** Reward to the miner of an included ommer as a fraction of block reward (denominator). For era 2+
     */
   val ommerMiningRewardDenom: BigInt = 32
 
-  /** Reward to the miner of an included ommer as a fraction of block reward (max numerator).
-    * Different in the first era
+  /** Reward to the miner of an included ommer as a fraction of block reward (max numerator). Different in the first era
     */
   val firstEraOmmerMiningRewardMaxNumer: BigInt = 7
 
-  /** Reward to the miner of an included ommer as a fraction of block reward (denominator).
-    * Different in the first era
+  /** Reward to the miner of an included ommer as a fraction of block reward (denominator). Different in the first era
     */
   val firstEraOmmerMiningRewardDenom: BigInt = 8
 
   /** Calculates the miner reward for the block, that is, without considering the ommers included
     *
-    * @param blockNumber of the mined block
-    * @return miner reward for the block
+    * @param blockNumber
+    *   of the mined block
+    * @return
+    *   miner reward for the block
     */
   def calculateMiningRewardForBlock(blockNumber: BigInt): BigInt = {
     val era = eraNumber(blockNumber)
@@ -69,18 +68,24 @@ class BlockRewardCalculator(
 
   /** Calculates the miner reward for the ommers included on the block
     *
-    * @param blockNumber of the mined block
-    * @param ommersCount the number of ommers on the block
-    * @return miner reward for the block ommers
+    * @param blockNumber
+    *   of the mined block
+    * @param ommersCount
+    *   the number of ommers on the block
+    * @return
+    *   miner reward for the block ommers
     */
   def calculateMiningRewardForOmmers(blockNumber: BigInt, ommersCount: Int): BigInt =
     calculateMiningRewardPerOmmer(blockNumber) * ommersCount
 
   /** Calculates the ommers reward for the ommers included on the block
     *
-    * @param blockNumber of the mined block
-    * @param ommerNumber the block number of the ommer
-    * @return ommer reward
+    * @param blockNumber
+    *   of the mined block
+    * @param ommerNumber
+    *   the block number of the ommer
+    * @return
+    *   ommer reward
     */
   def calculateOmmerRewardForInclusion(blockNumber: BigInt, ommerNumber: BigInt): BigInt = {
     val era = eraNumber(blockNumber)
@@ -94,8 +99,10 @@ class BlockRewardCalculator(
 
   /** Calculates reward given to the miner for each ommer included in the block
     *
-    * @param blockNumber mined block
-    * @return reward given to the miner for each ommer included
+    * @param blockNumber
+    *   mined block
+    * @return
+    *   reward given to the miner for each ommer included
     */
   private def calculateMiningRewardPerOmmer(blockNumber: BigInt): BigInt =
     calculateMiningRewardForBlock(blockNumber) * ommerInclusionRewardNumer / ommerInclusionRewardDenom

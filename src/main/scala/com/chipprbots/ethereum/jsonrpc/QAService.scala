@@ -37,8 +37,10 @@ class QAService(
 
   /** qa_mineBlocks that instructs mocked miner to mine given number of blocks
     *
-    * @param req with requested block's data
-    * @return nothing
+    * @param req
+    *   with requested block's data
+    * @return
+    *   nothing
     */
   def mineBlocks(req: MineBlocksRequest): ServiceResponse[MineBlocksResponse] =
     mining

@@ -173,10 +173,14 @@ case class EvmConfig(
 
   /** Calculate gas cost of memory usage. Incur a blocking gas cost if memory usage exceeds reasonable limits.
     *
-    * @param memSize  current memory size in bytes
-    * @param offset   memory offset to be written/read
-    * @param dataSize size of data to be written/read in bytes
-    * @return gas cost
+    * @param memSize
+    *   current memory size in bytes
+    * @param offset
+    *   memory offset to be written/read
+    * @param dataSize
+    *   size of data to be written/read in bytes
+    * @return
+    *   gas cost
     */
   def calcMemCost(memSize: BigInt, offset: BigInt, dataSize: BigInt): BigInt = {
 
@@ -218,8 +222,10 @@ case class EvmConfig(
   /** If the initialization code completes successfully, a final contract-creation cost is paid, the code-deposit cost,
     * proportional to the size of the created contract’s code. See YP equation (96)
     *
-    * @param executionResultData Transaction code initialization result
-    * @return Calculated gas cost
+    * @param executionResultData
+    *   Transaction code initialization result
+    * @return
+    *   Calculated gas cost
     */
   def calcCodeDepositCost(executionResultData: ByteString): BigInt =
     G_codedeposit * executionResultData.size

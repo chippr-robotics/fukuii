@@ -517,7 +517,7 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
       val blockReward: BigInt =
         mining.blockPreparator.blockRewardCalculator.calculateMiningReward(validBlockHeader.number, 0)
 
-      val changes = Seq(minerAddress -> UpdateBalance(UInt256(blockReward))) //Paying miner for block processing
+      val changes = Seq(minerAddress -> UpdateBalance(UInt256(blockReward))) // Paying miner for block processing
       val correctStateRoot: ByteString = applyChanges(validBlockParentHeader.stateRoot, changes)
 
       val correctGasUsed: BigInt = 0

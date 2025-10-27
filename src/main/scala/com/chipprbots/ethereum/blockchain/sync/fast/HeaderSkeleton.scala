@@ -4,36 +4,33 @@ import com.chipprbots.ethereum.blockchain.sync.fast.HeaderSkeleton._
 import com.chipprbots.ethereum.domain.BlockHeader
 
 /** This class contains the state of the current skeleton being downloaded. This state is represented as the downloaded
-  * skeleton headers plus the downloaded batches.
-  * A skeleton of block headers consists of `limit` headers, separated by `gapSize` blocks in between.
-  * A batch of blocks is a sequence of `gapSize + 1` block headers starting one block after the previous skeleton
-  * header up to the next skeleton header inclusive.
-  * When a batch of headers is downloaded, it is checked against the current skeleton and if it is correct, we save it
-  * into the state.
-  * When all batches filling the gaps are downloaded, this skeleton is considered full and the `fullChain` can be
-  * requested.
+  * skeleton headers plus the downloaded batches. A skeleton of block headers consists of `limit` headers, separated by
+  * `gapSize` blocks in between. A batch of blocks is a sequence of `gapSize + 1` block headers starting one block after
+  * the previous skeleton header up to the next skeleton header inclusive. When a batch of headers is downloaded, it is
+  * checked against the current skeleton and if it is correct, we save it into the state. When all batches filling the
+  * gaps are downloaded, this skeleton is considered full and the `fullChain` can be requested.
   *
-  * Example:
-  * Given from = 0, to = 10, maxSkeletonHeaders = 3
-  * Then:
-  * - firstSkeletonHeaderNumber = 2
-  * - gapSize = 2
-  * - batchSize = 3
-  * - skeletonHeaderNumbers = Seq(2, 5, 8)
-  * - batchStartingHeaderNumbers = Seq(0, 3, 6)
+  * Example: Given from = 0, to = 10, maxSkeletonHeaders = 3 Then:
+  *   - firstSkeletonHeaderNumber = 2
+  *   - gapSize = 2
+  *   - batchSize = 3
+  *   - skeletonHeaderNumbers = Seq(2, 5, 8)
+  *   - batchStartingHeaderNumbers = Seq(0, 3, 6)
   *
-  *         batch                    gap                          batch
-  *  /-------------------\      /-----------\              /------------------\
-  *   0        1        2        3        4        5        6        7       8        9         10
-  *   |                 |                          |                         |                  |
-  * from          1stSkeletonHeader          2ndSkeletonHeader       lastSkeletonHeader         to
+  * batch gap batch /-------------------\ /-----------\ /------------------\ 0 1 2 3 4 5 6 7 8 9 10 \| | | | | from
+  * 1stSkeletonHeader 2ndSkeletonHeader lastSkeletonHeader to
   *
-  * @param from Lower bound for this skeleton, inclusive
-  * @param to Upper bound for this skeleton, inclusive
-  * @param maxSkeletonHeaders Maximum number of skeleton headers
-  * @param skeletonHeaders The currently downloaded skeleton headers. May be empty if none were downloaded. This is set
-  *                        by using `setSkeletonHeaders`
-  * @param batches The currently downloaded batches. This is filled in by using `addBatch`
+  * @param from
+  *   Lower bound for this skeleton, inclusive
+  * @param to
+  *   Upper bound for this skeleton, inclusive
+  * @param maxSkeletonHeaders
+  *   Maximum number of skeleton headers
+  * @param skeletonHeaders
+  *   The currently downloaded skeleton headers. May be empty if none were downloaded. This is set by using
+  *   `setSkeletonHeaders`
+  * @param batches
+  *   The currently downloaded batches. This is filled in by using `addBatch`
   */
 final case class HeaderSkeleton(
     from: BigInt,
@@ -57,7 +54,8 @@ final case class HeaderSkeleton(
     */
   val firstSkeletonHeaderNumber: BigInt = from + gapSize
 
-  /** Maximum number of blocks to be downloaded at once. This is the total number of skeleton headers that the skeleton contains.
+  /** Maximum number of blocks to be downloaded at once. This is the total number of skeleton headers that the skeleton
+    * contains.
     */
   val limit: BigInt = {
     val remainingSkeletonHeaders = remainingBlocks / batchSize
@@ -76,8 +74,10 @@ final case class HeaderSkeleton(
     } yield copy(skeletonHeaders = headers)
 
   /** Use this method to update this state with the downloaded skeleton
-    * @param headers The downloaded skeleton
-    * @return Either the updated structure if the validation succeeded or an error
+    * @param headers
+    *   The downloaded skeleton
+    * @return
+    *   Either the updated structure if the validation succeeded or an error
     */
   def setSkeletonHeaders(headers: Seq[BlockHeader]): Either[HeaderSkeletonError, HeaderSkeleton] =
     for {
@@ -101,8 +101,10 @@ final case class HeaderSkeleton(
   val batchStartingHeaderNumbers: Seq[BigInt] = from +: skeletonHeaderNumbers.dropRight(1).map(_ + 1)
 
   /** Use this method to update this state with a downloaded batch of headers
-    * @param batchHeaders The downloaded batch of headers
-    * @return Either the updated structure if the validation succeeded or an error
+    * @param batchHeaders
+    *   The downloaded batch of headers
+    * @return
+    *   Either the updated structure if the validation succeeded or an error
     */
   def addBatch(batchHeaders: Seq[BlockHeader]): Either[HeaderSkeletonError, HeaderSkeleton] =
     for {

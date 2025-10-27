@@ -18,8 +18,10 @@ object StdBlockValidator extends BlockValidator {
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.transactionsRoot]] matches [[BlockBody.transactionList]]
     * based on validations stated in section 4.4.2 of http://paper.gavwood.com/
     *
-    * @param block Block to validate
-    * @return Block if valid, a Some otherwise
+    * @param block
+    *   Block to validate
+    * @return
+    *   Block if valid, a Some otherwise
     */
   private def validateTransactionRoot(block: Block): Either[BlockError, BlockValid] = {
     val isValid = MptListValidator.isValid[SignedTransaction](
@@ -31,11 +33,13 @@ object StdBlockValidator extends BlockValidator {
     else Left(BlockTransactionsHashError)
   }
 
-  /** Validates [[BlockBody.uncleNodesList]] against [[com.chipprbots.ethereum.domain.BlockHeader.ommersHash]]
-    * based on validations stated in section 4.4.2 of http://paper.gavwood.com/
+  /** Validates [[BlockBody.uncleNodesList]] against [[com.chipprbots.ethereum.domain.BlockHeader.ommersHash]] based on
+    * validations stated in section 4.4.2 of http://paper.gavwood.com/
     *
-    * @param block Block to validate
-    * @return Block if valid, a Some otherwise
+    * @param block
+    *   Block to validate
+    * @return
+    *   Block if valid, a Some otherwise
     */
   private def validateOmmersHash(block: Block): Either[BlockError, BlockValid] = {
     val encodedOmmers: Array[Byte] = block.body.uncleNodesList.toBytes
@@ -43,11 +47,13 @@ object StdBlockValidator extends BlockValidator {
     else Left(BlockOmmersHashError)
   }
 
-  /** Validates [[Receipt]] against [[com.chipprbots.ethereum.domain.BlockHeader.receiptsRoot]]
-    * based on validations stated in section 4.4.2 of http://paper.gavwood.com/
+  /** Validates [[Receipt]] against [[com.chipprbots.ethereum.domain.BlockHeader.receiptsRoot]] based on validations
+    * stated in section 4.4.2 of http://paper.gavwood.com/
     *
-    * @param blockHeader    Block header to validate
-    * @param receipts Receipts to use
+    * @param blockHeader
+    *   Block header to validate
+    * @param receipts
+    *   Receipts to use
     * @return
     */
   private def validateReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]): Either[BlockError, BlockValid] = {
@@ -58,11 +64,13 @@ object StdBlockValidator extends BlockValidator {
     else Left(BlockReceiptsHashError)
   }
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.logsBloom]] against [[Receipt.logsBloomFilter]]
-    * based on validations stated in section 4.4.2 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.logsBloom]] against [[Receipt.logsBloomFilter]] based on
+    * validations stated in section 4.4.2 of http://paper.gavwood.com/
     *
-    * @param blockHeader  Block header to validate
-    * @param receipts     Receipts to use
+    * @param blockHeader
+    *   Block header to validate
+    * @param receipts
+    *   Receipts to use
     * @return
     */
   private def validateLogBloom(blockHeader: BlockHeader, receipts: Seq[Receipt]): Either[BlockError, BlockValid] = {
@@ -75,16 +83,20 @@ object StdBlockValidator extends BlockValidator {
 
   /** Validates that the block body does not contain transactions
     *
-    * @param blockBody BlockBody to validate
-    * @return BlockValid if there are no transactions, error otherwise
+    * @param blockBody
+    *   BlockBody to validate
+    * @return
+    *   BlockValid if there are no transactions, error otherwise
     */
   private def validateNoTransactions(blockBody: BlockBody): Either[BlockError, BlockValid] =
     Either.cond(blockBody.transactionList.isEmpty, BlockValid, CheckpointBlockTransactionsNotEmptyError)
 
   /** Validates that the block body does not contain ommers
     *
-    * @param blockBody BlockBody to validate
-    * @return BlockValid if there are no ommers, error otherwise
+    * @param blockBody
+    *   BlockBody to validate
+    * @return
+    *   BlockValid if there are no ommers, error otherwise
     */
   private def validateNoOmmers(blockBody: BlockBody): Either[BlockError, BlockValid] =
     Either.cond(blockBody.uncleNodesList.isEmpty, BlockValid, CheckpointBlockOmmersNotEmptyError)
@@ -93,8 +105,10 @@ object StdBlockValidator extends BlockValidator {
     *   - no transactions in the body
     *   - no ommers in the body
     *
-    * @param blockBody BlockBody to validate
-    * @return The BlockValid if validations are ok, BlockError otherwise
+    * @param blockBody
+    *   BlockBody to validate
+    * @return
+    *   The BlockValid if validations are ok, BlockError otherwise
     */
   private def validateBlockWithCheckpoint(blockBody: BlockBody): Either[BlockError, BlockValid] =
     for {
@@ -102,13 +116,15 @@ object StdBlockValidator extends BlockValidator {
       _ <- validateNoOmmers(blockBody)
     } yield BlockValid
 
-  /** This method allows validate a regular Block. It only performs the following validations (stated on
-    * section 4.4.2 of http://paper.gavwood.com/):
+  /** This method allows validate a regular Block. It only performs the following validations (stated on section 4.4.2
+    * of http://paper.gavwood.com/):
     *   - BlockValidator.validateTransactionRoot
     *   - BlockValidator.validateOmmersHash
     *
-    * @param block Block to validate
-    * @return The BlockValid if validations are ok, BlockError otherwise
+    * @param block
+    *   Block to validate
+    * @return
+    *   The BlockValid if validations are ok, BlockError otherwise
     */
   private def validateRegularBlock(block: Block): Either[BlockError, BlockValid] =
     for {
@@ -116,15 +132,18 @@ object StdBlockValidator extends BlockValidator {
       _ <- validateOmmersHash(block)
     } yield BlockValid
 
-  /** This method allows validate a Block. It only perfoms the following validations (stated on
-    * section 4.4.2 of http://paper.gavwood.com/):
+  /** This method allows validate a Block. It only perfoms the following validations (stated on section 4.4.2 of
+    * http://paper.gavwood.com/):
     *   - validate regular block or block with checkpoint
     *   - BlockValidator.validateReceipts
     *   - BlockValidator.validateLogBloom
     *
-    * @param block    Block to validate
-    * @param receipts Receipts to be in validation process
-    * @return The block if validations are ok, error otherwise
+    * @param block
+    *   Block to validate
+    * @param receipts
+    *   Receipts to be in validation process
+    * @return
+    *   The block if validations are ok, error otherwise
     */
   def validate(block: Block, receipts: Seq[Receipt]): Either[BlockError, BlockValid] =
     for {
@@ -134,9 +153,12 @@ object StdBlockValidator extends BlockValidator {
 
   /** This method allows validate that a BlockHeader matches a BlockBody.
     *
-    * @param blockHeader to validate
-    * @param blockBody to validate
-    * @return The block if the header matched the body, error otherwise
+    * @param blockHeader
+    *   to validate
+    * @param blockBody
+    *   to validate
+    * @return
+    *   The block if the header matched the body, error otherwise
     */
   def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody): Either[BlockError, BlockValid] = {
     val block = Block(blockHeader, blockBody)
@@ -144,14 +166,17 @@ object StdBlockValidator extends BlockValidator {
     else validateRegularBlock(block)
   }
 
-  /** This method allows validations of the block with its associated receipts.
-    * It only perfoms the following validations (stated on section 4.4.2 of http://paper.gavwood.com/):
+  /** This method allows validations of the block with its associated receipts. It only perfoms the following
+    * validations (stated on section 4.4.2 of http://paper.gavwood.com/):
     *   - BlockValidator.validateReceipts
     *   - BlockValidator.validateLogBloom
     *
-    * @param blockHeader    Block header to validate
-    * @param receipts Receipts to be in validation process
-    * @return The block if validations are ok, error otherwise
+    * @param blockHeader
+    *   Block header to validate
+    * @param receipts
+    *   Receipts to be in validation process
+    * @return
+    *   The block if validations are ok, error otherwise
     */
   def validateBlockAndReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]): Either[BlockError, BlockValid] =
     for {

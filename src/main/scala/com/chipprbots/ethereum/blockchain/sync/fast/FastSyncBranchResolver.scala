@@ -33,8 +33,8 @@ trait FastSyncBranchResolver {
 
 object FastSyncBranchResolver {
 
-  /** Stores the current search state for binary search.
-    * Meaning we know the first common block lies between minBlockNumber and maxBlockNumber.
+  /** Stores the current search state for binary search. Meaning we know the first common block lies between
+    * minBlockNumber and maxBlockNumber.
     */
   final case class SearchState(minBlockNumber: BigInt, maxBlockNumber: BigInt, masterPeer: Peer)
 
@@ -42,12 +42,13 @@ object FastSyncBranchResolver {
   def childOf(blockHeaderNumber: BigInt): BigInt = blockHeaderNumber + 1
 }
 
-/** Attempt to find last common block within recent blocks by looking for a parent/child
-  * relationship between our block headers and remote peer's block headers.
+/** Attempt to find last common block within recent blocks by looking for a parent/child relationship between our block
+  * headers and remote peer's block headers.
   */
 class RecentBlocksSearch(blockchainReader: BlockchainReader) {
 
-  /** Find the highest common block by trying to find a block so that our block n is the parent of remote candidate block n + 1
+  /** Find the highest common block by trying to find a block so that our block n is the parent of remote candidate
+    * block n + 1
     */
   def getHighestCommonBlock(
       candidateHeaders: Seq[BlockHeader],
@@ -75,8 +76,7 @@ object BinarySearchSupport extends Logger {
   final case class ContinueBinarySearch(searchState: SearchState) extends BinarySearchResult
   case object NoCommonBlock extends BinarySearchResult
 
-  /** Returns the block number in the middle between min and max.
-    * If there is no middle, it will return the lower value.
+  /** Returns the block number in the middle between min and max. If there is no middle, it will return the lower value.
     *
     * E.g. calling this method with min = 3 and max = 6 will return 4
     */

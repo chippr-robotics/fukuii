@@ -46,7 +46,7 @@ object Blacklist {
     trait RegularSyncBlacklistGroup {
       val group = "RegularSyncBlacklistGroup"
     }
-    //this group is directly translated from WireProtocol
+    // this group is directly translated from WireProtocol
     trait P2PBlacklistGroup {
       val group = "P2PBlacklistGroup"
     }

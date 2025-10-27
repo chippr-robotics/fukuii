@@ -352,7 +352,7 @@ class JsonRpcControllerEthSpec
 
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
-    //on time out it should respond with empty list
+    // on time out it should respond with empty list
 
     val response = result
     response should haveResult(

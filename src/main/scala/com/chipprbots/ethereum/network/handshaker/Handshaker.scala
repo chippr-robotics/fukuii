@@ -16,7 +16,8 @@ trait Handshaker[T <: HandshakeResult] {
 
   /** Obtains the next message to be sent if the handshaking is in progress, or the result of the handshake
     *
-    * @return next message to be sent or the result of the handshake
+    * @return
+    *   next message to be sent or the result of the handshake
     */
   def nextMessage: Either[HandshakeComplete[T], NextMessage] = handshakerState match {
     case inProgressState: InProgressState[T] =>
@@ -29,8 +30,10 @@ trait Handshaker[T <: HandshakeResult] {
 
   /** Processes a received message and obtains a new Handshaker if the handshaker handles the received message
     *
-    * @param receivedMessage, message received and to be processed
-    * @return handshaker after the message was processed or None if it doesn't change
+    * @param receivedMessage,
+    *   message received and to be processed
+    * @return
+    *   handshaker after the message was processed or None if it doesn't change
     */
   def applyMessage(receivedMessage: Message): Option[Handshaker[T]] = handshakerState match {
     case inProgressState: InProgressState[T] =>
@@ -42,8 +45,10 @@ trait Handshaker[T <: HandshakeResult] {
 
   /** Obtains the response to a message if there should be one.
     *
-    * @param receivedMessage, message received and to be optionally responded
-    * @return message to be sent as a response to the received one, if there should be any
+    * @param receivedMessage,
+    *   message received and to be optionally responded
+    * @return
+    *   message to be sent as a response to the received one, if there should be any
     */
   def respondToRequest(receivedMessage: Message): Option[MessageSerializable] = handshakerState match {
     case inProgressState: InProgressState[T] =>
@@ -53,7 +58,8 @@ trait Handshaker[T <: HandshakeResult] {
 
   /** Processes a timeout to the latest message sent and obtains the new Handshaker
     *
-    * @return handshaker after the timeout was processed
+    * @return
+    *   handshaker after the timeout was processed
     */
   def processTimeout: Handshaker[T] = handshakerState match {
     case inProgressState: InProgressState[T] =>
@@ -64,8 +70,10 @@ trait Handshaker[T <: HandshakeResult] {
 
   /** Obtains a Handshaker with the passed state
     *
-    * @param handshakerState, for the new handshaker
-    * @return handshaker with the passed state
+    * @param handshakerState,
+    *   for the new handshaker
+    * @return
+    *   handshaker with the passed state
     */
   protected def copy(handshakerState: HandshakerState[T]): Handshaker[T]
 

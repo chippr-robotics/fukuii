@@ -15,11 +15,12 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationBeforeExecEr
 import com.chipprbots.ethereum.ledger.BlockExecutionSuccess
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-/** Implements validators that adhere to the original [[com.chipprbots.ethereum.consensus.validators.Validators Validators]]
-  * interface.
+/** Implements validators that adhere to the original
+  * [[com.chipprbots.ethereum.consensus.validators.Validators Validators]] interface.
   *
-  * @see [[com.chipprbots.ethereum.consensus.pow.validators.StdValidatorsExecutor StdEthashValidators]]
-  *      for the PoW-specific counterpart.
+  * @see
+  *   [[com.chipprbots.ethereum.consensus.pow.validators.StdValidatorsExecutor StdEthashValidators]] for the
+  *   PoW-specific counterpart.
   */
 final class StdValidators(
     val blockValidator: BlockValidator,
@@ -88,7 +89,7 @@ object StdValidators {
       Left(ValidationAfterExecError(s"Block has invalid gas used, expected ${header.gasUsed} but got $gasUsed"))
     else if (header.stateRoot != stateRootHash)
       Left(ValidationAfterExecError(s"Block has invalid state root hash, expected ${Hex
-        .toHexString(header.stateRoot.toArray)} but got ${Hex.toHexString(stateRootHash.toArray)}"))
+          .toHexString(header.stateRoot.toArray)} but got ${Hex.toHexString(stateRootHash.toArray)}"))
     else {
       blockAndReceiptsValidation match {
         case Left(err) => Left(ValidationAfterExecError(err.toString))

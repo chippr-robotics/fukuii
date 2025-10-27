@@ -21,13 +21,13 @@ import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
 
-/** A standard node is everything Ethereum prescribes except the mining algorithm,
-  * which is plugged in dynamically.
+/** A standard node is everything Ethereum prescribes except the mining algorithm, which is plugged in dynamically.
   *
   * The design is historically related to the initial cake-pattern-based
   * [[com.chipprbots.ethereum.nodebuilder.Node Node]].
   *
-  * @see [[com.chipprbots.ethereum.nodebuilder.Node Node]]
+  * @see
+  *   [[com.chipprbots.ethereum.nodebuilder.Node Node]]
   */
 abstract class BaseNode extends Node {
 
@@ -93,7 +93,7 @@ abstract class BaseNode extends Node {
     maybeJsonRpcHttpServer match {
       case Right(jsonRpcServer) if jsonRpcConfig.httpServerConfig.enabled => jsonRpcServer.run()
       case Left(error) if jsonRpcConfig.httpServerConfig.enabled          => log.error(error)
-      case _                                                              => //Nothing
+      case _                                                              => // Nothing
     }
 
   private[this] def startJsonRpcIpcServer(): Unit =

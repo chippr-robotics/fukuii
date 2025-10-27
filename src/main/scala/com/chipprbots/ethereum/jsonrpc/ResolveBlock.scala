@@ -29,7 +29,7 @@ trait ResolveBlock {
         mining.blockGenerator.getPendingBlockAndState
           .map(pb => ResolvedBlock(pb.pendingBlock.block, pendingState = Some(pb.worldState)))
           .map(Right.apply)
-          .getOrElse(resolveBlock(BlockParam.Latest)) //Default behavior in other clients
+          .getOrElse(resolveBlock(BlockParam.Latest)) // Default behavior in other clients
     }
 
   private def getBlock(number: BigInt): Either[JsonRpcError, Block] =

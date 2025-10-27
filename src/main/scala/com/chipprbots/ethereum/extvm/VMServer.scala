@@ -166,8 +166,8 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
   // scalastyle:on method.length
 
   private def extractWarmAccessList(ald: AccessListData): (Set[Address], Set[(Address, BigInt)]) = {
-    val warmAddresses: Set[Address] = ald.addresses.toSet.map(((bs: GByteString)) => Address(bs: ByteString))
-    val warmStorage: Set[(Address, BigInt)] = ald.storageLocations.toSet.map { ((se: StorageEntry)) =>
+    val warmAddresses: Set[Address] = ald.addresses.toSet.map((bs: GByteString) => Address(bs: ByteString))
+    val warmStorage: Set[(Address, BigInt)] = ald.storageLocations.toSet.map { (se: StorageEntry) =>
       (Address(se.address: ByteString), se.storageLocation: BigInt)
     }
     (warmAddresses, warmStorage)
@@ -221,12 +221,12 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
       istanbulBlockNumber = conf.istanbulBlockNumber,
       maxCodeSize = if (conf.maxCodeSize.isEmpty) None else Some(bigintFromGByteString(conf.maxCodeSize)),
       accountStartNonce = conf.accountStartNonce,
-      atlantisBlockNumber = BigInt(8772000), //TODO include atlantis block number in protobuf
-      aghartaBlockNumber = BigInt(9573000), //TODO include agharta block number in protobuf
+      atlantisBlockNumber = BigInt(8772000), // TODO include atlantis block number in protobuf
+      aghartaBlockNumber = BigInt(9573000), // TODO include agharta block number in protobuf
       petersburgBlockNumber = conf.petersburgBlockNumber,
-      phoenixBlockNumber = BigInt(10500839), //TODO include phoenix block number in protobuf
-      magnetoBlockNumber = BigInt(13189133), //TODO include magneto block number in protobuf
-      berlinBlockNumber = BigInt("1000000000000000000"), //TODO include berlin block number in protobuf
+      phoenixBlockNumber = BigInt(10500839), // TODO include phoenix block number in protobuf
+      magnetoBlockNumber = BigInt(13189133), // TODO include magneto block number in protobuf
+      berlinBlockNumber = BigInt("1000000000000000000"), // TODO include berlin block number in protobuf
       chainId = conf.chainId.byteAt(0)
     )
 }

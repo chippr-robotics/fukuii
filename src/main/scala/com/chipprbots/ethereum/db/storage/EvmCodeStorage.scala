@@ -8,16 +8,14 @@ import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage._
 
-/** This class is used to store the EVM Code, by using:
-  *   Key: hash of the code
-  *   Value: the code
+/** This class is used to store the EVM Code, by using: Key: hash of the code Value: the code
   */
 class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[CodeHash, Code] {
   val namespace: IndexedSeq[Byte] = Namespaces.CodeNamespace
   def keySerializer: CodeHash => IndexedSeq[Byte] = identity
   def keyDeserializer: IndexedSeq[Byte] => CodeHash = k => ByteString.fromArrayUnsafe(k.toArray)
   def valueSerializer: Code => IndexedSeq[Byte] = identity
-  def valueDeserializer: IndexedSeq[Byte] => Code = ((code: IndexedSeq[Byte])) => ByteString(code.toArray)
+  def valueDeserializer: IndexedSeq[Byte] => Code = (code: IndexedSeq[Byte]) => ByteString(code.toArray)
 
   // overriding to avoid going through IndexedSeq[Byte]
   override def storageContent: Observable[Either[IterationError, (CodeHash, Code)]] =

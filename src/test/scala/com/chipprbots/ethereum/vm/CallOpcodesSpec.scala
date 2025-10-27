@@ -40,7 +40,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "should store contract's return data in memory" in {
-      //here the passed data size is equal to the contract's return data size (half of the input data)
+      // here the passed data size is equal to the contract's return data size (half of the input data)
 
       val expectedData = fxt.inputData.take(fxt.inputData.size / 2)
       val actualData = call.stateOut.memory.load(call.outOffset, call.outSize)._1
@@ -172,8 +172,8 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
 
     def callVarMemCost(config: EvmConfig): fxt.ExecuteCall = {
 
-      /** Amount of memory which causes the improper OOG exception, if we don take memcost into account
-        * during calculation of post EIP150 CALLOp gasCap: gasCap(state, gas, gExtra + memCost)
+      /** Amount of memory which causes the improper OOG exception, if we don take memcost into account during
+        * calculation of post EIP150 CALLOp gasCap: gasCap(state, gas, gExtra + memCost)
         */
       val gasFailingBeforeEIP150Fix = 141072
 
@@ -228,7 +228,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "should store contract's return data in memory" in {
-      //here the passed data size is greater than the contract's return data size
+      // here the passed data size is greater than the contract's return data size
 
       val expectedData = fxt.inputData.take(fxt.inputData.size / 2).padTo(call.outSize.toInt, 0)
       val actualData = call.stateOut.memory.load(call.outOffset, call.outSize)._1
@@ -292,7 +292,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "should store contract's return data in memory" in {
-      //here the passed data size is less than the contract's return data size
+      // here the passed data size is less than the contract's return data size
 
       val expectedData = fxt.inputData.take(call.outSize.toInt)
       val actualData = call.stateOut.memory.load(call.outOffset, call.outSize)._1
@@ -692,19 +692,15 @@ class CallOpcodesSpec extends AnyWordSpec with CallOpCodesBehaviors with Matcher
     }
 
     /** This test should result in an OutOfGas error as (following the equations. on the DELEGATECALL opcode in the YP):
-      * DELEGATECALL cost = memoryCost + C_extra + C_gascap
-      * and
-      * memoryCost = 0 (result written were input was)
-      * C_gascap = u_s[0] = UInt256.MaxValue - C_extra + 1
-      * Then
-      * CALL cost = UInt256.MaxValue + 1
-      * As the starting gas (startGas = C_extra - 1) is much lower than the cost this should result in an OutOfGas exception
+      * DELEGATECALL cost = memoryCost + C_extra + C_gascap and memoryCost = 0 (result written were input was) C_gascap
+      * \= u_s[0] = UInt256.MaxValue - C_extra + 1 Then CALL cost = UInt256.MaxValue + 1 As the starting gas (startGas =
+      * C_extra - 1) is much lower than the cost this should result in an OutOfGas exception
       */
     "gas cost bigger than available gas DELEGATECALL" should {
 
       val c_extra = config.feeSchedule.G_call
       val startGas = c_extra - 1
-      val gas = UInt256.MaxValue - c_extra + 1 //u_s[0]
+      val gas = UInt256.MaxValue - c_extra + 1 // u_s[0]
       val context: PC = fxt.context.copy(startGas = startGas)
       val call = fxt.ExecuteCall(
         op = DELEGATECALL,

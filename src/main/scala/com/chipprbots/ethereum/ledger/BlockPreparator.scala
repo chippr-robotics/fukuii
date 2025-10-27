@@ -34,18 +34,17 @@ class BlockPreparator(
 
   /** This function updates the state in order to pay rewards based on YP section 11.3 and with the required
     * modifications due to ECIP1097:
-    *  1. Reward for block is distributed as:
-    *      a. If treasury is disabled or it's has been selfdestructed:
-    *            Pay 100% of it to the miner
-    *      b. If a. isn't true:
-    *            Pay 80% of it to the miner
-    *            Pay 20% of it to the treasury contract
-    *  2. Miner is payed a reward for the inclusion of ommers
-    *  3. Ommers's miners are payed a reward for their inclusion in this block
+    *   1. Reward for block is distributed as:
+    *      a. If treasury is disabled or it's has been selfdestructed: Pay 100% of it to the miner b. If a. isn't true:
+    *         Pay 80% of it to the miner Pay 20% of it to the treasury contract 2. Miner is payed a reward for the
+    *         inclusion of ommers 3. Ommers's miners are payed a reward for their inclusion in this block
     *
-    * @param block the block being processed
-    * @param worldStateProxy the initial state
-    * @return the state after paying the appropriate reward to who corresponds
+    * @param block
+    *   the block being processed
+    * @param worldStateProxy
+    *   the initial state
+    * @return
+    *   the state after paying the appropriate reward to who corresponds
     */
   protected[ledger] def payBlockReward(
       block: Block,
@@ -95,21 +94,25 @@ class BlockPreparator(
 
   /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price). See YP equation number (68)
     *
-    * @param tx Target transaction
-    * @return Upfront cost
+    * @param tx
+    *   Target transaction
+    * @return
+    *   Upfront cost
     */
   private[ledger] def calculateUpfrontGas(tx: Transaction): UInt256 = UInt256(tx.gasLimit * tx.gasPrice)
 
   /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price) + Tv (Tx value). See YP equation number (65)
     *
-    * @param tx Target transaction
-    * @return Upfront cost
+    * @param tx
+    *   Target transaction
+    * @return
+    *   Upfront cost
     */
   private[ledger] def calculateUpfrontCost(tx: Transaction): UInt256 =
     UInt256(calculateUpfrontGas(tx) + tx.value)
 
-  /** Increments account nonce by 1 stated in YP equation (69) and
-    * Pays the upfront Tx gas calculated as TxGasPrice * TxGasLimit from balance. YP equation (68)
+  /** Increments account nonce by 1 stated in YP equation (69) and Pays the upfront Tx gas calculated as TxGasPrice *
+    * TxGasLimit from balance. YP equation (68)
     *
     * @param stx
     * @param worldStateProxy
@@ -135,8 +138,7 @@ class BlockPreparator(
     vm.run(context)
   }
 
-  /** Calculate total gas to be refunded
-    * See YP, eq (72)
+  /** Calculate total gas to be refunded See YP, eq (72)
     */
   private[ledger] def calcTotalGasToRefund(stx: SignedTransaction, result: PR): BigInt =
     result.error.map(_.useWholeGas) match {
@@ -165,37 +167,38 @@ class BlockPreparator(
       if (withTouch) savedWorld.touchAccounts(address) else savedWorld
     }
 
-  /** Delete all accounts (that appear in SUICIDE list). YP eq (78).
-    * The contract storage should be cleared during pruning as nodes could be used in other tries.
-    * The contract code is also not deleted as there can be contracts with the exact same code, making it risky to delete
-    * the code of an account in case it is shared with another one.
-    * FIXME: [EC-242]
-    *   Should we delete the storage associated with the deleted accounts?
-    *   Should we keep track of duplicated contracts for deletion?
+  /** Delete all accounts (that appear in SUICIDE list). YP eq (78). The contract storage should be cleared during
+    * pruning as nodes could be used in other tries. The contract code is also not deleted as there can be contracts
+    * with the exact same code, making it risky to delete the code of an account in case it is shared with another one.
+    * FIXME: [EC-242] Should we delete the storage associated with the deleted accounts? Should we keep track of
+    * duplicated contracts for deletion?
     *
     * @param addressesToDelete
     * @param worldStateProxy
-    * @return a worldState equal worldStateProxy except that the accounts from addressesToDelete are deleted
+    * @return
+    *   a worldState equal worldStateProxy except that the accounts from addressesToDelete are deleted
     */
   private[ledger] def deleteAccounts(addressesToDelete: Set[Address])(
       worldStateProxy: InMemoryWorldStateProxy
   ): InMemoryWorldStateProxy =
     addressesToDelete.foldLeft(worldStateProxy) { case (world, address) => world.deleteAccount(address) }
 
-  /** EIP161 - State trie clearing
-    * Delete all accounts that have been touched (involved in any potentially state-changing operation) during transaction execution.
+  /** EIP161 - State trie clearing Delete all accounts that have been touched (involved in any potentially
+    * state-changing operation) during transaction execution.
     *
-    * All potentially state-changing operation are:
-    * Account is the target or refund of a SUICIDE operation for zero or more value;
-    * Account is the source or destination of a CALL operation or message-call transaction transferring zero or more value;
-    * Account is the source or newly-creation of a CREATE operation or contract-creation transaction endowing zero or more value;
-    * as the block author ("miner") it is recipient of block-rewards or transaction-fees of zero or more.
+    * All potentially state-changing operation are: Account is the target or refund of a SUICIDE operation for zero or
+    * more value; Account is the source or destination of a CALL operation or message-call transaction transferring zero
+    * or more value; Account is the source or newly-creation of a CREATE operation or contract-creation transaction
+    * endowing zero or more value; as the block author ("miner") it is recipient of block-rewards or transaction-fees of
+    * zero or more.
     *
     * Deletion of touched account should be executed immediately following the execution of the suicide list
     *
-    * @param world world after execution of all potentially state-changing operations
-    * @return a worldState equal worldStateProxy except that the accounts touched during execution are deleted and touched
-    *         Set is cleared
+    * @param world
+    *   world after execution of all potentially state-changing operations
+    * @return
+    *   a worldState equal worldStateProxy except that the accounts touched during execution are deleted and touched Set
+    *   is cleared
     */
   private[ledger] def deleteEmptyTouchedAccounts(
       world: InMemoryWorldStateProxy
@@ -226,7 +229,7 @@ class BlockPreparator(
 
     val resultWithErrorHandling: PR =
       if (result.error.isDefined) {
-        //Rollback to the world before transfer was done if an error happened
+        // Rollback to the world before transfer was done if an error happened
         result.copy(world = checkpointWorldState, addressesToDelete = Set.empty, logs = Nil)
       } else
         result
@@ -238,13 +241,13 @@ class BlockPreparator(
     val payMinerForGasFn =
       pay(Address(blockHeader.beneficiary), (executionGasToPayToMiner * gasPrice).toUInt256, withTouch = true) _
 
-    val worldAfterPayments = (refundGasFn.andThen(payMinerForGasFn))(resultWithErrorHandling.world)
+    val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
 
     val deleteAccountsFn = deleteAccounts(resultWithErrorHandling.addressesToDelete) _
     val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts _
     val persistStateFn = InMemoryWorldStateProxy.persistState _
 
-    val world2 = (deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn))(worldAfterPayments)
+    val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterPayments)
 
     log.debug(s"""Transaction ${stx.hash.toHex} execution end. Summary:
          | - Error: ${result.error}.
@@ -257,13 +260,19 @@ class BlockPreparator(
   // scalastyle:off method.length
   /** This functions executes all the signed transactions from a block (till one of those executions fails)
     *
-    * @param signedTransactions from the block that are left to execute
-    * @param world that will be updated by the execution of the signedTransactions
-    * @param blockHeader of the block we are currently executing
-    * @param acumGas, accumulated gas of the previoulsy executed transactions of the same block
-    * @param acumReceipts, accumulated receipts of the previoulsy executed transactions of the same block
-    * @return a BlockResult if the execution of all the transactions in the block was successful or a BlockExecutionError
-    *         if one of them failed
+    * @param signedTransactions
+    *   from the block that are left to execute
+    * @param world
+    *   that will be updated by the execution of the signedTransactions
+    * @param blockHeader
+    *   of the block we are currently executing
+    * @param acumGas,
+    *   accumulated gas of the previoulsy executed transactions of the same block
+    * @param acumReceipts,
+    *   accumulated receipts of the previoulsy executed transactions of the same block
+    * @return
+    *   a BlockResult if the execution of all the transactions in the block was successful or a BlockExecutionError if
+    *   one of them failed
     */
   @tailrec
   final private[ledger] def executeTransactions(
@@ -379,7 +388,7 @@ class BlockPreparator(
         InMemoryWorldStateProxy(
           evmCodeStorage = evmCodeStorage,
           mptStorage = blockchain.getReadOnlyMptStorage(),
-          getBlockHashByNumber = ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+          getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
           accountStartNonce = blockchainConfig.accountStartNonce,
           stateRootHash = parent.stateRoot,
           noEmptyAccounts = EvmConfig.forBlock(block.header.number, blockchainConfig).noEmptyAccounts,

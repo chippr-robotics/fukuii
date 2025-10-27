@@ -27,7 +27,7 @@ package object encoding {
   private val storedNodeEncDec = new RLPDecoder[StoredNode] with RLPEncoder[StoredNode] {
     override def decode(rlp: RLPEncodeable): StoredNode = rlp match {
       case RLPList(nodeEncoded, references, lastUsedByBlock) => StoredNode(nodeEncoded, references, lastUsedByBlock)
-      case _                                                 => throw new RuntimeException("Error when decoding stored node")
+      case _ => throw new RuntimeException("Error when decoding stored node")
     }
 
     override def encode(obj: StoredNode): RLPEncodeable = RLPList(obj.nodeEncoded, obj.references, obj.lastUsedByBlock)

@@ -382,7 +382,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = Config.clientId,
       capabilities = Seq(Capability.ETC64, Capability.ETH63, Capability.ETH64),
-      listenPort = 0, //Local node not listening
+      listenPort = 0, // Local node not listening
       nodeId = ByteString(nodeStatus.nodeId)
     )
 

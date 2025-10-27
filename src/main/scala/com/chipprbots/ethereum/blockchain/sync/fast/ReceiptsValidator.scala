@@ -15,12 +15,15 @@ trait ReceiptsValidator {
   def blockchainReader: BlockchainReader
   def validators: Validators
 
-  /** Validates whether the received receipts match the block headers stored on the blockchain,
-    * returning the valid receipts
+  /** Validates whether the received receipts match the block headers stored on the blockchain, returning the valid
+    * receipts
     *
-    * @param requestedHashes hash of the blocks to which the requested receipts should belong
-    * @param receipts received by the peer
-    * @return the valid receipts or the error encountered while validating them
+    * @param requestedHashes
+    *   hash of the blocks to which the requested receipts should belong
+    * @param receipts
+    *   received by the peer
+    * @return
+    *   the valid receipts or the error encountered while validating them
     */
   def validateReceipts(requestedHashes: Seq[ByteString], receipts: Seq[Seq[Receipt]]): ReceiptsValidationResult = {
     val blockHashesWithReceipts = requestedHashes.zip(receipts)

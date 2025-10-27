@@ -31,7 +31,7 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
       val weightList = Gen.listOf(chainWeightGen).sample.get
       val blockHashesWeightsPairs = weightList.zip(blockHashes)
 
-      //Chain weight of blocks is inserted
+      // Chain weight of blocks is inserted
       val storage = new ChainWeightStorage(EphemDataSource())
       val storageInsertions = blockHashesWeightsPairs.foldLeft(storage.emptyBatchUpdate) {
         case (updates, (td, blockHash)) =>
@@ -39,7 +39,7 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
       }
       storageInsertions.commit()
 
-      //Chain weight of blocks is deleted
+      // Chain weight of blocks is deleted
       val (toDelete, toLeave) = blockHashesWeightsPairs.splitAt(Gen.choose(0, blockHashesWeightsPairs.size).sample.get)
       val storageDeletions = toDelete.foldLeft(storage.emptyBatchUpdate) { case (updates, (_, blockHash)) =>
         updates.and(storage.remove(blockHash))

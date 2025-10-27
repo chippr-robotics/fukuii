@@ -4,9 +4,8 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 
-/** This class is used to store Nodes (defined in mpt/Node.scala), by using:
-  * Key: hash of the RLP encoded node
-  * Value: the RLP encoded node
+/** This class is used to store Nodes (defined in mpt/Node.scala), by using: Key: hash of the RLP encoded node Value:
+  * the RLP encoded node
   */
 class ArchiveNodeStorage(nodeStorage: NodesStorage) extends NodesKeyValueStorage {
 

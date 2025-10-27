@@ -64,8 +64,7 @@ object JsonSerializers {
         )
       )
 
-  /** Specific EthTransactionResponse serializer.
-    * It's purpose is to encode the optional "to" field, as requested by
+  /** Specific EthTransactionResponse serializer. It's purpose is to encode the optional "to" field, as requested by
     * retesteth
     */
   object EthTransactionResponseSerializer

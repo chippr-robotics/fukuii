@@ -28,9 +28,8 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
 
   def toUnsignedBigInt(n: BigInt): BigInt = if (n < 0) n + Modulus else n
 
-  /** For each operation (op) tests check a following property:
-    *   For two BigInts (n1, n2):
-    *   UInt256(n1) op UInt256(n2) == UInt256(n1 op n2)
+  /** For each operation (op) tests check a following property: For two BigInts (n1, n2): UInt256(n1) op UInt256(n2) ==
+    * UInt256(n1 op n2)
     */
   test("&") {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
@@ -69,10 +68,10 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
   }
 
   test("negation") {
-    forAll(bigIntGen) { ((n: BigInt)) =>
+    forAll(bigIntGen) { (n: BigInt) =>
       assert(-UInt256(n) == UInt256(-n))
     }
-    forAll(Table("n", specialNumbers: _*)) { ((n: BigInt)) =>
+    forAll(Table("n", specialNumbers: _*)) { (n: BigInt) =>
       assert(-UInt256(n) == UInt256(-n))
     }
     assert(-UInt256(1) == UInt256(-1))

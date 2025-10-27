@@ -28,11 +28,16 @@ trait Validators {
     *   - Doing BlockValidator.validateBlockReceipts validations involving the receipts
     *   - Validating the resulting gas used
     *
-    * @param block         to validate
-    * @param stateRootHash from the resulting state trie after executing the txs from the block
-    * @param receipts      associated with the execution of each of the tx from the block
-    * @param gasUsed       accumulated gas used for the execution of the txs from the block
-    * @return None if valid else a message with what went wrong
+    * @param block
+    *   to validate
+    * @param stateRootHash
+    *   from the resulting state trie after executing the txs from the block
+    * @param receipts
+    *   associated with the execution of each of the tx from the block
+    * @param gasUsed
+    *   accumulated gas used for the execution of the txs from the block
+    * @return
+    *   None if valid else a message with what went wrong
     */
   def validateBlockAfterExecution(
       block: Block,

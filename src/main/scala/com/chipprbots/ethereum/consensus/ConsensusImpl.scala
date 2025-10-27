@@ -35,18 +35,20 @@ class ConsensusImpl(
 ) extends Consensus
     with Logger {
 
-  /** Try to set the given branch as the new best branch if it is better than the current best
-    * branch.
-    * @param branch                  the new branch as a sorted list of blocks. Its parent must
-    *                                be in the current best branch
-    * @param blockExecutionScheduler threadPool on which the execution should be run
-    * @param blockchainConfig        blockchain configuration
-    * @return One of:
+  /** Try to set the given branch as the new best branch if it is better than the current best branch.
+    * @param branch
+    *   the new branch as a sorted list of blocks. Its parent must be in the current best branch
+    * @param blockExecutionScheduler
+    *   threadPool on which the execution should be run
+    * @param blockchainConfig
+    *   blockchain configuration
+    * @return
+    *   One of:
     *   - [[ExtendedCurrentBestBranch]] - if the branch was added on top of the current branch
-    *   - [[SelectedNewBestBranch]]     - if the chain was reorganized.
-    *   - [[KeptCurrentBestBranch]]     - if the branch was not considered as better than the current branch
-    *   - [[ConsensusError]]            - block failed to execute (when importing to top or reorganising the chain)
-    *   - [[ConsensusErrorDueToMissingNode]]  - block failed to execute (when importing to top or reorganising the chain)
+    *   - [[SelectedNewBestBranch]] - if the chain was reorganized.
+    *   - [[KeptCurrentBestBranch]] - if the branch was not considered as better than the current branch
+    *   - [[ConsensusError]] - block failed to execute (when importing to top or reorganising the chain)
+    *   - [[ConsensusErrorDueToMissingNode]] - block failed to execute (when importing to top or reorganising the chain)
     */
   override def evaluateBranch(
       branch: NonEmptyList[Block]
@@ -234,8 +236,10 @@ class ConsensusImpl(
 
   /** Reverts chain reorganisation in the event that one of the blocks from new branch fails to execute
     *
-    * @param oldBranch      old blocks along with corresponding receipts and totalDifficulties
-    * @param executedBlocks sub-sequence of new branch that was executed correctly
+    * @param oldBranch
+    *   old blocks along with corresponding receipts and totalDifficulties
+    * @param executedBlocks
+    *   sub-sequence of new branch that was executed correctly
     */
   private def revertChainReorganisation(
       oldBranch: List[BlockData],
@@ -259,10 +263,13 @@ class ConsensusImpl(
 
   /** Removes blocks from the [[Blockchain]] along with receipts and total difficulties.
     *
-    * @param parent     remove blocks until this hash (exclusive)
-    * @param fromNumber start removing from this number (downwards)
+    * @param parent
+    *   remove blocks until this hash (exclusive)
+    * @param fromNumber
+    *   start removing from this number (downwards)
     *
-    * @return the list of removed blocks along with receipts and total difficulties
+    * @return
+    *   the list of removed blocks along with receipts and total difficulties
     */
   private def removeBlocksUntil(parent: ByteString, fromNumber: BigInt): List[BlockData] = {
     @tailrec

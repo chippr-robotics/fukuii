@@ -15,9 +15,8 @@ import com.chipprbots.ethereum.extvm.msg.EthereumConfig
 import com.chipprbots.ethereum.extvm.msg.Hello
 import com.chipprbots.ethereum.extvm.msg.VMQuery
 
-/** HIBERNATED: External VM features are currently in hibernation.
-  * These features are experimental and not core to fukuii's functioning.
-  * Tests are ignored to prevent blocking development until the feature is fully developed.
+/** HIBERNATED: External VM features are currently in hibernation. These features are experimental and not core to
+  * fukuii's functioning. Tests are ignored to prevent blocking development until the feature is fully developed.
   */
 @Ignore
 class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {

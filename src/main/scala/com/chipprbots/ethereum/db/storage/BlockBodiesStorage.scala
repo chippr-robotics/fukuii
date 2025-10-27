@@ -12,9 +12,8 @@ import com.chipprbots.ethereum.utils.ByteUtils.byteSequenceToBuffer
 import com.chipprbots.ethereum.utils.ByteUtils.compactPickledBytes
 import com.chipprbots.ethereum.utils.Picklers._
 
-/** This class is used to store the BlockBody, by using:
-  *   Key: hash of the block to which the BlockBody belong
-  *   Value: the block body
+/** This class is used to store the BlockBody, by using: Key: hash of the block to which the BlockBody belong Value: the
+  * block body
   */
 class BlockBodiesStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[BlockBodyHash, BlockBody] {
   import BlockBodiesStorage._

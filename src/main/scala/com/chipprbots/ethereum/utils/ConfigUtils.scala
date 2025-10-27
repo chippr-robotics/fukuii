@@ -33,6 +33,6 @@ object ConfigUtils {
     .entrySet()
     .asScala
     .toSet
-    .flatMap(((entry: Entry[String, ConfigValue])) => entry.getKey.split('.').headOption)
+    .flatMap((entry: Entry[String, ConfigValue]) => entry.getKey.split('.').headOption)
 
 }

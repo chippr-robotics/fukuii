@@ -34,17 +34,19 @@ class BlockQueue(
   private val blocks = new java.util.concurrent.ConcurrentHashMap[ByteString, QueuedBlock].asScala
   private val parentToChildren = new java.util.concurrent.ConcurrentHashMap[ByteString, Set[ByteString]].asScala
 
-  /** Enqueue a block for optional later inclusion into the blockchain.
-    * Queued blocks are stored as trees with bi-directional relations. Therefore when a younger blocks arrives,
-    * for which the total difficulty is known, we can update total difficulties of all its descendants.
+  /** Enqueue a block for optional later inclusion into the blockchain. Queued blocks are stored as trees with
+    * bi-directional relations. Therefore when a younger blocks arrives, for which the total difficulty is known, we can
+    * update total difficulties of all its descendants.
     *
     * The queue is bounded by configured limits in relation to current best block number - i.e. if the block to be
     * enqueued is too far behind or too far ahead the current best block number it will not be added. Also other such
     * blocks, that are already enqueued, will be removed.
     *
-    * @param block the block to be enqueued
-    * @return if the newly enqueued block is part of a known branch (rooted somewhere on the main chain), return
-    *         the leaf hash and its total difficulty, otherwise None
+    * @param block
+    *   the block to be enqueued
+    * @return
+    *   if the newly enqueued block is part of a known branch (rooted somewhere on the main chain), return the leaf hash
+    *   and its total difficulty, otherwise None
     */
   def enqueueBlock(block: Block, bestBlockNumber: BigInt = blockchainReader.getBestBlockNumber()): Option[Leaf] = {
     import block.header._
@@ -93,16 +95,21 @@ class BlockQueue(
     blocks.contains(hash)
 
   /** Returns the weight of the block corresponding to the hash, or None if not found
-    * @param hash the block's hash to get the weight from
-    * @return the weight of the block corresponding to the hash, or None if not found
+    * @param hash
+    *   the block's hash to get the weight from
+    * @return
+    *   the weight of the block corresponding to the hash, or None if not found
     */
   def getChainWeightByHash(hash: ByteString): Option[ChainWeight] =
     blocks.get(hash).flatMap(_.weight)
 
   /** Takes a branch going from descendant block upwards to the oldest ancestor
-    * @param descendant the youngest block to be removed
-    * @param dequeue should the branch be removed from the queue. Shared part of branch won't be removed
-    * @return full branch from oldest ancestor to descendant, even if not all of it is removed
+    * @param descendant
+    *   the youngest block to be removed
+    * @param dequeue
+    *   should the branch be removed from the queue. Shared part of branch won't be removed
+    * @return
+    *   full branch from oldest ancestor to descendant, even if not all of it is removed
     */
   def getBranch(descendant: ByteString, dequeue: Boolean): List[Block] = {
 
@@ -128,7 +135,8 @@ class BlockQueue(
   }
 
   /** Removes a whole subtree begining with the ancestor. To be used when ancestor fails to execute
-    * @param ancestor hash of the ancestor block
+    * @param ancestor
+    *   hash of the ancestor block
     */
   def removeSubtree(ancestor: ByteString): Unit =
     blocks.get(ancestor).foreach { case QueuedBlock(block, _) =>
@@ -146,7 +154,8 @@ class BlockQueue(
   }
 
   /** Removes stale blocks - too old or too young in relation the current best block number
-    * @param bestBlockNumber - best block number of the main chain
+    * @param bestBlockNumber
+    *   \- best block number of the main chain
     */
   private def cleanUp(bestBlockNumber: BigInt): Unit = {
     val staleHashes = blocks.values.collect {
@@ -159,8 +168,10 @@ class BlockQueue(
   }
 
   /** Updates chain weights for a subtree.
-    * @param ancestor An ancestor's hash that determines the subtree
-    * @return Best leaf from the affected subtree
+    * @param ancestor
+    *   An ancestor's hash that determines the subtree
+    * @return
+    *   Best leaf from the affected subtree
     */
   private def updateChainWeights(ancestor: ByteString): Option[Leaf] =
     blocks.get(ancestor).flatMap(_.weight).flatMap { weight =>
@@ -181,8 +192,10 @@ class BlockQueue(
   /** Find a closest (youngest) chained ancestor. Chained means being part of a known chain, thus having total
     * difficulty defined
     *
-    * @param descendant the block we start the search from
-    * @return hash of the ancestor, if found
+    * @param descendant
+    *   the block we start the search from
+    * @return
+    *   hash of the ancestor, if found
     */
   @tailrec
   private def findClosestChainedAncestor(descendant: Block): Option[ByteString] =

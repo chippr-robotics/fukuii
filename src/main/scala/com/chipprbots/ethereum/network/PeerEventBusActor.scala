@@ -21,13 +21,15 @@ object PeerEventBusActor {
 
   /** Handle subscription to the peer event bus via Akka Streams.
     *
-    * @param peerEventBus ref to PeerEventBusActor
-    * @param messageClassifier specify which messages to subscribe to
-    * @return Source that subscribes to the peer event bus on materialization
-    *   and unsubscribes on cancellation. It will complete when the event bus
-    *   actor terminates.
+    * @param peerEventBus
+    *   ref to PeerEventBusActor
+    * @param messageClassifier
+    *   specify which messages to subscribe to
+    * @return
+    *   Source that subscribes to the peer event bus on materialization and unsubscribes on cancellation. It will
+    *   complete when the event bus actor terminates.
     *
-    *   Note:
+    * Note:
     *   - subscription is asynchronous so it may miss messages when starting.
     *   - it does not complete when a specified peerId disconnects.
     */
@@ -88,8 +90,10 @@ object PeerEventBusActor {
     /** Subscribes the subscriber to a requested event
       *
       * @param subscriber
-      * @param to, classifier for the event subscribed
-      * @return true if successful and false if not (because it was already subscribed to that Classifier, or otherwise)
+      * @param to,
+      *   classifier for the event subscribed
+      * @return
+      *   true if successful and false if not (because it was already subscribed to that Classifier, or otherwise)
       */
     override def subscribe(subscriber: ActorRef, to: Classifier): Boolean = to match {
       case msgClassifier: MessageClassifier => subscribeToMessageReceived(subscriber, msgClassifier)
@@ -99,8 +103,10 @@ object PeerEventBusActor {
     /** Unsubscribes the subscriber from a requested event
       *
       * @param subscriber
-      * @param from, classifier for the event to unsubscribe
-      * @return true if successful and false if not (because it wasn't subscribed to that Classifier, or otherwise)
+      * @param from,
+      *   classifier for the event to unsubscribe
+      * @return
+      *   true if successful and false if not (because it wasn't subscribed to that Classifier, or otherwise)
       */
     override def unsubscribe(subscriber: ActorRef, from: Classifier): Boolean = from match {
       case msgClassifier: MessageClassifier => unsubscribeFromMessageReceived(subscriber, msgClassifier)
@@ -146,8 +152,10 @@ object PeerEventBusActor {
     /** Subscribes the subscriber to a requested message received event
       *
       * @param subscriber
-      * @param to, classifier for the message received event subscribed
-      * @return true if successful and false if not (because it was already subscribed to that Classifier, or otherwise)
+      * @param to,
+      *   classifier for the message received event subscribed
+      * @return
+      *   true if successful and false if not (because it was already subscribed to that Classifier, or otherwise)
       */
     private def subscribeToMessageReceived(subscriber: ActorRef, to: MessageClassifier): Boolean = {
       val newSubscriptions = messageSubscriptions.get((subscriber, to.peerSelector)) match {
@@ -165,8 +173,10 @@ object PeerEventBusActor {
     /** Subscribes the subscriber to a requested connection event (new peer handshaked or peer disconnected)
       *
       * @param subscriber
-      * @param to, classifier for the connection event subscribed
-      * @return true if successful and false if not (because it was already subscribed to that Classifier, or otherwise)
+      * @param to,
+      *   classifier for the connection event subscribed
+      * @return
+      *   true if successful and false if not (because it was already subscribed to that Classifier, or otherwise)
       */
     private def subscribeToConnectionEvent(subscriber: ActorRef, to: Classifier): Boolean = {
       val subscription = Subscription(subscriber, to)
@@ -181,8 +191,10 @@ object PeerEventBusActor {
     /** Unsubscribes the subscriber from a requested received message event event
       *
       * @param subscriber
-      * @param from, classifier for the message received event to unsubscribe
-      * @return true if successful and false if not (because it wasn't subscribed to that Classifier, or otherwise)
+      * @param from,
+      *   classifier for the message received event to unsubscribe
+      * @return
+      *   true if successful and false if not (because it wasn't subscribed to that Classifier, or otherwise)
       */
     private def unsubscribeFromMessageReceived(subscriber: ActorRef, from: MessageClassifier): Boolean =
       messageSubscriptions.get((subscriber, from.peerSelector)).exists { messageCodes =>
@@ -198,8 +210,10 @@ object PeerEventBusActor {
     /** Unsubscribes the subscriber from a requested event
       *
       * @param subscriber
-      * @param from, classifier for the connection event to unsubscribe
-      * @return true if successful and false if not (because it wasn't subscribed to that Classifier, or otherwise)
+      * @param from,
+      *   classifier for the connection event to unsubscribe
+      * @return
+      *   true if successful and false if not (because it wasn't subscribed to that Classifier, or otherwise)
       */
     private def unsubscribeFromConnectionEvent(subscriber: ActorRef, from: Classifier): Boolean = {
       val subscription = Subscription(subscriber, from)

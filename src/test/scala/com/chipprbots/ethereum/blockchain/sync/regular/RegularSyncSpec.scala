@@ -109,7 +109,7 @@ class RegularSyncSpec
       })
 
       "subscribe to handshaked peers list" in sync(new Fixture(testSystem) {
-        regularSync //unlazy
+        regularSync // unlazy
         etcPeerManager.expectMsg(EtcPeerManagerActor.GetHandshakedPeers)
       })
     }

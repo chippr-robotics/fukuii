@@ -149,7 +149,7 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    //Hello exchange
+    // Hello exchange
     val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
@@ -162,15 +162,15 @@ class PeerActorSpec
       genesisHash = genesisHash
     )
 
-    //Node status exchange
+    // Node status exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
-    //Fork block exchange
+    // Fork block exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
 
-    //Check that peer is connected
+    // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Pong()))
 
@@ -187,7 +187,7 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    //Hello exchange
+    // Hello exchange
     val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
@@ -200,7 +200,7 @@ class PeerActorSpec
       genesisHash = genesisHash.drop(2)
     )
 
-    //Node status exchange
+    // Node status exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
@@ -217,7 +217,7 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    //Hello exchange
+    // Hello exchange
     val remoteHello = Hello(4, "test-client", Seq(Capability.ETC64, Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
@@ -231,15 +231,15 @@ class PeerActorSpec
       genesisHash = genesisHash
     )
 
-    //Node status exchange
+    // Node status exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: ETC64.Status.StatusEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
-    //Fork block exchange
+    // Fork block exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
 
-    //Check that peer is connected
+    // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Pong()))
 
@@ -256,7 +256,7 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    //Hello exchange
+    // Hello exchange
     val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
@@ -269,15 +269,15 @@ class PeerActorSpec
       genesisHash = genesisHash
     )
 
-    //Node status exchange
+    // Node status exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
-    //Fork block exchange
+    // Fork block exchange
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
 
-    //Check that peer is connected
+    // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Pong()))
 
@@ -364,10 +364,10 @@ class PeerActorSpec
   }
 
   it should "respond to fork block request during the handshake" in new TestSetup {
-    //Save dao fork block
+    // Save dao fork block
     blockchainWriter.storeBlockHeader(Fixtures.Blocks.DaoForkBlock.header).commit()
 
-    //Handshake till EtcForkBlockExchangeState
+    // Handshake till EtcForkBlockExchangeState
     peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
 
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
@@ -390,7 +390,7 @@ class PeerActorSpec
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
 
-    //Request dao fork block from the peer
+    // Request dao fork block from the peer
     rlpxConnection.send(
       peer,
       RLPxConnectionHandler.MessageReceived(GetBlockHeaders(Left(daoForkBlockNumber), 1, 0, false))
@@ -485,12 +485,12 @@ class PeerActorSpec
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
 
-    //Test that the handshake succeeded
+    // Test that the handshake succeeded
     val sender = TestProbe()(system)
     sender.send(peer, GetStatus)
     sender.expectMsg(StatusResponse(Handshaked))
 
-    //Test peer terminated after peerConf.disconnectPoisonPillTimeout
+    // Test peer terminated after peerConf.disconnectPoisonPillTimeout
     val manager = TestProbe()(system)
     manager.watch(peer)
 

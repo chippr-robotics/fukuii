@@ -80,8 +80,10 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
   /** Get the value associated with the key passed, if there exists one.
     *
     * @param key
-    * @return Option object with value if there exists one.
-    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @return
+    *   Option object with value if there exists one.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+    *   if there is any inconsistency in how the trie is build.
     */
   def get(key: K): Option[V] =
     pathTraverse[Option[V]](None, mkKeyNibbles(key)) {
@@ -97,8 +99,10 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
   /** Get the proof associated with the key passed, if there exists one.
     *
     * @param key
-    * @return Option object with proof if there exists one.
-    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @return
+    *   Option object with proof if there exists one.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+    *   if there is any inconsistency in how the trie is build.
     */
   def getProof(key: K): Option[Vector[MptNode]] =
     pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key)) { case (acc, node) =>
@@ -109,14 +113,19 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       }
     }
 
-  /** Traverse given path from the root to value and accumulate data.
-    * Only nodes which are significant for searching for value are taken into account.
+  /** Traverse given path from the root to value and accumulate data. Only nodes which are significant for searching for
+    * value are taken into account.
     *
-    * @param acc initial accumulator
-    * @param searchKey search key
-    * @param op accumulating operation
-    * @tparam T accumulator type
-    * @return accumulated data or None if key doesn't exist
+    * @param acc
+    *   initial accumulator
+    * @param searchKey
+    *   search key
+    * @param op
+    *   accumulating operation
+    * @tparam T
+    *   accumulator type
+    * @return
+    *   accumulated data or None if key doesn't exist
     */
   private def pathTraverse[T](acc: T, searchKey: Array[Byte])(op: (T, Option[MptNode]) => T): Option[T] = {
 
@@ -167,12 +176,15 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
 
   private def mkKeyNibbles(key: K): Array[Byte] = HexPrefix.bytesToNibbles(kSerializer.toBytes(key))
 
-  /** This function inserts a (key-value) pair into the trie. If the key is already asociated with another value it is updated.
+  /** This function inserts a (key-value) pair into the trie. If the key is already asociated with another value it is
+    * updated.
     *
     * @param key
     * @param value
-    * @return New trie with the (key-value) pair inserted.
-    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @return
+    *   New trie with the (key-value) pair inserted.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+    *   if there is any inconsistency in how the trie is build.
     */
   override def put(key: K, value: V): MerklePatriciaTrie[K, V] = {
     val keyNibbles = HexPrefix.bytesToNibbles(kSerializer.toBytes(key))
@@ -189,11 +201,14 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       }
   }
 
-  /** This function deletes a (key-value) pair from the trie. If no (key-value) pair exists with the passed trie then there's no effect on it.
+  /** This function deletes a (key-value) pair from the trie. If no (key-value) pair exists with the passed trie then
+    * there's no effect on it.
     *
     * @param key
-    * @return New trie with the (key-value) pair associated with the key passed deleted from the trie.
-    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @return
+    *   New trie with the (key-value) pair associated with the key passed deleted from the trie.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+    *   if there is any inconsistency in how the trie is build.
     */
   override def remove(key: K): MerklePatriciaTrie[K, V] =
     rootNode
@@ -216,10 +231,13 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
 
   /** This function updates the KeyValueStore by deleting, updating and inserting new (key-value) pairs.
     *
-    * @param toRemove which includes all the keys to be removed from the KeyValueStore.
-    * @param toUpsert which includes all the (key-value) pairs to be inserted into the KeyValueStore.
-    *                 If a key is already in the DataSource its value will be updated.
-    * @return the new DataSource after the removals and insertions were done.
+    * @param toRemove
+    *   which includes all the keys to be removed from the KeyValueStore.
+    * @param toUpsert
+    *   which includes all the (key-value) pairs to be inserted into the KeyValueStore. If a key is already in the
+    *   DataSource its value will be updated.
+    * @return
+    *   the new DataSource after the removals and insertions were done.
     */
   override def update(toRemove: Seq[K], toUpsert: Seq[(K, V)]): MerklePatriciaTrie[K, V] = {
     val afterRemoval = toRemove.foldLeft(this)((acc, key) => acc - key)
@@ -307,7 +325,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       case 0 =>
         // There is no common prefix with the node which means we have to replace it for a branch node
         val sharedKeyHead = sharedKey(0)
-        val (temporalBranchNode, maybeNewExtNode) = {
+        val (temporalBranchNode, maybeNewExtNode) =
           // Direct extension, we just replace the extension with a branch
           if (sharedKey.length == 1) BranchNode.withSingleChild(sharedKeyHead, next, None) -> None
           else {
@@ -315,7 +333,6 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
             val newExtNode = ExtensionNode(sharedKey.tail, next)
             BranchNode.withSingleChild(sharedKeyHead, newExtNode, None) -> Some(newExtNode)
           }
-        }
         val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) = put(temporalBranchNode, searchKey, value)
         NodeInsertResult(
           newNode = newBranchNode,
@@ -468,12 +485,17 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     *   - Branch node where there is only a single entry;
     *   - Extension node followed by anything other than a Branch node.
     *
-    * @param node         that may be in an invalid state.
-    * @param nodeStorage  to obtain the nodes referenced in the node that may be in an invalid state.
-    * @param notStoredYet to obtain the nodes referenced in the node that may be in an invalid state,
-    *                     if they were not yet inserted into the nodeStorage.
-    * @return fixed node.
-    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException if there is any inconsistency in how the trie is build.
+    * @param node
+    *   that may be in an invalid state.
+    * @param nodeStorage
+    *   to obtain the nodes referenced in the node that may be in an invalid state.
+    * @param notStoredYet
+    *   to obtain the nodes referenced in the node that may be in an invalid state, if they were not yet inserted into
+    *   the nodeStorage.
+    * @return
+    *   fixed node.
+    * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+    *   if there is any inconsistency in how the trie is build.
     */
   @tailrec
   private def fix(node: MptNode): MptNode = node match {

@@ -78,8 +78,8 @@ package object crypto {
     bytes
   }
 
-  /** @return (privateKey, publicKey) pair.
-    * The public key will be uncompressed and have its prefix dropped.
+  /** @return
+    *   (privateKey, publicKey) pair. The public key will be uncompressed and have its prefix dropped.
     */
   def keyPairToByteArrays(keyPair: AsymmetricCipherKeyPair): (Array[Byte], Array[Byte]) = {
     val prvKey = ByteUtils.bigIntegerToBytes(keyPair.getPrivate.asInstanceOf[ECPrivateKeyParameters].getD, 32)

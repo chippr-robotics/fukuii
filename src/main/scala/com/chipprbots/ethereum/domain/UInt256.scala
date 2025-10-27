@@ -68,8 +68,8 @@ class UInt256 private (private val n: BigInt) extends Ordered[UInt256] {
 
   // byte-wise operations
 
-  /** Converts a BigInt to a ByteString.
-    *  Output ByteString is padded with 0's from the left side up to UInt256.Size bytes.
+  /** Converts a BigInt to a ByteString. Output ByteString is padded with 0's from the left side up to UInt256.Size
+    * bytes.
     */
   lazy val bytes: ByteString = {
     val bs: ByteString = ByteString(n.toByteArray).takeRight(Size)
@@ -80,10 +80,11 @@ class UInt256 private (private val n: BigInt) extends Ordered[UInt256] {
       bs
   }
 
-  /** Used for gas calculation for EXP opcode. See YP Appendix H.1 (220)
-    * For n > 0: (n.bitLength - 1) / 8 + 1 == 1 + floor(log_256(n))
+  /** Used for gas calculation for EXP opcode. See YP Appendix H.1 (220) For n > 0: (n.bitLength - 1) / 8 + 1 == 1 +
+    * floor(log_256(n))
     *
-    * @return Size in bytes excluding the leading 0 bytes
+    * @return
+    *   Size in bytes excluding the leading 0 bytes
     */
   def byteSize: Int = if (isZero) 0 else (n.bitLength - 1) / 8 + 1
 
@@ -170,7 +171,7 @@ class UInt256 private (private val n: BigInt) extends Ordered[UInt256] {
       new UInt256(result)
   }
 
-  //standard methods
+  // standard methods
   override def equals(that: Any): Boolean =
     that match {
       case that: UInt256 => this.n.equals(that.n)
@@ -189,7 +190,7 @@ class UInt256 private (private val n: BigInt) extends Ordered[UInt256] {
 
   def toHexString: String = {
     val hex = f"$n%x"
-    //add zero if odd number of digits
+    // add zero if odd number of digits
     val extraZero = if (hex.length % 2 == 0) "" else "0"
     s"0x$extraZero$hex"
   }
@@ -199,11 +200,13 @@ class UInt256 private (private val n: BigInt) extends Ordered[UInt256] {
   // conversions
   def toBigInt: BigInt = n
 
-  /** @return an Int with MSB=0, thus a value in range [0, Int.MaxValue]
+  /** @return
+    *   an Int with MSB=0, thus a value in range [0, Int.MaxValue]
     */
   def toInt: Int = n.intValue & Int.MaxValue
 
-  /** @return a Long with MSB=0, thus a value in range [0, Long.MaxValue]
+  /** @return
+    *   a Long with MSB=0, thus a value in range [0, Long.MaxValue]
     */
   def toLong: Long = n.longValue & Long.MaxValue
 }

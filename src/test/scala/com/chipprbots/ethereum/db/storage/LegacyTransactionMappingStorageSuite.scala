@@ -41,7 +41,7 @@ class LegacyTransactionMappingStorageSuite extends AnyFunSuite with ScalaCheckPr
       }
       val txHashAndLocationPair = txHashes.zip(txLocationList)
 
-      //Mapping of tx to blocks is inserted
+      // Mapping of tx to blocks is inserted
       val storage = new TransactionMappingStorage(EphemDataSource())
       val storageInsertions = txHashAndLocationPair.foldLeft(storage.emptyBatchUpdate) {
         case (updates, (txHash, txLocation)) =>
@@ -49,7 +49,7 @@ class LegacyTransactionMappingStorageSuite extends AnyFunSuite with ScalaCheckPr
       }
       storageInsertions.commit()
 
-      //Mapping of tx to blocks is deleted
+      // Mapping of tx to blocks is deleted
       val (toDelete, toLeave) = txHashAndLocationPair.splitAt(Gen.choose(0, txHashAndLocationPair.size).sample.get)
       val storageDeletions = toDelete.foldLeft(storage.emptyBatchUpdate) { case (updates, (txHash, _)) =>
         updates.and(storage.remove(txHash))

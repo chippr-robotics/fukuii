@@ -33,7 +33,7 @@ class CodeStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Ob
       val codeHashes = unfilteredCodeHashes.distinct
       val codes = Gen.listOfN(codeHashes.length, randomSizeByteArrayGen(0, LimitCodeSize)).sample.get.map(ByteString(_))
 
-      //EVM codes are inserted
+      // EVM codes are inserted
       val storage = new EvmCodeStorage(EphemDataSource())
       val storageInsertions =
         codeHashes.zip(codes).foldLeft(storage.emptyBatchUpdate) { case (updates, (codeHash, code)) =>
@@ -41,7 +41,7 @@ class CodeStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Ob
         }
       storageInsertions.commit()
 
-      //EVM codes are deleted
+      // EVM codes are deleted
       val (toDelete, toLeave) = codeHashes
         .zip(codes)
         .splitAt(Gen.choose(0, codeHashes.size).sample.get)

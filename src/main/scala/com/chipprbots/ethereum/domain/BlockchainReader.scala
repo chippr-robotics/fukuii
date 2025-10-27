@@ -29,24 +29,30 @@ class BlockchainReader(
 
   /** Allows to query a blockHeader by block hash
     *
-    * @param hash of the block that's being searched
-    * @return [[BlockHeader]] if found
+    * @param hash
+    *   of the block that's being searched
+    * @return
+    *   [[BlockHeader]] if found
     */
   def getBlockHeaderByHash(hash: ByteString): Option[BlockHeader] =
     blockHeadersStorage.get(hash)
 
   /** Allows to query a blockBody by block hash
     *
-    * @param hash of the block that's being searched
-    * @return [[com.chipprbots.ethereum.domain.BlockBody]] if found
+    * @param hash
+    *   of the block that's being searched
+    * @return
+    *   [[com.chipprbots.ethereum.domain.BlockBody]] if found
     */
   def getBlockBodyByHash(hash: ByteString): Option[BlockBody] =
     blockBodiesStorage.get(hash)
 
   /** Allows to query for a block based on it's hash
     *
-    * @param hash of the block that's being searched
-    * @return Block if found
+    * @param hash
+    *   of the block that's being searched
+    * @return
+    *   Block if found
     */
   def getBlockByHash(hash: ByteString): Option[Block] =
     for {
@@ -61,15 +67,18 @@ class BlockchainReader(
     } yield header
 
   /** Returns MPT node searched by it's hash
-    * @param hash Node Hash
-    * @return MPT node
+    * @param hash
+    *   Node Hash
+    * @return
+    *   MPT node
     */
   def getMptNodeByHash(hash: ByteString): Option[MptNode] =
     stateStorage.getNode(hash)
 
   /** Returns the receipts based on a block hash
     * @param blockhash
-    * @return Receipts if found
+    * @return
+    *   Receipts if found
     */
   def getReceiptsByHash(blockhash: ByteString): Option[Seq[Receipt]] = receiptStorage.get(blockhash)
 
@@ -86,7 +95,7 @@ class BlockchainReader(
 
   def getLatestCheckpointBlockNumber(): BigInt = appStateStorage.getLatestCheckpointBlockNumber()
 
-  //returns the best known block if it's available in the storage
+  // returns the best known block if it's available in the storage
   def getBestBlock(): Option[Block] = {
     val bestKnownBlockinfo = appStateStorage.getBestBlockInfo()
     log.debug("Trying to get best block with number {}", bestKnownBlockinfo.number)
@@ -139,9 +148,12 @@ class BlockchainReader(
 
   /** Get an account for an address and a block number
     *
-    * @param branch branch for which we want to get the account
-    * @param address address of the account
-    * @param blockNumber the block that determines the state of the account
+    * @param branch
+    *   branch for which we want to get the account
+    * @param address
+    *   address of the account
+    * @param blockNumber
+    *   the block that determines the state of the account
     */
   def getAccount(branch: Branch, address: Address, blockNumber: BigInt): Option[Account] = branch match {
     case BestBranch(_, tipBlockNumber) =>
@@ -163,15 +175,19 @@ class BlockchainReader(
     }
 
   /** Looks up ChainWeight for a given chain
-    * @param blockhash Hash of top block in the chain
-    * @return ChainWeight if found
+    * @param blockhash
+    *   Hash of top block in the chain
+    * @return
+    *   ChainWeight if found
     */
   def getChainWeightByHash(blockhash: ByteString): Option[ChainWeight] = chainWeightStorage.get(blockhash)
 
   /** Allows to query for a block based on it's number
     *
-    * @param number Block number
-    * @return Block if it exists
+    * @param number
+    *   Block number
+    * @return
+    *   Block if it exists
     */
   private def getBlockByNumber(number: BigInt): Option[Block] =
     for {
@@ -181,8 +197,10 @@ class BlockchainReader(
 
   /** Returns a block hash given a block number
     *
-    * @param number Number of the searched block
-    * @return Block hash if found
+    * @param number
+    *   Number of the searched block
+    * @return
+    *   Block hash if found
     */
   private def getHashByBlockNumber(number: BigInt): Option[ByteString] =
     blockNumberMappingStorage.get(number)

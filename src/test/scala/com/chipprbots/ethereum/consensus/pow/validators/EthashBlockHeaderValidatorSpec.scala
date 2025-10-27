@@ -240,13 +240,8 @@ class EthashBlockHeaderValidatorSpec
 
     val difficulty: BigInt = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
 
-    /** Expected calculations:
-      * blockNumber = 5863375 // < 5900000
-      * timestampDiff = 6
-      * x = 3480699544328087 / 2048 =
-      * c = (1 - (6 / 9)) = 0,33  // > -99
-      * fakeBlockNumber = 5863375 - 3000000 = 2863375
-      * extraDifficulty = 134217728
+    /** Expected calculations: blockNumber = 5863375 // < 5900000 timestampDiff = 6 x = 3480699544328087 / 2048 = c = (1
+      * \- (6 / 9)) = 0,33 // > -99 fakeBlockNumber = 5863375 - 3000000 = 2863375 extraDifficulty = 134217728
       * difficultyWithoutBomb = 3480699544328087 + 1699560324378,95 * 0,33 = 3481260399235132
       */
     BigInt("3484099629090779")

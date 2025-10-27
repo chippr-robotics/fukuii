@@ -29,9 +29,8 @@ object RLPImplicitDerivations {
   /** Support introspecting on what happened during encoding the tail. */
   case class FieldInfo(isOptional: Boolean)
 
-  /** Case classes get encoded as lists, not values,
-    * which is an extra piece of information we want
-    * to be able to rely on during derivation.
+  /** Case classes get encoded as lists, not values, which is an extra piece of information we want to be able to rely
+    * on during derivation.
     */
   trait RLPListEncoder[T] extends RLPEncoder[T] {
     def encodeList(obj: T): (RLPList, List[FieldInfo])
@@ -71,13 +70,11 @@ object RLPImplicitDerivations {
   implicit val deriveHNilRLPListEncoder: RLPListEncoder[HNil] =
     RLPListEncoder(_ => RLPList() -> Nil)
 
-  /** Encoder that takes a list of fields which are the labelled generic
-    * representation of a case class and turns it into an RLPList by
-    * combining the RLP encoding of the head with the RLPList encoding of
-    * the tail of the field list.
+  /** Encoder that takes a list of fields which are the labelled generic representation of a case class and turns it
+    * into an RLPList by combining the RLP encoding of the head with the RLPList encoding of the tail of the field list.
     *
-    * This variant deals with trailing optional fields in the case classes,
-    * which can be omitted from the RLP list, instead of being added as empty lists.
+    * This variant deals with trailing optional fields in the case classes, which can be omitted from the RLP list,
+    * instead of being added as empty lists.
     */
   implicit def deriveOptionHListRLPListEncoder[K, H, T <: HList](implicit
       hEncoder: Lazy[RLPEncoder[H]],
@@ -136,8 +133,8 @@ object RLPImplicitDerivations {
 
   /** Decoder for the empty list of fields.
     *
-    * We can ignore extra items in the RLPList as optional fields we don't handle,
-    * or extra random data, which we have for example in EIP8 test vectors.
+    * We can ignore extra items in the RLPList as optional fields we don't handle, or extra random data, which we have
+    * for example in EIP8 test vectors.
     */
   implicit def deriveHNilRLPListDecoder(implicit
       policy: DerivationPolicy = DerivationPolicy.default
@@ -154,8 +151,7 @@ object RLPImplicitDerivations {
 
   /** Decoder for a list of fields in the generic represenation of a case class.
     *
-    * This variant deals with trailing optional fields, which may be omitted from
-    * the end of RLP lists.
+    * This variant deals with trailing optional fields, which may be omitted from the end of RLP lists.
     */
   implicit def deriveOptionHListRLPListDecoder[K <: Symbol, H, V, T <: HList](implicit
       hDecoder: Lazy[RLPDecoder[H]],

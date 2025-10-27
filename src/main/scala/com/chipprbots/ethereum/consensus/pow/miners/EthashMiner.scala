@@ -24,9 +24,8 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
 
-/** Implementation of Ethash CPU mining worker.
-  * Could be started by switching configuration flag "mining.mining-enabled" to true
-  * Implementation explanation at https://eth.wiki/concepts/ethash/ethash
+/** Implementation of Ethash CPU mining worker. Could be started by switching configuration flag "mining.mining-enabled"
+  * to true Implementation explanation at https://eth.wiki/concepts/ethash/ethash
   */
 class EthashMiner(
     dagManager: EthashDAGManager,

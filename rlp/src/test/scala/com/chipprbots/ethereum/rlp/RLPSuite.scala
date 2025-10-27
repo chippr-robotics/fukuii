@@ -87,7 +87,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     val obtained3: Byte = dataObtained3
     assert((127: Byte) == obtained3)
 
-    forAll(Gen.choose[Byte](Byte.MinValue, Byte.MaxValue)) { ((aByte: Byte)) =>
+    forAll(Gen.choose[Byte](Byte.MinValue, Byte.MaxValue)) { (aByte: Byte) =>
       val data = encode(aByte)
       val dataObtained = decode[Byte](data)
       val obtained: Byte = dataObtained
@@ -131,7 +131,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     val obtained8: Short = dataObtained8
     assert(0.toShort == obtained8)
 
-    forAll(Gen.choose[Short](Short.MinValue, Short.MaxValue)) { ((aShort: Short)) =>
+    forAll(Gen.choose[Short](Short.MinValue, Short.MaxValue)) { (aShort: Short) =>
       val data = encode(aShort)
       val dataObtained = decode[Short](data)
       val obtained: Short = dataObtained
@@ -326,9 +326,9 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     val obtained4: String = dataObtained4
     assert("Ethereum(++)/ZeroGox/v0.5.0/ncurses/Linux/g++Ethereum(++)/ZeroGox/v0.5.0/ncurses/Linux/g++" == obtained4)
 
-    val strGen = ((n: Int)) => Gen.choose(0, n).flatMap(long => Gen.listOfN(long, Gen.alphaChar).map(_.mkString))
+    val strGen = (n: Int) => Gen.choose(0, n).flatMap(long => Gen.listOfN(long, Gen.alphaChar).map(_.mkString))
 
-    forAll(strGen(10000)) { ((aString: String)) =>
+    forAll(strGen(10000)) { (aString: String) =>
       val data = encode(aString)
       val dataObtained = decode[String](data)
       val obtained: String = dataObtained
@@ -400,7 +400,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     val obtained9: Int = dataObtained9
     assert(0xffffffff == obtained9)
 
-    forAll(Gen.choose[Int](Int.MinValue, Int.MaxValue)) { ((anInt: Int)) =>
+    forAll(Gen.choose[Int](Int.MinValue, Int.MaxValue)) { (anInt: Int) =>
       val data = encode(anInt)
       val dataObtained = decode[Int](data)
       val obtained: Int = dataObtained
@@ -409,7 +409,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   }
 
   test("Long Encoding") {
-    forAll(Gen.choose[Long](0, Long.MaxValue)) { ((aLong: Long)) =>
+    forAll(Gen.choose[Long](0, Long.MaxValue)) { (aLong: Long) =>
       val data = encode(aLong)
       val dataObtained = decode[Long](data)
       val obtained: Long = dataObtained
@@ -433,7 +433,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     val obtained2: BigInt = dataObtained2
     assert(bigInt == obtained2)
 
-    forAll(Arbitrary.arbitrary[BigInt]) { ((aBigIntSigned: BigInt)) =>
+    forAll(Arbitrary.arbitrary[BigInt]) { (aBigIntSigned: BigInt) =>
       val aBigInt = aBigIntSigned.abs
       val data = encode(aBigInt)
       val dataObtained = decode[BigInt](data)
@@ -460,7 +460,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
     assert(shouldBeError.isSuccess)
 
-    forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Byte])) { ((aByteList: List[Byte])) =>
+    forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Byte])) { (aByteList: List[Byte]) =>
       val data = encode(aByteList.toArray)
       val dataObtained = decode[Array[Byte]](data)
       val obtained: Array[Byte] = dataObtained
@@ -469,7 +469,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   }
 
   test("Encode ByteString") {
-    forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Byte])) { ((aByteList: List[Byte])) =>
+    forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Byte])) { (aByteList: List[Byte]) =>
       val byteString = ByteString(aByteList.toArray)
       val data = encode(byteString)
       val dataObtained = decode[ByteString](data)
@@ -479,7 +479,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
   }
 
   test("Encode Seq") {
-    forAll(Gen.nonEmptyListOf(Gen.choose[Long](0, Long.MaxValue))) { ((aLongList: List[Long])) =>
+    forAll(Gen.nonEmptyListOf(Gen.choose[Long](0, Long.MaxValue))) { (aLongList: List[Long]) =>
       val aLongSeq: Seq[Long] = aLongList
       val data = encode(aLongSeq)(seqEncDec())
       val dataObtained: Seq[Long] = decode[Seq[Long]](data)(seqEncDec())
@@ -737,7 +737,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
       -> "a1010000000000000000000000000000000000000000000000000000000000000000"
   )
 
-  //The following classes are used for a simplifying testing for nested objects (allowing using simple RLPEncoder and RLPDecoder)
+  // The following classes are used for a simplifying testing for nested objects (allowing using simple RLPEncoder and RLPDecoder)
   private case class TestSimpleTransaction(id: Int, name: String)
 
   private object TestSimpleTransaction {

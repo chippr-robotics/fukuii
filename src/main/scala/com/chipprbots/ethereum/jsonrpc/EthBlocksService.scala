@@ -54,7 +54,8 @@ class EthBlocksService(
 
   /** eth_blockNumber that returns the number of most recent block.
     *
-    * @return Current block number the client is on.
+    * @return
+    *   Current block number the client is on.
     */
   def bestBlockNumber(req: BestBlockNumberRequest): ServiceResponse[BestBlockNumberResponse] = Task {
     Right(BestBlockNumberResponse(blockchainReader.getBestBlockNumber()))
@@ -62,8 +63,10 @@ class EthBlocksService(
 
   /** Implements the eth_getBlockTransactionCountByHash method that fetches the number of txs that a certain block has.
     *
-    * @param request with the hash of the block requested
-    * @return the number of txs that the block has or None if the client doesn't have the block requested
+    * @param request
+    *   with the hash of the block requested
+    * @return
+    *   the number of txs that the block has or None if the client doesn't have the block requested
     */
   def getBlockTransactionCountByHash(request: TxCountByBlockHashRequest): ServiceResponse[TxCountByBlockHashResponse] =
     Task {
@@ -73,8 +76,10 @@ class EthBlocksService(
 
   /** Implements the eth_getBlockByHash method that fetches a requested block.
     *
-    * @param request with the hash of the block requested
-    * @return the block requested or None if the client doesn't have the block
+    * @param request
+    *   with the hash of the block requested
+    * @return
+    *   the block requested or None if the client doesn't have the block
     */
   def getByBlockHash(request: BlockByBlockHashRequest): ServiceResponse[BlockByBlockHashResponse] = Task {
     val BlockByBlockHashRequest(blockHash, fullTxs) = request
@@ -87,8 +92,10 @@ class EthBlocksService(
 
   /** Implements the eth_getBlockByNumber method that fetches a requested block.
     *
-    * @param request with the block requested (by it's number or by tag)
-    * @return the block requested or None if the client doesn't have the block
+    * @param request
+    *   with the block requested (by it's number or by tag)
+    * @return
+    *   the block requested or None if the client doesn't have the block
     */
   def getBlockByNumber(request: BlockByNumberRequest): ServiceResponse[BlockByNumberResponse] = Task {
     val BlockByNumberRequest(blockParam, fullTxs) = request
@@ -109,10 +116,14 @@ class EthBlocksService(
       }
     }
 
-  /** Implements the eth_getUncleByBlockHashAndIndex method that fetches an uncle from a certain index in a requested block.
+  /** Implements the eth_getUncleByBlockHashAndIndex method that fetches an uncle from a certain index in a requested
+    * block.
     *
-    * @param request with the hash of the block and the index of the uncle requested
-    * @return the uncle that the block has at the given index or None if the client doesn't have the block or if there's no uncle in that index
+    * @param request
+    *   with the hash of the block and the index of the uncle requested
+    * @return
+    *   the uncle that the block has at the given index or None if the client doesn't have the block or if there's no
+    *   uncle in that index
     */
   def getUncleByBlockHashAndIndex(
       request: UncleByBlockHashAndIndexRequest
@@ -128,17 +139,21 @@ class EthBlocksService(
       }
     val weight = uncleHeaderOpt.flatMap(uncleHeader => blockchainReader.getChainWeightByHash(uncleHeader.hash))
 
-    //The block in the response will not have any txs or uncles
+    // The block in the response will not have any txs or uncles
     val uncleBlockResponseOpt = uncleHeaderOpt.map { uncleHeader =>
       BlockResponse(blockHeader = uncleHeader, weight = weight, pendingBlock = false)
     }
     Right(UncleByBlockHashAndIndexResponse(uncleBlockResponseOpt))
   }
 
-  /** Implements the eth_getUncleByBlockNumberAndIndex method that fetches an uncle from a certain index in a requested block.
+  /** Implements the eth_getUncleByBlockNumberAndIndex method that fetches an uncle from a certain index in a requested
+    * block.
     *
-    * @param request with the number/tag of the block and the index of the uncle requested
-    * @return the uncle that the block has at the given index or None if the client doesn't have the block or if there's no uncle in that index
+    * @param request
+    *   with the number/tag of the block and the index of the uncle requested
+    * @return
+    *   the uncle that the block has at the given index or None if the client doesn't have the block or if there's no
+    *   uncle in that index
     */
   def getUncleByBlockNumberAndIndex(
       request: UncleByBlockNumberAndIndexRequest
@@ -150,7 +165,7 @@ class EthBlocksService(
           val uncleHeader = block.body.uncleNodesList.apply(uncleIndex.toInt)
           val weight = blockchainReader.getChainWeightByHash(uncleHeader.hash)
 
-          //The block in the response will not have any txs or uncles
+          // The block in the response will not have any txs or uncles
           Some(
             BlockResponse(
               blockHeader = uncleHeader,

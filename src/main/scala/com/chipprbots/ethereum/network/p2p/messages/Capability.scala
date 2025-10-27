@@ -24,9 +24,9 @@ object ProtocolFamily {
 sealed abstract class Capability(val name: ProtocolFamily, val version: Byte)
 
 object Capability {
-  case object ETH63 extends Capability(ProtocolFamily.ETH, 63) //scalastyle:ignore magic.number
-  case object ETH64 extends Capability(ProtocolFamily.ETH, 64) //scalastyle:ignore magic.number
-  case object ETC64 extends Capability(ProtocolFamily.ETC, 64) //scalastyle:ignore magic.number
+  case object ETH63 extends Capability(ProtocolFamily.ETH, 63) // scalastyle:ignore magic.number
+  case object ETH64 extends Capability(ProtocolFamily.ETH, 64) // scalastyle:ignore magic.number
+  case object ETC64 extends Capability(ProtocolFamily.ETC, 64) // scalastyle:ignore magic.number
 
   def parse(s: String): Option[Capability] = s match {
     case "eth/63" => Some(ETH63)
@@ -44,7 +44,7 @@ object Capability {
       case l   => Some(best(l))
     }
 
-  //TODO consider how this scoring should be handled with 'snap' and other extended protocols
+  // TODO consider how this scoring should be handled with 'snap' and other extended protocols
   def best(capabilities: List[Capability]): Capability =
     capabilities.maxBy(_.version)
 

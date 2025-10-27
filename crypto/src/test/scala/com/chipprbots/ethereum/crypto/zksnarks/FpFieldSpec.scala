@@ -33,7 +33,7 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
     fp2 <- fp6Generator
   } yield Fp12(fp1, fp2)
 
-  //Generator of valid field elements, for which all laws needs to be obeyed
+  // Generator of valid field elements, for which all laws needs to be obeyed
   def fpGen: Gen[T]
 
   implicit val config: PropertyCheckConfiguration = PropertyCheckConfiguration(minSuccessful = 100)

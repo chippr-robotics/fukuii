@@ -92,7 +92,7 @@ class SyncControllerSpec
 
       eventually {
         someTimePasses()
-        //switch to regular download
+        // switch to regular download
         val children = syncController.children
         assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
         assert(children.exists(ref => ref.path.name == "regular-sync"))
@@ -124,7 +124,7 @@ class SyncControllerSpec
     eventually {
       someTimePasses()
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-      //switch to regular download
+      // switch to regular download
       val children = syncController.children
       assert(children.exists(ref => ref.path.name == "regular-sync"))
       assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
@@ -395,7 +395,7 @@ class SyncControllerSpec
     eventually {
       someTimePasses()
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-      //switch to regular download
+      // switch to regular download
       val children = syncController.children
       assert(children.exists(ref => ref.path.name == "regular-sync"))
       assert(blockchainReader.getBestBlockNumber() == freshHeader1.number)
@@ -427,7 +427,7 @@ class SyncControllerSpec
     eventually {
       someTimePasses()
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-      //switch to regular download
+      // switch to regular download
       val children = syncController.children
       assert(children.exists(ref => ref.path.name == "regular-sync"))
       assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
@@ -487,7 +487,7 @@ class SyncControllerSpec
 
     eventually {
       someTimePasses()
-      //switch to regular download
+      // switch to regular download
       val children = syncController.children
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
       assert(children.exists(ref => ref.path.name == "regular-sync"))
@@ -504,7 +504,7 @@ class SyncControllerSpec
     @volatile
     var stateDownloadStarted = false
 
-    //+ cake overrides
+    // + cake overrides
     implicit override lazy val system: ActorSystem =
       ActorSystem("SyncControllerSpec_System", ConfigFactory.load("explicit-scheduler"))
 
@@ -514,7 +514,7 @@ class SyncControllerSpec
 
     override lazy val mining: TestMining = buildTestMining().withValidators(validators)
 
-    //+ cake overrides
+    // + cake overrides
 
     val etcPeerManager: TestProbe = TestProbe()
     val peerMessageBus: TestProbe = TestProbe()

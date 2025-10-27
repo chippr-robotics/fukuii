@@ -105,8 +105,8 @@ class RestrictedEthashBlockHeaderValidatorSpec
         allowedMinersPublicKeys = allowedMiners
       )
 
-    /** validParent and validHeader are special headers with extended extraData field and are only useful when used
-      * with RestrictedEthashBlockHeaderValidator
+    /** validParent and validHeader are special headers with extended extraData field and are only useful when used with
+      * RestrictedEthashBlockHeaderValidator
       */
     val validParent: BlockHeader = BlockHeader(
       parentHash = ByteStringUtils.string2hash("c12a822d0c9a1a777cd1023172ec304aca76e403355e4eb56592d299e4b86503"),

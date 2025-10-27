@@ -65,8 +65,10 @@ object OmmersPool {
 
   /** As is stated on section 11.1, eq. (143) of the YP
     *
-    * @param ommerGenerationLimit should be === 6
-    * @param returnedOmmersSizeLimit should be === 2
+    * @param ommerGenerationLimit
+    *   should be === 6
+    * @param returnedOmmersSizeLimit
+    *   should be === 2
     *
     * Probably not worthy but those params could be placed in mining config.
     */

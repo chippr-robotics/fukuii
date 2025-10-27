@@ -94,7 +94,8 @@ class EthInfoService(
 
   /** Implements the eth_syncing method that returns syncing information if the node is syncing.
     *
-    * @return The syncing status if the node is syncing or None if not
+    * @return
+    *   The syncing status if the node is syncing or None if not
     */
   def syncing(req: SyncingRequest): ServiceResponse[SyncingResponse] =
     syncingController
@@ -130,7 +131,7 @@ class EthInfoService(
     val dataEither = (tx.function, tx.contractCode) match {
       case (Some(function), None)     => Right(rlp.encode(RLPList(function, args)))
       case (None, Some(contractCode)) => Right(rlp.encode(RLPList(contractCode, args)))
-      case _                          => Left(JsonRpcError.InvalidParams("Iele transaction should contain either functionName or contractCode"))
+      case _ => Left(JsonRpcError.InvalidParams("Iele transaction should contain either functionName or contractCode"))
     }
 
     dataEither match {

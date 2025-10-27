@@ -9,10 +9,14 @@ object InMemorySimpleMapProxy {
 
 /** This class keeps holds changes made to the inner [[com.chipprbots.ethereum.common.SimpleMap]] until data is commited
   *
-  * @param inner [[com.chipprbots.ethereum.common.SimpleMap]] to proxy
-  * @param cache InMemory map where data is going to be cached
-  * @tparam K data type of the key to be used within this Proxy
-  * @tparam V data type of the value to be used within this Proxy
+  * @param inner
+  *   [[com.chipprbots.ethereum.common.SimpleMap]] to proxy
+  * @param cache
+  *   InMemory map where data is going to be cached
+  * @tparam K
+  *   data type of the key to be used within this Proxy
+  * @tparam V
+  *   data type of the value to be used within this Proxy
   */
 class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: I, val cache: Map[K, Option[V]])
     extends SimpleMap[K, V, InMemorySimpleMapProxy[K, V, I]] {
@@ -28,7 +32,8 @@ class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: 
 
   /** Persists the changes into the underlying [[com.chipprbots.ethereum.common.SimpleMap]]
     *
-    * @return Updated proxy
+    * @return
+    *   Updated proxy
     */
   def persist(): InMemorySimpleMapProxy[K, V, I] = {
     val changesToApply = changes
@@ -37,14 +42,16 @@ class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: 
 
   /** Clears the cache without applying the changes
     *
-    * @return Updated proxy
+    * @return
+    *   Updated proxy
     */
   def rollback: InMemorySimpleMapProxy[K, V, I] = new InMemorySimpleMapProxy[K, V, I](inner, Map.empty)
 
   /** This function obtains the value asociated with the key passed, if there exists one.
     *
     * @param key
-    * @return Option object with value if there exists one.
+    * @return
+    *   Option object with value if there exists one.
     */
   def get(key: K): Option[V] = cache.getOrElse(key, inner.get(key))
 
@@ -52,10 +59,13 @@ class InMemorySimpleMapProxy[K, V, I <: SimpleMap[K, V, I]] private (val inner: 
 
   /** This function updates the KeyValueStore by deleting, updating and inserting new (key-value) pairs.
     *
-    * @param toRemove which includes all the keys to be removed from the KeyValueStore.
-    * @param toUpsert which includes all the (key-value) pairs to be inserted into the KeyValueStore.
-    *                 If a key is already in the DataSource its value will be updated.
-    * @return the new DataSource after the removals and insertions were done.
+    * @param toRemove
+    *   which includes all the keys to be removed from the KeyValueStore.
+    * @param toUpsert
+    *   which includes all the (key-value) pairs to be inserted into the KeyValueStore. If a key is already in the
+    *   DataSource its value will be updated.
+    * @return
+    *   the new DataSource after the removals and insertions were done.
     */
   override def update(toRemove: Seq[K], toUpsert: Seq[(K, V)]): InMemorySimpleMapProxy[K, V, I] = {
     val afterRemoval = toRemove.foldLeft(cache)((updated, key) => updated + (key -> None))

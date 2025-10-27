@@ -29,3 +29,4 @@ result
 # sonarScan
 .scannerwork/
 actionlint
+sbt-bin

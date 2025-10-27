@@ -30,13 +30,13 @@ class NodeStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Ob
     forAll(Gen.listOf(nodeGen)) { unfilteredMptNodes =>
       val mptNodes = unfilteredMptNodes.distinct
 
-      //Nodes are inserted
+      // Nodes are inserted
       val initialNodeStorage: NodeStorage = new NodeStorage(EphemDataSource())
       val nodeStorage = mptNodes.foldLeft(initialNodeStorage) { case (recNodeStorage, node) =>
         recNodeStorage.update(Nil, Seq(ByteString(node.hash) -> node.toBytes))
       }
 
-      //Nodes are deleted
+      // Nodes are deleted
       val (toDelete, toLeave) = mptNodes.splitAt(Gen.choose(0, mptNodes.size).sample.get)
       val nodeStorageAfterDelete = toDelete.foldLeft(nodeStorage) { case (recNodeStorage, node) =>
         recNodeStorage.update(Seq(ByteString(node.hash)), Nil)

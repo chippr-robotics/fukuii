@@ -204,9 +204,12 @@ object OpCode {
 
 /** Base class for all the opcodes of the EVM
   *
-  * @param code Opcode byte representation
-  * @param delta number of words to be popped from stack
-  * @param alpha number of words to be pushed to stack
+  * @param code
+  *   Opcode byte representation
+  * @param delta
+  *   number of words to be popped from stack
+  * @param alpha
+  *   number of words to be pushed to stack
   */
 abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGasFn: FeeSchedule => BigInt)
     extends Product
@@ -446,12 +449,13 @@ case object EXTCODEHASH extends OpCode(0x3f, 1, 1, _.G_balance) with AddrAccessG
     val (accountAddress, stack1) = state.stack.pop
     val address = Address(accountAddress)
 
-    /** Specification of EIP1052 - https://eips.ethereum.org/EIPS/eip-1052, says that we should return 0
-      * In case the account does not exist 0 is pushed to the stack.
+    /** Specification of EIP1052 - https://eips.ethereum.org/EIPS/eip-1052, says that we should return 0 In case the
+      * account does not exist 0 is pushed to the stack.
       *
       * But the interpretation is, that account does not exists if:
       *   - it do not exists or,
-      *   - is empty according to eip161 rules (account is considered empty when it has no code and zero nonce and zero balance)
+      *   - is empty according to eip161 rules (account is considered empty when it has no code and zero nonce and zero
+      *     balance)
       *
       * Example of existing check in geth:
       * https://github.com/ethereum/go-ethereum/blob/aad3c67a92cd4f3cc3a885fdc514ba2a7fb3e0a3/core/state/statedb.go#L203
@@ -752,13 +756,13 @@ case object SSTORE extends OpCode(0x55, 2, 0, _.G_zero) {
         state.config.feeSchedule.G_sload
       } else {
         val originalValue = state.originalWorld.getStorage(state.ownAddress).load(offset)
-        if (originalValue == currentValue) { //fresh slot
+        if (originalValue == currentValue) { // fresh slot
           if (originalValue == 0)
             state.config.feeSchedule.G_sset
           else
             state.config.feeSchedule.G_sreset
         } else {
-          //dirty slot
+          // dirty slot
           state.config.feeSchedule.G_sload
         }
       }
@@ -951,8 +955,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (Seq(endowment, inOffset, inSize), stack1) = state.stack.pop(3)
 
-    //FIXME: to avoid calculating this twice, we could adjust state.gas prior to execution in OpCode#execute
-    //not sure how this would affect other opcodes [EC-243]
+    // FIXME: to avoid calculating this twice, we could adjust state.gas prior to execution in OpCode#execute
+    // not sure how this would affect other opcodes [EC-243]
     val availableGas = state.gas - (baseGasFn(state.config.feeSchedule) + varGas(state))
     val startGas = state.config.gasCap(availableGas)
     val (initCode, memory1) = state.memory.load(inOffset, inSize)
@@ -1050,11 +1054,11 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
         (toAddr, state.ownAddress, callValue, callValue, true, state.staticCtx)
 
       case STATICCALL =>
-        /** We return `doTransfer = true` for STATICCALL as it should  `functions equivalently to a CALL` (spec)
-          * Note that we won't transfer any founds during later transfer, as `value` and `endowment` are equal to Zero.
-          * One thing that will change though is that both - recipient and sender addresses will be added to touched accounts
-          * Set. And if empty they will be deleted at the end of transaction.
-          * Link to clarification about this behaviour in yp: https://github.com/ethereum/EIPs/pull/214#issuecomment-288697580
+        /** We return `doTransfer = true` for STATICCALL as it should `functions equivalently to a CALL` (spec) Note
+          * that we won't transfer any founds during later transfer, as `value` and `endowment` are equal to Zero. One
+          * thing that will change though is that both - recipient and sender addresses will be added to touched
+          * accounts Set. And if empty they will be deleted at the end of transaction. Link to clarification about this
+          * behaviour in yp: https://github.com/ethereum/EIPs/pull/214#issuecomment-288697580
           */
         (toAddr, state.ownAddress, UInt256.Zero, UInt256.Zero, true, true)
 

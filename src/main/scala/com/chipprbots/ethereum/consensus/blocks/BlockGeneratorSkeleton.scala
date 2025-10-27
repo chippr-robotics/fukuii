@@ -59,7 +59,7 @@ abstract class BlockGeneratorSkeleton(
       ommersHash = ByteString(kec256(x.toBytes: Array[Byte])),
       beneficiary = beneficiary.bytes,
       stateRoot = ByteString.empty,
-      //we are not able to calculate transactionsRoot here because we do not know if they will fail
+      // we are not able to calculate transactionsRoot here because we do not know if they will fail
       transactionsRoot = ByteString.empty,
       receiptsRoot = ByteString.empty,
       logsBloom = ByteString.empty,
@@ -134,7 +134,7 @@ abstract class BlockGeneratorSkeleton(
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] = {
 
     val sortedTransactions: Seq[SignedTransaction] = transactions
-      //should be safe to call get as we do not insert improper transactions to pool.
+      // should be safe to call get as we do not insert improper transactions to pool.
       .groupBy(tx => SignedTransaction.getSender(tx).get)
       .values
       .toList

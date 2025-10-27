@@ -15,12 +15,12 @@ import com.chipprbots.ethereum.nodebuilder.Node
 
 /** Abstraction for a mining protocol implementation.
   *
-  * @see [[Protocol Protocol]]
+  * @see
+  *   [[Protocol Protocol]]
   */
 trait Mining {
 
-  /** The type of configuration [[FullMiningConfig#specific specific]]
-    * to this mining protocol implementation.
+  /** The type of configuration [[FullMiningConfig#specific specific]] to this mining protocol implementation.
     */
   type Config <: AnyRef /*Product*/
 
@@ -40,8 +40,7 @@ trait Mining {
     */
   def blockPreparator: BlockPreparator
 
-  /** Returns the [[com.chipprbots.ethereum.consensus.blocks.BlockGenerator BlockGenerator]]
-    * this mining protocol uses.
+  /** Returns the [[com.chipprbots.ethereum.consensus.blocks.BlockGenerator BlockGenerator]] this mining protocol uses.
     */
   def blockGenerator: BlockGenerator
 
@@ -51,8 +50,7 @@ trait Mining {
     */
   def startProtocol(node: Node): Unit
 
-  /** Stops the mining protocol on the current node.
-    * This is called internally when the node terminates.
+  /** Stops the mining protocol on the current node. This is called internally when the node terminates.
     */
   def stopProtocol(): Unit
 
@@ -67,11 +65,9 @@ trait Mining {
 
 /** Internal API, used for testing.
   *
-  * This is a [[Mining]] API for the needs of the test suites.
-  * It gives a lot of flexibility overriding parts of Mining' behavior
-  * but it is the developer's responsibility to maintain consistency (though the
-  * particular mining protocols we implement so far do their best
-  * in that direction).
+  * This is a [[Mining]] API for the needs of the test suites. It gives a lot of flexibility overriding parts of Mining'
+  * behavior but it is the developer's responsibility to maintain consistency (though the particular mining protocols we
+  * implement so far do their best in that direction).
   */
 trait TestMining extends Mining {
   def blockGenerator: TestBlockGenerator

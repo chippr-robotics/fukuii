@@ -446,9 +446,9 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
 
   }
 
-  /** The MPT tested in this example has duplicated nodes as the branch node has two children with the same node: LeafNode("a", value)
-    * When one of the key-value that uses one of this nodes is removed, this shouldn't affect the use of the other key-value
-    * which shares the same LeafNode
+  /** The MPT tested in this example has duplicated nodes as the branch node has two children with the same node:
+    * LeafNode("a", value) When one of the key-value that uses one of this nodes is removed, this shouldn't affect the
+    * use of the other key-value which shares the same LeafNode
     */
   test("PatriciaTrie insert causes node duplicated and removal of one of them should not fail") {
     val key1 = Hex.decode("ba")
@@ -460,24 +460,21 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     val trie = emptyMpt.put(key1, value).put(key2, value).put(key3, value)
     val trieAfterRemoval = trie.remove(key1)
 
-    //Old trie still works
+    // Old trie still works
     assert(trie.get(key1).getOrElse(Array.emptyByteArray).sameElements(value))
     assert(trie.get(key2).getOrElse(Array.emptyByteArray).sameElements(value))
     assert(trie.get(key3).getOrElse(Array.emptyByteArray).sameElements(value))
 
-    //New trie is consistent
+    // New trie is consistent
     assert(trieAfterRemoval.get(key1).isEmpty)
     assert(trieAfterRemoval.get(key2).getOrElse(Array.emptyByteArray).sameElements(value))
     assert(trieAfterRemoval.get(key3).getOrElse(Array.emptyByteArray).sameElements(value))
   }
 
-  /** Tests whether the creation of a duplicated valid temporal extension node removes it's original copy.
-    * The creation of this temporal nodes happens in the case that an insertion is done on an extension node with a
-    * partial match between the extension node key and the search key
-    * Case tested:
-    *             BN:  ['a'-> EN1, 'b'->EN2]
-    *             EN1: [Key: 'aab', value: ...otherBN...]
-    *             EN2: [Key: 'b', value: ...otherBN...]     <- Temporal extension node will be equal to this
+  /** Tests whether the creation of a duplicated valid temporal extension node removes it's original copy. The creation
+    * of this temporal nodes happens in the case that an insertion is done on an extension node with a partial match
+    * between the extension node key and the search key Case tested: BN: ['a'-> EN1, 'b'->EN2] EN1: [Key: 'aab', value:
+    * ...otherBN...] EN2: [Key: 'b', value: ...otherBN...] <- Temporal extension node will be equal to this
     */
   test("Creating temporal extension node already used in MPT doesn't cause missing node while pruning") {
     def decodeHexString(hexString: String): ByteString = ByteString(Hex.decode(hexString))
@@ -512,13 +509,10 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assert(trieAtBlock10.get(decodeHexString("aaaa")).contains(6))
   }
 
-  /** Tests whether the creation of a duplicated valid temporal leaf node removes it's original copy.
-    * The creation of this temporal nodes happens in the case that an insertion is done on an leaf node with a
-    * partial match between the leaf node key and the search key
-    * Case tested:
-    *             BN:  ['a'-> LN1, 'b'->LN2]
-    *             LN1: [Key: 'b', value: ""]                       <- Temporal leaf node will be equal to this
-    *             LN2: [Key: 'bbb', value: ..large bytestring...]
+  /** Tests whether the creation of a duplicated valid temporal leaf node removes it's original copy. The creation of
+    * this temporal nodes happens in the case that an insertion is done on an leaf node with a partial match between the
+    * leaf node key and the search key Case tested: BN: ['a'-> LN1, 'b'->LN2] LN1: [Key: 'b', value: ""] <- Temporal
+    * leaf node will be equal to this LN2: [Key: 'bbb', value: ..large bytestring...]
     */
   test("Creating temporal leaf node already used in MPT doesn't cause missing node while pruning") {
     def decodeHexString(hexString: String): ByteString = ByteString(Hex.decode(hexString))
@@ -599,7 +593,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     val key1: Array[Byte] = Hex.decode("10000001")
     val key2: Array[Byte] = Hex.decode("10000002")
     val key3: Array[Byte] = Hex.decode("30000003")
-    val key4: Array[Byte] = Hex.decode("10000004") //a key that doesn't have a corresponding value in the trie
+    val key4: Array[Byte] = Hex.decode("10000004") // a key that doesn't have a corresponding value in the trie
 
     val val1: Array[Byte] = Hex.decode("0101")
     val val2: Array[Byte] = Hex.decode("0102")

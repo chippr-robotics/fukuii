@@ -12,7 +12,7 @@ object MiningConfigs {
   final val coinbaseAddressNum = 42
   final val coinbase: Address = Address(coinbaseAddressNum)
 
-  //noinspection ScalaStyle
+  // noinspection ScalaStyle
   final val ethashConfig = new EthashConfig(
     ommersPoolSize = 30,
     ommerPoolQueryTimeout = Timeouts.normalTimeout,

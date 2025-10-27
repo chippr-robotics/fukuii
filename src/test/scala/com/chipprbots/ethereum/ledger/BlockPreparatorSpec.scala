@@ -263,7 +263,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     val newAccountAddress =
       Address(kec256(newAccountKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail))
 
-    override lazy val vm: VMImpl = new MockVM(((pc: PC)) =>
+    override lazy val vm: VMImpl = new MockVM((pc: PC) =>
       createResult(pc, defaultGasLimit, defaultGasLimit, 0, None, returnData = ByteString("contract code"))
     )
 
@@ -286,7 +286,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     Address(kec256(newAccountKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail))
 
     override lazy val vm: VMImpl =
-      new MockVM(((pc: PC)) => createResult(pc, defaultGasLimit, defaultGasLimit, 0, None, returnData = ByteString.empty))
+      new MockVM((pc: PC) => createResult(pc, defaultGasLimit, defaultGasLimit, 0, None, returnData = ByteString.empty))
 
     override lazy val validators: MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed {
       override val signedTransactionValidator: SignedTransactionValidator =
@@ -329,7 +329,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     Address(kec256(newAccountKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail))
 
     override lazy val vm =
-      new MockVM(((pc: PC)) => createResult(pc, defaultGasLimit, defaultGasLimit, 0, None, returnData = ByteString.empty))
+      new MockVM((pc: PC) => createResult(pc, defaultGasLimit, defaultGasLimit, 0, None, returnData = ByteString.empty))
 
     override lazy val validators: Mocks.MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed {
       override val signedTransactionValidator: SignedTransactionValidator =

@@ -8,9 +8,11 @@ import com.chipprbots.ethereum.domain.BlockHeader
 
 object KeccakBlockHeaderValidator {
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.nonce]] and [[com.chipprbots.ethereum.domain.BlockHeader.mixHash]] are correct
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.nonce]] and
+    * [[com.chipprbots.ethereum.domain.BlockHeader.mixHash]] are correct
     * @param blockHeader
-    * @return BlockHeaderValid if valid or an BlockHeaderError.HeaderPoWError otherwise
+    * @return
+    *   BlockHeaderValid if valid or an BlockHeaderError.HeaderPoWError otherwise
     */
   def validateHeader(blockHeader: BlockHeader): Either[BlockHeaderError, BlockHeaderValid] = {
     val rlpEncodedHeader = BlockHeader.getEncodedWithoutNonce(blockHeader)

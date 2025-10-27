@@ -14,8 +14,8 @@ import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxyStorage
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 
-/** This is a wrapper around InMemoryWorldStateProxy.
-  * Its only role is to store the storage key encountered during a run to store them for debugging purpose.
+/** This is a wrapper around InMemoryWorldStateProxy. Its only role is to store the storage key encountered during a run
+  * to store them for debugging purpose.
   */
 case class TestModeWorldStateProxy(
     override val stateStorage: MptStorage,

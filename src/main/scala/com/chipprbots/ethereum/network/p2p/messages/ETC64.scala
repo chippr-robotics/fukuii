@@ -12,8 +12,8 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp._
 
-/** This is temporary ETC64 version, the real one will be implemented by ETCM-355
-  * This one will be probably ETC67 in the future
+/** This is temporary ETC64 version, the real one will be implemented by ETCM-355 This one will be probably ETC67 in the
+  * future
   */
 object ETC64 {
   object Status {

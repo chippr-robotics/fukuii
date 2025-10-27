@@ -166,10 +166,10 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
 
   // scalastyle:off magic.number
   trait TestSetup extends EphemBlockchainTestSetup {
-    //+ cake overrides
+    // + cake overrides
     override lazy val vm: VMImpl = new MockVM()
 
-    //- cake overrides
+    // - cake overrides
 
     val validAccountAddress: Address = Address(0xababab) // 11250603
     val validAccountAddress2: Address = Address(0xcdcdcd) // 13487565
@@ -196,7 +196,7 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     val worldState: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       blockchain.getBackingMptStorage(-1),
-      ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       UInt256.Zero,
       ByteString(MerklePatriciaTrie.EmptyRootHash),
       noEmptyAccounts = false,

@@ -52,7 +52,7 @@ class EthashDAGManager(blockCreator: PoWBlockCreator) extends Logger {
   private def dagFile(seed: ByteString): File =
     new File(
       s"${blockCreator.miningConfig.ethashDir}/full-R${EthashUtils.Revision}-${Hex
-        .toHexString(seed.take(8).toArray[Byte])}"
+          .toHexString(seed.take(8).toArray[Byte])}"
     )
 
   private def generateDagAndSaveToFile(epoch: Long, dagNumHashes: Int, seed: ByteString): Array[Array[Int]] = {

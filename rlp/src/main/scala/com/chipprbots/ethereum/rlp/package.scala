@@ -11,9 +11,8 @@ package object rlp {
 
   /** An exception capturing a deserialization error.
     *
-    * The `encodeables` are a stack of values as we recursed into the data structure
-    * which may help deducting what went wrong. The last element is what caused the
-    * problem but it may be easier to recognise if we look at the head.
+    * The `encodeables` are a stack of values as we recursed into the data structure which may help deducting what went
+    * wrong. The last element is what caused the problem but it may be easier to recognise if we look at the head.
     */
   case class RLPException(message: String, encodeables: List[RLPEncodeable] = Nil) extends RuntimeException(message)
   object RLPException {
@@ -46,16 +45,17 @@ package object rlp {
 
   /** Modelise a RLPEncodable that should be binary prefixed by a raw byte.
     *
-    * When converting this RLPEncodable to byte, the resulting value will be:
-    * prefix || prefixedRLPEncodable.toByte
+    * When converting this RLPEncodable to byte, the resulting value will be: prefix || prefixedRLPEncodable.toByte
     * where || is the binary concatenation symbol.
     *
     * To be able to read back the data, use TypedTransaction.TypedTransactionsRLPAggregator
     *
     * This is for example used for typed transaction and typed receipt.
     *
-    * @param prefix the raw byte
-    * @param prefixedRLPEncodeable the RLPEncodable to prefix with
+    * @param prefix
+    *   the raw byte
+    * @param prefixedRLPEncodeable
+    *   the RLPEncodable to prefix with
     */
   case class PrefixedRLPEncodable(prefix: Byte, prefixedRLPEncodeable: RLPEncodeable) extends RLPEncodeable {
     require(prefix >= 0, "prefix should be in the range [0; 0x7f]")
@@ -113,11 +113,14 @@ package object rlp {
   /** This function calculates the next element item based on a previous element starting position. It's meant to be
     * used while decoding a stream of RLPEncoded Items.
     *
-    * @param data Data with encoded items
-    * @param pos  Where to start. This value should be a valid start element position in order to be able to calculate
-    *             next one
-    * @return Next item position
-    * @throws RLPException if there is any error
+    * @param data
+    *   Data with encoded items
+    * @param pos
+    *   Where to start. This value should be a valid start element position in order to be able to calculate next one
+    * @return
+    *   Next item position
+    * @throws RLPException
+    *   if there is any error
     */
   def nextElementIndex(data: Array[Byte], pos: Int): Int = RLP.getItemBounds(data, pos).end + 1
 

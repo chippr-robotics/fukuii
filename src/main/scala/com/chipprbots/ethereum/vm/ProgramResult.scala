@@ -7,12 +7,18 @@ import com.chipprbots.ethereum.domain.TxLogEntry
 
 /** Represenation of the result of execution of a contract
   *
-  * @param returnData bytes returned by the executed contract (set by [[RETURN]] opcode)
-  * @param gasRemaining amount of gas remaining after execution
-  * @param world represents changes to the world state
-  * @param addressesToDelete list of addresses of accounts scheduled to be deleted
-  * @param internalTxs list of internal transactions (for debugging/tracing) if enabled in config
-  * @param error defined when the program terminated abnormally
+  * @param returnData
+  *   bytes returned by the executed contract (set by [[RETURN]] opcode)
+  * @param gasRemaining
+  *   amount of gas remaining after execution
+  * @param world
+  *   represents changes to the world state
+  * @param addressesToDelete
+  *   list of addresses of accounts scheduled to be deleted
+  * @param internalTxs
+  *   list of internal transactions (for debugging/tracing) if enabled in config
+  * @param error
+  *   defined when the program terminated abnormally
   */
 case class ProgramResult[W <: WorldStateProxy[W, S], S <: Storage[S]](
     returnData: ByteString,

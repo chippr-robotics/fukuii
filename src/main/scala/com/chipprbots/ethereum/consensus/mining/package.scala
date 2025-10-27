@@ -10,8 +10,7 @@ import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 
-/** Provides everything related to consensus.
-  * Different mining protocols are implemented in sub-packages.
+/** Provides everything related to consensus. Different mining protocols are implemented in sub-packages.
   */
 package object mining {
   final type GetBlockHeaderByHash = ByteString => Option[BlockHeader]
@@ -37,11 +36,10 @@ package object mining {
 
   implicit final class RichMining(val mining: Mining) extends AnyVal {
 
-    /** There are APIs that expect that the standard Ethash mining is running and so depend
-      * on either its configuration or general PoW semantics.
-      * This is a method that can handle such cases via a respective if/then/else construct:
-      * if we run under [[com.chipprbots.ethereum.consensus.pow.PoWMining EthashConsensus]]
-      * then the `_then` function is called, otherwise the `_else` value is computed.
+    /** There are APIs that expect that the standard Ethash mining is running and so depend on either its configuration
+      * or general PoW semantics. This is a method that can handle such cases via a respective if/then/else construct:
+      * if we run under [[com.chipprbots.ethereum.consensus.pow.PoWMining EthashConsensus]] then the `_then` function is
+      * called, otherwise the `_else` value is computed.
       */
     def ifEthash[A](_then: PoWMining => A)(_else: => A): A =
       mining match {

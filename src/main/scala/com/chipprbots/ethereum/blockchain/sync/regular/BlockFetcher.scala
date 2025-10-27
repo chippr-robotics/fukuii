@@ -143,7 +143,7 @@ class BlockFetcher(
         fetchBlocks(newState)
 
       case ReceivedHeaders(peer, headers) if state.isFetchingHeaders =>
-        //First successful fetch
+        // First successful fetch
         if (state.waitingHeaders.isEmpty) {
           supervisor ! ProgressProtocol.StartedFetching
         }
@@ -243,7 +243,7 @@ class BlockFetcher(
             fetchBlocks(newState)
           }
           .getOrElse(processFetchCommands(state))
-      //keep fetcher state updated in case new mined block was imported
+      // keep fetcher state updated in case new mined block was imported
       case InternalLastBlockImport(blockNr) =>
         log.debug("New mined block {} imported from the inside", blockNr)
         val newState = state.withLastBlock(blockNr).withPossibleNewTopAt(blockNr)

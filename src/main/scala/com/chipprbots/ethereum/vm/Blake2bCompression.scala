@@ -34,17 +34,17 @@ object Blake2bCompression {
   def parseNumberOfRounds(input: Array[Byte]): Long =
     Integer.toUnsignedLong(bytesToInt(copyOfRange(input, 0, 4)))
 
-  /** Parses input according to the rules defined in: https://eips.ethereum.org/EIPS/eip-152
-    * The encoded inputs are corresponding to the ones specified in the BLAKE2 RFC Section 3.2:
+  /** Parses input according to the rules defined in: https://eips.ethereum.org/EIPS/eip-152 The encoded inputs are
+    * corresponding to the ones specified in the BLAKE2 RFC Section 3.2:
     *
-    * rounds - the number of rounds - 32-bit unsigned big-endian word
-    * h - the state vector - 8 unsigned 64-bit little-endian words
-    * m - the message block vector - 16 unsigned 64-bit little-endian words
-    * t_0, t_1 - offset counters - 2 unsigned 64-bit little-endian words
-    * f - the final block indicator flag - 8-bit word
+    * rounds - the number of rounds - 32-bit unsigned big-endian word h - the state vector - 8 unsigned 64-bit
+    * little-endian words m - the message block vector - 16 unsigned 64-bit little-endian words t_0, t_1 - offset
+    * counters - 2 unsigned 64-bit little-endian words f - the final block indicator flag - 8-bit word
     *
-    * @param input [4 bytes for rounds][64 bytes for h][128 bytes for m][8 bytes for t_0][8 bytes for t_1][1 byte for f]
-    * @return all parsed inputs from input array: (rounds, h, m, t, f)
+    * @param input
+    *   [4 bytes for rounds][64 bytes for h][128 bytes for m][8 bytes for t_0][8 bytes for t_1][1 byte for f]
+    * @return
+    *   all parsed inputs from input array: (rounds, h, m, t, f)
     */
   private def parseInput(input: Array[Byte]): (Long, Array[Long], Array[Long], Array[Long], Boolean) = {
     val rounds = parseNumberOfRounds(input)

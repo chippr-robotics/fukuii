@@ -840,11 +840,11 @@ trait GenesisDataLoaderBuilder {
 
 }
 
-/** Provides the basic functionality of a Node, except the mining algorithm.
-  * The latter is loaded dynamically based on configuration.
+/** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
+  * configuration.
   *
-  * @see [[MiningBuilder MiningBuilder]],
-  *      [[MiningConfigBuilder ConsensusConfigBuilder]]
+  * @see
+  *   [[MiningBuilder MiningBuilder]], [[MiningConfigBuilder ConsensusConfigBuilder]]
   */
 trait Node
     extends SecureRandomBuilder

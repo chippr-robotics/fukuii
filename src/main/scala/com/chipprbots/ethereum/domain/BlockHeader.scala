@@ -17,10 +17,11 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 
 import BlockHeaderImplicits._
 
-/** @param extraFields contains the new fields added in ECIPs 1097 and 1098 and can contain values:
-  *  - HefPreECIP1098: represents the ETC blocks without checkpointing nor treasury enabled
-  *  - HefPostECIP1098: represents the ETC blocks with treasury enabled but not checkpointing
-  *  - HefPostECIP1097: represents the ETC blocks with both checkpointing and treasury enabled
+/** @param extraFields
+  *   contains the new fields added in ECIPs 1097 and 1098 and can contain values:
+  *   - HefPreECIP1098: represents the ETC blocks without checkpointing nor treasury enabled
+  *   - HefPostECIP1098: represents the ETC blocks with treasury enabled but not checkpointing
+  *   - HefPostECIP1097: represents the ETC blocks with both checkpointing and treasury enabled
   */
 case class BlockHeader(
     parentHash: ByteString,
@@ -87,7 +88,8 @@ case class BlockHeader(
   }
 
   /** calculates blockHash for given block header
-    * @return - hash that can be used to get block bodies / receipts
+    * @return
+    *   \- hash that can be used to get block bodies / receipts
     */
   lazy val hash: ByteString = ByteString(kec256(this.toBytes: Array[Byte]))
 
@@ -110,8 +112,10 @@ object BlockHeader {
 
   /** Given a block header, returns it's rlp encoded bytes without nonce and mix hash
     *
-    * @param blockHeader to be encoded without PoW fields
-    * @return rlp.encode( [blockHeader.parentHash, ..., blockHeader.extraData] + extra fields )
+    * @param blockHeader
+    *   to be encoded without PoW fields
+    * @return
+    *   rlp.encode( [blockHeader.parentHash, ..., blockHeader.extraData] + extra fields )
     */
   def getEncodedWithoutNonce(blockHeader: BlockHeader): Array[Byte] = {
     // toRLPEncodeable is guaranteed to return a RLPList

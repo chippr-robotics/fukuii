@@ -15,8 +15,10 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
   type PS = ProgramState[W, S]
 
   /** Executes a top-level program (transaction)
-    * @param context context to be executed
-    * @return result of the execution
+    * @param context
+    *   context to be executed
+    * @return
+    *   result of the execution
     */
   def run(context: ProgramContext[W, S]): ProgramResult[W, S] = {
     {
@@ -24,7 +26,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       import org.bouncycastle.util.encoders.Hex
       log.trace(
         s"caller:  $callerAddr | recipient: $recipientAddr | gasPrice: $gasPrice | value: $value | inputData: ${Hex
-          .toHexString(inputData.toArray)}"
+            .toHexString(inputData.toArray)}"
       )
     }
 
@@ -60,8 +62,8 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       }
     }
 
-  /** Contract creation - Λ function in YP
-    * salt is used to create contract by CREATE2 opcode. See https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
+  /** Contract creation - Λ function in YP salt is used to create contract by CREATE2 opcode. See
+    * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
     */
   private[vm] def create(
       context: PC,
@@ -83,15 +85,14 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       val conflict = context.world.nonEmptyCodeOrNonceAccount(newAddress)
 
       /** Specification of https://eips.ethereum.org/EIPS/eip-1283 states, that `originalValue` should be taken from
-        *  world which is left after `a reversion happens on the current transaction`, so in current scope `context.originalWorld`.
+        * world which is left after `a reversion happens on the current transaction`, so in current scope
+        * `context.originalWorld`.
         *
-        *  But ets test expects that it should be taken from world after the new account initialisation, which clears
-        *  account storage.
-        *  As it seems other implementations encountered similar problems with this ambiguity:
-        *  ambiguity:
-        *  https://gist.github.com/holiman/0154f00d5fcec5f89e85894cbb46fcb2 - explanation of geth and parity treating this
-        *  situation differently.
-        *  https://github.com/mana-ethereum/mana/pull/579 - elixir eth client dealing with same problem.
+        * But ets test expects that it should be taken from world after the new account initialisation, which clears
+        * account storage. As it seems other implementations encountered similar problems with this ambiguity:
+        * ambiguity: https://gist.github.com/holiman/0154f00d5fcec5f89e85894cbb46fcb2 - explanation of geth and parity
+        * treating this situation differently. https://github.com/mana-ethereum/mana/pull/579 - elixir eth client
+        * dealing with same problem.
         */
       val originInitialisedAccount = context.originalWorld.initialiseAccount(newAddress)
 

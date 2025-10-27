@@ -153,7 +153,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     }
   }
 
-  //TODO: investigate why reorganisation is not triggered after 2 nodes with conflicting branches connect
+  // TODO: investigate why reorganisation is not triggered after 2 nodes with conflicting branches connect
   "peers should choose the branch with a checkpoint even if it's shorter" in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
@@ -165,11 +165,11 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
       _ <- peer2.importBlocksUntil(20)(IdentityUpdate)
       _ <- peer2.startRegularSync()
       _ <- peer2.connectToPeers(Set(peer1.node))
-      //without new added blocks the syncing and reorganisation are not triggered
+      // without new added blocks the syncing and reorganisation are not triggered
       _ <- peer1.mineNewBlocks(500.milliseconds, 10)(IdentityUpdate)
       _ <- peer1.waitForRegularSyncLoadLastBlock(19)
     } yield assert(true)
-  //these should pass
+  // these should pass
 //      assert(peer1.blockchainReader.getBestBlock().get.hash == peer2.blockchainReader.getBestBlock().get.hash )
 //      assert(peer1.bl.getLatestCheckpointBlockNumber() == peer2.bl.getLatestCheckpointBlockNumber())
   }

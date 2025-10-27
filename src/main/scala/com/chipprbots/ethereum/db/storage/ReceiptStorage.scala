@@ -15,8 +15,7 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.ByteUtils.byteSequenceToBuffer
 import com.chipprbots.ethereum.utils.ByteUtils.compactPickledBytes
 
-/** This class is used to store the Receipts, by using:
-  * Key: hash of the block to which the list of receipts belong
+/** This class is used to store the Receipts, by using: Key: hash of the block to which the list of receipts belong
   * Value: the list of receipts
   */
 class ReceiptStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[BlockHash, Seq[Receipt]] {

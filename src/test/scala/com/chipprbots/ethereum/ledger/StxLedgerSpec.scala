@@ -18,13 +18,13 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
 
   "StxLedger" should "correctly estimate minimum gasLimit to run transaction which throws" in new ScenarioSetup {
 
-    /** Transaction requires gasLimit equal to 121825, but actual gas used due to refund is equal 42907.
-      * Our simulateTransaction properly estimates gas usage to 42907, but requires at least 121825 gas to
-      * make that simulation
+    /** Transaction requires gasLimit equal to 121825, but actual gas used due to refund is equal 42907. Our
+      * simulateTransaction properly estimates gas usage to 42907, but requires at least 121825 gas to make that
+      * simulation
       *
-      * After some investigation it seems that semantics required from estimateGas is that it should return
-      * minimal gas required to sendTransaction, not minimal gas used by transaction. (it is implemented that way in
-      * parity and geth)
+      * After some investigation it seems that semantics required from estimateGas is that it should return minimal gas
+      * required to sendTransaction, not minimal gas used by transaction. (it is implemented that way in parity and
+      * geth)
       */
 
     val tx = LegacyTransaction(0, 0, lastBlockGasLimit, existingAddress, 0, sendData)
@@ -92,14 +92,14 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
     val header: BlockHeader = preparedBlock.block.header.copy(number = 1, stateRoot = preparedBlock.stateRootHash)
 
     /** All operations in `ledger.prepareBlock` are performed on ReadOnlyWorldStateProxy so there are no updates in
-      * underlying storages, but StateRootHash returned by it `expect` this updates to be in storages.
-      * It leads to MPTexception.RootNotFound
+      * underlying storages, but StateRootHash returned by it `expect` this updates to be in storages. It leads to
+      * MPTexception.RootNotFound
       */
 
     assertThrows[MPTException](stxLedger.simulateTransaction(stxFromAddress, header, None))
 
-    /** Solution is to return this ReadOnlyWorldStateProxy from `ledger.prepareBlock` along side with preparedBlock
-      * and perform simulateTransaction on this world.
+    /** Solution is to return this ReadOnlyWorldStateProxy from `ledger.prepareBlock` along side with preparedBlock and
+      * perform simulateTransaction on this world.
       */
     val result: TxResult =
       stxLedger.simulateTransaction(stxFromAddress, header, Some(preparedWorld))
@@ -168,7 +168,7 @@ trait ScenarioSetup extends EphemBlockchainTestSetup {
     InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       blockchain.getBackingMptStorage(-1),
-      ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       UInt256.Zero,
       ByteString(MerklePatriciaTrie.EmptyRootHash),
       noEmptyAccounts = false,
@@ -181,19 +181,12 @@ trait ScenarioSetup extends EphemBlockchainTestSetup {
   val existingEmptyAccountAddres: Address = Address(20)
   val existingEmptyAccount: Account = Account.empty()
 
-  /** Failing code which mess up with gas estimation
-    * contract FunkyGasPattern {
-    *   string public field;
-    *   function SetField(string value) {
-    *     // This check will screw gas estimation! Good, good!
-    *     if (msg.gas < 100000) {
-    *       throw;
-    *     }
-    *     field = value;
-    *   }
-    * }
+  /** Failing code which mess up with gas estimation contract FunkyGasPattern { string public field; function
+    * SetField(string value) { // This check will screw gas estimation! Good, good! if (msg.gas < 100000) { throw; }
+    * field = value; } }
     *
-    * @note Example from https://github.com/ethereum/go-ethereum/pull/3587
+    * @note
+    *   Example from https://github.com/ethereum/go-ethereum/pull/3587
     */
   val failingCode: ByteString = ByteString(
     Hex.decode(

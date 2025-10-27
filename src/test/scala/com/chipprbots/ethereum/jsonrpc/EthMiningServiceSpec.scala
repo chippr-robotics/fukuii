@@ -341,7 +341,7 @@ class EthMiningServiceSpec
     val fakeWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       blockchain.getReadOnlyMptStorage(),
-      ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       UInt256.Zero,
       ByteString.empty,
       noEmptyAccounts = false,

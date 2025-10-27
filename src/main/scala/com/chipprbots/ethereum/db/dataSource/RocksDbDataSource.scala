@@ -34,9 +34,12 @@ class RocksDbDataSource(
 
   /** This function obtains the associated value to a key, if there exists one.
     *
-    * @param namespace which will be searched for the key.
-    * @param key       the key retrieve the value.
-    * @return the value associated with the passed key.
+    * @param namespace
+    *   which will be searched for the key.
+    * @param key
+    *   the key retrieve the value.
+    * @return
+    *   the value associated with the passed key.
     */
   override def get(namespace: Namespace, key: Key): Option[Value] = {
     dbLock.readLock().lock()
@@ -55,12 +58,13 @@ class RocksDbDataSource(
     } finally dbLock.readLock().unlock()
   }
 
-  /** This function obtains the associated value to a key, if there exists one. It assumes that
-    * caller already properly serialized key. Useful when caller knows some pattern in data to
-    * avoid generic serialization.
+  /** This function obtains the associated value to a key, if there exists one. It assumes that caller already properly
+    * serialized key. Useful when caller knows some pattern in data to avoid generic serialization.
     *
-    * @param key the key retrieve the value.
-    * @return the value associated with the passed key.
+    * @param key
+    *   the key retrieve the value.
+    * @return
+    *   the value associated with the passed key.
     */
   override def getOptimized(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]] = {
     dbLock.readLock().lock()
@@ -132,8 +136,8 @@ class RocksDbDataSource(
   def iterate(namespace: Namespace): Observable[Either[IterationError, (Array[Byte], Array[Byte])]] =
     Observable.fromResource(namespaceIterator(namespace)).flatMap(it => moveIterator(it))
 
-  /** This function is used only for tests.
-    * This function updates the DataSource by deleting all the (key-value) pairs in it.
+  /** This function is used only for tests. This function updates the DataSource by deleting all the (key-value) pairs
+    * in it.
     */
   override def clear(): Unit = {
     destroy()
@@ -177,13 +181,15 @@ class RocksDbDataSource(
     } finally dbLock.writeLock().unlock()
   }
 
-  /** This function is used only for tests.
-    * This function closes the DataSource, if it is not yet closed, and deletes all the files used by it.
+  /** This function is used only for tests. This function closes the DataSource, if it is not yet closed, and deletes
+    * all the files used by it.
     */
   override def destroy(): Unit =
-    try if (!isClosed) {
-      close()
-    } finally destroyDB()
+    try
+      if (!isClosed) {
+        close()
+      }
+    finally destroyDB()
 
   protected def destroyDB(): Unit =
     try {
@@ -303,7 +309,7 @@ object RocksDbDataSource {
     val (db, handles, readOptions, dbOptions, cfOptions) = createDB(rocksDbConfig, namespaces)
     assert(allNameSpaces.size == handles.size)
     val handlesMap = allNameSpaces.zip(handles.toList).toMap
-    //This assert ensures that we do not have duplicated namespaces
+    // This assert ensures that we do not have duplicated namespaces
     assert(handlesMap.size == handles.size)
     new RocksDbDataSource(db, rocksDbConfig, readOptions, dbOptions, cfOptions, allNameSpaces, handlesMap)
   }

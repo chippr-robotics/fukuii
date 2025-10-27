@@ -85,7 +85,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = Config.clientId,
       capabilities = Seq(Capability.ETH63),
-      listenPort = 0, //Local node not listening
+      listenPort = 0, // Local node not listening
       nodeId = ByteString(1)
     )
 

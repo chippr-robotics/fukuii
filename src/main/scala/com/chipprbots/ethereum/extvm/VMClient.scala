@@ -16,8 +16,9 @@ import com.chipprbots.ethereum.vm._
 
 import Implicits._
 
-/** @param testMode - if enabled the client will send blockchain configuration with each configuration.
-  *                 This is useful to override configuration for each test, rather than to recreate the VM.
+/** @param testMode
+  *   \- if enabled the client will send blockchain configuration with each configuration. This is useful to override
+  *   configuration for each test, rather than to recreate the VM.
   */
 class VMClient(externalVmConfig: VmConfig.ExternalConfig, messageHandler: MessageHandler, testMode: Boolean)
     extends Logger {

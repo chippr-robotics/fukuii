@@ -22,7 +22,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
 
   val KeySizeWithoutPrefix: Int = 32
   val KeySize: Int = KeySizeWithoutPrefix + 1
-  //Hash size + prefix
+  // Hash size + prefix
   val KeyNumberLimit: Int = 40
   val OtherNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('r'.toByte)
 
@@ -219,7 +219,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
           val valList2 = keyList.map(2.toByte +: _)
           db.update(prepareUpdate(namespace = OtherNamespace2, toUpsert = keyList.zip(valList2)))
 
-          //Removal of keys from the OtherNamespace namespace
+          // Removal of keys from the OtherNamespace namespace
           db.update(prepareUpdate(namespace = OtherNamespace, toRemove = keyList))
 
           keyList.foreach { key =>
@@ -229,7 +229,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
             assert(db.get(OtherNamespace2, key).contains(value))
           }
 
-          //Removal of keys from the OtherNamespace2 namespace
+          // Removal of keys from the OtherNamespace2 namespace
           db.update(prepareUpdate(namespace = OtherNamespace2, toRemove = keyList))
 
           keyList.foreach { key =>
