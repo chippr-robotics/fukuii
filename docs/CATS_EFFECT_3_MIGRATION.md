@@ -4,30 +4,51 @@
 **Repository**: chippr-robotics/fukuii  
 **Current Version**: Cats Effect 2.5.5  
 **Target Version**: Cats Effect 3.5.4 (latest stable)  
-**Status**: Planning Complete
+**Status**: **BLOCKED - Monix Compatibility Issue**
+
+---
+
+## ⚠️ MIGRATION BLOCKED
+
+**Blocker**: Monix 3.4.1 does not provide full Cats Effect 3 support.
+
+**Details**: See [MONIX_CE3_COMPATIBILITY_ANALYSIS.md](./MONIX_CE3_COMPATIBILITY_ANALYSIS.md) for complete analysis.
+
+**Issue**: Monix 3.4.1 provides type class instances for CE2 (`Effect`, `ContextShift`, `Bracket`) which no longer exist in CE3. Compilation fails when attempting to use Monix `Task` with CE3 dependencies.
+
+**Resolution Options**:
+1. **Wait for Monix CE3 support** (unknown timeline, not recommended)
+2. **Migrate from Monix to CE3 IO** (4-6 weeks effort, recommended long-term)
+3. **Defer CE3 migration** (keep CE2, recommended short-term)
+4. **Create compatibility shim** (1 week effort, temporary solution)
+
+**Decision**: **DEFER CE3 MIGRATION** until Monix migration is completed or alternative solution is implemented.
 
 ---
 
 ## Executive Summary
 
-This document outlines the migration plan for upgrading from Cats Effect 2.5.5 to Cats Effect 3.5.4. The migration is a prerequisite for full Scala 3 adoption and provides significant benefits including improved performance, better type safety, and a more ergonomic API.
+This document outlines the migration plan for upgrading from Cats Effect 2.5.5 to Cats Effect 3.5.4. The migration was originally planned as a prerequisite for full Scala 3 adoption, but is currently **blocked** by Monix compatibility issues.
 
 **Current Usage Assessment:**
 - Limited Cats Effect 2 usage in codebase
-- Primary usage: `Resource` for resource management
+- Primary usage: `Resource` for resource management with Monix `Task`
 - Test code uses: `Deferred`, `Ref`, and `Effect` type class
 - Main production code uses `Resource` with Monix `Task`
 - No direct usage of `IO` monad in current codebase
 - Usage is concentrated in ~14 files
+- **BLOCKER**: Heavy Monix usage (~423 Scala files use Monix)
 
-**Migration Complexity**: **Low to Medium**
-- Most usage is in test code
-- Breaking changes are well-documented and mechanical
-- Primary usage (`Resource`) has minimal API changes
-- Concurrent primitives moved to different packages
-- `Effect` type class removed (requires small refactor)
+**Migration Complexity**: **CHANGED FROM Low-Medium to HIGH**
+- Initial assessment underestimated Monix dependency
+- Monix 3.4.1 incompatible with CE3
+- Requires either:
+  - Monix migration to CE3 IO (4-6 weeks)
+  - Waiting for Monix CE3 support (timeline unknown)
+  - Building compatibility shims (complex, temporary)
 
-**Estimated Effort**: 4-8 hours for code changes + testing
+**Original Estimated Effort**: 4-8 hours ❌  
+**Revised Estimated Effort**: 4-6 weeks (due to Monix migration requirement) ⚠️
 
 ---
 
@@ -35,13 +56,14 @@ This document outlines the migration plan for upgrading from Cats Effect 2.5.5 t
 
 1. [Breaking Changes Analysis](#breaking-changes-analysis)
 2. [Current Usage Inventory](#current-usage-inventory)
-3. [Migration Strategy](#migration-strategy)
-4. [Code Changes Required](#code-changes-required)
-5. [Testing Strategy](#testing-strategy)
-6. [Scala 3 Compatibility](#scala-3-compatibility)
-7. [Risk Assessment](#risk-assessment)
-8. [Timeline](#timeline)
-9. [Recommendations](#recommendations)
+3. [Monix Compatibility Blocker](#monix-compatibility-blocker)
+4. [Migration Strategy](#migration-strategy)
+5. [Code Changes Required](#code-changes-required)
+6. [Testing Strategy](#testing-strategy)
+7. [Scala 3 Compatibility](#scala-3-compatibility)
+8. [Risk Assessment](#risk-assessment)
+9. [Timeline](#timeline)
+10. [Updated Recommendations](#updated-recommendations)
 
 ---
 
@@ -153,9 +175,76 @@ Import types breakdown:
 
 ---
 
-## 3. Migration Strategy
+## 3. Monix Compatibility Blocker
 
-### 3.1 Phased Approach
+### 3.1 Discovered Issue
+
+During migration attempt, compilation failed due to Monix 3.4.1 incompatibility with Cats Effect 3:
+
+```
+[error] Symbol 'type cats.effect.Effect' is missing from the classpath.
+[error] This symbol is required by 'class monix.eval.instances.CatsEffectForTask'.
+
+[error] Symbol 'type cats.effect.ContextShift' is missing from the classpath.
+[error] This symbol is required by 'value monix.tail.Iterant.cs'.
+
+[error] Symbol 'type cats.effect.Bracket' is missing from the classpath.
+[error] This symbol is required by 'class monix.reactive.Observable.CatsInstances'.
+```
+
+###  3.2 Root Cause
+
+**Monix 3.4.1 was built for Cats Effect 2.x** and provides type class instances for CE2 type classes that **no longer exist** in CE3:
+
+| CE2 Type Class | CE3 Status | Monix 3.4.1 Provides |
+|----------------|------------|----------------------|
+| `Effect[F]` | ❌ Removed (replaced by `Async`) | ✅ Yes |
+| `ContextShift[F]` | ❌ Removed (built into runtime) | ✅ Yes |
+| `Bracket[F, E]` | ❌ Removed (replaced by `MonadCancel`) | ✅ Yes |
+
+When CE3 is on the classpath, these type classes don't exist, causing Monix's instances to fail compilation.
+
+### 3.3 Affected Production Code
+
+Files using Monix with CE2 type classes:
+- `BlockImporter.scala` - Effect type class
+- `PeerDiscoveryManager.scala` - ContextShift for Iterant
+- `TransactionHistoryService.scala` - Bracket for Observable
+- ~420 other files using Monix Task/Observable
+
+### 3.4 Resolution Options
+
+**See [MONIX_CE3_COMPATIBILITY_ANALYSIS.md](./MONIX_CE3_COMPATIBILITY_ANALYSIS.md) for detailed analysis.**
+
+| Option | Effort | Timeline | Recommendation |
+|--------|--------|----------|----------------|
+| Wait for Monix CE3 support | Low | Unknown (likely never) | ❌ Not viable |
+| Migrate Monix → CE3 IO | High | 4-6 weeks | ✅ Best long-term |
+| Defer CE3 migration | Low | N/A | ✅ Short-term |
+| Build compatibility shim | Medium | 1 week | ⚠️ Temporary solution |
+
+**Decision**: **DEFER CE3 MIGRATION** until Monix situation is resolved.
+
+### 3.5 Impact on Scala 3 Migration
+
+This blocker affects the overall migration strategy:
+
+**Original Plan**:
+1. Cats Effect 3 migration
+2. Scala 3 migration
+
+**Revised Options**:
+1. **Option A**: Defer CE3, do Scala 3 with CE2 (partial Scala 3 support)
+2. **Option B**: Migrate Monix → CE3 IO first, then CE3, then Scala 3
+3. **Option C**: Do Scala 3 with CE2, then migrate Monix → IO in Scala 3
+
+**Recommendation**: See Section 10 (Updated Recommendations) for detailed analysis.
+
+---
+
+## 4. Migration Strategy (Original - Now Superseded)
+
+### 4.1 Phased Approach (No Longer Viable Without Monix Migration)
 
 **Phase 1: Dependency Update** (1 hour)
 - Update `project/Dependencies.scala` to Cats Effect 3.5.4
@@ -478,45 +567,203 @@ libraryDependencies += "org.typelevel" %% "cats-effect" % "3.5.4"
 
 ---
 
-## 9. Recommendations
+## 9. Recommendations (Original - Superseded by Section 10)
 
-### 9.1 Immediate Actions
+### 9.1 Immediate Actions (OUTDATED - See Section 10)
 
-1. **Approve Migration**: Low risk, high value for Scala 3 migration
-2. **Schedule Work**: 1-2 day effort for one developer
-3. **Run Baseline Tests**: Establish current state before changes
-4. **Review Breaking Changes**: Team should understand CE3 differences
+1. ~~**Approve Migration**: Low risk, high value for Scala 3 migration~~ **BLOCKED**
+2. ~~**Schedule Work**: 1-2 day effort for one developer~~ **Requires 4-6 weeks**
+3. **Run Baseline Tests**: Still relevant for future migration
+4. **Review Breaking Changes**: Still relevant, plus review Monix migration
 
-### 9.2 Migration Order
+### 9.2 Migration Order (OUTDATED - See Section 10)
 
-**Recommended Order**:
-1. ✅ **Do This First**: Cats Effect 3 migration (this document)
-2. ⏭️ **Then Do**: Scala 3 migration (already planned)
-3. ⏭️ **Later Consider**: Monix to CE3 IO migration (optional, larger effort)
+**Original Recommended Order** (NO LONGER VIABLE):
+1. ~~✅ **Do This First**: Cats Effect 3 migration~~ ❌ **BLOCKED**
+2. ⏭️ **Then Do**: Scala 3 migration (may need revision)
+3. ⏭️ **Later Consider**: Monix to CE3 IO migration (NOW REQUIRED FOR CE3)
 4. ⏭️ **Later Consider**: json4s to Circe migration (deferred)
 5. ⏭️ **Later Consider**: Shapeless 3 migration (during Scala 3 switch)
 
-**Rationale**: CE3 is prerequisite for Scala 3; minimal effort with high value.
+**Rationale**: ~~CE3 is prerequisite for Scala 3~~ CE3 requires Monix migration first.
 
 ### 9.3 Post-Migration Actions
 
 1. **Document Lessons Learned**: Update this document with actual experience
-2. **Update Team Guidelines**: Document CE3 best practices
+2. **Update Team Guidelines**: Document CE3 best practices (when migration happens)
 3. **Monitor Performance**: Watch for any issues in production
 4. **Consider CE3 Features**: Evaluate Supervisor, Dispatcher, etc. for future use
 
-### 9.4 Decision: Proceed with Migration
+### 9.4 Decision: ~~Proceed~~ DEFER Migration
 
-**Recommendation**: **PROCEED** with Cats Effect 3 migration
+**Original Recommendation**: ~~**PROCEED** with Cats Effect 3 migration~~
+
+**Updated Recommendation**: **DEFER** - See Section 10 for revised recommendations
+
+**Justification for Deferral**:
+- ❌ NOT low risk - requires Monix migration
+- ❌ NOT 8-12 hours - requires 4-6 weeks
+- ⚠️ Still required for best Scala 3 support
+- ✅ Can do Scala 3 with CE2 (partial support)
+- ⚠️ Community strongly recommends CE3 (but acknowledges Monix issue)
+- ⚠️ Rollback won't solve Monix problem
+
+---
+
+## 10. Updated Recommendations (Post-Blocker Discovery)
+
+### 10.1 Immediate Actions (This PR)
+
+**Decision**: **DEFER CE3 MIGRATION** - Document findings and plan next steps
+
+**Actions for This PR**:
+1. ✅ Document Monix blocker (this section + MONIX_CE3_COMPATIBILITY_ANALYSIS.md)
+2. ✅ Keep migration planning documents for future reference
+3. ⏭️ Revert to Cats Effect 2.5.5 in Dependencies.scala
+4. ⏭️ Revert Scala version to 2.13.8 (or keep 2.13.14 if CE2 compatible)
+5. ⏭️ Revert log4cats to 1.7.0 (CE2 compatible)
+6. ⏭️ Revert scalafix to 0.10.4 (CE2 compatible)
+7. ✅ Keep import path cleanups (CE2/CE3 compatible)
+8. ⏭️ Update README and CONTRIBUTING about Monix/CE3 situation
+9. ⏭️ Update SCALA_3_MIGRATION_REPORT.md with blocker
+
+**Outcome**: Document why CE3 migration is blocked, provide path forward
+
+### 10.2 Near-term Planning (Next Quarter)
+
+**Priority Decision Needed**: Which provides more value?
+
+**Option A: Scala 3 First (with CE2)**
+- Pros: Achieves Scala 3 goal, CE2 has partial Scala 3 support
+- Cons: Less optimal CE support in Scala 3, will need CE3 eventually
+- Timeline: Per existing Scala 3 migration plan
+- Recommendation: Viable if Scala 3 is higher priority
+
+**Option B: Monix Migration First**
+- Pros: Enables CE3, then easy Scala 3 migration
+- Cons: Delays Scala 3, significant effort (4-6 weeks)
+- Timeline: 4-6 weeks for Monix → IO, then 1 week for CE3, then Scala 3
+- Recommendation: Best technical path, but longer timeline
+
+**Option C: Parallel Approach**
+- Pros: Make progress on both fronts
+- Cons: Complex, requires more resources
+- Timeline: Depends on team size
+- Recommendation: Only if team has capacity
+
+### 10.3 Recommended Path Forward
+
+**Recommended Sequence**:
+
+1. **Phase 0: Planning** (Now - 2 weeks)
+   - Create detailed Monix → CE3 IO migration plan
+   - Identify all Monix usage patterns
+   - Create proof-of-concept for one module
+   - Estimate effort and resources
+   - **Deliverable**: Monix migration specification document
+
+2. **Phase 1: Monix Migration** (4-6 weeks)
+   - Replace Monix Task with CE3 IO
+   - Replace Monix Observable with fs2 Stream
+   - Replace Monix Scheduler with IORuntime
+   - Module-by-module migration (bytes → rlp → crypto → node)
+   - **Deliverable**: Codebase using CE3 IO instead of Monix
+
+3. **Phase 2: CE3 Upgrade** (1 week)
+   - Update cats-effect to 3.5.4 (now trivial)
+   - Update log4cats to 2.6.0
+   - Run tests
+   - **Deliverable**: Full CE3 adoption
+
+4. **Phase 3: Scala 3 Migration** (Per existing plan)
+   - Execute Scala 3 migration with CE3 support
+   - **Deliverable**: Scala 3 codebase
+
+**Total Timeline**: 6-8 weeks + Scala 3 migration time
+
+### 10.4 Alternative: Scala 3 with CE2
+
+If timeline pressure requires Scala 3 sooner:
+
+1. **Phase 1: Scala 3 Migration with CE2** (Per existing plan)
+   - Migrate to Scala 3.3.4
+   - Keep Cats Effect 2.5.5
+   - Keep Monix 3.4.1
+   - **Note**: Monix has partial Scala 3 support
+
+2. **Phase 2: Monix Migration in Scala 3** (4-6 weeks)
+   - Perform Monix → CE3 IO migration in Scala 3 codebase
+   - May be slightly easier with Scala 3 features
+
+3. **Phase 3: CE3 Upgrade** (1 week)
+   - Update to CE3 after Monix gone
+
+**Pros**: Achieves Scala 3 goal faster  
+**Cons**: Monix Scala 3 support is partial, migration complexity
+
+### 10.5 Cost-Benefit Analysis
+
+| Approach | Timeline | Risk | Scala 3 | CE3 | Recommendation |
+|----------|----------|------|---------|-----|----------------|
+| Monix → IO → CE3 → Scala 3 | 8-10 weeks | Medium | ⏭️ Later | ✅ Yes | Best technical |
+| Scala 3 (CE2) → Monix → IO → CE3 | 6-8 weeks | Higher | ✅ Yes | ⏭️ Later | Faster Scala 3 |
+| Defer everything | 0 weeks | Low | ❌ No | ❌ No | Not recommended |
+
+### 10.6 Resource Requirements
+
+**For Monix → CE3 IO Migration**:
+- 1-2 senior Scala developers (full-time, 4-6 weeks)
+- Experience with Cats Effect and functional Scala
+- Understanding of reactive streams / fs2
+- DevOps support for testing infrastructure
+- QA support for validation
+
+**Skills Needed**:
+- Deep Monix `Task` knowledge
+- Cats Effect 3 `IO` expertise
+- fs2 streams (for Observable replacement)
+- Effect system design patterns
+- Performance testing and optimization
+
+### 10.7 Final Recommendation
+
+**Recommendation**: **Plan Monix → CE3 IO migration as next major project**
 
 **Justification**:
-- Low risk due to limited usage
-- Required for Scala 3 adoption
-- Well-documented migration path
-- Community strongly recommends CE3
-- Performance and feature improvements
-- ~8-12 hours effort is reasonable
-- Easy rollback if needed
+1. CE3 is future of Typelevel ecosystem
+2. Monix development is slowing/stalled
+3. CE3 IO has better performance
+4. Better Scala 3 support with CE3
+5. Community momentum behind CE3
+6. Will need to do this eventually anyway
+
+**Next Steps**:
+1. Review this analysis with team
+2. Decide priority: Scala 3 vs CE3
+3. Allocate resources for Monix migration planning
+4. Create detailed Monix migration specification
+5. Begin Phase 0 (Planning) when approved
+
+---
+
+## 11. Conclusion (Updated)
+
+The Cats Effect 3 migration is **not viable** without first migrating from Monix to CE3 IO. This discovery significantly changes the migration strategy and timeline.
+
+**Key Findings**:
+- ❌ Original plan (8-12 hours) not feasible
+- ✅ Comprehensive migration plan still valuable for reference
+- ⚠️ Requires 4-6 week Monix migration first
+- ✅ Still important for long-term technical health
+- ⚠️ Affects Scala 3 migration strategy
+
+**Recommended Actions**:
+1. **Immediate**: Defer CE3, document blocker
+2. **Near-term**: Plan comprehensive Monix → IO migration
+3. **Medium-term**: Execute Monix migration
+4. **Long-term**: Complete CE3 upgrade, then Scala 3
+
+**Decision Point**: Team must decide priority between Scala 3 and CE3/Monix migration.
 
 ---
 
