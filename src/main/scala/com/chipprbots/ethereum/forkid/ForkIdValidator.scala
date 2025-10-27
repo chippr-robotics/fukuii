@@ -6,9 +6,8 @@ import akka.util.ByteString
 
 import cats.Monad
 import cats.data.EitherT._
+import cats.effect.IO
 import cats.implicits._
-
-import monix.eval.Task
 
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.SelfAwareStructuredLogger
@@ -26,7 +25,7 @@ import cats.effect._
 
 object ForkIdValidator {
 
-  implicit val taskLogger: SelfAwareStructuredLogger[Task] = Slf4jLogger.getLogger[Task]
+  implicit val ioLogger: SelfAwareStructuredLogger[IO] = Slf4jLogger.getLogger[IO]
   implicit val syncIoLogger: SelfAwareStructuredLogger[SyncIO] = Slf4jLogger.getLogger[SyncIO]
 
   val maxUInt64: BigInt = (BigInt(0x7fffffffffffffffL) << 1) + 1 // scalastyle:ignore magic.number
