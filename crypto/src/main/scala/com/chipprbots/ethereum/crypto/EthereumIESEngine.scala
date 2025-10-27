@@ -18,25 +18,31 @@ import org.bouncycastle.crypto.parsers.ECIESPublicKeyParser
 import org.bouncycastle.util.Arrays
 import org.bouncycastle.util.BigIntegers
 
-/** Support class for constructing integrated encryption cipher
-  * for doing basic message exchanges on top of key agreement ciphers.
-  * Follows the description given in IEEE Std 1363a with a couple of changes
-  * specific to Ethereum:
-  * - Hash the MAC key before use
-  * - Include the encryption IV in the MAC computation
+/** Support class for constructing integrated encryption cipher for doing basic message exchanges on top of key
+  * agreement ciphers. Follows the description given in IEEE Std 1363a with a couple of changes specific to Ethereum:
+  *   - Hash the MAC key before use
+  *   - Include the encryption IV in the MAC computation
   */
 
-/** set up for use with stream mode, where the key derivation function
-  * is used to provide a stream of bytes to xor with the message.
+/** set up for use with stream mode, where the key derivation function is used to provide a stream of bytes to xor with
+  * the message.
   *
-  * @param kdf        the key derivation function used for byte generation
-  * @param mac        the message authentication code generator for the message
-  * @param hash       hash ing function
-  * @param cipher     the actual cipher
-  * @param IV         vector with random values used to initialize cipher
-  * @param prvSrc     private key source
-  * @param pubSrc     public key source
-  * @param hashMacKey determines if for mac use kdf value (if false) or hashed kdf value (if true)
+  * @param kdf
+  *   the key derivation function used for byte generation
+  * @param mac
+  *   the message authentication code generator for the message
+  * @param hash
+  *   hash ing function
+  * @param cipher
+  *   the actual cipher
+  * @param IV
+  *   vector with random values used to initialize cipher
+  * @param prvSrc
+  *   private key source
+  * @param pubSrc
+  *   public key source
+  * @param hashMacKey
+  *   determines if for mac use kdf value (if false) or hashed kdf value (if true)
   */
 class EthereumIESEngine(
     kdf: Either[ConcatKDFBytesGenerator, MGF1BytesGeneratorExt],
@@ -214,7 +220,7 @@ class EthereumIESEngine(
     agree.init(prv)
     val sharedSecret = BigIntegers.asUnsignedByteArray(agree.getFieldSize, agree.calculateAgreement(pub))
 
-    val fillKDFunction = ((outLen: Int)) =>
+    val fillKDFunction = (outLen: Int) =>
       kdf.fold(_.generateBytes(outLen, sharedSecret), _.generateBytes(outLen, sharedSecret))
 
     val encodedKey = encodedPublicKey.orElse(encodedEphKeyPair).getOrElse(new Array[Byte](0))

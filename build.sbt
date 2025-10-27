@@ -12,11 +12,15 @@ val nixBuild = sys.props.isDefinedAt("nix")
 // Enable dev mode: disable certain flags, etc.
 val fukuiiDev = sys.props.get("fukuiiDev").contains("true") || sys.env.get("FUKUII_DEV").contains("true")
 
-lazy val compilerOptimizationsForProd = Seq(
+// Scala 2.x specific optimizations
+lazy val scala2OptimizationsForProd = Seq(
   "-opt:l:method", // method-local optimizations
   "-opt:l:inline", // inlining optimizations
   "-opt-inline-from:com.chipprbots.**" // inlining the project only
 )
+
+// Scala 3 has a different optimizer, these flags are not needed
+lazy val scala3OptimizationsForProd = Seq.empty[String]
 
 // Releasing. https://github.com/olafurpg/sbt-ci-release
 inThisBuild(
@@ -102,13 +106,17 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   // Configure scalacOptions based on Scala version
   scalacOptions := {
     val base = baseScalacOptions
-    val versionSpecific = CrossVersion.partialVersion(scalaVersion.value) match {
-      case Some((3, _)) => scala3Options
-      case Some((2, 13)) => scala2Options ++ fatalWarningsScala2
-      case Some((2, 12)) => scala2Options ++ fatalWarningsScala2
-      case _ => Seq.empty
+    val (versionSpecific, optimizations) = CrossVersion.partialVersion(scalaVersion.value) match {
+      case Some((3, _)) => 
+        (scala3Options, if (fukuiiDev) Seq.empty else scala3OptimizationsForProd)
+      case Some((2, 13)) => 
+        (scala2Options ++ fatalWarningsScala2, if (fukuiiDev) Seq.empty else scala2OptimizationsForProd)
+      case Some((2, 12)) => 
+        (scala2Options ++ fatalWarningsScala2, if (fukuiiDev) Seq.empty else scala2OptimizationsForProd)
+      case _ => 
+        (Seq.empty, Seq.empty)
     }
-    base ++ versionSpecific ++ (if (fukuiiDev) Seq.empty else compilerOptimizationsForProd)
+    base ++ versionSpecific ++ optimizations
   },
   (Compile / console / scalacOptions) ~= (_.filterNot(
     Set(

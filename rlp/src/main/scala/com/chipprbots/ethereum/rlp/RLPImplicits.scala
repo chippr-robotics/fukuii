@@ -49,7 +49,7 @@ object RLPImplicits {
     }
   }
 
-  //Used for decoding and encoding positive (or 0) BigInts
+  // Used for decoding and encoding positive (or 0) BigInts
   implicit val bigIntEncDec: RLPEncoder[BigInt] with RLPDecoder[BigInt] = new RLPEncoder[BigInt]
     with RLPDecoder[BigInt] {
 
@@ -64,14 +64,14 @@ object RLPImplicits {
     }
   }
 
-  //Used for decoding and encoding positive (or 0) longs
+  // Used for decoding and encoding positive (or 0) longs
   implicit val longEncDec: RLPEncoder[Long] with RLPDecoder[Long] = new RLPEncoder[Long] with RLPDecoder[Long] {
     override def encode(obj: Long): RLPEncodeable = bigIntEncDec.encode(BigInt(obj))
 
     override def decode(rlp: RLPEncodeable): Long = rlp match {
       case RLPValue(bytes) if bytes.length <= 8 => bigIntEncDec.decode(rlp).toLong
-      case RLPValue(bytes)                      => throw RLPException(s"expected max 8 bytes for Long; got ${bytes.length}", rlp)
-      case _                                    => throw RLPException(s"src is not an RLPValue", rlp)
+      case RLPValue(bytes) => throw RLPException(s"expected max 8 bytes for Long; got ${bytes.length}", rlp)
+      case _               => throw RLPException(s"src is not an RLPValue", rlp)
     }
   }
 

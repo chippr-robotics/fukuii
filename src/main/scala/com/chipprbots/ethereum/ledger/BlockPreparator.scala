@@ -36,9 +36,8 @@ class BlockPreparator(
     * modifications due to ECIP1097:
     *   1. Reward for block is distributed as:
     *      a. If treasury is disabled or it's has been selfdestructed: Pay 100% of it to the miner b. If a. isn't true:
-    *         Pay 80% of it to the miner Pay 20% of it to the treasury contract
-    *      2. Miner is payed a reward for the inclusion of ommers 3. Ommers's miners are payed a reward for their
-    *      inclusion in this block
+    *         Pay 80% of it to the miner Pay 20% of it to the treasury contract 2. Miner is payed a reward for the
+    *         inclusion of ommers 3. Ommers's miners are payed a reward for their inclusion in this block
     *
     * @param block
     *   the block being processed

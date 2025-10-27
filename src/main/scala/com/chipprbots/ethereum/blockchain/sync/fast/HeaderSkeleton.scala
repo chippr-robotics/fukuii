@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.domain.BlockHeader
   *   - skeletonHeaderNumbers = Seq(2, 5, 8)
   *   - batchStartingHeaderNumbers = Seq(0, 3, 6)
   *
-  * batch gap batch /-------------------\ /-----------\ /------------------\ 0 1 2 3 4 5 6 7 8 9 10
-  * \| | | | | from 1stSkeletonHeader 2ndSkeletonHeader lastSkeletonHeader to
+  * batch gap batch /-------------------\ /-----------\ /------------------\ 0 1 2 3 4 5 6 7 8 9 10 \| | | | | from
+  * 1stSkeletonHeader 2ndSkeletonHeader lastSkeletonHeader to
   *
   * @param from
   *   Lower bound for this skeleton, inclusive
