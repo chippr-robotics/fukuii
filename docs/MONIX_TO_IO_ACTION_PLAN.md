@@ -423,63 +423,117 @@ def iterate(): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
 ## Phase 3: Transaction Processing
 
 **Duration**: 5-7 days  
-**Owner**: Senior developer #1
+**Owner**: Senior developer #1  
+**Status**: ✅ In Progress
 
 ### Complex Streaming Logic
 
 #### 3.1 Migrate TransactionHistoryService.scala
-- [ ] Analyze complex Observable streaming patterns
-- [ ] Design fs2.Stream equivalent
-- [ ] Implement parallel streaming with `parEvalMap`
+- [x] Analyze complex Observable streaming patterns
+- [x] Design fs2.Stream equivalent
+- [x] Implement parallel streaming with `parEvalMap`
+- [x] Replace Observable.from → Stream.emits
+- [x] Replace Observable.concatMap → Stream.flatMap
+- [x] Replace Observable.mapEval → Stream.evalMap
+- [x] Replace Observable.toListL → Stream.compile.toList
+- [x] Replace Task.memoizeOnSuccess → IO.memoize
+- [x] Replace Task.now → IO.pure
+- [x] Replace Task.parMap2 → parMapN
 - [ ] Test transaction queries
+- [ ] Performance validation
 
 **File**: `src/main/scala/com/chipprbots/ethereum/transactions/TransactionHistoryService.scala`
 
-**Migration Pattern**:
+**Migration Completed**:
 ```scala
 // BEFORE
-Observable
-  .from(blocks)
-  .mapParallelOrdered(10)(blockNr => Task(fetchBlock(blockNr)))
+val txnsFromBlocks = Observable
+  .from(fromBlocks.reverse)
+  .mapParallelOrdered(10)(blockNr =>
+    Task(blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockNr))
+  )(OverflowStrategy.Unbounded)
   .collect { case Some(block) => block }
   .concatMap { block =>
-    Observable.from(block.transactions)
-      .collect(matchingTxs)
-      .mapEval(enrichTx)
+    Observable
+      .from(block.body.transactionList.reverse)
+      .collect(Function.unlift(MinedTxChecker.checkTx(_, account)))
+      .mapEval { case (tx, mkExtendedData) => ... }
   }
   .toListL
 
+Task.parMap2(txnsFromBlocks, txnsFromMempool)(_ ++ _)
+
 // AFTER
-Stream
-  .emits(blocks.toSeq)
-  .parEvalMap(10)(blockNr => IO(fetchBlock(blockNr)))
+val txnsFromBlocks = Stream
+  .emits(fromBlocks.reverse.toSeq)
+  .parEvalMap(10)(blockNr =>
+    IO(blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockNr))
+  )
   .collect { case Some(block) => block }
   .flatMap { block =>
-    Stream.emits(block.transactions.toSeq)
-      .collect(matchingTxs)
-      .evalMap(enrichTx)
+    Stream
+      .emits(block.body.transactionList.reverse.toSeq)
+      .collect(Function.unlift(MinedTxChecker.checkTx(_, account)))
+      .evalMap { case (tx, mkExtendedData) => ... }
   }
   .compile.toList
+
+(txnsFromBlocks, txnsFromMempool).parMapN(_ ++ _)
 ```
 
-**Acceptance Criteria**:
-- ✅ Transaction history queries work
-- ✅ Performance comparable to baseline
-- ✅ Tests pass
-
-#### 3.2 Migrate PendingTransactionsManager.scala
-- [ ] Update transaction pool with IO
-- [ ] Test transaction handling
+**Additional Changes**:
+- Updated `AkkaTaskOps.scala`: Task.deferFuture → IO.fromFuture
 
 **Acceptance Criteria**:
-- ✅ Transaction pool works correctly
-- ✅ Tests pass
+- ✅ TransactionHistoryService migrated to Stream[IO, _]
+- ⏳ Transaction history queries work
+- ⏳ Performance comparable to baseline
+- ⏳ Tests pass
+
+#### 3.2 Migrate AkkaTaskOps.scala
+- [x] Update TaskActorOps to use IO
+- [x] Replace Task.deferFuture → IO.fromFuture
+- [ ] Verify askFor method works with IO
+
+**File**: `src/main/scala/com/chipprbots/ethereum/jsonrpc/AkkaTaskOps.scala`
+
+**Acceptance Criteria**:
+- ✅ AkkaTaskOps uses IO
+- ⏳ Actor communication works correctly
 
 #### 3.3 Update Transaction Tests
+- [ ] Update LegacyTransactionHistoryServiceSpec.scala
 - [ ] Update all transaction-related tests
 
 **Acceptance Criteria**:
-- ✅ All transaction tests pass
+- ⏳ All transaction tests pass
+
+### Phase 3 Summary
+
+**Completed** (2 files):
+- ✅ TransactionHistoryService.scala: Complete Observable → Stream migration
+- ✅ AkkaTaskOps.scala: Task → IO for actor communication
+
+**Migration Patterns Applied**:
+- `Observable.from(it)` → `Stream.emits(it.toSeq)`
+- `Observable.mapParallelOrdered(n)` → `Stream.parEvalMap(n)`
+- `Observable.concatMap` → `Stream.flatMap`
+- `Observable.mapEval` → `Stream.evalMap`
+- `Observable.toListL` → `Stream.compile.toList`
+- `Task.memoizeOnSuccess` → `IO.memoize`
+- `Task.now` → `IO.pure`
+- `Task.parMap2` → `parMapN`
+- `Task.deferFuture` → `IO.fromFuture`
+
+**Remaining Work**:
+- Transaction test files migration
+- Performance validation
+- Integration test verification
+
+**Next Steps**:
+- Verify compilation
+- Run transaction tests
+- Continue with remaining transaction files or move to Phase 4
 
 ---
 
