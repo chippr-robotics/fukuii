@@ -42,6 +42,8 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 - Main application defaults to Scala 2.13 but can be built with Scala 3
 - CI pipeline tests both versions using matrix builds
 
+**Future Considerations**: See [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md) for detailed analysis of toolchain updates required for Scala 3 migration.
+
 ---
 
 ## Tool Inventory

@@ -185,6 +185,12 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 When modifying code derived from Mantis, include a notice in the header of changed files stating that you changed the file and add your own copyright line.
 
+## Development and Future Plans
+
+**Technology Stack**: This project uses Scala 2.13.6 with plans for future migration to Scala 3.0. For detailed information about the migration strategy, see our [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md).
+
+**Static Analysis**: We maintain a comprehensive static analysis toolchain. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
+
 Contact
 
 For questions or support, reach out to Chippr Robotics LLC via our GitHub repository.
