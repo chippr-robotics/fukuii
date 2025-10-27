@@ -7,6 +7,23 @@
 
 ---
 
+## Quick Reference
+
+| Question | Answer |
+|----------|--------|
+| **Is scalanet critical?** | ✅ YES - Essential for P2P networking |
+| **Can it be removed?** | ❌ NO - Required for network participation |
+| **Scala 3 support available?** | ❌ NO - No artifacts published |
+| **Alternative libraries?** | ❌ NO - No suitable drop-in replacement |
+| **Recommended action?** | 🔧 **Fork and migrate to Scala 3** |
+| **Timeline impact?** | ⏱️ Adds 3-4 weeks to migration |
+| **Migration complexity?** | 📊 Medium (estimated 60-114 hours) |
+| **Risk level?** | ⚠️ Medium (well-understood scope) |
+
+**TL;DR**: Scalanet must be forked and migrated to Scala 3. No alternatives exist. This is a blocking dependency for Scala 3 migration.
+
+---
+
 ## Executive Summary
 
 **Scalanet** is a **critical networking component** for the Fukuii Ethereum client, providing peer-to-peer discovery functionality via DevP2P (Ethereum's networking protocol). However, scalanet **does not have Scala 3 support** and appears to be an unmaintained IOHK (Input Output Hong Kong) library.
