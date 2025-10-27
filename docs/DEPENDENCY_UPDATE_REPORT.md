@@ -69,8 +69,8 @@ Successfully updated all critical dependencies to versions that support both Sca
 | Scala Logging | 3.9.2 | 3.9.5 | ✅ Yes |
 | Logstash Encoder | 6.4 | 8.0 | ✅ Yes (Java) |
 | Janino | 3.1.2 | 3.1.12 | ✅ Yes (Java) |
-| Log4cats Core | 2.1.1 | 1.7.0 | ✅ Yes (compatible with Cats Effect 2.x) |
-| Log4cats SLF4J | 1.3.1 | 1.7.0 | ✅ Yes (compatible with Cats Effect 2.x) |
+| Log4cats Core | 2.1.1 | 1.7.0 | ✅ Yes (downgraded for Cats Effect 2.x compatibility - 2.x requires CE 3) |
+| Log4cats SLF4J | 1.3.1 | 1.7.0 | ✅ Yes (upgraded within 1.x series, compatible with CE 2.x) |
 
 ### Dependencies Kept Unchanged (Strategy Deferred)
 
@@ -154,9 +154,19 @@ Ran security vulnerability check on critical updated dependencies:
    - **Action Required**: None (other tools still active)
    - **Timeline**: Will be re-enabled after Scala 3 migration
 
+3. **Log4cats Versioning**: Log4cats Core downgraded from 2.1.1 to 1.7.0
+   - **Reason**: Log4cats 2.x requires Cats Effect 3.x (breaking changes)
+   - **Impact**: None - 1.7.0 has Scala 3 support and works with Cats Effect 2.x
+   - **Action Required**: None (API compatible)
+   - **Timeline**: Will upgrade to Log4cats 2.x when migrating to Cats Effect 3.x
+
 3. **Test Library Updates**: Minor version updates to test frameworks
    - **Impact**: Test APIs remain compatible
    - **Action Required**: None identified
+
+4. **Log4cats Versioning Note**: Log4cats Core was intentionally kept at 1.x (downgrade from 2.1.1 to 1.7.0)
+   - **Reason**: Cats Effect 2.x compatibility (avoiding breaking changes)
+   - **Impact**: None - functionality preserved, Scala 3 support maintained
 
 ### API Compatibility
 
