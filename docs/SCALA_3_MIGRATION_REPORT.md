@@ -171,7 +171,7 @@ Many Scala 2 compiler flags are removed or renamed:
 | Shapeless | 2.3.3 | ✅ Shapeless 3 available | Major rewrite, significant changes |
 | Enumeratum | 1.6.1 | ✅ 1.7.x for Scala 3 | Minor upgrade |
 | Boopickle | 1.3.3 | ✅ 1.4.x for Scala 3 | Minor upgrade |
-| Scalanet | 0.6.0 | ❌ No Scala 3 support | **CRITICAL BLOCKER** - Fork required (see SCALANET_COMPATIBILITY_ASSESSMENT.md) |
+| Scalanet | ~~0.6.0~~ → Vendored | ✅ **RESOLVED - Vendored locally** | Vendored in `scalanet/` (67 files, Apache 2.0) - see SCALANET_COMPATIBILITY_ASSESSMENT.md |
 
 ### 3.2 Java Dependencies
 
@@ -185,18 +185,19 @@ All pure Java dependencies are compatible:
 
 ### 3.3 High-Risk Dependencies
 
-#### 3.3.1 Scalanet (IOHK Network Library) - **VERIFIED BLOCKER**
-- **Current**: 0.6.0
+#### 3.3.1 Scalanet (IOHK Network Library) - **✅ RESOLVED**
+- **Current**: ~~0.6.0 (external)~~ → **Vendored locally**
 - **Issue**: ❌ No Scala 3 artifacts available, appears unmaintained
 - **Impact**: **CRITICAL** - Essential for P2P networking and peer discovery
 - **Assessment**: Comprehensive analysis completed (see `SCALANET_COMPATIBILITY_ASSESSMENT.md`)
-- **Decision**: **Fork and migrate required**
-- **Solution**:
-  1. Fork scalanet to chippr-robotics organization
-  2. Migrate fork to Scala 3.3.4
-  3. Maintain as part of Fukuii project
-  4. Contact IOHK in parallel (may transfer maintenance)
-- **Timeline Impact**: Adds 3-4 weeks to migration (unavoidable)
+- **Decision**: **Vendor as part of Fukuii** (simpler than separate fork)
+- **Implementation** (October 27, 2025):
+  1. ✅ Vendored scalanet 0.8.0 source code into `scalanet/` directory
+  2. ✅ Added proper Apache 2.0 attribution (see `scalanet/ATTRIBUTION.md`)
+  3. ✅ Updated build to use local modules (scalanet, scalanetDiscovery)
+  4. ✅ Removed external dependency from Dependencies.scala
+- **Benefits**: Simpler than fork, easier Scala 3 migration, better integration
+- **Timeline Impact**: ~~Adds 3-4 weeks~~ **RESOLVED** - Will migrate with rest of codebase
 
 #### 3.3.2 json4s
 - **Current**: 3.6.9

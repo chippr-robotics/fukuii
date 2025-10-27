@@ -78,7 +78,7 @@ Successfully updated all critical dependencies to versions that support both Sca
 |------------|----------------|----------------|---------|
 | Cats Effect | 2.5.5 | 3.x available | Breaking API changes - defer migration to separate phase |
 | json4s | 3.6.9 | 4.0.x available | Breaking API changes - evaluate migration to Circe instead |
-| Scalanet | 0.6.0 | ❌ No Scala 3 support | **CRITICAL BLOCKER** - Fork required (see SCALANET_COMPATIBILITY_ASSESSMENT.md) |
+| ~~Scalanet~~ | ~~0.6.0~~ | ✅ **VENDORED LOCALLY** | **RESOLVED** - Vendored in `scalanet/` directory (see SCALANET_COMPATIBILITY_ASSESSMENT.md) |
 | Shapeless | 2.3.3 | 3.x available | Complete rewrite - migrate during Scala 3 switch |
 
 ---
@@ -196,13 +196,14 @@ Ran security vulnerability check on critical updated dependencies:
 
 ### Phase 1: Scala 3 Migration Preparation
 
-1. **Scalanet Compatibility - ✅ COMPLETED (October 27, 2025)**
+1. **Scalanet Compatibility - ✅ RESOLVED (October 27, 2025)**
    - ✅ Verified: No Scala 3 support available
-   - ✅ Assessment: Critical dependency, cannot be removed
-   - ✅ Decision: Fork and migrate required
-   - ✅ Documentation: See `SCALANET_COMPATIBILITY_ASSESSMENT.md`
-   - 📋 Next: Begin scalanet fork and migration (3-4 weeks)
-   - If unavailable, evaluate fork or alternative
+   - ✅ Assessment: Critical dependency, cannot be removed  
+   - ✅ Decision: Vendor locally as part of Fukuii
+   - ✅ Implementation: Vendored in `scalanet/` directory (67 files, Apache 2.0)
+   - ✅ Documentation: See `SCALANET_COMPATIBILITY_ASSESSMENT.md` and `scalanet/ATTRIBUTION.md`
+   - ✅ Build: Integrated as local modules (scalanet, scalanetDiscovery)
+   - 📋 Next: Migrate to Scala 3 alongside rest of Fukuii codebase
 
 2. **Cats Effect 3 Migration Planning**
    - Review breaking changes

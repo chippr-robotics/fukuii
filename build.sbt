@@ -143,6 +143,44 @@ val publishSettings = Seq(
 // which would fail if the project didn't have configuration to add to.
 val Integration = config("it").extend(Test)
 
+// Vendored scalanet modules (from IOHK's scalanet library)
+lazy val scalanet = {
+  val scalanet = project
+    .in(file("scalanet/src"))
+    .configs(Integration)
+    .settings(commonSettings("fukuii-scalanet"))
+    .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
+    .settings(publishSettings)
+    .settings(
+      libraryDependencies ++=
+        Dependencies.akka ++
+          Dependencies.cats ++
+          Dependencies.monix ++
+          Dependencies.testing
+    )
+
+  scalanet
+}
+
+lazy val scalanetDiscovery = {
+  val scalanetDiscovery = project
+    .in(file("scalanet/discovery"))
+    .configs(Integration)
+    .dependsOn(scalanet)
+    .settings(commonSettings("fukuii-scalanet-discovery"))
+    .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
+    .settings(publishSettings)
+    .settings(
+      libraryDependencies ++=
+        Dependencies.akka ++
+          Dependencies.cats ++
+          Dependencies.monix ++
+          Dependencies.testing
+    )
+
+  scalanetDiscovery
+}
+
 lazy val bytes = {
   val bytes = project
     .in(file("bytes"))
@@ -243,7 +281,7 @@ lazy val node = {
     .in(file("."))
     .configs(Integration, Benchmark, Evm, Rpc)
     .enablePlugins(BuildInfoPlugin)
-    .dependsOn(bytes, crypto, rlp)
+    .dependsOn(bytes, crypto, rlp, scalanet, scalanetDiscovery)
     .settings(
       buildInfoKeys ++= Seq[BuildInfoKey](
         name,
