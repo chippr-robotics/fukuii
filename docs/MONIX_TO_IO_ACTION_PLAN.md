@@ -327,57 +327,96 @@ trait SpecBase {
 ## Phase 2: Database Layer
 
 **Duration**: 5-7 days  
-**Owner**: Senior developer #2
+**Owner**: Senior developer #2  
+**Status**: ✅ In Progress
 
 ### High Priority: Observable → Stream Migration
 
 #### 2.1 Migrate RocksDbDataSource.scala
-- [ ] Convert `Observable` iteration to `fs2.Stream`
-- [ ] Update iterator methods
+- [x] Convert `Observable` iteration to `fs2.Stream`
+- [x] Update iterator methods
+- [x] Replace Observable.fromResource → Stream.resource
+- [x] Replace Observable.repeatEvalF → Stream.repeatEval
+- [x] Replace Task → IO in helper methods
 - [ ] Performance test iteration
 
 **File**: `src/main/scala/com/chipprbots/ethereum/db/dataSource/RocksDbDataSource.scala`
 
-**Migration Pattern**:
+**Migration Completed**:
 ```scala
 // BEFORE
-import monix.reactive.Observable
+private def dbIterator: Resource[Task, RocksIterator] =
+  Resource.fromAutoCloseable(Task(db.newIterator()))
 
-def iterate(namespace: Namespace): Observable[(Key, Value)] =
-  Observable.fromIterator(Task(iterator(namespace)))
+def iterate(): Observable[Either[IterationError, (Array[Byte], Array[Byte])]] =
+  Observable.fromResource(dbIterator).flatMap(it => moveIterator(it))
 
 // AFTER
-import fs2.Stream
-import cats.effect.IO
+private def dbIterator: Resource[IO, RocksIterator] =
+  Resource.fromAutoCloseable(IO(db.newIterator()))
 
-def iterate(namespace: Namespace): Stream[IO, (Key, Value)] =
-  Stream.fromIterator[IO](IO(iterator(namespace)), chunkSize = 1024)
+def iterate(): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
+  Stream.resource(dbIterator).flatMap(it => moveIterator(it))
 ```
 
 **Acceptance Criteria**:
 - ✅ Database iteration uses fs2.Stream
-- ✅ Performance within 10% of baseline
-- ✅ Tests pass
+- ⏳ Performance within 10% of baseline
+- ⏳ Tests pass
 
 #### 2.2 Migrate Storage Abstractions
-- [ ] Migrate `KeyValueStorage.scala`
-- [ ] Migrate `NodeStorage.scala`
-- [ ] Migrate `EvmCodeStorage.scala`
-- [ ] Migrate `TransactionalKeyValueStorage.scala`
-- [ ] Migrate `EphemDataSource.scala`
+- [x] Migrate `DataSource.scala` trait
+- [x] Migrate `KeyValueStorage.scala`
+- [x] Migrate `EphemDataSource.scala`
+- [x] Migrate `RocksDbDataSource.scala`
+- [ ] Update tests using these storage classes
+- [ ] Verify `NodeStorage.scala` and `EvmCodeStorage.scala` (may inherit changes)
+
+**Files Updated**:
+- `DataSource.scala` - trait updated with Stream[IO, _] signatures
+- `KeyValueStorage.scala` - storageContent returns Stream[IO, _]
+- `EphemDataSource.scala` - Observable.fromIterable → Stream.emits
+- `RocksDbDataSource.scala` - complete Observable → Stream migration
 
 **Acceptance Criteria**:
 - ✅ All storage classes use IO
-- ✅ Observable removed from storage layer
-- ✅ Storage tests pass
+- ✅ Observable removed from core storage layer
+- ⏳ Storage tests pass
 
 #### 2.3 Update Database Tests
-- [ ] Update `RockDbIteratorSpec.scala`
+- [ ] Update `RockDbIteratorSpec.scala` internal tests
 - [ ] Update all storage tests
+- [ ] Verify integration tests
 
 **Acceptance Criteria**:
-- ✅ All database tests pass
-- ✅ Integration tests pass
+- ⏳ All database tests pass
+- ⏳ Integration tests pass
+
+### Phase 2 Summary
+
+**Completed** (4 core files):
+- ✅ DataSource trait: Observable → Stream[IO, _]
+- ✅ RocksDbDataSource: Complete Observable → Stream migration
+- ✅ EphemDataSource: Observable.fromIterable → Stream.emits
+- ✅ KeyValueStorage: storageContent now returns Stream[IO, _]
+
+**Migration Patterns Applied**:
+- `Observable.fromResource(r)` → `Stream.resource(r)`
+- `Observable.fromTask(t)` → `Stream.eval(t)`
+- `Observable.repeatEvalF(t)` → `Stream.repeatEval(t)`
+- `Observable.fromIterable(it)` → `Stream.emits(it.toSeq)`
+- `Observable.onErrorHandleWith` → `Stream.handleErrorWith`
+- `Task` → `IO` throughout
+
+**Remaining Work**:
+- Test files with Observable usage (RockDbIteratorSpec)
+- Performance validation
+- Integration test verification
+
+**Next Steps**:
+- Verify compilation
+- Run database tests
+- Begin Phase 3: Transaction Processing
 
 ---
 
