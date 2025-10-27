@@ -88,7 +88,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
 
         LoggingTestKit
           .debug("Mining with Keccak")
-          .withCustom { _: LoggingEvent =>
+          .withCustom { (_: LoggingEvent) =>
             coordinator ! StopMining
             true
           }

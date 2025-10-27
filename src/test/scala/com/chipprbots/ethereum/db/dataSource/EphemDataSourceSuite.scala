@@ -25,7 +25,7 @@ class EphemDataSourceSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
     }
 
   test("EphemDataSource insert") {
-    forAll(seqByteStringOfNItemsGen(KeySize)) { unFilteredKeyList: Seq[ByteString] =>
+    forAll(seqByteStringOfNItemsGen(KeySize)) { (unFilteredKeyList: Seq[ByteString]) =>
       val keyList = unFilteredKeyList.filter(_.length == KeySize)
       val db = EphemDataSource()
       putMultiple(dataSource = db, toInsert = keyList.zip(keyList))
@@ -38,7 +38,7 @@ class EphemDataSourceSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
   }
 
   test("EphemDataSource delete") {
-    forAll(seqByteStringOfNItemsGen(KeySize)) { keyList: Seq[ByteString] =>
+    forAll(seqByteStringOfNItemsGen(KeySize)) { (keyList: Seq[ByteString]) =>
       val (keysToDelete, keyValueLeft) = keyList.splitAt(Gen.choose(0, keyList.size).sample.get)
 
       val db = EphemDataSource()
@@ -57,7 +57,7 @@ class EphemDataSourceSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
   }
 
   test("EphemDataSource clear") {
-    forAll(seqByteStringOfNItemsGen(KeySize)) { keyList: Seq[ByteString] =>
+    forAll(seqByteStringOfNItemsGen(KeySize)) { (keyList: Seq[ByteString]) =>
       val db = EphemDataSource()
 
       putMultiple(db, keyList.zip(keyList))

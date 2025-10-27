@@ -27,7 +27,7 @@ class KnownNodesStorage(val dataSource: DataSource) extends TransactionalKeyValu
     ArraySeq.unsafeWrapArray(k.mkString(" ").getBytes(StorageStringCharset.UTF8Charset))
   }
 
-  def valueDeserializer: IndexedSeq[Byte] => Set[String] = (valueBytes: IndexedSeq[Byte]) =>
+  def valueDeserializer: IndexedSeq[Byte] => Set[String] = ((valueBytes: IndexedSeq[Byte])) =>
     new String(valueBytes.toArray, StorageStringCharset.UTF8Charset).split(' ').toSet
 
   def getKnownNodes(): Set[URI] =

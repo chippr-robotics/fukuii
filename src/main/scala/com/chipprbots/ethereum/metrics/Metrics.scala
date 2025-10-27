@@ -39,7 +39,7 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
       //      If you do, you risk getting no metrics out of the gauge.
       //      So we just use a vanilla `this` but any other non-`null`
       //      value would also do.
-      .builder(mkName(name), this, (_: Any) => computeValue())
+      .builder(mkName(name), this, ((_: Any)) => computeValue())
       .register(registry)
 
   /** Returns a [[io.micrometer.core.instrument.Counter Counter]].

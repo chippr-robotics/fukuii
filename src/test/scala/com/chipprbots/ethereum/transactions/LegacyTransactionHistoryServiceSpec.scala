@@ -37,7 +37,7 @@ class LegacyTransactionHistoryServiceSpec
 
   def createFixture() = new Fixture
 
-  "returns account recent transactions in newest -> oldest order" in testCaseM { fixture: Fixture =>
+  "returns account recent transactions in newest -> oldest order" in testCaseM { (fixture: Fixture) =>
     import fixture._
 
     val address = Address("ee4439beb5c71513b080bbf9393441697a29f478")
@@ -94,7 +94,7 @@ class LegacyTransactionHistoryServiceSpec
   }
 
   "does not return account recent transactions from older blocks and return pending txs" in testCaseM {
-    fixture: Fixture =>
+    (fixture: Fixture) =>
       import fixture._
 
       val blockWithTx = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
@@ -119,7 +119,7 @@ class LegacyTransactionHistoryServiceSpec
   }
 
   "marks transactions as checkpointed if there's checkpoint block following block containing transaction" in testCaseM {
-    fixture: Fixture =>
+    (fixture: Fixture) =>
       import fixture._
 
       val keyPair = generateKeyPair(secureRandom)

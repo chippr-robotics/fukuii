@@ -17,9 +17,9 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
 
   object IntStorage {
     val intNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('i'.toByte)
-    val intSerializer: Int => IndexedSeq[Byte] = (i: Int) => rlpEncode(i).toIndexedSeq
+    val intSerializer: Int => IndexedSeq[Byte] = ((i: Int)) => rlpEncode(i).toIndexedSeq
     val intDeserializer: IndexedSeq[Byte] => Int =
-      (encodedInt: IndexedSeq[Byte]) => rlpDecode[Int](encodedInt.toArray)
+      ((encodedInt: IndexedSeq[Byte])) => rlpDecode[Int](encodedInt.toArray)
   }
 
   class IntStorage(val dataSource: DataSource) extends KeyValueStorage[Int, Int, IntStorage] {

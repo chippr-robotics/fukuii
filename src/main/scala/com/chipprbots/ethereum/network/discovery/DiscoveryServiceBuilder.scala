@@ -156,7 +156,7 @@ trait DiscoveryServiceBuilder {
           peerGroup = peerGroup,
           privateKey = privateKey,
           localNodeAddress = localNode.address,
-          toNodeAddress = (address: InetMultiAddress) =>
+          toNodeAddress = ((address: InetMultiAddress)) =>
             ENode.Address(
               ip = address.inetSocketAddress.getAddress,
               udpPort = address.inetSocketAddress.getPort,
@@ -178,7 +178,7 @@ trait DiscoveryServiceBuilder {
       node = localNode,
       config = v4Config,
       network = network,
-      toAddress = (address: ENode.Address) => InetMultiAddress(new InetSocketAddress(address.ip, address.udpPort)),
+      toAddress = ((address: ENode.Address)) => InetMultiAddress(new InetSocketAddress(address.ip, address.udpPort)),
       // On a network with many bootstrap nodes the enrollment and the initial self-lookup can take considerable
       // amount of time. We can do the enrollment in the background, which means the service is available from the
       // start, and the nodes can be contacted and gradually as they are discovered during the iterative lookup,

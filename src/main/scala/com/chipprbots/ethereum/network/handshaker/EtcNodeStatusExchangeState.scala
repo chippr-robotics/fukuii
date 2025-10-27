@@ -27,7 +27,7 @@ trait EtcNodeStatusExchangeState[T <: Message] extends InProgressState[PeerInfo]
     DisconnectedState(Disconnect.Reasons.TimeoutOnReceivingAMessage)
   }
 
-  protected def applyRemoteStatusMessage: RemoteStatus => HandshakerState[PeerInfo] = { status: RemoteStatus =>
+  protected def applyRemoteStatusMessage: RemoteStatus => HandshakerState[PeerInfo] = { (status: RemoteStatus) =>
     log.debug("Peer returned status ({})", status)
 
     val validNetworkID = status.networkId == handshakerConfiguration.peerConfiguration.networkId

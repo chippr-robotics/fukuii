@@ -22,7 +22,7 @@ class LruCache[K <: AnyRef, V <: AnyRef](
     CacheBuilder
       .newBuilder()
       .maximumSize(config.maxSize)
-      .removalListener((notification: RemovalNotification[K, V]) =>
+      .removalListener(((notification: RemovalNotification[K, V])) =>
         if (notification.wasEvicted()) {
           notificationHandler.foreach(handler => handler(notification))
         }

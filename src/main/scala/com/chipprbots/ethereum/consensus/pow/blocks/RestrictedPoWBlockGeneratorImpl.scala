@@ -71,7 +71,7 @@ class RestrictedPoWBlockGeneratorImpl(
         prepared.pendingBlock.copy(block = prepared.pendingBlock.block.copy(header = headerWithAdditionalExtraData))
       )
 
-      cache.updateAndGet { t: List[PendingBlockAndState] =>
+      cache.updateAndGet { (t: List[PendingBlockAndState]) =>
         (modifiedPrepared :: t).take(blockCacheSize)
       }
 

@@ -152,8 +152,8 @@ class RLPxConnectionHandlerSpec
     connection.expectMsgClass(classOf[Tcp.Register])
 
     //AuthHandshaker throws exception on initial message
-    (mockHandshaker.handleInitialMessage _).expects(*).onCall { _: ByteString => throw new Exception("MAC invalid") }
-    (mockHandshaker.handleInitialMessageV4 _).expects(*).onCall { _: ByteString => throw new Exception("MAC invalid") }
+    (mockHandshaker.handleInitialMessage _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
+    (mockHandshaker.handleInitialMessageV4 _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
 
     val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
     rlpxConnection ! Tcp.Received(data)
@@ -175,8 +175,8 @@ class RLPxConnectionHandlerSpec
     tcpActorProbe.expectMsg(Tcp.Write(initPacket))
 
     //AuthHandshaker handles the response message (that throws an invalid MAC)
-    (mockHandshaker.handleResponseMessage _).expects(*).onCall { _: ByteString => throw new Exception("MAC invalid") }
-    (mockHandshaker.handleResponseMessageV4 _).expects(*).onCall { _: ByteString => throw new Exception("MAC invalid") }
+    (mockHandshaker.handleResponseMessage _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
+    (mockHandshaker.handleResponseMessageV4 _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
 
     val data = ByteString((0 until AuthHandshaker.ResponsePacketLength).map(_.toByte).toArray)
     rlpxConnection ! Tcp.Received(data)

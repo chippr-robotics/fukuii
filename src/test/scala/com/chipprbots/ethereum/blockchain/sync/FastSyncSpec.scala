@@ -114,7 +114,7 @@ class FastSyncSpec
 
   "FastSync" - {
     "for reporting progress" - {
-      "returns NotSyncing until pivot block is selected and first data being fetched" in testCaseM { fixture: Fixture =>
+      "returns NotSyncing until pivot block is selected and first data being fetched" in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -123,7 +123,7 @@ class FastSyncSpec
         } yield assert(status === Status.NotSyncing)).timeout(timeout.duration)
       }
 
-      "returns Syncing when pivot block is selected and started fetching data" in testCaseM { fixture: Fixture =>
+      "returns Syncing when pivot block is selected and started fetching data" in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -143,7 +143,7 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with block progress once both header and body is fetched" in testCaseM { fixture: Fixture =>
+      "returns Syncing with block progress once both header and body is fetched" in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -173,7 +173,7 @@ class FastSyncSpec
             fastSyncBlockValidationX = 1,
             fastSyncThrottle = 1.millis
           )
-      }) { fixture: Fixture =>
+      }) { (fixture: Fixture) =>
         import fixture._
 
         (for {

@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.utils.NumericUtils._
 import com.chipprbots.ethereum.utils.StringUtils
 
 object CommonJsonCodecs {
-  implicit val decodeBigInt: Decoder[BigInt] = { (c: HCursor) =>
+  implicit val decodeBigInt: Decoder[BigInt] = { ((c: HCursor)) =>
     // try converting from JSON number
     c.as[JsonNumber].flatMap(n => Try(n.toBigInt.get).toEither).left.flatMap { _ =>
       // if that fails, convert from JSON string
@@ -22,16 +22,16 @@ object CommonJsonCodecs {
   }
 
   implicit val encodeByteString: Encoder[ByteString] =
-    (b: ByteString) => ("0x" + Hex.toHexString(b.toArray)).asJson
+    ((b: ByteString)) => ("0x" + Hex.toHexString(b.toArray)).asJson
 
   implicit val decodeByteString: Decoder[ByteString] =
-    (c: HCursor) => c.as[String].map(s => ByteString(Hex.decode(StringUtils.drop0x(s))))
+    ((c: HCursor)) => c.as[String].map(s => ByteString(Hex.decode(StringUtils.drop0x(s))))
 
   implicit val encodeAddress: Encoder[Address] =
-    (a: Address) => a.toString.asJson
+    ((a: Address)) => a.toString.asJson
 
   implicit val decodeAddress: Decoder[Address] =
-    (c: HCursor) => c.as[String].map(Address(_))
+    ((c: HCursor)) => c.as[String].map(Address(_))
 
   private def stringToBigInt(s: String): Either[Throwable, BigInt] =
     if (s.isEmpty || s == "0x") Right(BigInt(0)) else Try(parseHexOrDecNumber(s)).toEither

@@ -60,19 +60,19 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
   }
 
   test("~") {
-    forAll(bigIntGen) { n: BigInt =>
+    forAll(bigIntGen) { (n: BigInt) =>
       assert(~UInt256(n) == UInt256(~n))
     }
-    forAll(Table("n", specialNumbers: _*)) { n: BigInt =>
+    forAll(Table("n", specialNumbers: _*)) { (n: BigInt) =>
       assert(~UInt256(n) == UInt256(~n))
     }
   }
 
   test("negation") {
-    forAll(bigIntGen) { (n: BigInt) =>
+    forAll(bigIntGen) { ((n: BigInt)) =>
       assert(-UInt256(n) == UInt256(-n))
     }
-    forAll(Table("n", specialNumbers: _*)) { (n: BigInt) =>
+    forAll(Table("n", specialNumbers: _*)) { ((n: BigInt)) =>
       assert(-UInt256(n) == UInt256(-n))
     }
     assert(-UInt256(1) == UInt256(-1))
