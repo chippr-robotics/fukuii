@@ -82,6 +82,15 @@ object Dependencies {
     "io.monix" %% "monix" % "3.4.1" // Updated for partial Scala 3 support
   )
 
+  val fs2: Seq[ModuleID] = {
+    val fs2Version = "3.9.3" // Latest stable with CE3 support
+    Seq(
+      "co.fs2" %% "fs2-core" % fs2Version,
+      "co.fs2" %% "fs2-io" % fs2Version,
+      "co.fs2" %% "fs2-reactive-streams" % fs2Version // For interop if needed
+    )
+  }
+
   // Scalanet is now vendored locally in scalanet/ directory
   // See scalanet/ATTRIBUTION.md for details
   val network: Seq[ModuleID] = Seq.empty
