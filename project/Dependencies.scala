@@ -70,10 +70,11 @@ object Dependencies {
 
   val cats: Seq[ModuleID] = {
     val catsVersion = "2.9.0" // Updated for Scala 3 support, compatible with 2.13.6
+    val catsEffectVersion = "3.5.4" // Cats Effect 3 - required for full Scala 3 support
     Seq(
       "org.typelevel" %% "mouse" % "1.2.1", // Compatible with Scala 2.13.6 and 3.x
       "org.typelevel" %% "cats-core" % catsVersion,
-      "org.typelevel" %% "cats-effect" % "2.5.5" // Keep 2.x for now (3.x has breaking changes)
+      "org.typelevel" %% "cats-effect" % catsEffectVersion // CE3 upgrade - see docs/CATS_EFFECT_3_MIGRATION.md
     )
   }
 
@@ -94,8 +95,8 @@ object Dependencies {
     "com.typesafe.scala-logging" %% "scala-logging" % "3.9.5", // Updated for Scala 3 support
     "net.logstash.logback" % "logstash-logback-encoder" % "8.0", // Updated
     "org.codehaus.janino" % "janino" % "3.1.12", // Updated for security
-    "org.typelevel" %% "log4cats-core" % "1.7.0", // Compatible with cats-effect 2.x and Scala 3
-    "org.typelevel" %% "log4cats-slf4j" % "1.7.0" // Compatible with cats-effect 2.x and Scala 3
+    "org.typelevel" %% "log4cats-core" % "2.6.0", // Updated for Cats Effect 3.x and Scala 3 support
+    "org.typelevel" %% "log4cats-slf4j" % "2.6.0" // Updated for Cats Effect 3.x and Scala 3 support
   )
 
   val crypto = Seq("org.bouncycastle" % "bcprov-jdk15on" % "1.66")

@@ -5,7 +5,7 @@ import akka.testkit.TestActor.AutoPilot
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import cats.effect.concurrent.Deferred
+import cats.effect.Deferred
 
 import monix.eval.Task
 import monix.execution.Scheduler

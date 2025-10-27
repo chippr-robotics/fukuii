@@ -5,8 +5,8 @@ import java.nio.file.Files
 import akka.util.ByteString
 
 import cats.effect.Resource
-import cats.effect.concurrent.Deferred
-import cats.effect.concurrent.Ref
+import cats.effect.Deferred
+import cats.effect.Ref
 
 import monix.eval.Task
 import monix.reactive.Consumer

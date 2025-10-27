@@ -44,7 +44,7 @@ crossPaths := true
 ThisBuild / evictionErrorLevel := Level.Info
 
 val `scala-2.12` = "2.12.13"
-val `scala-2.13` = "2.13.8" // Upgraded from 2.13.6 for Scala 3-ready dependencies (SIP-51 requirement)
+val `scala-2.13` = "2.13.14" // Upgraded for Cats Effect 3.5.4 compatibility (SIP-51 requirement - CE3 dependencies require 2.13.14+)
 val `scala-3` = "3.3.4" // Scala 3 LTS version
 val supportedScalaVersions = List(`scala-2.12`, `scala-2.13`)
 val scala3SupportedVersions = List(`scala-2.13`, `scala-3`) // Cross-compilation target for Scala 3 migration

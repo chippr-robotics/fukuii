@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum
 
-import cats.effect.Bracket
-import cats.effect.Effect
+import cats.effect.Async
 import cats.effect.Resource
+import cats.effect.Sync
 import cats.effect.implicits._
 
 import monix.eval.Task
@@ -24,15 +24,15 @@ trait SpecBase extends TypeCheckedTripleEquals with Diagrams with Matchers { sel
   override val executionContext = ExecutionContext.global
   implicit val scheduler: Scheduler = Scheduler(executionContext)
 
-  def customTestCaseResourceM[M[_]: Effect, T](
+  def customTestCaseResourceM[M[_]: Async, T](
       fixture: Resource[M, T]
-  )(theTest: T => M[Assertion])(implicit bracket: Bracket[M, Throwable]): Future[Assertion] =
+  )(theTest: T => M[Assertion]): Future[Assertion] =
     fixture.use(theTest).toIO.unsafeToFuture()
 
-  def customTestCaseM[M[_]: Effect, T](fixture: => T)(theTest: T => M[Assertion]): Future[Assertion] =
+  def customTestCaseM[M[_]: Async, T](fixture: => T)(theTest: T => M[Assertion]): Future[Assertion] =
     customTestCaseResourceM(Resource.pure[M, T](fixture))(theTest)
 
-  def testCaseM[M[_]: Effect](theTest: => M[Assertion]): Future[Assertion] = customTestCaseM(())(_ => theTest)
+  def testCaseM[M[_]: Async](theTest: => M[Assertion]): Future[Assertion] = customTestCaseM(())(_ => theTest)
 
   def testCase(theTest: => Assertion): Future[Assertion] = testCaseM(Task(theTest))
 }
@@ -48,7 +48,7 @@ trait SpecFixtures { self: SpecBase =>
 
   def createFixture(): Fixture
 
-  def testCaseM[M[_]: Effect](theTest: Fixture => M[Assertion]): Future[Assertion] =
+  def testCaseM[M[_]: Async](theTest: Fixture => M[Assertion]): Future[Assertion] =
     customTestCaseM(createFixture())(theTest)
 
   def testCase(theTest: Fixture => Assertion): Future[Assertion] =
@@ -60,7 +60,7 @@ trait ResourceFixtures { self: SpecBase =>
 
   def fixtureResource: Resource[Task, Fixture]
 
-  def testCaseM[M[_]: Effect](theTest: Fixture => M[Assertion]): Future[Assertion] =
+  def testCaseM[M[_]: Async](theTest: Fixture => M[Assertion]): Future[Assertion] =
     customTestCaseResourceM(fixtureResource.mapK(Task.liftTo[M]))(theTest)
 
   /** Task-specific method to avoid type inference issues in [[testCaseM]]
