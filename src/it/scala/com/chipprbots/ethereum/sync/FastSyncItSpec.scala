@@ -2,8 +2,7 @@ package com.chipprbots.ethereum.sync
 
 import akka.util.ByteString
 
-import monix.execution.Scheduler
-import monix.execution.schedulers.SchedulerService
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -19,11 +18,10 @@ import com.chipprbots.ethereum.sync.util.SyncCommonItSpec._
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpecUtils._
 
 class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
-  implicit val testScheduler: SchedulerService = Scheduler.fixedPool("test", 16)
+  implicit val testIORuntime: IORuntime = IORuntime.global
 
   override def afterAll(): Unit = {
-    testScheduler.shutdown()
-    testScheduler.awaitTermination(60.second)
+    // IORuntime shutdown is handled automatically
   }
 
   it should "sync blockchain without state nodes" in customTestCaseResourceM(

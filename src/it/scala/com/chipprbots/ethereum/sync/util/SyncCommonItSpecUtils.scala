@@ -3,24 +3,24 @@ package com.chipprbots.ethereum.sync.util
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeoutException
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 
 object SyncCommonItSpecUtils {
-  def retryUntilWithDelay[A](source: Task[A], delay: FiniteDuration, maxRetries: Int)(
+  def retryUntilWithDelay[A](source: IO[A], delay: FiniteDuration, maxRetries: Int)(
       predicate: A => Boolean
-  ): Task[A] =
-    source.delayExecution(delay).flatMap { result =>
+  ): IO[A] =
+    IO.sleep(delay) *> source.flatMap { result =>
       if (predicate(result)) {
-        Task.now(result)
+        IO.pure(result)
       } else {
         if (maxRetries > 0) {
           retryUntilWithDelay(source, delay, maxRetries - 1)(predicate)
         } else {
-          Task.raiseError(new TimeoutException("Task time out after all retries"))
+          IO.raiseError(new TimeoutException("Task time out after all retries"))
         }
       }
     }

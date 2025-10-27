@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.sync
 
-import monix.execution.Scheduler
-import monix.execution.schedulers.SchedulerService
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -18,7 +17,7 @@ import com.chipprbots.ethereum.sync.util.SyncCommonItSpec._
 import com.chipprbots.ethereum.utils.Config
 
 class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
-  implicit val testScheduler: SchedulerService = Scheduler.fixedPool("test", 16)
+  implicit val testIORuntime: IORuntime = IORuntime.global
 
   override def beforeAll(): Unit = {
     // Clear metrics registry to prevent pollution from previous test runs
@@ -29,8 +28,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
   }
 
   override def afterAll(): Unit = {
-    testScheduler.shutdown()
-    testScheduler.awaitTermination(120.second)
+    // IORuntime shutdown is handled automatically
   }
 
   "peer 2 should sync to the top of peer1 blockchain" - {
