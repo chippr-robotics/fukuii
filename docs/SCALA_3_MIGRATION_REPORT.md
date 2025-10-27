@@ -14,13 +14,14 @@ This report analyzes the requirements and steps needed to migrate the Fukuii Eth
 
 1. **Large codebase**: ~270K lines across multiple modules (bytes, crypto, rlp, node)
 2. **External dependencies**: 30+ libraries that need Scala 3 compatibility
-3. **Static analysis toolchain**: Scalafmt, Scalafix, Scapegoat, Scoverage need updates
-4. **Implicit conversions**: 284+ implicit vals, 103+ implicit classes, requiring migration to new `given`/`using` syntax
-5. **Build system**: SBT 1.10.7 with multiple plugins requiring updates
+3. **⚠️ CRITICAL BLOCKER: Scalanet dependency** - No Scala 3 support, fork required (see `SCALANET_COMPATIBILITY_ASSESSMENT.md`)
+4. **Static analysis toolchain**: Scalafmt, Scalafix, Scapegoat, Scoverage need updates
+5. **Implicit conversions**: 284+ implicit vals, 103+ implicit classes, requiring migration to new `given`/`using` syntax
+6. **Build system**: SBT 1.10.7 with multiple plugins requiring updates
 
-**Recommendation**: Proceed with a phased migration approach, starting with dependency compatibility assessment, followed by automated migration using Scala 3 migration tooling, then manual fixes for complex cases.
+**Recommendation**: Proceed with a phased migration approach, starting with dependency compatibility assessment (including scalanet fork), followed by automated migration using Scala 3 migration tooling, then manual fixes for complex cases.
 
-**Estimated Timeline**: 4-8 weeks for a complete migration with testing and validation.
+**Estimated Timeline**: 7-12 weeks for a complete migration with testing and validation (includes 3-4 weeks for scalanet fork).
 
 ---
 
@@ -170,7 +171,7 @@ Many Scala 2 compiler flags are removed or renamed:
 | Shapeless | 2.3.3 | ✅ Shapeless 3 available | Major rewrite, significant changes |
 | Enumeratum | 1.6.1 | ✅ 1.7.x for Scala 3 | Minor upgrade |
 | Boopickle | 1.3.3 | ✅ 1.4.x for Scala 3 | Minor upgrade |
-| Scalanet | 0.6.0 | ❓ Check with IOHK | May need update or fork |
+| Scalanet | 0.6.0 | ❌ No Scala 3 support | **CRITICAL BLOCKER** - Fork required (see SCALANET_COMPATIBILITY_ASSESSMENT.md) |
 
 ### 3.2 Java Dependencies
 
@@ -184,14 +185,18 @@ All pure Java dependencies are compatible:
 
 ### 3.3 High-Risk Dependencies
 
-#### 3.3.1 Scalanet (IOHK Network Library)
+#### 3.3.1 Scalanet (IOHK Network Library) - **VERIFIED BLOCKER**
 - **Current**: 0.6.0
-- **Issue**: May not be published for Scala 3
-- **Impact**: Critical - core P2P networking
-- **Solution Options**:
-  1. Request Scala 3 version from IOHK
-  2. Fork and migrate if necessary
-  3. Evaluate alternative networking libraries
+- **Issue**: ❌ No Scala 3 artifacts available, appears unmaintained
+- **Impact**: **CRITICAL** - Essential for P2P networking and peer discovery
+- **Assessment**: Comprehensive analysis completed (see `SCALANET_COMPATIBILITY_ASSESSMENT.md`)
+- **Decision**: **Fork and migrate required**
+- **Solution**:
+  1. Fork scalanet to chippr-robotics organization
+  2. Migrate fork to Scala 3.3.4
+  3. Maintain as part of Fukuii project
+  4. Contact IOHK in parallel (may transfer maintenance)
+- **Timeline Impact**: Adds 3-4 weeks to migration (unavoidable)
 
 #### 3.3.2 json4s
 - **Current**: 3.6.9
