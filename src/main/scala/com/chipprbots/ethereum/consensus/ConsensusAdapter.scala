@@ -109,11 +109,13 @@ class ConsensusAdapter(
       .delay(blockValidation.validateBlockBeforeExecution(block))
       .flatTap {
         case Left(error) =>
-          IO(log.error(
-            "Error while validating block with hash {} before execution: {}",
-            Hex.toHexString(block.hash.toArray),
-            error.reason.toString
-          ))
+          IO(
+            log.error(
+              "Error while validating block with hash {} before execution: {}",
+              Hex.toHexString(block.hash.toArray),
+              error.reason.toString
+            )
+          )
         case Right(_) => IO(log.debug("Block with hash {} validated successfully", Hex.toHexString(block.hash.toArray)))
       }
       .evalOn(validationScheduler)

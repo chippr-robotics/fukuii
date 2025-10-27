@@ -154,7 +154,8 @@ class PeerDiscoveryManager(
   }
 
   def startDiscoveryService(): Unit =
-    discoveryResources.allocated.unsafeToFuture()
+    discoveryResources.allocated
+      .unsafeToFuture()
       .onComplete {
         case Failure(ex) =>
           self ! StartAttempt(Left(ex))
@@ -163,12 +164,14 @@ class PeerDiscoveryManager(
       }(runtime.compute)
 
   def stopDiscoveryService(release: IO[Unit]): Unit =
-    release.unsafeToFuture().onComplete {
-      case Failure(ex) =>
-        self ! StopAttempt(Left(ex))
-      case Success(result) =>
-        self ! StopAttempt(Right(result))
-    }(runtime.compute)
+    release
+      .unsafeToFuture()
+      .onComplete {
+        case Failure(ex) =>
+          self ! StopAttempt(Left(ex))
+        case Success(result) =>
+          self ! StopAttempt(Right(result))
+      }(runtime.compute)
 
   def sendDiscoveredNodesInfo(
       maybeDiscoveryService: Option[v4.DiscoveryService],

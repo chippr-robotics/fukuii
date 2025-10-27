@@ -14,13 +14,14 @@ class LoadableBloomFilter[A](bloomFilter: BloomFilter[A], source: Stream[IO, Eit
     source
       .fold(BloomFilterLoadingResult()) { (s, e) =>
         e match {
-          case Left(value)  => s.copy(error = Some(value))
-          case Right(value) => 
+          case Left(value) => s.copy(error = Some(value))
+          case Right(value) =>
             bloomFilter.put(value)
             s.copy(writtenElements = s.writtenElements + 1)
         }
       }
-      .compile.lastOrError
+      .compile
+      .lastOrError
       .memoize
 
   def put(elem: A): Boolean = bloomFilter.put(elem)

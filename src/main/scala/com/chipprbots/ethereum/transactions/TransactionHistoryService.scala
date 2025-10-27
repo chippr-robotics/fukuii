@@ -31,9 +31,7 @@ class TransactionHistoryService(
     val getLastCheckpoint = IO(blockchainReader.getLatestCheckpointBlockNumber()).memoize
     val txnsFromBlocks = Stream
       .emits(fromBlocks.reverse.toSeq)
-      .parEvalMap(10)(blockNr =>
-        IO(blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockNr))
-      )
+      .parEvalMap(10)(blockNr => IO(blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockNr)))
       .collect { case Some(block) => block }
       .flatMap { block =>
         val getBlockReceipts = IO {
@@ -52,7 +50,8 @@ class TransactionHistoryService(
             data
           }
       }
-      .compile.toList
+      .compile
+      .toList
 
     val txnsFromMempool = getTransactionsFromPool.map { pendingTransactions =>
       pendingTransactions

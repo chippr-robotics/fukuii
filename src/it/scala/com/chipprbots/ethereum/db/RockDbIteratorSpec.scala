@@ -41,9 +41,13 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
 
   def writeNValuesToDb(n: Int, db: RocksDbDataSource, namespace: IndexedSeq[Byte]): IO[Unit] = {
     val iterable = 0 until n
-    Stream.emits(iterable).evalMap { _ =>
-      IO(db.update(Seq(DataSourceUpdateOptimized(namespace, Seq(), Seq((genRandomArray(), genRandomArray()))))))
-    }.compile.drain
+    Stream
+      .emits(iterable)
+      .evalMap { _ =>
+        IO(db.update(Seq(DataSourceUpdateOptimized(namespace, Seq(), Seq((genRandomArray(), genRandomArray()))))))
+      }
+      .compile
+      .drain
   }
 
   it should "cancel ongoing iteration" in testCaseT { db =>
@@ -62,7 +66,9 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
             _ <- if (cur == finishMark) cancelMark.complete(()) else IO.unit
           } yield ()
         }
-        .compile.drain.start
+        .compile
+        .drain
+        .start
       _ <- cancelMark.get
       // take in mind this test also check if all underlying rocksdb resources has been cleaned as if cancel
       // would not close underlying DbIterator, whole test would kill jvm due to rocksdb error at native level because
@@ -83,7 +89,8 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
         .evalMap { _ =>
           counter.update(current => current + 1)
         }
-        .compile.drain
+        .compile
+        .drain
       finalCounter <- counter.get
     } yield assert(finalCounter == largeNum)
   }
