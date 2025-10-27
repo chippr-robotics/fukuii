@@ -6,8 +6,8 @@ import akka.testkit.TestActor
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
@@ -40,7 +40,7 @@ import com.chipprbots.ethereum.utils.Config
 
 trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with BlockchainConfigBuilder {
   implicit val classicSystem: ClassicSystem = ClassicSystem()
-  implicit val scheduler: Scheduler = Scheduler(classicSystem.dispatcher)
+  implicit val runtime: IORuntime = IORuntime.global
   val parentActor: TestProbe = TestProbe()
   val sync: TestProbe = TestProbe()
   val ommersPool: TestProbe = TestProbe()
@@ -150,12 +150,12 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
       parentBlock: Block,
       withTransactions: Boolean,
       resultBlock: Block
-  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, Task[PendingBlockAndState]] =
+  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
     (blockCreator
       .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
       .expects(parentBlock, withTransactions, *, *)
       .returning(
-        Task.now(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
+        IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
       )
       .atLeastOnce()
 
@@ -163,21 +163,21 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
       parentBlock: Block,
       withTransactions: Boolean,
       resultBlock: Block
-  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, Task[PendingBlockAndState]] =
+  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
     (blockCreator
       .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
       .expects(where { (parent, withTxs, _, _) =>
         parent == parentBlock && withTxs == withTransactions
       })
       .returning(
-        Task.now(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
+        IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
       )
       .atLeastOnce()
 
   protected def prepareMocks(): Unit = {
     (ethMiningService.submitHashRate _)
       .expects(*)
-      .returns(Task.now(Right(SubmitHashRateResponse(true))))
+      .returns(IO.pure(Right(SubmitHashRateResponse(true))))
       .atLeastOnce()
 
     ommersPool.setAutoPilot { (sender: ActorRef, _: Any) =>

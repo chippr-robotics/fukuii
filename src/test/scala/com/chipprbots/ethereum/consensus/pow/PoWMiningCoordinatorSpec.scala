@@ -9,7 +9,7 @@ import akka.actor.typed.scaladsl.adapter._
 import akka.testkit.TestActor
 import akka.testkit.TestProbe
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration._
 
@@ -215,7 +215,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
 
     (ethMiningService.submitHashRate _)
       .expects(*)
-      .returns(Task.now(Right(SubmitHashRateResponse(true))))
+      .returns(IO.pure(Right(SubmitHashRateResponse(true))))
       .atLeastOnce()
 
     ommersPool.setAutoPilot { (sender: ActorRef, _: Any) =>
