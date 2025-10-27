@@ -6,8 +6,7 @@ import akka.util.ByteString
 
 import cats.data.NonEmptyList
 
-import monix.execution.Scheduler
-import monix.execution.schedulers.SchedulerService
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -46,11 +45,10 @@ class BlockImporterItSpec
     with Eventually
     with NormalPatience {
 
-  implicit val testScheduler: SchedulerService = Scheduler.fixedPool("test", 32)
+  implicit val testRuntime: IORuntime = IORuntime.global
 
   override def afterAll(): Unit = {
-    testScheduler.shutdown()
-    testScheduler.awaitTermination(60.second)
+    // No need to shutdown IORuntime.global
   }
 
   "BlockImporter" should "not discard blocks of the main chain if the reorganisation failed" in new TestFixture() {

@@ -12,7 +12,7 @@ import akka.testkit.TestProbe
 import akka.util.ByteString
 import akka.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
@@ -287,29 +287,29 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     BlockchainState(bestBlock, currentWorldState, currentWeight)
   }
 
-  def startPeer(): Task[Unit] =
+  def startPeer(): IO[Unit] =
     for {
-      _ <- Task {
+      _ <- IO {
         peerManager ! PeerManagerActor.StartConnecting
         server ! ServerActor.StartServer(listenAddress)
       }
-      _ <- retryUntilWithDelay(Task(nodeStatusHolder.get()), 1.second, 5) { status =>
+      _ <- retryUntilWithDelay(IO(nodeStatusHolder.get()), 1.second, 5) { status =>
         status.serverStatus == Listening(listenAddress)
       }
     } yield ()
 
-  def shutdown(): Task[Unit] =
+  def shutdown(): IO[Unit] =
     for {
-      _ <- Task.deferFuture(system.terminate())
-      _ <- Task(storagesInstance.dataSource.destroy())
+      _ <- IO.fromFuture(IO(system.terminate()))
+      _ <- IO(storagesInstance.dataSource.destroy())
     } yield ()
 
-  def connectToPeers(nodes: Set[Node]): Task[Unit] =
+  def connectToPeers(nodes: Set[Node]): IO[Unit] =
     for {
-      _ <- Task {
+      _ <- IO {
         peerManager ! DiscoveredNodesInfo(nodes)
       }
-      _ <- retryUntilWithDelay(Task(storagesInstance.storages.knownNodesStorage.getKnownNodes()), 1.second, 5) {
+      _ <- retryUntilWithDelay(IO(storagesInstance.storages.knownNodesStorage.getKnownNodes()), 1.second, 5) {
         knownNodes =>
           val requestedNodes = nodes.map(_.id)
           val currentNodes = knownNodes.map(Node.fromUri).map(_.id)
@@ -331,8 +331,8 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   private def generateInvalidBlock(
       currentBestBlock: Block
-  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): Task[Unit] =
-    Task {
+  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): IO[Unit] =
+    IO {
       val currentWorld = getMptForBlock(currentBestBlock)
 
       val newBlockNumber = currentBestBlock.header.number + 1
@@ -354,8 +354,8 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   private def generateValidBlock(
       currentBestBlock: Block
-  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): Task[Unit] =
-    Task {
+  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): IO[Unit] =
+    IO {
       val currentWeight = blockchainReader.getChainWeightByHash(currentBestBlock.hash).get
       val currentWorld = getMptForBlock(currentBestBlock)
       val (newBlock, newWeight, _) =
@@ -366,10 +366,10 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   def importBlocksUntil(
       n: BigInt
-  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): Task[Unit] =
-    Task(blockchainReader.getBestBlock()).flatMap { block =>
+  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): IO[Unit] =
+    IO(blockchainReader.getBestBlock()).flatMap { block =>
       if (block.get.number >= n) {
-        Task(())
+        IO(())
       } else {
         generateValidBlock(block.get)(updateWorldForBlock).flatMap(_ => importBlocksUntil(n)(updateWorldForBlock))
       }
@@ -378,10 +378,10 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   def importInvalidBlocks(
       from: BigInt,
       to: BigInt
-  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): Task[Unit] =
-    Task(blockchainReader.getBestBlock()).flatMap { block =>
+  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): IO[Unit] =
+    IO(blockchainReader.getBestBlock()).flatMap { block =>
       if (block.get.number >= to) {
-        Task(())
+        IO(())
       } else if (block.get.number >= from) {
         generateInvalidBlock(block.get)(updateWorldForBlock).flatMap(_ =>
           importInvalidBlocks(from, to)(updateWorldForBlock)
@@ -397,10 +397,10 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   def importInvalidBlockNumbers(
       from: BigInt,
       to: BigInt
-  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): Task[Unit] =
-    Task(blockchainReader.getBestBlock()).flatMap { block =>
+  )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): IO[Unit] =
+    IO(blockchainReader.getBestBlock()).flatMap { block =>
       if (block.get.number >= to) {
-        Task(())
+        IO(())
       } else if (block.get.number >= from) {
         generateInvalidBlock(block.get)(updateWorldForBlock).flatMap(_ =>
           importInvalidBlockNumbers(from, to)(updateWorldForBlock)
