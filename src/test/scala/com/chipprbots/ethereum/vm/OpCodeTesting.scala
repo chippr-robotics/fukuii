@@ -26,8 +26,7 @@ trait OpCodeTesting extends AnyFunSuiteLike {
   def ignore[T <: OpCode](ops: T*)(f: T => Any): Unit =
     ops.foreach(op => ignore(op.toString)(f(op)))
 
-  /** Run this as the last test in the suite
-    * Ignoring an OpCode test will NOT cause this test to fail
+  /** Run this as the last test in the suite Ignoring an OpCode test will NOT cause this test to fail
     */
   def verifyAllOpCodesRegistered(except: OpCode*): Unit =
     test("all opcodes have been registered") {
@@ -50,7 +49,7 @@ trait OpCodeTesting extends AnyFunSuiteLike {
         case ReturnDataOverflow => ()
       }.isEmpty
     ) {
-      //Found error that is neither an InvalidJump nor RevertOccurs
+      // Found error that is neither an InvalidJump nor RevertOccurs
       fail(s"Unexpected ${stateOut.error.get} error")
     } else {
       stateOut.gas shouldEqual (stateIn.gas - expectedGas)

@@ -13,12 +13,18 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
   /** Initial tests of intrinsic validity stated in Section 6 of YP
     *
-    * @param stx                        Transaction to validate
-    * @param senderAccount              Account of the sender of the tx
-    * @param blockHeader                Container block
-    * @param upfrontGasCost    The upfront gas cost of the tx
-    * @param accumGasUsed               Total amount of gas spent prior this transaction within the container block
-    * @return Transaction if valid, error otherwise
+    * @param stx
+    *   Transaction to validate
+    * @param senderAccount
+    *   Account of the sender of the tx
+    * @param blockHeader
+    *   Container block
+    * @param upfrontGasCost
+    *   The upfront gas cost of the tx
+    * @param accumGasUsed
+    *   Total amount of gas spent prior this transaction within the container block
+    * @return
+    *   Transaction if valid, error otherwise
     */
   def validate(
       stx: SignedTransaction,
@@ -38,8 +44,10 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
   /** Validates if the transaction is syntactically valid (lengths of the transaction fields are correct)
     *
-    * @param stx Transaction to validate
-    * @return Either the validated transaction or TransactionSyntaxError if an error was detected
+    * @param stx
+    *   Transaction to validate
+    * @return
+    *   Either the validated transaction or TransactionSyntaxError if an error was detected
     */
   private def checkSyntacticValidity(stx: SignedTransaction): Either[SignedTransactionError, SignedTransactionValid] = {
     import LegacyTransaction._
@@ -70,9 +78,12 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
   /** Validates if the transaction signature is valid as stated in appendix F in YP
     *
-    * @param stx                  Transaction to validate
-    * @param blockNumber          Number of the block for this transaction
-    * @return Either the validated transaction or TransactionSignatureError if an error was detected
+    * @param stx
+    *   Transaction to validate
+    * @param blockNumber
+    *   Number of the block for this transaction
+    * @return
+    *   Either the validated transaction or TransactionSignatureError if an error was detected
     */
   private def validateSignature(
       stx: SignedTransaction,
@@ -94,9 +105,12 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
   /** Validates if the transaction nonce matches current sender account's nonce
     *
-    * @param stx Transaction to validate
-    * @param senderNonce Nonce of the sender of the transaction
-    * @return Either the validated transaction or a TransactionNonceError
+    * @param stx
+    *   Transaction to validate
+    * @param senderNonce
+    *   Nonce of the sender of the transaction
+    * @return
+    *   Either the validated transaction or a TransactionNonceError
     */
   private def validateNonce(
       stx: SignedTransaction,
@@ -107,9 +121,12 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
   /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction.
     *
-    * @param stx Transaction to validate
-    * @param blockHeaderNumber Number of the block where the stx transaction was included
-    * @return Either the validated transaction or a TransactionNotEnoughGasForIntrinsicError
+    * @param stx
+    *   Transaction to validate
+    * @param blockHeaderNumber
+    *   Number of the block where the stx transaction was included
+    * @return
+    *   Either the validated transaction or a TransactionNotEnoughGasForIntrinsicError
     */
   private def validateGasLimitEnoughForIntrinsicGas(
       stx: SignedTransaction,
@@ -125,9 +142,12 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
   /** Validates the sender account balance contains at least the cost required in up-front payment.
     *
-    * @param senderBalance Balance of the sender of the tx
-    * @param upfrontCost Upfront cost of the transaction tx
-    * @return Either the validated transaction or a TransactionSenderCantPayUpfrontCostError
+    * @param senderBalance
+    *   Balance of the sender of the tx
+    * @param upfrontCost
+    *   Upfront cost of the transaction tx
+    * @return
+    *   Either the validated transaction or a TransactionSenderCantPayUpfrontCostError
     */
   private def validateAccountHasEnoughGasToPayUpfrontCost(
       senderBalance: UInt256,
@@ -139,10 +159,14 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   /** The sum of the transaction’s gas limit and the gas utilised in this block prior must be no greater than the
     * block’s gasLimit
     *
-    * @param stx           Transaction to validate
-    * @param accumGasUsed Gas spent within tx container block prior executing stx
-    * @param blockGasLimit Block gas limit
-    * @return Either the validated transaction or a TransactionGasLimitTooBigError
+    * @param stx
+    *   Transaction to validate
+    * @param accumGasUsed
+    *   Gas spent within tx container block prior executing stx
+    * @param blockGasLimit
+    *   Block gas limit
+    * @return
+    *   Either the validated transaction or a TransactionGasLimitTooBigError
     */
   private def validateBlockHasEnoughGasLimitForTx(
       stx: SignedTransaction,

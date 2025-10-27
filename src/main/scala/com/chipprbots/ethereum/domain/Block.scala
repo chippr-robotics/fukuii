@@ -10,8 +10,10 @@ import com.chipprbots.ethereum.rlp.rawDecode
 
 /** This class represent a block as a header and a body which are returned in two different messages
   *
-  * @param header Block header
-  * @param body   Block body
+  * @param header
+  *   Block header
+  * @param body
+  *   Block body
   */
 case class Block(header: BlockHeader, body: BlockBody) {
   override def toString: String =

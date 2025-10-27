@@ -28,7 +28,7 @@ class BloomFilterSpec extends AnyFlatSpec with Matchers {
     obtained shouldBe receiptWithManyLogs.logsBloomFilter
   }
 
-  //From tx 0xe9e91f1ee4b56c0df2e9f06c2b8c27c6076195a88a7b8537ba8313d80e6f124e
+  // From tx 0xe9e91f1ee4b56c0df2e9f06c2b8c27c6076195a88a7b8537ba8313d80e6f124e
   val receiptWithoutLogs: Receipt = LegacyReceipt.withHashOutcome(
     postTransactionStateHash =
       ByteString(Hex.decode("fa28ef92787192b577a8628e520b546ab58b72102572e08191ddecd51d0851e5")),
@@ -41,7 +41,7 @@ class BloomFilterSpec extends AnyFlatSpec with Matchers {
     logs = Seq[TxLogEntry]()
   )
 
-  //From tx 0x864f61c4fbf1952bfb55d4617e4bde3a0338322b37c832119ed1e8717b502530
+  // From tx 0x864f61c4fbf1952bfb55d4617e4bde3a0338322b37c832119ed1e8717b502530
   val receiptOneLogOneTopic: Receipt = LegacyReceipt.withHashOutcome(
     postTransactionStateHash =
       ByteString(Hex.decode("d74e64c4beb7627811f456baedfe05d26364bef11136b922b8c44769ad1e6ac6")),
@@ -64,7 +64,7 @@ class BloomFilterSpec extends AnyFlatSpec with Matchers {
     )
   )
 
-  //From tx 0x0bb157f90f918fad96d6954d9e620a4aa490da57a66303a6b41e855fd0f19a59
+  // From tx 0x0bb157f90f918fad96d6954d9e620a4aa490da57a66303a6b41e855fd0f19a59
   val receiptWithManyLogs: Receipt = LegacyReceipt.withHashOutcome(
     postTransactionStateHash =
       ByteString(Hex.decode("fe375456a6f22f90f2f55bd57e72c7c663ef7733d5795f091a06496ad5895c67")),

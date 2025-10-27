@@ -42,9 +42,13 @@ object BlockWithCheckpointHeaderValidator {
 
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.checkpoint]] signatures
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
-    * @return BlockHeader if valid, an [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderInvalidCheckpointSignatures]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
+    * @return
+    *   BlockHeader if valid, an
+    *   [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderInvalidCheckpointSignatures]] otherwise
     */
   private def validateCheckpointSignatures(
       blockHeader: BlockHeader,
@@ -63,7 +67,7 @@ object BlockWithCheckpointHeaderValidator {
           .flatten
 
         lazy val (validSignatures, invalidSignatures) = signaturesWithRecoveredKeys.partition {
-          //signatures are valid if the signers are known AND distinct
+          // signatures are valid if the signers are known AND distinct
           case (_, Some(pk)) => blockchainConfig.checkpointPubKeys.contains(pk) && !repeatedSigners.contains(pk)
           case _             => false
         }
@@ -84,18 +88,21 @@ object BlockWithCheckpointHeaderValidator {
       .getOrElse(Left(BlockWithCheckpointHeaderValidator.NoCheckpointInHeaderError))
 
   /** Validates emptiness of:
-    * - beneficiary
-    * - extraData
-    * - treasuryOptOut
-    * - ommersHash
-    * - transactionsRoot
-    * - receiptsRoot
-    * - logsBloom
-    * - nonce
-    * - mixHash
+    *   - beneficiary
+    *   - extraData
+    *   - treasuryOptOut
+    *   - ommersHash
+    *   - transactionsRoot
+    *   - receiptsRoot
+    *   - logsBloom
+    *   - nonce
+    *   - mixHash
     *
-    * @param blockHeader BlockHeader to validate.
-    * @return BlockHeader if valid, an [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderFieldNotEmptyError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @return
+    *   BlockHeader if valid, an
+    *   [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderFieldNotEmptyError]] otherwise
     */
   private def validateEmptyFields(blockHeader: BlockHeader): Either[BlockHeaderError, BlockHeaderValid] =
     if (blockHeader.beneficiary != BlockHeader.EmptyBeneficiary)
@@ -119,11 +126,15 @@ object BlockWithCheckpointHeaderValidator {
   private def notEmptyFieldError(field: String) = Left(HeaderFieldNotEmptyError(s"$field is not empty"))
 
   /** Validates fields which should be equal to parent equivalents:
-    * - stateRoot
+    *   - stateRoot
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
-    * @return BlockHeader if valid, an [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderNotMatchParentError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
+    * @return
+    *   BlockHeader if valid, an
+    *   [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderNotMatchParentError]] otherwise
     */
   private def validateFieldsCopiedFromParent(
       blockHeader: BlockHeader,
@@ -141,8 +152,11 @@ object BlockWithCheckpointHeaderValidator {
     Left(HeaderNotMatchParentError(s"$field has different value that similar parent field"))
 
   /** Validates gasUsed equal to zero
-    * @param blockHeader BlockHeader to validate.
-    * @return BlockHeader if valid, an [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderGasUsedError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @return
+    *   BlockHeader if valid, an [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderGasUsedError]]
+    *   otherwise
     */
   private def validateGasUsed(blockHeader: BlockHeader): Either[BlockHeaderError, BlockHeaderValid] =
     if (blockHeader.gasUsed != BigInt(0)) Left(HeaderGasUsedError)
@@ -150,9 +164,12 @@ object BlockWithCheckpointHeaderValidator {
 
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.unixTimestamp]] is one bigger than parent unixTimestamp
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
-    * @return BlockHeader if valid, an [[HeaderTimestampError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
+    * @return
+    *   BlockHeader if valid, an [[HeaderTimestampError]] otherwise
     */
   private def validateTimestamp(
       blockHeader: BlockHeader,

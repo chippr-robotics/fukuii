@@ -56,13 +56,13 @@ class RLPxConnectionHandlerSpec
 
     setupIncomingRLPxConnection()
 
-    //Send first message
+    // Send first message
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
     rlpxConnection ! RLPxConnectionHandler.Ack
     connection.expectNoMessage()
 
-    //Send second message
+    // Send second message
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
     rlpxConnection ! RLPxConnectionHandler.Ack
@@ -78,21 +78,21 @@ class RLPxConnectionHandlerSpec
 
     setupIncomingRLPxConnection()
 
-    //Send several messages
+    // Send several messages
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
 
-    //Only first message is sent
+    // Only first message is sent
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
     connection.expectNoMessage()
 
-    //Send Ack, second message should now be sent through TCP connection
+    // Send Ack, second message should now be sent through TCP connection
     rlpxConnection ! RLPxConnectionHandler.Ack
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
     connection.expectNoMessage()
 
-    //Send Ack, third message should now be sent through TCP connection
+    // Send Ack, third message should now be sent through TCP connection
     rlpxConnection ! RLPxConnectionHandler.Ack
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
     connection.expectNoMessage()
@@ -112,7 +112,7 @@ class RLPxConnectionHandlerSpec
     val expectedHello = rlpxConnectionParent.expectMsgType[InitialHelloReceived]
     expectedHello.message shouldBe a[Hello]
 
-    //The rlpx connection is closed after a timeout happens (after rlpxConfiguration.waitForTcpAckTimeout) and it is processed
+    // The rlpx connection is closed after a timeout happens (after rlpxConfiguration.waitForTcpAckTimeout) and it is processed
     rlpxConnectionParent.expectTerminated(
       rlpxConnection,
       max = rlpxConfiguration.waitForTcpAckTimeout + Timeouts.normalTimeout
@@ -127,33 +127,35 @@ class RLPxConnectionHandlerSpec
 
     setupIncomingRLPxConnection()
 
-    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping()) //With SEQ number 0
-    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping()) //With SEQ number 1
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping()) // With SEQ number 0
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping()) // With SEQ number 1
 
-    //Only first Ping is sent
+    // Only first Ping is sent
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
 
-    //Upon Ack, the next message is sent
+    // Upon Ack, the next message is sent
     rlpxConnection ! RLPxConnectionHandler.Ack
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
 
-    //AckTimeout for the first Ping is received
-    rlpxConnection ! RLPxConnectionHandler.AckTimeout(0) //AckTimeout for first Ping message
+    // AckTimeout for the first Ping is received
+    rlpxConnection ! RLPxConnectionHandler.AckTimeout(0) // AckTimeout for first Ping message
 
-    //Connection should continue to work perfectly
+    // Connection should continue to work perfectly
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     rlpxConnection ! RLPxConnectionHandler.Ack
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
   }
 
   it should "close the connection if the AuthHandshake init message's MAC is invalid" in new TestSetup {
-    //Incomming connection arrives
+    // Incomming connection arrives
     rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
     connection.expectMsgClass(classOf[Tcp.Register])
 
-    //AuthHandshaker throws exception on initial message
-    (mockHandshaker.handleInitialMessage _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
-    (mockHandshaker.handleInitialMessageV4 _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
+    // AuthHandshaker throws exception on initial message
+    (mockHandshaker.handleInitialMessage _).expects(*).onCall((_: ByteString) => throw new Exception("MAC invalid"))
+    (mockHandshaker.handleInitialMessageV4 _).expects(*).onCall { (_: ByteString) =>
+      throw new Exception("MAC invalid")
+    }
 
     val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
     rlpxConnection ! Tcp.Received(data)
@@ -162,11 +164,11 @@ class RLPxConnectionHandlerSpec
   }
 
   it should "close the connection if the AuthHandshake response message's MAC is invalid" in new TestSetup {
-    //Outgoing connection request arrives
+    // Outgoing connection request arrives
     rlpxConnection ! RLPxConnectionHandler.ConnectTo(uri)
     tcpActorProbe.expectMsg(Tcp.Connect(inetAddress))
 
-    //The TCP connection results are handled
+    // The TCP connection results are handled
     val initPacket = ByteString("Init packet")
     (mockHandshaker.initiate _).expects(uri).returning(initPacket -> mockHandshaker)
 
@@ -174,9 +176,11 @@ class RLPxConnectionHandlerSpec
     tcpActorProbe.expectMsg(Tcp.Register(rlpxConnection))
     tcpActorProbe.expectMsg(Tcp.Write(initPacket))
 
-    //AuthHandshaker handles the response message (that throws an invalid MAC)
-    (mockHandshaker.handleResponseMessage _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
-    (mockHandshaker.handleResponseMessageV4 _).expects(*).onCall { (_: ByteString) => throw new Exception("MAC invalid") }
+    // AuthHandshaker handles the response message (that throws an invalid MAC)
+    (mockHandshaker.handleResponseMessage _).expects(*).onCall((_: ByteString) => throw new Exception("MAC invalid"))
+    (mockHandshaker.handleResponseMessageV4 _).expects(*).onCall { (_: ByteString) =>
+      throw new Exception("MAC invalid")
+    }
 
     val data = ByteString((0 until AuthHandshaker.ResponsePacketLength).map(_.toByte).toArray)
     rlpxConnection ! Tcp.Received(data)
@@ -186,7 +190,7 @@ class RLPxConnectionHandlerSpec
 
   trait TestSetup extends MockFactory with SecureRandomBuilder {
 
-    //Mock parameters for RLPxConnectionHandler
+    // Mock parameters for RLPxConnectionHandler
     val mockMessageDecoder: MessageDecoder = new MessageDecoder {
       override def fromBytes(`type`: Int, payload: Array[Byte]) =
         throw new Exception("Mock message decoder fails to decode all messages")
@@ -205,7 +209,7 @@ class RLPxConnectionHandlerSpec
     val rlpxConfiguration: RLPxConfiguration = new RLPxConfiguration {
       override val waitForTcpAckTimeout: FiniteDuration = Timeouts.normalTimeout
 
-      //unused
+      // unused
       override val waitForHandshakeTimeout: FiniteDuration = Timeouts.veryLongTimeout
     }
 
@@ -227,13 +231,13 @@ class RLPxConnectionHandlerSpec
     )
     rlpxConnectionParent.watch(rlpxConnection)
 
-    //Setup for RLPxConnection, after it the RLPxConnectionHandler is in a handshaked state
+    // Setup for RLPxConnection, after it the RLPxConnectionHandler is in a handshaked state
     def setupIncomingRLPxConnection(): Unit = {
-      //Start setting up connection
+      // Start setting up connection
       rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
       connection.expectMsgClass(classOf[Tcp.Register])
 
-      //AuthHandshaker handles initial message
+      // AuthHandshaker handles initial message
       val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
       val hello = ByteString((1 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
       val response = ByteString("response data")
@@ -245,14 +249,14 @@ class RLPxConnectionHandlerSpec
         .returning(Some((Hello(5, "", Capability.ETH63 :: Nil, 30303, ByteString("abc")), Seq.empty)))
       (mockMessageCodec.readMessages _)
         .expects(hello)
-        .returning(Nil) //For processing of messages after handshaking finishes
+        .returning(Nil) // For processing of messages after handshaking finishes
 
       rlpxConnection ! Tcp.Received(data)
       connection.expectMsg(Tcp.Write(response))
 
       rlpxConnection ! Tcp.Received(hello)
 
-      //Connection fully established
+      // Connection fully established
       rlpxConnectionParent.expectMsgClass(classOf[RLPxConnectionHandler.ConnectionEstablished])
     }
   }

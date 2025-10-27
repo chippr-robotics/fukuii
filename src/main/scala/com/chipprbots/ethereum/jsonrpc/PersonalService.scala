@@ -133,10 +133,9 @@ class PersonalService(
   def sign(request: SignRequest): ServiceResponse[SignResponse] = Task {
     import request._
 
-    val accountWallet = {
+    val accountWallet =
       if (passphrase.isDefined) keyStore.unlockAccount(address, passphrase.get).left.map(handleError)
       else unlockedWallets.get(request.address).toRight(AccountLocked)
-    }
 
     accountWallet
       .map { wallet =>
@@ -185,7 +184,7 @@ class PersonalService(
     val dataEither = (tx.function, tx.contractCode) match {
       case (Some(function), None)     => Right(rlp.encode(RLPList(function, args)))
       case (None, Some(contractCode)) => Right(rlp.encode(RLPList(contractCode, args)))
-      case _                          => Left(JsonRpcError.InvalidParams("Iele transaction should contain either functionName or contractCode"))
+      case _ => Left(JsonRpcError.InvalidParams("Iele transaction should contain either functionName or contractCode"))
     }
 
     dataEither match {

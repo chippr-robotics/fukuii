@@ -40,7 +40,7 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
       }.toArray)
       val program = Program(code)
 
-      //Removing the PUSH1 that would be used as a parameter of another PUSH1
+      // Removing the PUSH1 that would be used as a parameter of another PUSH1
       //  Example: In "PUSH1 PUSH1 JUMPDEST", the JUMPDEST is a valid jump destination
       val pushOpLocationsNotParameters = pushOpLocations
         .diff(jumpDestLocations)

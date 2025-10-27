@@ -10,7 +10,8 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 class EphemDataSource(var storage: Map[ByteBuffer, Array[Byte]]) extends DataSource {
 
   /** key.drop to remove namespace prefix from the key
-    * @return key values paris from this storage
+    * @return
+    *   key values paris from this storage
     */
   def getAll(namespace: Namespace): Seq[(IndexedSeq[Byte], IndexedSeq[Byte])] = synchronized {
     storage.toSeq.map { case (key, value) => (key.array().drop(namespace.length).toIndexedSeq, value.toIndexedSeq) }

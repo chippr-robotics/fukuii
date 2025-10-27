@@ -135,7 +135,7 @@ class FastSync(
   private class SyncingHandler(initialSyncState: SyncState, var masterPeer: Option[Peer] = None) {
 
     private val BlockHeadersHandlerName = "block-headers-request-handler"
-    //not part of syncstate as we do not want to persist is.
+    // not part of syncstate as we do not want to persist is.
     private var stateSyncRestartRequested = false
 
     private var requestedHeaders: Map[Peer, BigInt] = Map.empty
@@ -169,7 +169,7 @@ class FastSync(
       s"$countActor-state-scheduler"
     )
 
-    //Delay before starting to persist snapshot. It should be 0, as the presence of it marks that fast sync was started
+    // Delay before starting to persist snapshot. It should be 0, as the presence of it marks that fast sync was started
     private val persistStateSnapshotDelay: FiniteDuration = 0.seconds
     private val syncStatePersistCancellable =
       scheduler.scheduleWithFixedDelay(persistStateSnapshotDelay, persistStateSnapshotInterval, self, PersistSyncState)
@@ -300,7 +300,7 @@ class FastSync(
         Progress(syncState.lastFullBlockNumber, syncState.pivotBlock.number),
         Some(
           Progress(syncState.downloadedNodesCount, syncState.totalNodesCount.max(1))
-        ) //There's always at least one state root to fetch
+        ) // There's always at least one state root to fetch
       )
 
     private def updatePivotBlock(updateReason: PivotBlockUpdateReason): Unit =
@@ -573,7 +573,7 @@ class FastSync(
       syncState = syncState.copy(
         blockBodiesQueue = Seq.empty,
         receiptsQueue = Seq.empty,
-        //todo adjust the formula to minimize redownloaded block headers
+        // todo adjust the formula to minimize redownloaded block headers
         bestBlockHeaderNumber = (syncState.bestBlockHeaderNumber - 2 * blockHeadersPerRequest).max(0)
       )
       log.debug("Missing block header for known hash")

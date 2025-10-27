@@ -21,11 +21,11 @@ object FaucetMethodsImplicits extends JsonMethodsImplicits {
     case _                                     => Left(InvalidParams())
   }
 
-  implicit val sendFundsResponseEncoder: JsonEncoder[SendFundsResponse] = ((t: SendFundsResponse)) => encodeAsHex(t.txId)
+  implicit val sendFundsResponseEncoder: JsonEncoder[SendFundsResponse] = (t: SendFundsResponse) => encodeAsHex(t.txId)
 
   implicit val statusRequestDecoder: JsonMethodDecoder[StatusRequest] = new NoParamsMethodDecoder(StatusRequest())
 
-  implicit val statusEncoder: JsonEncoder[StatusResponse] = ((t: StatusResponse)) =>
+  implicit val statusEncoder: JsonEncoder[StatusResponse] = (t: StatusResponse) =>
     JObject(
       "status" -> JString(t.status.toString)
     )

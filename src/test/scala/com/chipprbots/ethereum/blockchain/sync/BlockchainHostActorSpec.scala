@@ -50,7 +50,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       )
     )
 
-    //given
+    // given
     val receiptsHashes = Seq(
       ByteString(Hex.decode("a218e2c611f21232d857e3c8cecdcdf1f65f25a4477f98f6f47e4063807f2308")),
       ByteString(Hex.decode("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"))
@@ -63,15 +63,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeReceipts(receiptsHashes(1), receipts(1)))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetReceipts(receiptsHashes), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(Receipts(receipts), peerId))
   }
 
   it should "return BlockBodies for block hashes" in new TestSetup {
-    //given
+    // given
     val blockBodiesHashes = Seq(
       ByteString(Hex.decode("a218e2c611f21232d857e3c8cecdcdf1f65f25a4477f98f6f47e4063807f2308")),
       ByteString(Hex.decode("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"))
@@ -84,15 +84,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockBody(blockBodiesHashes(1), blockBodies(1)))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockBodies(blockBodiesHashes), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockBodies(blockBodies), peerId))
   }
 
   it should "return block headers by block number" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 4)
 
@@ -103,15 +103,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = 6)))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockHeaders(Left(3), 2, 0, reverse = false), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
   it should "return block headers by block number when response is shorter then what was requested" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 4)
 
@@ -120,15 +120,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(secondHeader))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockHeaders(Left(3), 3, 0, reverse = false), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
   it should "return block headers by block number in reverse order" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 2)
 
@@ -138,15 +138,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = 1)))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockHeaders(Left(3), 2, 0, reverse = true), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
   it should "return block headers by block hash" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 4)
 
@@ -157,15 +157,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = 6)))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 2, 0, reverse = false), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
   it should "return block headers by block hash when skipping headers" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 5)
 
@@ -177,18 +177,18 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(baseBlockHeader.copy(number = 7)))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(
       GetBlockHeaders(Right(firstHeader.hash), maxHeaders = 2, skip = 1, reverse = false),
       peerId
     )
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
   it should "return block headers in reverse when there are skipped blocks" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 1)
 
@@ -197,15 +197,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(secondHeader))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 2, 1, reverse = true), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
   it should "return block headers in reverse when there are skipped blocks and we are asking for blocks before genesis" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 1)
 
@@ -214,15 +214,15 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(secondHeader))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 3, 1, reverse = true), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
   it should "return block headers in reverse when there are skipped blocks ending at genesis" in new TestSetup {
-    //given
+    // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 4)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 2)
 
@@ -231,10 +231,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       .and(blockchainWriter.storeBlockHeader(secondHeader))
       .commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetBlockHeaders(Right(firstHeader.hash), 4, 1, reverse = true), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(
       EtcPeerManagerActor.SendMessage(
         BlockHeaders(Seq(firstHeader, secondHeader, blockchainReader.genesisHeader)),
@@ -244,21 +244,21 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "return evm code for hash" in new TestSetup {
-    //given
+    // given
     val fakeEvmCode = ByteString(Hex.decode("ffddaaffddaaffddaaffddaaffddaa"))
     val evmCodeHash: ByteString = ByteString(crypto.kec256(fakeEvmCode.toArray[Byte]))
 
     storagesInstance.storages.evmCodeStorage.put(evmCodeHash, fakeEvmCode).commit()
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetNodeData(Seq(evmCodeHash)), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(NodeData(Seq(fakeEvmCode)), peerId))
   }
 
   it should "return mptNode for hash" in new TestSetup {
-    //given
+    // given
     val exampleNibbles = ByteString(HexPrefix.bytesToNibbles(Hex.decode("ffddaa")))
     val exampleHash = ByteString(Hex.decode("ab" * 32))
     val extensionNode: MptNode = ExtensionNode(exampleNibbles, HashNode(exampleHash.toArray[Byte]))
@@ -269,10 +269,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       0
     )
 
-    //when
+    // when
     blockchainHost ! MessageFromPeer(GetNodeData(Seq(ByteString(extensionNode.hash))), peerId)
 
-    //then
+    // then
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(NodeData(Seq(extensionNode.toBytes)), peerId))
   }
 

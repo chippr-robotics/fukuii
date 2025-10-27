@@ -37,7 +37,7 @@ object SignatureValidator extends App with SecureRandomBuilder with JsonMethodsI
                 )
               } else {
                 System.err.println(s"Recovered public key [${ByteStringUtils
-                  .hash2string(pk)}] is different than given [${ByteStringUtils.hash2string(publicKey)}]")
+                    .hash2string(pk)}] is different than given [${ByteStringUtils.hash2string(publicKey)}]")
                 sys.exit(1)
               }
             case None =>

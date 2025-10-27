@@ -31,11 +31,11 @@ import com.chipprbots.ethereum.rlp.RLPList
 object RLPCodecs extends ContentCodecs with PayloadCodecs {
   implicit def codecFromRLPCodec[T: RLPCodec]: Codec[T] =
     Codec[T](
-      ((value: T)) => {
+      (value: T) => {
         val bytes = rlp.encode(value)
         Attempt.successful(BitVector(bytes))
       },
-      ((bits: BitVector)) => {
+      (bits: BitVector) => {
         val tryDecode = Try(rlp.decode[T](bits.toByteArray))
         Attempt.fromTry(tryDecode.map(DecodeResult(_, BitVector.empty)))
       }
@@ -174,7 +174,7 @@ trait PayloadCodecs { self: ContentCodecs =>
 
   implicit def payloadCodec: Codec[Payload] =
     Codec[Payload](
-      ((payload: Payload)) => {
+      (payload: Payload) => {
         val (packetType, packetData) =
           payload match {
             case x: Payload.Ping        => PacketType.Ping -> rlp.encode(x)
@@ -187,7 +187,7 @@ trait PayloadCodecs { self: ContentCodecs =>
 
         Attempt.successful(BitVector(packetType.toByte +: packetData))
       },
-      ((bits: BitVector)) =>
+      (bits: BitVector) =>
         bits.consumeThen(8)(
           err => Attempt.failure(Err(err)),
           (head, tail) => {

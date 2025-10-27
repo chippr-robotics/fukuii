@@ -78,8 +78,8 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     saveAccount(from, debited).saveAccount(to, credited)
   }
 
-  /** IF EIP-161 is in effect this sets new contract's account initial nonce to 1 over the default value
-    * for the given network (usually zero)
+  /** IF EIP-161 is in effect this sets new contract's account initial nonce to 1 over the default value for the given
+    * network (usually zero)
     */
   def initialiseAccount(newAddress: Address): WS = {
 
@@ -97,9 +97,9 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     saveAccount(newAddress, accountWithCorrectNonce)
   }
 
-  /** In case of transfer to self, during selfdestruction the ether is actually destroyed
-    * see https://github.com/ethereum/wiki/wiki/Subtleties/d5d3583e1b0a53c7c49db2fa670fdd88aa7cabaf#other-operations
-    * and https://github.com/ethereum/go-ethereum/blob/ff9a8682323648266d5c73f4f4bce545d91edccb/core/state/statedb.go#L322
+  /** In case of transfer to self, during selfdestruction the ether is actually destroyed see
+    * https://github.com/ethereum/wiki/wiki/Subtleties/d5d3583e1b0a53c7c49db2fa670fdd88aa7cabaf#other-operations and
+    * https://github.com/ethereum/go-ethereum/blob/ff9a8682323648266d5c73f4f4bce545d91edccb/core/state/statedb.go#L322
     */
   def removeAllEther(address: Address): WS = {
     val debited = getGuaranteedAccount(address).copy(balance = 0)
@@ -108,8 +108,10 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
 
   /** Creates a new address based on the address and nonce of the creator. YP equation 82
     *
-    * @param creatorAddr, the address of the creator of the new address
-    * @return the new address
+    * @param creatorAddr,
+    *   the address of the creator of the new address
+    * @return
+    *   the new address
     */
   def createAddress(creatorAddr: Address): Address = {
     val creatorAccount = getGuaranteedAccount(creatorAddr)
@@ -117,13 +119,17 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     Address(hash)
   }
 
-  /** Creates a new address based on the address, salt and init code
-    * see https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
+  /** Creates a new address based on the address, salt and init code see
+    * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
     *
-    * @param creatorAddr the address of the creator of the new address
-    * @param salt salt
-    * @param code code of the contract
-    * @return the new address
+    * @param creatorAddr
+    *   the address of the creator of the new address
+    * @param salt
+    *   salt
+    * @param code
+    *   code of the contract
+    * @return
+    *   the new address
     */
   def create2Address(creatorAddr: Address, salt: UInt256, code: ByteString): Address = {
     val prefix = 0xff.toByte
@@ -138,11 +144,13 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     saveAccount(address, account)
   }
 
-  /** Determines if account of provided address is dead.
-    * According to EIP161: An account is considered dead when either it is non-existent or it is empty
+  /** Determines if account of provided address is dead. According to EIP161: An account is considered dead when either
+    * it is non-existent or it is empty
     *
-    * @param address, the address of the checked account
-    * @return true if account is dead, false otherwise
+    * @param address,
+    *   the address of the checked account
+    * @return
+    *   true if account is dead, false otherwise
     */
   def isAccountDead(address: Address): Boolean =
     getAccount(address).forall(_.isEmpty(accountStartNonce))

@@ -58,11 +58,12 @@ class BlockchainWriter(
   def storeChainWeight(blockHash: ByteString, weight: ChainWeight): DataSourceBatchUpdate =
     chainWeightStorage.put(blockHash, weight)
 
-  /** Persists a block in the underlying Blockchain Database
-    * Note: all store* do not update the database immediately, rather they create
-    * a [[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate]] which then has to be committed (atomic operation)
+  /** Persists a block in the underlying Blockchain Database Note: all store* do not update the database immediately,
+    * rather they create a [[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate]] which then has to be
+    * committed (atomic operation)
     *
-    * @param block Block to be saved
+    * @param block
+    *   Block to be saved
     */
   def storeBlock(block: Block): DataSourceBatchUpdate =
     storeBlockHeader(block.header).and(storeBlockBody(block.header.hash, block.body))

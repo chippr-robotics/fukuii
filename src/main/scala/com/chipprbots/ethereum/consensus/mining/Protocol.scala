@@ -2,14 +2,14 @@ package com.chipprbots.ethereum.consensus.mining
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 
-/** Enumerates the known mining protocols that Mantis can use.
-  * For the respective implementations, see [[Mining]].
+/** Enumerates the known mining protocols that Mantis can use. For the respective implementations, see [[Mining]].
   */
 sealed trait Protocol {
 
   /** We use this `name` to specify the protocol in configuration.
     *
-    * @see [[Protocol.Names]]
+    * @see
+    *   [[Protocol.Names]]
     */
   def name: String
 }
@@ -32,17 +32,15 @@ object Protocol {
   /** The standard Ethereum PoW mining protocol. */
   case object PoW extends ProtocolImpl(Names.PoW)
 
-  /** Non-standard ethereum PoW mining protocol, which allows restricting list of possible miners.
-    * Main differences from basic PoW mining protocol:
+  /** Non-standard ethereum PoW mining protocol, which allows restricting list of possible miners. Main differences from
+    * basic PoW mining protocol:
     *   - Each miner, signs header data before mining i.e prepared header without mixHash and Nonce, and appends this
     *     signature to blockheader.extraData field. Only such prepared header is mined upon.
-    *   - Each validator, checks (in addition to standard blockheader validations):
-    *       a) if blockheader.extraData field has at most 97 bytes length (32 bytes of standard extraData + 65 bytes
-    *          for ECDSA signature
-    *       b) if signature is a valid signature over all blockheader data except: mixHash, Nonce, last 65 bytes of
-    *          extraData field (those bytes are signature itself)
-    *       c) if public key recovered from correct signature is contained within allowedMinersPublicKeys set defined
-    *          for given chain
+    *   - Each validator, checks (in addition to standard blockheader validations): a) if blockheader.extraData field
+    *     has at most 97 bytes length (32 bytes of standard extraData + 65 bytes for ECDSA signature b) if signature is
+    *     a valid signature over all blockheader data except: mixHash, Nonce, last 65 bytes of extraData field (those
+    *     bytes are signature itself) c) if public key recovered from correct signature is contained within
+    *     allowedMinersPublicKeys set defined for given chain
     */
   case object RestrictedPoW extends ProtocolImpl(Names.RestrictedPoW)
 

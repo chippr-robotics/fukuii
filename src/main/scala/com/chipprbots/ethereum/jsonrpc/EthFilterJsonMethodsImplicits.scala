@@ -129,7 +129,7 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
         case JNull         => Right(Nil)
         case jstr: JString => parseTopic(jstr).map(Seq(_))
         case jarr: JArray  => parseNestedTopics(jarr)
-        case other         => Left(InvalidParams(msg = s"Unable to parse topics, expected byte data or array but got: $other"))
+        case other => Left(InvalidParams(msg = s"Unable to parse topics, expected byte data or array but got: $other"))
       })
 
     def optionalBlockParam(field: String) =

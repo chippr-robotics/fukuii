@@ -100,9 +100,9 @@ class BlockRewardCalculatorSpec extends AnyFlatSpec with Matchers with ScalaChec
       (testMP, 11, List(9, 8), 2656250, List(78125, 78125), testByzantiumBN, testConstantinopleBN),
       (testMP, 20, Nil, 2500000, Nil, testByzantiumBN, testConstantinopleBN),
       (testMP, 21, List(20), 1289062, List(39062), testByzantiumBN, testConstantinopleBN),
-      //Era 21, which causes exponentiation vs loop error rounding error (See https://github.com/paritytech/parity/issues/6523)
+      // Era 21, which causes exponentiation vs loop error rounding error (See https://github.com/paritytech/parity/issues/6523)
       (lowEraDurationMP, 66, Nil, BigInt("46116860184273879"), Nil, lowByzantiumBN, testConstantinopleBN),
-      //Causes ommer count multiplication rounding error, when calculating the reward given to the miner for including 2 ommers
+      // Causes ommer count multiplication rounding error, when calculating the reward given to the miner for including 2 ommers
       (
         lowEraDurationMP,
         78,

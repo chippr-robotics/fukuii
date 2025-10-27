@@ -26,7 +26,7 @@ class TransactionSpec
 
   "rlp encoding then decoding transaction" should "give back the initial transaction" in {
 
-    forAll(signedTxGen(secureRandom, None)) { ((originalSignedTransaction: SignedTransaction)) =>
+    forAll(signedTxGen(secureRandom, None)) { (originalSignedTransaction: SignedTransaction) =>
       // encode it
       import SignedTransactions.SignedTransactionEnc
       val encodedSignedTransaction: Array[Byte] = originalSignedTransaction.toBytes
@@ -41,7 +41,7 @@ class TransactionSpec
 
   "signing transaction, encoding and decoding it" should "allow to retrieve the proper sender" in {
 
-    forAll(transactionGen) { ((originalTransaction: Transaction)) =>
+    forAll(transactionGen) { (originalTransaction: Transaction) =>
       implicit val blockchainConfig = Config.blockchains.blockchainConfig
 
       val senderKeys = crypto.generateKeyPair(secureRandom)
@@ -76,7 +76,7 @@ class TransactionSpec
 
   "rlp encoding then decoding transactions sequence" should "give back the initial transactions sequence" in {
 
-    forAll(signedTxSeqGen(2, secureRandom, None)) { ((originalSignedTransactionSeq: Seq[SignedTransaction])) =>
+    forAll(signedTxSeqGen(2, secureRandom, None)) { (originalSignedTransactionSeq: Seq[SignedTransaction]) =>
       // encode it
       import SignedTransactions.SignedTransactionsEnc
       val encodedSignedTransactionSeq: Array[Byte] = SignedTransactions(originalSignedTransactionSeq).toBytes

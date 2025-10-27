@@ -160,7 +160,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
       nonce = ByteString(Hex.decode("40b0b2c0b6d14706"))
     )
 
-    //Ommers from block 0xe9fb121a7ee5cb03b33adbf59e95321a2453f09db98068e1f31f0da79860c50c (of number 97)
+    // Ommers from block 0xe9fb121a7ee5cb03b33adbf59e95321a2453f09db98068e1f31f0da79860c50c (of number 97)
     val ommer1: BlockHeader = BlockHeader(
       parentHash = ByteString(Hex.decode("fd07e36cfaf327801e5696134b36678f6a89fb1e8f017f2411a29d0ae810ab8b")),
       ommersHash = ByteString(Hex.decode("7766c4251396a6833ccbe4be86fbda3a200dccbe6a15d80ae3de5378b1540e04")),

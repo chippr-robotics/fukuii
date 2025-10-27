@@ -23,17 +23,17 @@ class CallOpFixture(val config: EvmConfig, val startState: MockWorldState) {
   val valueOffset: UInt256 = UInt256(2)
 
   val extCode: Assembly = Assembly(
-    //store owner address
+    // store owner address
     ADDRESS,
     PUSH1,
     ownerOffset.toInt,
     SSTORE,
-    //store caller address
+    // store caller address
     CALLER,
     PUSH1,
     callerOffset.toInt,
     SSTORE,
-    //store call value
+    // store call value
     CALLVALUE,
     PUSH1,
     valueOffset.toInt,
@@ -65,13 +65,13 @@ class CallOpFixture(val config: EvmConfig, val startState: MockWorldState) {
   )
 
   val sstoreWithClearCode: Assembly = Assembly(
-    //Save a value to the storage
+    // Save a value to the storage
     PUSH1,
     10,
     PUSH1,
     0,
     SSTORE,
-    //Clear the store
+    // Clear the store
     PUSH1,
     0,
     PUSH1,

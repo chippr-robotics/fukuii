@@ -10,9 +10,7 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteUtils.byteSequenceToBuffer
 import com.chipprbots.ethereum.utils.ByteUtils.compactPickledBytes
 
-/** This class is used to store the ChainWeight of blocks, by using:
-  *   Key: hash of the block
-  *   Value: ChainWeight
+/** This class is used to store the ChainWeight of blocks, by using: Key: hash of the block Value: ChainWeight
   */
 class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[BlockHash, ChainWeight] {
   val namespace: IndexedSeq[Byte] = Namespaces.ChainWeightNamespace

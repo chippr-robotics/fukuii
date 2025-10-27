@@ -8,8 +8,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 object PoWBlockHeaderValidator extends BlockHeaderValidatorSkeleton {
 
-  /** A hook where even more mining-specific validation can take place.
-    * For example, PoW validation is done here.
+  /** A hook where even more mining-specific validation can take place. For example, PoW validation is done here.
     */
   override protected[validators] def validateEvenMore(
       blockHeader: BlockHeader

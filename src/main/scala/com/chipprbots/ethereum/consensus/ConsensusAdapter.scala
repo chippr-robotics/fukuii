@@ -31,8 +31,8 @@ import com.chipprbots.ethereum.utils.FunctorOps._
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
 
-/** This is a temporary class to isolate the real Consensus and extract responsibilities which should not
-  * be part of the consensus in the final design, but are currently needed.
+/** This is a temporary class to isolate the real Consensus and extract responsibilities which should not be part of the
+  * consensus in the final design, but are currently needed.
   */
 class ConsensusAdapter(
     consensus: Consensus,

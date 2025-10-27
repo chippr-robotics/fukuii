@@ -3,11 +3,9 @@ package com.chipprbots.ethereum.metrics
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-/** A gauge that starts at `0` and can be triggered to go to `1`.
-  * Next time it is sampled, it goes back to `0`.
-  * This is normally used for either one-off signals (e.g. when an application starts)
-  * or slowly re-appearing signals. Specifically, the sampling rate must be greater
-  * than the rate the signal is triggered.
+/** A gauge that starts at `0` and can be triggered to go to `1`. Next time it is sampled, it goes back to `0`. This is
+  * normally used for either one-off signals (e.g. when an application starts) or slowly re-appearing signals.
+  * Specifically, the sampling rate must be greater than the rate the signal is triggered.
   */
 class DeltaSpikeGauge(name: String, metrics: Metrics) {
   final private[this] val isTriggeredRef = new AtomicBoolean(false)

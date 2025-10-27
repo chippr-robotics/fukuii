@@ -62,8 +62,10 @@ object InMemoryWorldStateProxy {
     *   - Commits constract storages (to get account's contract storage root)
     *   - Updates state tree
     *
-    * @param worldState Proxy to commit
-    * @return Updated world
+    * @param worldState
+    *   Proxy to commit
+    * @return
+    *   Updated world
     */
   def persistState(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy = {
     def persistCode(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
@@ -94,19 +96,22 @@ object InMemoryWorldStateProxy {
     def persistAccountsStateTrie(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
       worldState.copyWith(accountsStateTrie = worldState.accountsStateTrie.persist())
 
-    ((persistCode _).andThen(persistContractStorage).andThen(persistAccountsStateTrie))(worldState)
+    (persistCode _).andThen(persistContractStorage).andThen(persistAccountsStateTrie)(worldState)
   }
 
-  /** Returns an [[InMemorySimpleMapProxy]] of the accounts state trie "The world state (state), is a mapping
-    * between Keccak 256-bit hashes of the addresses (160-bit identifiers) and account states (a data structure serialised as RLP [...]).
-    * Though not stored on the blockchain, it is assumed that the implementation will maintain this mapping in a
-    * modified Merkle Patricia tree [...])."
+  /** Returns an [[InMemorySimpleMapProxy]] of the accounts state trie "The world state (state), is a mapping between
+    * Keccak 256-bit hashes of the addresses (160-bit identifiers) and account states (a data structure serialised as
+    * RLP [...]). Though not stored on the blockchain, it is assumed that the implementation will maintain this mapping
+    * in a modified Merkle Patricia tree [...])."
     *
     * * See [[http://paper.gavwood.com YP 4.1]]
     *
-    * @param accountsStorage Accounts Storage where trie nodes are saved
-    * @param stateRootHash   State trie root hash
-    * @return Proxied Accounts State Trie
+    * @param accountsStorage
+    *   Accounts Storage where trie nodes are saved
+    * @param stateRootHash
+    *   State trie root hash
+    * @return
+    *   Proxied Accounts State Trie
     */
   private def createProxiedAccountsStateTrie(
       accountsStorage: MptStorage,
@@ -141,7 +146,7 @@ class InMemoryWorldStateProxy(
     val accountsStateTrie: InMemorySimpleMapProxy[Address, Account, MerklePatriciaTrie[Address, Account]],
     // Contract Storage Proxies by Address
     val contractStorages: Map[Address, InMemorySimpleMapProxy[BigInt, BigInt, MerklePatriciaTrie[BigInt, BigInt]]],
-    //It's easier to use the storage instead of the blockchain here (because of proxy wrapping). We might need to reconsider this
+    // It's easier to use the storage instead of the blockchain here (because of proxy wrapping). We might need to reconsider this
     val evmCodeStorage: EvmCodeStorage,
     // Account's code by Address
     val accountCodes: Map[Address, Code],
@@ -239,13 +244,16 @@ class InMemoryWorldStateProxy(
 
   override def getBlockHash(number: UInt256): Option[UInt256] = getBlockByNumber(number).map(UInt256(_))
 
-  /** Returns an [[InMemorySimpleMapProxy]] of the contract storage, for `ethCompatibleStorage` defined as "trie as a map-ping from the Keccak
-    * 256-bit hash of the 256-bit integer keys to the RLP-encoded256-bit integer values."
-    * See [[http://paper.gavwood.com YP 4.1]]
+  /** Returns an [[InMemorySimpleMapProxy]] of the contract storage, for `ethCompatibleStorage` defined as "trie as a
+    * map-ping from the Keccak 256-bit hash of the 256-bit integer keys to the RLP-encoded256-bit integer values." See
+    * [[http://paper.gavwood.com YP 4.1]]
     *
-    * @param contractStorage Storage where trie nodes are saved
-    * @param storageRoot     Trie root
-    * @return Proxied Contract Storage Trie
+    * @param contractStorage
+    *   Storage where trie nodes are saved
+    * @param storageRoot
+    *   Trie root
+    * @return
+    *   Proxied Contract Storage Trie
     */
   private def createProxiedContractStorageTrie(
       contractStorage: MptStorage,

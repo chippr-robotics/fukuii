@@ -463,7 +463,7 @@ class PersonalServiceSpec
         new BlockchainConfigBuilder {
           override def blockchainConfig = BlockchainConfig(
             chainId = chainId,
-            //unused
+            // unused
             networkId = 1,
             maxCodeSize = None,
             forkBlockNumbers = forkBlockNumbers,

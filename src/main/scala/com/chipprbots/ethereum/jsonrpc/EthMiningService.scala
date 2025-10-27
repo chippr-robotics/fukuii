@@ -71,7 +71,7 @@ class EthMiningService(
 
   def getMining(req: GetMiningRequest): ServiceResponse[GetMiningResponse] =
     ifEthash(req) { _ =>
-      val isMining = lastActive.updateAndGet { ((e: Option[Date])) =>
+      val isMining = lastActive.updateAndGet { (e: Option[Date]) =>
         e.filter { time =>
           Duration.between(time.toInstant, (new Date).toInstant).toMillis < jsonRpcConfig.minerActiveTimeout.toMillis
         }
@@ -137,14 +137,14 @@ class EthMiningService(
       reportActive()
       val now = new Date
       removeObsoleteHashrates(now)
-      hashRate.put(req.id, (req.hashRate -> now))
+      hashRate.put(req.id, req.hashRate -> now)
       SubmitHashRateResponse(true)
     }
 
   def getHashRate(req: GetHashRateRequest): ServiceResponse[GetHashRateResponse] =
     ifEthash(req) { _ =>
       removeObsoleteHashrates(new Date)
-      //sum all reported hashRates
+      // sum all reported hashRates
       GetHashRateResponse(hashRate.map { case (_, (hr, _)) => hr }.sum)
     }
 

@@ -6,8 +6,8 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 
-/** This storage allows to read from another NodesKeyValueStorage but doesn't remove or upsert into database.
-  * To do so, it uses an internal in memory cache to apply all the changes.
+/** This storage allows to read from another NodesKeyValueStorage but doesn't remove or upsert into database. To do so,
+  * it uses an internal in memory cache to apply all the changes.
   */
 class ReadOnlyNodeStorage private (wrapped: NodesKeyValueStorage) extends NodesKeyValueStorage {
   val buffer: mutable.Map[NodeHash, Option[NodeEncoded]] = mutable.Map.empty[NodeHash, Option[NodeEncoded]]
@@ -23,16 +23,20 @@ class ReadOnlyNodeStorage private (wrapped: NodesKeyValueStorage) extends NodesK
   /** This function obtains the value asociated with the key passed, if there exists one.
     *
     * @param key
-    * @return Option object with value if there exists one.
+    * @return
+    *   Option object with value if there exists one.
     */
   override def get(key: NodeHash): Option[NodeEncoded] = buffer.getOrElse(key, wrapped.get(key))
 
   /** This function updates the KeyValueStore by deleting, updating and inserting new (key-value) pairs.
     *
-    * @param toRemove which includes all the keys to be removed from the KeyValueStore.
-    * @param toUpsert which includes all the (key-value) pairs to be inserted into the KeyValueStore.
-    *                 If a key is already in the DataSource its value will be updated.
-    * @return the new DataSource after the removals and insertions were done.
+    * @param toRemove
+    *   which includes all the keys to be removed from the KeyValueStore.
+    * @param toUpsert
+    *   which includes all the (key-value) pairs to be inserted into the KeyValueStore. If a key is already in the
+    *   DataSource its value will be updated.
+    * @return
+    *   the new DataSource after the removals and insertions were done.
     */
   override def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesKeyValueStorage = {
     toRemove.foreach(elementToRemove => buffer -= elementToRemove)

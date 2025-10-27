@@ -115,8 +115,7 @@ class FastSyncBranchResolverActor(
     context.become(waitingForRecentBlockHeaders(masterPeer, bestBlockNumber, requestHandler))
   }
 
-  /** Searches recent blocks for a valid parent/child relationship.
-    * If we dont't find one, we switch to binary search.
+  /** Searches recent blocks for a valid parent/child relationship. If we dont't find one, we switch to binary search.
     */
   private def handleRecentBlockHeadersResponse(
       blockHeaders: Seq[BlockHeader],
@@ -162,8 +161,8 @@ class FastSyncBranchResolverActor(
     context.stop(self)
   }
 
-  /** In case of fatal errors (and to prevent trying forever) branch resolver will signal fast-sync about
-    * the error and let fast-sync decide if it issues another request.
+  /** In case of fatal errors (and to prevent trying forever) branch resolver will signal fast-sync about the error and
+    * let fast-sync decide if it issues another request.
     */
   private def stopWithFailure(response: BranchResolutionFailed): Unit = {
     fastSync ! response

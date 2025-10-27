@@ -93,9 +93,12 @@ case class BranchNode(
 
   /** This function creates a new BranchNode by updating one of the children of the self node.
     *
-    * @param childIndex of the BranchNode children where the child should be inserted.
-    * @param childNode  to be inserted as a child of the new BranchNode (and hashed if necessary).
-    * @return a new BranchNode.
+    * @param childIndex
+    *   of the BranchNode children where the child should be inserted.
+    * @param childNode
+    *   to be inserted as a child of the new BranchNode (and hashed if necessary).
+    * @return
+    *   a new BranchNode.
     */
   def updateChild(childIndex: Int, childNode: MptNode): BranchNode = {
     val updatedChildren = util.Arrays.copyOf(children, BranchNode.numberOfChildren)
@@ -130,9 +133,12 @@ object ExtensionNode {
 
   /** This function creates a new ExtensionNode with next parameter as its node pointer
     *
-    * @param sharedKey of the new ExtensionNode.
-    * @param next      to be inserted as the node pointer (and hashed if necessary).
-    * @return a new BranchNode.
+    * @param sharedKey
+    *   of the new ExtensionNode.
+    * @param next
+    *   to be inserted as the node pointer (and hashed if necessary).
+    * @return
+    *   a new BranchNode.
     */
   def apply(sharedKey: ByteString, next: MptNode): ExtensionNode = {
     val nextNode = next
@@ -144,22 +150,28 @@ object BranchNode {
   val numberOfChildren = 16
   private val emptyChildren: Array[MptNode] = Array.fill(numberOfChildren)(NullNode)
 
-  /** This function creates a new terminator BranchNode having only a value associated with it.
-    * This new BranchNode will be temporarily in an invalid state.
+  /** This function creates a new terminator BranchNode having only a value associated with it. This new BranchNode will
+    * be temporarily in an invalid state.
     *
-    * @param terminator to be associated with the new BranchNode.
-    * @return a new BranchNode.
+    * @param terminator
+    *   to be associated with the new BranchNode.
+    * @return
+    *   a new BranchNode.
     */
   def withValueOnly(terminator: Array[Byte]): BranchNode =
     BranchNode(util.Arrays.copyOf(emptyChildren, numberOfChildren), Some(ByteString(terminator)))
 
-  /** This function creates a new BranchNode having only one child associated with it (and optionaly a value).
-    * This new BranchNode will be temporarily in an invalid state.
+  /** This function creates a new BranchNode having only one child associated with it (and optionaly a value). This new
+    * BranchNode will be temporarily in an invalid state.
     *
-    * @param position   of the BranchNode children where the child should be inserted.
-    * @param child      to be inserted as a child of the new BranchNode (and hashed if necessary).
-    * @param terminator to be associated with the new BranchNode.
-    * @return a new BranchNode.
+    * @param position
+    *   of the BranchNode children where the child should be inserted.
+    * @param child
+    *   to be inserted as a child of the new BranchNode (and hashed if necessary).
+    * @param terminator
+    *   to be associated with the new BranchNode.
+    * @return
+    *   a new BranchNode.
     */
   def withSingleChild(position: Byte, child: MptNode, terminator: Option[Array[Byte]]): BranchNode = {
     val emptyCopy = util.Arrays.copyOf(emptyChildren, numberOfChildren)

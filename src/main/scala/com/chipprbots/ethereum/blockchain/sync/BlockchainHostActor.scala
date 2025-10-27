@@ -28,8 +28,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
 
-/** BlockchainHost actor is in charge of replying to the peer's requests for blockchain data, which includes both
-  * node and block data.
+/** BlockchainHost actor is in charge of replying to the peer's requests for blockchain data, which includes both node
+  * and block data.
   */
 class BlockchainHostActor(
     blockchainReader: BlockchainReader,
@@ -51,11 +51,13 @@ class BlockchainHostActor(
     }
   }
 
-  /** Handles requests for node data, which includes both mpt nodes and evm code (both requested by hash).
-    * Both types of node data are requested by the same GetNodeData message
+  /** Handles requests for node data, which includes both mpt nodes and evm code (both requested by hash). Both types of
+    * node data are requested by the same GetNodeData message
     *
-    * @param message to be processed
-    * @return message response if message is a request for node data or None if not
+    * @param message
+    *   to be processed
+    * @return
+    *   message response if message is a request for node data or None if not
     */
   private def handleEvmCodeMptFastDownload(message: Message): Option[MessageSerializable] = message match {
     case GetNodeData(mptElementsHashes) =>
@@ -63,10 +65,10 @@ class BlockchainHostActor(
         mptElementsHashes.take(peerConfiguration.fastSyncHostConfiguration.maxMptComponentsPerMessage)
 
       val nodeData: Seq[ByteString] = hashesRequested.flatMap { hash =>
-        //Fetch mpt node by hash
+        // Fetch mpt node by hash
         val maybeMptNodeData = blockchainReader.getMptNodeByHash(hash).map(e => e.toBytes: ByteString)
 
-        //If no mpt node was found, fetch evm by hash
+        // If no mpt node was found, fetch evm by hash
         maybeMptNodeData.orElse(evmCodeStorage.get(hash))
       }
 
@@ -77,8 +79,10 @@ class BlockchainHostActor(
 
   /** Handles request for block data, which includes receipts, block bodies and headers (all requested by hash)
     *
-    * @param message to be processed
-    * @return message response if message is a request for block data or None if not
+    * @param message
+    *   to be processed
+    * @return
+    *   message response if message is a request for block data or None if not
     */
   private def handleBlockFastDownload(message: Message): Option[MessageSerializable] = message match {
     case request: GetReceipts =>
@@ -109,7 +113,9 @@ class BlockchainHostActor(
             startBlockNumber to (startBlockNumber + (request.skip + 1) * headersCount - 1) by (request.skip + 1)
           }
 
-          val blockHeaders: Seq[BlockHeader] = range.flatMap { (a: BigInt) => blockchainReader.getBlockHeaderByNumber(a) }
+          val blockHeaders: Seq[BlockHeader] = range.flatMap { (a: BigInt) =>
+            blockchainReader.getBlockHeaderByNumber(a)
+          }
 
           Some(BlockHeaders(blockHeaders))
 

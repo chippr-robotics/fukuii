@@ -23,7 +23,8 @@ trait BlockHeaderValidator {
 object BlockHeaderValidator {
   val MaxExtraDataSize: Int = 32
   val GasLimitBoundDivisor: Int = 1024
-  val MinGasLimit: BigInt = 5000 //Although the paper states this value is 125000, on the different clients 5000 is used
+  val MinGasLimit: BigInt =
+    5000 // Although the paper states this value is 125000, on the different clients 5000 is used
   val MaxGasLimit: Long = Long.MaxValue // max gasLimit is equal 2^63-1 according to EIP106
 }
 

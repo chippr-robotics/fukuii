@@ -49,9 +49,7 @@ object CliCommands extends SecureRandomBuilder {
       keyNumberOpts.map { numOfKeys =>
         val keyPairs = for (_ <- 1 to numOfKeys) yield newRandomKeyPairAsStrings(secureRandom)
 
-        /** The key pairs will be printed in the format:
-          *   priv-key-hex (32 bytes)
-          *   pub-key-hex (64 bytes)
+        /** The key pairs will be printed in the format: priv-key-hex (32 bytes) pub-key-hex (64 bytes)
           */
         keyPairs.map { case (prv, pub) => s"$prv\n$pub\n" }.mkString("\n")
       }
@@ -99,8 +97,8 @@ object CliCommands extends SecureRandomBuilder {
 
   private def allocs(addresses: List[String], balance: BigInt): String =
     s""""alloc": ${addresses
-      .map(address => s"""$address: { "balance": $balance }""")
-      .mkString("{", ", ", "}")}"""
+        .map(address => s"""$address: { "balance": $balance }""")
+        .mkString("{", ", ", "}")}"""
 
   private def privKeyToAddress(privKey: Array[Byte]): String = {
     val pubKey = pubKeyFromPrvKey(privKey)

@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.Storage
 import com.chipprbots.ethereum.vm.WorldStateProxy
 
-/** Entity to be used to persist and query  Blockchain related objects (blocks, transactions, ommers)
+/** Entity to be used to persist and query Blockchain related objects (blocks, transactions, ommers)
   */
 trait Blockchain {
 
@@ -27,15 +27,19 @@ trait Blockchain {
 
   /** Get account storage at given position
     *
-    * @param rootHash storage root hash
-    * @param position storage position
+    * @param rootHash
+    *   storage root hash
+    * @param position
+    *   storage position
     */
   def getAccountStorageAt(rootHash: ByteString, position: BigInt, ethCompatibleStorage: Boolean): ByteString
 
   /** Get a storage-value and its proof being the path from the root node until the last matching node.
     *
-    * @param rootHash storage root hash
-    * @param position storage position
+    * @param rootHash
+    *   storage root hash
+    * @param position
+    *   storage position
     */
   def getStorageProofAt(
       rootHash: ByteString,
@@ -45,13 +49,15 @@ trait Blockchain {
 
   /** Get the MptStorage
     * @param blockNumber
-    * @return MptStorage
+    * @return
+    *   MptStorage
     */
   def getBackingMptStorage(blockNumber: BigInt): MptStorage
 
   /** Get the MptStorage for read-only
     *
-    * @return MptStorage
+    * @return
+    *   MptStorage
     */
   def getReadOnlyMptStorage(): MptStorage
 
@@ -99,10 +105,9 @@ class BlockchainImpl(
       ethCompatibleStorage: Boolean
   ): StorageProof = {
     val storage: MptStorage = stateStorage.getBackingStorage(0)
-    val mpt: MerklePatriciaTrie[BigInt, BigInt] = {
+    val mpt: MerklePatriciaTrie[BigInt, BigInt] =
       if (ethCompatibleStorage) domain.EthereumUInt256Mpt.storageMpt(rootHash, storage)
       else domain.ArbitraryIntegerMpt.storageMpt(rootHash, storage)
-    }
     val value: Option[BigInt] = mpt.get(position)
     val proof: Option[Vector[MptNode]] = mpt.getProof(position)
     StorageProof(position, value, proof)
@@ -190,8 +195,8 @@ class BlockchainImpl(
   }
   // scalastyle:on method.length
 
-  /** Recursive function which try to find the previous checkpoint by traversing blocks from top to the bottom.
-    * In case of finding the checkpoint block number, the function will finish the job and return result
+  /** Recursive function which try to find the previous checkpoint by traversing blocks from top to the bottom. In case
+    * of finding the checkpoint block number, the function will finish the job and return result
     */
   @tailrec
   private def findPreviousCheckpointBlockNumber(
@@ -207,7 +212,7 @@ class BlockchainImpl(
 
       maybePreviousCheckpointBlockNumber match {
         case Some(previousCheckpointBlockNumber) => previousCheckpointBlockNumber
-        case None                                => findPreviousCheckpointBlockNumber(blockNumberToCheck - 1, latestCheckpointBlockNumber)
+        case None => findPreviousCheckpointBlockNumber(blockNumberToCheck - 1, latestCheckpointBlockNumber)
       }
     } else 0
 

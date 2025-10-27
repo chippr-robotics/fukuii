@@ -14,9 +14,8 @@ import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-/** This file documents the original interface that was designed at ETCM-1018
-  * but implements a different one to be used as a stepping stone to the new architecture
-  * still in progress
+/** This file documents the original interface that was designed at ETCM-1018 but implements a different one to be used
+  * as a stepping stone to the new architecture still in progress
   */
 trait Consensus {
   def evaluateBranch(
@@ -26,18 +25,17 @@ trait Consensus {
   /** Original interface from ETCM-1018, for temporary documentation purposes
     */
   /** Answer which branch is best
-    * @return branch.Branch
+    * @return
+    *   branch.Branch
     */
 //  def getBestBranch(): branch.Branch = blockchainReader.getBestBranch()
 
   /** @param branch
-    * This methods received a Branch that was updated by ChainManagement.
-    * When a Branch is updated we need to compare the weight of the current best branch with the
-    * updated one.
-    * If the current best branch is still the best then nothing needs to be done.
-    * If the updated branch is heavier than an attempt to set the updated branch as best branch is done by
-    * executing the blocks in the updated branch to see if it is a valid branch.
-    * If it is not a valid branch then ExecutingSync has to be informed, otherwise update state with new best branch.
+    *   This methods received a Branch that was updated by ChainManagement. When a Branch is updated we need to compare
+    *   the weight of the current best branch with the updated one. If the current best branch is still the best then
+    *   nothing needs to be done. If the updated branch is heavier than an attempt to set the updated branch as best
+    *   branch is done by executing the blocks in the updated branch to see if it is a valid branch. If it is not a
+    *   valid branch then ExecutingSync has to be informed, otherwise update state with new best branch.
     */
 //  def evaluateBranch(branch: UpdatedBranch): Either[BlockExecutionError, Boolean] =
 //    if (extendsBestBranch()) {
@@ -62,14 +60,16 @@ trait Consensus {
 
   /** Compares the weight of the updatedBranch with the weight of the current best branch
     * @param updatedBranch
-    * @return true if updatedBranch is heavier than current best branch, false otherwise
+    * @return
+    *   true if updatedBranch is heavier than current best branch, false otherwise
     */
 //  private def isHeavierThanBestBranch(updatedBranch: UpdatedBranch): Boolean = ???
 
-  /** Tries to set a new best branch by executing all blocks in the branch, from the HCB to the branch tip.
-    * We assume the pre validation of the blocks of the branch was done already
+  /** Tries to set a new best branch by executing all blocks in the branch, from the HCB to the branch tip. We assume
+    * the pre validation of the blocks of the branch was done already
     * @param branch
-    * @return  Either[BlockExecutionError, Boolean]
+    * @return
+    *   Either[BlockExecutionError, Boolean]
     */
 //  private def attemptToSetNewBestBranch(branch: UpdatedBranch): Either[BlockExecutionError, Boolean] = ???
 
@@ -108,8 +108,8 @@ object Consensus {
   case class BranchExecutionFailure(blockToEnqueue: List[Block], failingBlockHash: ByteString, error: String)
       extends ConsensusResult
 
-  /** An error external the the blocks in the branch occured, which prevents the branch from being executed.
-    * Usually this is due to an inconsistency in the database.
+  /** An error external the the blocks in the branch occured, which prevents the branch from being executed. Usually
+    * this is due to an inconsistency in the database.
     */
   case class ConsensusError(blockToEnqueue: List[Block], err: String) extends ConsensusResult
   case class ConsensusErrorDueToMissingNode(blockToEnqueue: List[Block], reason: MissingNodeException)

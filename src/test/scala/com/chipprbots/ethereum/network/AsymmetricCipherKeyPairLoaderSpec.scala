@@ -25,7 +25,7 @@ class AsymmetricCipherKeyPairLoaderSpec extends AnyFlatSpec with Matchers with S
   }
 
   def equalKeyPairs(keyPair1: AsymmetricCipherKeyPair, keyPair2: AsymmetricCipherKeyPair): Boolean = {
-    //Compare public keys
+    // Compare public keys
     val publicKeyParam1 = keyPair1.getPublic.asInstanceOf[ECPublicKeyParameters]
     val publicKeyParam2 = keyPair2.getPublic.asInstanceOf[ECPublicKeyParameters]
     val equalPublicKey =
@@ -33,7 +33,7 @@ class AsymmetricCipherKeyPairLoaderSpec extends AnyFlatSpec with Matchers with S
         publicKeyParam1.getParameters == publicKeyParam2.getParameters &&
         publicKeyParam1.isPrivate == publicKeyParam2.isPrivate
 
-    //Compare private keys
+    // Compare private keys
     val privateKeyParam1 = keyPair1.getPrivate.asInstanceOf[ECPrivateKeyParameters]
     val privateKeyParam2 = keyPair2.getPrivate.asInstanceOf[ECPrivateKeyParameters]
     val equalPrivateKey =
@@ -46,10 +46,10 @@ class AsymmetricCipherKeyPairLoaderSpec extends AnyFlatSpec with Matchers with S
 
   it should "correctly save the AsymmetricCipherKeyPairLoader" in {
     withFilePath { path =>
-      //Create key pair
+      // Create key pair
       val newKeyPair = network.loadAsymmetricCipherKeyPair(path, secureRandom)
 
-      //Read key pair from file
+      // Read key pair from file
       val obtainedKeyPair = network.loadAsymmetricCipherKeyPair(path, secureRandom)
 
       assert(equalKeyPairs(newKeyPair, obtainedKeyPair))

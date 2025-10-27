@@ -56,7 +56,7 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     resAfterFirstImport shouldEqual Right(addr1)
     resAfterDupImport shouldBe Left(KeyStore.DuplicateKeySaved)
 
-    //Only the first import succeeded
+    // Only the first import succeeded
     val listAfterImport = keyStore.listAccounts().toOption.get
     listAfterImport.toSet shouldEqual Set(addr1)
     listAfterImport.length shouldEqual 1

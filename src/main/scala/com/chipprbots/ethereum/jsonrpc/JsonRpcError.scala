@@ -18,7 +18,7 @@ object JsonRpcError extends JsonMethodsImplicits {
   def apply[T: JsonEncoder](code: Int, message: String, data: T): JsonRpcError =
     JsonRpcError(code, message, Some(JsonEncoder[T].encodeJson(data)))
 
-  implicit val rateLimitInformation: JsonEncoder[RateLimitInformation] = ((rateLimit: RateLimitInformation)) =>
+  implicit val rateLimitInformation: JsonEncoder[RateLimitInformation] = (rateLimit: RateLimitInformation) =>
     JObject(
       "backoff_seconds" -> JLong(rateLimit.backoffSeconds)
     )

@@ -205,8 +205,8 @@ class PeerDiscoveryManager(
 
   /** Pull the next node from the stream of random lookups and send to the recipient.
     *
-    * If discovery isn't running then don't send anything because the recipient is likely
-    * to have already tried them and will just ask for a replacement immediately.
+    * If discovery isn't running then don't send anything because the recipient is likely to have already tried them and
+    * will just ask for a replacement immediately.
     */
   def sendRandomNodeInfo(
       maybeRandomNodes: Option[RandomNodes],

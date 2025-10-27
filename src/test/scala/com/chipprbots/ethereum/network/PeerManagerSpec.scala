@@ -347,7 +347,7 @@ class PeerManagerSpec
   behavior.of("outgoingConnectionDemand")
 
   it should "try to connect to at least min-outgoing-peers but no more than max-outgoing-peers" in new ConnectedPeersFixture {
-    forAll { ((connectedPeers: ConnectedPeers)) =>
+    forAll { (connectedPeers: ConnectedPeers) =>
       val demand = PeerManagerActor.outgoingConnectionDemand(connectedPeers, peerConfiguration)
       demand shouldBe >=(0)
       if (connectedPeers.outgoingHandshakedPeersCount >= peerConfiguration.minOutgoingPeers) {
@@ -403,7 +403,7 @@ class PeerManagerSpec
   behavior.of("numberOfIncomingConnectionsToPrune")
 
   it should "try to prune incoming connections down to the minimum allowed number" in new ConnectedPeersFixture {
-    forAll { ((connectedPeers: ConnectedPeers)) =>
+    forAll { (connectedPeers: ConnectedPeers) =>
       val numPeersToPrune = PeerManagerActor.numberOfIncomingConnectionsToPrune(connectedPeers, peerConfiguration)
       numPeersToPrune shouldBe >=(0)
       numPeersToPrune shouldBe <=(peerConfiguration.pruneIncomingPeers)
@@ -423,7 +423,7 @@ class PeerManagerSpec
 
   // The `ConnectedPeers` is quite slow to generate, so doing a few tests in one go.
   it should "prune peers which are old enough, protecting against repeated forced pruning" in new ConnectedPeersFixture {
-    forAll { ((connectedPeers: ConnectedPeers)) =>
+    forAll { (connectedPeers: ConnectedPeers) =>
       val numPeersToPrune = PeerManagerActor.numberOfIncomingConnectionsToPrune(connectedPeers, peerConfiguration)
 
       val now = System.currentTimeMillis

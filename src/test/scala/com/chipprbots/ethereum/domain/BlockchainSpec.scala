@@ -173,16 +173,16 @@ class BlockchainSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCh
     blockchainWriter.storeBlockHeader(headerWithAcc).commit()
     blockchainWriter.saveBestKnownBlocks(headerWithAcc.hash, headerWithAcc.number)
 
-    //unhappy path
+    // unhappy path
     val wrongAddress = Address(666)
     val retrievedAccountProofWrong =
       blockchainReader.getAccountProof(blockchainReader.getBestBranch(), wrongAddress, headerWithAcc.number)
-    //the account doesn't exist, so we can't retrieve it, but we do receive a proof of non-existence with a full path of nodes that we iterated
+    // the account doesn't exist, so we can't retrieve it, but we do receive a proof of non-existence with a full path of nodes that we iterated
     retrievedAccountProofWrong.isDefined shouldBe true
     retrievedAccountProofWrong.size shouldBe 1
     mptWithAcc.get(wrongAddress) shouldBe None
 
-    //happy path
+    // happy path
     val retrievedAccountProof =
       blockchainReader.getAccountProof(blockchainReader.getBestBranch(), address, headerWithAcc.number)
     retrievedAccountProof.isDefined shouldBe true
@@ -205,7 +205,7 @@ class BlockchainSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCh
     val wrongAddress = Address(666)
     val retrievedAccountProofWrong =
       blockchainReader.getAccountProof(blockchainReader.getBestBranch(), wrongAddress, headerWithAcc.number)
-    //the account doesn't exist, so we can't retrieve it, but we do receive a proof of non-existence with a full path of nodes(root node) that we iterated
+    // the account doesn't exist, so we can't retrieve it, but we do receive a proof of non-existence with a full path of nodes(root node) that we iterated
     (retrievedAccountProofWrong.getOrElse(Vector.empty).toList match {
       case _ @HashNode(_) :: Nil => true
       case _                     => false

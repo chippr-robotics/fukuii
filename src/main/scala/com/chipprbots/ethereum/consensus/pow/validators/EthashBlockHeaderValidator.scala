@@ -24,11 +24,14 @@ object EthashBlockHeaderValidator {
   // we need atomic since validators can be used from multiple places
   protected val powCaches: AtomicAny[List[PowCacheData]] = Atomic(List.empty[PowCacheData])
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.nonce]] and [[com.chipprbots.ethereum.domain.BlockHeader.mixHash]] are correct
-    * based on validations stated in section 4.4.4 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.nonce]] and
+    * [[com.chipprbots.ethereum.domain.BlockHeader.mixHash]] are correct based on validations stated in section 4.4.4 of
+    * http://paper.gavwood.com/
     *
-    * @param blockHeader BlockHeader to validate.
-    * @return BlockHeaderValid if valid or an BlockHeaderError.HeaderPoWError otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @return
+    *   BlockHeaderValid if valid or an BlockHeaderError.HeaderPoWError otherwise
     */
   def validateHeader(
       blockHeader: BlockHeader

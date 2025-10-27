@@ -38,9 +38,8 @@ trait JsonRpcBaseController {
 
   import JsonRpcBaseController._
 
-  /** FIXME: We are making mandatory to pass a config in all the Controllers that implements this trait
-    * when it is just used for the disabled methods.
-    * We should change this behaviour in order to remove this unnecessary dependency.
+  /** FIXME: We are making mandatory to pass a config in all the Controllers that implements this trait when it is just
+    * used for the disabled methods. We should change this behaviour in order to remove this unnecessary dependency.
     */
   val config: JsonRpcConfig
   implicit def executionContext: ExecutionContext = scala.concurrent.ExecutionContext.global

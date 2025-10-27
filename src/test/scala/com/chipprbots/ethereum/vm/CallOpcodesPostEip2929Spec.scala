@@ -64,7 +64,7 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
       "consume correct gas (refund call gas) (cold access)" in {
         val expectedGas = G_cold_account_access + G_callvalue - G_callstipend + config.calcMemCost(32, 32, 16)
         call.stateOut.gasUsed shouldEqual expectedGas
-        //if a scope reverts, the access lists should be in the state they were in before that scope was entered
+        // if a scope reverts, the access lists should be in the state they were in before that scope was entered
         call.stateOut.accessedAddresses shouldNot contain(fxt.extAddr)
       }
 
@@ -502,19 +502,15 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
     }
 
     /** This test should result in an OutOfGas error as (following the equations. on the DELEGATECALL opcode in the YP):
-      * DELEGATECALL cost = memoryCost + C_extra + C_gascap
-      * and
-      * memoryCost = 0 (result written were input was)
-      * C_gascap = u_s[0] = UInt256.MaxValue - C_extra + 1
-      * Then
-      * CALL cost = UInt256.MaxValue + 1
-      * As the starting gas (startGas = C_extra - 1) is much lower than the cost this should result in an OutOfGas exception
+      * DELEGATECALL cost = memoryCost + C_extra + C_gascap and memoryCost = 0 (result written were input was) C_gascap
+      * \= u_s[0] = UInt256.MaxValue - C_extra + 1 Then CALL cost = UInt256.MaxValue + 1 As the starting gas (startGas =
+      * C_extra - 1) is much lower than the cost this should result in an OutOfGas exception
       */
     "gas cost bigger than available gas DELEGATECALL (cold)" should {
 
       val c_extra = config.feeSchedule.G_cold_account_access
       val startGas = c_extra - 1
-      val gas = UInt256.MaxValue - c_extra + 1 //u_s[0]
+      val gas = UInt256.MaxValue - c_extra + 1 // u_s[0]
       val context: PC = fxt.context.copy(startGas = startGas)
       val call = fxt.ExecuteCall(
         op = DELEGATECALL,
@@ -532,7 +528,7 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
 
       val c_extra = config.feeSchedule.G_warm_storage_read
       val startGas = c_extra - 1
-      val gas = UInt256.MaxValue - c_extra + 1 //u_s[0]
+      val gas = UInt256.MaxValue - c_extra + 1 // u_s[0]
       val context: PC = fxt.context.copy(startGas = startGas)
       val call = fxt.ExecuteCall(
         op = DELEGATECALL,

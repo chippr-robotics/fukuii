@@ -7,7 +7,8 @@ trait SuperSlow {
 
   /** Some assertions may be prohibitively slow and shouldn't run on every CI run. Use this method when that's the case.
     *
-    * @param f slow tests
+    * @param f
+    *   slow tests
     */
   def superSlow[T](f: => T): Option[T] =
     if (skip) None else Some(f)

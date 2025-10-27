@@ -85,7 +85,7 @@ class BlockImporter(
         internally = true
       )(state)
 
-    //We don't want to lose a checkpoint
+    // We don't want to lose a checkpoint
     case nc @ NewCheckpoint(_) if state.importing =>
       context.system.scheduler.scheduleOnce(1.second, self, nc)
 
@@ -260,7 +260,7 @@ class BlockImporter(
           case BlockImportFailed(error) if informFetcherOnFail =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number, BlacklistReason.BlockImportError(error))
           case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
-          case result                                                                => log.error("Unknown block import result {}", result)
+          case result => log.error("Unknown block import result {}", result)
         }
         .map(_ => Running),
       blockImportType

@@ -13,9 +13,9 @@ object Stack {
 }
 
 //TODO: consider a List with head being top of the stack (DUP,SWAP go at most the depth of 16) [EC-251]
-/** Stack for the EVM. Instruction pop their arguments from it and push their results to it.
-  * The Stack doesn't handle overflow and underflow errors. Any operations that trascend given stack bounds will
-  * return the stack unchanged. Pop will always return zeroes in such case.
+/** Stack for the EVM. Instruction pop their arguments from it and push their results to it. The Stack doesn't handle
+  * overflow and underflow errors. Any operations that trascend given stack bounds will return the stack unchanged. Pop
+  * will always return zeroes in such case.
   */
 class Stack private (private val underlying: Vector[UInt256], val maxSize: Int) {
 
@@ -28,8 +28,8 @@ class Stack private (private val underlying: Vector[UInt256], val maxSize: Int) 
       (UInt256.Zero, this)
   }
 
-  /** Pop n elements from the stack. The first element in the resulting sequence will be the top-most element
-    * in the current stack
+  /** Pop n elements from the stack. The first element in the resulting sequence will be the top-most element in the
+    * current stack
     */
   def pop(n: Int): (Seq[UInt256], Stack) = {
     val (updated, popped) = underlying.splitAt(underlying.length - n)
@@ -47,8 +47,8 @@ class Stack private (private val underlying: Vector[UInt256], val maxSize: Int) 
       this
   }
 
-  /** Push a sequence of elements to the stack. That last element of the sequence will be the top-most element
-    * in the resulting stack
+  /** Push a sequence of elements to the stack. That last element of the sequence will be the top-most element in the
+    * resulting stack
     */
   def push(words: Seq[UInt256]): Stack = {
     val updated = underlying ++ words
@@ -86,8 +86,9 @@ class Stack private (private val underlying: Vector[UInt256], val maxSize: Int) 
 
   def size: Int = underlying.size
 
-  /** @return the elements of the stack as a sequence, with the top-most element of the stack
-    *         as the first element in the sequence
+  /** @return
+    *   the elements of the stack as a sequence, with the top-most element of the stack as the first element in the
+    *   sequence
     */
   def toSeq: Seq[UInt256] = underlying.reverse
 

@@ -229,7 +229,7 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with SecureRandomBu
       val (refForAnswerSecondHeaderReq, refForAnswerFirstBodiesReq) = msgs match {
         case Seq((`secondGetBlockHeadersRequest`, s1), (`firstGetBlockBodiesRequest`, s2)) => (s1, s2)
         case Seq((`firstGetBlockBodiesRequest`, s2), (`secondGetBlockHeadersRequest`, s1)) => (s1, s2)
-        case _                                                                             => fail("missing body or header request")
+        case _ => fail("missing body or header request")
       }
 
       // Block 16 is mined (we could have reached this stage due to invalidation messages sent to the fetcher)

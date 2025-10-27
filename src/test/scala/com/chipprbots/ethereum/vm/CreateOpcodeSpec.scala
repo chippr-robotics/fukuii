@@ -54,7 +54,7 @@ class CreateOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProperty
       42,
       PUSH1,
       0,
-      SSTORE, //store an arbitrary value
+      SSTORE, // store an arbitrary value
       PUSH1,
       contractCodeSize,
       DUP1,
@@ -98,13 +98,13 @@ class CreateOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProperty
     )
 
     val initWithSstoreWithClear: Assembly = Assembly(
-      //Save a value to the storage
+      // Save a value to the storage
       PUSH1,
       10,
       PUSH1,
       0,
       SSTORE,
-      //Clear the store
+      // Clear the store
       PUSH1,
       0,
       PUSH1,
@@ -433,7 +433,7 @@ class CreateOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProperty
       val context: PC = fxt.context.copy(startGas = Int.MaxValue, evmConfig = ethConfig)
 
       val gasConsumedIfError =
-        G_create + config.gasCap(context.startGas - G_create) //Gas consumed by CREATE opcode if an error happens
+        G_create + config.gasCap(context.startGas - G_create) // Gas consumed by CREATE opcode if an error happens
 
       "result in an out of gas if the code is larger than the limit" in {
         val codeSize = maxCodeSize + 1

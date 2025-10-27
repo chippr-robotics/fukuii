@@ -36,7 +36,7 @@ class ReceiptStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with
       val receipts = receiptsGen(blockHashes.length).sample.get
       val blockHashesReceiptsPair = receipts.zip(blockHashes)
 
-      //Receipts are inserted
+      // Receipts are inserted
       val storage = new ReceiptStorage(EphemDataSource())
       val storageInsertions = blockHashesReceiptsPair.foldLeft(storage.emptyBatchUpdate) {
         case (updates, (receiptList, blockHash)) =>
@@ -44,7 +44,7 @@ class ReceiptStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with
       }
       storageInsertions.commit()
 
-      //Receipts are deleted
+      // Receipts are deleted
       val (toDelete, toLeave) = blockHashesReceiptsPair.splitAt(Gen.choose(0, blockHashesReceiptsPair.size).sample.get)
       val storageDeletions = toDelete.foldLeft(storage.emptyBatchUpdate) { case (updates, (_, blockHash)) =>
         updates.and(storage.remove(blockHash))

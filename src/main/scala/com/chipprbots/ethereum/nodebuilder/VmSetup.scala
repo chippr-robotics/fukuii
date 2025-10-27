@@ -10,10 +10,9 @@ import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.VmConfig
 // import com.chipprbots.ethereum.utils.VmConfig.ExternalConfig
 
-/** HIBERNATED: External VM features are currently in hibernation.
-  * External VM support is experimental and not production-ready.
-  * Default configuration uses vm.mode = "internal" which is fully supported.
-  * All external VM code paths have been commented out.
+/** HIBERNATED: External VM features are currently in hibernation. External VM support is experimental and not
+  * production-ready. Default configuration uses vm.mode = "internal" which is fully supported. All external VM code
+  * paths have been commented out.
   */
 object VmSetup extends Logger {
 

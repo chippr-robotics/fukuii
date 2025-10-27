@@ -37,7 +37,7 @@ case class EtcForkBlockExchangeState(
 
         if (forkResolver.isAccepted(fork)) {
           log.debug("Fork is accepted")
-          //setting maxBlockNumber to 0, as we do not know best block number yet
+          // setting maxBlockNumber to 0, as we do not know best block number yet
           ConnectedState(PeerInfo.withForkAccepted(remoteStatus))
         } else {
           log.debug("Fork is not accepted")

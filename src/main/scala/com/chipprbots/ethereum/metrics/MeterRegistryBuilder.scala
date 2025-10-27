@@ -19,8 +19,7 @@ object MeterRegistryBuilder extends Logger {
     log.debug(s"New ${getClassName(m)} metric: " + m.getId.getName)
 
   /** Build our meter registry consist in:
-    * 1. Create each Meter registry
-    * 2. Config the resultant composition
+    *   1. Create each Meter registry 2. Config the resultant composition
     */
   def build(metricsPrefix: String): MeterRegistry = {
 

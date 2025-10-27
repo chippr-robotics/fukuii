@@ -17,9 +17,9 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
 
   object IntStorage {
     val intNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('i'.toByte)
-    val intSerializer: Int => IndexedSeq[Byte] = ((i: Int)) => rlpEncode(i).toIndexedSeq
+    val intSerializer: Int => IndexedSeq[Byte] = (i: Int) => rlpEncode(i).toIndexedSeq
     val intDeserializer: IndexedSeq[Byte] => Int =
-      ((encodedInt: IndexedSeq[Byte])) => rlpDecode[Int](encodedInt.toArray)
+      (encodedInt: IndexedSeq[Byte]) => rlpDecode[Int](encodedInt.toArray)
   }
 
   class IntStorage(val dataSource: DataSource) extends KeyValueStorage[Int, Int, IntStorage] {
@@ -70,10 +70,10 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
 
   test("Delete ints from KeyValueStorage") {
     forAll(Gen.listOf(intGen)) { listOfInt =>
-      //Insert of keys
+      // Insert of keys
       val intStorage = initialIntStorage.update(Seq(), listOfInt.zip(listOfInt))
 
-      //Delete of ints
+      // Delete of ints
       val (toDelete, toLeave) = listOfInt.splitAt(Gen.choose(0, listOfInt.size).sample.get)
       val keyValueStorage = intStorage.update(toDelete, Seq())
 
@@ -100,10 +100,10 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
 
   test("Remove ints from KeyValueStorage") {
     forAll(Gen.listOf(intGen)) { listOfInt =>
-      //Insert of keys
+      // Insert of keys
       val intStorage = initialIntStorage.update(Seq(), listOfInt.zip(listOfInt))
 
-      //Delete of ints
+      // Delete of ints
       val (toDelete, toLeave) = listOfInt.splitAt(Gen.choose(0, listOfInt.size).sample.get)
       val keyValueStorage = toDelete.foldLeft(intStorage) { case (recKeyValueStorage, i) =>
         recKeyValueStorage.remove(i)

@@ -124,10 +124,10 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers {
 
   // scalastyle:off magic.number
   trait TestSetup extends EphemBlockchainTestSetup {
-    //+ cake overrides
+    // + cake overrides
     override lazy val vm: VMImpl = new MockVM()
 
-    //- cake overrides
+    // - cake overrides
 
     val conf: BlockchainConfigForEvm = BlockchainConfigForEvm(blockchainConfig)
     val postEip161Config: EvmConfig = EvmConfig.PostEIP161ConfigBuilder(conf)
@@ -154,7 +154,7 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers {
     val worldStateWithoutPersist: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       blockchain.getBackingMptStorage(-1),
-      ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       UInt256.Zero,
       ByteString(MerklePatriciaTrie.EmptyRootHash),
       noEmptyAccounts = postEip161Config.noEmptyAccounts,
@@ -169,7 +169,7 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers {
     val worldStateWithoutPersistPreEIP161: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       blockchain.getBackingMptStorage(-1),
-      ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       UInt256.Zero,
       ByteString(MerklePatriciaTrie.EmptyRootHash),
       noEmptyAccounts = postEip160Config.noEmptyAccounts,

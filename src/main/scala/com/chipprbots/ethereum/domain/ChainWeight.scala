@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.domain
 
 object ChainWeight {
-  //FIXME: a shorter name?
+  // FIXME: a shorter name?
   def totalDifficultyOnly(td: BigInt): ChainWeight =
     ChainWeight(0, td)
 
@@ -26,7 +26,7 @@ case class ChainWeight(
   def asTuple: (BigInt, BigInt) =
     ChainWeight.unapply(this).get
 
-  //Test API
+  // Test API
 
   def increaseTotalDifficulty(td: BigInt): ChainWeight =
     copy(totalDifficulty = totalDifficulty + td)

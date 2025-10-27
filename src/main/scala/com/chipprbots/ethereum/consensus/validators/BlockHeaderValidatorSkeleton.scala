@@ -10,11 +10,10 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
 
 /** A block header validator that does everything Ethereum prescribes except from:
-  *  - PoW validation
-  *  - Difficulty validation.
+  *   - PoW validation
+  *   - Difficulty validation.
   *
-  * The former is a characteristic of standard ethereum with Ethash, so it is not even known to
-  * this implementation.
+  * The former is a characteristic of standard ethereum with Ethash, so it is not even known to this implementation.
   *
   * The latter is treated polymorphically by directly using a difficulty
   * [[com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator calculator]].
@@ -28,18 +27,18 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
 
   protected def difficulty: DifficultyCalculator = DifficultyCalculator
 
-  /** A hook where even more consensus-specific validation can take place.
-    * For example, PoW validation is done here.
+  /** A hook where even more consensus-specific validation can take place. For example, PoW validation is done here.
     */
   protected def validateEvenMore(blockHeader: BlockHeader)(implicit
       blockchainConfig: BlockchainConfig
   ): Either[BlockHeaderError, BlockHeaderValid]
 
-  /** This method allows validate a BlockHeader (stated on
-    * section 4.4.4 of http://paper.gavwood.com/).
+  /** This method allows validate a BlockHeader (stated on section 4.4.4 of http://paper.gavwood.com/).
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
     */
   def validate(blockHeader: BlockHeader, parentHeader: BlockHeader)(implicit
       blockchainConfig: BlockchainConfig
@@ -47,11 +46,12 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     if (blockHeader.hasCheckpoint) validateBlockWithCheckpointHeader(blockHeader, parentHeader)
     else validateRegularHeader(blockHeader, parentHeader)
 
-  /** This method allows validate a BlockHeader (stated on
-    * section 4.4.4 of http://paper.gavwood.com/).
+  /** This method allows validate a BlockHeader (stated on section 4.4.4 of http://paper.gavwood.com/).
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param getBlockHeaderByHash function to obtain the parent.
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param getBlockHeaderByHash
+    *   function to obtain the parent.
     */
   override def validate(
       blockHeader: BlockHeader,
@@ -64,11 +64,13 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       _ <- validate(blockHeader, blockHeaderParent)
     } yield BlockHeaderValid
 
-  /** This method runs a validation of the header of regular block.
-    * It runs basic validation and pow validation (hidden in validateEvenMore)
+  /** This method runs a validation of the header of regular block. It runs basic validation and pow validation (hidden
+    * in validateEvenMore)
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
     */
   private def validateRegularHeader(
       blockHeader: BlockHeader,
@@ -87,11 +89,13 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       _ <- validateEvenMore(blockHeader)
     } yield BlockHeaderValid
 
-  /** This method runs a validation of the header of block with checkpoint.
-    * It runs basic validation and checkpoint specific validation
+  /** This method runs a validation of the header of block with checkpoint. It runs basic validation and checkpoint
+    * specific validation
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
     */
   private def validateBlockWithCheckpointHeader(
       blockHeader: BlockHeader,
@@ -103,11 +107,14 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       _ <- validateExtraFields(blockHeader)
     } yield BlockHeaderValid
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.extraData]] length
-    * based on validations stated in section 4.4.4 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.extraData]] length based on validations stated in section
+    * 4.4.4 of http://paper.gavwood.com/
     *
-    * @param blockHeader BlockHeader to validate.
-    * @return BlockHeader if valid, an [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderExtraDataError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @return
+    *   BlockHeader if valid, an [[com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderExtraDataError]]
+    *   otherwise
     */
   protected def validateExtraData(
       blockHeader: BlockHeader
@@ -134,12 +141,15 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     }
   }
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.unixTimestamp]] is greater than the one of its parent
-    * based on validations stated in section 4.4.4 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.unixTimestamp]] is greater than the one of its parent based
+    * on validations stated in section 4.4.4 of http://paper.gavwood.com/
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
-    * @return BlockHeader if valid, an [[HeaderTimestampError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
+    * @return
+    *   BlockHeader if valid, an [[HeaderTimestampError]] otherwise
     */
   private def validateTimestamp(
       blockHeader: BlockHeader,
@@ -148,12 +158,15 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     if (blockHeader.unixTimestamp > parentHeader.unixTimestamp) Right(BlockHeaderValid)
     else Left(HeaderTimestampError)
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.difficulty]] is correct
-    * based on validations stated in section 4.4.4 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.difficulty]] is correct based on validations stated in
+    * section 4.4.4 of http://paper.gavwood.com/
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parent Block of the parent of the block to validate.
-    * @return BlockHeader if valid, an [[HeaderDifficultyError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parent
+    *   Block of the parent of the block to validate.
+    * @return
+    *   BlockHeader if valid, an [[HeaderDifficultyError]] otherwise
     */
   private def validateDifficulty(
       blockHeader: BlockHeader,
@@ -163,24 +176,30 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       Right(BlockHeaderValid)
     else Left(HeaderDifficultyError)
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.gasUsed]] is not greater than [[com.chipprbots.ethereum.domain.BlockHeader.gasLimit]]
-    * based on validations stated in section 4.4.4 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.gasUsed]] is not greater than
+    * [[com.chipprbots.ethereum.domain.BlockHeader.gasLimit]] based on validations stated in section 4.4.4 of
+    * http://paper.gavwood.com/
     *
-    * @param blockHeader BlockHeader to validate.
-    * @return BlockHeader if valid, an [[HeaderGasUsedError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @return
+    *   BlockHeader if valid, an [[HeaderGasUsedError]] otherwise
     */
   private def validateGasUsed(blockHeader: BlockHeader): Either[BlockHeaderError, BlockHeaderValid] =
     if (blockHeader.gasUsed <= blockHeader.gasLimit && blockHeader.gasUsed >= 0) Right(BlockHeaderValid)
     else Left(HeaderGasUsedError)
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.gasLimit]] follows the restrictions based on its parent gasLimit
-    * based on validations stated in section 4.4.4 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.gasLimit]] follows the restrictions based on its parent
+    * gasLimit based on validations stated in section 4.4.4 of http://paper.gavwood.com/
     *
     * EIP106(https://github.com/ethereum/EIPs/issues/106) adds additional validation of maximum value for gasLimit.
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
-    * @return BlockHeader if valid, an [[HeaderGasLimitError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
+    * @return
+    *   BlockHeader if valid, an [[HeaderGasLimitError]] otherwise
     */
   private def validateGasLimit(
       blockHeader: BlockHeader,
@@ -197,12 +216,15 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
         Left(HeaderGasLimitError)
     }
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.number]] is the next one after its parents number
-    * based on validations stated in section 4.4.4 of http://paper.gavwood.com/
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.number]] is the next one after its parents number based on
+    * validations stated in section 4.4.4 of http://paper.gavwood.com/
     *
-    * @param blockHeader BlockHeader to validate.
-    * @param parentHeader BlockHeader of the parent of the block to validate.
-    * @return BlockHeader if valid, an [[HeaderNumberError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @param parentHeader
+    *   BlockHeader of the parent of the block to validate.
+    * @return
+    *   BlockHeader if valid, an [[HeaderNumberError]] otherwise
     */
   private def validateNumber(
       blockHeader: BlockHeader,
@@ -211,10 +233,13 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     if (blockHeader.number == parentHeader.number + 1) Right(BlockHeaderValid)
     else Left(HeaderNumberError)
 
-  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.extraFields]] match the ECIP1097 and ECIP1098 enabling configuration
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.extraFields]] match the ECIP1097 and ECIP1098 enabling
+    * configuration
     *
-    * @param blockHeader BlockHeader to validate.
-    * @return BlockHeader if valid, an [[HeaderExtraFieldsError]] otherwise
+    * @param blockHeader
+    *   BlockHeader to validate.
+    * @return
+    *   BlockHeader if valid, an [[HeaderExtraFieldsError]] otherwise
     */
   private def validateExtraFields(
       blockHeader: BlockHeader

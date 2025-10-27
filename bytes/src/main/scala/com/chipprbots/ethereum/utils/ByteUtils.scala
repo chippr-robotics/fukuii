@@ -10,12 +10,15 @@ import scala.util.Random
 
 object ByteUtils {
 
-  /** Calculates number of matching bytes from the beginning of both arrays.
-    * Due to performance reasons needs to be as fast as possible which means usage of while loops and var's.
+  /** Calculates number of matching bytes from the beginning of both arrays. Due to performance reasons needs to be as
+    * fast as possible which means usage of while loops and var's.
     *
-    * @param a - first array of bytes to check
-    * @param b - second array to bytes to check
-    * @return Length of common prefix shared by both arrays
+    * @param a
+    *   \- first array of bytes to check
+    * @param b
+    *   \- second array to bytes to check
+    * @return
+    *   Length of common prefix shared by both arrays
     */
   def matchingLength(a: Array[Byte], b: Array[Byte]): Int = {
     var prefixLen = 0
@@ -45,12 +48,15 @@ object ByteUtils {
     else asByteArray
   }
 
-  /** Calculates xor distance between two byte arrays. Due to performance reasons needs to be as fast as possible
-    * which means usage of while loops and var's.
+  /** Calculates xor distance between two byte arrays. Due to performance reasons needs to be as fast as possible which
+    * means usage of while loops and var's.
     *
-    * @param a - array of bytes to xor
-    * @param b - array of bytes to xor
-    * @return Array[Byte] - each element of array is equal to `(a(i) ^ b(i))`
+    * @param a
+    *   \- array of bytes to xor
+    * @param b
+    *   \- array of bytes to xor
+    * @return
+    *   Array[Byte] - each element of array is equal to `(a(i) ^ b(i))`
     */
   def xor(a: Array[Byte], b: Array[Byte]): Array[Byte] = {
     val ret = new Array[Byte](a.length)
@@ -130,11 +136,15 @@ object ByteUtils {
   /** Converts array of Int to corresponding array of bytes. Due to performance reasons needs to be as fast as possible
     * which means usage of while loops and var's.
     *
-    * @param arr - array of int's to convert
-    * @param b - array for resulting byte conversion. It will be mutated in place, and it's length needs to be equal to
-    *              `(arr.length * 4)`
-    * @param bigEndian - param specifying which int representation should be used.
-    * @return Unit
+    * @param arr
+    *   \- array of int's to convert
+    * @param b
+    *   \- array for resulting byte conversion. It will be mutated in place, and it's length needs to be equal to
+    *   `(arr.length * 4)`
+    * @param bigEndian
+    *   \- param specifying which int representation should be used.
+    * @return
+    *   Unit
     */
   def intsToBytesMut(arr: Array[Int], b: Array[Byte], bigEndian: Boolean): Unit =
     if (!bigEndian) {
@@ -174,11 +184,15 @@ object ByteUtils {
   /** Converts array of bytes to corresponding array of ints. Due to performance reasons needs to be as fast as possible
     * which means usage of while loops and var's.
     *
-    * @param b - array of bytes to convert
-    * @param arr - array for resulting int conversion. It will be mutated in place, and it's length needs to be equal to
-    *              `(b.length / 4)`
-    * @param bigEndian - param specifying which int representation should be used.
-    * @return Unit
+    * @param b
+    *   \- array of bytes to convert
+    * @param arr
+    *   \- array for resulting int conversion. It will be mutated in place, and it's length needs to be equal to
+    *   `(b.length / 4)`
+    * @param bigEndian
+    *   \- param specifying which int representation should be used.
+    * @return
+    *   Unit
     */
   def bytesToIntsMut(b: Array[Byte], arr: Array[Int], bigEndian: Boolean): Unit =
     if (!bigEndian) {

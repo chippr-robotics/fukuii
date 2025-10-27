@@ -230,7 +230,7 @@ object ETH63 {
       override def code: Int = Codes.ReceiptsCode
 
       override def toRLPEncodable: RLPEncodeable = RLPList(
-        msg.receiptsForBlocks.map(((rs: Seq[Receipt])) => RLPList(rs.map(((r: Receipt)) => r.toRLPEncodable): _*)): _*
+        msg.receiptsForBlocks.map((rs: Seq[Receipt]) => RLPList(rs.map((r: Receipt) => r.toRLPEncodable): _*)): _*
       )
     }
 

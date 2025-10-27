@@ -18,24 +18,30 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
   val OmmerGenerationLimit: Int = 6 // Stated on section 11.1, eq. (143) of the YP
   val OmmerSizeLimit: Int = 2
 
-  /** This method allows validating the ommers of a Block. It performs the following validations (stated on
-    * section 11.1 of the YP):
+  /** This method allows validating the ommers of a Block. It performs the following validations (stated on section 11.1
+    * of the YP):
     *   - OmmersValidator.validateOmmersLength
     *   - OmmersValidator.validateOmmersHeaders
     *   - OmmersValidator.validateOmmersAncestors
-    * It also includes validations mentioned in the white paper (https://github.com/ethereum/wiki/wiki/White-Paper)
-    * and implemented in the different ETC clients:
+    * It also includes validations mentioned in the white paper (https://github.com/ethereum/wiki/wiki/White-Paper) and
+    * implemented in the different ETC clients:
     *   - OmmersValidator.validateOmmersNotUsed
     *   - OmmersValidator.validateDuplicatedOmmers
     *
-    * @param parentHash           the hash of the parent of the block to which the ommers belong
-    * @param blockNumber          the number of the block to which the ommers belong
-    * @param ommers               the list of ommers to validate
-    * @param getBlockHeaderByHash function to obtain an ancestor block header by hash
-    * @param getNBlocksBack       function to obtain N blocks including one given by hash and its N-1 ancestors
+    * @param parentHash
+    *   the hash of the parent of the block to which the ommers belong
+    * @param blockNumber
+    *   the number of the block to which the ommers belong
+    * @param ommers
+    *   the list of ommers to validate
+    * @param getBlockHeaderByHash
+    *   function to obtain an ancestor block header by hash
+    * @param getNBlocksBack
+    *   function to obtain N blocks including one given by hash and its N-1 ancestors
     *
-    * @return [[com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersValid]] if valid,
-    *         an [[com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError]] otherwise
+    * @return
+    *   [[com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersValid]] if valid, an
+    *   [[com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError]] otherwise
     */
   def validate(
       parentHash: ByteString,
@@ -57,9 +63,11 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
 
   /** Validates ommers length based on validations stated in section 11.1 of the YP
     *
-    * @param ommers the list of ommers to validate
+    * @param ommers
+    *   the list of ommers to validate
     *
-    * @return [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersLengthError]] otherwise
+    * @return
+    *   [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersLengthError]] otherwise
     */
   private def validateOmmersLength(ommers: Seq[BlockHeader]): Either[OmmersError, OmmersValid] =
     if (ommers.length <= OmmerSizeLimit) Right(OmmersValid)
@@ -67,9 +75,12 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
 
   /** Validates that each ommer's header is valid based on validations stated in section 11.1 of the YP
     *
-    * @param ommers               the list of ommers to validate
-    * @param getBlockParentsHeaderByHash function to obtain ommers' parents
-    * @return [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersHeaderError]] otherwise
+    * @param ommers
+    *   the list of ommers to validate
+    * @param getBlockParentsHeaderByHash
+    *   function to obtain ommers' parents
+    * @return
+    *   [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersHeaderError]] otherwise
     */
   private def validateOmmersHeaders(
       ommers: Seq[BlockHeader],
@@ -85,15 +96,20 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
     }
   }
 
-  /** Validates that each ommer is not too old and that it is a sibling as one of the current block's ancestors
-    * based on validations stated in section 11.1 of the YP
+  /** Validates that each ommer is not too old and that it is a sibling as one of the current block's ancestors based on
+    * validations stated in section 11.1 of the YP
     *
-    * @param parentHash     the hash of the parent of the block to which the ommers belong
-    * @param blockNumber    the number of the block to which the ommers belong
-    * @param ommers         the list of ommers to validate
-    * @param getNBlocksBack from where the ommers' parents will be obtained
-    * @return [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmerIsAncestorError]] or
-    *         [[OmmersValidator.OmmersError.OmmerParentIsNotAncestorError]]  otherwise
+    * @param parentHash
+    *   the hash of the parent of the block to which the ommers belong
+    * @param blockNumber
+    *   the number of the block to which the ommers belong
+    * @param ommers
+    *   the list of ommers to validate
+    * @param getNBlocksBack
+    *   from where the ommers' parents will be obtained
+    * @return
+    *   [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmerIsAncestorError]] or
+    *   [[OmmersValidator.OmmersError.OmmerParentIsNotAncestorError]] otherwise
     */
   private[validators] def validateOmmersAncestors(
       parentHash: ByteString,
@@ -117,14 +133,19 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
     else Right(OmmersValid)
   }
 
-  /** Validates that each ommer was not previously used
-    * based on validations stated in the white paper (https://github.com/ethereum/wiki/wiki/White-Paper)
+  /** Validates that each ommer was not previously used based on validations stated in the white paper
+    * (https://github.com/ethereum/wiki/wiki/White-Paper)
     *
-    * @param parentHash     the hash of the parent of the block to which the ommers belong
-    * @param blockNumber    the number of the block to which the ommers belong
-    * @param ommers         the list of ommers to validate
-    * @param getNBlocksBack from where the ommers' parents will be obtained
-    * @return [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersUsedBeforeError]] otherwise
+    * @param parentHash
+    *   the hash of the parent of the block to which the ommers belong
+    * @param blockNumber
+    *   the number of the block to which the ommers belong
+    * @param ommers
+    *   the list of ommers to validate
+    * @param getNBlocksBack
+    *   from where the ommers' parents will be obtained
+    * @return
+    *   [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersUsedBeforeError]] otherwise
     */
   private def validateOmmersNotUsed(
       parentHash: ByteString,
@@ -139,11 +160,13 @@ class StdOmmersValidator(blockHeaderValidator: BlockHeaderValidator) extends Omm
     else Left(OmmersUsedBeforeError)
   }
 
-  /** Validates that there are no duplicated ommers
-    * based on validations stated in the white paper (https://github.com/ethereum/wiki/wiki/White-Paper)
+  /** Validates that there are no duplicated ommers based on validations stated in the white paper
+    * (https://github.com/ethereum/wiki/wiki/White-Paper)
     *
-    * @param ommers the list of ommers to validate
-    * @return [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersDuplicatedError]] otherwise
+    * @param ommers
+    *   the list of ommers to validate
+    * @return
+    *   [[OmmersValidator.OmmersValid]] if valid, an [[OmmersValidator.OmmersError.OmmersDuplicatedError]] otherwise
     */
   private def validateDuplicatedOmmers(ommers: Seq[BlockHeader]): Either[OmmersError, OmmersValid] =
     if (ommers.distinct.length == ommers.length) Right(OmmersValid)

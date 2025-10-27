@@ -54,9 +54,8 @@ object PrecompiledContracts {
   def isDefinedAt(context: ProgramContext[_, _]): Boolean =
     getContract(context).isDefined
 
-  /** Runs a contract for address provided in `ProgramContext#recipientAddr`
-    * Will throw an exception if the address does not point to a precompiled contract - callers should first
-    * check with `isDefinedAt`
+  /** Runs a contract for address provided in `ProgramContext#recipientAddr` Will throw an exception if the address does
+    * not point to a precompiled contract - callers should first check with `isDefinedAt`
     */
   def run[W <: WorldStateProxy[W, S], S <: Storage[S]](context: ProgramContext[W, S]): ProgramResult[W, S] =
     getContract(context).get.run(context)
@@ -167,7 +166,7 @@ object PrecompiledContracts {
       15 + 3 * wordsForBytes(inputData.size)
   }
 
-  //Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-198.md
+  // Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-198.md
   object ModExp extends PrecompiledContract {
 
     private val lengthBytes = 32
@@ -178,7 +177,7 @@ object PrecompiledContracts {
       val expLength = getLength(inputData, 1)
       val modLength = getLength(inputData, 2)
 
-      val result = {
+      val result =
         if (baseLength == 0 && modLength == 0)
           BigInt(0)
         else {
@@ -193,7 +192,6 @@ object PrecompiledContracts {
             base.modPow(exp, mod)
           }
         }
-      }
       Some(ByteString(ByteUtils.bigIntegerToBytes(result.bigInteger, modLength)))
     }
 
@@ -214,7 +212,7 @@ object PrecompiledContracts {
         PostEIP198Cost.calculate(baseLength, modLength, expLength, expBytes)
     }
 
-    //Spec: https://eips.ethereum.org/EIPS/eip-198
+    // Spec: https://eips.ethereum.org/EIPS/eip-198
     object PostEIP198Cost {
       private val GQUADDIVISOR = 20
 
@@ -235,7 +233,7 @@ object PrecompiledContracts {
       }
     }
 
-    //Spec: https://eips.ethereum.org/EIPS/eip-2565
+    // Spec: https://eips.ethereum.org/EIPS/eip-2565
     object PostEIP2565Cost {
       private val GQUADDIVISOR = 3
 
@@ -288,7 +286,7 @@ object PrecompiledContracts {
     }
   }
 
-  //Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-196.md
+  // Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-196.md
   object Bn128Add extends PrecompiledContract {
     val expectedBytes: Int = 4 * 32
 
@@ -320,7 +318,7 @@ object PrecompiledContracts {
 
   }
 
-  //Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-196.md
+  // Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-196.md
   object Bn128Mul extends PrecompiledContract {
     val expectedBytes: Int = 3 * 32
     val maxScalar: BigInt = BigInt(2).pow(256) - 1
@@ -354,7 +352,7 @@ object PrecompiledContracts {
       (input.slice(0, 32), input.slice(32, 64), input.slice(64, 96))
   }
 
-  //Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-197.md
+  // Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-197.md
   // scalastyle: off
   object Bn128Pairing extends PrecompiledContract {
     private val wordLength = 32
@@ -413,7 +411,7 @@ object PrecompiledContracts {
     }
   }
 
-  //Spec: https://eips.ethereum.org/EIPS/eip-152
+  // Spec: https://eips.ethereum.org/EIPS/eip-152
   // scalastyle: off
   object Blake2bCompress extends PrecompiledContract {
     def exec(inputData: ByteString): Option[ByteString] =

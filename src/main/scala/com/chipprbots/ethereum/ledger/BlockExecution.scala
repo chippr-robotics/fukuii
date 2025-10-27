@@ -24,8 +24,8 @@ class BlockExecution(
 
   /** Executes and validate a block
     *
-    * @param alreadyValidated should we skip pre-execution validation (if the block has already been validated,
-    *                         eg. in the importBlock method)
+    * @param alreadyValidated
+    *   should we skip pre-execution validation (if the block has already been validated, eg. in the importBlock method)
     */
   def executeAndValidateBlock(
       block: Block,
@@ -34,7 +34,7 @@ class BlockExecution(
     val preExecValidationResult =
       if (alreadyValidated) Right(block) else blockValidation.validateBlockBeforeExecution(block)
 
-    val blockExecResult = {
+    val blockExecResult =
       if (block.hasCheckpoint) {
         // block with checkpoint is not executed normally - it's not need to do after execution validation
         preExecValidationResult.map(_ => Seq.empty[Receipt])
@@ -50,7 +50,6 @@ class BlockExecution(
           )
         } yield result.receipts
       }
-    }
 
     if (blockExecResult.isRight) {
       log.debug(s"Block ${block.header.number} (with hash: ${block.header.hashAsHexString}) executed correctly")
@@ -82,7 +81,7 @@ class BlockExecution(
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       blockchain.getBackingMptStorage(block.header.number),
-      ((number: BigInt)) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot,
       noEmptyAccounts = EvmConfig.forBlock(parentHeader.number, blockchainConfig).noEmptyAccounts,
@@ -91,7 +90,8 @@ class BlockExecution(
 
   /** This function runs transactions
     *
-    * @param block the block with transactions to run
+    * @param block
+    *   the block with transactions to run
     */
   protected[ledger] def executeBlockTransactions(
       block: Block,
@@ -128,9 +128,12 @@ class BlockExecution(
 
   /** This function updates worldState transferring balance from drainList accounts to refundContract address
     *
-    * @param worldState     initial world state
-    * @param daoForkConfig  dao fork configuration with drainList and refundContract config
-    * @return updated world state proxy
+    * @param worldState
+    *   initial world state
+    * @param daoForkConfig
+    *   dao fork configuration with drainList and refundContract config
+    * @return
+    *   updated world state proxy
     */
   private def drainDaoForkAccounts(
       worldState: InMemoryWorldStateProxy,
@@ -148,11 +151,14 @@ class BlockExecution(
 
   /** Executes and validates a list of blocks, storing the results in the blockchain.
     *
-    * @param blocks   blocks to be executed
-    * @param parentChainWeight parent weight
+    * @param blocks
+    *   blocks to be executed
+    * @param parentChainWeight
+    *   parent weight
     *
-    * @return a list of blocks in incremental order that were correctly executed and an optional
-    *         [[com.chipprbots.ethereum.ledger.BlockExecutionError]]
+    * @return
+    *   a list of blocks in incremental order that were correctly executed and an optional
+    *   [[com.chipprbots.ethereum.ledger.BlockExecutionError]]
     */
   def executeAndValidateBlocks(
       blocks: List[Block],

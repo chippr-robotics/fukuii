@@ -31,7 +31,8 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
     new DeltaSpikeGauge(mkName(name), this)
 
   /** Returns a [[io.micrometer.core.instrument.Gauge Gauge]].
-    * @param computeValue A function that computes the current gauge value.
+    * @param computeValue
+    *   A function that computes the current gauge value.
     */
   def gauge(name: String, computeValue: () => Double): Gauge =
     Gauge
@@ -39,7 +40,7 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
       //      If you do, you risk getting no metrics out of the gauge.
       //      So we just use a vanilla `this` but any other non-`null`
       //      value would also do.
-      .builder(mkName(name), this, ((_: Any)) => computeValue())
+      .builder(mkName(name), this, (_: Any) => computeValue())
       .register(registry)
 
   /** Returns a [[io.micrometer.core.instrument.Counter Counter]].
@@ -68,7 +69,7 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
 object Metrics {
   final val MetricsPrefix = "app"
 
-  //+ Metrics singleton support
+  // + Metrics singleton support
   final private[this] val metricsSentinel = Metrics(MetricsPrefix, new SimpleMeterRegistry())
 
   final private[this] val metricsRef = new AtomicReference[Metrics](metricsSentinel)
@@ -76,7 +77,7 @@ object Metrics {
   private[this] def setOnce(metrics: Metrics): Boolean = metricsRef.compareAndSet(metricsSentinel, metrics)
 
   def get(): Metrics = metricsRef.get()
-  //- Metrics singleton support
+  // - Metrics singleton support
 
   /** Instantiates and configures the metrics "service". This should happen once in the lifetime of the application.
     * After this call completes successfully, you can obtain the metrics service by using `Metrics.get()`.

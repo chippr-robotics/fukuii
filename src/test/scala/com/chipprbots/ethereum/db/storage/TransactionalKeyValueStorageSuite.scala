@@ -17,9 +17,9 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
 
   object IntStorage {
     val intNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('i'.toByte)
-    val intSerializer: Int => IndexedSeq[Byte] = ((i: Int)) => rlpEncode(i).toIndexedSeq
+    val intSerializer: Int => IndexedSeq[Byte] = (i: Int) => rlpEncode(i).toIndexedSeq
     val intDeserializer: IndexedSeq[Byte] => Int =
-      ((encodedInt: IndexedSeq[Byte])) => rlpDecode[Int](encodedInt.toArray)
+      (encodedInt: IndexedSeq[Byte]) => rlpDecode[Int](encodedInt.toArray)
   }
 
   class IntStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[Int, Int] {
@@ -73,11 +73,11 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
 
   test("Delete ints from KeyValueStorage") {
     forAll(Gen.listOf(intGen)) { listOfInt =>
-      //Insert of keys
+      // Insert of keys
       val intStorage = newIntStorage()
       intStorage.update(Seq(), listOfInt.zip(listOfInt)).commit()
 
-      //Delete of ints
+      // Delete of ints
       val (toDelete, toLeave) = listOfInt.splitAt(Gen.choose(0, listOfInt.size).sample.get)
       intStorage.update(toDelete, Seq()).commit()
 
@@ -108,11 +108,11 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
 
   test("Remove ints from KeyValueStorage") {
     forAll(Gen.listOf(intGen)) { listOfInt =>
-      //Insert of keys
+      // Insert of keys
       val intStorage = newIntStorage()
       intStorage.update(Seq(), listOfInt.zip(listOfInt)).commit()
 
-      //Delete of ints
+      // Delete of ints
       val (toDelete, toLeave) = listOfInt.splitAt(Gen.choose(0, listOfInt.size).sample.get)
       val batchUpdates = toDelete.foldLeft(intStorage.emptyBatchUpdate) { case (updates, i) =>
         updates.and(intStorage.remove(i))

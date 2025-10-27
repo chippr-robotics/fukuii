@@ -10,8 +10,9 @@ package object blocks {
 
   /** This is type `X` in `BlockGenerator`.
     *
-    * @see [[com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator EthashBlockGenerator]],
-    *      [[com.chipprbots.ethereum.consensus.blocks.BlockGenerator.X BlockGenerator{ type X}]]
+    * @see
+    *   [[com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator EthashBlockGenerator]],
+    *   [[com.chipprbots.ethereum.consensus.blocks.BlockGenerator.X BlockGenerator{ type X}]]
     */
   final type Ommers = Seq[BlockHeader]
 

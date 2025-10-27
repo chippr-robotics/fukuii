@@ -33,8 +33,10 @@ class TestEthBlockServiceWrapper(
 
   /** Implements the eth_getBlockByHash method that fetches a requested block.
     *
-    * @param request with the hash of the block requested
-    * @return the block requested or None if the client doesn't have the block
+    * @param request
+    *   with the hash of the block requested
+    * @return
+    *   the block requested or None if the client doesn't have the block
     */
   override def getByBlockHash(
       request: EthBlocksService.BlockByBlockHashRequest
@@ -68,8 +70,10 @@ class TestEthBlockServiceWrapper(
 
   /** Implements the eth_getBlockByNumber method that fetches a requested block.
     *
-    * @param request with the block requested (by it's number or by tag)
-    * @return the block requested or None if the client doesn't have the block
+    * @param request
+    *   with the block requested (by it's number or by tag)
+    * @return
+    *   the block requested or None if the client doesn't have the block
     */
   override def getBlockByNumber(
       request: EthBlocksService.BlockByNumberRequest

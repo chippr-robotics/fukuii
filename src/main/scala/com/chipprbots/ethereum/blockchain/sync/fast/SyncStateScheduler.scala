@@ -32,31 +32,27 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders.MptNodeDec
 
-/** Scheduler which traverses Merkle patricia trie in DFS fashion, while also creating requests for nodes missing in traversed
-  * trie.
-  * Traversal example: Merkle Patricia Trie with 2 leaf child nodes, each with non empty code value.
-  * Final State:
-  * BranchNode(hash: 1)
-  * /                 \
-  * Leaf(hash:2, codeHash:3)       Leaf(hash:4, codeHash:5)
+/** Scheduler which traverses Merkle patricia trie in DFS fashion, while also creating requests for nodes missing in
+  * traversed trie. Traversal example: Merkle Patricia Trie with 2 leaf child nodes, each with non empty code value.
+  * Final State: BranchNode(hash: 1) / \ Leaf(hash:2, codeHash:3) Leaf(hash:4, codeHash:5)
   *
-  * InitialState:
-  * At initial state there is only: (hash: 1)
+  * InitialState: At initial state there is only: (hash: 1)
   *
   * Traversal in node by node fashion:
-  * 1. Ask for root. After receive: (NodesToGet:[Hash:2, Hash4], nodesToSave: [])
-  * 2. Ask for (Hash:2). After receive: (NodesToGet:[CodeHash:3, Hash4], nodesToSave: [])
-  * 3. Ask for (CodeHash:3). After receive: (NodesToGet:[Hash:4], nodesToSave: [Leaf(hash:2, codeHash:3)])
-  * 4. Ask for (Hash:4). After receive: (NodesToGet:[codeHash:5], nodesToSave: [Leaf(hash:2, codeHash:3)])
-  * 5. Ask for (CodeHash:5).After receive:
-  * (NodesToGet:[], nodesToSave: [Leaf(hash:2, codeHash:3)], Leaf(hash:4, codeHash:5),  BranchNode(hash: 1))
+  *   1. Ask for root. After receive: (NodesToGet:[Hash:2, Hash4], nodesToSave: []) 2. Ask for (Hash:2). After receive:
+  *      (NodesToGet:[CodeHash:3, Hash4], nodesToSave: []) 3. Ask for (CodeHash:3). After receive: (NodesToGet:[Hash:4],
+  *      nodesToSave: [Leaf(hash:2, codeHash:3)]) 4. Ask for (Hash:4). After receive: (NodesToGet:[codeHash:5],
+  *      nodesToSave: [Leaf(hash:2, codeHash:3)]) 5. Ask for (CodeHash:5).After receive: (NodesToGet:[], nodesToSave:
+  *      [Leaf(hash:2, codeHash:3)], Leaf(hash:4, codeHash:5), BranchNode(hash: 1))
   *
-  * BranchNode is only committed to save when all of its leaf nodes are retrieved, and all children of those leaf nodes i.e
-  * storage and code are retrieved.
+  * BranchNode is only committed to save when all of its leaf nodes are retrieved, and all children of those leaf nodes
+  * i.e storage and code are retrieved.
   *
-  * SyncStateScheduler is agnostic to the way how SchedulerState is handled, it can be kept in var in actor, or in cats.Ref.
+  * SyncStateScheduler is agnostic to the way how SchedulerState is handled, it can be kept in var in actor, or in
+  * cats.Ref.
   *
-  * Important part is that nodes retrieved by getMissingNodes, must eventually be provided for scheduler to make progress
+  * Important part is that nodes retrieved by getMissingNodes, must eventually be provided for scheduler to make
+  * progress
   */
 class SyncStateScheduler(
     blockchainReader: BlockchainReader,
@@ -78,9 +74,9 @@ class SyncStateScheduler(
       Option(initialState.schedule(initialRequest))
     }
 
-  /** Default responses processor which ignores duplicated or not requested hashes, but informs the caller about critical
-    * errors.
-    * If it would valuable, it possible to implement processor which would gather statistics about duplicated or not requested data.
+  /** Default responses processor which ignores duplicated or not requested hashes, but informs the caller about
+    * critical errors. If it would valuable, it possible to implement processor which would gather statistics about
+    * duplicated or not requested data.
     */
   def processResponses(
       state: SchedulerState,

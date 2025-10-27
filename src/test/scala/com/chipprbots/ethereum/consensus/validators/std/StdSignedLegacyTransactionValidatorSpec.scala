@@ -25,7 +25,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
 
   implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
 
-  //From block 0x228943f4ef720ac91ca09c08056d7764c2a1650181925dfaeb484f27e544404e with number 1100000 (tx index 0)
+  // From block 0x228943f4ef720ac91ca09c08056d7764c2a1650181925dfaeb484f27e544404e with number 1100000 (tx index 0)
   val txBeforeHomestead: LegacyTransaction = LegacyTransaction(
     nonce = 81,
     gasPrice = BigInt("60000000000"),
@@ -41,7 +41,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     signature = ByteString(Hex.decode("13696dc6b5b601d19960a4f764416d36b271fc292bb87e2c36aea25d52f49064"))
   )
 
-  //From block 0xdc7874d8ea90b63aa0ba122055e514db8bb75c0e7d51a448abd12a31ca3370cf with number 1200003 (tx index 0)
+  // From block 0xdc7874d8ea90b63aa0ba122055e514db8bb75c0e7d51a448abd12a31ca3370cf with number 1200003 (tx index 0)
   val txAfterHomestead: LegacyTransaction = LegacyTransaction(
     nonce = 1631,
     gasPrice = BigInt("30000000000"),
@@ -71,7 +71,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
   val blockHeaderAfterHomestead: BlockHeader =
     Fixtures.Blocks.Block3125369.header.copy(number = 1200003, gasLimit = 4710000)
 
-  val accumGasUsed = 0 //Both are the first tx in the block
+  val accumGasUsed = 0 // Both are the first tx in the block
 
   val upfrontGasCost: UInt256 = UInt256(senderBalance / 2)
 

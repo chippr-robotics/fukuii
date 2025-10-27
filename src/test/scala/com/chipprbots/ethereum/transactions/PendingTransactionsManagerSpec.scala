@@ -39,7 +39,7 @@ import com.chipprbots.ethereum.utils.TxPoolConfig
 class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
 
   "PendingTransactionsManager" should "store pending transactions received from peers" in new TestSetup {
-    val msg = ((1 to 10).map(e => newStx(e))).toSet
+    val msg = (1 to 10).map(e => newStx(e)).toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg, PeerId("1"))
 
     Thread.sleep(Timeouts.normalTimeout.toMillis)
@@ -188,7 +188,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
       override val transactionTimeout: FiniteDuration = 500.millis
       override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.normalTimeout
 
-      //unused
+      // unused
       override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
     }
 
@@ -235,7 +235,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     val txPoolConfig: TxPoolConfig = new TxPoolConfig {
       override val txPoolSize: Int = 300
 
-      //unused
+      // unused
       override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout

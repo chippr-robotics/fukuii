@@ -29,15 +29,15 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.utils.ByteUtils
 
-/** This actors takes care of initiating a secure connection (auth handshake) between peers.
-  * Once such connection is established it allows to send/receive frames (messages) over it.
+/** This actors takes care of initiating a secure connection (auth handshake) between peers. Once such connection is
+  * established it allows to send/receive frames (messages) over it.
   *
   * The actor can be in one of four states:
-  * 1. when created it waits for initial command (either handle incoming connection or connect using uri)
-  * 2. when new connection is requested the actor waits for the result (waitingForConnectionResult)
-  * 3. once underlying connection is established it either waits for handshake init message or for response message
-  * (depending on who initiated the connection)
-  * 4. once handshake is done (and secure connection established) actor can send/receive messages (`handshaked` state)
+  *   1. when created it waits for initial command (either handle incoming connection or connect using uri) 2. when new
+  *      connection is requested the actor waits for the result (waitingForConnectionResult) 3. once underlying
+  *      connection is established it either waits for handshake init message or for response message (depending on who
+  *      initiated the connection) 4. once handshake is done (and secure connection established) actor can send/receive
+  *      messages (`handshaked` state)
   */
 class RLPxConnectionHandler(
     capabilities: List[Capability],
@@ -147,8 +147,10 @@ class RLPxConnectionHandler(
 
     /** Decode V4 packet
       *
-      * @param data , includes both the V4 packet with bytes from next messages
-      * @return data of the packet and the remaining data
+      * @param data
+      *   , includes both the V4 packet with bytes from next messages
+      * @return
+      *   data of the packet and the remaining data
       */
     private def decodeV4Packet(data: ByteString): (ByteString, ByteString) = {
       val encryptedPayloadSize = ByteUtils.bigEndianToShort(data.take(2).toArray)
@@ -200,7 +202,7 @@ class RLPxConnectionHandler(
             )
           )
         case Ack if cancellableAckTimeout.nonEmpty =>
-          //Cancel pending message timeout
+          // Cancel pending message timeout
           cancellableAckTimeout.foreach(_.cancellable.cancel())
           context.become(awaitInitialHello(extractor, None, seqNumber))
 
@@ -269,10 +271,14 @@ class RLPxConnectionHandler(
     /** Handles sending and receiving messages from the Akka TCP connection, while also handling acknowledgement of
       * messages sent. Messages are only sent when all Ack from previous messages were received.
       *
-      * @param messageCodec          , for encoding the messages sent
-      * @param messagesNotSent       , messages not yet sent
-      * @param cancellableAckTimeout , timeout for the message sent for which we are awaiting an acknowledgement (if there is one)
-      * @param seqNumber             , sequence number for the next message to be sent
+      * @param messageCodec
+      *   , for encoding the messages sent
+      * @param messagesNotSent
+      *   , messages not yet sent
+      * @param cancellableAckTimeout
+      *   , timeout for the message sent for which we are awaiting an acknowledgement (if there is one)
+      * @param seqNumber
+      *   , sequence number for the next message to be sent
       */
     def handshaked(
         messageCodec: MessageCodec,
@@ -299,10 +305,10 @@ class RLPxConnectionHandler(
           messages.foreach(processMessage)
 
         case Ack if cancellableAckTimeout.nonEmpty =>
-          //Cancel pending message timeout
+          // Cancel pending message timeout
           cancellableAckTimeout.foreach(_.cancellable.cancel())
 
-          //Send next message if there is one
+          // Send next message if there is one
           if (messagesNotSent.nonEmpty)
             sendMessage(messageCodec, messagesNotSent.head, seqNumber, messagesNotSent.tail)
           else
@@ -314,13 +320,17 @@ class RLPxConnectionHandler(
           context.stop(self)
       }
 
-    /** Sends an encoded message through the TCP connection, an Ack will be received when the message was
-      * successfully queued for delivery. A cancellable timeout is created for the Ack message.
+    /** Sends an encoded message through the TCP connection, an Ack will be received when the message was successfully
+      * queued for delivery. A cancellable timeout is created for the Ack message.
       *
-      * @param messageCodec        , for encoding the messages sent
-      * @param messageToSend       , message to be sent
-      * @param seqNumber           , sequence number for the message to be sent
-      * @param remainingMsgsToSend , messages not yet sent
+      * @param messageCodec
+      *   , for encoding the messages sent
+      * @param messageToSend
+      *   , message to be sent
+      * @param seqNumber
+      *   , sequence number for the message to be sent
+      * @param remainingMsgsToSend
+      *   , messages not yet sent
       */
     private def sendMessage(
         messageCodec: MessageCodec,
@@ -345,8 +355,10 @@ class RLPxConnectionHandler(
 
     /** Given a sequence number for the AckTimeouts, the next seq number is returned
       *
-      * @param seqNumber , the current sequence number
-      * @return the sequence number for the next message sent
+      * @param seqNumber
+      *   , the current sequence number
+      * @return
+      *   the sequence number for the next message sent
       */
     private def increaseSeqNumber(seqNumber: Int): Int = seqNumber match {
       case Int.MaxValue => 0

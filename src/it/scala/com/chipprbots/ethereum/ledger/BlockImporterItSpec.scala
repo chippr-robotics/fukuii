@@ -74,12 +74,12 @@ class BlockImporterItSpec
     blockImporter ! BlockImporter.Start
     blockImporter ! BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(newBranch))
 
-    //because the blocks are not valid, we shouldn't reorganise, but at least stay with a current chain, and the best block of the current chain is oldBlock4
+    // because the blocks are not valid, we shouldn't reorganise, but at least stay with a current chain, and the best block of the current chain is oldBlock4
     eventually(blockchainReader.getBestBlock().get shouldEqual oldBlock4)
   }
 
   it should "return a correct new best block after reorganising longer chain to a shorter one if its weight is bigger" in new StartedImportFixture() {
-    //returning discarded initial chain
+    // returning discarded initial chain
     blockchainWriter.save(oldBlock2, Nil, oldWeight2, saveAsBestBlock = true)
     blockchainWriter.save(oldBlock3, Nil, oldWeight3, saveAsBestBlock = true)
     blockchainWriter.save(oldBlock4, Nil, oldWeight4, saveAsBestBlock = true)
@@ -94,7 +94,7 @@ class BlockImporterItSpec
       getBlock(genesisBlock.number + 4, difficulty = 104, parent = oldBlock3.header.hash)
     val newBlock4WeightParentOldBlock3 = oldWeight3.increase(newBlock4ParentOldBlock3.header)
 
-    //Block n5 with oldBlock4 as parent
+    // Block n5 with oldBlock4 as parent
     val newBlock5ParentOldBlock4: Block =
       getBlock(
         genesisBlock.number + 5,
@@ -110,7 +110,7 @@ class BlockImporterItSpec
     blockchainWriter.saveBestKnownBlocks(oldBlock3.header.hash, oldBlock3.number)
     blockchainWriter.save(newBlock4ParentOldBlock3, Nil, newBlock4WeightParentOldBlock3, saveAsBestBlock = true)
 
-    //not reorganising anymore until oldBlock4(not part of the chain anymore), no block/ommer validation when not part of the chain, resolveBranch is returning UnknownBranch
+    // not reorganising anymore until oldBlock4(not part of the chain anymore), no block/ommer validation when not part of the chain, resolveBranch is returning UnknownBranch
     blockImporter ! BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(List(newBlock5ParentOldBlock4)))
 
     eventually(blockchainReader.getBestBlock().get shouldEqual newBlock4ParentOldBlock3)
@@ -287,7 +287,7 @@ class TestFixture extends TestSetupWithVmAndValidators {
   val oldWeight3: ChainWeight = oldWeight2.increase(oldBlock3.header)
   val oldWeight4: ChainWeight = oldWeight3.increase(oldBlock4.header)
 
-  //saving initial main chain
+  // saving initial main chain
   blockchainWriter.save(block1, Nil, weight1, saveAsBestBlock = true)
   blockchainWriter.save(oldBlock2, Nil, oldWeight2, saveAsBestBlock = true)
   blockchainWriter.save(oldBlock3, Nil, oldWeight3, saveAsBestBlock = true)

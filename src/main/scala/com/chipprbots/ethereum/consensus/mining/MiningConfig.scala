@@ -8,12 +8,14 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.utils.Logger
 
-/** Provides generic mining configuration. Each consensus protocol implementation
-  * will use its own specific configuration as well.
+/** Provides generic mining configuration. Each consensus protocol implementation will use its own specific
+  * configuration as well.
   *
-  * @param protocol Designates the mining protocol.
-  * @param miningEnabled Provides support for generalized "mining". The exact semantics are up to the
-  *                      specific mining protocol implementation.
+  * @param protocol
+  *   Designates the mining protocol.
+  * @param miningEnabled
+  *   Provides support for generalized "mining". The exact semantics are up to the specific mining protocol
+  *   implementation.
   */
 final case class MiningConfig(
     protocol: Protocol,
@@ -39,7 +41,7 @@ object MiningConfig extends Logger {
     Protocol.Names.RestrictedPoW
   )
 
-  final val AllowedProtocolsError: String => String = ((s: String)) =>
+  final val AllowedProtocolsError: String => String = (s: String) =>
     Keys.Mining +
       " is configured as '" + s + "'" +
       " but it should be one of " +

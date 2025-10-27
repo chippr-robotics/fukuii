@@ -197,7 +197,7 @@ class TestService(
     val genesisDataLoader = new GenesisDataLoader(blockchainReader, blockchainWriter, stateStorage)
     genesisDataLoader.loadGenesisData(genesisData)
 
-    //save account codes to world state
+    // save account codes to world state
     storeGenesisAccountCodes(genesisData.alloc)
     storeGenesisAccountStorageData(genesisData.alloc)
 
@@ -366,10 +366,11 @@ class TestService(
       .timeout(timeout.duration)
   }
 
-  /** Get the list of accounts of size _maxResults in the given _blockHashOrNumber after given _txIndex.
-    * In response AddressMap contains addressHash - > address starting from given _addressHash.
-    * nexKey field is the next addressHash (if any addresses left in the state).
-    * @see https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_accountrange
+  /** Get the list of accounts of size _maxResults in the given _blockHashOrNumber after given _txIndex. In response
+    * AddressMap contains addressHash - > address starting from given _addressHash. nexKey field is the next addressHash
+    * (if any addresses left in the state).
+    * @see
+    *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_accountrange
     */
   def getAccountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] = {
     // This implementation works by keeping a list of know account from the genesis state
@@ -409,12 +410,13 @@ class TestService(
     }
   }
 
-  /** Get the list of storage values starting from _begin and up to _begin + _maxResults at given block.
-    * nexKey field is the next key hash if any key left in the state, or 0x00 otherwise.
+  /** Get the list of storage values starting from _begin and up to _begin + _maxResults at given block. nexKey field is
+    * the next key hash if any key left in the state, or 0x00 otherwise.
     *
-    * Normally, this RPC method is supposed to also be able to look up the state after after transaction
-    * _txIndex is executed. This is currently not supported in mantis.
-    * @see https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
+    * Normally, this RPC method is supposed to also be able to look up the state after after transaction _txIndex is
+    * executed. This is currently not supported in mantis.
+    * @see
+    *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
     */
   // TODO ETCM-784, ETCM-758: see how we can get a state after an arbitrary transation
   def storageRangeAt(request: StorageRangeRequest): ServiceResponse[StorageRangeResponse] = {

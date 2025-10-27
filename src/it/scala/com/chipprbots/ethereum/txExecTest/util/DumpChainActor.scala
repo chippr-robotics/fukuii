@@ -42,8 +42,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63._
 import com.chipprbots.ethereum.txExecTest.util.DumpChainActor._
 
 /** Actor used for obtaining all the blockchain data (blocks, receipts, nodes) from the blocks [startBlock, maxBlocks]
-  * from a peer bootstrapNode.
-  * The bootstrapNode is assumed to respond to all the messages and properly, so no validation of the received data is done.
+  * from a peer bootstrapNode. The bootstrapNode is assumed to respond to all the messages and properly, so no
+  * validation of the received data is done.
   */
 class DumpChainActor(
     peerManager: ActorRef,
@@ -55,7 +55,7 @@ class DumpChainActor(
   var contractNodesHashes: Set[ByteString] = Set.empty
   var evmCodeHashes: Set[ByteString] = Set.empty
 
-  //Temporary storages used to store the received data
+  // Temporary storages used to store the received data
   var blockHeadersStorage: Map[ByteString, BlockHeader] = HashMap.empty
   var blockBodyStorage: Map[ByteString, BlockBody] = HashMap.empty
   var blockReceiptsStorage: Map[ByteString, Seq[Receipt]] = HashMap.empty
@@ -63,7 +63,7 @@ class DumpChainActor(
   var contractStorage: Map[ByteString, MptNode] = HashMap.empty
   var evmCodeStorage: Map[ByteString, ByteString] = HashMap.empty
 
-  //Pending data to request
+  // Pending data to request
   var blockHeaderToRequest: BigInt = 0
   var receiptsToRequest: Seq[ByteString] = Nil
   var blockBodiesToRequest: Seq[ByteString] = Nil
@@ -79,7 +79,7 @@ class DumpChainActor(
     context.system.scheduler.scheduleOnce(4 seconds, r)
   }
 
-  //Periodically try to connect to bootstrap peer in case the connection failed before dump termination
+  // Periodically try to connect to bootstrap peer in case the connection failed before dump termination
   val connectToBootstrapTimeout: Cancellable = context.system.scheduler.scheduleWithFixedDelay(
     0 seconds,
     4 seconds,
@@ -203,7 +203,7 @@ class DumpChainActor(
     } else {
       if (peers.nonEmpty) {
         val peerToRequest = peers.head
-        //Block headers are only requested once the pending receipts and bodies requests were finished
+        // Block headers are only requested once the pending receipts and bodies requests were finished
         if (
           blockHeaderToRequest < maxBlocks && receiptsRequested.isEmpty && blockBodiesRequested.isEmpty &&
           blockBodiesToRequest.isEmpty && receiptsToRequest.isEmpty

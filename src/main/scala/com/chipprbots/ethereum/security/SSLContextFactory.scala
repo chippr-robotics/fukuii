@@ -28,9 +28,12 @@ case class SSLContextFactory() extends FileUtils with KeyStoreUtils {
 
   /** Validates that the keystore certificate file and password file were configured and that the files exists
     *
-    * @param keystorePath with the path to the certificate keystore if it was configured
-    * @param passwordFile with the path to the password file if it was configured
-    * @return the certificate path and password file or the error detected
+    * @param keystorePath
+    *   with the path to the certificate keystore if it was configured
+    * @param passwordFile
+    *   with the path to the password file if it was configured
+    * @return
+    *   the certificate path and password file or the error detected
     */
   private def validateCertificateFiles(
       keystorePath: String,
@@ -51,10 +54,13 @@ case class SSLContextFactory() extends FileUtils with KeyStoreUtils {
   /** Constructs the SSL context given a certificate
     *
     * @param secureRandom
-    * @param keyStorePath path to the keystore where the certificate is stored
-    * @param keyStoreType for accessing the keystore with the certificate
+    * @param keyStorePath
+    *   path to the keystore where the certificate is stored
+    * @param keyStoreType
+    *   for accessing the keystore with the certificate
     * @param password
-    * @return the SSL context with the obtained certificate or an error if any happened
+    * @return
+    *   the SSL context with the obtained certificate or an error if any happened
     */
   private def obtainSSLContext(
       secureRandom: SecureRandom,
