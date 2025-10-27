@@ -214,7 +214,7 @@ class EthereumIESEngine(
     agree.init(prv)
     val sharedSecret = BigIntegers.asUnsignedByteArray(agree.getFieldSize, agree.calculateAgreement(pub))
 
-    val fillKDFunction = (outLen: Int) =>
+    val fillKDFunction = ((outLen: Int)) =>
       kdf.fold(_.generateBytes(outLen, sharedSecret), _.generateBytes(outLen, sharedSecret))
 
     val encodedKey = encodedPublicKey.orElse(encodedEphKeyPair).getOrElse(new Array[Byte](0))

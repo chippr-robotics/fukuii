@@ -166,8 +166,8 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
   // scalastyle:on method.length
 
   private def extractWarmAccessList(ald: AccessListData): (Set[Address], Set[(Address, BigInt)]) = {
-    val warmAddresses: Set[Address] = ald.addresses.toSet.map((bs: GByteString) => Address(bs: ByteString))
-    val warmStorage: Set[(Address, BigInt)] = ald.storageLocations.toSet.map { (se: StorageEntry) =>
+    val warmAddresses: Set[Address] = ald.addresses.toSet.map(((bs: GByteString)) => Address(bs: ByteString))
+    val warmStorage: Set[(Address, BigInt)] = ald.storageLocations.toSet.map { ((se: StorageEntry)) =>
       (Address(se.address: ByteString), se.storageLocation: BigInt)
     }
     (warmAddresses, warmStorage)

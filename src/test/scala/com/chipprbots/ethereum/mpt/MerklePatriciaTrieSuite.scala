@@ -43,14 +43,14 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   test("PatriciaTrie gets inserted key-value pairs") {
-    forAll(keyValueListGen()) { keyValueList: Seq[(Int, Int)] =>
+    forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
       assertCanGetEveryKeyValue(trie, keyValueList)
     }
   }
 
   test("PatriciaTrie collapsing trie") {
-    forAll(keyValueListGen()) { keyValueList: Seq[(Int, Int)] =>
+    forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       // given
       val trie = addEveryKeyValuePair(keyValueList)
       val unfoldedTrie = MptTraversals.parseTrieIntoMemory(HashNode(trie.getRootHash), emptyEphemNodeStorage)
@@ -68,7 +68,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   test("PatriciaTrie encoding decoding") {
-    forAll(keyValueListGen()) { keyValueList: Seq[(Int, Int)] =>
+    forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
       val unfoldedTrieNode = MptTraversals.parseTrieIntoMemory(HashNode(trie.getRootHash), emptyEphemNodeStorage)
 
@@ -81,7 +81,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   test("PatriciaTrie delete") {
-    forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Int])) { keyList: List[Int] =>
+    forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Int])) { (keyList: List[Int]) =>
       val keyValueList = keyList.distinct.zipWithIndex
       val trieAfterInsert = addEveryKeyValuePair(keyValueList)
       val (keyValueToDelete, keyValueLeft) = keyValueList.splitAt(Gen.choose(0, keyValueList.size).sample.get)
@@ -99,7 +99,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   test("Trie insert should have the same root independently on the order its pairs are inserted") {
-    forAll(keyValueListGen()) { keyValueList: Seq[(Int, Int)] =>
+    forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
 
       val keyValueListShuffle = Random.shuffle(keyValueList)
@@ -559,14 +559,14 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   test("PatriciaTrie can get proof(at least the root node) for all inserted key-value pairs") {
-    forAll(keyValueListGen()) { keyValueList: Seq[(Int, Int)] =>
+    forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
       assertCanGetProofForEveryKeyValue(trie, keyValueList)
     }
   }
 
   test("PatriciaTrie return root as proof when no common nibbles are found between MPT root hash and search key") {
-    forAll(keyValueListGen(1, 10)) { keyValueList: Seq[(Int, Int)] =>
+    forAll(keyValueListGen(1, 10)) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
       val wrongKey = 22
       val proof = trie.getProof(wrongKey)
@@ -618,7 +618,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   test("getProof returns valid proof for existing key") {
     import MptProofVerifier.verifyProof
 
-    forAll(keyValueListGen()) { keyValueList: Seq[(Int, Int)] =>
+    forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val input: Seq[(Array[Byte], Array[Byte])] = keyValueList
         .map { case (k, v) => k.toString.getBytes() -> v.toString.getBytes() }
 

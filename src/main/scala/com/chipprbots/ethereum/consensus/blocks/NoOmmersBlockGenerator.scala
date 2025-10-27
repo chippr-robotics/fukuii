@@ -60,7 +60,7 @@ abstract class NoOmmersBlockGenerator(
           x,
           initialWorldStateBeforeExecution
         )
-      cache.updateAndGet((t: List[PendingBlockAndState]) => (prepared :: t).take(blockCacheSize))
+      cache.updateAndGet(((t: List[PendingBlockAndState])) => (prepared :: t).take(blockCacheSize))
 
       prepared
     }

@@ -8,7 +8,7 @@ import com.chipprbots.ethereum.ObjectGenerators
 class HexPrefixSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
 
   test("HexPrefix encoding") {
-    forAll(hexPrefixDecodeParametersGen()) { pair: (Array[Byte], Boolean) =>
+    forAll(hexPrefixDecodeParametersGen()) { (pair: (Array[Byte], Boolean)) =>
       val (bytes, t) = pair
       val nibbles = HexPrefix.bytesToNibbles(bytes = bytes)
       val packed = HexPrefix.encode(nibbles, t)

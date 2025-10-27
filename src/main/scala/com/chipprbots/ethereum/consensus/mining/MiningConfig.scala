@@ -39,7 +39,7 @@ object MiningConfig extends Logger {
     Protocol.Names.RestrictedPoW
   )
 
-  final val AllowedProtocolsError: String => String = (s: String) =>
+  final val AllowedProtocolsError: String => String = ((s: String)) =>
     Keys.Mining +
       " is configured as '" + s + "'" +
       " but it should be one of " +

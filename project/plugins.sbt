@@ -1,4 +1,8 @@
 logLevel := sbt.Level.Warn
+
+// Fix dependency conflict for scala-xml
+ThisBuild / libraryDependencySchemes += "org.scala-lang.modules" %% "scala-xml" % "always"
+
 addSbtPlugin("com.eed3si9n" % "sbt-buildinfo" % "0.10.0")
 addSbtPlugin("com.github.mwz" % "sbt-sonar" % "2.2.0")
 addSbtPlugin("com.lightbend.sbt" % "sbt-javaagent" % "0.1.6")

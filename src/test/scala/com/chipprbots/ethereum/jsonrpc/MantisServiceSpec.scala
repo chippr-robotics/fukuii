@@ -100,7 +100,7 @@ class MantisServiceSpec
       }
     }
 
-    "should validate range size against configuration" in testCaseM { fixture: Fixture =>
+    "should validate range size against configuration" in testCaseM { (fixture: Fixture) =>
       import fixture._
 
       mantisService

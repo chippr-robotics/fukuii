@@ -188,7 +188,7 @@ trait ObjectGenerators {
   }
 
   def genKey(rnd: SecureRandom): Gen[AsymmetricCipherKeyPair] =
-    Gen.resultOf { _: Unit =>
+    Gen.resultOf { (_: Unit) =>
       crypto.generateKeyPair(rnd)
     }
 

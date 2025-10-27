@@ -54,13 +54,13 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("a * a^-1 == one") {
-    forAll(fpGen) { a: T =>
+    forAll(fpGen) { (a: T) =>
       assert(a * a.inversed() == FiniteField[T].one)
     }
   }
 
   test("a + (-a) == a - a == zero") {
-    forAll(fpGen) { a: T =>
+    forAll(fpGen) { (a: T) =>
       assert(a + a.negated() == FiniteField[T].zero)
       assert(a - a == FiniteField[T].zero)
     }
@@ -79,21 +79,21 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("0 as neutral element fo addition") {
-    forAll(fpGen) { n1: T =>
+    forAll(fpGen) { (n1: T) =>
       assert(n1 + FiniteField[T].zero == n1)
       assert(FiniteField[T].zero + n1 == n1)
     }
   }
 
   test("1 as neutral element fo multiplication") {
-    forAll(fpGen) { n1: T =>
+    forAll(fpGen) { (n1: T) =>
       assert(n1 * FiniteField[T].one == n1)
       assert(FiniteField[T].one * n1 == n1)
     }
   }
 
   test("multiply by 0") {
-    forAll(fpGen) { n1: T =>
+    forAll(fpGen) { (n1: T) =>
       assert(n1 * FiniteField[T].zero == FiniteField[T].zero)
       assert(FiniteField[T].zero * n1 == FiniteField[T].zero)
       assert((n1 * FiniteField[T].zero).isZero())
@@ -108,13 +108,13 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("a.doubled == a + a") {
-    forAll(fpGen) { a: T =>
+    forAll(fpGen) { (a: T) =>
       assert(a.doubled() == a + a)
     }
   }
 
   test("a.squared == a * a") {
-    forAll(fpGen) { a: T =>
+    forAll(fpGen) { (a: T) =>
       assert(a.squared() == a * a)
     }
   }

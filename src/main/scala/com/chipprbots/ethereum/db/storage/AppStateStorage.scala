@@ -25,7 +25,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def keyDeserializer: IndexedSeq[Byte] => Key = k => new String(k.toArray, StorageStringCharset.UTF8Charset)
   def valueSerializer: String => IndexedSeq[Byte] = k =>
     ArraySeq.unsafeWrapArray(k.getBytes(StorageStringCharset.UTF8Charset))
-  def valueDeserializer: IndexedSeq[Byte] => String = (valueBytes: IndexedSeq[Byte]) =>
+  def valueDeserializer: IndexedSeq[Byte] => String = ((valueBytes: IndexedSeq[Byte])) =>
     new String(valueBytes.toArray, StorageStringCharset.UTF8Charset)
 
   def getBestBlockNumber(): BigInt =

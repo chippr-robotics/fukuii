@@ -46,7 +46,7 @@ class FastSyncStateStorage(val dataSource: DataSource)
   override def valueSerializer: SyncState => IndexedSeq[Byte] = ss => compactPickledBytes(Pickle.intoBytes(ss))
 
   override def valueDeserializer: IndexedSeq[Byte] => SyncState =
-    (bytes: IndexedSeq[Byte]) => Unpickle[SyncState].fromBytes(ByteBuffer.wrap(bytes.toArray[Byte]))
+    ((bytes: IndexedSeq[Byte])) => Unpickle[SyncState].fromBytes(ByteBuffer.wrap(bytes.toArray[Byte]))
 
   protected def apply(dataSource: DataSource): FastSyncStateStorage = new FastSyncStateStorage(dataSource)
 

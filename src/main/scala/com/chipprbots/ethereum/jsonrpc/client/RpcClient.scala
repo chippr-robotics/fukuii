@@ -77,7 +77,7 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
         response <- Http().singleRequest(request, connectionContext, connectionPoolSettings)
         data <- Unmarshal(response.entity).to[String]
       } yield parse(data).left.map(e => ParserError(e.message)))
-      .onErrorHandle { ex: Throwable =>
+      .onErrorHandle { (ex: Throwable) =>
         ex match {
           case _: TcpIdleTimeoutException =>
             log.error("RPC request", ex)

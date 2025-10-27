@@ -109,7 +109,7 @@ class BlockchainHostActor(
             startBlockNumber to (startBlockNumber + (request.skip + 1) * headersCount - 1) by (request.skip + 1)
           }
 
-          val blockHeaders: Seq[BlockHeader] = range.flatMap { a: BigInt => blockchainReader.getBlockHeaderByNumber(a) }
+          val blockHeaders: Seq[BlockHeader] = range.flatMap { (a: BigInt) => blockchainReader.getBlockHeaderByNumber(a) }
 
           Some(BlockHeaders(blockHeaders))
 

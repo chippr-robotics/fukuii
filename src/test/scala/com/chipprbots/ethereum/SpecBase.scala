@@ -52,7 +52,7 @@ trait SpecFixtures { self: SpecBase =>
     customTestCaseM(createFixture())(theTest)
 
   def testCase(theTest: Fixture => Assertion): Future[Assertion] =
-    testCaseM((fixture: Fixture) => Task.pure(theTest(fixture)))
+    testCaseM(((fixture: Fixture)) => Task.pure(theTest(fixture)))
 }
 
 trait ResourceFixtures { self: SpecBase =>

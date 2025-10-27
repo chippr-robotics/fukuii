@@ -42,7 +42,7 @@ class TestModeComponentsProvider(
         evmCodeStorage,
         consensuz.blockPreparator,
         blockValidation,
-        (key: UInt256) => preimageCache.put(crypto.kec256(key.bytes), key)
+        ((key: UInt256)) => preimageCache.put(crypto.kec256(key.bytes), key)
       )
 
     new ConsensusAdapter(

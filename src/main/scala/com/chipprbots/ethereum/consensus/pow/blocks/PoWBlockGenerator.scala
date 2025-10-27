@@ -99,7 +99,7 @@ class PoWBlockGeneratorImpl(
         initialWorldStateBeforeExecution
       )
 
-      cache.updateAndGet { t: List[PendingBlockAndState] =>
+      cache.updateAndGet { (t: List[PendingBlockAndState]) =>
         (prepared :: t).take(blockCacheSize)
       }
 
