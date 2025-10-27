@@ -41,14 +41,21 @@ ThisBuild / evictionErrorLevel := Level.Info
 
 val `scala-2.12` = "2.12.13"
 val `scala-2.13` = "2.13.6"
+val `scala-3` = "3.3.4" // Scala 3 LTS version
 val supportedScalaVersions = List(`scala-2.12`, `scala-2.13`)
+val scala3SupportedVersions = List(`scala-2.13`, `scala-3`) // Cross-compilation target for Scala 3 migration
 
+// Scala 2.x specific options
+val scala2Options = Seq(
+  "-Ywarn-unused",
+  "-Xlint"
+)
+
+// Common options for both Scala 2 and Scala 3
 val baseScalacOptions = Seq(
   "-unchecked",
   "-deprecation",
   "-feature",
-  "-Ywarn-unused",
-  "-Xlint",
   "-encoding",
   "utf-8"
 )
@@ -56,7 +63,8 @@ val baseScalacOptions = Seq(
 // https://www.scala-lang.org/2021/01/12/configuring-and-suppressing-warnings.html
 // cat={warning-name}:ws prints a summary with the number of warnings of the given type
 // any:e turns all remaining warnings into errors
-val fatalWarnings = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("true")) {
+// Scala 2 only - Scala 3 uses different warning configuration
+def fatalWarningsScala2 = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("true")) {
   "-Wconf:any:w"
 } else {
   "-Wconf:" ++ Seq(
@@ -70,6 +78,12 @@ val fatalWarnings = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("true")) {
     "any:e"
   ).mkString(",")
 }) ++ Seq("-Ypatmat-exhaust-depth", "off")
+
+// Scala 3 warning options
+val scala3Options = Seq(
+  "-Xfatal-warnings",
+  "-Ykind-projector" // Scala 3 replacement for kind-projector plugin
+)
 
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   name := projectName,
@@ -85,8 +99,17 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   resolvers += "Sonatype OSS Snapshots".at("https://oss.sonatype.org/content/repositories/snapshots"),
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
-  scalacOptions := baseScalacOptions ++ fatalWarnings,
-  scalacOptions ++= (if (fukuiiDev) Seq.empty else compilerOptimizationsForProd),
+  // Configure scalacOptions based on Scala version
+  scalacOptions := {
+    val base = baseScalacOptions
+    val versionSpecific = CrossVersion.partialVersion(scalaVersion.value) match {
+      case Some((3, _)) => scala3Options
+      case Some((2, 13)) => scala2Options ++ fatalWarningsScala2
+      case Some((2, 12)) => scala2Options ++ fatalWarningsScala2
+      case _ => Seq.empty
+    }
+    base ++ versionSpecific ++ (if (fukuiiDev) Seq.empty else compilerOptimizationsForProd)
+  },
   (Compile / console / scalacOptions) ~= (_.filterNot(
     Set(
       "-Ywarn-unused-import",
@@ -103,7 +126,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
 
 val publishSettings = Seq(
   publish / skip := false,
-  crossScalaVersions := supportedScalaVersions
+  crossScalaVersions := scala3SupportedVersions // Use Scala 2.13 and 3.3.4 for published libraries
 )
 
 // Adding an "it" config because in `Dependencies.scala` some are declared with `% "it,test"`
@@ -269,7 +292,7 @@ lazy val node = {
       batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml""""
     )
     .settings(
-      crossScalaVersions := List(`scala-2.13`)
+      crossScalaVersions := scala3SupportedVersions // Enable cross-compilation for main node project
     )
 
   if (!nixBuild)
@@ -393,6 +416,33 @@ addCommandAlias(
 addCommandAlias(
   "testCoverageOff",
   """; coverageOff
+    |; testAll
+    |""".stripMargin
+)
+
+// Scala 3 migration commands
+addCommandAlias(
+  "scala3Migrate",
+  """; scala3-migrate
+    |""".stripMargin
+)
+
+addCommandAlias(
+  "scala3MigrateSyntax",
+  """; scala3-migrate-syntax
+    |""".stripMargin
+)
+
+addCommandAlias(
+  "compileScala3",
+  """; ++3.3.4
+    |; compile-all
+    |""".stripMargin
+)
+
+addCommandAlias(
+  "testScala3",
+  """; ++3.3.4
     |; testAll
     |""".stripMargin
 )

@@ -17,8 +17,12 @@ permissions:
 
 jobs:
   test:
-    name: Test and Build (JDK 17)
+    name: Test and Build (JDK 17, Scala ${{ matrix.scala-version }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        scala-version: ['2.13', '3.3']
+      fail-fast: false
     
     steps:
       - name: Checkout code
@@ -55,32 +59,49 @@ jobs:
           sudo apt-get install sbt
       
       - name: Compile all modules
-        run: sbt compile-all
+        run: |
+          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
+            sbt "++3.3.4" compile-all
+          else
+            sbt compile-all
+          fi
         env:
           FUKUII_DEV: true
       
       - name: Check code formatting
-        run: sbt formatCheck
+        run: |
+          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
+            sbt "++3.3.4" formatCheck
+          else
+            sbt formatCheck
+          fi
         env:
           FUKUII_DEV: true
       
       - name: Run Scapegoat analysis
+        # Only run Scapegoat on Scala 2.13 as it's not yet compatible with Scala 3
+        if: matrix.scala-version == '2.13'
         run: sbt runScapegoat
         env:
           FUKUII_DEV: true
       
       - name: Upload Scapegoat reports
-        if: always()
+        if: always() && matrix.scala-version == '2.13'
         uses: actions/upload-artifact@v4
         with:
-          name: scapegoat-reports-jdk17
+          name: scapegoat-reports-jdk17-scala-${{ matrix.scala-version }}
           path: |
             **/target/scala-*/scapegoat-report/**
           retention-days: 7
           if-no-files-found: warn
       
       - name: Run tests with coverage
-        run: sbt testCoverage
+        run: |
+          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
+            sbt "++3.3.4" testCoverage
+          else
+            sbt testCoverage
+          fi
         env:
           FUKUII_DEV: true
       
@@ -88,7 +109,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports-jdk17
+          name: coverage-reports-jdk17-scala-${{ matrix.scala-version }}
           path: |
             **/target/scala-*/scoverage-report/**
             **/target/scala-*/scoverage-data/**
@@ -96,11 +117,15 @@ jobs:
           if-no-files-found: warn
       
       - name: Build assembly
+        # Only build assembly for Scala 2.13 (primary version)
+        if: matrix.scala-version == '2.13'
         run: sbt assembly
         env:
           FUKUII_DEV: true
       
       - name: Build distribution
+        # Only build distribution for Scala 2.13 (primary version)
+        if: matrix.scala-version == '2.13'
         run: sbt dist
         env:
           FUKUII_DEV: true
@@ -109,16 +134,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-jdk17
+          name: test-results-jdk17-scala-${{ matrix.scala-version }}
           path: |
             **/target/test-reports/**
           retention-days: 7
           if-no-files-found: warn
       
       - name: Upload build artifacts
+        if: matrix.scala-version == '2.13'
         uses: actions/upload-artifact@v4
         with:
-          name: fukuii-distribution-jdk17
+          name: fukuii-distribution-jdk17-scala-${{ matrix.scala-version }}
           path: |
             target/universal/*.zip
             **/target/scala-*/*-assembly-*.jar
