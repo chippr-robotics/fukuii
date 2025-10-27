@@ -195,7 +195,9 @@ sbt "migrateSyntax rlp"     # Migrate rlp module syntax
 sbt "migrateSyntax crypto"  # Migrate crypto module syntax
 sbt "migrateSyntax node"    # Migrate node module syntax
 ```
-This automatically fixes syntax incompatibilities for Scala 3 in the specified module.
+**⚠️ Warning**: This command modifies source files in place to fix syntax incompatibilities for Scala 3. Commit your changes before running to easily review the modifications.
+
+This command uses the scala3-migrate plugin to automatically fix syntax incompatibilities for Scala 3 in the specified module.
 
 **Cross-compile a specific module:**
 ```bash
@@ -206,7 +208,8 @@ sbt "crypto/+test"    # Test crypto module for all Scala versions
 **Notes:**
 - The default Scala version is 2.13.6
 - Scala 3.3.4 (LTS) is available for cross-compilation
-- **Phase 2 Migration Complete**: All modules (bytes, rlp, crypto, node) have been migrated using `migrateSyntax` to fix Scala 3 syntax incompatibilities
+- The project uses sbt-scala3-migrate plugin version 0.6.1 for migration tooling
+- **Phase 2 Migration Complete**: All modules (bytes, rlp, crypto, node) have been migrated using `migrateSyntax` (scala3-migrate 0.6.1) to fix Scala 3 syntax incompatibilities
 - The codebase is now Scala 3 syntax-compatible while maintaining full Scala 2.13 compatibility
 - CI tests both Scala 2.13 and 3.3 versions
 - Scapegoat analysis currently only runs on Scala 2.13 (not yet Scala 3 compatible)
