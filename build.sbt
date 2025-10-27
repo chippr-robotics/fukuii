@@ -156,6 +156,7 @@ lazy val scalanet = {
       libraryDependencies ++=
         Dependencies.akka ++
           Dependencies.cats ++
+          Dependencies.fs2 ++
           Dependencies.monix ++
           Dependencies.testing
     )
@@ -175,6 +176,7 @@ lazy val scalanetDiscovery = {
       libraryDependencies ++=
         Dependencies.akka ++
           Dependencies.cats ++
+          Dependencies.fs2 ++
           Dependencies.monix ++
           Dependencies.testing
     )
@@ -260,6 +262,7 @@ lazy val node = {
       Dependencies.crypto,
       Dependencies.dependencies,
       Dependencies.enumeratum,
+      Dependencies.fs2,
       Dependencies.guava,
       Dependencies.json4s,
       Dependencies.kamon,

@@ -1,8 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import monix.eval.Task
-import monix.reactive.Consumer
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 
 import com.google.common.hash.BloomFilter
 import com.google.common.hash.Funnel
@@ -10,16 +9,19 @@ import com.google.common.hash.Funnel
 import com.chipprbots.ethereum.blockchain.sync.fast.LoadableBloomFilter.BloomFilterLoadingResult
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 
-class LoadableBloomFilter[A](bloomFilter: BloomFilter[A], source: Observable[Either[IterationError, A]]) {
-  val loadFromSource: Task[BloomFilterLoadingResult] =
+class LoadableBloomFilter[A](bloomFilter: BloomFilter[A], source: Stream[IO, Either[IterationError, A]]) {
+  val loadFromSource: IO[BloomFilterLoadingResult] =
     source
-      .consumeWith(Consumer.foldLeftTask(BloomFilterLoadingResult()) { (s, e) =>
+      .fold(BloomFilterLoadingResult()) { (s, e) =>
         e match {
-          case Left(value)  => Task.now(s.copy(error = Some(value)))
-          case Right(value) => Task(bloomFilter.put(value)).map(_ => s.copy(writtenElements = s.writtenElements + 1))
+          case Left(value)  => s.copy(error = Some(value))
+          case Right(value) => 
+            bloomFilter.put(value)
+            s.copy(writtenElements = s.writtenElements + 1)
         }
-      })
-      .memoizeOnSuccess
+      }
+      .compile.lastOrError
+      .memoize
 
   def put(elem: A): Boolean = bloomFilter.put(elem)
 
@@ -29,7 +31,7 @@ class LoadableBloomFilter[A](bloomFilter: BloomFilter[A], source: Observable[Eit
 }
 
 object LoadableBloomFilter {
-  def apply[A](expectedSize: Int, loadingSource: Observable[Either[IterationError, A]])(implicit
+  def apply[A](expectedSize: Int, loadingSource: Stream[IO, Either[IterationError, A]])(implicit
       f: Funnel[A]
   ): LoadableBloomFilter[A] =
     new LoadableBloomFilter[A](BloomFilter.create[A](f, expectedSize), loadingSource)

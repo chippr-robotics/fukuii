@@ -2,7 +2,8 @@ package com.chipprbots.ethereum.db.dataSource
 
 import java.nio.ByteBuffer
 
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.DataSource._
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
@@ -57,15 +58,15 @@ class EphemDataSource(var storage: Map[ByteBuffer, Array[Byte]]) extends DataSou
 
   override def destroy(): Unit = ()
 
-  override def iterate(): Observable[Either[IterationError, (Array[Byte], Array[Byte])]] =
-    Observable.fromIterable(storage.toList.map { case (key, value) => Right((key.array(), value)) })
+  override def iterate(): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
+    Stream.emits(storage.toList.map { case (key, value) => Right((key.array(), value)) })
 
-  override def iterate(namespace: Namespace): Observable[Either[IterationError, (Array[Byte], Array[Byte])]] = {
+  override def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] = {
     val namespaceVals = storage.collect {
       case (buffer, bytes) if buffer.array().startsWith(namespace) => Right((buffer.array(), bytes))
     }
 
-    Observable.fromIterable(namespaceVals)
+    Stream.emits(namespaceVals.toSeq)
   }
 }
 

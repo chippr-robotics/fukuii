@@ -216,20 +216,27 @@ All pure Java dependencies are compatible:
   2. Consider alternative approaches (Scala 3 native features)
 
 #### 3.3.4 Monix
-- **Current**: 3.2.2
+- **Current**: 3.4.1 (updated from 3.2.2)
 - **Issue**: Limited Scala 3 support, community moving to Cats Effect 3
-- **Impact**: Moderate - used for reactive streams
+- **Impact**: High - used extensively (~184 imports, 85+ Task files, 16+ Observable files)
+- **Status**: ⚠️ **Action plan created** - See [Monix to IO Action Plan](./MONIX_TO_IO_ACTION_PLAN.md)
 - **Solution Options**:
-  1. Update to Monix 3.4.x (partial Scala 3 support)
-  2. Migrate to Cats Effect 3 (recommended by community)
+  1. ~~Update to Monix 3.4.x (partial Scala 3 support)~~ Already at 3.4.1
+  2. **Migrate to Cats Effect 3 IO** (recommended, action plan ready, 6-8 weeks effort)
 
 ### 3.4 Dependency Update Priority
 
+**Phase 0 - Monix Migration** (prerequisite for full CE3 + Scala 3):
+1. Execute Monix → Cats Effect 3 IO migration (see [Action Plan](./MONIX_TO_IO_ACTION_PLAN.md))
+2. Replace Task with IO, Observable with fs2.Stream
+3. Remove Monix dependency entirely
+4. Complete Cats Effect 3 upgrade to 3.5.4
+
 **Phase 1 - Prerequisites** (before Scala 3 migration):
-1. Update Akka to 2.6.20+
-2. Update Akka HTTP to 10.2.10+
-3. Update Cats to 2.9.0+
-4. Evaluate Monix vs Cats Effect 3 migration
+1. ✅ Update Akka to 2.6.20+ (complete)
+2. ✅ Update Akka HTTP to 10.2.10+ (complete)
+3. ✅ Update Cats to 2.9.0+ (complete)
+4. ⏳ Complete Monix → CE3 IO migration (action plan ready)
 
 **Phase 2 - During Migration**:
 1. Update all test frameworks (ScalaTest, ScalaCheck, ScalaMock)
@@ -239,8 +246,7 @@ All pure Java dependencies are compatible:
 
 **Phase 3 - Post Migration**:
 1. Migrate Shapeless usage
-2. Complete Monix migration if needed
-3. Update all remaining dependencies
+2. Update all remaining dependencies
 
 ---
 

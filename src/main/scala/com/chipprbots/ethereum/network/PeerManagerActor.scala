@@ -9,8 +9,8 @@ import akka.actor._
 import akka.util.ByteString
 import akka.util.Timeout
 
-import monix.eval.Task
-import monix.execution.{Scheduler => MonixScheduler}
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.collection.mutable
 import scala.concurrent.duration._

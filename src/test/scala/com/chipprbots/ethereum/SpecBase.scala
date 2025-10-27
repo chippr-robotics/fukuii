@@ -37,7 +37,7 @@ trait SpecBase extends TypeCheckedTripleEquals with Diagrams with Matchers { sel
 
   def testCaseM[M[_]: Async](theTest: => M[Assertion]): Future[Assertion] = customTestCaseM(())(_ => theTest)
 
-  def testCase(theTest: => Assertion): Future[Assertion] = testCaseM(Task(theTest))
+  def testCase(theTest: => Assertion): Future[Assertion] = testCaseM(IO(theTest))
 }
 
 trait FlatSpecBase extends AsyncFlatSpecLike with SpecBase {}
@@ -55,22 +55,22 @@ trait SpecFixtures { self: SpecBase =>
     customTestCaseM(createFixture())(theTest)
 
   def testCase(theTest: Fixture => Assertion): Future[Assertion] =
-    testCaseM((fixture: Fixture) => Task.pure(theTest(fixture)))
+    testCaseM((fixture: Fixture) => IO.pure(theTest(fixture)))
 }
 
 trait ResourceFixtures { self: SpecBase =>
   type Fixture
 
-  def fixtureResource: Resource[Task, Fixture]
+  def fixtureResource: Resource[IO, Fixture]
 
   def testCaseM[M[_]: Async](theTest: Fixture => M[Assertion]): Future[Assertion] =
-    customTestCaseResourceM(fixtureResource.mapK(Task.liftTo[M]))(theTest)
+    customTestCaseResourceM(fixtureResource.mapK(IO.liftTo[M]))(theTest)
 
-  /** Task-specific method to avoid type inference issues in [[testCaseM]]
+  /** IO-specific method to avoid type inference issues in [[testCaseM]]
     */
-  def testCaseT(theTest: Fixture => Task[Assertion]): Future[Assertion] =
+  def testCaseT(theTest: Fixture => IO[Assertion]): Future[Assertion] =
     customTestCaseResourceM(fixtureResource)(theTest)
 
   def testCase(theTest: Fixture => Assertion): Future[Assertion] =
-    customTestCaseResourceM(fixtureResource)(fixture => Task.pure(theTest(fixture)))
+    customTestCaseResourceM(fixtureResource)(fixture => IO.pure(theTest(fixture)))
 }
