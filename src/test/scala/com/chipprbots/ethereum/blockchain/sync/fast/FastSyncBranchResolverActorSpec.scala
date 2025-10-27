@@ -11,7 +11,7 @@ import akka.testkit.TestProbe
 import akka.util.ByteString
 import akka.util.Timeout
 
-import cats.effect.concurrent.Deferred
+import cats.effect.Deferred
 import cats.implicits._
 
 import monix.eval.Task
