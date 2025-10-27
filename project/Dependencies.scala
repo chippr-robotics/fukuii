@@ -27,12 +27,12 @@ object Dependencies {
     Seq(
       "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
       "ch.megard" %% "akka-http-cors" % "1.1.0",
-      "de.heikoseeberger" %% "akka-http-json4s" % "1.34.0",
+      "de.heikoseeberger" %% "akka-http-json4s" % "1.39.2", // Updated for json4s 4.0.x compatibility
       "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % "it,test"
     )
   }
 
-  val json4s = Seq("org.json4s" %% "json4s-native" % "3.6.9")
+  val json4s = Seq("org.json4s" %% "json4s-native" % "4.0.7") // Updated for Scala 3 support
 
   val circe: Seq[ModuleID] = {
     val circeVersion = "0.14.10" // Updated for Scala 3 support

@@ -32,10 +32,12 @@ To contribute to Fukuii, you'll need:
 
 Fukuii supports cross-compilation for multiple Scala versions:
 
-- **Scala 2.13.8** - Primary version (default - updated for Scala 3-ready dependencies)
+- **Scala 2.13.14** - Primary version (default - updated for json4s 4.0.7 and Scala 3-ready dependencies)
 - **Scala 3.3.4** - LTS version for forward compatibility
 
 The project is configured for gradual migration to Scala 3 while maintaining backward compatibility with Scala 2.13.
+
+**Note**: SemanticDB/Scalafix are temporarily disabled for Scala 2.13.14 as semanticdb-scalac support is pending.
 
 ### Setting Up Your Development Environment
 

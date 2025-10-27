@@ -113,7 +113,7 @@ To build Fukuii from source locally you will need:
 ### Scala Version Support
 
 Fukuii supports multiple Scala versions:
-- **Scala 2.13.8** (primary/default version - updated for Scala 3-ready dependencies)
+- **Scala 2.13.14** (primary/default version - updated for json4s 4.0.7 and Scala 3-ready dependencies)
 - **Scala 3.3.4** (LTS - for cross-compilation and forward compatibility)
 
 The codebase is configured for gradual migration to Scala 3 while maintaining full backward compatibility.
