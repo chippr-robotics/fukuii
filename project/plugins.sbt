@@ -17,5 +17,5 @@ addSbtPlugin("io.kamon" % "sbt-kanela-runner" % "2.0.5")
 addSbtPlugin("org.scalameta" % "sbt-scalafmt" % "2.5.2") // Updated for Scala 3 support
 addSbtPlugin("org.scoverage" % "sbt-scoverage" % "2.0.10")
 addSbtPlugin("com.geirsson" % "sbt-ci-release" % "1.5.6")
-addSbtPlugin("ch.epfl.scala" % "sbt-scalafix" % "0.12.1")
+addSbtPlugin("ch.epfl.scala" % "sbt-scalafix" % "0.13.0") // Updated for better Scala version support
 addSbtPlugin("ch.epfl.scala" % "sbt-scala3-migrate" % "0.6.1") // Scala 3 migration tooling

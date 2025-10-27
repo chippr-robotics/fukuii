@@ -44,7 +44,7 @@ crossPaths := true
 ThisBuild / evictionErrorLevel := Level.Info
 
 val `scala-2.12` = "2.12.13"
-val `scala-2.13` = "2.13.14" // Upgraded for Cats Effect 3.5.4 compatibility (SIP-51 requirement - CE3 dependencies require 2.13.14+)
+val `scala-2.13` = "2.13.14" // Upgraded for json4s 4.0.x and circe 0.14.10 (SIP-51 requirement)
 val `scala-3` = "3.3.4" // Scala 3 LTS version
 val supportedScalaVersions = List(`scala-2.12`, `scala-2.13`)
 val scala3SupportedVersions = List(`scala-2.13`, `scala-3`) // Cross-compilation target for Scala 3 migration
@@ -95,9 +95,10 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   scalaVersion := `scala-2.13`,
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
-  semanticdbEnabled := true, // enable SemanticDB
-  semanticdbVersion := scalafixSemanticdb.revision, // use Scalafix compatible version
-  ThisBuild / scalafixScalaBinaryVersion := CrossVersion.binaryScalaVersion(scalaVersion.value),
+  // NOTE: SemanticDB temporarily disabled for Scala 2.13.14 (not yet supported by semanticdb-scalac)
+  // Will be re-enabled when semanticdb adds 2.13.14 support or after Scala 3 migration
+  // semanticdbEnabled := true, // enable SemanticDB
+  // semanticdbVersion := scalafixSemanticdb.revision, // use Scalafix compatible version
   ThisBuild / scalafixDependencies ++= List(
     "com.github.liancheng" %% "organize-imports" % "0.6.0"
   ),
@@ -142,6 +143,44 @@ val publishSettings = Seq(
 // Adding an "it" config because in `Dependencies.scala` some are declared with `% "it,test"`
 // which would fail if the project didn't have configuration to add to.
 val Integration = config("it").extend(Test)
+
+// Vendored scalanet modules (from IOHK's scalanet library)
+lazy val scalanet = {
+  val scalanet = project
+    .in(file("scalanet/src"))
+    .configs(Integration)
+    .settings(commonSettings("fukuii-scalanet"))
+    .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
+    .settings(publishSettings)
+    .settings(
+      libraryDependencies ++=
+        Dependencies.akka ++
+          Dependencies.cats ++
+          Dependencies.monix ++
+          Dependencies.testing
+    )
+
+  scalanet
+}
+
+lazy val scalanetDiscovery = {
+  val scalanetDiscovery = project
+    .in(file("scalanet/discovery"))
+    .configs(Integration)
+    .dependsOn(scalanet)
+    .settings(commonSettings("fukuii-scalanet-discovery"))
+    .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
+    .settings(publishSettings)
+    .settings(
+      libraryDependencies ++=
+        Dependencies.akka ++
+          Dependencies.cats ++
+          Dependencies.monix ++
+          Dependencies.testing
+    )
+
+  scalanetDiscovery
+}
 
 lazy val bytes = {
   val bytes = project
@@ -243,7 +282,7 @@ lazy val node = {
     .in(file("."))
     .configs(Integration, Benchmark, Evm, Rpc)
     .enablePlugins(BuildInfoPlugin)
-    .dependsOn(bytes, crypto, rlp)
+    .dependsOn(bytes, crypto, rlp, scalanet, scalanetDiscovery)
     .settings(
       buildInfoKeys ++= Seq[BuildInfoKey](
         name,

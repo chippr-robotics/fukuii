@@ -14,13 +14,14 @@ This report analyzes the requirements and steps needed to migrate the Fukuii Eth
 
 1. **Large codebase**: ~270K lines across multiple modules (bytes, crypto, rlp, node)
 2. **External dependencies**: 30+ libraries that need Scala 3 compatibility
-3. **Static analysis toolchain**: Scalafmt, Scalafix, Scapegoat, Scoverage need updates
-4. **Implicit conversions**: 284+ implicit vals, 103+ implicit classes, requiring migration to new `given`/`using` syntax
-5. **Build system**: SBT 1.10.7 with multiple plugins requiring updates
+3. **⚠️ CRITICAL BLOCKER: Scalanet dependency** - No Scala 3 support, fork required (see `SCALANET_COMPATIBILITY_ASSESSMENT.md`)
+4. **Static analysis toolchain**: Scalafmt, Scalafix, Scapegoat, Scoverage need updates
+5. **Implicit conversions**: 284+ implicit vals, 103+ implicit classes, requiring migration to new `given`/`using` syntax
+6. **Build system**: SBT 1.10.7 with multiple plugins requiring updates
 
-**Recommendation**: Proceed with a phased migration approach, starting with dependency compatibility assessment, followed by automated migration using Scala 3 migration tooling, then manual fixes for complex cases.
+**Recommendation**: Proceed with a phased migration approach, starting with dependency compatibility assessment (including scalanet fork), followed by automated migration using Scala 3 migration tooling, then manual fixes for complex cases.
 
-**Estimated Timeline**: 4-8 weeks for a complete migration with testing and validation.
+**Estimated Timeline**: 7-12 weeks for a complete migration with testing and validation (includes 3-4 weeks for scalanet fork).
 
 ---
 
@@ -170,7 +171,7 @@ Many Scala 2 compiler flags are removed or renamed:
 | Shapeless | 2.3.3 | ✅ Shapeless 3 available | Major rewrite, significant changes |
 | Enumeratum | 1.6.1 | ✅ 1.7.x for Scala 3 | Minor upgrade |
 | Boopickle | 1.3.3 | ✅ 1.4.x for Scala 3 | Minor upgrade |
-| Scalanet | 0.6.0 | ❓ Check with IOHK | May need update or fork |
+| Scalanet | ~~0.6.0~~ → Vendored | ✅ **RESOLVED - Vendored locally** | Vendored in `scalanet/` (67 files, Apache 2.0) - see SCALANET_COMPATIBILITY_ASSESSMENT.md |
 
 ### 3.2 Java Dependencies
 
@@ -184,22 +185,27 @@ All pure Java dependencies are compatible:
 
 ### 3.3 High-Risk Dependencies
 
-#### 3.3.1 Scalanet (IOHK Network Library)
-- **Current**: 0.6.0
-- **Issue**: May not be published for Scala 3
-- **Impact**: Critical - core P2P networking
-- **Solution Options**:
-  1. Request Scala 3 version from IOHK
-  2. Fork and migrate if necessary
-  3. Evaluate alternative networking libraries
+#### 3.3.1 Scalanet (IOHK Network Library) - **✅ RESOLVED**
+- **Current**: ~~0.6.0 (external)~~ → **Vendored locally**
+- **Issue**: ❌ No Scala 3 artifacts available, appears unmaintained
+- **Impact**: **CRITICAL** - Essential for P2P networking and peer discovery
+- **Assessment**: Comprehensive analysis completed (see `SCALANET_COMPATIBILITY_ASSESSMENT.md`)
+- **Decision**: **Vendor as part of Fukuii** (simpler than separate fork)
+- **Implementation** (October 27, 2025):
+  1. ✅ Vendored scalanet 0.8.0 source code into `scalanet/` directory
+  2. ✅ Added proper Apache 2.0 attribution (see `scalanet/ATTRIBUTION.md`)
+  3. ✅ Updated build to use local modules (scalanet, scalanetDiscovery)
+  4. ✅ Removed external dependency from Dependencies.scala
+- **Benefits**: Simpler than fork, easier Scala 3 migration, better integration
+- **Timeline Impact**: ~~Adds 3-4 weeks~~ **RESOLVED** - Will migrate with rest of codebase
 
-#### 3.3.2 json4s
-- **Current**: 3.6.9
-- **Issue**: 4.0.x has breaking API changes
-- **Impact**: Moderate - used for JSON serialization
-- **Solution Options**:
-  1. Migrate to json4s 4.0.x (breaking changes)
-  2. Consider migrating to Circe entirely (already in use)
+#### 3.3.2 json4s ✅ **RESOLVED**
+- **Previous**: 3.6.9
+- **Current**: 4.0.7
+- **Status**: ✅ **Updated** - Scala 3 compatible
+- **Impact**: Minimal - API changes handled successfully
+- **Solution Chosen**: Updated to json4s 4.0.x (no significant breaking changes encountered)
+- **Note**: Circe remains in use for RPC client (dual JSON library strategy maintained)
 
 #### 3.3.3 Shapeless
 - **Current**: 2.3.3 (Shapeless 2)

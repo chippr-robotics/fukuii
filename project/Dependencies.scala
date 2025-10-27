@@ -27,12 +27,12 @@ object Dependencies {
     Seq(
       "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
       "ch.megard" %% "akka-http-cors" % "1.1.0",
-      "de.heikoseeberger" %% "akka-http-json4s" % "1.34.0",
+      "de.heikoseeberger" %% "akka-http-json4s" % "1.39.2", // Updated for json4s 4.0.x compatibility
       "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % "it,test"
     )
   }
 
-  val json4s = Seq("org.json4s" %% "json4s-native" % "3.6.9")
+  val json4s = Seq("org.json4s" %% "json4s-native" % "4.0.7") // Updated for Scala 3 support
 
   val circe: Seq[ModuleID] = {
     val circeVersion = "0.14.10" // Updated for Scala 3 support
@@ -82,13 +82,9 @@ object Dependencies {
     "io.monix" %% "monix" % "3.4.1" // Updated for partial Scala 3 support
   )
 
-  val network: Seq[ModuleID] = {
-    val scalanetVersion = "0.6.0"
-    Seq(
-      "io.iohk" %% "scalanet" % scalanetVersion,
-      "io.iohk" %% "scalanet-discovery" % scalanetVersion
-    )
-  }
+  // Scalanet is now vendored locally in scalanet/ directory
+  // See scalanet/ATTRIBUTION.md for details
+  val network: Seq[ModuleID] = Seq.empty
 
   val logging = Seq(
     "ch.qos.logback" % "logback-classic" % "1.5.12", // Updated for better compatibility

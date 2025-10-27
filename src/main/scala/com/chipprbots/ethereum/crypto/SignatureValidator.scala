@@ -30,14 +30,14 @@ object SignatureValidator extends App with SecureRandomBuilder with JsonMethodsI
         case Success(recoveredPk) =>
           val publicKey = ByteStringUtils.string2hash(pk)
           recoveredPk match {
-            case Some(pk) =>
-              if (pk == publicKey) {
+            case Some(recoveredKey) =>
+              if (recoveredKey == publicKey) {
                 System.err.println(
-                  s"Recovered public key [${ByteStringUtils.hash2string(pk)}] is the same as given one"
+                  s"Recovered public key [${ByteStringUtils.hash2string(recoveredKey)}] is the same as given one"
                 )
               } else {
                 System.err.println(s"Recovered public key [${ByteStringUtils
-                    .hash2string(pk)}] is different than given [${ByteStringUtils.hash2string(publicKey)}]")
+                    .hash2string(recoveredKey)}] is different than given [${ByteStringUtils.hash2string(publicKey)}]")
                 sys.exit(1)
               }
             case None =>
