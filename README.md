@@ -32,8 +32,16 @@ This project uses GitHub Actions for continuous integration and delivery:
 - ✅ **Automated Testing**: All tests run on every push and PR
 - 🔍 **Code Quality**: Automated formatting and style checks
 - 🐳 **Docker Builds**: Automatic container image builds
-- 🚀 **Releases**: Automated release creation with milestone tracking
+- 🚀 **One-Click Releases**: Automated releases with CHANGELOG, SBOM, and artifacts
+- 📝 **Release Drafter**: Auto-generated release notes from PRs
 - 📊 **Dependency Checks**: Weekly dependency monitoring
+
+**Release Automation Features:**
+- Auto-generated CHANGELOG from commit history
+- JAR and distribution artifacts attached to releases
+- Software Bill of Materials (SBOM) in CycloneDX format
+- Signed Docker images with SLSA provenance
+- Milestone tracking and automatic closure
 
 **Quick Links:**
 - [Workflow Documentation](.github/workflows/README.md)
@@ -98,28 +106,41 @@ See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
 To build Fukuii from source locally you will need:
 
-JDK 17.
+- **JDK 17**
+- **sbt** (Scala build tool, version 1.10.7+)
+- **Python** (for certain auxiliary scripts)
 
-sbt
- (Scala build tool).
+### Scala Version Support
 
-Python (for certain auxiliary scripts).
+Fukuii supports multiple Scala versions:
+- **Scala 2.13.6** (primary/default version)
+- **Scala 3.3.4** (LTS - for cross-compilation and forward compatibility)
 
-Building the client
+The codebase is configured for gradual migration to Scala 3 while maintaining full backward compatibility.
+
+### Building the client
 
 Update git submodules:
 
+```bash
 git submodule update --init --recursive
-
+```
 
 Build the distribution using sbt:
 
+```bash
 sbt dist
-
+```
 
 After the build completes, a distribution zip archive will be placed under target/universal/. Unzip it to run the client.
 
-Running the client
+**Building with Scala 3:**
+
+```bash
+sbt "++3.3.4" dist
+```
+
+### Running the client
 
 The distribution’s bin/ directory contains a launcher script named fukuii. To join the ETC network:
 

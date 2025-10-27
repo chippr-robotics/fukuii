@@ -24,9 +24,18 @@ We are committed to providing a welcoming and inclusive environment for all cont
 To contribute to Fukuii, you'll need:
 
 - **JDK 17** - Required for building and running the project
-- **sbt** - Scala build tool (version 1.5.4 or higher)
+- **sbt** - Scala build tool (version 1.10.7 or higher)
 - **Git** - For version control
 - **Optional**: Python (for auxiliary scripts)
+
+### Scala Version Support
+
+Fukuii supports cross-compilation for multiple Scala versions:
+
+- **Scala 2.13.6** - Primary version (default)
+- **Scala 3.3.4** - LTS version for forward compatibility
+
+The project is configured for gradual migration to Scala 3 while maintaining backward compatibility with Scala 2.13.
 
 ### Setting Up Your Development Environment
 
@@ -156,6 +165,46 @@ sbt formatCheck
 ```bash
 sbt pp
 ```
+
+### Scala 3 Cross-Compilation
+
+Fukuii is configured for gradual migration to Scala 3 while maintaining Scala 2.13 compatibility.
+
+**Compile with Scala 3:**
+```bash
+sbt compileScala3
+```
+This runs: `sbt ++3.3.4 compile-all`
+
+**Test with Scala 3:**
+```bash
+sbt testScala3
+```
+This runs: `sbt ++3.3.4 testAll`
+
+**Run Scala 3 migration analysis:**
+```bash
+sbt scala3Migrate
+```
+This uses the scala3-migrate plugin to identify incompatibilities.
+
+**Check Scala 3 syntax compatibility:**
+```bash
+sbt scala3MigrateSyntax
+```
+This checks if source files can be parsed by Scala 3 compiler.
+
+**Cross-compile a specific module:**
+```bash
+sbt "bytes/+compile"  # Compile bytes module for all Scala versions
+sbt "crypto/+test"    # Test crypto module for all Scala versions
+```
+
+**Notes:**
+- The default Scala version is 2.13.6
+- Scala 3.3.4 (LTS) is available for cross-compilation
+- CI tests both Scala 2.13 and 3.3 versions
+- Scapegoat analysis currently only runs on Scala 2.13 (not yet Scala 3 compatible)
 
 ## Pre-commit Hooks
 
@@ -343,26 +392,51 @@ sbt "IntegrationTest / test"
 
 ### Continuous Integration
 
-Our CI pipeline automatically runs:
-- ✅ Compilation (`compile-all`)
-- ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
-- ✅ Static bug detection (`runScapegoat`)
-- ✅ Test suite with code coverage (`testCoverage`)
-- ✅ Coverage reports (published as artifacts)
-- ✅ Build artifacts (`assembly`, `dist`)
+Our CI pipeline automatically runs on both Scala 2.13 and Scala 3.3 (matrix build):
+- ✅ Compilation (`compile-all`) - both Scala versions
+- ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix) - both Scala versions
+- ✅ Static bug detection (`runScapegoat`) - Scala 2.13 only (not yet Scala 3 compatible)
+- ✅ Test suite with code coverage (`testCoverage`) - both Scala versions
+- ✅ Coverage reports (published as artifacts with Scala version tags)
+- ✅ Build artifacts (`assembly`, `dist`) - Scala 2.13 only (primary version)
 
 All checks must pass before a PR can be merged.
 
+**CI Matrix Strategy:**
+- Scala 2.13.6: Full pipeline (formatting, tests, Scapegoat, coverage, build)
+- Scala 3.3.4: Compilation, formatting, and tests (Scapegoat excluded due to tool limitations)
+
 ### Releases and Supply Chain Security
 
+Fukuii uses an automated one-click release process with full traceability.
+
 When a release is created (via git tag `vX.Y.Z`), the release workflow automatically:
+- ✅ Builds distribution package (ZIP) and assembly JAR
+- ✅ Generates CHANGELOG from commits since last release
+- ✅ Creates Software Bill of Materials (SBOM) in CycloneDX format
+- ✅ Attaches all artifacts to GitHub release
 - ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/chordodes_fukuii`
 - ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/overview/) (keyless, GitHub OIDC)
 - ✅ Generates SLSA Level 3 provenance attestations
-- ✅ Includes Software Bill of Materials (SBOM)
 - ✅ Outputs immutable digest references for tamper-proof deployments
+- ✅ Closes matching milestone
 
-Release images can be verified:
+**Release Artifacts:**
+Each release includes:
+- Distribution ZIP with scripts and configs
+- Standalone assembly JAR
+- CHANGELOG.md with categorized changes
+- SBOM (Software Bill of Materials)
+- Signed Docker images with provenance
+
+**Making a Release:**
+```bash
+# Ensure version.sbt is updated
+git tag -a v1.0.0 -m "Release 1.0.0"
+git push origin v1.0.0
+```
+
+**Verify Release Images:**
 ```bash
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
@@ -370,7 +444,14 @@ cosign verify \
   ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
 ```
 
-See [docker/README.md](docker/README.md) for detailed information about container security.
+**Release Drafter:**
+Release notes are automatically drafted as PRs are merged. Use descriptive commit messages with prefixes:
+- `feat:` for features
+- `fix:` for bug fixes
+- `security:` for security fixes
+- `docs:` for documentation
+
+See [.github/workflows/README.md](.github/workflows/README.md) for detailed release process documentation.
 
 ## Guidelines for LLM Agents
 
@@ -415,6 +496,8 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 ### Reminders
 
 - **JDK Compatibility**: Code must work on JDK 17
+- **Scala Version Support**: Code should compile on both Scala 2.13.6 and 3.3.4 (LTS)
+- **Cross-Compilation**: Test changes on both Scala versions when possible
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
 - **Rebranding**: This is a rebrand from "Mantis" to "Fukuii" - update any remaining "mantis" or "io.iohk" references
@@ -422,6 +505,15 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 - **Git Hygiene**: Don't commit build artifacts, IDE files, or temporary files
 
 ### Prompts for Common Tasks
+
+**When working with Scala 3 migration:**
+```
+1. Run `sbt scala3MigrateSyntax` to check syntax compatibility
+2. Run `sbt scala3Migrate` for detailed migration analysis
+3. Use `sbt compileScala3` to test compilation with Scala 3
+4. Update code to use Scala 3 compatible syntax where needed
+5. Test with both Scala 2.13 and 3.3 before submitting
+```
 
 **When fixing tests:**
 ```
@@ -453,16 +545,19 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 ```
 1. Check the GitHub Advisory Database for vulnerabilities
 2. Test thoroughly on JDK 17
-3. Update version numbers in build.sbt
-4. Document any breaking changes or migration steps
+3. Test cross-compilation: `sbt "bytes/+compile"` for affected modules
+4. Update version numbers in build.sbt
+5. Document any breaking changes or migration steps
 ```
 
 ### Quality Checklist
 
 Before submitting a PR, verify:
-- [ ] `sbt formatCheck` passes
-- [ ] `sbt compile-all` succeeds
-- [ ] `sbt testAll` passes (on JDK 17)
+- [ ] `sbt formatCheck` passes (both Scala 2.13 and 3.3)
+- [ ] `sbt compile-all` succeeds (Scala 2.13)
+- [ ] `sbt compileScala3` succeeds (Scala 3.3)
+- [ ] `sbt testAll` passes (on JDK 17, Scala 2.13)
+- [ ] `sbt testScala3` passes (on JDK 17, Scala 3.3)
 - [ ] `sbt "IntegrationTest / test"` passes for integration tests
 - [ ] No new compiler warnings introduced
 - [ ] Documentation updated for user-facing changes
