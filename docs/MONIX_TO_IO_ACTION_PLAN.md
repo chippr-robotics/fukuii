@@ -1,12 +1,14 @@
 # Monix to Cats Effect 3 IO Migration - Action Plan
 
 **Date Created**: October 27, 2025  
+**Last Updated**: October 27, 2025  
 **Repository**: chippr-robotics/fukuii  
-**Status**: Ready for Execution  
+**Status**: Phase 0 In Progress - Dependencies Added, Automation Scripts Created  
 **Related Documents**: 
 - [MONIX_TO_IO_MIGRATION_PLAN.md](./MONIX_TO_IO_MIGRATION_PLAN.md) - Technical migration guide
 - [MONIX_MIGRATION_PUNCH_LIST.md](./MONIX_MIGRATION_PUNCH_LIST.md) - Detailed task checklist
 - [CATS_EFFECT_3_MIGRATION.md](./CATS_EFFECT_3_MIGRATION.md) - CE3 upgrade analysis
+- [Migration Scripts](../../scripts/migration/README.md) - Automation scripts
 
 ---
 
@@ -113,28 +115,32 @@ Phase 8: Documentation (Week 6)
 ## Phase 0: Pre-Migration Setup
 
 **Duration**: 2 days  
-**Owner**: Lead developer
+**Owner**: Lead developer  
+**Status**: ✅ In Progress
 
 ### Tasks
 
 #### 0.1 Environment Setup
-- [ ] Create migration branch: `git checkout -b feature/monix-to-io-migration`
-- [ ] Verify build environment (JDK 17, sbt 1.10.7+)
+- [x] Create migration branch: `git checkout -b feature/monix-to-io-migration`
+- [x] Verify build environment (JDK 17, sbt 1.10.7+)
 - [ ] Run baseline tests: `sbt testAll`
 - [ ] Document baseline metrics
 
 **Acceptance Criteria**:
 - ✅ Branch created and pushed
-- ✅ All tests pass in baseline
-- ✅ Build succeeds cleanly
+- ⏳ All tests pass in baseline
+- ⏳ Build succeeds cleanly
 
 #### 0.2 Add fs2 Dependencies
-- [ ] Add fs2-core 3.9.3 to `project/Dependencies.scala`
-- [ ] Add fs2-io 3.9.3 to `project/Dependencies.scala`
-- [ ] Add fs2-reactive-streams 3.9.3 (for interop if needed)
+- [x] Add fs2-core 3.9.3 to `project/Dependencies.scala`
+- [x] Add fs2-io 3.9.3 to `project/Dependencies.scala`
+- [x] Add fs2-reactive-streams 3.9.3 (for interop if needed)
+- [x] Add fs2 to node module dependencies in `build.sbt`
+- [x] Add fs2 to scalanet module dependencies in `build.sbt`
+- [x] Add fs2 to scalanetDiscovery module dependencies in `build.sbt`
 - [ ] Verify dependencies resolve: `sbt update`
 
-**Code Changes**:
+**Code Changes**: ✅ Complete
 ```scala
 // project/Dependencies.scala
 val fs2: Seq[ModuleID] = {
@@ -148,26 +154,48 @@ val fs2: Seq[ModuleID] = {
 ```
 
 **Acceptance Criteria**:
-- ✅ `sbt update` succeeds
-- ✅ fs2 available on classpath
-- ✅ No dependency conflicts
+- ✅ fs2 dependencies added to Dependencies.scala
+- ✅ fs2 added to module dependencies in build.sbt
+- ⏳ `sbt update` succeeds
+- ⏳ fs2 available on classpath
+- ⏳ No dependency conflicts
 
-#### 0.3 Team Training
-- [ ] Conduct 2-day fs2 workshop
-- [ ] Review CE3 IO patterns
-- [ ] Establish pair programming schedule
+#### 0.3 Create Automation Scripts
+- [x] Create `scripts/migration/` directory
+- [x] Create `01-analyze-monix-usage.sh` - Analyze current Monix usage
+- [x] Create `02-add-fs2-imports.sh` - Identify files needing fs2 imports
+- [x] Create `03-replace-task-with-io.sh` - Automated Task → IO replacements
+- [x] Create `04-replace-observable-with-stream.sh` - Observable analysis helper
+- [x] Create `05-replace-scheduler-with-runtime.sh` - Scheduler → IORuntime
+- [x] Create `scripts/migration/README.md` - Script documentation
+- [x] Make scripts executable
+- [x] Test analysis script
 
 **Acceptance Criteria**:
-- ✅ Team familiar with fs2 concepts
-- ✅ Migration patterns documented
+- ✅ All migration scripts created and executable
+- ✅ Scripts documented with usage examples
+- ✅ Analysis script tested and working
+- ✅ Scripts create backups before modifications
 
 #### 0.4 Establish Performance Baselines
 - [ ] Run and record performance benchmarks
 - [ ] Document current metrics for comparison
 
 **Acceptance Criteria**:
-- ✅ Baseline metrics documented
-- ✅ Benchmark scripts ready
+- ⏳ Baseline metrics documented
+- ⏳ Benchmark scripts ready
+
+### Phase 0 Summary
+
+**Completed**:
+- ✅ fs2 dependencies added to build configuration
+- ✅ Automation scripts created for migration tasks
+- ✅ Initial Monix usage analysis (122 files, 85 Task, 16 Observable, 59 Scheduler)
+
+**Next Steps**:
+- Verify dependencies resolve with `sbt update`
+- Run baseline tests
+- Begin Phase 1: Foundation Modules
 
 ---
 
