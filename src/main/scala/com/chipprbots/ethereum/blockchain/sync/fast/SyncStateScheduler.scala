@@ -4,8 +4,9 @@ import java.util.Comparator
 
 import akka.util.ByteString
 
-import monix.eval.Task
-import monix.reactive.Observable
+import cats.effect.IO
+
+import fs2.Stream
 
 import scala.annotation.tailrec
 import scala.collection.immutable.ArraySeq
@@ -61,7 +62,7 @@ class SyncStateScheduler(
     bloomFilter: LoadableBloomFilter[ByteString]
 ) {
 
-  val loadFilterFromBlockchain: Task[BloomFilterLoadingResult] = bloomFilter.loadFromSource
+  val loadFilterFromBlockchain: IO[BloomFilterLoadingResult] = bloomFilter.loadFromSource
 
   def initState(targetRootHash: ByteString): Option[SchedulerState] =
     if (targetRootHash == emptyStateRootHash) {
@@ -295,9 +296,9 @@ object SyncStateScheduler {
   ): SyncStateScheduler = {
     // provided source i.e mptStateSavedKeys() is guaranteed to finish on first `Left` element which means that returned
     // error is the reason why loading has stopped
-    val mptStateSavedKeys: Observable[Either[IterationError, ByteString]] =
+    val mptStateSavedKeys: Stream[IO, Either[IterationError, ByteString]] =
       (nodeStorage.storageContent.map(c => c.map(_._1)) ++ evmCodeStorage.storageContent.map(c => c.map(_._1)))
-        .takeWhileInclusive(_.isRight)
+        .takeThrough(_.isRight)
 
     new SyncStateScheduler(
       blockchainReader,

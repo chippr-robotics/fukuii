@@ -10,8 +10,8 @@ import akka.util.ByteString
 
 import cats.data.NonEmptyList
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -48,7 +48,7 @@ class SyncStateSchedulerActor(
     with ActorLogging
     with Timers {
 
-  implicit private val monixScheduler: Scheduler = Scheduler(context.dispatcher)
+  implicit private val monixScheduler: IORuntime = IORuntime.global
 
   private def getFreePeers(state: DownloaderState): List[Peer] =
     peersToDownloadFrom.collect {
@@ -87,7 +87,7 @@ class SyncStateSchedulerActor(
       self ! RequestFailed(peer, "Peer disconnected in the middle of request")
   }
 
-  private val loadingCancelable = sync.loadFilterFromBlockchain.runAsync {
+  private val loadingCancelable = sync.loadFilterFromBlockchain.unsafeRunCancelable() {
     case Left(value) =>
       log.error(
         "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
@@ -224,7 +224,7 @@ class SyncStateSchedulerActor(
             )
             val (requests, newState1) = newState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
             requests.foreach(req => requestNodes(req))
-            Task(processNodes(newState1, nodes)).runToFuture.pipeTo(self)
+            IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)
             context.become(syncing(newState1))
 
           case (Some((nodes, newState)), None) =>
@@ -233,7 +233,7 @@ class SyncStateSchedulerActor(
               newState.numberOfRemainingRequests
             )
             // we do not have any peers and cannot assign new tasks, but we can still process remaining requests
-            Task(processNodes(newState, nodes)).runToFuture.pipeTo(self)
+            IO(processNodes(newState, nodes)).unsafeToFuture().pipeTo(self)
             context.become(syncing(newState))
 
           case (None, Some(peers)) =>
@@ -277,7 +277,7 @@ class SyncStateSchedulerActor(
         } else {
           log.debug("Response received while idle. Initiating response processing")
           val newState = currentState.initProcessing
-          Task(processNodes(newState, result)).runToFuture.pipeTo(self)
+          IO(processNodes(newState, result)).unsafeToFuture().pipeTo(self)
           context.become(syncing(newState))
         }
 

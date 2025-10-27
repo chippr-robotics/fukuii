@@ -4,8 +4,8 @@ import akka.actor.Actor
 import akka.actor.ActorLogging
 import akka.pattern.pipe
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Failure
 import scala.util.Success
@@ -47,9 +47,9 @@ class StateStorageActor extends Actor with ActorLogging {
   }
 
   private def persistState(storage: FastSyncStateStorage, syncState: SyncState): Unit = {
-    implicit val scheduler: Scheduler = Scheduler(context.dispatcher)
+    implicit val runtime: IORuntime = IORuntime.global
 
-    val persistingQueues: Task[Try[FastSyncStateStorage]] = Task {
+    val persistingQueues: IO[Try[FastSyncStateStorage]] = IO {
       lazy val result = Try(storage.putSyncState(syncState))
       if (log.isDebugEnabled) {
         val now = System.currentTimeMillis()
@@ -61,7 +61,7 @@ class StateStorageActor extends Actor with ActorLogging {
         result
       }
     }
-    persistingQueues.runToFuture.pipeTo(self)
+    persistingQueues.unsafeToFuture().pipeTo(self)
     context.become(busy(storage, None))
   }
 
