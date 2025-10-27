@@ -578,6 +578,7 @@ Before submitting a PR, verify:
 
 ## Additional Resources
 
+- [Security Policy](SECURITY.md) - **Important**: Reporting vulnerabilities and security best practices
 - [GitHub Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)

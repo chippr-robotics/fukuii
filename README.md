@@ -174,7 +174,18 @@ Rename any directories or files under ~/.mantis to ~/.fukuii. The layout of the 
 
 Review custom scripts or automation to ensure they invoke fukuii instead of mantis.
 
-Contributing
+## Security
+
+Security is a top priority for the Fukuii project. Please see our [Security Policy](SECURITY.md) for:
+
+- How to report security vulnerabilities
+- Our security principles and practices
+- Supported versions and security updates
+- Best practices for running Fukuii securely
+
+**For security issues, please DO NOT open public GitHub issues.** Follow the responsible disclosure process outlined in our Security Policy.
+
+## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for detailed information on:
 
