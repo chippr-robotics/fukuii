@@ -7,7 +7,7 @@ import akka.actor.typed.DispatcherSelector
 import akka.actor.typed.scaladsl.adapter._
 import akka.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration._
 

@@ -4,8 +4,8 @@ import akka.util.ByteString
 
 import cats.data.NonEmptyList
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
 import com.chipprbots.ethereum.domain.Block
@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 trait Consensus {
   def evaluateBranch(
       block: NonEmptyList[Block]
-  )(implicit blockExecutionScheduler: Scheduler, blockchainConfig: BlockchainConfig): Task[ConsensusResult]
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult]
 
   /** Original interface from ETCM-1018, for temporary documentation purposes
     */

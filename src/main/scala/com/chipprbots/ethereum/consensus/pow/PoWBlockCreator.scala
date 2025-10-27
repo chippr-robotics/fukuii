@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.consensus.pow
 import akka.actor.ActorRef
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -35,9 +35,9 @@ class PoWBlockCreator(
       parentBlock: Block,
       withTransactions: Boolean = true,
       initialWorldStateBeforeExecution: Option[InMemoryWorldStateProxy] = None
-  )(implicit blockchainConfig: BlockchainConfig): Task[PendingBlockAndState] = {
-    val transactions = if (withTransactions) getTransactionsFromPool else Task.now(PendingTransactionsResponse(Nil))
-    Task.parZip2(getOmmersFromPool(parentBlock.hash), transactions).map { case (ommers, pendingTxs) =>
+  )(implicit blockchainConfig: BlockchainConfig): IO[PendingBlockAndState] = {
+    val transactions = if (withTransactions) getTransactionsFromPool else IO.pure(PendingTransactionsResponse(Nil))
+    (getOmmersFromPool(parentBlock.hash), transactions).parMapN { case (ommers, pendingTxs) =>
       blockGenerator.generateBlock(
         parentBlock,
         pendingTxs.pendingTransactions.map(_.stx.tx),
@@ -48,10 +48,10 @@ class PoWBlockCreator(
     }
   }
 
-  private def getOmmersFromPool(parentBlockHash: ByteString): Task[OmmersPool.Ommers] =
+  private def getOmmersFromPool(parentBlockHash: ByteString): IO[OmmersPool.Ommers] =
     ommersPool
       .askFor[OmmersPool.Ommers](OmmersPool.GetOmmers(parentBlockHash))
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Failed to get ommers, mining block with empty ommers list", ex)
         OmmersPool.Ommers(Nil)
       }
