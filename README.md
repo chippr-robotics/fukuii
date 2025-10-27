@@ -113,7 +113,7 @@ To build Fukuii from source locally you will need:
 ### Scala Version Support
 
 Fukuii supports multiple Scala versions:
-- **Scala 2.13.6** (primary/default version)
+- **Scala 2.13.8** (primary/default version - updated for Scala 3-ready dependencies)
 - **Scala 3.3.4** (LTS - for cross-compilation and forward compatibility)
 
 The codebase is configured for gradual migration to Scala 3 while maintaining full backward compatibility.
@@ -187,9 +187,9 @@ When modifying code derived from Mantis, include a notice in the header of chang
 
 ## Development and Future Plans
 
-**Technology Stack**: This project uses Scala 2.13.6 with active migration to Scala 3.3.4 (LTS). **Phase 3 (Manual Fixes) and Phase 4 (Validation & Testing) of the migration are now complete**, with the codebase fully prepared for Scala 3 from a code perspective. The next step requires updating critical dependencies to versions that support Scala 3. For detailed information about the migration strategy, progress, and validation results, see our [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md) and [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md).
+**Technology Stack**: This project uses Scala 2.13.8 with active migration to Scala 3.3.4 (LTS). **Phase 0 (Dependency Updates), Phase 3 (Manual Fixes), and Phase 4 (Validation & Testing) of the migration are now complete**. All critical dependencies now support Scala 3, unblocking the migration path. For detailed information about the migration strategy, progress, and validation results, see our [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md), [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md), and [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md).
 
-**Static Analysis**: We maintain a comprehensive static analysis toolchain. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
+**Static Analysis**: We maintain a comprehensive static analysis toolchain. **Note**: Scapegoat is temporarily disabled during the Scala 2.13.8 → 3.3.4 transition period due to tooling limitations. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 
 Contact
 

@@ -2,7 +2,7 @@ import sbt._
 
 object Dependencies {
 
-  private val akkaVersion = "2.6.9"
+  private val akkaVersion = "2.6.20" // Updated for Scala 3 support (minimum version with Scala 3 artifacts)
 
   val akkaUtil: Seq[ModuleID] =
     Seq(
@@ -22,7 +22,7 @@ object Dependencies {
     )
 
   val akkaHttp: Seq[ModuleID] = {
-    val akkaHttpVersion = "10.2.0"
+    val akkaHttpVersion = "10.2.10" // Updated for Scala 3 support
 
     Seq(
       "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
@@ -35,17 +35,18 @@ object Dependencies {
   val json4s = Seq("org.json4s" %% "json4s-native" % "3.6.9")
 
   val circe: Seq[ModuleID] = {
-    val circeVersion = "0.13.0"
+    val circeVersion = "0.14.10" // Updated for Scala 3 support
+    val circeGenericExtrasVersion = "0.14.4" // Last version with generic-extras
 
     Seq(
       "io.circe" %% "circe-core" % circeVersion,
       "io.circe" %% "circe-generic" % circeVersion,
       "io.circe" %% "circe-parser" % circeVersion,
-      "io.circe" %% "circe-generic-extras" % circeVersion
+      "io.circe" %% "circe-generic-extras" % circeGenericExtrasVersion // Separate versioning for generic-extras
     )
   }
 
-  val boopickle = Seq("io.suzaku" %% "boopickle" % "1.3.3")
+  val boopickle = Seq("io.suzaku" %% "boopickle" % "1.4.0") // Updated for Scala 3 support
 
   val rocksDb = Seq(
     // use "5.18.3" for older macOS
@@ -53,31 +54,31 @@ object Dependencies {
   )
 
   val enumeratum: Seq[ModuleID] = Seq(
-    "com.beachape" %% "enumeratum" % "1.6.1",
-    "com.beachape" %% "enumeratum-cats" % "1.6.1",
-    "com.beachape" %% "enumeratum-scalacheck" % "1.6.1" % Test
+    "com.beachape" %% "enumeratum" % "1.7.5", // Updated for Scala 3 support
+    "com.beachape" %% "enumeratum-cats" % "1.7.5",
+    "com.beachape" %% "enumeratum-scalacheck" % "1.7.5" % Test
   )
 
   val testing: Seq[ModuleID] = Seq(
-    "org.scalatest" %% "scalatest" % "3.2.2" % "it,test",
-    "org.scalamock" %% "scalamock" % "5.0.0" % "it,test",
-    "org.scalatestplus" %% "scalacheck-1-15" % "3.2.3.0" % "test",
-    "org.scalacheck" %% "scalacheck" % "1.15.1" % "it,test",
-    "com.softwaremill.diffx" %% "diffx-core" % "0.3.30" % "test",
-    "com.softwaremill.diffx" %% "diffx-scalatest" % "0.3.30" % "test"
+    "org.scalatest" %% "scalatest" % "3.2.19" % "it,test", // Updated for Scala 3 support
+    "org.scalamock" %% "scalamock" % "6.0.0" % "it,test", // Updated for Scala 3 support
+    "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % "test", // Updated for ScalaCheck 1.18
+    "org.scalacheck" %% "scalacheck" % "1.18.1" % "it,test", // Updated for Scala 3 support
+    "com.softwaremill.diffx" %% "diffx-core" % "0.9.0" % "test", // Updated for Scala 3 support
+    "com.softwaremill.diffx" %% "diffx-scalatest" % "0.9.0" % "test"
   )
 
   val cats: Seq[ModuleID] = {
-    val catsVersion = "2.6.1"
+    val catsVersion = "2.9.0" // Updated for Scala 3 support, compatible with 2.13.6
     Seq(
-      "org.typelevel" %% "mouse" % "0.25",
+      "org.typelevel" %% "mouse" % "1.2.1", // Compatible with Scala 2.13.6 and 3.x
       "org.typelevel" %% "cats-core" % catsVersion,
-      "org.typelevel" %% "cats-effect" % "2.5.1"
+      "org.typelevel" %% "cats-effect" % "2.5.5" // Keep 2.x for now (3.x has breaking changes)
     )
   }
 
   val monix = Seq(
-    "io.monix" %% "monix" % "3.2.2"
+    "io.monix" %% "monix" % "3.4.1" // Updated for partial Scala 3 support
   )
 
   val network: Seq[ModuleID] = {
@@ -89,19 +90,19 @@ object Dependencies {
   }
 
   val logging = Seq(
-    "ch.qos.logback" % "logback-classic" % "1.2.3",
-    "com.typesafe.scala-logging" %% "scala-logging" % "3.9.2",
-    "net.logstash.logback" % "logstash-logback-encoder" % "6.4",
-    "org.codehaus.janino" % "janino" % "3.1.2",
-    "org.typelevel" %% "log4cats-core" % "2.1.1",
-    "org.typelevel" %% "log4cats-slf4j" % "1.3.1"
+    "ch.qos.logback" % "logback-classic" % "1.5.12", // Updated for better compatibility
+    "com.typesafe.scala-logging" %% "scala-logging" % "3.9.5", // Updated for Scala 3 support
+    "net.logstash.logback" % "logstash-logback-encoder" % "8.0", // Updated
+    "org.codehaus.janino" % "janino" % "3.1.12", // Updated for security
+    "org.typelevel" %% "log4cats-core" % "1.7.0", // Compatible with cats-effect 2.x and Scala 3
+    "org.typelevel" %% "log4cats-slf4j" % "1.7.0" // Compatible with cats-effect 2.x and Scala 3
   )
 
   val crypto = Seq("org.bouncycastle" % "bcprov-jdk15on" % "1.66")
 
-  val scopt = Seq("com.github.scopt" %% "scopt" % "4.0.0")
+  val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
 
-  val cli = Seq("com.monovore" %% "decline" % "1.3.0")
+  val cli = Seq("com.monovore" %% "decline" % "2.4.1") // Updated for Scala 3 support
 
   val apacheCommons = Seq(
     "commons-io" % "commons-io" % "2.8.0"
@@ -157,7 +158,7 @@ object Dependencies {
 
   val kamon: Seq[ModuleID] = {
     val provider = "io.kamon"
-    val version = "2.1.9"
+    val version = "2.7.5" // Updated for Scala 3 support
     Seq(
       provider %% "kamon-prometheus" % version,
       provider %% "kamon-akka" % version
@@ -169,7 +170,7 @@ object Dependencies {
   )
 
   val scaffeine: Seq[ModuleID] = Seq(
-    "com.github.blemale" %% "scaffeine" % "4.0.2" % "compile"
+    "com.github.blemale" %% "scaffeine" % "5.3.0" % "compile" // Updated for Scala 3 support
   )
 
 }
