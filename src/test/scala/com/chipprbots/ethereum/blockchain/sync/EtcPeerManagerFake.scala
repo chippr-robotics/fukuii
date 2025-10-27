@@ -6,12 +6,11 @@ import akka.testkit.TestProbe
 import akka.util.ByteString
 
 import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.reactive.Observable
-import monix.reactive.subjects.ReplaySubject
-import monix.reactive.subjects.Subject
+import fs2.Stream
+import fs2.concurrent.Topic
 
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
@@ -36,16 +35,18 @@ class EtcPeerManagerFake(
     peers: Map[Peer, PeerInfo],
     blocks: List[Block],
     getMptNodes: List[ByteString] => List[ByteString]
-)(implicit system: ActorSystem, scheduler: Scheduler) {
-  private val responsesSubject: Subject[MessageFromPeer, MessageFromPeer] = ReplaySubject()
-  private val requestsSubject: Subject[SendMessage, SendMessage] = ReplaySubject()
-  private val peersConnectedDeferred = Deferred.unsafe[Task, Unit]
+)(implicit system: ActorSystem, ioRuntime: IORuntime) {
+  private val responsesTopicIO: IO[Topic[IO, MessageFromPeer]] = Topic[IO, MessageFromPeer]
+  private val requestsTopicIO: IO[Topic[IO, SendMessage]] = Topic[IO, SendMessage]
+  private val responsesTopic: Topic[IO, MessageFromPeer] = responsesTopicIO.unsafeRunSync()
+  private val requestsTopic: Topic[IO, SendMessage] = requestsTopicIO.unsafeRunSync()
+  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit]
 
   val probe: TestProbe = TestProbe("etc_peer_manager")
   val autoPilot =
     new EtcPeerManagerFake.EtcPeerManagerAutoPilot(
-      requestsSubject,
-      responsesSubject,
+      requestsTopic,
+      responsesTopic,
       peersConnectedDeferred,
       peers,
       blocks,
@@ -55,33 +56,34 @@ class EtcPeerManagerFake(
 
   def ref = probe.ref
 
-  val requests: Observable[SendMessage] = requestsSubject
-  val responses: Observable[MessageFromPeer] = responsesSubject
-  val onPeersConnected: Task[Unit] = peersConnectedDeferred.get
-  val pivotBlockSelected: Observable[BlockHeader] = responses
+  val requests: Stream[IO, SendMessage] = requestsTopic.subscribe(100)
+  val responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
+  val onPeersConnected: IO[Unit] = peersConnectedDeferred.get
+  val pivotBlockSelected: Stream[IO, BlockHeader] = responses
     .collect { case MessageFromPeer(BlockHeaders(Seq(header)), peer) =>
       (header, peer)
     }
-    .bufferTumbling(peers.size)
-    .concatMap { headersFromPeers =>
+    .chunkN(peers.size)
+    .flatMap { headersFromPeersChunk =>
+      val headersFromPeers = headersFromPeersChunk.toList
       val (headers, respondedPeers) = headersFromPeers.unzip
 
       if (headers.distinct.size == 1 && respondedPeers.toSet == peers.keySet.map(_.id)) {
-        Observable.pure(headers.head)
+        Stream.emit(headers.head)
       } else {
-        Observable.empty
+        Stream.empty
       }
     }
 
-  val fetchedHeaders: Observable[Seq[BlockHeader]] = responses
+  val fetchedHeaders: Stream[IO, Seq[BlockHeader]] = responses
     .collect {
       case MessageFromPeer(BlockHeaders(headers), _) if headers.size == syncConfig.blockHeadersPerRequest => headers
     }
-  val fetchedBodies: Observable[Seq[BlockBody]] = responses
+  val fetchedBodies: Stream[IO, Seq[BlockBody]] = responses
     .collect { case MessageFromPeer(BlockBodies(bodies), _) =>
       bodies
     }
-  val requestedReceipts: Observable[Seq[ByteString]] = requests.collect(
+  val requestedReceipts: Stream[IO, Seq[ByteString]] = requests.collect(
     Function.unlift(msg =>
       msg.message.underlyingMsg match {
         case GetReceipts(hashes) => Some(hashes)
@@ -89,35 +91,35 @@ class EtcPeerManagerFake(
       }
     )
   )
-  val fetchedBlocks: Observable[List[Block]] = fetchedBodies
+  val fetchedBlocks: Stream[IO, List[Block]] = fetchedBodies
     .scan[(List[Block], List[Block])]((Nil, blocks)) { case ((_, remainingBlocks), bodies) =>
       remainingBlocks.splitAt(bodies.size)
     }
     .map(_._1)
-    .combineLatestMap(requestedReceipts)((blocks, _) => blocks) // a big simplification, but should be sufficient here
+    .zipWith(requestedReceipts.repeat)((blocks, _) => blocks) // a big simplification, but should be sufficient here
 
-  val fetchedState: Observable[Seq[ByteString]] = responses.collect { case MessageFromPeer(NodeData(values), _) =>
+  val fetchedState: Stream[IO, Seq[ByteString]] = responses.collect { case MessageFromPeer(NodeData(values), _) =>
     values
   }
 
 }
 object EtcPeerManagerFake {
   class EtcPeerManagerAutoPilot(
-      requests: Subject[SendMessage, SendMessage],
-      responses: Subject[MessageFromPeer, MessageFromPeer],
-      peersConnected: Deferred[Task, Unit],
+      requests: Topic[IO, SendMessage],
+      responses: Topic[IO, MessageFromPeer],
+      peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
       blocks: List[Block],
       getMptNodes: List[ByteString] => List[ByteString]
-  )(implicit scheduler: Scheduler)
+  )(implicit ioRuntime: IORuntime)
       extends AutoPilot {
     def run(sender: ActorRef, msg: Any): EtcPeerManagerAutoPilot = {
       msg match {
         case EtcPeerManagerActor.GetHandshakedPeers =>
           sender ! EtcPeerManagerActor.HandshakedPeers(peers)
-          peersConnected.complete(()).onErrorHandle(_ => ()).runSyncUnsafe()
+          peersConnected.complete(()).handleError(_ => ()).unsafeRunSync()
         case sendMsg @ EtcPeerManagerActor.SendMessage(rawMsg, peerId) =>
-          requests.onNext(sendMsg)
+          requests.publish1(sendMsg).unsafeRunSync()
           val response = rawMsg.underlyingMsg match {
             case GetBlockHeaders(startingBlock, maxHeaders, skip, false) =>
               val headers = blocks.tails
@@ -142,7 +144,7 @@ object EtcPeerManagerFake {
           }
           val theResponse = MessageFromPeer(response, peerId)
           sender ! theResponse
-          responses.onNext(theResponse)
+          responses.publish1(theResponse).unsafeRunSync()
       }
       this
     }
