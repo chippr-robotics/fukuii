@@ -1,9 +1,11 @@
 package com.chipprbots.ethereum
 
 import cats.effect.Async
+import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.Sync
 import cats.effect.implicits._
+import cats.effect.unsafe.IORuntime
 
 import monix.eval.Task
 import monix.execution.Scheduler
@@ -23,6 +25,7 @@ trait SpecBase extends TypeCheckedTripleEquals with Diagrams with Matchers { sel
 
   override val executionContext = ExecutionContext.global
   implicit val scheduler: Scheduler = Scheduler(executionContext)
+  implicit val ioRuntime: IORuntime = IORuntime.global
 
   def customTestCaseResourceM[M[_]: Async, T](
       fixture: Resource[M, T]

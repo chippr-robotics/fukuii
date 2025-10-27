@@ -71,10 +71,13 @@ object Dependencies {
   val cats: Seq[ModuleID] = {
     val catsVersion = "2.9.0" // Updated for Scala 3 support, compatible with 2.13.6
     val catsEffectVersion = "3.5.4" // Cats Effect 3 - required for full Scala 3 support
+    val fs2Version = "3.9.3" // fs2 for streaming - required for Observable migration
     Seq(
       "org.typelevel" %% "mouse" % "1.2.1", // Compatible with Scala 2.13.6 and 3.x
       "org.typelevel" %% "cats-core" % catsVersion,
-      "org.typelevel" %% "cats-effect" % catsEffectVersion // CE3 upgrade - see docs/CATS_EFFECT_3_MIGRATION.md
+      "org.typelevel" %% "cats-effect" % catsEffectVersion, // CE3 upgrade - see docs/CATS_EFFECT_3_MIGRATION.md
+      "co.fs2" %% "fs2-core" % fs2Version, // fs2 streaming for Observable migration
+      "co.fs2" %% "fs2-io" % fs2Version // fs2 IO operations
     )
   }
 
