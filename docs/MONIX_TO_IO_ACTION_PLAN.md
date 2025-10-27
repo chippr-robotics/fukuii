@@ -531,16 +531,17 @@ val txnsFromBlocks = Stream
 - Integration test verification
 
 **Next Steps**:
+- ✅ Moving to Phase 4 (Blockchain Sync)
 - Verify compilation
-- Run transaction tests
-- Continue with remaining transaction files or move to Phase 4
+- Run tests
 
 ---
 
 ## Phase 4: Blockchain Sync
 
 **Duration**: 5-7 days  
-**Owner**: Senior developer #2
+**Owner**: Senior developer #2  
+**Status**: ✅ In Progress
 
 ### Critical Sync Components
 
@@ -550,21 +551,38 @@ val txnsFromBlocks = Stream
 - [ ] Test block import
 
 **Acceptance Criteria**:
-- ✅ Block import works correctly
-- ✅ Sync tests pass
+- ⏳ Block import works correctly
+- ⏳ Sync tests pass
 
 #### 4.2 Migrate Sync Components
+- [x] Migrate `FetchRequest.scala` - Task → IO for request handling
+- [x] Migrate `LoadableBloomFilter.scala` - Observable → Stream, Consumer → fold
 - [ ] Migrate `HeadersFetcher.scala`
-- [ ] Migrate `FetchRequest.scala`
+- [ ] Migrate `BodiesFetcher.scala`
 - [ ] Migrate `StateStorageActor.scala`
 - [ ] Migrate `SyncStateScheduler.scala` (Observable usage)
 - [ ] Migrate `SyncStateSchedulerActor.scala`
-- [ ] Migrate `LoadableBloomFilter.scala`
+
+**FetchRequest.scala Migration**:
+- `Task.deferFuture` → `IO.fromFuture`
+- `Task.now` → `IO.pure`
+- `.delayExecution` → `.delayBy`
+- `.onErrorHandle` → `.handleError`
+- Actor communication integrated with IO
+
+**LoadableBloomFilter.scala Migration**:
+- `Observable[Either[IterationError, A]]` → `Stream[IO, Either[IterationError, A]]`
+- `Consumer.foldLeftTask` → `Stream.fold` with `.compile.lastOrError`
+- `Task.now` → Pure computation (no effect needed)
+- `Task(bloomFilter.put(value))` → Direct side effect in fold
+- `.memoizeOnSuccess` → `.memoize`
 
 **Acceptance Criteria**:
-- ✅ All sync components use IO
-- ✅ Observable removed from sync layer
-- ✅ Sync tests pass
+- ✅ FetchRequest uses IO (completed)
+- ✅ LoadableBloomFilter uses Stream[IO, _] (completed)
+- ⏳ All sync components use IO
+- ⏳ Observable removed from sync layer
+- ⏳ Sync tests pass
 
 #### 4.3 Update Sync Tests
 - [ ] Update `RegularSyncSpec.scala`
@@ -572,7 +590,25 @@ val txnsFromBlocks = Stream
 - [ ] Update `EtcPeerManagerFake.scala`
 
 **Acceptance Criteria**:
-- ✅ All sync tests pass
+- ⏳ All sync tests pass
+
+### Phase 4 Summary
+
+**Completed** (2 files):
+- ✅ FetchRequest.scala: Task → IO for actor-based requests
+- ✅ LoadableBloomFilter.scala: Observable → Stream, Consumer → fold
+
+**Migration Patterns Added**:
+- `Task.deferFuture` → `IO.fromFuture`
+- `.delayExecution` → `.delayBy`
+- `.onErrorHandle` → `.handleError`
+- `Observable.consumeWith(Consumer.foldLeftTask(...))` → `Stream.fold(...).compile.lastOrError`
+
+**Remaining Work**:
+- Block fetchers (Headers, Bodies, State nodes)
+- State storage components
+- Sync scheduler components
+- Sync test files
 
 ---
 
