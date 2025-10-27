@@ -2,8 +2,8 @@ package com.chipprbots.ethereum.consensus.pow.miners
 
 import akka.util.ByteString
 
-import monix.execution.CancelableFuture
-import monix.execution.Scheduler
+import scala.concurrent.Future
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Random
 
@@ -28,7 +28,7 @@ class KeccakMiner(
     blockCreator: PoWBlockCreator,
     syncController: akka.actor.ActorRef,
     ethMiningService: EthMiningService
-)(implicit scheduler: Scheduler)
+)(implicit scheduler: IORuntime)
     extends Miner
     with Logger {
 
@@ -36,7 +36,7 @@ class KeccakMiner(
 
   def processMining(
       bestBlock: Block
-  )(implicit blockchainConfig: BlockchainConfig): CancelableFuture[CoordinatorProtocol] = {
+  )(implicit blockchainConfig: BlockchainConfig): Future[CoordinatorProtocol] = {
     log.debug("Starting mining with parent block {}", bestBlock.number)
     blockCreator
       .getBlockForMining(bestBlock)

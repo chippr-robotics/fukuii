@@ -3,8 +3,8 @@ package com.chipprbots.ethereum.consensus.pow.miners
 import akka.actor.{ActorRef => ClassicActorRef}
 import akka.util.ByteString
 
-import monix.execution.CancelableFuture
-import monix.execution.Scheduler
+import scala.concurrent.Future
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Random
 
@@ -32,7 +32,7 @@ class EthashMiner(
     blockCreator: PoWBlockCreator,
     syncController: ClassicActorRef,
     ethMiningService: EthMiningService
-)(implicit scheduler: Scheduler)
+)(implicit scheduler: IORuntime)
     extends Miner
     with Logger {
 
@@ -40,7 +40,7 @@ class EthashMiner(
 
   def processMining(
       bestBlock: Block
-  )(implicit blockchainConfig: BlockchainConfig): CancelableFuture[CoordinatorProtocol] = {
+  )(implicit blockchainConfig: BlockchainConfig): Future[CoordinatorProtocol] = {
     log.debug("Starting mining with parent block {}", bestBlock.number)
     blockCreator
       .getBlockForMining(bestBlock)

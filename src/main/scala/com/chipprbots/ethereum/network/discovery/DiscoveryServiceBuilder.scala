@@ -6,8 +6,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 import cats.effect.Resource
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import io.iohk.scalanet.discovery.crypto.PrivateKey
 import io.iohk.scalanet.discovery.crypto.PublicKey
@@ -34,7 +34,7 @@ trait DiscoveryServiceBuilder {
       tcpPort: Int,
       nodeStatusHolder: AtomicReference[NodeStatus],
       knownNodesStorage: KnownNodesStorage
-  )(implicit scheduler: Scheduler): Resource[Task, v4.DiscoveryService] = {
+  )(implicit scheduler: IORuntime): Resource[IO, v4.DiscoveryService] = {
 
     implicit val sigalg = new Secp256k1SigAlg()
     val keyPair = nodeStatusHolder.get.key

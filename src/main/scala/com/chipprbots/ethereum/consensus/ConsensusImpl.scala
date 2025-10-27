@@ -5,8 +5,8 @@ import akka.util.ByteString
 import cats.data.NonEmptyList
 import cats.implicits._
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 
@@ -52,7 +52,7 @@ class ConsensusImpl(
     */
   override def evaluateBranch(
       branch: NonEmptyList[Block]
-  )(implicit blockExecutionScheduler: Scheduler, blockchainConfig: BlockchainConfig): Task[ConsensusResult] =
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
     blockchainReader.getBestBlock() match {
       case Some(bestBlock) =>
         blockchainReader.getChainWeightByHash(bestBlock.header.hash) match {
@@ -67,21 +67,20 @@ class ConsensusImpl(
       currentBestBlock: Block,
       currentBestBlockWeight: ChainWeight
   )(implicit
-      blockExecutionScheduler: Scheduler,
+      blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig
-  ): Task[ConsensusResult] = {
+  ): IO[ConsensusResult] = {
 
-    val consensusResult: Task[ConsensusResult] =
+    val consensusResult: IO[ConsensusResult] =
       if (currentBestBlock.isParentOf(branch.head)) {
-        Task.evalOnce(importToTop(branch, currentBestBlockWeight)).executeOn(blockExecutionScheduler)
+        IO.delay(importToTop(branch, currentBestBlockWeight)).evalOn(blockExecutionScheduler)
       } else {
-        Task
-          .evalOnce(importToNewBranch(branch, currentBestBlock.number, currentBestBlockWeight))
-          .executeOn(blockExecutionScheduler)
+        IO
+          .delay(importToNewBranch(branch, currentBestBlock.number, currentBestBlockWeight))
+          .evalOn(blockExecutionScheduler)
       }
 
-    consensusResult.foreach(measureBlockMetrics)
-    consensusResult
+    consensusResult.flatTap(result => IO(measureBlockMetrics(result)))
   }
 
   private def importToNewBranch(
@@ -173,12 +172,12 @@ class ConsensusImpl(
   private def newBranchWeight(newBranch: NonEmptyList[Block], parentWeight: ChainWeight) =
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))
 
-  private def returnNoTotalDifficulty(bestBlock: Block): Task[ConsensusError] = {
+  private def returnNoTotalDifficulty(bestBlock: Block): IO[ConsensusError] = {
     log.error(
       "Getting total difficulty for current best block with hash: {} failed",
       bestBlock.header.hashAsHexString
     )
-    Task.now(
+    IO.pure(
       ConsensusError(
         Nil,
         s"Couldn't get total difficulty for current best block with hash: ${bestBlock.header.hashAsHexString}"
@@ -186,9 +185,9 @@ class ConsensusImpl(
     )
   }
 
-  private def returnNoBestBlock(): Task[ConsensusError] = {
+  private def returnNoBestBlock(): IO[ConsensusError] = {
     log.error("Getting current best block failed")
-    Task.now(ConsensusError(Nil, "Couldn't find the current best block"))
+    IO.pure(ConsensusError(Nil, "Couldn't find the current best block"))
   }
 
   private def measureBlockMetrics(importResult: ConsensusResult): Unit =

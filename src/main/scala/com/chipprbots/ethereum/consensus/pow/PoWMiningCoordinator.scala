@@ -6,8 +6,8 @@ import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.{ActorRef => ClassicActorRef}
 
-import monix.execution.CancelableFuture
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.DurationInt
 
@@ -85,7 +85,7 @@ class PoWMiningCoordinator private (
   import configBuilder._
   import PoWMiningCoordinator._
 
-  implicit private val scheduler: Scheduler = Scheduler(context.executionContext)
+  implicit private val scheduler: IORuntime = IORuntime(context.executionContext)
   5.seconds
   private val log = context.log
   private val dagManager = new EthashDAGManager(blockCreator)
