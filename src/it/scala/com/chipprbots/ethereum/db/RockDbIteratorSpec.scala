@@ -8,10 +8,7 @@ import cats.effect.Resource
 import cats.effect.Deferred
 import cats.effect.Ref
 import cats.effect.IO
-
-import monix.eval.Task
-import monix.reactive.Consumer
-import monix.reactive.Observable
+import fs2.Stream
 
 import scala.util.Random
 
@@ -40,29 +37,33 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
   def genRandomByteString(): ByteString =
     ByteString.fromArrayUnsafe(genRandomArray())
 
-  def writeNValuesToDb(n: Int, db: RocksDbDataSource, namespace: IndexedSeq[Byte]): Task[Unit] = {
-    val iterable = 0 until n
-    Observable.fromIterable(iterable).foreachL { _ =>
-      db.update(Seq(DataSourceUpdateOptimized(namespace, Seq(), Seq((genRandomArray(), genRandomArray())))))
-    }
-  }
+  def writeNValuesToDb(n: Int, db: RocksDbDataSource, namespace: IndexedSeq[Byte]): IO[Unit] =
+    Stream
+      .range(0, n)
+      .evalMap { _ =>
+        IO(db.update(Seq(DataSourceUpdateOptimized(namespace, Seq(), Seq((genRandomArray(), genRandomArray()))))))
+      }
+      .compile
+      .drain
 
   it should "cancel ongoing iteration" in testCaseT { db =>
     val largeNum = 1000000
     val finishMark = 20000
     for {
-      counter <- Ref.of[Task, Int](0)
-      cancelMark <- Deferred[Task, Unit]
+      counter <- Ref.of[IO, Int](0)
+      cancelMark <- Deferred[IO, Unit]
       _ <- writeNValuesToDb(largeNum, db, Namespaces.NodeNamespace)
       fib <- db
         .iterate(Namespaces.NodeNamespace)
         .map(_.toOption.get)
-        .consumeWith(Consumer.foreachEval[Task, (Array[Byte], Array[Byte])] { _ =>
+        .evalMap { _ =>
           for {
             cur <- counter.updateAndGet(i => i + 1)
-            _ <- if (cur == finishMark) cancelMark.complete(()) else Task.unit
+            _ <- if (cur == finishMark) cancelMark.complete(()) else IO.unit
           } yield ()
-        })
+        }
+        .compile
+        .drain
         .start
       _ <- cancelMark.get
       // take in mind this test also check if all underlying rocksdb resources has been cleaned as if cancel
@@ -76,14 +77,16 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
   it should "read all key values in db" in testCaseT { db =>
     val largeNum = 100000
     for {
-      counter <- Ref.of[Task, Int](0)
+      counter <- Ref.of[IO, Int](0)
       _ <- writeNValuesToDb(largeNum, db, Namespaces.NodeNamespace)
       _ <- db
         .iterate(Namespaces.NodeNamespace)
         .map(_.toOption.get)
-        .consumeWith(Consumer.foreachEval[Task, (Array[Byte], Array[Byte])] { _ =>
+        .evalMap { _ =>
           counter.update(current => current + 1)
-        })
+        }
+        .compile
+        .drain
       finalCounter <- counter.get
     } yield assert(finalCounter == largeNum)
   }
@@ -96,12 +99,12 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
     val nodeKeyValues = (20 to 30).map(i => (ByteString(i.toByte), ByteString(i.toByte).toArray)).toList
 
     for {
-      _ <- Task(codeStorage.update(Seq(), codeKeyValues).commit())
-      _ <- Task(nodeStorage.update(Seq(), nodeKeyValues))
-      result <- Task.parZip2(
-        codeStorage.storageContent.map(_.toOption.get).map(_._1).toListL,
-        nodeStorage.storageContent.map(_.toOption.get).map(_._1).toListL
-      )
+      _ <- IO(codeStorage.update(Seq(), codeKeyValues).commit())
+      _ <- IO(nodeStorage.update(Seq(), nodeKeyValues))
+      result <- (
+        codeStorage.storageContent.map(_.toOption.get).map(_._1).compile.toList,
+        nodeStorage.storageContent.map(_.toOption.get).map(_._1).compile.toList
+      ).parTupled
       (codeResult, nodeResult) = result
     } yield {
       codeResult shouldEqual codeKeyValues.map(_._1)
@@ -112,14 +115,14 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
   it should "iterate over keys and values " in testCaseT { db =>
     val keyValues = (1 to 100).map(i => (ByteString(i.toByte), ByteString(i.toByte))).toList
     for {
-      _ <- Task(
+      _ <- IO(
         db.update(
           Seq(
             DataSourceUpdateOptimized(Namespaces.NodeNamespace, Seq(), keyValues.map(e => (e._1.toArray, e._2.toArray)))
           )
         )
       )
-      elems <- db.iterate(Namespaces.NodeNamespace).map(_.toOption.get).toListL
+      elems <- db.iterate(Namespaces.NodeNamespace).map(_.toOption.get).compile.toList
     } yield {
       val deserialized = elems.map { case (bytes, bytes1) => (ByteString(bytes), ByteString(bytes1)) }
       assert(elems.size == keyValues.size)
@@ -129,7 +132,7 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
 
   it should "return empty list when iterating empty db" in testCaseT { db =>
     for {
-      elems <- db.iterate().toListL
+      elems <- db.iterate().compile.toList
     } yield assert(elems.isEmpty)
   }
 }
