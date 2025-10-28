@@ -93,7 +93,7 @@ trait JsonRpcBaseController {
   def handle[Req, Res](
       fn: Req => IO[Either[JsonRpcError, Res]],
       rpcReq: JsonRpcRequest
-  )(implicit dec: JsonMethodDecoder[Req], enc: JsonEncoder[Res]):  IO[JsonRpcResponse] =
+  )(implicit dec: JsonMethodDecoder[Req], enc: JsonEncoder[Res]): IO[JsonRpcResponse] =
     dec.decodeJson(rpcReq.params) match {
       case Right(req) =>
         fn(req)
