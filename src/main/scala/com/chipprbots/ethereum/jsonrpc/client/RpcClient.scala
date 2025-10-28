@@ -14,7 +14,8 @@ import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.stream.StreamTcpException
 import akka.stream.scaladsl.TcpIdleTimeoutException
 
-import monix.eval.Task
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -68,16 +69,16 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
         jsonResponse.hcursor.downField("result").as[T].left.map(f => RpcClientError(f.message))
     }
 
-  private def makeRpcCall(jsonRequest: Json): Task[Either[RpcError, Json]] = {
+  private def makeRpcCall(jsonRequest: Json): IO[Either[RpcError, Json]] = {
     val entity = HttpEntity(ContentTypes.`application/json`, jsonRequest.noSpaces)
     val request = HttpRequest(method = HttpMethods.POST, uri = node, entity = entity)
 
-    Task
-      .deferFuture(for {
+    IO
+      .fromFuture(IO(for {
         response <- Http().singleRequest(request, connectionContext, connectionPoolSettings)
         data <- Unmarshal(response.entity).to[String]
-      } yield parse(data).left.map(e => ParserError(e.message)))
-      .onErrorHandle { (ex: Throwable) =>
+      } yield parse(data).left.map(e => ParserError(e.message))))
+      .handleError { (ex: Throwable) =>
         ex match {
           case _: TcpIdleTimeoutException =>
             log.error("RPC request", ex)
@@ -103,7 +104,7 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
 }
 
 object RpcClient {
-  type RpcResponse[T] = Task[Either[RpcError, T]]
+  type RpcResponse[T] = IO[Either[RpcError, T]]
 
   type Secrets = Map[String, Json]
 
