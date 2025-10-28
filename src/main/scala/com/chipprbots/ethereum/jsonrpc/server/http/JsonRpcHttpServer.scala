@@ -8,8 +8,8 @@ import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server._
 
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
@@ -41,6 +41,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
   val jsonRpcHealthChecker: JsonRpcHealthChecker
   val config: JsonRpcHttpServerConfig
 
+  implicit val runtime: IORuntime = IORuntime.global
   implicit val serialization: Serialization.type = native.Serialization
 
   implicit val formats: Formats = DefaultFormats + JsonSerializers.RpcErrorJsonSerializer
@@ -88,18 +89,18 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
         case reqSeq =>
           complete {
-            Task
+            IO
               .traverse(reqSeq)(request => jsonRpcController.handleRequest(request))
-              .runToFuture
+              .unsafeToFuture()(runtime)
           }
       }
     }
   }
 
   def handleRequest(request: JsonRpcRequest): StandardRoute =
-    complete(handleResponse(jsonRpcController.handleRequest(request)).runToFuture)
+    complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture()(runtime))
 
-  private def handleResponse(f: Task[JsonRpcResponse]): Task[(StatusCode, JsonRpcResponse)] = f.map { jsonRpcResponse =>
+  private def handleResponse(f: IO[JsonRpcResponse]): IO[(StatusCode, JsonRpcResponse)] = f.map { jsonRpcResponse =>
     jsonRpcResponse.error match {
       case Some(JsonRpcError(error, _, _)) if jsonRpcErrorCodes.contains(error) =>
         (StatusCodes.BadRequest, jsonRpcResponse)
@@ -126,7 +127,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
             entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
           )
       }
-    complete(httpResponseF.runToFuture)
+    complete(httpResponseF.unsafeToFuture()(runtime))
   }
 
   private def handleBuildInfo(): StandardRoute = {

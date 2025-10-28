@@ -12,7 +12,7 @@ import akka.http.scaladsl.server.Route
 import akka.http.scaladsl.testkit.ScalatestRouteTest
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -44,7 +44,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
   it should "respond to healthcheck" in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
-      .returning(Task.now(HealthcheckResponse(List(HealthcheckResult.ok("peerCount", Some("2"))))))
+      .returning(IO.pure(HealthcheckResponse(List(HealthcheckResult.ok("peerCount", Some("2"))))))
 
     val getRequest = HttpRequest(HttpMethods.GET, uri = "/healthcheck")
 
@@ -62,7 +62,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(
-        Task.now(
+        IO.pure(
           HealthcheckResponse(
             List(
               HealthcheckResult.ok("otherCheck"),
@@ -104,7 +104,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
   it should "pass valid json request to controller" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
@@ -122,7 +122,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val jsonRequests =
       ByteString("""[{"jsonrpc":"2.0", "method": "asd", "id": "1"}, {"jsonrpc":"2.0", "method": "asd", "id": "2"}]""")
@@ -163,7 +163,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
 
     (mockJsonRpcController.handleRequest _)
       .expects(*)
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val postRequest = HttpRequest(
       HttpMethods.POST,
@@ -180,7 +180,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
   it should "accept json request with ip restriction and only one request" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
@@ -197,7 +197,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
   it should "return too many requests error with ip-restriction enabled and two requests executed in a row" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
@@ -218,7 +218,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val jsonRequests =
       ByteString("""[{"jsonrpc":"2.0", "method": "asd", "id": "1"}, {"jsonrpc":"2.0", "method": "asd", "id": "2"}]""")
@@ -234,7 +234,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
@@ -265,7 +265,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
-      .returning(Task.now(jsonRpcResponseSuccessful))
+      .returning(IO.pure(jsonRpcResponseSuccessful))
 
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
@@ -299,7 +299,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
-        Task.now(
+        IO.pure(
           JsonRpcResponse(
             jsonRpc,
             None,
@@ -325,7 +325,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
-        Task.now(
+        IO.pure(
           JsonRpcResponse(
             jsonRpc,
             None,
@@ -357,7 +357,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
-        Task.now(
+        IO.pure(
           JsonRpcResponse(
             jsonRpc,
             None,
@@ -386,7 +386,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
-        Task.now(
+        IO.pure(
           JsonRpcResponse(
             jsonRpc,
             None,

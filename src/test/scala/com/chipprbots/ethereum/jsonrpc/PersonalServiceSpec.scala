@@ -7,7 +7,7 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.FiniteDuration
 import scala.reflect.ClassTag
@@ -53,6 +53,8 @@ class PersonalServiceSpec
     with NormalPatience
     with Eventually
     with ScalaCheckPropertyChecks {
+
+  implicit val runtime: IORuntime = IORuntime.global
 
   "PersonalService" should "import private keys" in new TestSetup {
     (keyStore.importPrivateKey _).expects(prvKey, passphrase).returning(Right(address))
@@ -130,7 +132,7 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).runToFuture
+    val res = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -151,7 +153,7 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).runToFuture
+    val res = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Seq(PendingTransaction(stxWithSender, 0))))
@@ -184,7 +186,7 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req = SendTransactionRequest(tx)
-    val res = personal.sendTransaction(req).runToFuture
+    val res = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -343,7 +345,7 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).runToFuture
+    val res = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -363,7 +365,7 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber)
 
     val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).runToFuture
+    val res = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))

@@ -8,7 +8,8 @@ import java.net.Socket
 
 import akka.actor.ActorSystem
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
+import cats.effect.IO
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
@@ -31,6 +32,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
     system: ActorSystem
 ) extends Logger {
 
+  implicit val runtime: IORuntime = IORuntime.global
   var serverSocket: ServerSocket = _
 
   def run(): Unit = {
@@ -97,9 +99,21 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
         case Some(nextMsgJson) =>
           val request = nextMsgJson.extract[JsonRpcRequest]
           val responseF = jsonRpcController.handleRequest(request)
-          val response = responseF.runSyncUnsafe(awaitTimeout)
-          out.write((Serialization.write(response) + '\n').getBytes())
-          out.flush()
+          responseF.unsafeRunTimed(awaitTimeout) match {
+            case Some(response) =>
+              out.write((Serialization.write(response) + '\n').getBytes())
+              out.flush()
+            case None =>
+              // Send JSON-RPC error response for timeout
+              val errorResponse = JsonRpcResponse(
+                "2.0",
+                None,
+                Some(JsonRpcError(-32000, "Request timed out", None)),
+                request.id
+              )
+              out.write((Serialization.write(errorResponse) + '\n').getBytes())
+              out.flush()
+          }
         case None =>
           running = false
       }

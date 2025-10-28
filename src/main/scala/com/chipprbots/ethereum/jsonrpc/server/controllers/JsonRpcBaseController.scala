@@ -2,9 +2,8 @@ package com.chipprbots.ethereum.jsonrpc.server.controllers
 
 import java.time.Duration
 
+import cats.effect.IO
 import cats.syntax.all._
-
-import monix.eval.Task
 
 import scala.collection.immutable.ArraySeq
 import scala.concurrent.ExecutionContext
@@ -44,7 +43,7 @@ trait JsonRpcBaseController {
   val config: JsonRpcConfig
   implicit def executionContext: ExecutionContext = scala.concurrent.ExecutionContext.global
 
-  def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]]]
+  def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]]
 
   def enabledApis: Seq[String]
 
@@ -52,23 +51,23 @@ trait JsonRpcBaseController {
 
   implicit val serialization: Serialization.type = native.Serialization
 
-  def handleRequest(request: JsonRpcRequest): Task[JsonRpcResponse] = {
+  def handleRequest(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     val startTimeNanos = System.nanoTime()
 
     log.debug(s"received request ${request.inspect}")
 
-    val notFoundFn: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = { case _ =>
+    val notFoundFn: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = { case _ =>
       JsonRpcControllerMetrics.NotFoundMethodsCounter.increment()
-      Task.now(errorResponse(request, MethodNotFound))
+      IO.pure(errorResponse(request, MethodNotFound))
     }
 
-    val handleFn: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] =
+    val handleFn: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
       enabledApis.foldLeft(notFoundFn)((fn, api) => apisHandleFns.getOrElse(api, PartialFunction.empty).orElse(fn))
 
     handleFn(request)
       .flatTap {
         case JsonRpcResponse(_, _, Some(JsonRpcError(code, message, extraData)), _) =>
-          Task {
+          IO {
             log.error(
               s"JsonRpcError from request: ${request.toStringWithSensitiveInformation} - response code: $code and message: $message. " +
                 s"${extraData.map(data => s"Extra info: ${data.values}")}"
@@ -76,25 +75,25 @@ trait JsonRpcBaseController {
             JsonRpcControllerMetrics.MethodsErrorCounter.increment()
           }
         case JsonRpcResponse(_, _, None, _) =>
-          Task {
+          IO {
             JsonRpcControllerMetrics.MethodsSuccessCounter.increment()
 
             val time = Duration.ofNanos(System.nanoTime() - startTimeNanos)
             JsonRpcControllerMetrics.recordMethodTime(request.method, time)
           }
       }
-      .flatTap(response => Task(log.debug(s"sending response ${response.inspect}")))
+      .flatTap(response => IO(log.debug(s"sending response ${response.inspect}")))
       .onErrorRecoverWith { case t: Throwable =>
         JsonRpcControllerMetrics.MethodsExceptionCounter.increment()
         log.error(s"Error serving request: ${request.toStringWithSensitiveInformation}", t)
-        Task.raiseError(t)
+        IO.raiseError(t)
       }
   }
 
   def handle[Req, Res](
-      fn: Req => Task[Either[JsonRpcError, Res]],
+      fn: Req => IO[Either[JsonRpcError, Res]],
       rpcReq: JsonRpcRequest
-  )(implicit dec: JsonMethodDecoder[Req], enc: JsonEncoder[Res]): Task[JsonRpcResponse] =
+  )(implicit dec: JsonMethodDecoder[Req], enc: JsonEncoder[Res]): IO[JsonRpcResponse] =
     dec.decodeJson(rpcReq.params) match {
       case Right(req) =>
         fn(req)
@@ -107,7 +106,7 @@ trait JsonRpcBaseController {
             errorResponse(rpcReq, InternalError)
           }
       case Left(error) =>
-        Task.now(errorResponse(rpcReq, error))
+        IO.pure(errorResponse(rpcReq, error))
     }
 
   private def successResponse[T](req: JsonRpcRequest, result: T)(implicit enc: JsonEncoder[T]): JsonRpcResponse =

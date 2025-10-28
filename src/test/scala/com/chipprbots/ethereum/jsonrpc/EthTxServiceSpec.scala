@@ -5,7 +5,7 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.DurationInt
@@ -40,6 +40,8 @@ class EthTxServiceSpec
     with MockFactory
     with NormalPatience
     with TypeCheckedTripleEquals {
+
+  implicit val runtime: IORuntime = IORuntime.global
 
   it should "answer eth_getTransactionByBlockHashAndIndex with None when there is no block with the requested hash" in new TestSetup {
     val txIndexToRequest = blockToRequest.body.transactionList.size / 2
@@ -124,7 +126,7 @@ class EthTxServiceSpec
     val request = GetTransactionByHashRequest(txToRequestHash)
 
     // when
-    val response = ethTxService.getRawTransactionByHash(request).runSyncUnsafe()
+    val response = ethTxService.getRawTransactionByHash(request).unsafeRunSync()
 
     // then
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
@@ -138,7 +140,7 @@ class EthTxServiceSpec
     val request = GetTransactionByHashRequest(txToRequestHash)
 
     // when
-    val response = ethTxService.getRawTransactionByHash(request).runToFuture
+    val response = ethTxService.getRawTransactionByHash(request).unsafeToFuture()
 
     // then
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
@@ -157,7 +159,7 @@ class EthTxServiceSpec
     val request = GetTransactionByHashRequest(txToRequestHash)
 
     // when
-    val response = ethTxService.getRawTransactionByHash(request).runSyncUnsafe()
+    val response = ethTxService.getRawTransactionByHash(request).unsafeRunSync()
 
     // then
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
@@ -170,7 +172,7 @@ class EthTxServiceSpec
     (appStateStorage.getBestBlockNumber _).expects().returning(42)
 
     val response = ethTxService.getGetGasPrice(GetGasPriceRequest())
-    response.runSyncUnsafe() shouldEqual Right(GetGasPriceResponse(0))
+    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(0))
   }
 
   it should "return average gas price" in new TestSetup {
@@ -182,7 +184,7 @@ class EthTxServiceSpec
     blockchainWriter.saveBestKnownBlocks(block.hash, block.number)
 
     val response = ethTxService.getGetGasPrice(GetGasPriceRequest())
-    response.runSyncUnsafe() shouldEqual Right(GetGasPriceResponse(BigInt("20000000000")))
+    response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(BigInt("20000000000")))
   }
 
   it should "getTransactionByBlockNumberAndIndexRequest return transaction by index" in new TestSetup {
@@ -257,7 +259,7 @@ class EthTxServiceSpec
   it should "handle get transaction by hash if the tx is not on the blockchain and not in the tx pool" in new TestSetup {
 
     val request = GetTransactionByHashRequest(txToRequestHash)
-    val response = ethTxService.getTransactionByHash(request).runSyncUnsafe()
+    val response = ethTxService.getTransactionByHash(request).unsafeRunSync()
 
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsResponse(Nil))
@@ -268,7 +270,7 @@ class EthTxServiceSpec
   it should "handle get transaction by hash if the tx is still pending" in new TestSetup {
 
     val request = GetTransactionByHashRequest(txToRequestHash)
-    val response = ethTxService.getTransactionByHash(request).runToFuture
+    val response = ethTxService.getTransactionByHash(request).unsafeToFuture()
 
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(
@@ -284,7 +286,7 @@ class EthTxServiceSpec
     blockchainWriter.storeBlock(blockWithTx).commit()
 
     val request = GetTransactionByHashRequest(txToRequestHash)
-    val response = ethTxService.getTransactionByHash(request).runSyncUnsafe()
+    val response = ethTxService.getTransactionByHash(request).unsafeRunSync()
 
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsResponse(Nil))
@@ -311,7 +313,7 @@ class EthTxServiceSpec
     val request = GetTransactionReceiptRequest(contractCreatingTransaction.hash)
     val response = ethTxService.getTransactionReceipt(request)
 
-    response.runSyncUnsafe() shouldEqual Right(
+    response.unsafeRunSync() shouldEqual Right(
       GetTransactionReceiptResponse(
         Some(
           TransactionReceiptResponse(
@@ -328,7 +330,7 @@ class EthTxServiceSpec
   }
 
   it should "send message to pendingTransactionsManager and return an empty GetPendingTransactionsResponse" in new TestSetup {
-    val res = ethTxService.getTransactionsFromPool.runSyncUnsafe()
+    val res = ethTxService.getTransactionsFromPool.unsafeRunSync()
 
     pendingTransactionsManager.expectMsg(GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsResponse(Nil))
@@ -353,7 +355,7 @@ class EthTxServiceSpec
       PendingTransaction(fakeTransaction, System.currentTimeMillis)
     }.toList
 
-    val res = ethTxService.getTransactionsFromPool.runToFuture
+    val res = ethTxService.getTransactionsFromPool.unsafeToFuture()
 
     pendingTransactionsManager.expectMsg(GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsResponse(transactions))
@@ -362,7 +364,7 @@ class EthTxServiceSpec
   }
 
   it should "send message to pendingTransactionsManager and return an empty GetPendingTransactionsResponse in case of error" in new TestSetup {
-    val res = ethTxService.getTransactionsFromPool.runSyncUnsafe()
+    val res = ethTxService.getTransactionsFromPool.unsafeRunSync()
 
     pendingTransactionsManager.expectMsg(GetPendingTransactions)
     pendingTransactionsManager.reply(new ClassCastException("error"))
