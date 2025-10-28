@@ -502,7 +502,7 @@ addCommandAlias(
 
 // Scapegoat configuration
 // Re-enabled with Scala 3 compatible version 3.x
-(ThisBuild / scapegoatVersion) := "3.2.2"
+(ThisBuild / scapegoatVersion) := "3.1.4"
 scapegoatReports := Seq("xml", "html")
 scapegoatConsoleOutput := false
 scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")

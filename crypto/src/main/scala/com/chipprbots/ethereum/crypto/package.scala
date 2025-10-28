@@ -56,7 +56,7 @@ package object crypto {
     output
   }
 
-  def kec512(input: Array[Byte]): Array[Byte] = synchronized {
+  def kec512(input: Array[Byte]): Array[Byte] = kec512.synchronized {
     val out = Array.ofDim[Byte](kec512.getDigestSize)
     kec512.update(input, 0, input.length)
     kec512.doFinal(out, 0)
