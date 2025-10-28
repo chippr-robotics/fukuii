@@ -147,7 +147,7 @@ trait DiscoveryServiceBuilder {
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
       sigalg: SigAlg,
-      runtime: IORuntime
+      implicit runtime: IORuntime
   ): Resource[IO, v4.DiscoveryNetwork[InetMultiAddress]] =
     for {
       peerGroup <- StaticUDPPeerGroup[v4.Packet](udpConfig)
