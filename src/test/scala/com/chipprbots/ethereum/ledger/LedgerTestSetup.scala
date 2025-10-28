@@ -413,6 +413,9 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
       blockchainReader,
       blockQueue,
       blockValidation,
+      // Using the global IORuntime is appropriate here because, in test scenarios,
+      // validation operations do not require a custom runtime with specific threading characteristics.
+      // Tests are typically run in isolation, so contention and performance concerns are minimal.
       runtime
     )
   }
