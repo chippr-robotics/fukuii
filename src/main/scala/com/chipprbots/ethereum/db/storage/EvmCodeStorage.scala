@@ -2,7 +2,8 @@ package com.chipprbots.ethereum.db.storage
 
 import akka.util.ByteString
 
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
@@ -18,7 +19,7 @@ class EvmCodeStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
   def valueDeserializer: IndexedSeq[Byte] => Code = (code: IndexedSeq[Byte]) => ByteString(code.toArray)
 
   // overriding to avoid going through IndexedSeq[Byte]
-  override def storageContent: Observable[Either[IterationError, (CodeHash, Code)]] =
+  override def storageContent: Stream[IO, Either[IterationError, (CodeHash, Code)]] =
     dataSource.iterate(namespace).map { result =>
       result.map { case (key, value) => (ByteString.fromArrayUnsafe(key), ByteString.fromArrayUnsafe(value)) }
     }
