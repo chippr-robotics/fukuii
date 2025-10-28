@@ -7,8 +7,8 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import akka.util.Timeout
 
-import monix.eval.Task
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 
 import scala.concurrent.duration.DurationInt
 
@@ -95,7 +95,7 @@ class FastSyncSpec
       )
     )
 
-    val saveGenesis: Task[Unit] = Task {
+    val saveGenesis: IO[Unit] = IO {
       blockchainWriter.save(
         BlockHelpers.genesis,
         receipts = Nil,
@@ -104,10 +104,10 @@ class FastSyncSpec
       )
     }
 
-    val startSync: Task[Unit] = Task(fastSync ! SyncProtocol.Start)
+    val startSync: IO[Unit] = IO(fastSync ! SyncProtocol.Start)
 
-    val getSyncStatus: Task[Status] =
-      Task.deferFuture((fastSync ? SyncProtocol.GetStatus).mapTo[Status])
+    val getSyncStatus: IO[Status] =
+      IO.fromFuture(IO((fastSync ? SyncProtocol.GetStatus).mapTo[Status]))
   }
 
   override def createFixture(): Fixture = new Fixture
@@ -128,11 +128,11 @@ class FastSyncSpec
         import fixture._
 
         (for {
-          _ <- saveGenesis
           _ <- startSync
+          _ <- saveGenesis
           _ <- etcPeerManager.onPeersConnected
-          _ <- etcPeerManager.pivotBlockSelected.firstL
-          _ <- etcPeerManager.fetchedHeaders.firstL
+          _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
+          _ <- etcPeerManager.fetchedHeaders.head.compile.lastOrError
           status <- getSyncStatus
         } yield status match {
           case Status.Syncing(startingBlockNumber, blocksProgress, stateNodesProgress) =>
@@ -151,8 +151,8 @@ class FastSyncSpec
           _ <- saveGenesis
           _ <- startSync
           _ <- etcPeerManager.onPeersConnected
-          _ <- etcPeerManager.pivotBlockSelected.firstL
-          blocksBatch <- etcPeerManager.fetchedBlocks.firstL
+          _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
+          blocksBatch <- etcPeerManager.fetchedBlocks.head.compile.lastOrError
           status <- getSyncStatus
           lastBlockFromBatch = blocksBatch.last.number
         } yield status match {
@@ -181,22 +181,26 @@ class FastSyncSpec
           _ <- saveGenesis
           _ <- startSync
           _ <- etcPeerManager.onPeersConnected
-          _ <- etcPeerManager.pivotBlockSelected.firstL
-          _ <- Observable
-            .interval(10.millis)
-            .mapEval(_ => getSyncStatus)
+          _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
+          _ <- Stream
+            .awakeEvery[IO](10.millis)
+            .evalMap(_ => getSyncStatus)
             .collect {
               case stat @ Status.Syncing(_, Progress(current, _), _) if current >= expectedTargetBlockNumber => stat
             }
-            .firstL
-          _ <- Observable
-            .interval(10.millis)
-            .mapEval(_ => getSyncStatus)
+            .head
+            .compile
+            .lastOrError
+          _ <- Stream
+            .awakeEvery[IO](10.millis)
+            .evalMap(_ => getSyncStatus)
             .collect {
               case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) if stateNodesProgress.target > 1 =>
                 stat
             }
-            .firstL
+            .head
+            .compile
+            .lastOrError
         } yield succeed).timeout(timeout.duration)
       }
     }
