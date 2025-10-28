@@ -131,7 +131,7 @@ object Dependencies {
     "org.jupnp" % "org.jupnp.support" % "2.5.2",
     "org.jupnp" % "org.jupnp.tool" % "2.5.2",
     "javax.servlet" % "javax.servlet-api" % "4.0.1",
-    "com.thesamet.scalapb" %% "scalapb-runtime" % "0.11.17" // Required for Scala 3 support
+    "com.thesamet.scalapb" %% "scalapb-runtime" % Versions.scalapb // Required for Scala 3 support
   )
 
   val guava: Seq[ModuleID] = {

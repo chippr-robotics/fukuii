@@ -82,7 +82,7 @@ object RLPScala3Derivation {
           s"RLP decoding error: expected ${decoders.length} fields, got ${decoded.length}."
         )
       }
-      val tuple = decoded.asInstanceOf[mirror.MirroredElemTypes]
+      val tuple = Tuple.fromArray(decoded.toArray).asInstanceOf[mirror.MirroredElemTypes]
       (mirror.fromProduct(tuple), decoded.map(_ => FieldInfo(isOptional = false)))
     }
   }
