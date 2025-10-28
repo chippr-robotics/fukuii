@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.faucet.jsonrpc
 
 import akka.actor.ActorSystem
 
+import cats.effect.unsafe.IORuntime
+
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContextExecutor
 
@@ -25,6 +27,7 @@ trait FaucetControllerBuilder {
   self: FaucetConfigBuilder with ActorSystemBuilder =>
 
   implicit val ec: ExecutionContextExecutor = system.dispatcher
+  implicit val runtime: IORuntime = IORuntime.global
 }
 
 trait FaucetRpcServiceBuilder {
