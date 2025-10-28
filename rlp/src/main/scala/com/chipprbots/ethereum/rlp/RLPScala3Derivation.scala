@@ -38,9 +38,9 @@ object RLPScala3Derivation {
       new RLPListEncoderImpl[T](summonEncoders[m.MirroredElemTypes])
   }
   
-  private class RLPListEncoderImpl[T](encoders: List[RLPEncoder[?]]) extends RLPListEncoder[T] {
+  private class RLPListEncoderImpl[T <: Product](encoders: List[RLPEncoder[?]]) extends RLPListEncoder[T] {
     override def encodeList(obj: T): (RLPList, List[FieldInfo]) = {
-      val elems = obj.asInstanceOf[Product].productIterator.toList
+      val elems = obj.productIterator.toList
       encodeElements(elems, encoders)
     }
   }
