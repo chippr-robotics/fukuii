@@ -4,8 +4,7 @@ import akka.actor.ActorRef
 import akka.util.ByteString
 import akka.util.Timeout
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
 
 import scala.concurrent.duration._
 import scala.util.Failure
@@ -276,8 +275,8 @@ class TestService(
           blockTimestamp += 1
         }
 
-    def doNTimesF(n: Int)(fn: Task[Unit]): Task[Unit] = fn.flatMap { _ =>
-      if (n <= 1) Task.unit
+    def doNTimesF(n: Int)(fn: IO[Unit]): IO[Unit] = fn.flatMap { _ =>
+      if (n <= 1) IO.unit
       else doNTimesF(n - 1)(fn)
     }
 
@@ -304,7 +303,7 @@ class TestService(
   ): ServiceResponse[ImportRawBlockResponse] =
     Try(decode(request.blockRlp).toBlock) match {
       case Failure(_) =>
-        Task.now(Left(JsonRpcError(-1, "block validation failed!", None)))
+        IO.pure(Left(JsonRpcError(-1, "block validation failed!", None)))
       case Success(value) =>
         testModeComponentsProvider
           .getConsensus(preimageCache)
@@ -324,7 +323,7 @@ class TestService(
         ImportRawBlockResponse(blockHash).rightNow
       case e =>
         log.warn("Block import failed with {}", e)
-        Task.now(Left(JsonRpcError(-1, "block validation failed!", None)))
+        IO.pure(Left(JsonRpcError(-1, "block validation failed!", None)))
     }
 
   def setEtherbase(req: SetEtherbaseRequest): ServiceResponse[SetEtherbaseResponse] = {
@@ -483,6 +482,6 @@ class TestService(
   private val emptyLogRlpHash: ByteString = ByteString(crypto.kec256(rlp.encode(RLPList())))
 
   implicit private class RichResponse[A](response: A) {
-    def rightNow: Task[Either[JsonRpcError, A]] = Task.now(Right(response))
+    def rightNow: IO[Either[JsonRpcError, A]] = IO.pure(Right(response))
   }
 }
