@@ -4,7 +4,7 @@ import akka.actor.{ActorSystem => ClassicSystem}
 import akka.testkit.TestActorRef
 import akka.testkit.TestKit
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration._
 
@@ -57,7 +57,7 @@ class MockedMinerSpec
           .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
           .expects(bfm1, false, *, *)
           .returning(
-            Task.raiseError(new RuntimeException("error"))
+            IO.raiseError(new RuntimeException("error"))
           )
           .atLeastOnce()
 
