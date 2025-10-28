@@ -8,8 +8,8 @@ import java.net.Socket
 
 import akka.actor.ActorSystem
 
-import cats.effect.unsafe.IORuntime
 import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
@@ -33,6 +33,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
 ) extends Logger {
 
   implicit val runtime: IORuntime = IORuntime.global
+
   var serverSocket: ServerSocket = _
 
   def run(): Unit = {

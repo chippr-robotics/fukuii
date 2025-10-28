@@ -10,6 +10,7 @@ import akka.http.scaladsl.server._
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import cats.syntax.all._
 
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
@@ -89,16 +90,17 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
         case reqSeq =>
           complete {
-            IO
-              .traverse(reqSeq)(request => jsonRpcController.handleRequest(request))
-              .unsafeToFuture()(runtime)
+            reqSeq
+              .toList
+              .traverse(request => jsonRpcController.handleRequest(request))
+              .unsafeToFuture()
           }
       }
     }
   }
 
   def handleRequest(request: JsonRpcRequest): StandardRoute =
-    complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture()(runtime))
+    complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture())
 
   private def handleResponse(f: IO[JsonRpcResponse]): IO[(StatusCode, JsonRpcResponse)] = f.map { jsonRpcResponse =>
     jsonRpcResponse.error match {
