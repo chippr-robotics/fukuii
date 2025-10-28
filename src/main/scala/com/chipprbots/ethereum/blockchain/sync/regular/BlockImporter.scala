@@ -9,10 +9,9 @@ import akka.actor.Props
 import akka.actor.ReceiveTimeout
 
 import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 import cats.implicits._
-
-import monix.eval.Task
-import monix.execution.Scheduler
 
 import scala.concurrent.duration._
 
@@ -54,7 +53,7 @@ class BlockImporter(
   import BlockImporter._
   import configBuilder._
 
-  implicit val ec: Scheduler = Scheduler(context.dispatcher)
+  implicit val runtime: IORuntime = IORuntime.global
 
   context.setReceiveTimeout(syncConfig.syncRetryInterval)
 
@@ -145,8 +144,8 @@ class BlockImporter(
   }
 
   private def importBlocks(blocks: NonEmptyList[Block], blockImportType: BlockImportType): ImportFn = importWith(
-    Task
-      .now {
+    IO
+      .pure {
         log.debug(
           "Attempting to import blocks starting from {} and ending with {}",
           blocks.head.number,
@@ -156,12 +155,12 @@ class BlockImporter(
       }
       .flatMap {
         case Right(blocksToImport) => handleBlocksImport(blocksToImport)
-        case Left(resolvingFrom)   => Task.now(ResolvingBranch(resolvingFrom))
+        case Left(resolvingFrom)   => IO.pure(ResolvingBranch(resolvingFrom))
       },
     blockImportType
   )
 
-  private def handleBlocksImport(blocks: List[Block]): Task[NewBehavior] =
+  private def handleBlocksImport(blocks: List[Block]): IO[NewBehavior] =
     tryImportBlocks(blocks)
       .map { value =>
         val (importedBlocks, errorOpt) = value
@@ -192,12 +191,12 @@ class BlockImporter(
   private def tryImportBlocks(
       blocks: List[Block],
       importedBlocks: List[Block] = Nil
-  ): Task[(List[Block], Option[Any])] =
+  ): IO[(List[Block], Option[Any])] =
     if (blocks.isEmpty) {
       importedBlocks.headOption.foreach(block =>
         supervisor ! ProgressProtocol.ImportedBlock(block.number, internally = false)
       )
-      Task.now((importedBlocks, None))
+      IO.pure((importedBlocks, None))
     } else {
       val restOfBlocks = blocks.tail
       consensus
@@ -213,10 +212,10 @@ class BlockImporter(
             tryImportBlocks(restOfBlocks, importedBlocks)
 
           case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
-            Task.now((importedBlocks, Some(missingNodeException)))
+            IO.pure((importedBlocks, Some(missingNodeException)))
 
           case BlockImportFailedDueToMissingNode(missingNodeException) =>
-            Task.raiseError(missingNodeException)
+            IO.raiseError(missingNodeException)
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
             log.error(
@@ -225,7 +224,7 @@ class BlockImporter(
               blocks.head.header.hashAsHexString,
               ByteStringUtils.hash2string(blocks.head.header.parentHash)
             )
-            Task.now((importedBlocks, Some(err)))
+            IO.pure((importedBlocks, Some(err)))
         }
     }
 
@@ -238,7 +237,7 @@ class BlockImporter(
   ): ImportFn = {
     def doLog(entry: ImportMessages.LogEntry): Unit = log.log(entry._1, entry._2)
     importWith(
-      Task(doLog(importMessages.preImport()))
+      IO(doLog(importMessages.preImport()))
         .flatMap(_ => consensus.evaluateBranchBlock(block))
         .tap((importMessages.messageForImportResult _).andThen(doLog))
         .tap {
@@ -256,7 +255,7 @@ class BlockImporter(
             doLog(importMessages.missingStateNode(missingNodeException))
             Running
           case BlockImportFailedDueToMissingNode(missingNodeException) =>
-            Task.raiseError(missingNodeException)
+            IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number, BlacklistReason.BlockImportError(error))
           case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
@@ -277,17 +276,17 @@ class BlockImporter(
     blocksAdded.foreach(block => pendingTransactionsManager ! RemoveTransactions(block.body.transactionList))
   }
 
-  private def importWith(importTask: Task[NewBehavior], blockImportType: BlockImportType)(
+  private def importWith(importTask: IO[NewBehavior], blockImportType: BlockImportType)(
       state: ImporterState
   ): Unit = {
     context.become(running(state.importingBlocks()))
 
     importTask
       .map(self ! ImportDone(_, blockImportType))
-      .onErrorHandle(ex => log.error(ex, ex.getMessage))
+      .handleError(ex => log.error(ex, ex.getMessage))
       .timed
-      .map { case (timeTaken, _) => blockImportType.recordMetric(timeTaken.length) }
-      .runAsyncAndForget
+      .map { case (timeTaken, _) => blockImportType.recordMetric(timeTaken.toNanos) }
+      .unsafeRunAndForget()
   }
 
   // Either block from which we try resolve branch or list of blocks to be imported
