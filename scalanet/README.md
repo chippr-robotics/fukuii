@@ -30,7 +30,7 @@ scalanet/
 │   ├── it/                  # Integration tests
 │   └── ut/                  # Unit tests
 └── src/                     # Core scalanet library
-    └── io/iohk/scalanet/
+    └── com/chipprbots/scalanet/
         ├── crypto/          # Cryptographic utilities
         └── peergroup/       # Peer group abstractions
 ```
@@ -57,8 +57,9 @@ Scalanet is used by Fukuii's peer discovery subsystem:
 
 ## Modifications
 
-This vendored version may include modifications for:
-- Scala 3 compatibility
+This vendored version includes modifications for:
+- **Package rebranding**: Changed from `io.iohk.scalanet` to `com.chipprbots.scalanet` to align with Fukuii's rebranding
+- Scala 3 compatibility (planned)
 - Integration with Fukuii's codebase
 - Bug fixes and improvements
 - Dependency updates

@@ -17,9 +17,9 @@ import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
 
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.ethereum.v4
-import io.iohk.scalanet.discovery.ethereum.{Node => ENode}
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.ethereum.v4
+import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
 import scodec.bits.BitVector
 
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage

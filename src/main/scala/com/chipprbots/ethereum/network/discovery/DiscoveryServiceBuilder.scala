@@ -9,15 +9,15 @@ import cats.effect.Resource
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
-import io.iohk.scalanet.discovery.crypto.PrivateKey
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.crypto.SigAlg
-import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
-import io.iohk.scalanet.discovery.ethereum.v4
-import io.iohk.scalanet.discovery.ethereum.{Node => ENode}
-import io.iohk.scalanet.peergroup.ExternalAddressResolver
-import io.iohk.scalanet.peergroup.InetMultiAddress
-import io.iohk.scalanet.peergroup.udp.StaticUDPPeerGroup
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.v4
+import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
+import com.chipprbots.scalanet.peergroup.ExternalAddressResolver
+import com.chipprbots.scalanet.peergroup.InetMultiAddress
+import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import scodec.Codec
 import scodec.bits.BitVector
 
@@ -147,7 +147,7 @@ trait DiscoveryServiceBuilder {
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
       sigalg: SigAlg,
-      implicit runtime: IORuntime
+      runtime: IORuntime
   ): Resource[IO, v4.DiscoveryNetwork[InetMultiAddress]] =
     for {
       peerGroup <- StaticUDPPeerGroup[v4.Packet](udpConfig)
