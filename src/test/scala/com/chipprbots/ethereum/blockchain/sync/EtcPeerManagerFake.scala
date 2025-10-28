@@ -96,7 +96,8 @@ class EtcPeerManagerFake(
       remainingBlocks.splitAt(bodies.size)
     }
     .map(_._1)
-    .zipWith(requestedReceipts.repeat)((blocks, _) => blocks) // a big simplification, but should be sufficient here
+    .zip(requestedReceipts)
+    .map { case (blocks, _) => blocks } // a big simplification, but should be sufficient here
 
   val fetchedState: Stream[IO, Seq[ByteString]] = responses.collect { case MessageFromPeer(NodeData(values), _) =>
     values

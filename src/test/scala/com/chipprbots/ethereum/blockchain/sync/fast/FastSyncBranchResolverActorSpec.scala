@@ -368,9 +368,7 @@ object FastSyncBranchResolverActorSpec extends Logger {
           val theResponse = MessageFromPeer(response, peerId)
           sender ! theResponse
           responses.publish1(theResponse).unsafeRunSync()
-          if (blockIndex == blocksSetSize) {
-            // Stream naturally completes when no more subscribers
-          }
+          if (blockIndex == blocksSetSize) ()
       }
       this
     }

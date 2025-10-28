@@ -204,7 +204,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       mutable.Map[ByteString, IO[BlockImportResult]]()
     protected val importedBlocksSet: mutable.Set[Block] = mutable.Set[Block]()
     private val importedBlocksTopicIO = Topic[IO, Block]
-    private val importedBlocksSubject = importedBlocksTopicIO.unsafeRunSync()
+    private lazy val importedBlocksSubject = importedBlocksTopicIO.unsafeRunSync()
     val importedBlocks: Stream[IO, Block] = importedBlocksSubject.subscribe(100)
 
     def didTryToImportBlock(predicate: Block => Boolean): Boolean =
