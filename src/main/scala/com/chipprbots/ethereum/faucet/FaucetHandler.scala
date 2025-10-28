@@ -5,7 +5,8 @@ import akka.actor.ActorLogging
 import akka.actor.Props
 import akka.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.faucet.FaucetHandler.WalletException
@@ -14,7 +15,9 @@ import com.chipprbots.ethereum.faucet.jsonrpc.WalletService
 import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.keystore.Wallet
 
-class FaucetHandler(walletService: WalletService, config: FaucetConfig) extends Actor with ActorLogging {
+class FaucetHandler(walletService: WalletService, config: FaucetConfig)(implicit runtime: IORuntime)
+    extends Actor
+    with ActorLogging {
 
   import FaucetHandler.FaucetHandlerMsg._
   import FaucetHandler.FaucetHandlerResponse._
@@ -30,7 +33,7 @@ class FaucetHandler(walletService: WalletService, config: FaucetConfig) extends 
 
     case Initialization =>
       log.info("Initialization called (faucet unavailable)")
-      walletService.getWallet.runSyncUnsafe() match {
+      walletService.getWallet.unsafeRunSync() match {
         case Left(error) =>
           log.error(s"Couldn't initialize wallet - error: $error")
           throw new WalletException(error)
@@ -70,7 +73,7 @@ class FaucetHandler(walletService: WalletService, config: FaucetConfig) extends 
           case Left(error) =>
             respondTo ! WalletRpcClientError(error.msg)
         }
-        .runAsyncAndForget
+        .unsafeRunAndForget()
   }
 }
 
@@ -93,7 +96,7 @@ object FaucetHandler {
 
   class WalletException(keyStoreError: KeyStoreError) extends RuntimeException(keyStoreError.toString)
 
-  def props(walletRpcClient: WalletService, config: FaucetConfig): Props = Props(
+  def props(walletRpcClient: WalletService, config: FaucetConfig)(implicit runtime: IORuntime): Props = Props(
     new FaucetHandler(walletRpcClient, config)
   )
 

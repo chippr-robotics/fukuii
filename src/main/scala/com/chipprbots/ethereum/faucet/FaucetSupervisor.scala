@@ -8,6 +8,8 @@ import akka.actor.SupervisorStrategy
 import akka.pattern.BackoffOpts
 import akka.pattern.BackoffSupervisor
 
+import cats.effect.unsafe.IORuntime
+
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.faucet.FaucetHandler.WalletException
@@ -19,7 +21,8 @@ object FaucetSupervisor {
 }
 
 class FaucetSupervisor(walletService: WalletService, config: FaucetConfig, shutdown: () => Unit)(implicit
-    system: ActorSystem
+    system: ActorSystem,
+    runtime: IORuntime
 ) extends Logger {
 
   val childProps: Props = FaucetHandler.props(walletService, config)

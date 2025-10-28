@@ -4,8 +4,8 @@ import java.security.SecureRandom
 
 import akka.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -31,6 +31,8 @@ import com.chipprbots.ethereum.rlp
 
 class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "Wallet Service" should "send a transaction successfully when getNonce and sendTransaction successfully" in new TestSetup {
 
     val receivingAddress = Address("0x99")
@@ -52,10 +54,10 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val retTxId = ByteString(Hex.decode("112233"))
 
-    (walletRpcClient.getNonce _).expects(config.walletAddress).returning(Task.pure(Right(currentNonce)))
-    (walletRpcClient.sendTransaction _).expects(ByteString(expectedTx)).returning(Task.pure(Right(retTxId)))
+    (walletRpcClient.getNonce _).expects(config.walletAddress).returning(IO.pure(Right(currentNonce)))
+    (walletRpcClient.sendTransaction _).expects(ByteString(expectedTx)).returning(IO.pure(Right(retTxId)))
 
-    val res = walletService.sendFunds(wallet, Address("0x99")).runSyncUnsafe()
+    val res = walletService.sendFunds(wallet, Address("0x99")).unsafeRunSync()
 
     res shouldEqual Right(retTxId)
 
@@ -64,9 +66,9 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
   it should "failure the transaction when get timeout of getNonce" in new TestSetup {
 
     val timeout = ConnectionError("timeout")
-    (walletRpcClient.getNonce _).expects(config.walletAddress).returning(Task.pure(Left(timeout)))
+    (walletRpcClient.getNonce _).expects(config.walletAddress).returning(IO.pure(Left(timeout)))
 
-    val res = walletService.sendFunds(wallet, Address("0x99")).runSyncUnsafe()
+    val res = walletService.sendFunds(wallet, Address("0x99")).unsafeRunSync()
 
     res shouldEqual Left(timeout)
 
@@ -75,7 +77,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
   it should "get wallet successful" in new TestSetup {
     (mockKeyStore.unlockAccount _).expects(config.walletAddress, config.walletPassword).returning(Right(wallet))
 
-    val res = walletService.getWallet.runSyncUnsafe()
+    val res = walletService.getWallet.unsafeRunSync()
 
     res shouldEqual Right(wallet)
   }
@@ -85,7 +87,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
       .expects(config.walletAddress, config.walletPassword)
       .returning(Left(DecryptionFailed))
 
-    val res = walletService.getWallet.runSyncUnsafe()
+    val res = walletService.getWallet.unsafeRunSync()
 
     res shouldEqual Left(DecryptionFailed)
   }

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.faucet.jsonrpc.FaucetDomain._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
@@ -21,18 +21,18 @@ class FaucetJsonRpcController(
 
   override def enabledApis: Seq[String] = config.apis
 
-  override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]]] = Map(
+  override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Faucet -> handleRequest
   )
 
-  def handleRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = { case req =>
-    val notFoundFn: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = { case _ =>
-      Task.now(errorResponse(req, JsonRpcError.MethodNotFound))
+  def handleRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = { case req =>
+    val notFoundFn: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = { case _ =>
+      IO.pure(errorResponse(req, JsonRpcError.MethodNotFound))
     }
     handleFaucetRequest.orElse(notFoundFn)(req)
   }
 
-  private def handleFaucetRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleFaucetRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, FaucetJsonRpcController.SendFunds, _, _) =>
       handle[SendFundsRequest, SendFundsResponse](faucetRpcService.sendFunds, req)
     case req @ JsonRpcRequest(_, FaucetJsonRpcController.Status, _, _) =>
