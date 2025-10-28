@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.transactions
 import akka.actor.ActorRef
 import akka.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -19,7 +19,7 @@ trait TransactionPicker extends Logger {
 
   implicit val timeout: Timeout = Timeout(getTransactionFromPoolTimeout)
 
-  def getTransactionsFromPool: Task[PendingTransactionsResponse] =
+  def getTransactionsFromPool: IO[PendingTransactionsResponse] =
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .onErrorHandle { ex =>

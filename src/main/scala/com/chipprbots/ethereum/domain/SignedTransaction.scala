@@ -1,12 +1,11 @@
 package com.chipprbots.ethereum.domain
 
 import java.math.BigInteger
-import java.util.concurrent.Executors
 
 import akka.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Try
 
@@ -26,7 +25,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 object SignedTransaction {
 
-  implicit private val executionContext: Scheduler = Scheduler(Executors.newWorkStealingPool())
+  implicit private val ioRuntime: IORuntime = IORuntime.global
 
   // txHash size is 32bytes, Address size is 20 bytes, taking into account some overhead key-val pair have
   // around 70bytes then 100k entries have around 7mb. 100k entries is around 300blocks for Ethereum network.
@@ -273,13 +272,13 @@ object SignedTransaction {
       .flatten
       .grouped(batchSize)
 
-    Task.traverse(blocktx.toSeq)(calculateSendersForTxs).runAsyncAndForget
+    IO.parTraverseN(Runtime.getRuntime.availableProcessors)(blocktx.toSeq)(calculateSendersForTxs).void.unsafeRunAndForget()(ioRuntime)
   }
 
   private def calculateSendersForTxs(txs: Seq[SignedTransaction])(implicit
       blockchainConfig: BlockchainConfig
-  ): Task[Unit] =
-    Task(txs.foreach(calculateAndCacheSender))
+  ): IO[Unit] =
+    IO(txs.foreach(calculateAndCacheSender))
 
   private def calculateAndCacheSender(stx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig) =
     calculateSender(stx).foreach(address => txSenders.put(stx.hash, address))

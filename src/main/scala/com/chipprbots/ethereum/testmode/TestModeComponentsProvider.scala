@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.testmode
 
 import akka.util.ByteString
 
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
@@ -23,7 +23,7 @@ class TestModeComponentsProvider(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     evmCodeStorage: EvmCodeStorage,
-    validationExecutionContext: Scheduler,
+    validationExecutionContext: IORuntime,
     miningConfig: MiningConfig,
     vm: VMImpl,
     node: TestNode
