@@ -34,6 +34,9 @@ object SignedTransaction {
   // Each background thread gets batch of signed tx to calculate senders
   val batchSize = 5
 
+  // Cache available processors count for parallel execution (constant at runtime)
+  private val availableProcessors: Int = Runtime.getRuntime.availableProcessors
+
   private val txSenders: Cache[ByteString, Address] = CacheBuilder
     .newBuilder()
     .maximumSize(maximumSenderCacheSize)
@@ -272,7 +275,7 @@ object SignedTransaction {
       .flatten
       .grouped(batchSize)
 
-    IO.parTraverseN(Runtime.getRuntime.availableProcessors)(blocktx.toSeq)(calculateSendersForTxs).void.unsafeRunAndForget()(ioRuntime)
+    IO.parTraverseN(availableProcessors)(blocktx.toSeq)(calculateSendersForTxs).void.unsafeRunAndForget()(ioRuntime)
   }
 
   private def calculateSendersForTxs(txs: Seq[SignedTransaction])(implicit
