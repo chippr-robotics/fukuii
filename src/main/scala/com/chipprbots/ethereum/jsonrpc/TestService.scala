@@ -145,7 +145,7 @@ class TestService(
     testModeComponentsProvider: TestModeComponentsProvider,
     transactionMappingStorage: TransactionMappingStorage,
     node: TestNode
-)(implicit scheduler: Scheduler)
+)(implicit ioRuntime: IORuntime)
     extends Logger {
   import node._
 
@@ -262,7 +262,7 @@ class TestService(
   def mineBlocks(
       request: MineBlocksRequest
   ): ServiceResponse[MineBlocksResponse] = {
-    def mineBlock(): Task[Unit] =
+    def mineBlock(): IO[Unit] =
       getBlockForMining(blockchainReader.getBestBlock().get)
         .flatMap { blockForMining =>
           testModeComponentsProvider
@@ -340,7 +340,7 @@ class TestService(
     } preimageCache.put(crypto.kec256(storageKey.bytes), storageKey)
   }
 
-  private def getBlockForMining(parentBlock: Block): Task[PendingBlock] = {
+  private def getBlockForMining(parentBlock: Block): IO[PendingBlock] = {
     implicit val timeout: Timeout = Timeout(20.seconds)
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
