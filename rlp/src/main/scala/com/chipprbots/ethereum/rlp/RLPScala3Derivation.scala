@@ -35,7 +35,7 @@ object RLPScala3Derivation {
       }
     
     inline def derived[T](using m: Mirror.ProductOf[T]): RLPListEncoder[T] = 
-      RLPListEncoderImpl[T](summonEncoders[m.MirroredElemTypes])
+      new RLPListEncoderImpl[T](summonEncoders[m.MirroredElemTypes])
   }
   
   private class RLPListEncoderImpl[T](encoders: List[RLPEncoder[?]]) extends RLPListEncoder[T] {
