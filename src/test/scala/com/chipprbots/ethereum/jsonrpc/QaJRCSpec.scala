@@ -88,7 +88,7 @@ class QaJRCSpec
       "communication with miner failed" in new TestSetup {
         (qaService.mineBlocks _)
           .expects(mineBlocksReq)
-          .returning(Task.raiseError(new ClassCastException("error")))
+          .returning(IO.raiseError(new ClassCastException("error")))
 
         val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).unsafeRunSync()
 
@@ -199,7 +199,7 @@ class QaJRCSpec
       "generating failed" in new TestSetup {
         (qaService.generateCheckpoint _)
           .expects(generateCheckpointReq)
-          .returning(Task.raiseError(new RuntimeException("error")))
+          .returning(IO.raiseError(new RuntimeException("error")))
 
         val response: JsonRpcResponse =
           jsonRpcController.handleRequest(generateCheckpointRpcRequest).unsafeRunSync()
@@ -232,7 +232,7 @@ class QaJRCSpec
       "getting federation members info failed" in new TestSetup {
         (qaService.getFederationMembersInfo _)
           .expects(GetFederationMembersInfoRequest())
-          .returning(Task.raiseError(new RuntimeException("error")))
+          .returning(IO.raiseError(new RuntimeException("error")))
 
         val response: JsonRpcResponse =
           jsonRpcController.handleRequest(getFederationMembersInfoRpcRequest).unsafeRunSync()
@@ -350,7 +350,7 @@ class QaJRCSpec
 
     def mockSuccessfulMineBlocksBehaviour(
         resp: MockedMinerResponse
-    ): CallHandler1[MineBlocksRequest, Task[Either[JsonRpcError, MineBlocksResponse]]] =
+    ): CallHandler1[MineBlocksRequest, IO[Either[JsonRpcError, MineBlocksResponse]]] =
       (qaService.mineBlocks _)
         .expects(mineBlocksReq)
         .returning(IO.pure(Right(MineBlocksResponse(resp))))

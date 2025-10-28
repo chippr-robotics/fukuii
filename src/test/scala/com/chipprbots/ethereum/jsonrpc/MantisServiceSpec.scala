@@ -87,7 +87,7 @@ class MantisServiceSpec
             override def getAccountTransactions(account: Address, fromBlocks: NumericRange[BigInt])(implicit
                 blockchainConfig: BlockchainConfig
             ) =
-              Task.pure(expectedResponse)
+              IO.pure(expectedResponse)
           }
       }
 

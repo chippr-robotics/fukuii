@@ -43,7 +43,7 @@ class QAServiceSpec
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
-      .returning(Task.raiseError(new ClassCastException("error")))
+      .returning(IO.raiseError(new ClassCastException("error")))
       .atLeastOnce()
 
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Left(JsonRpcError.InternalError))

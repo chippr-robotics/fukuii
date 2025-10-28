@@ -323,6 +323,6 @@ case class JsonRpcController(
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "rpc_modules", _, _) =>
       val result = enabledApis.map(_ -> "1.0").toMap
-      Task(JsonRpcResponse("2.0", Some(result), None, req.id))
+      IO(JsonRpcResponse("2.0", Some(result), None, req.id))
   }
 }

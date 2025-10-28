@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
@@ -24,5 +24,5 @@ object ProofServiceDummy extends ProofService {
   val EmptyProofResponse: GetProofResponse = GetProofResponse(EmptyProofAccount)
 
   override def getProof(req: GetProofRequest): ServiceResponse[GetProofResponse] =
-    Task.now(Right(EmptyProofResponse))
+    IO.pure(Right(EmptyProofResponse))
 }

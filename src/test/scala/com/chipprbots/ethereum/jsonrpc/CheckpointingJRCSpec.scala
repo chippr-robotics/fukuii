@@ -43,7 +43,7 @@ class CheckpointingJRCSpec
     val servResp = GetLatestBlockResponse(Some(BlockInfo(block.hash, block.number)))
     (checkpointingService.getLatestBlock _)
       .expects(GetLatestBlockRequest(4, None))
-      .returning(Task.now(Right(servResp)))
+      .returning(IO.pure(Right(servResp)))
 
     val expectedResult = JObject(
       "block" -> JObject(
@@ -100,7 +100,7 @@ class CheckpointingJRCSpec
 
     (checkpointingService.pushCheckpoint _)
       .expects(servReq)
-      .returning(Task.now(Right(servResp)))
+      .returning(IO.pure(Right(servResp)))
 
     val expectedResult = JBool(true)
 
