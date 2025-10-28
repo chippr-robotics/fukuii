@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import akka.actor.ActorRef
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
