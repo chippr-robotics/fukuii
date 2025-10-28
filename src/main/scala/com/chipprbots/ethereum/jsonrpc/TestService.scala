@@ -4,8 +4,8 @@ import akka.actor.ActorRef
 import akka.util.ByteString
 import akka.util.Timeout
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 import scala.util.Failure
@@ -146,7 +146,7 @@ class TestService(
     testModeComponentsProvider: TestModeComponentsProvider,
     transactionMappingStorage: TransactionMappingStorage,
     node: TestNode
-)(implicit scheduler: Scheduler)
+)(implicit ioRuntime: IORuntime)
     extends Logger {
   import node._
 
@@ -263,7 +263,7 @@ class TestService(
   def mineBlocks(
       request: MineBlocksRequest
   ): ServiceResponse[MineBlocksResponse] = {
-    def mineBlock(): Task[Unit] =
+    def mineBlock(): IO[Unit] =
       getBlockForMining(blockchainReader.getBestBlock().get)
         .flatMap { blockForMining =>
           testModeComponentsProvider
@@ -276,8 +276,8 @@ class TestService(
           blockTimestamp += 1
         }
 
-    def doNTimesF(n: Int)(fn: Task[Unit]): Task[Unit] = fn.flatMap { _ =>
-      if (n <= 1) Task.unit
+    def doNTimesF(n: Int)(fn: IO[Unit]): IO[Unit] = fn.flatMap { _ =>
+      if (n <= 1) IO.unit
       else doNTimesF(n - 1)(fn)
     }
 
@@ -341,7 +341,7 @@ class TestService(
     } preimageCache.put(crypto.kec256(storageKey.bytes), storageKey)
   }
 
-  private def getBlockForMining(parentBlock: Block): Task[PendingBlock] = {
+  private def getBlockForMining(parentBlock: Block): IO[PendingBlock] = {
     implicit val timeout: Timeout = Timeout(20.seconds)
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
@@ -483,6 +483,6 @@ class TestService(
   private val emptyLogRlpHash: ByteString = ByteString(crypto.kec256(rlp.encode(RLPList())))
 
   implicit private class RichResponse[A](response: A) {
-    def rightNow: Task[Either[JsonRpcError, A]] = Task.now(Right(response))
+    def rightNow: IO[Either[JsonRpcError, A]] = IO.pure(Right(response))
   }
 }
