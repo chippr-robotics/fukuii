@@ -47,8 +47,6 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
 
   implicit val formats: Formats = DefaultFormats + JsonSerializers.RpcErrorJsonSerializer
 
-  implicit val runtime: IORuntime = IORuntime.global
-
   def corsAllowedOrigins: HttpOriginMatcher
 
   lazy val jsonRpcErrorCodes: List[Int] =
@@ -92,9 +90,10 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
         case reqSeq =>
           complete {
-            IO
-              .traverse(reqSeq)(request => jsonRpcController.handleRequest(request))
-              .unsafeToFuture()(runtime)
+            reqSeq
+              .toList
+              .traverse(request => jsonRpcController.handleRequest(request))
+              .unsafeToFuture()
           }
       }
     }
