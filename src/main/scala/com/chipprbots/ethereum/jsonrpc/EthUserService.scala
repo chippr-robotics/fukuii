@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage

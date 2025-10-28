@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import akka.actor.ActorRef
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.NewCheckpoint
 import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
@@ -33,15 +33,15 @@ class CheckpointingService(
     lazy val isValidParent =
       req.parentCheckpoint.forall(blockchainReader.getBlockHeaderByHash(_).exists(_.number < blockToReturnNum))
 
-    Task {
+    IO {
       blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockToReturnNum)
     }.flatMap {
       case Some(b) if isValidParent =>
-        Task.now(Right(GetLatestBlockResponse(Some(BlockInfo(b.hash, b.number)))))
+        IO.pure(Right(GetLatestBlockResponse(Some(BlockInfo(b.hash, b.number)))))
 
       case Some(_) =>
         log.debug("No checkpoint candidate found for a specified parent")
-        Task.now(Right(GetLatestBlockResponse(None)))
+        IO.pure(Right(GetLatestBlockResponse(None)))
 
       case None =>
         log.error(
@@ -52,7 +52,7 @@ class CheckpointingService(
     }
   }
 
-  def pushCheckpoint(req: PushCheckpointRequest): ServiceResponse[PushCheckpointResponse] = Task {
+  def pushCheckpoint(req: PushCheckpointRequest): ServiceResponse[PushCheckpointResponse] = IO {
     val parentHash = req.hash
 
     blockchainReader.getBlockByHash(parentHash).orElse(blockQueue.getBlockByHash(parentHash)) match {

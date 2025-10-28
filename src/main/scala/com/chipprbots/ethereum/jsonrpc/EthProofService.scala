@@ -2,9 +2,8 @@ package com.chipprbots.ethereum.jsonrpc
 
 import akka.util.ByteString
 
+import cats.effect.IO
 import cats.implicits._
-
-import monix.eval.Task
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
 import com.chipprbots.ethereum.domain.Account
