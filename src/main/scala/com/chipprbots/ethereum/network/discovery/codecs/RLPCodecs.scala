@@ -4,12 +4,12 @@ import java.net.InetAddress
 
 import scala.util.Try
 
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.crypto.Signature
-import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
-import io.iohk.scalanet.discovery.ethereum.Node
-import io.iohk.scalanet.discovery.ethereum.v4.Payload
-import io.iohk.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.Signature
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
+import com.chipprbots.scalanet.discovery.hash.Hash
 import scodec.Attempt
 import scodec.Codec
 import scodec.DecodeResult

@@ -22,9 +22,9 @@ import scala.concurrent.duration._
 import scala.math.Ordering.Implicits._
 import scala.util.control.NoStackTrace
 
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.ethereum.v4.DiscoveryService
-import io.iohk.scalanet.discovery.ethereum.{Node => ENode}
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService
+import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.concurrent.Eventually
 import org.scalatest.concurrent.ScalaFutures

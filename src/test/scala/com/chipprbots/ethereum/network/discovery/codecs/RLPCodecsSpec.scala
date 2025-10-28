@@ -6,12 +6,12 @@ import scala.reflect.ClassTag
 import scala.util.Random
 
 import _root_.com.chipprbots.ethereum.rlp.RLPException
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
-import io.iohk.scalanet.discovery.ethereum.Node
-import io.iohk.scalanet.discovery.ethereum.v4.Packet
-import io.iohk.scalanet.discovery.ethereum.v4.Payload
-import io.iohk.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
+import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
+import com.chipprbots.scalanet.discovery.hash.Hash
 import org.scalactic.Equality
 import org.scalatest.Assertion
 import org.scalatest.flatspec.AnyFlatSpec

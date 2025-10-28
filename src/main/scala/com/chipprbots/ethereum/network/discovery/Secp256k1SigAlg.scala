@@ -4,10 +4,10 @@ import akka.util.ByteString
 
 import scala.collection.concurrent.TrieMap
 
-import io.iohk.scalanet.discovery.crypto.PrivateKey
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.crypto.SigAlg
-import io.iohk.scalanet.discovery.crypto.Signature
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.crypto.Signature
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import scodec.Attempt
