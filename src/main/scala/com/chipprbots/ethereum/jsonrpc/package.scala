@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum
 
-import monix.eval.Task
+import cats.effect.IO
 
 package object jsonrpc {
-  type ServiceResponse[T] = Task[Either[JsonRpcError, T]]
+  type ServiceResponse[T] = IO[Either[JsonRpcError, T]]
 }

@@ -32,13 +32,13 @@ class FaucetRpcService(config: FaucetConfig)(implicit system: ActorSystem)
           .askFor[Any](FaucetHandlerMsg.SendFunds(sendFundsRequest.address))
           .map(handleSendFundsResponse.orElse(handleErrors))
       )
-      .onErrorRecover(handleErrors)
+      .recover(handleErrors)
 
   def status(statusRequest: StatusRequest): ServiceResponse[StatusResponse] =
     selectFaucetHandler()
       .flatMap(handler => handler.askFor[Any](FaucetHandlerMsg.Status))
       .map(handleStatusResponse.orElse(handleErrors))
-      .onErrorRecover(handleErrors)
+      .recover(handleErrors)
 
   private def handleSendFundsResponse: PartialFunction[Any, Either[JsonRpcError, SendFundsResponse]] = {
     case FaucetHandlerResponse.TransactionSent(txHash) =>

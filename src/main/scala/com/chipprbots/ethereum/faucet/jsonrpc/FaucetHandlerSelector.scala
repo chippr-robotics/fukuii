@@ -5,7 +5,7 @@ import akka.actor.ActorSystem
 import akka.pattern.RetrySupport
 import akka.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.faucet.FaucetConfigBuilder
 import com.chipprbots.ethereum.faucet.FaucetHandler
@@ -20,11 +20,13 @@ trait FaucetHandlerSelector {
 
   lazy val handlerTimeout: Timeout = Timeout(faucetConfig.handlerTimeout)
 
-  def selectFaucetHandler()(implicit system: ActorSystem): Task[ActorRef] =
-    Task.deferFuture(
-      retry(() => system.actorSelection(handlerPath).resolveOne(handlerTimeout.duration), attempts, delay)(
-        system.dispatcher,
-        system.scheduler
+  def selectFaucetHandler()(implicit system: ActorSystem): IO[ActorRef] =
+    IO.fromFuture(
+      IO(
+        retry(() => system.actorSelection(handlerPath).resolveOne(handlerTimeout.duration), attempts, delay)(
+          system.dispatcher,
+          system.scheduler
+        )
       )
     )
 
