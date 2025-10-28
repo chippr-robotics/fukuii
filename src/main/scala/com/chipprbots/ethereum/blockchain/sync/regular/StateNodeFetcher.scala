@@ -8,9 +8,8 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.{ActorRef => ClassicActorRef}
 import akka.util.ByteString
 
+import cats.effect.unsafe.IORuntime
 import cats.syntax.either._
-
-import monix.execution.Scheduler
 
 import scala.util.Failure
 import scala.util.Success
@@ -35,7 +34,7 @@ class StateNodeFetcher(
     with FetchRequest[StateNodeFetcher.StateNodeFetcherCommand] {
 
   val log = context.log
-  implicit val ec: Scheduler = Scheduler(context.executionContext)
+  implicit val runtime: IORuntime = IORuntime.global
 
   import StateNodeFetcher._
 
@@ -86,7 +85,7 @@ class StateNodeFetcher(
 
   private def requestStateNode(hash: ByteString): Unit = {
     val resp = makeRequest(Request.create(GetNodeData(List(hash)), BestPeer), StateNodeFetcher.RetryStateNodeRequest)
-    context.pipeToSelf(resp.runToFuture) {
+    context.pipeToSelf(resp.unsafeToFuture()) {
       case Success(res) => res
       case Failure(_)   => StateNodeFetcher.RetryStateNodeRequest
     }
