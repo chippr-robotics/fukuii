@@ -4,9 +4,8 @@ import akka.actor.ActorRef
 import akka.util.ByteString
 import akka.util.Timeout
 
+import cats.effect.IO
 import cats.syntax.either._
-
-import monix.eval.Task
 
 import scala.reflect.ClassTag
 
@@ -87,10 +86,10 @@ class EthInfoService(
   import EthInfoService._
 
   def protocolVersion(req: ProtocolVersionRequest): ServiceResponse[ProtocolVersionResponse] =
-    Task.now(Right(ProtocolVersionResponse(f"0x${capability.version}%x")))
+    IO.pure(Right(ProtocolVersionResponse(f"0x${capability.version}%x")))
 
   def chainId(req: ChainIdRequest): ServiceResponse[ChainIdResponse] =
-    Task.now(Right(ChainIdResponse(blockchainConfig.chainId)))
+    IO.pure(Right(ChainIdResponse(blockchainConfig.chainId)))
 
   /** Implements the eth_syncing method that returns syncing information if the node is syncing.
     *
@@ -142,12 +141,12 @@ class EthInfoService(
               rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])(seqEncDec[ByteString]())
             )
           })
-      case Left(error) => Task.now(Left(error))
+      case Left(error) => IO.pure(Left(error))
     }
   }
 
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
-    Task {
+    IO {
       doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
     }
 
