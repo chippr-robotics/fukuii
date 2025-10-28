@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import monix.eval.Task
+import cats.effect.IO
 
 import org.json4s.JsonDSL._
 

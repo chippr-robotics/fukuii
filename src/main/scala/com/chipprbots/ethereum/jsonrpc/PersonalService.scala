@@ -6,7 +6,7 @@ import akka.actor.ActorRef
 import akka.util.ByteString
 import akka.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.util.Try
 
@@ -85,14 +85,14 @@ class PersonalService(
 
   private val unlockedWallets: ExpiringMap[Address, Wallet] = ExpiringMap.empty(Duration.ofSeconds(defaultUnlockTime))
 
-  def importRawKey(req: ImportRawKeyRequest): ServiceResponse[ImportRawKeyResponse] = Task {
+  def importRawKey(req: ImportRawKeyRequest): ServiceResponse[ImportRawKeyResponse] = IO {
     for {
       prvKey <- Right(req.prvKey).filterOrElse(_.length == PrivateKeyLength, InvalidKey)
       addr <- keyStore.importPrivateKey(prvKey, req.passphrase).left.map(handleError)
     } yield ImportRawKeyResponse(addr)
   }
 
-  def newAccount(req: NewAccountRequest): ServiceResponse[NewAccountResponse] = Task {
+  def newAccount(req: NewAccountRequest): ServiceResponse[NewAccountResponse] = IO {
     keyStore
       .newAccount(req.passphrase)
       .map(NewAccountResponse.apply)
@@ -100,7 +100,7 @@ class PersonalService(
       .map(handleError)
   }
 
-  def listAccounts(request: ListAccountsRequest): ServiceResponse[ListAccountsResponse] = Task {
+  def listAccounts(request: ListAccountsRequest): ServiceResponse[ListAccountsResponse] = IO {
     keyStore
       .listAccounts()
       .map(ListAccountsResponse.apply)
@@ -108,7 +108,7 @@ class PersonalService(
       .map(handleError)
   }
 
-  def unlockAccount(request: UnlockAccountRequest): ServiceResponse[UnlockAccountResponse] = Task {
+  def unlockAccount(request: UnlockAccountRequest): ServiceResponse[UnlockAccountResponse] = IO {
     keyStore
       .unlockAccount(request.address, request.passphrase)
       .left
@@ -125,12 +125,12 @@ class PersonalService(
       }
   }
 
-  def lockAccount(request: LockAccountRequest): ServiceResponse[LockAccountResponse] = Task {
+  def lockAccount(request: LockAccountRequest): ServiceResponse[LockAccountResponse] = IO {
     unlockedWallets.remove(request.address)
     Right(LockAccountResponse(true))
   }
 
-  def sign(request: SignRequest): ServiceResponse[SignResponse] = Task {
+  def sign(request: SignRequest): ServiceResponse[SignResponse] = IO {
     import request._
 
     val accountWallet =
@@ -143,7 +143,7 @@ class PersonalService(
       }
   }
 
-  def ecRecover(req: EcRecoverRequest): ServiceResponse[EcRecoverResponse] = Task {
+  def ecRecover(req: EcRecoverRequest): ServiceResponse[EcRecoverResponse] = IO {
     import req._
     signature
       .publicKey(getMessageToSign(message))
@@ -156,7 +156,7 @@ class PersonalService(
   def sendTransaction(
       request: SendTransactionWithPassphraseRequest
   ): ServiceResponse[SendTransactionWithPassphraseResponse] = {
-    val maybeWalletUnlocked = Task {
+    val maybeWalletUnlocked = IO {
       keyStore.unlockAccount(request.tx.from, request.passphrase).left.map(handleError)
     }
 
@@ -164,7 +164,7 @@ class PersonalService(
       case Right(wallet) =>
         val futureTxHash = sendTransaction(request.tx, wallet)
         futureTxHash.map(txHash => Right(SendTransactionWithPassphraseResponse(txHash)))
-      case Left(err) => Task.now(Left(err))
+      case Left(err) => IO.pure(Left(err))
     }
   }
 
@@ -174,7 +174,7 @@ class PersonalService(
         val futureTxHash = sendTransaction(request.tx, wallet)
         futureTxHash.map(txHash => Right(SendTransactionResponse(txHash)))
 
-      case None => Task.now(Left(AccountLocked))
+      case None => IO.pure(Left(AccountLocked))
     }
 
   def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse] = {
@@ -195,16 +195,16 @@ class PersonalService(
           )
         )
       case Left(error) =>
-        Task.now(Left(error))
+        IO.pure(Left(error))
     }
   }
 
-  private def sendTransaction(request: TransactionRequest, wallet: Wallet): Task[ByteString] = {
+  private def sendTransaction(request: TransactionRequest, wallet: Wallet): IO[ByteString] = {
     implicit val timeout = Timeout(txPoolConfig.pendingTxManagerQueryTimeout)
 
     val pendingTxsFuture =
       txPool.askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
-    val latestPendingTxNonceFuture: Task[Option[BigInt]] = pendingTxsFuture.map { pendingTxs =>
+    val latestPendingTxNonceFuture: IO[Option[BigInt]] = pendingTxsFuture.map { pendingTxs =>
       val senderTxsNonces = pendingTxs.pendingTransactions
         .collect { case ptx if ptx.stx.senderAddress == wallet.address => ptx.stx.tx.tx.nonce }
       Try(senderTxsNonces.max).toOption

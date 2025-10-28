@@ -8,10 +8,10 @@ import akka.actor.Scheduler
 import akka.util.ByteString
 import akka.util.Timeout
 
-import monix.eval.Task
-import monix.execution
+import cats.effect.IO
 
 import scala.annotation.tailrec
+import scala.concurrent.ExecutionContext
 import scala.util.Random
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
@@ -39,7 +39,7 @@ class FilterManager(
   import context.system
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(system.scheduler)
-  implicit private val executionContext: execution.Scheduler = monix.execution.Scheduler(system.dispatcher)
+  implicit private val executionContext: ExecutionContext = system.dispatcher
 
   val maxBlockHashesChanges = 256
 
@@ -251,16 +251,16 @@ class FilterManager(
     recur(blockNumber + 1, Nil)
   }
 
-  private def getPendingTransactions(): Task[Seq[PendingTransaction]] =
+  private def getPendingTransactions(): IO[Seq[PendingTransaction]] =
     pendingTransactionsManager
       .askFor[PendingTransactionsManager.PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .flatMap { response =>
         keyStore.listAccounts() match {
           case Right(accounts) =>
-            Task.now(
+            IO.pure(
               response.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
             )
-          case Left(_) => Task.raiseError(new RuntimeException("Cannot get account list"))
+          case Left(_) => IO.raiseError(new RuntimeException("Cannot get account list"))
         }
       }
 

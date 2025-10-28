@@ -3,9 +3,8 @@ package com.chipprbots.ethereum.jsonrpc
 import akka.actor.ActorRef
 import akka.util.ByteString
 
+import cats.effect.IO
 import cats.implicits._
-
-import monix.eval.Task
 
 import enumeratum._
 import mouse.all._
@@ -46,7 +45,7 @@ class QAService(
     mining
       .askMiner(MineBlocks(req.numBlocks, req.withTransactions, req.parentBlock))
       .map(_ |> (MineBlocksResponse(_)) |> (_.asRight))
-      .onErrorHandle { throwable =>
+      .handleError { throwable =>
         log.warn("Unable to mine requested blocks", throwable)
         Left(JsonRpcError.InternalError)
       }
@@ -57,7 +56,7 @@ class QAService(
     val hash = req.blockHash.orElse(blockchainReader.getBestBlock().map(_.hash))
     hash match {
       case Some(hashValue) =>
-        Task {
+        IO {
           val parent =
             blockchainReader
               .getBlockByHash(hashValue)
@@ -68,7 +67,7 @@ class QAService(
           syncController ! NewCheckpoint(checkpointBlock)
           Right(GenerateCheckpointResponse(checkpoint))
         }
-      case None => Task.now(Left(JsonRpcError.BlockNotFound))
+      case None => IO.pure(Left(JsonRpcError.BlockNotFound))
     }
   }
 
@@ -83,7 +82,7 @@ class QAService(
   def getFederationMembersInfo(
       req: GetFederationMembersInfoRequest
   ): ServiceResponse[GetFederationMembersInfoResponse] =
-    Task {
+    IO {
       Right(GetFederationMembersInfoResponse(blockchainConfig.checkpointPubKeys.toList))
     }
 }

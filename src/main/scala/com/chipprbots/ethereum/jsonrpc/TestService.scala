@@ -5,7 +5,6 @@ import akka.util.ByteString
 import akka.util.Timeout
 
 import cats.effect.IO
-import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 import scala.util.Failure
@@ -304,7 +303,7 @@ class TestService(
   ): ServiceResponse[ImportRawBlockResponse] =
     Try(decode(request.blockRlp).toBlock) match {
       case Failure(_) =>
-        Task.now(Left(JsonRpcError(-1, "block validation failed!", None)))
+        IO.pure(Left(JsonRpcError(-1, "block validation failed!", None)))
       case Success(value) =>
         testModeComponentsProvider
           .getConsensus(preimageCache)
@@ -324,7 +323,7 @@ class TestService(
         ImportRawBlockResponse(blockHash).rightNow
       case e =>
         log.warn("Block import failed with {}", e)
-        Task.now(Left(JsonRpcError(-1, "block validation failed!", None)))
+        IO.pure(Left(JsonRpcError(-1, "block validation failed!", None)))
     }
 
   def setEtherbase(req: SetEtherbaseRequest): ServiceResponse[SetEtherbaseResponse] = {

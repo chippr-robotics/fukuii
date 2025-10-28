@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.utils.Config
@@ -19,8 +19,8 @@ class Web3Service {
   import Web3Service._
 
   def sha3(req: Sha3Request): ServiceResponse[Sha3Response] =
-    Task(Right(Sha3Response(crypto.kec256(req.data))))
+    IO(Right(Sha3Response(crypto.kec256(req.data))))
 
   def clientVersion(req: ClientVersionRequest): ServiceResponse[ClientVersionResponse] =
-    Task(Right(ClientVersionResponse(Config.clientVersion)))
+    IO(Right(ClientVersionResponse(Config.clientVersion)))
 }

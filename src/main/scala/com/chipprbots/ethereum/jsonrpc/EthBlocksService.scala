@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -57,7 +57,7 @@ class EthBlocksService(
     * @return
     *   Current block number the client is on.
     */
-  def bestBlockNumber(req: BestBlockNumberRequest): ServiceResponse[BestBlockNumberResponse] = Task {
+  def bestBlockNumber(req: BestBlockNumberRequest): ServiceResponse[BestBlockNumberResponse] = IO {
     Right(BestBlockNumberResponse(blockchainReader.getBestBlockNumber()))
   }
 
@@ -69,7 +69,7 @@ class EthBlocksService(
     *   the number of txs that the block has or None if the client doesn't have the block requested
     */
   def getBlockTransactionCountByHash(request: TxCountByBlockHashRequest): ServiceResponse[TxCountByBlockHashResponse] =
-    Task {
+    IO {
       val txsCount = blockchainReader.getBlockBodyByHash(request.blockHash).map(_.transactionList.size)
       Right(TxCountByBlockHashResponse(txsCount))
     }
@@ -81,7 +81,7 @@ class EthBlocksService(
     * @return
     *   the block requested or None if the client doesn't have the block
     */
-  def getByBlockHash(request: BlockByBlockHashRequest): ServiceResponse[BlockByBlockHashResponse] = Task {
+  def getByBlockHash(request: BlockByBlockHashRequest): ServiceResponse[BlockByBlockHashResponse] = IO {
     val BlockByBlockHashRequest(blockHash, fullTxs) = request
     val blockOpt = blockchainReader.getBlockByHash(blockHash).orElse(blockQueue.getBlockByHash(blockHash))
     val weight = blockchainReader.getChainWeightByHash(blockHash).orElse(blockQueue.getChainWeightByHash(blockHash))
@@ -97,7 +97,7 @@ class EthBlocksService(
     * @return
     *   the block requested or None if the client doesn't have the block
     */
-  def getBlockByNumber(request: BlockByNumberRequest): ServiceResponse[BlockByNumberResponse] = Task {
+  def getBlockByNumber(request: BlockByNumberRequest): ServiceResponse[BlockByNumberResponse] = IO {
     val BlockByNumberRequest(blockParam, fullTxs) = request
     val blockResponseOpt =
       resolveBlock(blockParam).toOption.map { case ResolvedBlock(block, pending) =>
@@ -110,7 +110,7 @@ class EthBlocksService(
   def getBlockTransactionCountByNumber(
       req: GetBlockTransactionCountByNumberRequest
   ): ServiceResponse[GetBlockTransactionCountByNumberResponse] =
-    Task {
+    IO {
       resolveBlock(req.block).map { case ResolvedBlock(block, _) =>
         GetBlockTransactionCountByNumberResponse(block.body.transactionList.size)
       }
@@ -127,7 +127,7 @@ class EthBlocksService(
     */
   def getUncleByBlockHashAndIndex(
       request: UncleByBlockHashAndIndexRequest
-  ): ServiceResponse[UncleByBlockHashAndIndexResponse] = Task {
+  ): ServiceResponse[UncleByBlockHashAndIndexResponse] = IO {
     val UncleByBlockHashAndIndexRequest(blockHash, uncleIndex) = request
     val uncleHeaderOpt = blockchainReader
       .getBlockBodyByHash(blockHash)
@@ -157,7 +157,7 @@ class EthBlocksService(
     */
   def getUncleByBlockNumberAndIndex(
       request: UncleByBlockNumberAndIndexRequest
-  ): ServiceResponse[UncleByBlockNumberAndIndexResponse] = Task {
+  ): ServiceResponse[UncleByBlockNumberAndIndexResponse] = IO {
     val UncleByBlockNumberAndIndexRequest(blockParam, uncleIndex) = request
     val uncleBlockResponseOpt = resolveBlock(blockParam).toOption
       .flatMap { case ResolvedBlock(block, pending) =>
@@ -183,7 +183,7 @@ class EthBlocksService(
   def getUncleCountByBlockNumber(
       req: GetUncleCountByBlockNumberRequest
   ): ServiceResponse[GetUncleCountByBlockNumberResponse] =
-    Task {
+    IO {
       resolveBlock(req.block).map { case ResolvedBlock(block, _) =>
         GetUncleCountByBlockNumberResponse(block.body.uncleNodesList.size)
       }
@@ -192,7 +192,7 @@ class EthBlocksService(
   def getUncleCountByBlockHash(
       req: GetUncleCountByBlockHashRequest
   ): ServiceResponse[GetUncleCountByBlockHashResponse] =
-    Task {
+    IO {
       blockchainReader.getBlockBodyByHash(req.blockHash) match {
         case Some(blockBody) =>
           Right(GetUncleCountByBlockHashResponse(blockBody.uncleNodesList.size))
