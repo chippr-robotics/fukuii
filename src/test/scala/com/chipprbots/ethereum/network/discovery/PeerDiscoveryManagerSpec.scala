@@ -11,10 +11,10 @@ import akka.util.ByteString
 import akka.util.Timeout
 
 import cats.effect.Resource
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.execution.atomic.AtomicInt
+import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.immutable.SortedSet
 import scala.concurrent.Future
@@ -44,7 +44,7 @@ class PeerDiscoveryManagerSpec
     with ScalaFutures
     with NormalPatience {
 
-  implicit val scheduler: Scheduler = Scheduler.Implicits.global
+  implicit val runtime: IORuntime = IORuntime.global
   implicit val timeout: Timeout = 1.second
 
   val defaultConfig: DiscoveryConfig = DiscoveryConfig(Config.config, bootstrapNodes = Set.empty)
@@ -65,8 +65,8 @@ class PeerDiscoveryManagerSpec
     lazy val discoveryConfig = defaultConfig
     lazy val knownNodesStorage: KnownNodesStorage = mock[KnownNodesStorage]
     lazy val discoveryService: DiscoveryService = mock[DiscoveryService]
-    lazy val discoveryServiceResource: Resource[Task, DiscoveryService] =
-      Resource.pure[Task, DiscoveryService](discoveryService)
+    lazy val discoveryServiceResource: Resource[IO, DiscoveryService] =
+      Resource.pure[IO, DiscoveryService](discoveryService)
 
     lazy val peerDiscoveryManager: TestActorRef[PeerDiscoveryManager] =
       TestActorRef[PeerDiscoveryManager](
@@ -151,7 +151,7 @@ class PeerDiscoveryManagerSpec
 
       (() => discoveryService.getNodes)
         .expects()
-        .returning(Task(sampleNodes.map(toENode)))
+        .returning(IO(sampleNodes.map(toENode)))
         .once()
 
       val expected = sampleKnownUris ++ sampleNodes.map(_.toUri)
@@ -172,10 +172,10 @@ class PeerDiscoveryManagerSpec
 
       @volatile var started = false
 
-      override lazy val discoveryServiceResource: Resource[Task, DiscoveryService] =
+      override lazy val discoveryServiceResource: Resource[IO, DiscoveryService] =
         Resource.eval {
-          Task { started = true } >>
-            Task.raiseError[DiscoveryService](new RuntimeException("Oh no!") with NoStackTrace)
+          IO { started = true } >>
+            IO.raiseError[DiscoveryService](new RuntimeException("Oh no!") with NoStackTrace)
         }
 
       (knownNodesStorage.getKnownNodes _)
@@ -205,7 +205,7 @@ class PeerDiscoveryManagerSpec
 
       (() => discoveryService.getNodes)
         .expects()
-        .returning(Task(sampleNodes.map(toENode)))
+        .returning(IO(sampleNodes.map(toENode)))
         .once()
 
       override def test(): Unit = {
@@ -228,7 +228,7 @@ class PeerDiscoveryManagerSpec
 
       (() => discoveryService.getNodes)
         .expects()
-        .returning(Task.raiseError(new RuntimeException("Oh no!") with NoStackTrace))
+        .returning(IO.raiseError(new RuntimeException("Oh no!") with NoStackTrace))
         .atLeastOnce()
 
       override def test(): Unit = {
@@ -248,14 +248,14 @@ class PeerDiscoveryManagerSpec
       // 1 to replace consumed items
       // 1 finished waiting to push items in the full buffer (this may or may not finish by the end of the test)
       val expectedLookups = Range.inclusive(3, 4)
-      val lookupCount = AtomicInt(0)
+      val lookupCount = new AtomicInteger(0)
 
       implicit val nodeOrd: Ordering[ENode] =
         Ordering.by(_.id.toByteArray.toSeq)
 
       (discoveryService.lookup _)
         .expects(*)
-        .returning(Task { lookupCount.increment(); SortedSet(randomNodes.map(toENode).toSeq: _*) })
+        .returning(IO { lookupCount.incrementAndGet(); SortedSet(randomNodes.map(toENode).toSeq: _*) })
         .repeat(expectedLookups)
 
       override lazy val discoveryConfig =

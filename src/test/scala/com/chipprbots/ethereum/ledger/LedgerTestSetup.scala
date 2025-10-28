@@ -4,8 +4,7 @@ import akka.util.ByteString
 import akka.util.ByteString.{empty => bEmpty}
 
 import cats.data.NonEmptyList
-
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
@@ -287,7 +286,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
 
   val blockQueue: BlockQueue
 
-  implicit val schedulerContext: Scheduler = Scheduler.fixedPool("ledger-test-pool", 4)
+  implicit val runtime: IORuntime = IORuntime.global
 
   override lazy val consensusAdapter: ConsensusAdapter = mkConsensus()
 
@@ -414,7 +413,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
       blockchainReader,
       blockQueue,
       blockValidation,
-      Scheduler(system.dispatchers.lookup("validation-context"))
+      runtime
     )
   }
 }
