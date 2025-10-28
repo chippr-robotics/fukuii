@@ -8,7 +8,8 @@ import java.net.Socket
 
 import akka.actor.ActorSystem
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
@@ -30,6 +31,8 @@ import com.chipprbots.ethereum.utils.Logger
 class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcServerConfig)(implicit
     system: ActorSystem
 ) extends Logger {
+
+  implicit val runtime: IORuntime = IORuntime.global
 
   var serverSocket: ServerSocket = _
 
@@ -97,7 +100,9 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
         case Some(nextMsgJson) =>
           val request = nextMsgJson.extract[JsonRpcRequest]
           val responseF = jsonRpcController.handleRequest(request)
-          val response = responseF.runSyncUnsafe(awaitTimeout)
+          val response = responseF.unsafeRunTimed(awaitTimeout).getOrElse(
+            throw new RuntimeException(s"Request timed out after $awaitTimeout")
+          )
           out.write((Serialization.write(response) + '\n').getBytes())
           out.flush()
         case None =>
