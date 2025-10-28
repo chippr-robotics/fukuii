@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.testkit.TestKit
 import akka.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.Duration
 
@@ -42,6 +42,8 @@ class EthBlocksServiceSpec
     with MockFactory
     with NormalPatience
     with TypeCheckedTripleEquals {
+
+  implicit val runtime: IORuntime = IORuntime.global
 
   "EthBlocksService" should "answer eth_blockNumber with the latest block number" in new TestSetup {
     val bestBlockNumber = 10
@@ -137,7 +139,7 @@ class EthBlocksServiceSpec
       .returns(Some(PendingBlockAndState(PendingBlock(blockToRequest, Nil), fakeWorld)))
 
     val request = BlockByNumberRequest(BlockParam.Pending, fullTxs = true)
-    val response = ethBlocksService.getBlockByNumber(request).runSyncUnsafe().toOption.get
+    val response = ethBlocksService.getBlockByNumber(request).unsafeRunSync().toOption.get
 
     response.blockResponse.isDefined should be(true)
     val blockResponse = response.blockResponse.get
@@ -158,7 +160,7 @@ class EthBlocksServiceSpec
     (() => blockGenerator.getPendingBlockAndState).expects().returns(None)
 
     val request = BlockByNumberRequest(BlockParam.Pending, fullTxs = true)
-    val response = ethBlocksService.getBlockByNumber(request).runSyncUnsafe().toOption.get
+    val response = ethBlocksService.getBlockByNumber(request).unsafeRunSync().toOption.get
     response.blockResponse.get.hash.get shouldEqual blockToRequest.header.hash
   }
 
@@ -231,7 +233,7 @@ class EthBlocksServiceSpec
       GetBlockTransactionCountByNumberRequest(BlockParam.WithNumber(blockToRequest.header.number))
     )
 
-    response.runSyncUnsafe() shouldEqual Right(
+    response.unsafeRunSync() shouldEqual Right(
       GetBlockTransactionCountByNumberResponse(blockToRequest.body.transactionList.size)
     )
   }
@@ -243,7 +245,7 @@ class EthBlocksServiceSpec
     val response =
       ethBlocksService.getBlockTransactionCountByNumber(GetBlockTransactionCountByNumberRequest(BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(
+    response.unsafeRunSync() shouldEqual Right(
       GetBlockTransactionCountByNumberResponse(blockToRequest.body.transactionList.size)
     )
   }
@@ -396,7 +398,7 @@ class EthBlocksServiceSpec
 
     val response = ethBlocksService.getUncleCountByBlockNumber(GetUncleCountByBlockNumberRequest(BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(
+    response.unsafeRunSync() shouldEqual Right(
       GetUncleCountByBlockNumberResponse(blockToRequest.body.uncleNodesList.size)
     )
   }
@@ -407,7 +409,7 @@ class EthBlocksServiceSpec
     val response =
       ethBlocksService.getUncleCountByBlockHash(GetUncleCountByBlockHashRequest(blockToRequest.header.hash))
 
-    response.runSyncUnsafe() shouldEqual Right(
+    response.unsafeRunSync() shouldEqual Right(
       GetUncleCountByBlockHashResponse(blockToRequest.body.uncleNodesList.size)
     )
   }

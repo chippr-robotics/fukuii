@@ -42,6 +42,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
   val jsonRpcHealthChecker: JsonRpcHealthChecker
   val config: JsonRpcHttpServerConfig
 
+  implicit val runtime: IORuntime = IORuntime.global
   implicit val serialization: Serialization.type = native.Serialization
 
   implicit val formats: Formats = DefaultFormats + JsonSerializers.RpcErrorJsonSerializer
@@ -91,10 +92,9 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
         case reqSeq =>
           complete {
-            reqSeq
-              .toList
-              .traverse(request => jsonRpcController.handleRequest(request))
-              .unsafeToFuture()
+            IO
+              .traverse(reqSeq)(request => jsonRpcController.handleRequest(request))
+              .unsafeToFuture()(runtime)
           }
       }
     }
@@ -130,7 +130,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
             entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
           )
       }
-    complete(httpResponseF.unsafeToFuture())
+    complete(httpResponseF.unsafeToFuture()(runtime))
   }
 
   private def handleBuildInfo(): StandardRoute = {

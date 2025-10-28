@@ -5,7 +5,7 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalactic.TypeCheckedTripleEquals
@@ -46,15 +46,17 @@ class EthServiceSpec
     with NormalPatience
     with TypeCheckedTripleEquals {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "EthInfoService" should "return ethereum protocol version" in new TestSetup {
-    val response = ethService.protocolVersion(ProtocolVersionRequest()).runSyncUnsafe()
+    val response = ethService.protocolVersion(ProtocolVersionRequest()).unsafeRunSync()
     val protocolVersion = response.toOption.get.value
 
     Integer.parseInt(protocolVersion.drop(2), 16) shouldEqual currentProtocolVersion
   }
 
   it should "return configured chain id" in new TestSetup {
-    val response = ethService.chainId(ChainIdRequest()).runSyncUnsafe().toOption.get
+    val response = ethService.chainId(ChainIdRequest()).unsafeRunSync().toOption.get
 
     assert(response === ChainIdResponse(blockchainConfig.chainId))
   }
@@ -64,7 +66,7 @@ class EthServiceSpec
       SyncProtocol.Status.Syncing(999, Progress(200, 10000), Some(Progress(100, 144)))
     })
 
-    val response = ethService.syncing(SyncingRequest()).runSyncUnsafe().toOption.get
+    val response = ethService.syncing(SyncingRequest()).unsafeRunSync().toOption.get
 
     response shouldEqual SyncingResponse(
       Some(
@@ -85,7 +87,7 @@ class EthServiceSpec
       SyncProtocol.Status.NotSyncing
     })
 
-    val response = ethService.syncing(SyncingRequest()).runSyncUnsafe()
+    val response = ethService.syncing(SyncingRequest()).unsafeRunSync()
 
     response shouldEqual Right(SyncingResponse(None))
   }
@@ -95,7 +97,7 @@ class EthServiceSpec
       SyncProtocol.Status.SyncDone
     })
 
-    val response = ethService.syncing(SyncingRequest()).runSyncUnsafe()
+    val response = ethService.syncing(SyncingRequest()).unsafeRunSync()
 
     response shouldEqual Right(SyncingResponse(None))
   }
@@ -127,7 +129,7 @@ class EthServiceSpec
     )
     val response = ethService.call(CallRequest(tx, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(CallResponse(ByteString("return_value")))
+    response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
   }
 
   it should "execute estimateGas and return a value" in new TestSetup {
@@ -147,7 +149,7 @@ class EthServiceSpec
     )
     val response = ethService.estimateGas(CallRequest(tx, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(EstimateGasResponse(123))
+    response.unsafeRunSync() shouldEqual Right(EstimateGasResponse(123))
   }
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.

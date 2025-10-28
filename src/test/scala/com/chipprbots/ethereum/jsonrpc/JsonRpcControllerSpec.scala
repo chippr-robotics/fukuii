@@ -3,8 +3,8 @@ package com.chipprbots.ethereum.jsonrpc
 import akka.actor.ActorSystem
 import akka.testkit.TestKit
 
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -49,13 +49,15 @@ class JsonRpcControllerSpec
     with LongPatience
     with Eventually {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   implicit val formats: Formats = DefaultFormats.preservingEmptyValues + OptionNoneToJNullSerializer +
     QuantitiesSerializer + UnformattedDataJsonSerializer
 
   "JsonRpcController" should "handle valid sha3 request" in new JsonRpcControllerFixture {
     val rpcRequest = newJsonRpcRequest("web3_sha3", JString("0x1234") :: Nil)
 
-    val response = jsonRpcController.handleRequest(rpcRequest).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult("0x56570de287d73cd1cb6092bb8fdee6173974955fdef345ae579ee9f475ea7432")
   }
@@ -63,7 +65,7 @@ class JsonRpcControllerSpec
   it should "fail when invalid request is received" in new JsonRpcControllerFixture {
     val rpcRequest = newJsonRpcRequest("web3_sha3", JString("asdasd") :: Nil)
 
-    val response = jsonRpcController.handleRequest(rpcRequest).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveError(JsonRpcError.InvalidParams("Invalid method parameters"))
   }
@@ -71,26 +73,26 @@ class JsonRpcControllerSpec
   it should "handle clientVersion request" in new JsonRpcControllerFixture {
     val rpcRequest = newJsonRpcRequest("web3_clientVersion")
 
-    val response = jsonRpcController.handleRequest(rpcRequest).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult(version)
   }
 
   it should "Handle net_peerCount request" in new JsonRpcControllerFixture {
-    (netService.peerCount _).expects(*).returning(Task.now(Right(PeerCountResponse(123))))
+    (netService.peerCount _).expects(*).returning(IO.pure(Right(PeerCountResponse(123))))
 
     val rpcRequest = newJsonRpcRequest("net_peerCount")
 
-    val response = jsonRpcController.handleRequest(rpcRequest).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult("0x7b")
   }
 
   it should "Handle net_listening request" in new JsonRpcControllerFixture {
-    (netService.listening _).expects(*).returning(Task.now(Right(ListeningResponse(false))))
+    (netService.listening _).expects(*).returning(IO.pure(Right(ListeningResponse(false))))
 
     val rpcRequest = newJsonRpcRequest("net_listening")
-    val response = jsonRpcController.handleRequest(rpcRequest).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveBooleanResult(false)
   }
@@ -98,10 +100,10 @@ class JsonRpcControllerSpec
   it should "Handle net_version request" in new JsonRpcControllerFixture {
     val netVersion = "99"
 
-    (netService.version _).expects(*).returning(Task.now(Right(VersionResponse(netVersion))))
+    (netService.version _).expects(*).returning(IO.pure(Right(VersionResponse(netVersion))))
 
     val rpcRequest = newJsonRpcRequest("net_version")
-    val response = jsonRpcController.handleRequest(rpcRequest).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult(netVersion)
   }
@@ -117,12 +119,12 @@ class JsonRpcControllerSpec
     }
 
     val ethRpcRequest = newJsonRpcRequest("eth_protocolVersion")
-    val ethResponse = jsonRpcController.handleRequest(ethRpcRequest).runSyncUnsafe()
+    val ethResponse = jsonRpcController.handleRequest(ethRpcRequest).unsafeRunSync()
 
     ethResponse should haveError(JsonRpcError.MethodNotFound)
 
     val web3RpcRequest = newJsonRpcRequest("web3_clientVersion")
-    val web3Response = jsonRpcController.handleRequest(web3RpcRequest).runSyncUnsafe()
+    val web3Response = jsonRpcController.handleRequest(web3RpcRequest).unsafeRunSync()
 
     web3Response should haveStringResult(version)
   }
@@ -146,10 +148,10 @@ class JsonRpcControllerSpec
 
     (debugService.listPeersInfo _)
       .expects(ListPeersInfoRequest())
-      .returning(Task.now(Right(ListPeersInfoResponse(peers))))
+      .returning(IO.pure(Right(ListPeersInfoResponse(peers))))
 
     val rpcRequest = newJsonRpcRequest("debug_listPeersInfo")
-    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).runSyncUnsafe()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveResult(JArray(peers.map(info => JString(info.toString))))
   }
@@ -157,7 +159,7 @@ class JsonRpcControllerSpec
   it should "rpc_modules" in new JsonRpcControllerFixture {
     val request: JsonRpcRequest = newJsonRpcRequest("rpc_modules")
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
 
     response should haveResult(
       JObject(

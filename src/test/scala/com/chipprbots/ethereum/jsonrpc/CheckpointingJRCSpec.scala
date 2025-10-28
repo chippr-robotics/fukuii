@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.json4s.JsonAST._
@@ -34,6 +34,8 @@ class CheckpointingJRCSpec
     with JsonMethodsImplicits
     with SecureRandomBuilder {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   import Req._
 
   "CheckpointingJRC" should "getLatestBlock" in new TestSetup {
@@ -41,7 +43,7 @@ class CheckpointingJRCSpec
     val servResp = GetLatestBlockResponse(Some(BlockInfo(block.hash, block.number)))
     (checkpointingService.getLatestBlock _)
       .expects(GetLatestBlockRequest(4, None))
-      .returning(Task.now(Right(servResp)))
+      .returning(IO.pure(Right(servResp)))
 
     val expectedResult = JObject(
       "block" -> JObject(
@@ -50,35 +52,35 @@ class CheckpointingJRCSpec
       )
     )
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveResult(expectedResult)
   }
 
   it should "return invalid params when checkpoint parent is of the wrong type" in new TestSetup {
     val request = getLatestBlockRequestBuilder(JArray(JInt(1) :: JBool(true) :: Nil))
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(notSupportedTypeError)
   }
 
   it should "return invalid params when checkpoint interval is not positive (getLatestBlock)" in new TestSetup {
     val request = getLatestBlockRequestBuilder(JArray(JInt(-1) :: JNull :: Nil))
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(expectedPositiveIntegerError)
   }
 
   it should "return invalid params when checkpoint interval is too big (getLatestBlock)" in new TestSetup {
     val request = getLatestBlockRequestBuilder(JArray(JInt(BigInt(Int.MaxValue) + 1) :: JNull :: Nil))
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(expectedPositiveIntegerError)
   }
 
   it should "return invalid params when checkpoint interval is missing (getLatestBlock)" in new TestSetup {
     val request = getLatestBlockRequestBuilder(JArray(Nil))
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(InvalidParams())
   }
 
@@ -98,11 +100,11 @@ class CheckpointingJRCSpec
 
     (checkpointingService.pushCheckpoint _)
       .expects(servReq)
-      .returning(Task.now(Right(servResp)))
+      .returning(IO.pure(Right(servResp)))
 
     val expectedResult = JBool(true)
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveResult(expectedResult)
   }
 
@@ -111,7 +113,7 @@ class CheckpointingJRCSpec
       JArray(JString(ByteStringUtils.hash2string(block.hash)) :: Nil)
     )
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(InvalidParams())
   }
 
@@ -127,7 +129,7 @@ class CheckpointingJRCSpec
 
     val expectedError = InvalidParams(s"Invalid value [$badHash], expected 32 bytes")
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(expectedError)
   }
 
@@ -141,7 +143,7 @@ class CheckpointingJRCSpec
       )
     )
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(InvalidParams())
   }
 
@@ -156,7 +158,7 @@ class CheckpointingJRCSpec
 
     val expectedError = InvalidParams("Unable to extract a signature from: JBool(true)")
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(expectedError)
   }
 
@@ -169,7 +171,7 @@ class CheckpointingJRCSpec
       )
     )
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(InvalidParams())
   }
 
@@ -184,7 +186,7 @@ class CheckpointingJRCSpec
 
     val expectedError = InvalidParams("Bad signature length")
 
-    val response = jsonRpcController.handleRequest(request).runSyncUnsafe()
+    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(expectedError)
   }
 

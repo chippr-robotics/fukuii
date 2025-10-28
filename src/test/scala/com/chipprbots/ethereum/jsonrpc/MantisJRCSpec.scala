@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import monix.eval.Task
+import cats.effect.IO
 
 import org.json4s.Extraction
 import org.json4s.JArray
@@ -74,7 +74,7 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
       (mantisService.getAccountTransactions _)
         .expects(*)
         .returning(
-          Task.now(
+          IO.pure(
             Right(
               GetAccountTransactionsResponse(
                 List(

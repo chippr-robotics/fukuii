@@ -66,7 +66,7 @@ case class JsonRpcController(
   import TestJsonMethodsImplicits._
   import MantisJsonMethodImplicits._
 
-  override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]]] = Map(
+  override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
     Apis.Web3 -> handleWeb3Request,
     Apis.Net -> handleNetRequest,
@@ -82,14 +82,14 @@ case class JsonRpcController(
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
 
-  private def handleWeb3Request: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleWeb3Request: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "web3_sha3", _, _) =>
       handle[Sha3Request, Sha3Response](web3Service.sha3, req)
     case req @ JsonRpcRequest(_, "web3_clientVersion", _, _) =>
       handle[ClientVersionRequest, ClientVersionResponse](web3Service.clientVersion, req)
   }
 
-  private def handleNetRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleNetRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "net_version", _, _) =>
       handle[VersionRequest, VersionResponse](netService.version, req)
     case req @ JsonRpcRequest(_, "net_listening", _, _) =>
@@ -100,7 +100,7 @@ case class JsonRpcController(
 
   // scalastyle:off cyclomatic.complexity
   // scalastyle:off method.length
-  private def handleEthRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleEthRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "eth_protocolVersion", _, _) =>
       handle[ProtocolVersionRequest, ProtocolVersionResponse](ethInfoService.protocolVersion, req)
     case req @ JsonRpcRequest(_, "eth_chainId", _, _) =>
@@ -227,18 +227,18 @@ case class JsonRpcController(
       handle[GetProofRequest, GetProofResponse](proofService.getProof, req)
   }
 
-  private def handleDebugRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "debug_listPeersInfo", _, _) =>
       handle[ListPeersInfoRequest, ListPeersInfoResponse](debugService.listPeersInfo, req)
   }
 
-  private def handleTestRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] =
+  private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
     testServiceOpt match {
       case Some(testService) => handleTestRequest(testService)
       case None              => PartialFunction.empty
     }
 
-  private def handleTestRequest(testService: TestService): PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleTestRequest(testService: TestService): PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "test_setChainParams", _, _) =>
       handle[SetChainParamsRequest, SetChainParamsResponse](testService.setChainParams, req)
     case req @ JsonRpcRequest(_, "test_mineBlocks", _, _) =>
@@ -260,14 +260,14 @@ case class JsonRpcController(
       handle[StorageRangeRequest, StorageRangeResponse](testService.storageRangeAt, req)
   }
 
-  private def handleIeleRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleIeleRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "iele_sendTransaction", _, _) =>
       handle[SendIeleTransactionRequest, SendTransactionResponse](personalService.sendIeleTransaction, req)
     case req @ JsonRpcRequest(_, "iele_call", _, _) =>
       handle[IeleCallRequest, IeleCallResponse](ethInfoService.ieleCall, req)
   }
 
-  private def handlePersonalRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handlePersonalRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "personal_importRawKey", _, _) =>
       handle[ImportRawKeyRequest, ImportRawKeyResponse](personalService.importRawKey, req)
 
@@ -296,12 +296,12 @@ case class JsonRpcController(
       handle[EcRecoverRequest, EcRecoverResponse](personalService.ecRecover, req)
   }
 
-  private def handleMantisRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleMantisRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "mantis_getAccountTransactions", _, _) =>
       handle[GetAccountTransactionsRequest, GetAccountTransactionsResponse](mantisService.getAccountTransactions, req)
   }
 
-  private def handleQARequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "qa_mineBlocks", _, _) =>
       handle[QAService.MineBlocksRequest, QAService.MineBlocksResponse](qaService.mineBlocks, req)
 
@@ -312,7 +312,7 @@ case class JsonRpcController(
       handle[GetFederationMembersInfoRequest, GetFederationMembersInfoResponse](qaService.getFederationMembersInfo, req)
   }
 
-  private def handleCheckpointingRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleCheckpointingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "checkpointing_getLatestBlock", _, _) =>
       handle[GetLatestBlockRequest, GetLatestBlockResponse](checkpointingService.getLatestBlock, req)
 
@@ -320,9 +320,9 @@ case class JsonRpcController(
       handle[PushCheckpointRequest, PushCheckpointResponse](checkpointingService.pushCheckpoint, req)
   }
 
-  private def handleRpcRequest: PartialFunction[JsonRpcRequest, Task[JsonRpcResponse]] = {
+  private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "rpc_modules", _, _) =>
       val result = enabledApis.map(_ -> "1.0").toMap
-      Task(JsonRpcResponse("2.0", Some(result), None, req.id))
+      IO(JsonRpcResponse("2.0", Some(result), None, req.id))
   }
 }

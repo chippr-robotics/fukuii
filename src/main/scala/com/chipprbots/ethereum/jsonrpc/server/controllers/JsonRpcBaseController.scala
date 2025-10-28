@@ -83,11 +83,10 @@ trait JsonRpcBaseController {
           }
       }
       .flatTap(response => IO(log.debug(s"sending response ${response.inspect}")))
-      .onError { case t: Throwable =>
-        IO {
-          JsonRpcControllerMetrics.MethodsExceptionCounter.increment()
-          log.error(s"Error serving request: ${request.toStringWithSensitiveInformation}", t)
-        }
+      .onErrorRecoverWith { case t: Throwable =>
+        JsonRpcControllerMetrics.MethodsExceptionCounter.increment()
+        log.error(s"Error serving request: ${request.toStringWithSensitiveInformation}", t)
+        IO.raiseError(t)
       }
   }
 

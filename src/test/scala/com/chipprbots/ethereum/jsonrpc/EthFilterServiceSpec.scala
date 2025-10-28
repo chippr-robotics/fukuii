@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.testkit.TestKit
 import akka.testkit.TestProbe
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -33,37 +33,39 @@ class EthFilterServiceSpec
     with NormalPatience
     with TypeCheckedTripleEquals {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   it should "handle newFilter request" in new TestSetup {
     val filter = Filter(None, None, None, Seq.empty)
-    val res = ethFilterService.newFilter(NewFilterRequest(filter)).runToFuture
+    val res = ethFilterService.newFilter(NewFilterRequest(filter)).unsafeToFuture()
     filterManager.expectMsg(FM.NewLogFilter(None, None, None, Seq.empty))
     filterManager.reply(FM.NewFilterResponse(123))
     res.futureValue shouldEqual Right(NewFilterResponse(123))
   }
 
   it should "handle newBlockFilter request" in new TestSetup {
-    val res = ethFilterService.newBlockFilter(NewBlockFilterRequest()).runToFuture
+    val res = ethFilterService.newBlockFilter(NewBlockFilterRequest()).unsafeToFuture()
     filterManager.expectMsg(FM.NewBlockFilter)
     filterManager.reply(FM.NewFilterResponse(123))
     res.futureValue shouldEqual Right(NewFilterResponse(123))
   }
 
   it should "handle newPendingTransactionFilter request" in new TestSetup {
-    val res = ethFilterService.newPendingTransactionFilter(NewPendingTransactionFilterRequest()).runToFuture
+    val res = ethFilterService.newPendingTransactionFilter(NewPendingTransactionFilterRequest()).unsafeToFuture()
     filterManager.expectMsg(FM.NewPendingTransactionFilter)
     filterManager.reply(FM.NewFilterResponse(123))
     res.futureValue shouldEqual Right(NewFilterResponse(123))
   }
 
   it should "handle uninstallFilter request" in new TestSetup {
-    val res = ethFilterService.uninstallFilter(UninstallFilterRequest(123)).runToFuture
+    val res = ethFilterService.uninstallFilter(UninstallFilterRequest(123)).unsafeToFuture()
     filterManager.expectMsg(FM.UninstallFilter(123))
     filterManager.reply(FM.UninstallFilterResponse)
     res.futureValue shouldEqual Right(UninstallFilterResponse(true))
   }
 
   it should "handle getFilterChanges request" in new TestSetup {
-    val res = ethFilterService.getFilterChanges(GetFilterChangesRequest(123)).runToFuture
+    val res = ethFilterService.getFilterChanges(GetFilterChangesRequest(123)).unsafeToFuture()
     filterManager.expectMsg(FM.GetFilterChanges(123))
     val changes = FM.LogFilterChanges(Seq.empty)
     filterManager.reply(changes)
@@ -71,7 +73,7 @@ class EthFilterServiceSpec
   }
 
   it should "handle getFilterLogs request" in new TestSetup {
-    val res = ethFilterService.getFilterLogs(GetFilterLogsRequest(123)).runToFuture
+    val res = ethFilterService.getFilterLogs(GetFilterLogsRequest(123)).unsafeToFuture()
     filterManager.expectMsg(FM.GetFilterLogs(123))
     val logs = FM.LogFilterLogs(Seq.empty)
     filterManager.reply(logs)
@@ -80,7 +82,7 @@ class EthFilterServiceSpec
 
   it should "handle getLogs request" in new TestSetup {
     val filter = Filter(None, None, None, Seq.empty)
-    val res = ethFilterService.getLogs(GetLogsRequest(filter)).runToFuture
+    val res = ethFilterService.getLogs(GetLogsRequest(filter)).unsafeToFuture()
     filterManager.expectMsg(FM.GetLogs(None, None, None, Seq.empty))
     val logs = FM.LogFilterLogs(Seq.empty)
     filterManager.reply(logs)

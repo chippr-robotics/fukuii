@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.testkit.TestKit
 import akka.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import org.scalactic.TypeCheckedTripleEquals
 import org.scalamock.scalatest.MockFactory
@@ -33,6 +33,8 @@ class EthUserServiceSpec
     with NormalPatience
     with TypeCheckedTripleEquals {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   it should "handle getCode request" in new TestSetup {
     val address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
     storagesInstance.storages.evmCodeStorage.put(ByteString("code hash"), ByteString("code code code")).commit()
@@ -53,7 +55,7 @@ class EthUserServiceSpec
 
     val response = ethUserService.getCode(GetCodeRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(GetCodeResponse(ByteString("code code code")))
+    response.unsafeRunSync() shouldEqual Right(GetCodeResponse(ByteString("code code code")))
   }
 
   it should "handle getBalance request" in new TestSetup {
@@ -75,7 +77,7 @@ class EthUserServiceSpec
 
     val response = ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(GetBalanceResponse(123))
+    response.unsafeRunSync() shouldEqual Right(GetBalanceResponse(123))
   }
 
   it should "handle MissingNodeException when getting balance" in new TestSetup {
@@ -88,7 +90,7 @@ class EthUserServiceSpec
 
     val response = ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Left(JsonRpcError.NodeNotFound)
+    response.unsafeRunSync() shouldEqual Left(JsonRpcError.NodeNotFound)
   }
   it should "handle getStorageAt request" in new TestSetup {
 
@@ -117,7 +119,7 @@ class EthUserServiceSpec
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
     val response = ethUserService.getStorageAt(GetStorageAtRequest(address, 333, BlockParam.Latest))
-    response.runSyncUnsafe().map(v => UInt256(v.value)) shouldEqual Right(UInt256(123))
+    response.unsafeRunSync().map(v => UInt256(v.value)) shouldEqual Right(UInt256(123))
   }
 
   it should "handle get transaction count request" in new TestSetup {
@@ -136,7 +138,7 @@ class EthUserServiceSpec
 
     val response = ethUserService.getTransactionCount(GetTransactionCountRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(GetTransactionCountResponse(BigInt(999)))
+    response.unsafeRunSync() shouldEqual Right(GetTransactionCountResponse(BigInt(999)))
   }
 
   class TestSetup() extends MockFactory with EphemBlockchainTestSetup {

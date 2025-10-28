@@ -6,7 +6,7 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.collection.immutable.NumericRange
 
@@ -87,7 +87,7 @@ class MantisServiceSpec
             override def getAccountTransactions(account: Address, fromBlocks: NumericRange[BigInt])(implicit
                 blockchainConfig: BlockchainConfig
             ) =
-              Task.pure(expectedResponse)
+              IO.pure(expectedResponse)
           }
       }
 

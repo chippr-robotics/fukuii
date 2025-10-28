@@ -7,7 +7,7 @@ import akka.actor.ActorRef
 import akka.actor.ActorSystem
 import akka.testkit.TestProbe
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -28,10 +28,12 @@ import com.chipprbots.ethereum.utils.ServerStatus
 
 class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience with SecureRandomBuilder {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "NetService" should "return handshaked peer count" in new TestSetup {
     val resF = netService
       .peerCount(PeerCountRequest())
-      .runToFuture
+      .unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(
@@ -48,11 +50,11 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
   }
 
   it should "return listening response" in new TestSetup {
-    netService.listening(ListeningRequest()).runSyncUnsafe() shouldBe Right(ListeningResponse(true))
+    netService.listening(ListeningRequest()).unsafeRunSync() shouldBe Right(ListeningResponse(true))
   }
 
   it should "return version response" in new TestSetup {
-    netService.version(VersionRequest()).runSyncUnsafe() shouldBe Right(VersionResponse("42"))
+    netService.version(VersionRequest()).unsafeRunSync() shouldBe Right(VersionResponse("42"))
   }
 
   trait TestSetup {
