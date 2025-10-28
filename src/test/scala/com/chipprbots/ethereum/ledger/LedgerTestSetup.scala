@@ -286,7 +286,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
 
   val blockQueue: BlockQueue
 
-  implicit val runtime: IORuntime = IORuntime.global
+  implicit val runtimeContext: IORuntime = IORuntime.global
 
   override lazy val consensusAdapter: ConsensusAdapter = mkConsensus()
 
