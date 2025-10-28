@@ -17,8 +17,10 @@ object Dependencies {
       "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
       "com.typesafe.akka" %% "akka-testkit" % akkaVersion,
       "com.typesafe.akka" %% "akka-actor-testkit-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-stream" % akkaVersion,
-      "com.miguno.akka" %% "akka-mock-scheduler" % "0.5.5" % "it,test"
+      "com.typesafe.akka" %% "akka-stream" % akkaVersion
+      // NOTE: akka-mock-scheduler 0.5.5 is not available for Scala 3
+      // Commented out temporarily - tests that use this will need to be updated or skipped
+      // "com.miguno.akka" %% "akka-mock-scheduler" % "0.5.5" % "it,test"
     )
 
   val akkaHttp: Seq[ModuleID] = {
