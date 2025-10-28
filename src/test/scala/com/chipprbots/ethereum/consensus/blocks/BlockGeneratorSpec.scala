@@ -4,8 +4,7 @@ import java.time.Instant
 
 import akka.util.ByteString
 
-import monix.execution.Scheduler
-import monix.execution.schedulers.SchedulerService
+import cats.effect.unsafe.IORuntime
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
@@ -34,7 +33,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.utils._
 
 class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with Logger {
-  implicit val testContext: SchedulerService = Scheduler.fixedPool("block-generator-spec-pool", 4)
+  implicit val testContext: IORuntime = IORuntime.global
 
   "BlockGenerator" should "generate correct block with empty transactions" in new TestSetup {
     val pendingBlock =
@@ -109,7 +108,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     )
 
     // Import Block, to create some existing state
-    consensusAdapter.evaluateBranchBlock(fullBlock).runSyncUnsafe()
+    consensusAdapter.evaluateBranchBlock(fullBlock).unsafeRunSync()
 
     // Create new pending block, with updated stateRootHash
     val pendBlockAndState = blockGenerator.generateBlock(
