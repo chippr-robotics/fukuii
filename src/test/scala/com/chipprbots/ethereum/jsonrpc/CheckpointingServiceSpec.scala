@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.testkit.TestKit
 import akka.testkit.TestProbe
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import org.scalacheck.Gen
 import org.scalamock.scalatest.MockFactory
@@ -37,6 +37,8 @@ class CheckpointingServiceSpec
     with ScalaCheckPropertyChecks
     with Matchers {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "CheckpointService" should "get latest block (at a correct checkpointing interval) from Blockchain" in new TestSetup {
     val nums = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
@@ -57,7 +59,7 @@ class CheckpointingServiceSpec
       (blockchainReader.getBlockByNumber _).expects(*, checkpointedBlockNum).returning(Some(block))
       val result = service.getLatestBlock(request)
 
-      result.runSyncUnsafe() shouldEqual Right(expectedResponse)
+      result.unsafeRunSync() shouldEqual Right(expectedResponse)
     }
   }
 
@@ -87,7 +89,7 @@ class CheckpointingServiceSpec
       (blockchainReader.getBlockByNumber _).expects(*, checkpointedBlockNum).returning(Some(block))
       val result = service.getLatestBlock(request)
 
-      result.runSyncUnsafe() shouldEqual Right(expectedResponse)
+      result.unsafeRunSync() shouldEqual Right(expectedResponse)
     }
   }
 
@@ -115,7 +117,7 @@ class CheckpointingServiceSpec
       (blockchainReader.getBlockByNumber _).expects(*, *).returning(Some(previousCheckpoint))
       val result = service.getLatestBlock(request)
 
-      result.runSyncUnsafe() shouldEqual Right(expectedResponse)
+      result.unsafeRunSync() shouldEqual Right(expectedResponse)
     }
   }
 
@@ -143,7 +145,7 @@ class CheckpointingServiceSpec
       (blockchainReader.getBlockByNumber _).expects(*, checkpointedBlockNum).returning(Some(block))
       val result = service.getLatestBlock(request)
 
-      result.runSyncUnsafe() shouldEqual Right(expectedResponse)
+      result.unsafeRunSync() shouldEqual Right(expectedResponse)
     }
   }
 
@@ -156,7 +158,7 @@ class CheckpointingServiceSpec
 
     (blockchainReader.getBlockByHash _).expects(hash).returning(Some(parentBlock)).once()
 
-    val result = service.pushCheckpoint(request).runSyncUnsafe()
+    val result = service.pushCheckpoint(request).unsafeRunSync()
     val checkpointBlock = checkpointBlockGenerator.generate(parentBlock, Checkpoint(signatures))
     syncController.expectMsg(NewCheckpoint(checkpointBlock))
     result shouldEqual Right(expectedResponse)
@@ -180,7 +182,7 @@ class CheckpointingServiceSpec
 
     val result = service.getLatestBlock(GetLatestBlockRequest(4, None))
 
-    result.runSyncUnsafe() shouldEqual Right(expectedResponse)
+    result.unsafeRunSync() shouldEqual Right(expectedResponse)
   }
 
   trait TestSetup {

@@ -6,7 +6,7 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.collection.immutable.NumericRange
 

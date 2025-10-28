@@ -6,7 +6,7 @@ import akka.actor.ActorSystem
 import akka.testkit.TestKit
 import akka.testkit.TestProbe
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.concurrent.ScalaFutures
@@ -36,9 +36,11 @@ class DebugServiceSpec
     with MockFactory
     with ScalaFutures {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "DebugService" should "return list of peers info" in new TestSetup {
     val result =
-      debugService.listPeersInfo(ListPeersInfoRequest()).runToFuture
+      debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))
@@ -50,7 +52,7 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there are no peers available" in new TestSetup {
-    val result = debugService.listPeersInfo(ListPeersInfoRequest()).runToFuture
+    val result = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map.empty))
@@ -59,7 +61,7 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there is no peer info" in new TestSetup {
-    val result = debugService.listPeersInfo(ListPeersInfoRequest()).runToFuture
+    val result = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))

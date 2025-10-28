@@ -5,7 +5,7 @@ import akka.testkit.TestKit
 import akka.testkit.TestProbe
 import akka.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import org.scalamock.scalatest.AsyncMockFactory
 
@@ -33,7 +33,7 @@ class QAServiceSpec
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
-      .returning(Task.now(MiningOrdered))
+      .returning(IO.pure(MiningOrdered))
       .atLeastOnce()
 
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Right(MineBlocksResponse(MiningOrdered)))
