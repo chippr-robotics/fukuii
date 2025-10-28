@@ -67,7 +67,7 @@ object RLPScala3Derivation {
       }
     
     inline def derived[T](using m: Mirror.ProductOf[T], ct: ClassTag[T]): RLPListDecoder[T] = 
-      RLPListDecoderImpl[T](summonDecoders[m.MirroredElemTypes], m, ct)
+      new RLPListDecoderImpl[T](summonDecoders[m.MirroredElemTypes], m, ct)
   }
 
   private class RLPListDecoderImpl[T](
