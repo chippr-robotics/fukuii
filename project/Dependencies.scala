@@ -172,7 +172,7 @@ object Dependencies {
   }
 
   val shapeless: Seq[ModuleID] = Seq(
-    "com.chuusai" %% "shapeless" % "2.3.3"
+    "org.typelevel" %% "shapeless3-deriving" % "3.4.3"
   )
 
   val scaffeine: Seq[ModuleID] = Seq(

@@ -92,7 +92,7 @@ val scala3Options = Seq(
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   name := projectName,
   organization := "com.chipprbots",
-  scalaVersion := `scala-2.13`,
+  scalaVersion := `scala-3`,
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
   // NOTE: SemanticDB temporarily disabled for Scala 2.13.14 (not yet supported by semanticdb-scalac)
@@ -444,18 +444,16 @@ addCommandAlias(
 )
 
 // runScapegoat - Run scapegoat analysis on all modules
-// NOTE: Temporarily disabled due to Scala version upgrade to 2.13.8
-// Scapegoat 1.4.11 only supports Scala 2.13.6
-// Will be re-enabled after Scala 3 migration when Scapegoat 2.x/3.x can be used
-// addCommandAlias(
-//   "runScapegoat",
-//   """; compile-all
-//     |; bytes / scapegoat
-//     |; crypto / scapegoat
-//     |; rlp / scapegoat
-//     |; scapegoat
-//     |""".stripMargin
-// )
+// Re-enabled with Scala 3 compatible version 2.x/3.x
+addCommandAlias(
+  "runScapegoat",
+  """; compile-all
+    |; bytes / scapegoat
+    |; crypto / scapegoat
+    |; rlp / scapegoat
+    |; scapegoat
+    |""".stripMargin
+)
 
 // testCoverage - Run tests with coverage
 addCommandAlias(
@@ -503,15 +501,13 @@ addCommandAlias(
 )
 
 // Scapegoat configuration
-// NOTE: Scapegoat temporarily disabled due to Scala version upgrade to 2.13.8
-// Scapegoat 1.4.11 was built for Scala 2.13.6; newer Scala 2.13.8+ artifacts not available for 1.x series
-// Will be re-enabled after Scala 3 migration (Phase 2) when Scapegoat 2.x/3.x can be used
-// (ThisBuild / scapegoatVersion) := "1.4.11"
-// scapegoatReports := Seq("xml", "html")
-// scapegoatConsoleOutput := false
-// scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")
-// scapegoatIgnoredFiles := Seq(
-//   ".*/src_managed/.*",
-//   ".*/target/.*protobuf/.*",
-//   ".*/BuildInfo\\.scala"
-// )
+// Re-enabled with Scala 3 compatible version 3.x
+(ThisBuild / scapegoatVersion) := "3.2.2"
+scapegoatReports := Seq("xml", "html")
+scapegoatConsoleOutput := false
+scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")
+scapegoatIgnoredFiles := Seq(
+  ".*/src_managed/.*",
+  ".*/target/.*protobuf/.*",
+  ".*/BuildInfo\\.scala"
+)
