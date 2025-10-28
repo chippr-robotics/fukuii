@@ -30,3 +30,4 @@ result
 .scannerwork/
 actionlint
 sbt-bin
+sbt/
