@@ -147,12 +147,13 @@ val Integration = config("it").extend(Test)
 // Vendored scalanet modules (from IOHK's scalanet library)
 lazy val scalanet = {
   val scalanet = project
-    .in(file("scalanet/src"))
+    .in(file("scalanet"))
     .configs(Integration)
     .settings(commonSettings("fukuii-scalanet"))
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
     .settings(publishSettings)
     .settings(
+      Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
       libraryDependencies ++=
         Dependencies.akka ++
           Dependencies.cats ++
@@ -173,6 +174,9 @@ lazy val scalanetDiscovery = {
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
     .settings(publishSettings)
     .settings(
+      Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
+      IntegrationTest / unmanagedSourceDirectories += baseDirectory.value / "it" / "src",
+      Test / unmanagedSourceDirectories += baseDirectory.value / "ut" / "src",
       libraryDependencies ++=
         Dependencies.akka ++
           Dependencies.cats ++
