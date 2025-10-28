@@ -82,7 +82,7 @@ trait JsonRpcBaseController {
             JsonRpcControllerMetrics.recordMethodTime(request.method, time)
           }
       }
-      .flatTap(response => Task(log.debug(s"sending response ${response.inspect}")))
+      .flatTap(response => IO(log.debug(s"sending response ${response.inspect}")))
       .onErrorRecoverWith { case t: Throwable =>
         JsonRpcControllerMetrics.MethodsExceptionCounter.increment()
         log.error(s"Error serving request: ${request.toStringWithSensitiveInformation}", t)
