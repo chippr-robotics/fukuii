@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.nodebuilder._
 trait ScenarioSetup extends StdTestMiningBuilder with StxLedgerBuilder {
   protected lazy val executionContextExecutor: ExecutionContextExecutor =
     ExecutionContext.fromExecutor(Executors.newFixedThreadPool(4))
-  implicit protected lazy val ioRuntime: IORuntime = IORuntime.global
+  protected implicit lazy val ioRuntime: IORuntime = IORuntime.global
   protected lazy val successValidators: Validators = Mocks.MockValidatorsAlwaysSucceed
   protected lazy val failureValidators: Validators = Mocks.MockValidatorsAlwaysFail
   protected lazy val powValidators: ValidatorsExecutor = ValidatorsExecutor(Protocol.PoW)
