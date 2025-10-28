@@ -99,7 +99,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
         case Some(nextMsgJson) =>
           val request = nextMsgJson.extract[JsonRpcRequest]
           val responseF = jsonRpcController.handleRequest(request)
-          val response = responseF.runSyncUnsafe(awaitTimeout)
+          val response = responseF.unsafeRunTimed(awaitTimeout)
           out.write((Serialization.write(response) + '\n').getBytes())
           out.flush()
         case None =>
