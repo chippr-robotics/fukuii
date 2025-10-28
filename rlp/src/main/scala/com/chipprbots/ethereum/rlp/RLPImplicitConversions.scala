@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.rlp
 
 import akka.util.ByteString
+
 import scala.language.implicitConversions
 
 import com.chipprbots.ethereum.rlp.RLPImplicits._
@@ -21,37 +22,20 @@ object RLPImplicitConversions {
 
   implicit def byteStringToEncodeable: (ByteString) => RLPEncodeable = toEncodeable[ByteString]
 
-  // Scala 3 conversions using Conversion instances
-  given byteConv: Conversion[RLPEncodeable, Byte] with {
-    def apply(x: RLPEncodeable): Byte = fromEncodeable[Byte](x)
-  }
+  implicit def byteFromEncodeable: (RLPEncodeable) => Byte = fromEncodeable[Byte]
 
-  given shortConv: Conversion[RLPEncodeable, Short] with {
-    def apply(x: RLPEncodeable): Short = fromEncodeable[Short](x)
-  }
+  implicit def shortFromEncodeable: (RLPEncodeable) => Short = fromEncodeable[Short]
 
-  given intConv: Conversion[RLPEncodeable, Int] with {
-    def apply(x: RLPEncodeable): Int = fromEncodeable[Int](x)
-  }
+  implicit def intFromEncodeable: (RLPEncodeable) => Int = fromEncodeable[Int]
 
-  given bigIntConv: Conversion[RLPEncodeable, BigInt] with {
-    def apply(x: RLPEncodeable): BigInt = fromEncodeable[BigInt](x)
-  }
+  implicit def bigIntFromEncodeable: (RLPEncodeable) => BigInt = fromEncodeable[BigInt]
 
-  given byteStringConv: Conversion[RLPEncodeable, ByteString] with {
-    def apply(x: RLPEncodeable): ByteString = fromEncodeable[ByteString](x)
-  }
+  implicit def byteStringFromEncodeable: (RLPEncodeable) => ByteString = fromEncodeable[ByteString]
 
-  given longConv: Conversion[RLPEncodeable, Long] with {
-    def apply(x: RLPEncodeable): Long = fromEncodeable[Long](x)
-  }
+  implicit def longFromEncodeable: (RLPEncodeable) => Long = fromEncodeable[Long]
 
-  given stringConv: Conversion[RLPEncodeable, String] with {
-    def apply(x: RLPEncodeable): String = fromEncodeable[String](x)
-  }
+  implicit def stringFromEncodeable: (RLPEncodeable) => String = fromEncodeable[String]
 
-  given byteArrayConv: Conversion[RLPEncodeable, Array[Byte]] with {
-    def apply(x: RLPEncodeable): Array[Byte] = fromEncodeable[Array[Byte]](x)
-  }
+  implicit def byteArrayFromEncodeable: (RLPEncodeable) => Array[Byte] = fromEncodeable[Array[Byte]]
 
 }

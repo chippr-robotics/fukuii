@@ -77,6 +77,11 @@ object RLPScala3Derivation {
   ) extends RLPListDecoder[T] {
     override def decodeList(items: List[RLPEncodeable]): (T, List[FieldInfo]) = {
       val decoded = decodeElements(items, decoders)
+      if (decoded.length != decoders.length) {
+        throw new IllegalArgumentException(
+          s"RLP decoding error: expected ${decoders.length} fields, got ${decoded.length}."
+        )
+      }
       val tuple = decoded.asInstanceOf[mirror.MirroredElemTypes]
       (mirror.fromProduct(tuple), decoded.map(_ => FieldInfo(isOptional = false)))
     }
