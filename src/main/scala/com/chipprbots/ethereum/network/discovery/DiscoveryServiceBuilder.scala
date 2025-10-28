@@ -77,13 +77,13 @@ trait DiscoveryServiceBuilder {
   private def makeDiscoveryConfig(
       discoveryConfig: DiscoveryConfig,
       knownNodesStorage: KnownNodesStorage
-  ): Task[v4.DiscoveryConfig] =
+  ): IO[v4.DiscoveryConfig] =
     for {
       reusedKnownNodes <-
         if (discoveryConfig.reuseKnownNodes)
-          Task(knownNodesStorage.getKnownNodes().map(Node.fromUri))
+          IO(knownNodesStorage.getKnownNodes().map(Node.fromUri))
         else
-          Task.pure(Set.empty[Node])
+          IO.pure(Set.empty[Node])
       // Discovery is going to enroll with all the bootstrap nodes passed to it.
       // Since we're running the enrollment in the background, it won't hold up
       // anything even if we have to enroll with hundreds of previously known nodes.
@@ -109,17 +109,17 @@ trait DiscoveryServiceBuilder {
       )
     } yield config
 
-  private def getExternalAddress(discoveryConfig: DiscoveryConfig): Task[InetAddress] =
+  private def getExternalAddress(discoveryConfig: DiscoveryConfig): IO[InetAddress] =
     discoveryConfig.host match {
       case Some(host) =>
-        Task(InetAddress.getByName(host))
+        IO(InetAddress.getByName(host))
 
       case None =>
         ExternalAddressResolver.default.resolve.flatMap {
           case Some(address) =>
-            Task.pure(address)
+            IO.pure(address)
           case None =>
-            Task.raiseError(
+            IO.raiseError(
               new IllegalStateException(
                 s"Failed to resolve the external address. Please configure it via -Dmantis.network.discovery.host"
               )
@@ -135,8 +135,8 @@ trait DiscoveryServiceBuilder {
       receiveBufferSizeBytes = v4.Packet.MaxPacketBitsSize / 8 * 2
     )
 
-  private def setDiscoveryStatus(nodeStatusHolder: AtomicReference[NodeStatus], status: ServerStatus): Task[Unit] =
-    Task(nodeStatusHolder.updateAndGet(_.copy(discoveryStatus = status)))
+  private def setDiscoveryStatus(nodeStatusHolder: AtomicReference[NodeStatus], status: ServerStatus): IO[Unit] =
+    IO(nodeStatusHolder.updateAndGet(_.copy(discoveryStatus = status)))
 
   private def makeDiscoveryNetwork(
       privateKey: PrivateKey,
@@ -147,8 +147,8 @@ trait DiscoveryServiceBuilder {
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
       sigalg: SigAlg,
-      scheduler: Scheduler
-  ): Resource[Task, v4.DiscoveryNetwork[InetMultiAddress]] =
+      runtime: IORuntime
+  ): Resource[IO, v4.DiscoveryNetwork[InetMultiAddress]] =
     for {
       peerGroup <- StaticUDPPeerGroup[v4.Packet](udpConfig)
       network <- Resource.eval {
@@ -172,7 +172,7 @@ trait DiscoveryServiceBuilder {
       localNode: ENode,
       v4Config: v4.DiscoveryConfig,
       network: v4.DiscoveryNetwork[InetMultiAddress]
-  )(implicit sigalg: SigAlg, enrContentCodec: Codec[EthereumNodeRecord.Content]): Resource[Task, v4.DiscoveryService] =
+  )(implicit sigalg: SigAlg, enrContentCodec: Codec[EthereumNodeRecord.Content]): Resource[IO, v4.DiscoveryService] =
     v4.DiscoveryService[InetMultiAddress](
       privateKey = privateKey,
       node = localNode,
