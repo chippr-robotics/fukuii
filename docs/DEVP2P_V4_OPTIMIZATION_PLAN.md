@@ -2,7 +2,7 @@
 
 **Based on**: [DEVP2P_V5_EXPLORATION.md](./DEVP2P_V5_EXPLORATION.md)  
 **Status**: 📋 **PROPOSED** - Awaiting team decision  
-**Date**: October 28, 2025
+**Date**: October 28, 2024
 
 ---
 
@@ -352,10 +352,10 @@ class MultiProtocolDiscovery(
 - Reference implementation maturity
 
 **Actions**:
-- [ ] Q1 2026: Review v5 spec progress
-- [ ] Q2 2026: Survey network adoption
-- [ ] Q3 2026: Evaluate ETC ecosystem
-- [ ] Q4 2026: Decision point for v5
+- [ ] Q1 2025: Review v5 spec progress
+- [ ] Q2 2025: Survey network adoption
+- [ ] Q3 2025: Evaluate ETC ecosystem
+- [ ] Q4 2025: Decision point for v5
 
 ### 4.2 v5 Prototype (If Conditions Met)
 
