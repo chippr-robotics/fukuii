@@ -114,7 +114,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         .when(*, *, *)
         .onCall { case (block: Block, _, _) =>
           importedBlocksSet.add(block)
-          results(block.header.hash).flatTap(_ => IO.fromFuture(IO(importedBlocksSubject.publish1(block).unsafeToFuture())))
+          results(block.header.hash).flatTap(_ => importedBlocksSubject.publish1(block).void)
         }
       adapter
     }
