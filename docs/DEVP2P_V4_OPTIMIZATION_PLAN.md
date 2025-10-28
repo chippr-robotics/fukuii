@@ -162,8 +162,8 @@ for (node <- closestNodes) {
   result <- node.findNode(target)
 }
 
-// Proposed
-closestNodes.parTraverse(α = 3) { node =>
+// Proposed (using concurrency parameter alpha = 3)
+closestNodes.parTraverse(concurrency = 3) { node =>
   node.findNode(target).timeout(5.seconds)
 }.map(_.flatten)
 ```
@@ -171,7 +171,7 @@ closestNodes.parTraverse(α = 3) { node =>
 **Changes**:
 - [ ] Implement concurrent query execution
 - [ ] Add timeout handling per query
-- [ ] Configure α (concurrency parameter)
+- [ ] Configure concurrency parameter (alpha/α in Kademlia spec)
 - [ ] Track query success rates
 
 **Files to modify**:
