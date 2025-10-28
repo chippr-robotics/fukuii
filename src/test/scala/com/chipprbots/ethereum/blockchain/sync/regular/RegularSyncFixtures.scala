@@ -188,7 +188,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       .last
       .flatMap {
         case Some(status) => IO.pure(status)
-        case None => IO.raiseError(new RuntimeException("No status found"))
+        case None         => IO.raiseError(new RuntimeException("No status found"))
       }
       .timeout(remainingOrDefault)
 

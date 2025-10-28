@@ -2,7 +2,8 @@ package com.chipprbots.ethereum.db.storage
 
 import akka.util.ByteString
 
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 
 import com.chipprbots.ethereum.db.cache.Cache
 import com.chipprbots.ethereum.db.dataSource.DataSource
@@ -56,7 +57,7 @@ class NodeStorage(val dataSource: DataSource)
     apply(dataSource)
   }
 
-  override def storageContent: Observable[Either[IterationError, (NodeHash, NodeEncoded)]] =
+  override def storageContent: Stream[IO, Either[IterationError, (NodeHash, NodeEncoded)]] =
     dataSource.iterate(namespace).map { result =>
       result.map { case (key, value) => (ByteString.fromArrayUnsafe(key), value) }
     }
