@@ -11,9 +11,8 @@ import akka.util.ByteString
 import akka.util.Timeout
 
 import cats.data.NonEmptyList
+import cats.effect.unsafe.IORuntime
 import cats.instances.option._
-
-import monix.execution.{Scheduler => MonixScheduler}
 
 import scala.concurrent.duration._
 
@@ -57,7 +56,7 @@ class BlockFetcher(
 
   import BlockFetcher._
 
-  implicit val ec: MonixScheduler = MonixScheduler(context.executionContext)
+  implicit val runtime: IORuntime = IORuntime.global
   implicit val timeout: Timeout = syncConfig.peerResponseTimeout + 2.second // some margin for actor communication
   private val log = context.log
 
