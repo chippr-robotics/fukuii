@@ -2,6 +2,7 @@ package com.chipprbots.scalanet.peergroup.udp
 
 import cats.effect.{Ref, IO, Resource}
 import cats.effect.std.Semaphore
+import cats.effect.unsafe.implicits.global // For unsafeRunAndForget
 import cats.implicits._
 import com.typesafe.scalalogging.StrictLogging
 import com.chipprbots.scalanet.peergroup.{Channel, Release, InetMultiAddress, CloseableQueue}
@@ -83,9 +84,9 @@ class StaticUDPPeerGroup[M] private (
       .ifM(IO.raiseError(new IllegalStateException("The peer group has already been shut down.")), IO.unit)
 
   /** Create a new channel from the local server port to the remote address. */
-  override def client(to: InetMultiAddress): Resource[Task, Channel[InetMultiAddress, M]] = {
+  override def client(to: InetMultiAddress): Resource[IO, Channel[InetMultiAddress, M]] = {
     for {
-      _ <- Resource.liftF(raiseIfShutdown)
+      _ <- Resource.eval(raiseIfShutdown)
       remoteAddress = to.inetSocketAddress
       channel <- Resource {
         ChannelImpl[M](
@@ -100,13 +101,13 @@ class StaticUDPPeerGroup[M] private (
             // we can replicate incoming messages to it later.
             val add = for {
               _ <- addClientChannel(channel -> release)
-              _ <- Task(logger.debug(s"Added UDP client channel from $localAddress to $remoteAddress"))
+              _ <- IO(logger.debug(s"Added UDP client channel from $localAddress to $remoteAddress"))
             } yield ()
 
             val remove = for {
               _ <- removeClientChannel(channel -> release)
               _ <- release
-              _ <- Task(logger.debug(s"Removed UDP client channel from $localAddress to $remoteAddress"))
+              _ <- IO(logger.debug(s"Removed UDP client channel from $localAddress to $remoteAddress"))
             } yield ()
 
             add.as(channel -> remove)
@@ -138,7 +139,7 @@ class StaticUDPPeerGroup[M] private (
       case None =>
         // Use a semaphore to make sure we only create one channel.
         // This way we can handle incoming messages asynchronously.
-        serverChannelSemaphore.withPermit {
+        serverChannelSemaphore.permit.use { _ =>
           serverChannelsRef.get.map(_.get(remoteAddress)).flatMap {
             case Some((channel, _)) =>
               IO.pure(channel)
@@ -155,13 +156,13 @@ class StaticUDPPeerGroup[M] private (
                   val remove = for {
                     _ <- serverChannelsRef.update(_ - remoteAddress)
                     _ <- release
-                    _ <- Task(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
+                    _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
                   } yield ()
 
                   val add = for {
                     _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
                     _ <- serverQueue.offer(ChannelCreated(channel, remove))
-                    _ <- Task(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
+                    _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
                   } yield channel
 
                   add.as(channel)
@@ -191,7 +192,7 @@ class StaticUDPPeerGroup[M] private (
   ): IO[Unit] =
     for {
       channels <- getChannels(remoteAddress)
-      _ <- IO.parTraverseUnordered(channels)(f)
+      _ <- IO.parTraverse_(channels)(f)
     } yield ()
 
   /** Replicate the incoming message to the server channel and all client channels connected to the remote address. */
@@ -282,16 +283,16 @@ class StaticUDPPeerGroup[M] private (
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
-      _ <- toTask(serverBinding).onErrorRecoverWith {
+      _ <- toIO(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
-      _ <- Task(logger.info(s"Server bound to address ${config.bindAddress}"))
+      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}"))
     } yield ()
 
   private def shutdown: IO[Unit] = {
     for {
-      _ <- Task(logger.info(s"Shutting down UDP peer group for peer ${config.processAddress}"))
+      _ <- IO(logger.info(s"Shutting down UDP peer group for peer ${config.processAddress}"))
       // Mark the group as shutting down to stop accepting incoming connections.
       _ <- isShutdownRef.set(true)
       _ <- serverQueue.close(discard = true)
@@ -300,7 +301,7 @@ class StaticUDPPeerGroup[M] private (
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
       // Stop the in and outgoing traffic.
-      _ <- toTask(serverBinding.channel.close())
+      _ <- toIO(serverBinding.channel.close())
     } yield ()
   }
 
@@ -322,7 +323,7 @@ object StaticUDPPeerGroup extends StrictLogging {
 
   private type ChannelAlloc[M] = (ChannelImpl[M], Release)
 
-  def apply[M: Codec](config: Config)(implicit scheduler: Scheduler): Resource[Task, StaticUDPPeerGroup[M]] =
+  def apply[M: Codec](config: Config): Resource[IO, StaticUDPPeerGroup[M]] =
     makeEventLoop.flatMap { workerGroup =>
       Resource.make {
         for {
@@ -348,9 +349,9 @@ object StaticUDPPeerGroup extends StrictLogging {
   // Separate resource so if the server initialization fails, this still gets shut down.
   private val makeEventLoop =
     Resource.make {
-      Task(new NioEventLoopGroup())
+      IO(new NioEventLoopGroup())
     } { group =>
-      toTask(group.shutdownGracefully())
+      toIO(group.shutdownGracefully())
     }
 
   private class ChannelImpl[M](
@@ -384,13 +385,13 @@ object StaticUDPPeerGroup extends StrictLogging {
     override def sendMessage(message: M) =
       for {
         _ <- raiseIfClosed
-        _ <- Task(
+        _ <- IO(
           logger.debug(s"Sending $role message ${message.toString.take(100)}... from $localAddress to $remoteAddress")
         )
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
         packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress, localAddress)
-        _ <- toTask(nettyChannel.writeAndFlush(packet)).onErrorRecoverWith {
+        _ <- toIO(nettyChannel.writeAndFlush(packet)).handleErrorWith {
           case _: IOException =>
             IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
         }
@@ -442,7 +443,7 @@ object StaticUDPPeerGroup extends StrictLogging {
         remoteAddress: InetSocketAddress,
         role: Role,
         capacity: Int
-    ): Resource[Task, ChannelImpl[M]] =
+    ): Resource[IO, ChannelImpl[M]] =
       Resource.make {
         for {
           isClosedRef <- Ref[IO].of(false)
