@@ -31,7 +31,7 @@ private[scalanet] final class ChannelAwareQueue[M] private (
   def size: Long = queueSize.get()
 
   def offer(a: M): IO[Either[Closed, Unit]] = {
-    Task(enableBackPressureIfNecessary()) >> queue.offer(a)
+    IO(enableBackPressureIfNecessary()) >> queue.offer(a)
   }
 
   def next: IO[Option[M]] = {

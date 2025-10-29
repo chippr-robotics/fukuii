@@ -95,13 +95,13 @@ class DynamicTLSPeerGroup[M] private (
   private lazy val serverBind: ChannelFuture = serverBootstrap.bind(config.bindAddress)
 
   private def initialize: IO[Unit] =
-    toIO(serverBind).handleErrorWith {
+    toTask(serverBind).handleErrorWith {
       case NonFatal(e) => IO.raiseError(InitializationError(e.getMessage, e.getCause))
     } *> IO(logger.info(s"Server bound to address ${config.bindAddress}"))
 
   override def processAddress: PeerInfo = config.peerInfo
 
-  private def createChannel(to: PeerInfo, proxyConfig: Option[Socks5Config]): Resource[Task, Channel[PeerInfo, M]] = {
+  private def createChannel(to: PeerInfo, proxyConfig: Option[Socks5Config]): Resource[IO, Channel[PeerInfo, M]] = {
     // Creating new ssl context for each client is necessary, as this is only reliable way to pass peerInfo to TrustManager
     // which takes care of validating certificates and server node id.
     // Using Netty SSLEngine.getSession.putValue does not work as expected as until successfulhandshake there is no separate
@@ -122,11 +122,11 @@ class DynamicTLSPeerGroup[M] private (
     )(_.close())
   }
 
-  override def client(to: PeerInfo): Resource[Task, Channel[PeerInfo, M]] = {
+  override def client(to: PeerInfo): Resource[IO, Channel[PeerInfo, M]] = {
     createChannel(to, None)
   }
 
-  override def client(to: PeerInfo, proxyConfig: Socks5Config): Resource[Task, Channel[PeerInfo, M]] = {
+  override def client(to: PeerInfo, proxyConfig: Socks5Config): Resource[IO, Channel[PeerInfo, M]] = {
     createChannel(to, Some(proxyConfig))
   }
 
@@ -137,8 +137,8 @@ class DynamicTLSPeerGroup[M] private (
     for {
       _ <- IO(logger.debug("Start shutdown of tls peer group for peer {}", processAddress))
       _ <- serverQueue.close(discard = true)
-      _ <- toIO(serverBind.channel().close())
-      _ <- toIO(workerGroup.shutdownGracefully())
+      _ <- toTask(serverBind.channel().close())
+      _ <- toTask(workerGroup.shutdownGracefully())
       _ <- IO(logger.debug("Tls peer group shutdown for peer {}", processAddress))
     } yield ()
   }
@@ -411,7 +411,7 @@ object DynamicTLSPeerGroup {
       for {
         // Using MPMC because the channel creation event is only pushed after the SSL handshake,
         // which should take place on the channel thread, not the boss thread.
-        queue <- CloseableQueue.unbounded
+        queue <- CloseableQueue.unbounded[ServerEvent[PeerInfo, M]]
         // NOTE: The DynamicTLSPeerGroup creates Netty workgroups in its constructor, so calling `shutdown` is a must.
         pg <- IO(new DynamicTLSPeerGroup[M](config, queue))
         // NOTE: In theory we wouldn't have to initialize a peer group (i.e. start listening to incoming events)

@@ -37,7 +37,7 @@ class ReqResponseProtocol[A, M](
     group: PeerGroup[A, MessageEnvelope[M]],
     channelSemaphore: Semaphore[IO],
     channelMapRef: Ref[IO, ReqResponseProtocol.ChannelMap[A, M]],
-    fiberMapRef: Ref[IO, Map[ChannelId, Fiber[IO, Unit]]]
+    fiberMapRef: Ref[IO, Map[ChannelId, Fiber[IO, Throwable, Unit]]]
 )(a: Addressable[A]) {
 
   private def getChan(
@@ -201,13 +201,13 @@ object ReqResponseProtocol {
 
   private def buildProtocol[A, M](
       group: PeerGroup[A, MessageEnvelope[M]]
-  )(a: Addressable[A]): Resource[Task, ReqResponseProtocol[A, M]] = {
+  )(a: Addressable[A]): Resource[IO, ReqResponseProtocol[A, M]] = {
     Resource
       .make(
         for {
           channelSemaphore <- Semaphore[IO](1)
-          channelMapRef <- Ref.of[Task, ChannelMap[A, M]](Map.empty)
-          fiberMapRef <- Ref.of[Task, Map[ChannelId, Fiber[IO, Unit]]](Map.empty)
+          channelMapRef <- Ref.of[IO, ChannelMap[A, M]](Map.empty)
+          fiberMapRef <- Ref.of[IO, Map[ChannelId, Fiber[IO, Throwable, Unit]]](Map.empty)
           protocol = new ReqResponseProtocol[A, M](group, channelSemaphore, channelMapRef, fiberMapRef)
         } yield protocol
       ) { protocol =>
@@ -218,12 +218,12 @@ object ReqResponseProtocol {
 
   def getTlsReqResponseProtocolClient[M](framingConfig: FramingConfig)(
       address: InetSocketAddress
-  )(c: Codec[M]): Resource[Task, ReqResponseProtocol[PeerInfo, M]] = {
+  )(c: Codec[M]): Resource[IO, ReqResponseProtocol[PeerInfo, M]] = {
     implicit lazy val envelopeCodec = MessageEnvelope.defaultCodec[M]
     val rnd = new SecureRandom()
     val hostkeyPair = CryptoUtils.genEcKeyPair(rnd, Secp256k1.curveName)
     for {
-      config <- Resource.liftF(
+      config <- Resource.eval(
         IO.fromTry(
           DynamicTLSPeerGroup
             .Config(
@@ -246,7 +246,7 @@ object ReqResponseProtocol {
 
   def getDynamicUdpReqResponseProtocolClient[M](
       address: InetSocketAddress
-  )(c: Codec[M]): Resource[Task, ReqResponseProtocol[InetMultiAddress, M]] = {
+  )(c: Codec[M]): Resource[IO, ReqResponseProtocol[InetMultiAddress, M]] = {
     implicit val codec = MessageEnvelope.defaultCodec[M]
     for {
       pg <- DynamicUDPPeerGroup[MessageEnvelope[M]](DynamicUDPPeerGroup.Config(address))
