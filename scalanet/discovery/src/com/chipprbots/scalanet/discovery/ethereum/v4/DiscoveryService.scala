@@ -369,7 +369,7 @@ object DiscoveryService {
         }
         .flatMap { peers =>
           // Send our new ENR sequence to the peers so they can pull our latest data.
-          peers.toList.parTraverseN(config.kademliaAlpha)(pingAndMaybeUpdateTimestamp(_)).start.void
+          peers.toList.parTraverse(pingAndMaybeUpdateTimestamp(_)).start.void
         }
     }
 
