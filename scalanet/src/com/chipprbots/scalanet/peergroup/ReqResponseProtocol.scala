@@ -148,8 +148,8 @@ object ReqResponseProtocol {
   type ChannelId = (InetSocketAddress, InetSocketAddress)
   
   /** Exception thrown when a request fiber is canceled before receiving a response. */
-  class RequestCanceledException(requestId: UUID) 
-    extends RuntimeException(s"Request fiber for message $requestId was canceled")
+  class RequestCanceledException(requestId: UUID, cause: Throwable = null) 
+    extends RuntimeException(s"Request fiber for message $requestId was canceled", cause)
   
   class ReqResponseChannel[A, M](
       channel: Channel[A, MessageEnvelope[M]],

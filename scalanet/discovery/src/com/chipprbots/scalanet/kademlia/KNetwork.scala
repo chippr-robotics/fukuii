@@ -59,7 +59,12 @@ object KNetwork {
             // to block the next incoming channel from being picked up.
             Stream.eval {
               channel.nextChannelEvent.toStream
-                .collect { case MessageReceived(req: KRequest[_]) => req.asInstanceOf[KRequest[A]] }
+                .collect { 
+                  case MessageReceived(req: KRequest[_]) => 
+                    // Note: Type erasure requires asInstanceOf. The protocol ensures type safety at runtime
+                    // since KRequest[A] and KResponse[A] are matched by the network layer.
+                    req.asInstanceOf[KRequest[A]]
+                }
                 .head
                 .compile.lastOrError
                 .timeout(requestTimeout)
