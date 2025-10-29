@@ -495,10 +495,11 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
    - Integration tests go in `src/it/`, unit tests in `src/test/`
 
 3. **Documentation**
-   - Update documentation when changing public APIs
+   - Technical documentation is maintained in the gh-pages branch
+   - To update technical docs, switch to `gh-pages` branch and edit the relevant Markdown files
+   - Update README.md and CONTRIBUTING.md in the main branch for user-facing changes
    - Keep comments concise and focused on "why" not "what"
    - Don't add comments for self-explanatory code
-   - Update README.md for user-facing changes
 
 4. **Package Structure**
    - All code uses package prefix `com.chipprbots.ethereum`
@@ -586,15 +587,11 @@ Before submitting a PR, verify:
 - [GitHub Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
-- [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md)
-- [Monix to Cats Effect 3 IO Action Plan](docs/MONIX_TO_IO_ACTION_PLAN.md)
-- [Monix to IO Migration Plan](docs/MONIX_TO_IO_MIGRATION_PLAN.md)
-- [Monix Migration Punch List](docs/MONIX_MIGRATION_PUNCH_LIST.md)
-- [Cats Effect 3 Migration Analysis](docs/CATS_EFFECT_3_MIGRATION.md)
-- [Scalanet Compatibility Assessment](docs/SCALANET_COMPATIBILITY_ASSESSMENT.md)
-- [Scalanet Fork Action Plan](docs/SCALANET_FORK_ACTION_PLAN.md)
-- [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md)
-- [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md)
+- [Technical Documentation Site](https://chippr-robotics.github.io/fukuii/) - Comprehensive technical documentation
+  - [Scala 3.0 Migration Report](https://chippr-robotics.github.io/fukuii/scala3-migration)
+  - [Monix Migration Documentation](https://chippr-robotics.github.io/fukuii/monix-migration)
+  - [Architecture Overview](https://chippr-robotics.github.io/fukuii/architecture-overview)
+  - [Dependency Reports](https://chippr-robotics.github.io/fukuii/dependencies)
 - [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)
 - [Scalafmt Documentation](https://scalameta.org/scalafmt/)
 - [Scalafix Documentation](https://scalacenter.github.io/scalafix/)

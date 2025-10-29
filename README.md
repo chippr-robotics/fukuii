@@ -185,11 +185,15 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 When modifying code derived from Mantis, include a notice in the header of changed files stating that you changed the file and add your own copyright line.
 
+## Documentation
+
+For comprehensive technical documentation including architecture, migration guides, and dependency reports, visit our [Documentation Site](https://chippr-robotics.github.io/fukuii/).
+
 ## Development and Future Plans
 
-**Technology Stack**: This project uses Scala 2.13.14 with active migration to Scala 3.3.4 (LTS). **Phase 0 (Dependency Updates), Phase 3 (Manual Fixes), and Phase 4 (Validation & Testing) of the Scala 3 migration are now complete**. The scalanet dependency has been resolved by vendoring it locally in the `scalanet/` directory (see [Scalanet Compatibility Assessment](docs/SCALANET_COMPATIBILITY_ASSESSMENT.md)). For detailed information about the migration strategy, progress, and validation results, see our [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md), [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md), and [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md).
+**Technology Stack**: This project uses Scala 2.13.14 with active migration to Scala 3.3.4 (LTS). **Phase 0 (Dependency Updates), Phase 3 (Manual Fixes), and Phase 4 (Validation & Testing) of the Scala 3 migration are now complete**. For detailed information about the migration strategy, progress, and validation results, see our [Scala 3 Migration Documentation](https://chippr-robotics.github.io/fukuii/scala3-migration).
 
-**Monix to Cats Effect 3 IO Migration**: We are planning a comprehensive migration from Monix 3.4.1 to Cats Effect 3 IO to complete the Cats Effect 3 upgrade and enable full Scala 3 compatibility. This migration will replace ~85 files using `monix.eval.Task` with `cats.effect.IO` and ~16 files using `monix.reactive.Observable` with `fs2.Stream`. For the complete action plan, see [Monix to IO Action Plan](docs/MONIX_TO_IO_ACTION_PLAN.md). Related documentation: [Migration Plan](docs/MONIX_TO_IO_MIGRATION_PLAN.md), [Punch List](docs/MONIX_MIGRATION_PUNCH_LIST.md), and [CE3 Migration Analysis](docs/CATS_EFFECT_3_MIGRATION.md).
+**Monix to Cats Effect 3 IO Migration**: We are planning a comprehensive migration from Monix 3.4.1 to Cats Effect 3 IO to complete the Cats Effect 3 upgrade and enable full Scala 3 compatibility. This migration will replace ~85 files using `monix.eval.Task` with `cats.effect.IO` and ~16 files using `monix.reactive.Observable` with `fs2.Stream`. For the complete action plan, see [Monix Migration Documentation](https://chippr-robotics.github.io/fukuii/monix-migration).
 
 **Static Analysis**: We maintain a comprehensive static analysis toolchain. **Note**: Scapegoat is temporarily disabled during the Scala 2.13.14 → 3.3.4 transition period due to tooling limitations. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 
