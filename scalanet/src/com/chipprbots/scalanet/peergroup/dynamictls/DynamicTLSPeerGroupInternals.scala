@@ -354,7 +354,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       )
 
     private def handleEvent(event: ServerEvent[PeerInfo, M]): Unit =
-      serverQueue.offer(event).void.unsafeRunSync()(global)
+      serverQueue.offer(event).void.unsafeRunAndForget()
   }
 
   class DynamicTlsChannel[M](
