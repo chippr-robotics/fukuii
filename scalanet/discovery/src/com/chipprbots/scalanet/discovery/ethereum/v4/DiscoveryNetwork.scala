@@ -318,7 +318,7 @@ object DiscoveryNetwork {
             channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
           )
             .collect {
-              case MessageReceived(packet: Packet) => packet
+              case MessageReceived(packet) => packet
             }
             .evalMap { packet =>
               currentTimeSeconds.flatMap { timestamp =>
