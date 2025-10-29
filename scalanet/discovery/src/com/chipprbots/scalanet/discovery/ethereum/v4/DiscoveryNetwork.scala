@@ -320,7 +320,7 @@ object DiscoveryNetwork {
             .collect {
               case MessageReceived(packet: Packet) => packet
             }
-            .evalMap { (packet: Packet) =>
+            .evalMap { packet =>
               currentTimeSeconds.flatMap { timestamp =>
                 Packet.unpack(packet) match {
                   case Attempt.Successful((payload, remotePublicKey)) =>
