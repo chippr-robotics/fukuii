@@ -318,7 +318,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
             nettyChannel =>
               val localAddress = nettyChannel.localAddress()
               logger.debug(s"Generated local address for new client is $localAddress")
-              val channel = new ChannelImpl(
+              val channel: ChannelImpl = new ChannelImpl(
                 nettyChannel,
                 localAddress,
                 to.inetSocketAddress,
@@ -336,7 +336,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
               IO(logger.debug(s"UDP channel setup failed due to ${ex}", ex)) *>
                 IO.raiseError(new ChannelSetupException[InetMultiAddress](to, ex))
           }
-      })(_.close)
+      })((ch: ChannelImpl) => ch.close)
   }
 
   override def nextServerEvent =
