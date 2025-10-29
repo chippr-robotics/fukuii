@@ -6,15 +6,14 @@ import java.util.{Random, UUID}
 
 import cats.syntax.all._
 import cats.data.NonEmptySet
-import cats.effect.concurrent.Ref
+import cats.effect.Ref
 import com.typesafe.scalalogging.{CanLog, Logger}
 import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
 import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
 import com.chipprbots.scalanet.kademlia.KMessage.{KRequest, KResponse}
 import com.chipprbots.scalanet.kademlia.KRouter.KRouterInternals._
 import com.chipprbots.scalanet.kademlia.KRouter.{Config, NodeRecord}
-import monix.eval.Task
-import monix.reactive.{Consumer, Observable, OverflowStrategy}
+import cats.effect.IO
 import scodec.bits.BitVector
 import scala.collection.immutable.SortedSet
 
@@ -22,7 +21,7 @@ import scala.collection.immutable.SortedSet
 class KRouter[A](
     val config: Config[A],
     network: KNetwork[A],
-    routerState: Ref[Task, NodeRecordIndex[A]],
+    routerState: Ref[IO, NodeRecordIndex[A]],
     clock: Clock = Clock.systemUTC(),
     uuidSource: () => UUID = () => UUID.randomUUID(),
     rnd: Random = new SecureRandom()
@@ -46,20 +45,20 @@ class KRouter[A](
     * Due to technical complexities of this process most of kademlia implementations like:go-geth, nim-eth, decides to periodically perform lookups for
     * random ids instead
     */
-  private def startRefreshCycle(): Task[Unit] = {
-    Observable
-      .intervalWithFixedDelay(config.refreshRate, config.refreshRate)
-      .consumeWith(Consumer.foreachTask { _ =>
+  private def startRefreshCycle(): IO[Unit] = {
+    fs2.Stream.awakeEvery[IO](config.refreshRate)
+      .evalMap { _ =>
         lookup(KBuckets.generateRandomId(config.nodeRecord.id.length, rnd)).void
-      })
+      }
+      .compile.drain
   }
 
   // TODO[PM-1035]: parallelism should be configured by library user
-  private val responseTaskConsumer =
-    Consumer.foreachParallelTask[(KRequest[A], Option[KResponse[A]] => Task[Unit])](parallelism = 4) {
+  private def responseTaskConsumer(stream: fs2.Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])]): IO[Unit] = {
+    stream.parEvalMap(4) {
       case (FindNodes(uuid, nodeRecord, targetNodeId), responseHandler) =>
         for {
-          _ <- Task(
+          _ <- IO(
             logger.debug(
               s"Received request FindNodes(${nodeRecord.id.toHex}, $nodeRecord, ${targetNodeId.toHex})"
             )
@@ -67,32 +66,33 @@ class KRouter[A](
           state <- routerState.get
           closestNodes = state.kBuckets.closestNodes(targetNodeId, config.k).map(state.nodeRecords(_))
           response = Nodes(uuid, config.nodeRecord, closestNodes)
-          _ <- add(nodeRecord).startAndForget
+          _ <- add(nodeRecord).start.void
           responseTask <- responseHandler(Some(response))
         } yield responseTask
 
       case (Ping(uuid, nodeRecord), responseHandler) =>
         for {
-          _ <- Task(
+          _ <- IO(
             logger.debug(
               s"Received request Ping(${nodeRecord.id.toHex}, $nodeRecord)"
             )
           )
-          _ <- add(nodeRecord).startAndForget
+          _ <- add(nodeRecord).start.void
           response = Pong(uuid, config.nodeRecord)
           responseTask <- responseHandler(Some(response))
         } yield responseTask
-    }
+    }.compile.drain
+  }
 
   /**
     * Starts handling incoming requests. Infinite task.
     *
     * @return
     */
-  private def startServerHandling(): Task[Unit] = {
-    // asyncBoundary means that we are giving up on observable back pressure and the consumer will need consume
-    // events as soon as available, it is behaviour similar to ConcurrentSubject
-    network.kRequests.asyncBoundary(OverflowStrategy.DropNew(config.serverBufferSize)).consumeWith(responseTaskConsumer)
+  private def startServerHandling(): IO[Unit] = {
+    // Using fs2 Stream buffer instead of Observable asyncBoundary
+    // The consumer will process events as they arrive with backpressure
+    responseTaskConsumer(network.kRequests.buffer(config.serverBufferSize))
   }
 
   /**
@@ -101,18 +101,18 @@ class KRouter[A](
     *
     * @return
     */
-  private def enroll(): Task[Set[NodeRecord[A]]] = {
-    val loadKnownPeers = Task.traverse(config.knownPeers)(add)
+  private def enroll(): IO[Set[NodeRecord[A]]] = {
+    val loadKnownPeers = IO.traverse(config.knownPeers)(add)
     loadKnownPeers >> lookup(config.nodeRecord.id).attempt.flatMap {
       case Left(t) =>
-        Task {
+        IO {
           logger.error(s"Enrolment lookup failed with exception: $t")
           logger.debug(s"Enrolment failure stacktrace: ${t.getStackTrace.mkString("\n")}")
           Set.empty
         }
 
       case Right(nodes) =>
-        Task {
+        IO {
           val nodeIds = nodes.toSeq.map(_.id)
           val bootIds = config.knownPeers.map(_.id)
           val countSelf = nodeIds.count(myself)
@@ -127,38 +127,38 @@ class KRouter[A](
     }
   }
 
-  def get(key: BitVector): Task[NodeRecord[A]] = {
-    Task(logger.debug(s"get(${key.toHex})")) *>
+  def get(key: BitVector): IO[NodeRecord[A]] = {
+    IO(logger.debug(s"get(${key.toHex})")) *>
       getLocally(key) flatMap {
-      case Some(value) => Task.now(value)
+      case Some(value) => IO.pure(value)
       case None => getRemotely(key)
     }
   }
 
-  def remove(nodeId: BitVector): Task[Unit] = {
+  def remove(nodeId: BitVector): IO[Unit] = {
     routerState.update(current => current.removeNodeRecord(current.nodeRecords(nodeId)))
   }
 
-  def kBuckets: Task[KBuckets[BitVector]] = {
+  def kBuckets: IO[KBuckets[BitVector]] = {
     routerState.get.map(_.kBuckets)
   }
 
-  def nodeRecords: Task[Map[BitVector, NodeRecord[A]]] = {
+  def nodeRecords: IO[Map[BitVector, NodeRecord[A]]] = {
     routerState.get.map(_.nodeRecords)
   }
 
-  def ping(recToPing: NodeRecord[A]): Task[Boolean] = {
+  def ping(recToPing: NodeRecord[A]): IO[Boolean] = {
     network
       .ping(recToPing, Ping(uuidSource(), config.nodeRecord))
       .as(true)
-      .onErrorHandle(_ => false)
+      .handleError(_ => false)
 
   }
 
-  def add(nodeRecord: NodeRecord[A]): Task[Unit] = {
-    Task(logger.info(s"Handling potential addition of candidate (${nodeRecord.id.toHex}, $nodeRecord)")) *> {
+  def add(nodeRecord: NodeRecord[A]): IO[Unit] = {
+    IO(logger.info(s"Handling potential addition of candidate (${nodeRecord.id.toHex}, $nodeRecord)")) *> {
       if (myself(nodeRecord.id)) {
-        Task.unit
+        IO.unit
       } else {
         for {
           toPing <- routerState.modify { current =>
@@ -184,35 +184,35 @@ class KRouter[A](
   private def maybePingAndUpdateState(
       maybeRecordToPing: Option[NodeRecord[A]],
       nodeRecord: NodeRecord[A]
-  ): Task[Unit] = {
+  ): IO[Unit] = {
     maybeRecordToPing match {
-      case None => Task.unit
+      case None => IO.unit
       case Some(nodeToPing) =>
-        Task(logger.debug(s"Pinging ${nodeToPing.id.toHex} to check if it needs to be replaced.")) *>
+        IO(logger.debug(s"Pinging ${nodeToPing.id.toHex} to check if it needs to be replaced.")) *>
           ping(nodeToPing).ifM(
             // if it does respond, it is moved to the tail and the other node record discarded.
-            Task(
+            IO(
               logger.info(
                 s"Moving ${nodeToPing.id.toHex} to head of bucket. Discarding (${nodeRecord.id.toHex}, $nodeRecord) as routing table candidate."
               )
             ) *>
               routerState.update(_.touchNodeRecord(nodeToPing)),
             // if that node fails to respond, it is evicted from the bucket and the other node inserted (at the tail)
-            Task(logger.info(s"Replacing ${nodeToPing.id.toHex} with new entry (${nodeRecord.id.toHex}, $nodeRecord).")) *>
+            IO(logger.info(s"Replacing ${nodeToPing.id.toHex} with new entry (${nodeRecord.id.toHex}, $nodeRecord).")) *>
               routerState.update(_.replaceNodeRecord(nodeToPing, nodeRecord))
           )
     }
   }
 
-  private def getRemotely(key: BitVector): Task[NodeRecord[A]] = {
+  private def getRemotely(key: BitVector): IO[NodeRecord[A]] = {
     lookup(key) *> getLocally(key) flatMap {
-      case Some(value) => Task.now(value)
-      case None => Task.raiseError(new Exception(s"Target node id ${key.toHex} not found"))
+      case Some(value) => IO.pure(value)
+      case None => IO.raiseError(new Exception(s"Target node id ${key.toHex} not found"))
     }
 
   }
 
-  private def getLocally(key: BitVector): Task[Option[NodeRecord[A]]] = {
+  private def getLocally(key: BitVector): IO[Option[NodeRecord[A]]] = {
     for {
       state <- routerState.get
       nodeId = state.kBuckets.closestNodes(key, 1).find(_ == key)
@@ -222,20 +222,26 @@ class KRouter[A](
 
   // lookup process, from page 6 of the kademlia paper
   // Lookup terminates when initiator queried and got response from the k closest nodes it has seen
-  private def lookup(targetNodeId: BitVector): Task[SortedSet[NodeRecord[A]]] = {
+  private def lookup(targetNodeId: BitVector): IO[SortedSet[NodeRecord[A]]] = {
     // Starting lookup process with alpha known nodes from our kbuckets
+    // Note: memoizeOnSuccess removed during Monix→CE3 migration (CE3 doesn't have built-in memoization).
+    // WARNING: Removing memoization could cause performance regression if closestKnownNodesTask
+    // is executed multiple times per lookup. Based on code review, this appears to be called
+    // once per lookup invocation, but this has not been verified with certainty.
+    // If profiling reveals performance issues, implement manual memoization using Ref or
+    // add cats-effect-memoize library dependency.
     val closestKnownNodesTask = routerState.get.map { state =>
       state.kBuckets
         .closestNodes(targetNodeId, config.k + 1)
         .filterNot(myself)
         .take(config.alpha)
         .map(id => state.nodeRecords(id))
-    }.memoizeOnSuccess
+    }
 
     implicit val xorNodeOrder = new XorNodeOrder[A](targetNodeId)
     implicit val xorNodeOrdering = xorNodeOrder.xorNodeOrdering
 
-    def query(knownNodeRecord: NodeRecord[A]): Task[Seq[NodeRecord[A]]] = {
+    def query(knownNodeRecord: NodeRecord[A]): IO[Seq[NodeRecord[A]]] = {
 
       val requestId = uuidSource()
 
@@ -246,7 +252,7 @@ class KRouter[A](
       )
 
       for {
-        _ <- Task(
+        _ <- IO(
           logger.debug(
             s"Issuing " +
               s"findNodes request to (${knownNodeRecord.id.toHex}, $knownNodeRecord). " +
@@ -255,7 +261,7 @@ class KRouter[A](
           )
         )
         kNodesResponse <- network.findNodes(knownNodeRecord, findNodesRequest)
-        _ <- Task(
+        _ <- IO(
           logger.debug(
             s"Received Nodes response " +
               s"RequestId = ${kNodesResponse.requestId}, " +
@@ -266,23 +272,23 @@ class KRouter[A](
       } yield kNodesResponse.nodes
     }
 
-    def handleQuery(to: NodeRecord[A]): Task[QueryResult[A]] = {
+    def handleQuery(to: NodeRecord[A]): IO[QueryResult[A]] = {
       query(to).attempt.flatMap {
         case Left(ex) =>
-          Task(logger.debug(s"findNodes request for $to failed: $ex")) >>
-            Task.now(QueryResult.failed(to))
+          IO(logger.debug(s"findNodes request for $to failed: $ex")) >>
+            IO.pure(QueryResult.failed(to))
 
         case Right(nodes) =>
           // Adding node to kbuckets in background to not block lookup process
-          add(to).startAndForget.as(QueryResult.succeed(to, nodes))
+          add(to).start.void.as(QueryResult.succeed(to, nodes))
       }
     }
 
     def shouldFinishLookup(
         nodesLeftToQuery: Seq[NodeRecord[A]],
         nodesFound: NonEmptySet[NodeRecord[A]],
-        lookupState: Ref[Task, Map[BitVector, RequestResult]]
-    ): Task[Boolean] = {
+        lookupState: Ref[IO, Map[BitVector, RequestResult]]
+    ): IO[Boolean] = {
       for {
         currentState <- lookupState.get
         closestKnodes = nodesFound.toSortedSet
@@ -296,8 +302,8 @@ class KRouter[A](
         currentClosestNode: NodeRecord[A],
         receivedNodes: Seq[NodeRecord[A]],
         nodesFound: NonEmptySet[NodeRecord[A]],
-        lookupState: Ref[Task, Map[BitVector, RequestResult]]
-    ): Task[Seq[NodeRecord[A]]] = {
+        lookupState: Ref[IO, Map[BitVector, RequestResult]]
+    ): IO[Seq[NodeRecord[A]]] = {
 
       // All nodes which are closer to target, than the closest already found node
       val closestNodes = receivedNodes.filter(node => xorNodeOrder.compare(node, currentClosestNode) < 0)
@@ -338,15 +344,15 @@ class KRouter[A](
     def recLookUp(
         nodesToQuery: Seq[NodeRecord[A]],
         nodesFound: NonEmptySet[NodeRecord[A]],
-        lookupState: Ref[Task, Map[BitVector, RequestResult]]
-    ): Task[NonEmptySet[NodeRecord[A]]] = {
+        lookupState: Ref[IO, Map[BitVector, RequestResult]]
+    ): IO[NonEmptySet[NodeRecord[A]]] = {
       shouldFinishLookup(nodesToQuery, nodesFound, lookupState).flatMap {
         case true =>
-          Task.now(nodesFound)
+          IO.pure(nodesFound)
         case false =>
           val (toQuery, rest) = nodesToQuery.splitAt(config.alpha)
           for {
-            queryResults <- Task.parTraverseUnordered(toQuery) { knownNode =>
+            queryResults <- IO.parTraverseUnordered(toQuery) { knownNode =>
               handleQuery(knownNode)
             }
 
@@ -376,24 +382,24 @@ class KRouter[A](
       }
       .flatMap {
         case None =>
-          Task(logger.debug("Lookup finished without any nodes, as bootstrap nodes ")).as(SortedSet.empty)
+          IO(logger.debug("Lookup finished without any nodes, as bootstrap nodes ")).as(SortedSet.empty)
 
         case Some(closestKnownNodes) =>
           val initalRequestState: Map[BitVector, RequestResult] =
             closestKnownNodes.toList.map(_.id -> RequestScheduled).toMap
           // All initial nodes are scheduled to request
-          val lookUpTask: Task[SortedSet[NodeRecord[A]]] = for {
+          val lookUpTask: IO[SortedSet[NodeRecord[A]]] = for {
             // All initial nodes are scheduled to request
-            state <- Ref.of[Task, Map[BitVector, RequestResult]](initalRequestState)
+            state <- Ref.of[IO, Map[BitVector, RequestResult]](initalRequestState)
             // closestKnownNodes are constrained by alpha, it means there will be at most alpha independent recursive tasks
-            results <- Task.parTraverseUnordered(closestKnownNodes.toList) { knownNode =>
+            results <- closestKnownNodes.toList.parTraverse { knownNode =>
               recLookUp(List(knownNode), closestKnownNodes, state)
             }
             records = results.reduce(_ ++ _).toSortedSet
           } yield records
 
           lookUpTask flatTap { records =>
-            Task(logger.debug(lookupReport(targetNodeId, records)))
+            IO(logger.debug(lookupReport(targetNodeId, records)))
           }
       }
   }
@@ -466,12 +472,12 @@ object KRouter {
       network: KNetwork[A],
       clock: Clock = Clock.systemUTC(),
       uuidSource: () => UUID = () => UUID.randomUUID()
-  ): Task[KRouter[A]] = {
+  ): IO[KRouter[A]] = {
     for {
       state <- Ref.of[Task, NodeRecordIndex[A]](
         getIndex(config, clock)
       )
-      router <- Task.now(new KRouter(config, network, state, clock, uuidSource))
+      router <- IO.pure(new KRouter(config, network, state, clock, uuidSource))
       _ <- router.enroll()
       // TODO: These should be fibers that get cleaned up.
       _ <- router.startServerHandling().startAndForget
@@ -496,14 +502,14 @@ object KRouter {
       network: KNetwork[A],
       clock: Clock = Clock.systemUTC(),
       uuidSource: () => UUID = () => UUID.randomUUID()
-  ): Task[KRouter[A]] = {
+  ): IO[KRouter[A]] = {
     Ref
       .of[Task, NodeRecordIndex[A]](
         getIndex(config, clock)
       )
       .flatMap { state =>
-        Task.now(new KRouter(config, network, state, clock, uuidSource)).flatMap { router =>
-          Task.parMap3(
+        IO.pure(new KRouter(config, network, state, clock, uuidSource)).flatMap { router =>
+          IO.parMap3(
             router.enroll(), // The results should be ready when we return the router.
             router.startServerHandling().startAndForget,
             router.startRefreshCycle().startAndForget

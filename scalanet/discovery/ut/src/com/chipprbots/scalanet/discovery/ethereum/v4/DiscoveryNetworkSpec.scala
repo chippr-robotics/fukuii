@@ -13,15 +13,14 @@ import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
 import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
 import com.chipprbots.scalanet.NetUtils.aRandomAddress
 import java.net.InetSocketAddress
-import monix.execution.Scheduler
-import monix.eval.Task
+
+import cats.effect.IO
 import org.scalatest._
 import scala.concurrent.duration._
 import scala.util.Random
 import scala.util.control.NoStackTrace
 import scala.collection.SortedMap
 import scodec.bits.{BitVector, ByteVector}
-import monix.tail.Iterant
 import java.net.InetAddress
 
 class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
@@ -400,7 +399,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         token <- network.startHandling {
           StubDiscoveryRPC(
-            ping = _ => _ => Task.pure(Some(None))
+            ping = _ => _ => IO.pure(Some(None))
           )
         }
         // The fact that we moved on from `startHandling` shows that it's not
@@ -425,7 +424,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         _ <- network.startHandling {
           StubDiscoveryRPC(
-            ping = _ => _ => Task.pure(Some(None))
+            ping = _ => _ => IO.pure(Some(None))
           )
         }
         channels <- remotes.traverse {
@@ -448,7 +447,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         token <- network.startHandling {
           StubDiscoveryRPC(
-            ping = _ => _ => Task.pure(Some(None))
+            ping = _ => _ => IO.pure(Some(None))
           )
         }
         channel <- peerGroup.createServerChannel(from = remoteAddress)
@@ -477,7 +476,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         _ <- network.startHandling(StubDiscoveryRPC())
         channel <- peerGroup.createServerChannel(from = remoteAddress)
-        _ <- Task.sleep(config.messageExpiration + 100.millis)
+        _ <- IO.sleep(config.messageExpiration + 100.millis)
       } yield {
         channel.isClosed shouldBe true
       }
@@ -489,7 +488,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         _ <- network.startHandling(
           StubDiscoveryRPC(
-            findNode = _ => _ => Task.pure(Some(List(randomNode)))
+            findNode = _ => _ => IO.pure(Some(List(randomNode)))
           )
         )
         channel <- peerGroup.createServerChannel(from = remoteAddress)
@@ -793,7 +792,7 @@ object DiscoveryNetworkSpec extends Matchers {
 
   trait Fixture {
     // Implement `test` to assert something.
-    def test: Task[Assertion]
+    def test: IO[Assertion]
 
     lazy val config = defaultConfig
 
@@ -858,7 +857,7 @@ object DiscoveryNetworkSpec extends Matchers {
       def sendPayloadToSUT(
           payload: Payload,
           privateKey: PrivateKey
-      ): Task[Packet] = {
+      ): IO[Packet] = {
         for {
           packet <- Task(Packet.pack(payload, privateKey).require)
           _ <- channel.sendMessageToSUT(packet)
@@ -884,19 +883,19 @@ object DiscoveryNetworkSpec extends Matchers {
     )
 
     val handleWithNone = StubDiscoveryRPC(
-      ping = _ => _ => Task.pure(None),
-      findNode = _ => _ => Task.pure(None),
-      enrRequest = _ => _ => Task.pure(None)
+      ping = _ => _ => IO.pure(None),
+      findNode = _ => _ => IO.pure(None),
+      enrRequest = _ => _ => IO.pure(None)
     )
 
     val handleWithSome = StubDiscoveryRPC(
-      ping = _ => _ => Task.pure(Some(None)),
-      findNode = _ => _ => Task.pure(Some(List(randomNode))),
-      enrRequest = _ => _ => Task.pure(Some(localENR))
+      ping = _ => _ => IO.pure(Some(None)),
+      findNode = _ => _ => IO.pure(Some(List(randomNode))),
+      enrRequest = _ => _ => IO.pure(Some(localENR))
     )
 
     implicit class StubDiscoveryRPCOps(stub: StubDiscoveryRPC) {
-      def withEffect(task: Task[Unit]): StubDiscoveryRPC = {
+      def withEffect(task: IO[Unit]): StubDiscoveryRPC = {
         stub.copy(
           ping = caller => req => task >> stub.ping(caller)(req),
           findNode = caller => req => task >> stub.findNode(caller)(req),
@@ -904,7 +903,7 @@ object DiscoveryNetworkSpec extends Matchers {
         )
       }
 
-      def withCallerEffect(f: Caller => Task[Unit]): StubDiscoveryRPC = {
+      def withCallerEffect(f: Caller => IO[Unit]): StubDiscoveryRPC = {
         stub.copy(
           ping = caller => req => f(caller) >> stub.ping(caller)(req),
           findNode = caller => req => f(caller) >> stub.findNode(caller)(req),

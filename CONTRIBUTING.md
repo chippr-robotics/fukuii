@@ -561,11 +561,17 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 **When updating dependencies:**
 ```
-1. Check the GitHub Advisory Database for vulnerabilities
-2. Test thoroughly on JDK 17
-3. Test cross-compilation: `sbt "bytes/+compile"` for affected modules
-4. Update version numbers in build.sbt
-5. Document any breaking changes or migration steps
+1. Always use the latest stable versions to avoid future update cycles
+2. Check the GitHub Advisory Database for known vulnerabilities
+3. Verify compatibility with project requirements:
+   - JDK 17 compatibility
+   - Scala 2.13.14 support (primary version)
+   - Scala 3.3.4 cross-compilation support where applicable
+4. Test thoroughly on JDK 17
+5. Test cross-compilation: `sbt "bytes/+compile"` for affected modules
+6. Update version numbers in project/Dependencies.scala
+7. Document any breaking changes or migration steps
+8. Update security-sensitive dependencies (Netty, BouncyCastle, etc.) to latest patch versions
 ```
 
 ### Quality Checklist

@@ -18,7 +18,7 @@ sealed trait KeyType {
   def n: Int
 }
 object KeyType {
-  implicit val d = Discriminated[KeyType, Int](uint8)
+  implicit val d: Discriminated[KeyType, Int] = Discriminated[KeyType, Int](uint8)
 }
 
 /**
@@ -28,7 +28,7 @@ object KeyType {
 case object Secp256k1 extends KeyType {
   val curveName = "secp256k1"
   val n = 2
-  implicit val Secp256k1Disc = Discriminator[KeyType, Secp256k1.type, Int](n)
+  implicit val Secp256k1Disc: Discriminator[KeyType, Secp256k1.type, Int] = Discriminator[KeyType, Secp256k1.type, Int](n)
 }
 
 private[scalanet] object DynamicTLSExtension {

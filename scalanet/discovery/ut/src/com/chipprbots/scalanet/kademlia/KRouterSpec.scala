@@ -3,7 +3,7 @@ package com.chipprbots.scalanet.kademlia
 import java.time.Clock
 import java.util.UUID
 
-import cats.effect.concurrent.Ref
+import cats.effect.Ref
 import com.chipprbots.scalanet.kademlia.Generators.{aRandomBitVector, aRandomNodeRecord}
 import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
 import com.chipprbots.scalanet.kademlia.KMessage.{KRequest, KResponse}
@@ -14,9 +14,9 @@ import com.chipprbots.scalanet.kademlia.KRouterSpec.KNetworkScalanetInternalTest
   NodeData
 }
 import com.chipprbots.scalanet.kademlia.KRouterSpec._
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.reactive.Observable
+import cats.effect.IO
+
+import fs2.Stream
 import org.mockito.Mockito.{reset, when}
 import org.mockito.invocation.InvocationOnMock
 import org.scalatest.FreeSpec
@@ -77,7 +77,7 @@ class KRouterSpec extends FreeSpec with Eventually {
       val someNodeId = aRandomBitVector()
 
       when(knetwork.findNodes(to = bootstrapRecord, request = FindNodes(uuid, selfRecord, someNodeId)))
-        .thenReturn(Task.now(Nodes(uuid, bootstrapRecord, Seq.empty)))
+        .thenReturn(IO.pure(Nodes(uuid, bootstrapRecord, Seq.empty)))
 
       whenReady(krouter.get(someNodeId).runToFuture.failed) { e =>
         e shouldBe an[Exception]
@@ -96,11 +96,11 @@ class KRouterSpec extends FreeSpec with Eventually {
       val nodesResponse = Nodes(uuid, bootstrapRecord, Seq(otherNode))
 
       when(knetwork.findNodes(to = bootstrapRecord, request = FindNodes(uuid, selfRecord, otherNode.id)))
-        .thenReturn(Task.now(nodesResponse))
+        .thenReturn(IO.pure(nodesResponse))
 
       // Nodes are only considered found if they are online, i.e they respond to query
       when(knetwork.findNodes(to = otherNode, request = FindNodes(uuid, selfRecord, otherNode.id)))
-        .thenReturn(Task.now(Nodes(uuid, otherNode, Seq())))
+        .thenReturn(IO.pure(Nodes(uuid, otherNode, Seq())))
 
       // nodes are added in background, so to avoid flaky test eventually is needed
       eventually {
@@ -112,11 +112,11 @@ class KRouterSpec extends FreeSpec with Eventually {
 
       val selfRecord = aRandomNodeRecord()
       val otherRecord = aRandomNodeRecord()
-      val handler = mock[Option[KResponse[String]] => Task[Unit]]
+      val handler = mock[Option[KResponse[String]] => IO[Unit]]
 
       "when receiving a PING" in {
-        when(handler.apply(Some(Pong(uuid, selfRecord)))).thenReturn(Task.unit)
-        when(knetwork.kRequests).thenReturn(Observable((Ping(uuid, otherRecord), handler)))
+        when(handler.apply(Some(Pong(uuid, selfRecord)))).thenReturn(IO.unit)
+        when(knetwork.kRequests).thenReturn(Stream((Ping(uuid, otherRecord), handler)))
 
         val krouter = aKRouter(selfRecord, Set.empty)
 
@@ -126,8 +126,8 @@ class KRouterSpec extends FreeSpec with Eventually {
       }
 
       "when receiving a FIND_NODES" in {
-        when(handler.apply(Some(Nodes(uuid, selfRecord, Seq(selfRecord))))).thenReturn(Task.unit)
-        when(knetwork.kRequests).thenReturn(Observable((FindNodes(uuid, otherRecord, otherRecord.id), handler)))
+        when(handler.apply(Some(Nodes(uuid, selfRecord, Seq(selfRecord))))).thenReturn(IO.unit)
+        when(knetwork.kRequests).thenReturn(Stream((FindNodes(uuid, otherRecord, otherRecord.id), handler)))
 
         val krouter = aKRouter(selfRecord, Set.empty)
 
@@ -427,40 +427,40 @@ object KRouterSpec {
       }
     }
 
-    class KNetworkScalanetInternalTestImpl[A](val nodes: Ref[Task, Map[BitVector, NodeData[A]]]) extends KNetwork[A] {
-      override def findNodes(to: NodeRecord[A], request: FindNodes[A]): Task[Nodes[A]] = {
+    class KNetworkScalanetInternalTestImpl[A](val nodes: Ref[IO, Map[BitVector, NodeData[A]]]) extends KNetwork[A] {
+      override def findNodes(to: NodeRecord[A], request: FindNodes[A]): IO[Nodes[A]] = {
         for {
           currentState <- nodes.get
           response <- currentState.get(to.id) match {
             case Some(value) =>
-              Task.now(Nodes(request.requestId, value.myData, value.neigbours.map(_.myData)))
+              IO.pure(Nodes(request.requestId, value.myData, value.neigbours.map(_.myData)))
             case None =>
-              Task.raiseError(new TimeoutException(s"Task timed-out after of inactivity"))
+              IO.raiseError(new TimeoutException(s"Task timed-out after of inactivity"))
           }
         } yield response
       }
 
-      override def ping(to: NodeRecord[A], request: Ping[A]): Task[Pong[A]] = {
+      override def ping(to: NodeRecord[A], request: Ping[A]): IO[Pong[A]] = {
         for {
           currentState <- nodes.get
           response <- currentState.get(to.id) match {
             case Some(value) =>
-              Task.now(Pong(request.requestId, value.myData))
+              IO.pure(Pong(request.requestId, value.myData))
             case None =>
-              Task.raiseError(new TimeoutException(s"Task timed-out after of inactivity"))
+              IO.raiseError(new TimeoutException(s"Task timed-out after of inactivity"))
           }
         } yield response
       }
 
       // No server request handling for now
-      override def kRequests: Observable[(KRequest[A], Option[KResponse[A]] => Task[Unit])] = Observable.empty
+      override def kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])] = Stream.empty
     }
 
     def addNeighbours[A](
-        currentState: Ref[Task, Map[BitVector, NodeData[A]]],
+        currentState: Ref[IO, Map[BitVector, NodeData[A]]],
         newNeighbours: Seq[NodeData[A]],
         nodeToUpdate: BitVector
-    ): Task[Unit] = {
+    ): IO[Unit] = {
       for {
         _ <- currentState.update { s =>
           val withNeighbours = newNeighbours.foldLeft(s)((state, neighbour) => state + (neighbour.id -> neighbour))
@@ -473,7 +473,7 @@ object KRouterSpec {
   def createTestRouter(
       nodeRecord: NodeRecord[String] = aRandomNodeRecord(),
       peerConfig: Map[BitVector, NodeData[String]]
-  )(implicit scheduler: Scheduler): Task[KRouter[String]] = {
+  )(): IO[KRouter[String]] = {
 
     val knownPeers = peerConfig.collect {
       case (_, data) if data.bootstrap => data.myData
@@ -493,14 +493,14 @@ object KRouterSpec {
   val alpha = 1
   val k = 4000
 
-  when(knetwork.kRequests).thenReturn(Observable.empty)
+  when(knetwork.kRequests).thenReturn(Stream.empty)
 
   def aKRouter(
       nodeRecord: NodeRecord[String] = aRandomNodeRecord(),
       knownPeers: Set[NodeRecord[String]] = Set.empty,
       alpha: Int = alpha,
       k: Int = k
-  )(implicit scheduler: Scheduler): SRouter = {
+  )(): SRouter = {
 
     mockEnrollment(nodeRecord, knownPeers, Seq.empty)
     KRouter
@@ -518,18 +518,18 @@ object KRouterSpec {
     reset(knetwork)
     val bitLength: Int = selfRecord.id.size.toInt
     val ids = Generators.genBitVectorExhaustive(bitLength).filterNot(_ == selfRecord.id)
-    val handler = mock[Option[KResponse[String]] => Task[Unit]]
-    when(handler.apply(Some(Pong(uuid, selfRecord)))).thenReturn(Task.unit)
+    val handler = mock[Option[KResponse[String]] => IO[Unit]]
+    when(handler.apply(Some(Pong(uuid, selfRecord)))).thenReturn(IO.unit)
 
     when(knetwork.ping(any(), any())).thenAnswer((invocation: InvocationOnMock) => {
       val to = invocation.getArgument(0).asInstanceOf[NodeRecord[String]]
       if (responsivePredicate(to))
-        Task.now(Pong(uuid, to))
+        IO.pure(Pong(uuid, to))
       else
-        Task.raiseError(new Exception("Donnae want this one"))
+        IO.raiseError(new Exception("Donnae want this one"))
     })
     val kRequests =
-      Observable.fromIterable(ids.map(id => (Ping(uuid, aRandomNodeRecord(bitLength).copy(id = id)), handler)))
+      Stream.emits(ids.map(id => (Ping(uuid, aRandomNodeRecord(bitLength).copy(id = id)), handler)))
 
     when(knetwork.kRequests).thenReturn(kRequests)
 
@@ -546,7 +546,7 @@ object KRouterSpec {
     when(knetwork.findNodes(anyOf(knownPeers), meq(FindNodes(uuid, nodeRecord, nodeRecord.id))))
       .thenAnswer((invocation: InvocationOnMock) => {
         val to = invocation.getArgument(0).asInstanceOf[NodeRecord[String]]
-        Task.now(Nodes(uuid, to, otherNodes))
+        IO.pure(Nodes(uuid, to, otherNodes))
       })
 
     ()

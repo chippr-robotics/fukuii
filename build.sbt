@@ -92,7 +92,7 @@ val scala3Options = Seq(
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   name := projectName,
   organization := "com.chipprbots",
-  scalaVersion := `scala-3`,
+  scalaVersion := `scala-2.13`, // Primary version - Scala 3 available via cross-compilation
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
   // NOTE: SemanticDB temporarily disabled for Scala 2.13.14 (not yet supported by semanticdb-scalac)
@@ -159,6 +159,13 @@ lazy val scalanet = {
           Dependencies.cats ++
           Dependencies.fs2 ++
           Dependencies.monix ++
+          Dependencies.scodec ++
+          Dependencies.netty ++
+          Dependencies.crypto ++
+          Dependencies.jodaTime ++
+          Dependencies.ipmath ++
+          Dependencies.scaffeine ++
+          Dependencies.logging ++
           Dependencies.testing
     )
 
@@ -182,6 +189,13 @@ lazy val scalanetDiscovery = {
           Dependencies.cats ++
           Dependencies.fs2 ++
           Dependencies.monix ++
+          Dependencies.scodec ++
+          Dependencies.netty ++
+          Dependencies.crypto ++
+          Dependencies.jodaTime ++
+          Dependencies.ipmath ++
+          Dependencies.scaffeine ++
+          Dependencies.logging ++
           Dependencies.testing
     )
 
@@ -355,7 +369,7 @@ lazy val node = {
     node
   else
     //node.settings(PB.protocExecutable := file("protoc"))
-    node.settings((Compile / PB.runProtoc) := (args => Process("protoc", args) !))
+    node.settings((Compile / PB.runProtoc) := ((args: Seq[String]) => Process("protoc", args) !))
 
 }
 
@@ -505,8 +519,12 @@ addCommandAlias(
 )
 
 // Scapegoat configuration
-// Re-enabled with Scala 3 compatible version 3.x
-(ThisBuild / scapegoatVersion) := "3.1.4"
+// Version 2.x/3.x for Scala 2.13.14+, version 1.x for older Scala 2.13 versions
+(ThisBuild / scapegoatVersion) := (CrossVersion.partialVersion(scalaVersion.value) match {
+  case Some((2, 13)) => "3.1.2"  // Scala 2.13.14+ supports Scapegoat 3.x
+  case Some((3, _))  => "3.1.4"  // Scala 3 (when dependencies are ready)
+  case _             => "1.4.16" // Fallback for older versions
+})
 scapegoatReports := Seq("xml", "html")
 scapegoatConsoleOutput := false
 scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")

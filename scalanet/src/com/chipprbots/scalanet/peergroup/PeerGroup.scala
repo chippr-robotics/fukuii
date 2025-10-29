@@ -1,11 +1,10 @@
 package com.chipprbots.scalanet.peergroup
 
-import cats.effect.Resource
+import cats.effect.{IO, Resource}
+import fs2.Stream
 import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
 import com.chipprbots.scalanet.peergroup.PeerGroup.ProxySupport.Socks5Config
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
-import monix.eval.Task
-import monix.reactive.Observable
 import scodec.Codec
 
 import java.net.InetSocketAddress
@@ -42,18 +41,18 @@ trait Channel[A, M] {
     *
     * @param message the message to send
     * @return Where the underlying technology supports ACKs, implementations
-    *         should wait for the ack and return a successful or unsuccessful Task accordingly.
+    *         should wait for the ack and return a successful or unsuccessful IO accordingly.
     *         Where the underlying technology does not support ACKs (such as datagram protocols)
-    *         implementations may return immediately with a successful Task.
+    *         implementations may return immediately with a successful IO.
     */
-  def sendMessage(message: M): Task[Unit]
+  def sendMessage(message: M): IO[Unit]
 
   /**
     * Consume the next message from the underlying event queue.
     *
     * @return The next incoming message, or None if the channel was closed.
     */
-  def nextChannelEvent: Task[Option[ChannelEvent[M]]]
+  def nextChannelEvent: IO[Option[ChannelEvent[M]]]
 }
 
 object Channel {
@@ -125,13 +124,13 @@ trait PeerGroup[A, M] {
     *           set of peers).
     * @return the channel to interact with the desired peer(s).
     */
-  def client(to: A): Resource[Task, Channel[A, M]]
+  def client(to: A): Resource[IO, Channel[A, M]]
 
   /** Waits for the next server event, or returns None if the peer group is closed.
     *
     * @return the next ServerEvent.
     */
-  def nextServerEvent: Task[Option[ServerEvent[A, M]]]
+  def nextServerEvent: IO[Option[ServerEvent[A, M]]]
 }
 
 object PeerGroup {
@@ -150,7 +149,7 @@ object PeerGroup {
       * @param proxyConfig address and optional auth options to socks5 proxy
       * @return the channel to interact with the desired peer(s).
       */
-    def client(to: A, proxyConfig: Socks5Config): Resource[Task, Channel[A, M]]
+    def client(to: A, proxyConfig: Socks5Config): Resource[IO, Channel[A, M]]
   }
 
   object ProxySupport {
@@ -164,8 +163,8 @@ object PeerGroup {
     def apply[A, M](config: Socks5Config)(underlying: PeerGroup[A, M] with ProxySupport[A, M]): PeerGroup[A, M] =
       new PeerGroup[A, M] {
         override def processAddress: A = underlying.processAddress
-        override def client(to: A): Resource[Task, Channel[A, M]] = underlying.client(to, config)
-        override def nextServerEvent: Task[Option[ServerEvent[A, M]]] = underlying.nextServerEvent
+        override def client(to: A): Resource[IO, Channel[A, M]] = underlying.client(to, config)
+        override def nextServerEvent: IO[Option[ServerEvent[A, M]]] = underlying.nextServerEvent
       }
   }
 
@@ -197,9 +196,9 @@ object PeerGroup {
       }
     }
 
-    implicit class ServerOps[A, M](observable: Observable[ServerEvent[A, M]]) {
-      def collectChannelCreated: Observable[(Channel[A, M], Release)] = observable.collect(ChannelCreated.collector)
-      def collectHandshakeFailure: Observable[HandshakeException[A]] = observable.collect(HandshakeFailed.collector)
+    implicit class ServerOps[A, M](stream: Stream[IO, ServerEvent[A, M]]) {
+      def collectChannelCreated: Stream[IO, (Channel[A, M], Release)] = stream.collect(ChannelCreated.collector)
+      def collectHandshakeFailure: Stream[IO, HandshakeException[A]] = stream.collect(HandshakeFailed.collector)
     }
   }
 

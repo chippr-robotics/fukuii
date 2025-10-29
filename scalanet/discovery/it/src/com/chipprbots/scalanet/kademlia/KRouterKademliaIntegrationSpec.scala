@@ -6,7 +6,7 @@ import com.chipprbots.scalanet.NetUtils
 import com.chipprbots.scalanet.kademlia.KNetwork.KNetworkScalanetImpl
 import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
 import com.chipprbots.scalanet.peergroup.InetMultiAddress
-import monix.eval.Task
+import cats.effect.IO
 import com.chipprbots.scalanet.peergroup.PeerGroup
 import scodec.bits.BitVector
 import com.chipprbots.scalanet.discovery.crypto.PrivateKey
@@ -36,7 +36,7 @@ abstract class KRouterKademliaIntegrationSpec(peerGroupName: String)
       override val self: PeerRecord,
       router: KRouter[InetMultiAddress]
   ) extends TestNode {
-    override def getPeers: Task[Seq[NodeRecord[InetMultiAddress]]] = {
+    override def getPeers: IO[Seq[NodeRecord[InetMultiAddress]]] = {
       router.nodeRecords.map(_.values.toSeq)
     }
   }

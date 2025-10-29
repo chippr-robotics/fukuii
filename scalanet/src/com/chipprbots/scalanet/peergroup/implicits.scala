@@ -1,37 +1,30 @@
 package com.chipprbots.scalanet.peergroup
 
-import cats.effect.concurrent.Deferred
-import monix.eval.Task
-import monix.tail.Iterant
-import monix.reactive.Observable
+import cats.effect.{Deferred, IO}
+import fs2.Stream
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
 import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
 
 package object implicits {
   // Functions to be applied on the `.nextChannelEvent()` or `.nextServerEvent()` results.
-  implicit class NextOps[A](val next: Task[Option[A]]) extends AnyVal {
-    def toIterant: Iterant[Task, A] =
-      Iterant.repeatEvalF(next).takeWhile(_.isDefined).map(_.get)
+  implicit class NextOps[A](val next: IO[Option[A]]) extends AnyVal {
+    def toStream: Stream[IO, A] =
+      Stream.repeatEval(next).unNoneTerminate
 
-    def toObservable: Observable[A] =
-      Observable.repeatEvalF(next).takeWhile(_.isDefined).map(_.get)
-
-    def withCancelToken(token: Deferred[Task, Unit]): Task[Option[A]] =
-      Task.race(token.get, next).map {
+    def withCancelToken(token: Deferred[IO, Unit]): IO[Option[A]] =
+      IO.race(token.get, next).map {
         case Left(()) => None
         case Right(x) => x
       }
   }
 
   implicit class PeerGroupOps[A, M](val group: PeerGroup[A, M]) extends AnyVal {
-    def serverEventObservable: Observable[ServerEvent[A, M]] =
-      group.nextServerEvent.toObservable
+    def serverEventStream: Stream[IO, ServerEvent[A, M]] =
+      group.nextServerEvent.toStream
   }
 
   implicit class ChannelOps[A, M](val channel: Channel[A, M]) extends AnyVal {
-    // NB: Not making an equivalent version for Iterant because it doesn't support timeout
-    // directly; instead, use `next().timeout(5.second).toIterant`
-    def channelEventObservable: Observable[ChannelEvent[M]] =
-      channel.nextChannelEvent.toObservable
+    def channelEventStream: Stream[IO, ChannelEvent[M]] =
+      channel.nextChannelEvent.toStream
   }
 }
