@@ -94,7 +94,7 @@ class ReqResponseProtocol[A, M](
       envelope <- subscription.join.flatMap {
         case cats.effect.Outcome.Succeeded(fa) => fa
         case cats.effect.Outcome.Errored(e) => IO.raiseError(e)
-        case cats.effect.Outcome.Canceled() => IO.raiseError(new RuntimeException(s"Request fiber for message ${messageToSend.id} was canceled"))
+        case cats.effect.Outcome.Canceled() => IO.raiseError(new ReqResponseProtocol.RequestCanceledException(messageToSend.id))
       }
     } yield envelope.m
 
@@ -146,6 +146,11 @@ class ReqResponseProtocol[A, M](
 
 object ReqResponseProtocol {
   type ChannelId = (InetSocketAddress, InetSocketAddress)
+  
+  /** Exception thrown when a request fiber is canceled before receiving a response. */
+  class RequestCanceledException(requestId: UUID) 
+    extends RuntimeException(s"Request fiber for message $requestId was canceled")
+  
   class ReqResponseChannel[A, M](
       channel: Channel[A, MessageEnvelope[M]],
       topic: fs2.concurrent.Topic[IO, ChannelEvent[MessageEnvelope[M]]],

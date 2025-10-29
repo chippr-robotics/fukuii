@@ -27,6 +27,7 @@ class CloseableQueue[A](
     closed.tryGet.flatMap {
       case Some(true) =>
         // Clear the queue by draining all items recursively
+        // Note: This recursion is stack-safe due to IO's trampolining in Cats Effect
         def drainQueue: IO[Unit] = queue.tryTake.flatMap {
           case Some(_) => drainQueue
           case None => IO.unit

@@ -159,7 +159,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       executeAsync(messageQueue.offer(event).void)
 
     private def executeAsync(task: IO[Unit]): Unit =
-      task.unsafeRunAndForget()
+      task.unsafeRunAndForget()(global)
   }
 
   object MessageNotifier {
@@ -354,7 +354,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       )
 
     private def handleEvent(event: ServerEvent[PeerInfo, M]): Unit =
-      serverQueue.offer(event).void.unsafeRunAndForget()
+      serverQueue.offer(event).void.unsafeRunAndForget()(global)
   }
 
   class DynamicTlsChannel[M](
