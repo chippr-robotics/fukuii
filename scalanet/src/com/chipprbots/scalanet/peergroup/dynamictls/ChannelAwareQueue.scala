@@ -3,8 +3,7 @@ package com.chipprbots.scalanet.peergroup.dynamictls
 import com.chipprbots.scalanet.peergroup.CloseableQueue
 import com.chipprbots.scalanet.peergroup.CloseableQueue.Closed
 import io.netty.channel.ChannelConfig
-import monix.eval.Task
-import monix.execution.ChannelType
+import cats.effect.IO
 
 import java.util.concurrent.atomic.AtomicLong
 
@@ -31,11 +30,11 @@ private[scalanet] final class ChannelAwareQueue[M] private (
 
   def size: Long = queueSize.get()
 
-  def offer(a: M): Task[Either[Closed, Unit]] = {
+  def offer(a: M): IO[Either[Closed, Unit]] = {
     Task(enableBackPressureIfNecessary()) >> queue.offer(a)
   }
 
-  def next: Task[Option[M]] = {
+  def next: IO[Option[M]] = {
     queue.next.map {
       case Some(value) =>
         disableBackPressureIfNecessary()
@@ -45,7 +44,7 @@ private[scalanet] final class ChannelAwareQueue[M] private (
     }
   }
 
-  def close(discard: Boolean): Task[Unit] = queue.close(discard)
+  def close(discard: Boolean): IO[Unit] = queue.close(discard)
 
   private def enableBackPressureIfNecessary(): Unit =
     if (queueSize.incrementAndGet() >= limit && channelConfig.isAutoRead) {
@@ -61,7 +60,7 @@ private[scalanet] final class ChannelAwareQueue[M] private (
 }
 
 object ChannelAwareQueue {
-  def apply[M](limit: Int, channelType: ChannelType, channelConfig: ChannelConfig): Task[ChannelAwareQueue[M]] = {
+  def apply[M](limit: Int, channelType: ChannelType, channelConfig: ChannelConfig): IO[ChannelAwareQueue[M]] = {
     CloseableQueue.unbounded[M](channelType).map(queue => new ChannelAwareQueue[M](limit, queue, channelConfig))
   }
 

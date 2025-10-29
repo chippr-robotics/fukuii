@@ -1,8 +1,7 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
 import cats.implicits._
-import cats.effect.Clock
-import cats.effect.concurrent.Deferred
+import cats.effect.{IO, Temporal, Deferred}
 import com.typesafe.scalalogging.LazyLogging
 import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, PublicKey, SigAlg}
 import com.chipprbots.scalanet.discovery.ethereum.Node
@@ -14,9 +13,7 @@ import com.chipprbots.scalanet.peergroup.Channel.{ChannelIdle, DecodingError, Me
 
 import java.util.concurrent.TimeoutException
 import java.net.InetAddress
-import monix.eval.Task
-import monix.tail.Iterant
-import monix.catnap.CancelableF
+import fs2.Stream
 
 import scala.concurrent.duration._
 import scodec.{Attempt, Codec}
@@ -36,7 +33,7 @@ trait DiscoveryNetwork[A] extends DiscoveryRPC[DiscoveryNetwork.Peer[A]] {
 
   /** Start handling incoming requests using the local RPC interface.
     * The remote side is identified by its ID and address.*/
-  def startHandling(handler: DiscoveryRPC[DiscoveryNetwork.Peer[A]]): Task[CancelableF[Task]]
+  def startHandling(handler: DiscoveryRPC[DiscoveryNetwork.Peer[A]]): IO[Deferred[IO, Unit]]
 }
 
 object DiscoveryNetwork {
@@ -68,7 +65,7 @@ object DiscoveryNetwork {
       localNodeAddress: Node.Address,
       toNodeAddress: A => Node.Address,
       config: DiscoveryConfig
-  )(implicit codec: Codec[Payload], sigalg: SigAlg, clock: Clock[Task]): Task[DiscoveryNetwork[A]] = Task {
+  )(implicit codec: Codec[Payload], sigalg: SigAlg, temporal: Temporal[IO]): IO[DiscoveryNetwork[A]] = IO {
     new DiscoveryNetwork[A] with LazyLogging {
 
       import DiscoveryRPC.ENRSeq
@@ -76,7 +73,7 @@ object DiscoveryNetwork {
 
       private val expirationSeconds = config.messageExpiration.toSeconds
       private val maxClockDriftSeconds = config.maxClockDrift.toSeconds
-      private val currentTimeSeconds = clock.realTime(SECONDS)
+      private val currentTimeSeconds = temporal.realTime.map(_.toSeconds)
 
       private val maxNeighborsPerPacket = getMaxNeighborsPerPacket
 
@@ -85,9 +82,9 @@ object DiscoveryNetwork {
         * This is fair: every remote connection can be throttled independently
         * of each other, as well as based on operation type by the `handler` itself.
         */
-      override def startHandling(handler: DiscoveryRPC[Peer[A]]): Task[CancelableF[Task]] =
+      override def startHandling(handler: DiscoveryRPC[Peer[A]]): IO[Deferred[IO, Unit]] =
         for {
-          cancelToken <- Deferred[Task, Unit]
+          cancelToken <- Deferred[IO, Unit]
           _ <- peerGroup.nextServerEvent
             .withCancelToken(cancelToken)
             .toIterant
@@ -103,7 +100,7 @@ object DiscoveryNetwork {
                   .startAndForget
 
               case _ =>
-                Task.unit
+                IO.unit
             }
             .completedL
             .startAndForget
@@ -113,8 +110,8 @@ object DiscoveryNetwork {
       private def handleChannel(
           handler: DiscoveryRPC[Peer[A]],
           channel: Channel[A, Packet],
-          cancelToken: Deferred[Task, Unit]
-      ): Task[Unit] = {
+          cancelToken: Deferred[IO, Unit]
+      ): IO[Unit] = {
         channel.nextChannelEvent
           .withCancelToken(cancelToken)
           .timeout(config.messageExpiration) // Messages older than this would be ignored anyway.
@@ -127,7 +124,7 @@ object DiscoveryNetwork {
                     payload match {
                       case _: Payload.Response =>
                         // Not relevant on the server channel.
-                        Task.unit
+                        IO.unit
 
                       case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
                         Task(logger.debug(s"Ignoring expired request from ${channel.to}; ${p.expiration} < $timestamp"))
@@ -138,19 +135,19 @@ object DiscoveryNetwork {
 
                   case Attempt.Failure(err) =>
                     Task(logger.debug(s"Failed to unpack packet: $err; ${packet.show}")) >>
-                      Task.raiseError(new PacketException(s"Failed to unpack message: $err"))
+                      IO.raiseError(new PacketException(s"Failed to unpack message: $err"))
                 }
               }
 
             case DecodingError =>
-              Task.raiseError(new PacketException("Failed to decode a message."))
+              IO.raiseError(new PacketException("Failed to decode a message."))
 
             case UnexpectedError(ex) =>
-              Task.raiseError(new PacketException(ex.getMessage))
+              IO.raiseError(new PacketException(ex.getMessage))
 
             case ChannelIdle(_, _) =>
               // we do not use idle peer detection in discovery
-              Task.unit
+              IO.unit
           }
           .completedL
       }
@@ -161,7 +158,7 @@ object DiscoveryNetwork {
           remotePublicKey: PublicKey,
           hash: Hash,
           payload: Payload.Request
-      ): Task[Unit] = {
+      ): IO[Unit] = {
         val caller = Peer(remotePublicKey, channel.to)
 
         payload match {
@@ -195,33 +192,33 @@ object DiscoveryNetwork {
         }
       }
 
-      private def maybeRespond[Res](maybeResponse: Task[Option[Res]])(
-          f: Res => Task[Unit]
-      ): Task[Unit] =
+      private def maybeRespond[Res](maybeResponse: IO[Option[Res]])(
+          f: Res => IO[Unit]
+      ): IO[Unit] =
         maybeResponse
           .onErrorRecoverWith {
             case NonFatal(ex) =>
               // Not responding to this one, but it shouldn't stop handling further requests.
               Task(logger.error(s"Error handling incoming request: $ex")).as(None)
           }
-          .flatMap(_.fold(Task.unit)(f))
+          .flatMap(_.fold(IO.unit)(f))
 
       /** Serialize the payload to binary and sign the packet. */
-      private def pack(payload: Payload): Task[Packet] =
+      private def pack(payload: Payload): IO[Packet] =
         Packet
           .pack(payload, privateKey)
           .fold(
-            err => Task.raiseError(new IllegalArgumentException(s"Could not pack $payload: $err")),
-            packet => Task.pure(packet)
+            err => IO.raiseError(new IllegalArgumentException(s"Could not pack $payload: $err")),
+            packet => IO.pure(packet)
           )
 
       /** Set a future expiration time on the payload. */
-      private def setExpiration(payload: Payload): Task[Payload] = {
+      private def setExpiration(payload: Payload): IO[Payload] = {
         payload match {
           case p: Payload.HasExpiration[_] =>
             currentTimeSeconds.map(t => p.withExpiration(t + expirationSeconds))
           case p =>
-            Task.pure(p)
+            IO.pure(p)
         }
       }
 
@@ -301,7 +298,7 @@ object DiscoveryNetwork {
         /** Set the expiration, pack and send the data.
           * Return the packet so we can use the hash for expected responses.
           */
-        def send(payload: Payload): Task[Packet] = {
+        def send(payload: Payload): IO[Packet] = {
           for {
             expiring <- setExpiration(payload)
             packet <- pack(expiring)
@@ -332,11 +329,11 @@ object DiscoveryNetwork {
                   case Attempt.Successful((payload, remotePublicKey)) =>
                     payload match {
                       case _ if remotePublicKey != publicKey =>
-                        Task.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
+                        IO.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
 
                       case _: Payload.Request =>
                         // Not relevant on the client channel.
-                        Task.pure(None)
+                        IO.pure(None)
 
                       case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
                         Task(
@@ -344,11 +341,11 @@ object DiscoveryNetwork {
                         ).as(None)
 
                       case p: Payload.Response =>
-                        Task.pure(Some(p))
+                        IO.pure(Some(p))
                     }
 
                   case Attempt.Failure(err) =>
-                    Task.raiseError(
+                    IO.raiseError(
                       new IllegalArgumentException(s"Failed to unpack message: $err")
                     )
                 }
@@ -360,7 +357,7 @@ object DiscoveryNetwork {
             .collect(pf)
 
         /** Collect the first response that matches the partial function or return None if one cannot be found */
-        def collectFirstResponse[T](publicKey: PublicKey)(pf: PartialFunction[Payload.Response, T]): Task[Option[T]] =
+        def collectFirstResponse[T](publicKey: PublicKey)(pf: PartialFunction[Payload.Response, T]): IO[Option[T]] =
           channel
             .collectResponses(publicKey: PublicKey, config.requestTimeout.fromNow)(pf)
             .headOptionL
@@ -374,14 +371,14 @@ object DiscoveryNetwork {
             pf: PartialFunction[Payload.Response, T]
         )(
             f: (Z, T) => Either[Z, Z]
-        ): Task[Option[Z]] =
+        ): IO[Option[Z]] =
           channel
             .collectResponses(publicKey, timeout.fromNow)(pf)
             .attempt
-            .foldWhileLeftEvalL(Task.pure((seed -> 0).some)) {
+            .foldWhileLeftEvalL(IO.pure((seed -> 0).some)) {
               case (Some((acc, count)), Left(ex: TimeoutException)) if count > 0 =>
                 // We have a timeout but we already accumulated some results, so return those.
-                Task.pure(Right(Some((acc, count))))
+                IO.pure(Right(Some((acc, count))))
 
               case (_, Left(ex)) =>
                 // Unexpected error, discard results, if any.
@@ -390,11 +387,11 @@ object DiscoveryNetwork {
               case (Some((acc, count)), Right(response)) =>
                 // New response, fold it with the existing to decide if we need more.
                 val next = (acc: Z) => Some(acc -> (count + 1))
-                Task.pure(f(acc, response).bimap(next, next))
+                IO.pure(f(acc, response).bimap(next, next))
 
               case (None, _) =>
                 // Invalid state - this cannot happen
-                Task.raiseError(
+                IO.raiseError(
                   new IllegalStateException(s"Unexpected state while collecting responses from ${channel.to}")
                 )
             }

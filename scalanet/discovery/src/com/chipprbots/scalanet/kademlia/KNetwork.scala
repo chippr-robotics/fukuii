@@ -7,8 +7,8 @@ import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
 import com.chipprbots.scalanet.peergroup.implicits._
 import com.chipprbots.scalanet.peergroup.{Channel, PeerGroup}
 import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
-import monix.eval.Task
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 import scala.util.control.NonFatal
 
 trait KNetwork[A] {
@@ -22,7 +22,7 @@ trait KNetwork[A] {
     *         Some(response) or None for all request types, in order that the
     *         implementation can close the channel.
     */
-  def kRequests: Observable[(KRequest[A], Option[KResponse[A]] => Task[Unit])]
+  def kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])]
 
   /**
     * Send a FIND_NODES message to another peer.
@@ -30,7 +30,7 @@ trait KNetwork[A] {
     * @param request the FIND_NODES request
     * @return the future response
     */
-  def findNodes(to: NodeRecord[A], request: FindNodes[A]): Task[Nodes[A]]
+  def findNodes(to: NodeRecord[A], request: FindNodes[A]): IO[Nodes[A]]
 
   /**
     * Send a PING message to another peer.
@@ -38,7 +38,7 @@ trait KNetwork[A] {
     * @param request the PING request
     * @return the future response
     */
-  def ping(to: NodeRecord[A], request: Ping[A]): Task[Pong[A]]
+  def ping(to: NodeRecord[A], request: Ping[A]): IO[Pong[A]]
 }
 
 object KNetwork {
@@ -50,16 +50,16 @@ object KNetwork {
       requestTimeout: FiniteDuration = 3 seconds
   ) extends KNetwork[A] {
 
-    override lazy val kRequests: Observable[(KRequest[A], Option[KResponse[A]] => Task[Unit])] = {
-      peerGroup.serverEventObservable.collectChannelCreated
+    override lazy val kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])] = {
+      peerGroup.serverEventStream.collectChannelCreated
         .mergeMap {
-          case (channel: Channel[A, KMessage[A]], release: Task[Unit]) =>
+          case (channel: Channel[A, KMessage[A]], release: IO[Unit]) =>
             // NOTE: We cannot use mapEval with a Task here, because that would hold up
             // the handling of further incoming requests. For example if instead of a
             // request we got an incoming "response" type message that the collect
             // discards, `headL` would eventually time out but while we wait for
             // that the next incoming channel would not be picked up.
-            Observable.fromTask {
+            Stream.fromTask {
               channel.channelEventObservable
                 .collect { case MessageReceived(req: KRequest[A]) => req }
                 .headL
@@ -68,7 +68,7 @@ object KNetwork {
                   Some {
                     request -> { (maybeResponse: Option[KResponse[A]]) =>
                       maybeResponse
-                        .fold(Task.unit) { response =>
+                        .fold(IO.unit) { response =>
                           channel.sendMessage(response).timeout(requestTimeout)
                         }
                         .guarantee(release)
@@ -85,11 +85,11 @@ object KNetwork {
         .collect { case Some(pair) => pair }
     }
 
-    override def findNodes(to: NodeRecord[A], request: FindNodes[A]): Task[Nodes[A]] = {
+    override def findNodes(to: NodeRecord[A], request: FindNodes[A]): IO[Nodes[A]] = {
       requestTemplate(to, request, { case n @ Nodes(_, _, _) => n })
     }
 
-    override def ping(to: NodeRecord[A], request: Ping[A]): Task[Pong[A]] = {
+    override def ping(to: NodeRecord[A], request: Ping[A]): IO[Pong[A]] = {
       requestTemplate(to, request, { case p @ Pong(_, _) => p })
     }
 
@@ -97,7 +97,7 @@ object KNetwork {
         to: NodeRecord[A],
         message: Request,
         pf: PartialFunction[KMessage[A], Response]
-    ): Task[Response] = {
+    ): IO[Response] = {
       peerGroup
         .client(to.routingAddress)
         .use { clientChannel =>
@@ -109,7 +109,7 @@ object KNetwork {
         message: Request,
         clientChannel: Channel[A, KMessage[A]],
         pf: PartialFunction[KMessage[A], Response]
-    ): Task[Response] = {
+    ): IO[Response] = {
       for {
         _ <- clientChannel.sendMessage(message).timeout(requestTimeout)
         // This assumes that `requestTemplate` always opens a new channel.
