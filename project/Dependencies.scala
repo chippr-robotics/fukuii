@@ -122,7 +122,10 @@ object Dependencies {
     "org.typelevel" %% "log4cats-slf4j" % "2.6.0" // Updated for Cats Effect 3.x and Scala 3 support
   )
 
-  val crypto = Seq("org.bouncycastle" % "bcprov-jdk15on" % "1.66")
+  val crypto = Seq(
+    "org.bouncycastle" % "bcprov-jdk15on" % "1.70", // Updated for security
+    "org.bouncycastle" % "bcpkix-jdk15on" % "1.70"  // Additional bouncy castle package for X.509 certificates
+  )
 
   val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
 
