@@ -174,7 +174,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       maxIncomingQueueSize: Int,
       socks5Config: Option[Socks5Config],
       idlePeerConfig: Option[StalePeerDetectionConfig]
-  )(implicit scheduler: Scheduler, codec: Codec[M])
+  )(implicit codec: Codec[M])
       extends StrictLogging {
     val (decoder, encoder) = buildFramingCodecs(framingConfig)
     private val to = peerInfo
@@ -248,7 +248,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       val connectIO = for {
         _ <- IO(logger.debug("Initiating connection to peer {}", peerInfo))
         _ <- toTask(bootstrap.connect(peerInfo.address.inetSocketAddress))
-        ch <- IO.deferFuture(activationF)
+        ch <- IO.fromFuture(IO(activationF))
         _ <- IO(logger.debug("Connection to peer {} finished successfully", peerInfo))
       } yield new DynamicTlsChannel[M](localId, peerInfo, ch._1, ch._2, ClientChannel)
 
@@ -283,7 +283,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       maxIncomingQueueSize: Int,
       throttlingIpFilter: Option[ThrottlingIpFilter],
       idlePeerConfig: Option[StalePeerDetectionConfig]
-  )(implicit scheduler: Scheduler, codec: Codec[M])
+  )(implicit codec: Codec[M])
       extends StrictLogging {
     val sslHandler = sslServerCtx.newHandler(nettyChannel.alloc())
 
@@ -353,7 +353,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       )
 
     private def handleEvent(event: ServerEvent[PeerInfo, M]): Unit =
-      serverQueue.offer(event).void.runSyncUnsafe()
+      serverQueue.offer(event).void.unsafeRunSync()
   }
 
   class DynamicTlsChannel[M](
@@ -399,8 +399,8 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       } yield ()
   }
 
-  private def makeMessageQueue[M](limit: Int, channelConfig: ChannelConfig)(implicit scheduler: Scheduler) = {
-    ChannelAwareQueue[ChannelEvent[M]](limit, ChannelType.SPMC, channelConfig).runSyncUnsafe()
+  private def makeMessageQueue[M](limit: Int, channelConfig: ChannelConfig) = {
+    ChannelAwareQueue[ChannelEvent[M]](limit, ChannelType.SPMC, channelConfig).unsafeRunSync()
   }
 
   sealed abstract class TlsChannelType

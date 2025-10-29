@@ -50,8 +50,7 @@ class DynamicTLSPeerGroup[M] private (
     val config: Config,
     serverQueue: CloseableQueue[ServerEvent[PeerInfo, M]]
 )(
-    implicit codec: Codec[M],
-    scheduler: Scheduler
+    implicit codec: Codec[M]
 ) extends TerminalPeerGroup[PeerInfo, M]
     with ProxySupport[PeerInfo, M]
     with StrictLogging {
@@ -148,7 +147,7 @@ class DynamicTLSPeerGroup[M] private (
 object DynamicTLSPeerGroup {
   case class PeerInfo(id: BitVector, address: InetMultiAddress)
   object PeerInfo {
-    implicit val peerInfoAddressable = new Addressable[PeerInfo] {
+    implicit val peerInfoAddressable: Addressable[PeerInfo] = new Addressable[PeerInfo] {
       override def getAddress(a: PeerInfo): InetSocketAddress = a.address.inetSocketAddress
     }
   }
@@ -407,7 +406,7 @@ object DynamicTLSPeerGroup {
   }
 
   /** Create the peer group as a resource that is guaranteed to initialize itself and shut itself down at the end. */
-  def apply[M: Codec](config: Config)(implicit scheduler: Scheduler): Resource[Task, DynamicTLSPeerGroup[M]] =
+  def apply[M: Codec](config: Config): Resource[IO, DynamicTLSPeerGroup[M]] =
     Resource.make {
       for {
         // Using MPMC because the channel creation event is only pushed after the SSL handshake,

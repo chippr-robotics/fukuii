@@ -162,6 +162,10 @@ lazy val scalanet = {
           Dependencies.scodec ++
           Dependencies.netty ++
           Dependencies.crypto ++
+          Dependencies.jodaTime ++
+          Dependencies.ipmath ++
+          Dependencies.scaffeine ++
+          Dependencies.logging ++
           Dependencies.testing
     )
 
@@ -188,6 +192,10 @@ lazy val scalanetDiscovery = {
           Dependencies.scodec ++
           Dependencies.netty ++
           Dependencies.crypto ++
+          Dependencies.jodaTime ++
+          Dependencies.ipmath ++
+          Dependencies.scaffeine ++
+          Dependencies.logging ++
           Dependencies.testing
     )
 

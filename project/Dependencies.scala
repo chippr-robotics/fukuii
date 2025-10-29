@@ -108,10 +108,21 @@ object Dependencies {
     val nettyVersion = "4.1.109.Final" // Updated for security
     Seq(
       "io.netty" % "netty-handler" % nettyVersion,
+      "io.netty" % "netty-handler-proxy" % nettyVersion, // For Socks5ProxyHandler
       "io.netty" % "netty-transport" % nettyVersion,
       "io.netty" % "netty-codec" % nettyVersion
     )
   }
+
+  // Joda Time for DateTime (used in scalanet TLS extension)
+  val jodaTime: Seq[ModuleID] = Seq(
+    "joda-time" % "joda-time" % "2.12.7"
+  )
+
+  // IP math library for IP address range operations (used in scalanet)
+  val ipmath: Seq[ModuleID] = Seq(
+    "com.github.jgonian" % "commons-ip-math" % "1.32"
+  )
 
   val logging = Seq(
     "ch.qos.logback" % "logback-classic" % "1.5.12", // Updated for better compatibility
@@ -198,7 +209,8 @@ object Dependencies {
   )
 
   val scaffeine: Seq[ModuleID] = Seq(
-    "com.github.blemale" %% "scaffeine" % "5.3.0" % "compile" // Updated for Scala 3 support
+    "com.github.blemale" %% "scaffeine" % "5.3.0" % "compile", // Updated for Scala 3 support
+    "com.github.ben-manes.caffeine" % "caffeine" % "3.1.8" // Explicit caffeine dependency for scalanet
   )
 
 }
