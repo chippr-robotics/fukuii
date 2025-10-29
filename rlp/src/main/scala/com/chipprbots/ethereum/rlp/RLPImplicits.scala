@@ -9,7 +9,7 @@ import RLPCodec.Ops
 
 object RLPImplicits {
 
-  implicit val byteEncDec: RLPEncoder[Byte] with RLPDecoder[Byte] = new RLPEncoder[Byte] with RLPDecoder[Byte] {
+  given byteEncDec: (RLPEncoder[Byte] & RLPDecoder[Byte]) = new RLPEncoder[Byte] with RLPDecoder[Byte] {
     override def encode(obj: Byte): RLPValue = RLPValue(byteToByteArray(obj))
 
     override def decode(rlp: RLPEncodeable): Byte = rlp match {
@@ -24,7 +24,7 @@ object RLPImplicits {
     }
   }
 
-  implicit val shortEncDec: RLPEncoder[Short] with RLPDecoder[Short] = new RLPEncoder[Short] with RLPDecoder[Short] {
+  given shortEncDec: (RLPEncoder[Short] & RLPDecoder[Short]) = new RLPEncoder[Short] with RLPDecoder[Short] {
     override def encode(obj: Short): RLPValue = RLPValue(shortToBigEndianMinLength(obj))
 
     override def decode(rlp: RLPEncodeable): Short = rlp match {
@@ -40,7 +40,7 @@ object RLPImplicits {
     }
   }
 
-  implicit val intEncDec: RLPEncoder[Int] with RLPDecoder[Int] = new RLPEncoder[Int] with RLPDecoder[Int] {
+  given intEncDec: (RLPEncoder[Int] & RLPDecoder[Int]) = new RLPEncoder[Int] with RLPDecoder[Int] {
     override def encode(obj: Int): RLPValue = RLPValue(intToBigEndianMinLength(obj))
 
     override def decode(rlp: RLPEncodeable): Int = rlp match {
@@ -50,7 +50,7 @@ object RLPImplicits {
   }
 
   // Used for decoding and encoding positive (or 0) BigInts
-  implicit val bigIntEncDec: RLPEncoder[BigInt] with RLPDecoder[BigInt] = new RLPEncoder[BigInt]
+  given bigIntEncDec: (RLPEncoder[BigInt] & RLPDecoder[BigInt]) = new RLPEncoder[BigInt]
     with RLPDecoder[BigInt] {
 
     override def encode(obj: BigInt): RLPValue = RLPValue(
@@ -65,7 +65,7 @@ object RLPImplicits {
   }
 
   // Used for decoding and encoding positive (or 0) longs
-  implicit val longEncDec: RLPEncoder[Long] with RLPDecoder[Long] = new RLPEncoder[Long] with RLPDecoder[Long] {
+  given longEncDec: (RLPEncoder[Long] & RLPDecoder[Long]) = new RLPEncoder[Long] with RLPDecoder[Long] {
     override def encode(obj: Long): RLPEncodeable = bigIntEncDec.encode(BigInt(obj))
 
     override def decode(rlp: RLPEncodeable): Long = rlp match {
@@ -75,7 +75,7 @@ object RLPImplicits {
     }
   }
 
-  implicit val stringEncDec: RLPEncoder[String] with RLPDecoder[String] = new RLPEncoder[String]
+  given stringEncDec: (RLPEncoder[String] & RLPDecoder[String]) = new RLPEncoder[String]
     with RLPDecoder[String] {
     override def encode(obj: String): RLPValue = RLPValue(obj.getBytes)
 
@@ -85,7 +85,7 @@ object RLPImplicits {
     }
   }
 
-  implicit val byteArrayEncDec: RLPEncoder[Array[Byte]] with RLPDecoder[Array[Byte]] = new RLPEncoder[Array[Byte]]
+  given byteArrayEncDec: (RLPEncoder[Array[Byte]] & RLPDecoder[Array[Byte]]) = new RLPEncoder[Array[Byte]]
     with RLPDecoder[Array[Byte]] {
 
     override def encode(obj: Array[Byte]): RLPValue = RLPValue(obj)
@@ -96,17 +96,14 @@ object RLPImplicits {
     }
   }
 
-  implicit val byteStringEncDec: RLPEncoder[ByteString] with RLPDecoder[ByteString] = new RLPEncoder[ByteString]
+  given byteStringEncDec: (RLPEncoder[ByteString] & RLPDecoder[ByteString]) = new RLPEncoder[ByteString]
     with RLPDecoder[ByteString] {
     override def encode(obj: ByteString): RLPEncodeable = byteArrayEncDec.encode(obj.toArray[Byte])
 
     override def decode(rlp: RLPEncodeable): ByteString = ByteString(byteArrayEncDec.decode(rlp))
   }
 
-  implicit def seqEncDec[T]()(implicit
-      enc: RLPEncoder[T],
-      dec: RLPDecoder[T]
-  ): RLPEncoder[Seq[T]] with RLPDecoder[Seq[T]] =
+  given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): (RLPEncoder[Seq[T]] & RLPDecoder[Seq[T]]) =
     new RLPEncoder[Seq[T]] with RLPDecoder[Seq[T]] {
       override def encode(obj: Seq[T]): RLPEncodeable = RLPList(obj.map(enc.encode): _*)
 
@@ -116,21 +113,21 @@ object RLPImplicits {
       }
     }
 
-  implicit def listEncDec[T: RLPEncoder: RLPDecoder]: RLPCodec[List[T]] =
-    seqEncDec[T]().xmap(_.toList, _.toSeq)
+  given listEncDec[T: RLPEncoder: RLPDecoder]: RLPCodec[List[T]] =
+    seqEncDec[T].xmap(_.toList, _.toSeq)
 
-  implicit def optionEnc[T](implicit enc: RLPEncoder[T]): RLPEncoder[Option[T]] = {
+  given optionEnc[T](using enc: RLPEncoder[T]): RLPEncoder[Option[T]] = {
     case None        => RLPList()
     case Some(value) => RLPList(enc.encode(value))
   }
 
-  implicit def optionDec[T](implicit dec: RLPDecoder[T]): RLPDecoder[Option[T]] = {
+  given optionDec[T](using dec: RLPDecoder[T]): RLPDecoder[Option[T]] = {
     case RLPList(value) => Some(dec.decode(value))
     case RLPList()      => None
     case rlp            => throw RLPException(s"${rlp} should be a list with 1 or 0 elements", rlp)
   }
 
-  implicit val booleanEncDec: RLPEncoder[Boolean] with RLPDecoder[Boolean] = new RLPEncoder[Boolean]
+  given booleanEncDec: (RLPEncoder[Boolean] & RLPDecoder[Boolean]) = new RLPEncoder[Boolean]
     with RLPDecoder[Boolean] {
     override def encode(obj: Boolean): RLPEncodeable = {
       val intRepresentation: Int = if (obj) 1 else 0
@@ -146,7 +143,7 @@ object RLPImplicits {
     }
   }
 
-  implicit def tuple2Codec[A: RLPCodec, B: RLPCodec]: RLPCodec[(A, B)] =
+  given tuple2Codec[A: RLPCodec, B: RLPCodec]: RLPCodec[(A, B)] =
     RLPCodec.instance[(A, B)](
       { case (a, b) =>
         RLPList(RLPEncoder.encode(a), RLPEncoder.encode(b))
@@ -156,7 +153,7 @@ object RLPImplicits {
       }
     )
 
-  implicit def tuple3Codec[A: RLPCodec, B: RLPCodec, C: RLPCodec]: RLPCodec[(A, B, C)] =
+  given tuple3Codec[A: RLPCodec, B: RLPCodec, C: RLPCodec]: RLPCodec[(A, B, C)] =
     RLPCodec.instance[(A, B, C)](
       { case (a, b, c) =>
         RLPList(RLPEncoder.encode(a), RLPEncoder.encode(b), RLPEncoder.encode(c))
@@ -166,7 +163,7 @@ object RLPImplicits {
       }
     )
 
-  implicit def tuple4Codec[A: RLPCodec, B: RLPCodec, C: RLPCodec, D: RLPCodec]: RLPCodec[(A, B, C, D)] =
+  given tuple4Codec[A: RLPCodec, B: RLPCodec, C: RLPCodec, D: RLPCodec]: RLPCodec[(A, B, C, D)] =
     RLPCodec.instance[(A, B, C, D)](
       { case (a, b, c, d) =>
         RLPList(RLPEncoder.encode(a), RLPEncoder.encode(b), RLPEncoder.encode(c), RLPEncoder.encode(d))
@@ -176,7 +173,7 @@ object RLPImplicits {
       }
     )
 
-  implicit def tuple5Codec[A: RLPCodec, B: RLPCodec, C: RLPCodec, D: RLPCodec, E: RLPCodec]: RLPCodec[(A, B, C, D, E)] =
+  given tuple5Codec[A: RLPCodec, B: RLPCodec, C: RLPCodec, D: RLPCodec, E: RLPCodec]: RLPCodec[(A, B, C, D, E)] =
     RLPCodec.instance[(A, B, C, D, E)](
       { case (a, b, c, d, e) =>
         RLPList(

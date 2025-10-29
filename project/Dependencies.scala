@@ -204,9 +204,9 @@ object Dependencies {
     )
   }
 
-  val shapeless: Seq[ModuleID] = Seq(
-    "com.chuusai" %% "shapeless" % "2.3.12" // Shapeless 2 for Scala 2.13
-  )
+  // Shapeless removed - now using Scala 3 native derivation (Mirror-based)
+  // See RLPDerivation.scala for the new implementation
+  val shapeless: Seq[ModuleID] = Seq.empty
 
   val scaffeine: Seq[ModuleID] = Seq(
     "com.github.blemale" %% "scaffeine" % "5.3.0" % "compile", // Updated for Scala 3 support
