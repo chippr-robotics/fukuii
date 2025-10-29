@@ -6,11 +6,8 @@ import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
 import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, MessageReceived}
 import com.chipprbots.scalanet.peergroup.Channel
-import monix.eval.Task
-import monix.execution.{Scheduler, BufferCapacity}
+import cats.effect.IO
 import scala.collection.concurrent.TrieMap
-import monix.execution.atomic.AtomicInt
-import monix.catnap.ConcurrentQueue
 import scala.concurrent.duration._
 
 class MockPeerGroup[A, M](
@@ -22,7 +19,7 @@ class MockPeerGroup[A, M](
   private val serverEvents = ConcurrentQueue[Task].unsafe[ServerEvent[A, M]](BufferCapacity.Unbounded())
 
   // Intended for the System Under Test to read incoming channels.
-  override def nextServerEvent: Task[Option[PeerGroup.ServerEvent[A, M]]] =
+  override def nextServerEvent: IO[Option[PeerGroup.ServerEvent[A, M]]] =
     serverEvents.poll.map(Some(_))
 
   // Intended for the System Under Test to open outgoing channels.
@@ -37,10 +34,10 @@ class MockPeerGroup[A, M](
     }
   }
 
-  def getOrCreateChannel(to: A): Task[MockChannel[A, M]] =
+  def getOrCreateChannel(to: A): IO[MockChannel[A, M]] =
     Task(channels.getOrElseUpdate(to, new MockChannel[A, M](processAddress, to)))
 
-  def createServerChannel(from: A): Task[MockChannel[A, M]] =
+  def createServerChannel(from: A): IO[MockChannel[A, M]] =
     for {
       channel <- Task(new MockChannel[A, M](processAddress, from))
       _ <- Task(channel.refCount.increment())
@@ -66,17 +63,17 @@ class MockChannel[A, M](
     refCount.get() == 0
 
   // Messages coming from the System Under Test.
-  override def sendMessage(message: M): Task[Unit] =
+  override def sendMessage(message: M): IO[Unit] =
     messagesFromSUT.offer(MessageReceived(message))
 
   // Messages consumed by the System Under Test.
-  override def nextChannelEvent: Task[Option[Channel.ChannelEvent[M]]] =
+  override def nextChannelEvent: IO[Option[Channel.ChannelEvent[M]]] =
     messagesToSUT.poll.map(Some(_))
 
   // Send a message from the test.
-  def sendMessageToSUT(message: M): Task[Unit] =
+  def sendMessageToSUT(message: M): IO[Unit] =
     messagesToSUT.offer(MessageReceived(message))
 
-  def nextMessageFromSUT(timeout: FiniteDuration = 250.millis): Task[Option[ChannelEvent[M]]] =
-    messagesFromSUT.poll.map(Some(_)).timeoutTo(timeout, Task.pure(None))
+  def nextMessageFromSUT(timeout: FiniteDuration = 250.millis): IO[Option[ChannelEvent[M]]] =
+    messagesFromSUT.poll.map(Some(_)).timeoutTo(timeout, IO.pure(None))
 }

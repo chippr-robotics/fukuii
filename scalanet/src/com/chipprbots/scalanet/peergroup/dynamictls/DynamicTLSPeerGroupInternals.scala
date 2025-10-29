@@ -34,8 +34,7 @@ import io.netty.channel.{
 import io.netty.handler.ssl.{SslContext, SslHandshakeCompletionEvent}
 
 import javax.net.ssl.{SSLException, SSLHandshakeException, SSLKeyException}
-import monix.eval.Task
-import monix.execution.{ChannelType, Scheduler}
+import cats.effect.IO
 import scodec.bits.BitVector
 
 import scala.concurrent.Promise
@@ -80,9 +79,9 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
   }
 
   implicit class ChannelOps(val channel: io.netty.channel.Channel) {
-    def sendMessage[M](m: M)(implicit codec: Codec[M]): Task[Unit] =
+    def sendMessage[M](m: M)(implicit codec: Codec[M]): IO[Unit] =
       for {
-        enc <- Task.fromTry(codec.encode(m).toTry)
+        enc <- IO.fromTry(codec.encode(m).toTry)
         _ <- toTask(channel.writeAndFlush(Unpooled.wrappedBuffer(enc.toByteBuffer)))
       } yield ()
   }
@@ -158,7 +157,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       // Don't want to lose message, so `offer`, not `tryOffer`.
       executeAsync(messageQueue.offer(event).void)
 
-    private def executeAsync(task: Task[Unit]): Unit =
+    private def executeAsync(task: IO[Unit]): Unit =
       task.runAsyncAndForget(scheduler)
   }
 
@@ -249,13 +248,13 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       val connectTask = for {
         _ <- Task(logger.debug("Initiating connection to peer {}", peerInfo))
         _ <- toTask(bootstrap.connect(peerInfo.address.inetSocketAddress))
-        ch <- Task.deferFuture(activationF)
+        ch <- IO.deferFuture(activationF)
         _ <- Task(logger.debug("Connection to peer {} finished successfully", peerInfo))
       } yield new DynamicTlsChannel[M](localId, peerInfo, ch._1, ch._2, ClientChannel)
 
-      connectTask.onErrorRecoverWith {
+      connectIO.onErrorRecoverWith {
         case t: Throwable =>
-          Task.raiseError(mapException(t))
+          IO.raiseError(mapException(t))
       }
     }
 
@@ -373,16 +372,16 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
 
     override val from: PeerInfo = PeerInfo(localId, InetMultiAddress(nettyChannel.localAddress()))
 
-    override def sendMessage(message: M): Task[Unit] = {
+    override def sendMessage(message: M): IO[Unit] = {
       logger.debug("Sending message to peer {} via {}", nettyChannel.localAddress(), channelType)
       nettyChannel.sendMessage(message)(codec).onErrorRecoverWith {
         case e: IOException =>
           logger.debug("Sending message to {} failed due to {}", message, e)
-          Task.raiseError(new ChannelBrokenException[PeerInfo](to, e))
+          IO.raiseError(new ChannelBrokenException[PeerInfo](to, e))
       }
     }
 
-    override def nextChannelEvent: Task[Option[ChannelEvent[M]]] = incomingMessagesQueue.next
+    override def nextChannelEvent: IO[Option[ChannelEvent[M]]] = incomingMessagesQueue.next
 
     private[peergroup] def incomingQueueSize: Long = incomingMessagesQueue.size
 
@@ -390,7 +389,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       * To be sure that `channelInactive` had run before returning from close, we are also waiting for nettyChannel.closeFuture() after
       * nettyChannel.close()
       */
-    private[peergroup] def close(): Task[Unit] =
+    private[peergroup] def close(): IO[Unit] =
       for {
         _ <- Task(logger.debug("Closing {} to peer {}", channelType, to))
         _ <- toTask(nettyChannel.close())

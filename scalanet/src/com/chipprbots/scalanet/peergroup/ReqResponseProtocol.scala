@@ -4,8 +4,8 @@ import java.net.InetSocketAddress
 import java.security.SecureRandom
 import java.util.UUID
 import cats.implicits._
-import cats.effect.{Fiber, Resource}
-import cats.effect.concurrent.{Ref, Semaphore}
+import cats.effect.{Fiber, Resource, Ref, IO}
+import cats.effect.std.{Semaphore, Queue}
 import com.chipprbots.scalanet.crypto.CryptoUtils
 import com.chipprbots.scalanet.peergroup.implicits._
 import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, MessageReceived}
@@ -13,13 +13,10 @@ import com.chipprbots.scalanet.peergroup.ReqResponseProtocol._
 import com.chipprbots.scalanet.peergroup.dynamictls.{DynamicTLSPeerGroup, Secp256k1}
 import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{FramingConfig, PeerInfo}
 import com.chipprbots.scalanet.peergroup.udp.DynamicUDPPeerGroup
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.tail.Iterant
+import fs2.Stream
 import scodec.Codec
 
 import scala.concurrent.duration.{FiniteDuration, _}
-import monix.catnap.ConcurrentChannel
 
 /**
   * Simple higher level protocol on top of generic peer group. User is shielded from differnt implementation details like:
@@ -38,24 +35,24 @@ import monix.catnap.ConcurrentChannel
   */
 class ReqResponseProtocol[A, M](
     group: PeerGroup[A, MessageEnvelope[M]],
-    channelSemaphore: Semaphore[Task],
-    channelMapRef: Ref[Task, ReqResponseProtocol.ChannelMap[A, M]],
-    fiberMapRef: Ref[Task, Map[ChannelId, Fiber[Task, Unit]]]
-)(implicit s: Scheduler, a: Addressable[A]) {
+    channelSemaphore: Semaphore[IO],
+    channelMapRef: Ref[IO, ReqResponseProtocol.ChannelMap[A, M]],
+    fiberMapRef: Ref[IO, Map[ChannelId, Fiber[IO, Unit]]]
+)(a: Addressable[A]) {
 
   private def getChan(
       to: A,
       channelId: ChannelId
-  ): Task[ReqResponseChannel[A, M]] = {
+  ): IO[ReqResponseChannel[A, M]] = {
     channelMapRef.get.map(_.get(channelId)).flatMap {
       case Some(channel) =>
-        Task.pure(channel)
+        IO.pure(channel)
 
       case None =>
         channelSemaphore.withPermit {
           channelMapRef.get.map(_.get(channelId)).flatMap {
             case Some(channel) =>
-              Task.pure(channel)
+              IO.pure(channel)
 
             case None =>
               group.client(to).allocated.flatMap {
@@ -74,8 +71,8 @@ class ReqResponseProtocol[A, M](
 
   // It do not close the client channel after each message as in case of tcp it would be really costly
   // to create new tcp connection for each message.
-  // it probably should return Task[Either[E, M]]
-  def send(m: M, to: A, requestDuration: FiniteDuration = 5.seconds): Task[M] = {
+  // it probably should return IO[Either[E, M]]
+  def send(m: M, to: A, requestDuration: FiniteDuration = 5.seconds): IO[M] = {
     val channelId = (a.getAddress(processAddress), a.getAddress(to))
     for {
       ch <- getChan(to, channelId)
@@ -89,7 +86,7 @@ class ReqResponseProtocol[A, M](
       c: ReqResponseChannel[A, M],
       messageToSend: MessageEnvelope[M],
       timeOutDuration: FiniteDuration
-  ): Task[M] =
+  ): IO[M] =
     for {
       // Subscribe first so we don't miss the response.
       subscription <- c.subscribeForResponse(messageToSend.id, timeOutDuration).start
@@ -98,7 +95,7 @@ class ReqResponseProtocol[A, M](
     } yield result
 
   /** Start handling requests in the background. */
-  def startHandling(requestHandler: M => M): Task[Unit] = {
+  def startHandling(requestHandler: M => M): IO[Unit] = {
     group.nextServerEvent.toObservable.collectChannelCreated
       .foreachL {
         case (channel, release) =>
@@ -125,13 +122,13 @@ class ReqResponseProtocol[A, M](
   }
 
   /** Stop background fibers. */
-  private def cancelHandling(): Task[Unit] =
+  private def cancelHandling(): IO[Unit] =
     fiberMapRef.get.flatMap { fiberMap =>
       fiberMap.values.toList.traverse(_.cancel.attempt)
     }.void >> fiberMapRef.set(Map.empty)
 
   /** Release all open channels */
-  private def closeChannels(): Task[Unit] =
+  private def closeChannels(): IO[Unit] =
     channelMapRef.get.flatMap { channelMap =>
       channelMap.values.toList.traverse {
         _.release.attempt
@@ -149,13 +146,13 @@ object ReqResponseProtocol {
       val release: Release
   ) {
 
-    def sendMessage(message: MessageEnvelope[M]): Task[Unit] =
+    def sendMessage(message: MessageEnvelope[M]): IO[Unit] =
       channel.sendMessage(message)
 
     def subscribeForResponse(
         responseId: UUID,
         timeOutDuration: FiniteDuration
-    ): Task[MessageEnvelope[M]] = {
+    ): IO[MessageEnvelope[M]] = {
       concurrentChannel.consume.use { consumer =>
         Iterant
           .repeatEvalF(consumer.pull)
@@ -169,9 +166,9 @@ object ReqResponseProtocol {
           .headOptionL
           .flatMap {
             case None =>
-              Task.raiseError(new RuntimeException(s"Didn't receive a response for request $responseId"))
+              IO.raiseError(new RuntimeException(s"Didn't receive a response for request $responseId"))
             case Some(response) =>
-              Task.pure(response)
+              IO.pure(response)
           }
           .timeout(timeOutDuration)
       }
@@ -183,7 +180,7 @@ object ReqResponseProtocol {
     // messages to a concurrent channel, so every consumer gets every message.
     type ConChan[M] = ConcurrentChannel[Task, Option[Throwable], ChannelEvent[MessageEnvelope[M]]]
 
-    def apply[A, M](channel: Channel[A, MessageEnvelope[M]], release: Task[Unit]): Task[ReqResponseChannel[A, M]] =
+    def apply[A, M](channel: Channel[A, MessageEnvelope[M]], release: IO[Unit]): IO[ReqResponseChannel[A, M]] =
       for {
         concurrentChannel <- ConcurrentChannel.of[Task, Option[Throwable], ChannelEvent[MessageEnvelope[M]]]
         producer <- channel.nextChannelEvent.toIterant.pushToChannel(concurrentChannel).start
@@ -205,13 +202,13 @@ object ReqResponseProtocol {
 
   private def buildProtocol[A, M](
       group: PeerGroup[A, MessageEnvelope[M]]
-  )(implicit s: Scheduler, a: Addressable[A]): Resource[Task, ReqResponseProtocol[A, M]] = {
+  )(a: Addressable[A]): Resource[Task, ReqResponseProtocol[A, M]] = {
     Resource
       .make(
         for {
-          channelSemaphore <- Semaphore[Task](1)
+          channelSemaphore <- Semaphore[IO](1)
           channelMapRef <- Ref.of[Task, ChannelMap[A, M]](Map.empty)
-          fiberMapRef <- Ref.of[Task, Map[ChannelId, Fiber[Task, Unit]]](Map.empty)
+          fiberMapRef <- Ref.of[Task, Map[ChannelId, Fiber[IO, Unit]]](Map.empty)
           protocol = new ReqResponseProtocol[A, M](group, channelSemaphore, channelMapRef, fiberMapRef)
         } yield protocol
       ) { protocol =>
@@ -222,13 +219,13 @@ object ReqResponseProtocol {
 
   def getTlsReqResponseProtocolClient[M](framingConfig: FramingConfig)(
       address: InetSocketAddress
-  )(implicit s: Scheduler, c: Codec[M]): Resource[Task, ReqResponseProtocol[PeerInfo, M]] = {
+  )(c: Codec[M]): Resource[Task, ReqResponseProtocol[PeerInfo, M]] = {
     implicit lazy val envelopeCodec = MessageEnvelope.defaultCodec[M]
     val rnd = new SecureRandom()
     val hostkeyPair = CryptoUtils.genEcKeyPair(rnd, Secp256k1.curveName)
     for {
       config <- Resource.liftF(
-        Task.fromTry(
+        IO.fromTry(
           DynamicTLSPeerGroup
             .Config(
               address,
@@ -250,7 +247,7 @@ object ReqResponseProtocol {
 
   def getDynamicUdpReqResponseProtocolClient[M](
       address: InetSocketAddress
-  )(implicit s: Scheduler, c: Codec[M]): Resource[Task, ReqResponseProtocol[InetMultiAddress, M]] = {
+  )(c: Codec[M]): Resource[Task, ReqResponseProtocol[InetMultiAddress, M]] = {
     implicit val codec = MessageEnvelope.defaultCodec[M]
     for {
       pg <- DynamicUDPPeerGroup[MessageEnvelope[M]](DynamicUDPPeerGroup.Config(address))

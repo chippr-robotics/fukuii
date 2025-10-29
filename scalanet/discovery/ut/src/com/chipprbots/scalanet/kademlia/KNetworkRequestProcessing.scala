@@ -3,9 +3,9 @@ package com.chipprbots.scalanet.kademlia
 import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
 import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
 import com.chipprbots.scalanet.kademlia.KMessage.{KRequest, KResponse}
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.reactive.Observable
+import cats.effect.IO
+
+import fs2.Stream
 
 /**
   * If a user of KNetwork wanted to consume only one kind of request,
@@ -16,13 +16,13 @@ import monix.reactive.Observable
   */
 object KNetworkRequestProcessing {
 
-  implicit class KNetworkExtension[A](kNetwork: KNetwork[A])(implicit scheduler: Scheduler) {
+  implicit class KNetworkExtension[A](kNetwork: KNetwork[A])() {
 
-    type KRequestT = (KRequest[A], Option[KResponse[A]] => Task[Unit])
-    type FindNodesT = (FindNodes[A], Option[Nodes[A]] => Task[Unit])
-    type PingT = (Ping[A], Option[Pong[A]] => Task[Unit])
+    type KRequestT = (KRequest[A], Option[KResponse[A]] => IO[Unit])
+    type FindNodesT = (FindNodes[A], Option[Nodes[A]] => IO[Unit])
+    type PingT = (Ping[A], Option[Pong[A]] => IO[Unit])
 
-    def findNodesRequests(): Observable[FindNodesT] =
+    def findNodesRequests(): Stream[IO, FindNodesT] =
       kNetwork.kRequests
         .collect {
           case (f @ FindNodes(_, _, _), h) =>
@@ -32,7 +32,7 @@ object KNetworkRequestProcessing {
         }
         .collect { case Some(v) => v }
 
-    def pingRequests(): Observable[PingT] =
+    def pingRequests(): Stream[IO, PingT] =
       kNetwork.kRequests
         .map {
           case (p @ Ping(_, _), h) =>
@@ -43,7 +43,7 @@ object KNetworkRequestProcessing {
         .collect { case Some(v) => v }
 
     private def ignore(
-        handler: Option[KResponse[A]] => Task[Unit]
+        handler: Option[KResponse[A]] => IO[Unit]
     ): None.type = {
       handler(None).runSyncUnsafe()
       None

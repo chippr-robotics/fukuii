@@ -12,7 +12,7 @@ import com.chipprbots.scalanet.NetUtils
 import com.chipprbots.scalanet.peergroup.InetMultiAddress
 import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import java.net.InetSocketAddress
-import monix.eval.Task
+import cats.effect.IO
 import scala.concurrent.duration._
 import scodec.bits.BitVector
 
@@ -23,7 +23,7 @@ class DiscoveryKademliaIntegrationSpec extends KademliaIntegrationSpec("Discover
       override val self: Node,
       service: DiscoveryService
   ) extends TestNode {
-    override def getPeers: Task[Seq[Node]] =
+    override def getPeers: IO[Seq[Node]] =
       service.getNodes.map(_.toSeq)
   }
 

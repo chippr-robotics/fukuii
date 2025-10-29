@@ -1,7 +1,7 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
 import cats.implicits._
-import cats.effect.concurrent.Ref
+import cats.effect.Ref
 import com.chipprbots.scalanet.discovery.crypto.{PublicKey, Signature}
 import com.chipprbots.scalanet.discovery.ethereum.{EthereumNodeRecord, Node}
 import com.chipprbots.scalanet.discovery.ethereum.KeyValueTag, KeyValueTag.NetworkId
@@ -12,9 +12,8 @@ import com.chipprbots.scalanet.discovery.ethereum.v4.KBucketsWithSubnetLimits.Su
 import com.chipprbots.scalanet.kademlia.Xor
 import com.chipprbots.scalanet.NetUtils.aRandomAddress
 import java.net.InetSocketAddress
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.execution.atomic.AtomicInt
+import cats.effect.IO
+
 import org.scalatest._
 import org.scalatest.prop.TableDrivenPropertyChecks
 import scala.concurrent.duration._
@@ -249,8 +248,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
 
   trait BondingFixture extends Fixture {
     override lazy val rpc = unimplementedRPC.copy(
-      ping = _ => _ => Task.pure(Some(None)),
-      enrRequest = _ => _ => Task.pure(Some(remoteENR))
+      ping = _ => _ => IO.pure(Some(None)),
+      enrRequest = _ => _ => IO.pure(Some(remoteENR))
     )
   }
 
@@ -270,7 +269,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "not consider a peer bonded if it doesn't respond to a ping" in test {
     new BondingFixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(None)
+        ping = _ => _ => IO.pure(None)
       )
       override val test = for {
         bonded <- service.bond(remotePeer)
@@ -309,7 +308,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       override val test = for {
         _ <- service.bond(remotePeer)
         // Allow the ENR fetching to finish.
-        _ <- stateRef.get.flatMap(_.fetchEnrMap.get(remotePeer).fold(Task.sleep(100.millis))(_.get.void))
+        _ <- stateRef.get.flatMap(_.fetchEnrMap.get(remotePeer).fold(IO.sleep(100.millis))(_.get.void))
         state <- stateRef.get
       } yield {
         state.enrMap(remotePublicKey) shouldBe remoteENR
@@ -321,7 +320,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "remove the peer if the bond fails" in test {
     new BondingFixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(None)
+        ping = _ => _ => IO.pure(None)
       )
       override val test = for {
         _ <- stateRef.update {
@@ -353,7 +352,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "fetch if the address changed" in test {
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
+        ping = _ => _ => IO.pure(Some(None)),
         enrRequest = _ => _ => Task(Some(remoteENR))
       )
       val previousAddress = aRandomAddress()
@@ -382,7 +381,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       val callCount = AtomicInt(0)
 
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
+        ping = _ => _ => IO.pure(Some(None)),
         enrRequest = _ =>
           _ =>
             Task {
@@ -392,7 +391,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       )
 
       override val test = for {
-        _ <- Task.parSequenceUnordered(
+        _ <- IO.parSequenceUnordered(
           List.fill(5)(service.fetchEnr(remotePeer))
         )
       } yield {
@@ -404,7 +403,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "update the ENR, node maps and the k-buckets" in test {
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
+        ping = _ => _ => IO.pure(Some(None)),
         enrRequest = _ => _ => Task(Some(remoteENR))
       )
       override val test = for {
@@ -422,7 +421,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "remove the node if the ENR signature validation fails" in test {
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
+        ping = _ => _ => IO.pure(Some(None)),
         enrRequest = _ => _ => Task(Some(remoteENR.copy(signature = Signature(remoteENR.signature.reverse))))
       )
       override val test = for {
@@ -440,7 +439,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "not remove the bonded status if the ENR fetch fails" in test {
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
+        ping = _ => _ => IO.pure(Some(None)),
         enrRequest = _ => _ => Task(None)
       )
       override val test = for {
@@ -470,7 +469,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     }
 
     override lazy val rpc = unimplementedRPC.copy(
-      ping = _ => _ => Task.pure(Some(None)),
+      ping = _ => _ => IO.pure(Some(None)),
       enrRequest = _ => _ => Task(Some(remoteENR))
     )
 
@@ -529,7 +528,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
 
     // We'll try to ping the first peer.
     override lazy val rpc = unimplementedRPC.copy(
-      ping = _ => _ => Task.pure(if (responds) Some(None) else None)
+      ping = _ => _ => IO.pure(if (responds) Some(None) else None)
     )
     override val test = for {
       _ <- stateRef.update(
@@ -571,7 +570,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         hasEnrolled <- stateRef.get.map(_.hasEnrolled)
         maybeEnrSeq <- service.ping(remotePeer)(None)
         // Shouldn't start bonding, but in case it does, wait until it finishes.
-        _ <- stateRef.get.flatMap(_.bondingResultsMap.get(remotePeer).fold(Task.unit)(_.pongReceived.get.void))
+        _ <- stateRef.get.flatMap(_.bondingResultsMap.get(remotePeer).fold(IO.unit)(_.pongReceived.get.void))
         state <- stateRef.get
       } yield {
         hasEnrolled shouldBe false
@@ -593,8 +592,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         _ <- stateRef.update(_.setEnrolled)
         maybeEnrSeq <- service.ping(remotePeer)(None)
         // Wait for any ongoing bonding and ENR fetching to finish.
-        _ <- stateRef.get.flatMap(_.bondingResultsMap.get(remotePeer).fold(Task.unit)(_.pongReceived.get.void))
-        _ <- stateRef.get.flatMap(_.fetchEnrMap.get(remotePeer).fold(Task.unit)(_.get.void))
+        _ <- stateRef.get.flatMap(_.bondingResultsMap.get(remotePeer).fold(IO.unit)(_.pongReceived.get.void))
+        _ <- stateRef.get.flatMap(_.fetchEnrMap.get(remotePeer).fold(IO.unit)(_.get.void))
         state <- stateRef.get
       } yield {
         maybeEnrSeq shouldBe Some(Some(localENR.content.seq))
@@ -688,10 +687,10 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     )
 
     override lazy val rpc = unimplementedRPC.copy(
-      ping = _ => _ => Task.pure(Some(None)),
+      ping = _ => _ => IO.pure(Some(None)),
       enrRequest = peer =>
         _ =>
-          Task.pure {
+          IO.pure {
             ((remoteNode -> remoteENR) +: randomNodes).find(_._1.id == peer.id).map(_._2)
           },
       findNode = _ =>
@@ -699,7 +698,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
           Task {
             expectedTarget.foreach(targetPublicKey shouldBe _)
           } >>
-            Task.pure {
+            IO.pure {
               // Every peer returns some random subset of the nodes we prepared.
               Some(Random.shuffle(randomNodes).take(config.kademliaBucketSize).map(_._1))
             }
@@ -731,8 +730,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       }
 
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(None),
-        findNode = _ => _ => Task.pure(Some(nonExistingNodes))
+        ping = _ => _ => IO.pure(None),
+        findNode = _ => _ => IO.pure(Some(nonExistingNodes))
       )
 
       override val test = for {
@@ -816,11 +815,11 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       val nodes = localNodes ++ remoteNodes
 
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
-        enrRequest = peer => _ => Task.pure(nodes.find(_._1.id == peer.id).map(_._2)),
+        ping = _ => _ => IO.pure(Some(None)),
+        enrRequest = peer => _ => IO.pure(nodes.find(_._1.id == peer.id).map(_._2)),
         // Return a mix of remote and local nodes.
         findNode =
-          _ => targetPublicKey => Task.pure(Some(Random.shuffle(nodes).take(config.kademliaBucketSize).map(_._1)))
+          _ => targetPublicKey => IO.pure(Some(Random.shuffle(nodes).take(config.kademliaBucketSize).map(_._1)))
       )
 
       override val test = for {
@@ -883,8 +882,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "return false if it cannot retrieve any ENRs" in test {
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
-        enrRequest = _ => _ => Task.pure(None)
+        ping = _ => _ => IO.pure(Some(None)),
+        enrRequest = _ => _ => IO.pure(None)
       )
 
       override lazy val config = defaultConfig.copy(
@@ -946,13 +945,13 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       val (nodesWithEnr, nodesWithoutEnr) = randomNodes.splitAt(randomNodes.size / 2)
 
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
+        ping = _ => _ => IO.pure(Some(None)),
         // Only return ENR for the 1st half.
-        enrRequest = peer => _ => Task.pure { nodesWithEnr.find(_._1.id == peer.id).map(_._2) },
+        enrRequest = peer => _ => IO.pure { nodesWithEnr.find(_._1.id == peer.id).map(_._2) },
         // Random selection from the whole range, some with ENR, some without.
         findNode = _ =>
           targetPublicKey =>
-            Task.pure {
+            IO.pure {
               Some(Random.shuffle(randomNodes).take(config.kademliaBucketSize).map(_._1))
             }
       )
@@ -995,8 +994,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "try to fetch the ENR of the node" in test {
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None)),
-        enrRequest = _ => _ => Task.pure(Some(remoteENR))
+        ping = _ => _ => IO.pure(Some(None)),
+        enrRequest = _ => _ => IO.pure(Some(remoteENR))
       )
       override val test = for {
         _ <- service.addNode(remoteNode)
@@ -1062,7 +1061,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       val newIP = InetAddress.getByName("iohk.io")
 
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task.pure(Some(None))
+        ping = _ => _ => IO.pure(Some(None))
       )
 
       override val test = for {
@@ -1071,7 +1070,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
           _.withLastPongTimestamp(remotePeer, time0)
         }
         _ <- service.updateExternalAddress(newIP)
-        _ <- Task.sleep(250.millis) // It's running in the background.
+        _ <- IO.sleep(250.millis) // It's running in the background.
         state <- stateRef.get
       } yield {
         state.lastPongTimestampMap(remotePeer) should be > time0
@@ -1099,7 +1098,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         state0 <- stateRef.get
         state1 = state0.withTouch(remotePeer)
         state2 = state1.withEnrAndAddress(remotePeer, remoteENR, remoteNode.address)
-        _ <- Task.sleep(1.milli) // If we're too quick then TimeSet will assign the same timestamp.
+        _ <- IO.sleep(1.milli) // If we're too quick then TimeSet will assign the same timestamp.
         state3 = state2.withTouch(remotePeer)
       } yield {
         state0.kBuckets.contains(remotePeer) shouldBe false
@@ -1138,7 +1137,7 @@ object DiscoveryServiceSpec {
   )
 
   trait Fixture {
-    def test: Task[Assertion]
+    def test: IO[Assertion]
 
     def makeNode(publicKey: PublicKey, address: InetSocketAddress) =
       Node(publicKey, Node.Address(address.getAddress, address.getPort, address.getPort))

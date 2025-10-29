@@ -10,15 +10,15 @@ import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
 import com.chipprbots.scalanet.peergroup.{Channel, PeerGroup}
 import com.chipprbots.scalanet.kademlia.KNetwork.KNetworkScalanetImpl
 import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
-import monix.eval.Task
-import monix.reactive.Observable
+import cats.effect.IO
+import fs2.Stream
 import org.scalatest.FlatSpec
 import org.scalatest.Matchers._
 import org.scalatestplus.mockito.MockitoSugar._
 import org.mockito.Mockito.{when}
 
 import scala.concurrent.duration._
-import monix.execution.Scheduler.Implicits.global
+.Implicits.global
 import org.scalatest.concurrent.ScalaFutures._
 import com.chipprbots.scalanet.TaskValues._
 import KNetworkSpec._
@@ -35,13 +35,13 @@ class KNetworkSpec extends FlatSpec {
 
   implicit val patienceConfig = PatienceConfig(1 second)
 
-  private val getFindNodesRequest: KNetwork[String] => Task[KRequest[String]] = getActualRequest(_.findNodesRequests())
-  private val getPingRequest: KNetwork[String] => Task[KRequest[String]] = getActualRequest(_.pingRequests())
+  private val getFindNodesRequest: KNetwork[String] => IO[KRequest[String]] = getActualRequest(_.findNodesRequests())
+  private val getPingRequest: KNetwork[String] => IO[KRequest[String]] = getActualRequest(_.pingRequests())
 
-  private val sendFindNodesRequest: (NodeRecord[String], FindNodes[String]) => KNetwork[String] => Task[Nodes[String]] =
+  private val sendFindNodesRequest: (NodeRecord[String], FindNodes[String]) => KNetwork[String] => IO[Nodes[String]] =
     (to, request) => network => network.findNodes(to, request)
 
-  private val sendPingRequest: (NodeRecord[String], Ping[String]) => KNetwork[String] => Task[Pong[String]] =
+  private val sendPingRequest: (NodeRecord[String], Ping[String]) => KNetwork[String] => IO[Pong[String]] =
     (to, request) => network => network.ping(to, request)
 
   private val rpcs = Table(
@@ -55,7 +55,7 @@ class KNetworkSpec extends FlatSpec {
       val channel = mock[Channel[String, KMessage[String]]]
       val closed = new AtomicBoolean(false)
       val created = ChannelCreated(channel, Task { closed.set(true) })
-      val resource = Resource.make(Task.pure(channel))(_ => Task { closed.set(true) })
+      val resource = Resource.make(IO.pure(channel))(_ => Task { closed.set(true) })
     }
 
     val (network, peerGroup) = createKNetwork
@@ -92,7 +92,7 @@ class KNetworkSpec extends FlatSpec {
     s"Server $label" should "close server channel in the response task" in new Fixture {
       mockServerEvents(peerGroup, channelCreated)
       mockChannelEvents(channel, MessageReceived(request))
-      when(channel.sendMessage(response)).thenReturn(Task.unit)
+      when(channel.sendMessage(response)).thenReturn(IO.unit)
 
       sendResponse(network, response).evaluated
 
@@ -102,7 +102,7 @@ class KNetworkSpec extends FlatSpec {
     s"Server $label" should "close server channel in timed out response task" in new Fixture {
       mockServerEvents(peerGroup, channelCreated)
       mockChannelEvents(channel, MessageReceived(request))
-      when(channel.sendMessage(response)).thenReturn(Task.never)
+      when(channel.sendMessage(response)).thenReturn(IO.never)
 
       sendResponse(network, response).evaluatedFailure shouldBe a[TimeoutException]
       channelClosed.get shouldBe true
@@ -126,7 +126,7 @@ class KNetworkSpec extends FlatSpec {
 
     s"Client $label" should "close client channels when requests are successful" in new Fixture {
       when(peerGroup.client(targetRecord.routingAddress)).thenReturn(channelResource)
-      when(channel.sendMessage(request)).thenReturn(Task.unit)
+      when(channel.sendMessage(request)).thenReturn(IO.unit)
       mockChannelEvents(channel, MessageReceived(response))
 
       val actualResponse = clientRpc(network).evaluated
@@ -139,7 +139,7 @@ class KNetworkSpec extends FlatSpec {
       val exception = new Exception("failed")
 
       when(peerGroup.client(targetRecord.routingAddress))
-        .thenReturn(Resource.liftF(Task.raiseError[Channel[String, KMessage[String]]](exception)))
+        .thenReturn(Resource.liftF(IO.raiseError[Channel[String, KMessage[String]]](exception)))
 
       clientRpc(network).evaluatedFailure shouldBe exception
     }
@@ -147,7 +147,7 @@ class KNetworkSpec extends FlatSpec {
     s"Client $label" should "close client channels when sendMessage calls fail" in new Fixture {
       val exception = new Exception("failed")
       when(peerGroup.client(targetRecord.routingAddress)).thenReturn(channelResource)
-      when(channel.sendMessage(request)).thenReturn(Task.raiseError(exception))
+      when(channel.sendMessage(request)).thenReturn(IO.raiseError(exception))
 
       clientRpc(network).evaluatedFailure shouldBe exception
       channelClosed.get shouldBe true
@@ -155,7 +155,7 @@ class KNetworkSpec extends FlatSpec {
 
     s"Client $label" should "close client channels when response fails to arrive" in new Fixture {
       when(peerGroup.client(targetRecord.routingAddress)).thenReturn(channelResource)
-      when(channel.sendMessage(request)).thenReturn(Task.unit)
+      when(channel.sendMessage(request)).thenReturn(IO.unit)
       mockChannelEvents(channel)
 
       clientRpc(network).evaluatedFailure shouldBe a[TimeoutException]
@@ -171,7 +171,7 @@ class KNetworkSpec extends FlatSpec {
     mockChannelEvents(channel1.channel, MessageReceived(findNodes))
     mockChannelEvents(channel2.channel, MessageReceived(ping))
 
-    when(channel2.channel.sendMessage(pong)).thenReturn(Task.unit)
+    when(channel2.channel.sendMessage(pong)).thenReturn(IO.unit)
 
     // `pingRequests` consumes all requests and call `ignore` on the FindNodes, passing None which should close the channel.
     val (actualRequest, handler) = network.pingRequests().headL.evaluated
@@ -200,7 +200,7 @@ object KNetworkSpec {
 
   private def createKNetwork: (KNetwork[String], PeerGroup[String, KMessage[String]]) = {
     val peerGroup = mock[PeerGroup[String, KMessage[String]]]
-    when(peerGroup.nextServerEvent).thenReturn(Task.pure(None))
+    when(peerGroup.nextServerEvent).thenReturn(IO.pure(None))
     (new KNetworkScalanetImpl(peerGroup, requestTimeout), peerGroup)
   }
 
@@ -216,22 +216,22 @@ object KNetworkSpec {
   ) =
     when(channel.nextChannelEvent).thenReturn(nextTask(events, complete = false))
 
-  private def nextTask[T](events: Seq[T], complete: Boolean): Task[Option[T]] = {
+  private def nextIO[T](events: Seq[T], complete: Boolean): IO[Option[T]] = {
     val count = new AtomicInteger(0)
     Task(count.getAndIncrement()).flatMap {
       case i if i < events.size => Task(Some(events(i)))
       case _ if complete => Task(None)
-      case _ => Task.never
+      case _ => IO.never
     }
   }
 
-  private def getActualRequest[Request <: KRequest[String]](rpc: KNetwork[String] => Observable[(Request, _)])(
+  private def getActualRequest[Request <: KRequest[String]](rpc: KNetwork[String] => Stream[IO, (Request, _)])(
       network: KNetwork[String]
-  ): Task[Request] = {
+  ): IO[Request] = {
     rpc(network).headL.map(_._1)
   }
 
-  def sendResponse(network: KNetwork[String], response: KResponse[String]): Task[Unit] = {
+  def sendResponse(network: KNetwork[String], response: KResponse[String]): IO[Unit] = {
     network.kRequests.headL.flatMap { case (_, handler) => handler(Some(response)) }
   }
 }

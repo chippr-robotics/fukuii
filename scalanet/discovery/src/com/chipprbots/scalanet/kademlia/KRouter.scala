@@ -6,7 +6,7 @@ import java.util.{Random, UUID}
 
 import cats.syntax.all._
 import cats.data.NonEmptySet
-import cats.effect.concurrent.Ref
+import cats.effect.Ref
 import com.typesafe.scalalogging.{CanLog, Logger}
 import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
 import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
@@ -14,7 +14,6 @@ import com.chipprbots.scalanet.kademlia.KMessage.{KRequest, KResponse}
 import com.chipprbots.scalanet.kademlia.KRouter.KRouterInternals._
 import com.chipprbots.scalanet.kademlia.KRouter.{Config, NodeRecord}
 import cats.effect.IO
-import monix.reactive.{Consumer, Observable, OverflowStrategy}
 import scodec.bits.BitVector
 import scala.collection.immutable.SortedSet
 
