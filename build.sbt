@@ -44,7 +44,7 @@ crossPaths := true
 ThisBuild / evictionErrorLevel := Level.Info
 
 val `scala-2.12` = "2.12.13"
-val `scala-2.13` = "2.13.14" // Upgraded for json4s 4.0.x and circe 0.14.10 (SIP-51 requirement)
+val `scala-2.13` = "2.13.16" // Upgraded to 2.13.16 for BouncyCastle 1.82 and latest dependencies (SIP-51 requirement)
 val `scala-3` = "3.3.4" // Scala 3 LTS version
 val supportedScalaVersions = List(`scala-2.12`, `scala-2.13`)
 val scala3SupportedVersions = List(`scala-2.13`, `scala-3`) // Cross-compilation target for Scala 3 migration
@@ -519,10 +519,10 @@ addCommandAlias(
 )
 
 // Scapegoat configuration
-// Version 2.x/3.x for Scala 2.13.14+, version 1.x for older Scala 2.13 versions
+// Version 3.2.2+ supports Scala 2.13.16, version 1.x for older Scala 2.13 versions
 (ThisBuild / scapegoatVersion) := (CrossVersion.partialVersion(scalaVersion.value) match {
-  case Some((2, 13)) => "3.1.2"  // Scala 2.13.14+ supports Scapegoat 3.x
-  case Some((3, _))  => "3.1.4"  // Scala 3 (when dependencies are ready)
+  case Some((2, 13)) => "3.2.2"  // Scala 2.13.16+ supports Scapegoat 3.2.x
+  case Some((3, _))  => "3.2.2"  // Scala 3 (when dependencies are ready)
   case _             => "1.4.16" // Fallback for older versions
 })
 scapegoatReports := Seq("xml", "html")

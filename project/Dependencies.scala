@@ -134,8 +134,8 @@ object Dependencies {
   )
 
   val crypto = Seq(
-    "org.bouncycastle" % "bcprov-jdk15on" % "1.78", // Updated for security (CVE-2023-33201, CVE-2024-30171, CVE-2024-30172 fixed)
-    "org.bouncycastle" % "bcpkix-jdk15on" % "1.78"  // Additional bouncy castle package for X.509 certificates
+    "org.bouncycastle" % "bcprov-jdk18on" % "1.82", // Updated for JDK 18+ compatibility (jdk15on artifacts discontinued)
+    "org.bouncycastle" % "bcpkix-jdk18on" % "1.82"  // Additional bouncy castle package for X.509 certificates
   )
 
   val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
