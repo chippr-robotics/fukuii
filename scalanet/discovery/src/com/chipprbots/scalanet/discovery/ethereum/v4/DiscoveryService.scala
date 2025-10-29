@@ -658,7 +658,7 @@ object DiscoveryService {
           maybeEnr
             .recoverWith {
               case NonFatal(ex) =>
-                IO(logger.debug(s"Failed not fetch ENR from $peer: $ex")).as(None)
+                IO(logger.debug(s"Failed to fetch ENR from $peer: $ex")).as(None)
             }
             .flatTap(fetch.complete)
             .guarantee(stateRef.update(_.clearEnrFetch(peer)))
