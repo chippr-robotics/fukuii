@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.rlp
 
-import scala.compiletime.*
+import scala.compiletime.{*, given}
 import scala.deriving.Mirror
 import scala.reflect.ClassTag
 
@@ -184,50 +184,39 @@ object RLPDerivation {
   }
 
   /** Derive encoder for product types (case classes) */
-  inline given derivedEncoder[T](using m: Mirror.ProductOf[T]): RLPEncoder[T] with {} = {
-    inline val policy = summonFrom {
-      case p: DerivationPolicy => p
-      case _ => DerivationPolicy.default
-    }
-    
+  given derivedEncoder[T](using m: Mirror.ProductOf[T])(using policy: DerivationPolicy = DerivationPolicy.default): RLPEncoder[T] =
     new RLPEncoder[T] {
       override def encode(obj: T): RLPEncodeable = {
-        val tuple = Tuple.fromProductTyped(obj)
-        val (list, _) = encodeProductFields(tuple, m.MirroredElemLabels, policy)
+        val tuple = Tuple.fromProduct(obj.asInstanceOf[Product])
+        val labels = constValueTuple[m.MirroredElemLabels]
+        val (list, _) = encodeProductFields(tuple.asInstanceOf[Tuple], labels, policy)
         list
       }
     }
-  }
 
   /** Derive decoder for product types (case classes) */
-  inline given derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T]): RLPDecoder[T] with {} = {
-    inline val policy = summonFrom {
-      case p: DerivationPolicy => p
-      case _ => DerivationPolicy.default
-    }
-    
+  given derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T])(using policy: DerivationPolicy = DerivationPolicy.default): RLPDecoder[T] =
     new RLPDecoder[T] {
       override def decode(rlp: RLPEncodeable): T = rlp match {
         case list: RLPList =>
+          val labels = constValueTuple[m.MirroredElemLabels]
           val (decoded, _) = decodeProductFields[m.MirroredElemTypes](
             list.items.toList,
-            m.MirroredElemLabels,
+            labels,
             policy
           )
-          m.fromProduct(decoded)
+          m.fromProduct(decoded.asInstanceOf[Product])
         case _ =>
           throw RLPException(s"Cannot decode ${ct.runtimeClass.getSimpleName}: expected an RLPList.", rlp)
       }
     }
-  }
 
   /** Derive both encoder and decoder for product types */
-  inline given derivedCodec[T](using 
+  given derivedCodec[T](using 
       m: Mirror.ProductOf[T],
       ct: ClassTag[T]
-  ): RLPCodec[T] with {} = {
+  ): RLPCodec[T] =
     val enc = derivedEncoder[T](using m)
     val dec = derivedDecoder[T](using m, ct)
     RLPCodec[T](enc, dec)
-  }
 }
