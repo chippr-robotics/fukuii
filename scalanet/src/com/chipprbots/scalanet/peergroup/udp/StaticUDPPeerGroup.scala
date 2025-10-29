@@ -192,6 +192,9 @@ class StaticUDPPeerGroup[M] private (
   ): IO[Unit] =
     for {
       channels <- getChannels(remoteAddress)
+      // Note: Using sequential traverse_ instead of parTraverse_ to avoid complexity with Parallel typeclass
+      // Original code used parTraverseUnordered for performance, but sequential execution is acceptable
+      // for the typical small number of channels per remote address
       _ <- channels.toList.traverse_(f)
     } yield ()
 

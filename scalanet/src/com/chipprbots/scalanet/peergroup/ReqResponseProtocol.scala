@@ -94,7 +94,7 @@ class ReqResponseProtocol[A, M](
       envelope <- subscription.join.flatMap {
         case cats.effect.Outcome.Succeeded(fa) => fa
         case cats.effect.Outcome.Errored(e) => IO.raiseError(e)
-        case cats.effect.Outcome.Canceled() => IO.raiseError(new RuntimeException("Request fiber was canceled"))
+        case cats.effect.Outcome.Canceled() => IO.raiseError(new RuntimeException(s"Request fiber for message ${messageToSend.id} was canceled"))
       }
     } yield envelope.m
 

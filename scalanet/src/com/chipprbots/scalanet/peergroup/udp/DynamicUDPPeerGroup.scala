@@ -283,7 +283,11 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
     }
 
     def handleEvent(event: ChannelEvent[M]): Unit = {
-      messageQueue.tryOffer(event).void.unsafeRunAndForget()(global)
+      messageQueue.tryOffer(event).void
+        .handleErrorWith { e =>
+          IO(logger.error(s"Failed to offer event to messageQueue: ${e.getMessage}", e))
+        }
+        .unsafeRunAndForget()(global)
     }
   }
 
