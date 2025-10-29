@@ -205,7 +205,7 @@ object Dependencies {
   }
 
   val shapeless: Seq[ModuleID] = Seq(
-    "com.chuusai" %% "shapeless" % "2.3.12" // Shapeless 2 for Scala 2.13, Shapeless 3 for Scala 3 migration
+    "com.chuusai" %% "shapeless" % "2.3.12" // Shapeless 2 for Scala 2.13
   )
 
   val scaffeine: Seq[ModuleID] = Seq(

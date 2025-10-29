@@ -249,7 +249,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       val connectIO = for {
         _ <- IO(logger.debug("Initiating connection to peer {}", peerInfo))
         _ <- toTask(bootstrap.connect(peerInfo.address.inetSocketAddress))
-        ch <- IO.fromFuture(IO(activationF))
+        ch <- IO.fromFuture(IO.pure(activationF))
         _ <- IO(logger.debug("Connection to peer {} finished successfully", peerInfo))
       } yield new DynamicTlsChannel[M](localId, peerInfo, ch._1, ch._2, ClientChannel)
 

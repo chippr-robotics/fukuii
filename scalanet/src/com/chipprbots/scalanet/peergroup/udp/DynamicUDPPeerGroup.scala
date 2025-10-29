@@ -42,7 +42,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
 
   private val workerGroup = new NioEventLoopGroup()
 
-  private val serverQueue = CloseableQueue.unbounded.unsafeRunSync()(global)
+  private val serverQueue = CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]].unsafeRunSync()(global)
 
   // all channels in the map are open and active, as upon closing channels are removed from the map
   private[peergroup] val activeChannels = new ConcurrentHashMap[UDPChannelId, ChannelImpl]()

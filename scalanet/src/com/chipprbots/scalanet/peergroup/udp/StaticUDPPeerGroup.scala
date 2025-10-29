@@ -193,7 +193,7 @@ class StaticUDPPeerGroup[M] private (
   ): IO[Unit] =
     for {
       channels <- getChannels(remoteAddress)
-      _ <- channels.parTraverse_(f)
+      _ <- channels.toList.parTraverse_(f)
     } yield ()
 
   /** Replicate the incoming message to the server channel and all client channels connected to the remote address. */

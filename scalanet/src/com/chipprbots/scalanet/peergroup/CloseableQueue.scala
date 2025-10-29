@@ -26,8 +26,12 @@ class CloseableQueue[A](
   def next: IO[Option[A]] =
     closed.tryGet.flatMap {
       case Some(true) =>
-        // Clear the queue by draining all items using iterateWhile
-        IO.iterateWhile(queue.tryTake)(_.isDefined).as(None)
+        // Clear the queue by draining all items recursively
+        def drainQueue: IO[Unit] = queue.tryTake.flatMap {
+          case Some(_) => drainQueue
+          case None => IO.unit
+        }
+        drainQueue.as(None)
 
       case Some(false) =>
         queue.tryTake

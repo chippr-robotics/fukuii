@@ -49,7 +49,7 @@ class ReqResponseProtocol[A, M](
         IO.pure(channel)
 
       case None =>
-        channelSemaphore.withPermit {
+        channelSemaphore.permit.use { _ =>
           channelMapRef.get.map(_.get(channelId)).flatMap {
             case Some(channel) =>
               IO.pure(channel)
@@ -91,7 +91,11 @@ class ReqResponseProtocol[A, M](
       // Subscribe first so we don't miss the response.
       subscription <- c.subscribeForResponse(messageToSend.id, timeOutDuration).start
       _ <- c.sendMessage(messageToSend).timeout(timeOutDuration)
-      result <- subscription.join.map(_.m)
+      result <- subscription.join.flatMap {
+        case cats.effect.Outcome.Succeeded(fa) => fa
+        case cats.effect.Outcome.Errored(e) => IO.raiseError(e)
+        case cats.effect.Outcome.Canceled() => IO.raiseError(new RuntimeException("Request fiber was canceled"))
+      }
     } yield result
 
   /** Start handling requests in the background. */
