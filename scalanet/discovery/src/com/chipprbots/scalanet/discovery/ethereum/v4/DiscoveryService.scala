@@ -650,7 +650,7 @@ object DiscoveryService {
                       // We just have to keep trying to get an ENR for them, until then we can't use them for routing.
                       IO(logger.debug(s"Could not fetch ENR from $peer")).as(None)
 
-                    case Some(enr: EthereumNodeRecord) =>
+                    case Some(enr) =>
                       validateEnr(peer, enr)
                   }
           }
