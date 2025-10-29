@@ -85,7 +85,7 @@ object RLPDerivation {
           case _: true =>
             // Optional field
             val headEncoded = summonInline[RLPEncoder[head.type]].encode(head)
-            val (tailList, tailInfos) = encodeProductFields(tail, tail, policy)
+            val (tailList, tailInfos) = encodeProductFields(tail, labels, policy)
             val hInfo = FieldInfo(isOptional = true)
             
             val finalList = if (policy.omitTrailingOptionals && tailInfos.forall(_.isOptional)) {
