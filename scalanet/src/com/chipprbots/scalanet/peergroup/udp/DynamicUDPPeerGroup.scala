@@ -285,6 +285,9 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
     def handleEvent(event: ChannelEvent[M]): Unit = {
       messageQueue.tryOffer(event).void
         .handleErrorWith { e =>
+          // Error handling logs the failure but doesn't propagate.
+          // This is intentional: we're in a Netty callback and can't throw.
+          // Logging ensures visibility while allowing the handler to continue processing.
           IO(logger.error(s"Failed to offer event to messageQueue: ${e.getMessage}", e))
         }
         .unsafeRunAndForget()(global)

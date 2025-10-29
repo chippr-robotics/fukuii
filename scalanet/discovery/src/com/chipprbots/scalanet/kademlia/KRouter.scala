@@ -224,7 +224,10 @@ class KRouter[A](
   // Lookup terminates when initiator queried and got response from the k closest nodes it has seen
   private def lookup(targetNodeId: BitVector): IO[SortedSet[NodeRecord[A]]] = {
     // Starting lookup process with alpha known nodes from our kbuckets
-    // Note: memoizeOnSuccess removed - CE3 doesn't have built-in memoization, would need cats-effect-memoize or manual caching
+    // Note: memoizeOnSuccess removed - CE3 doesn't have built-in memoization.
+    // Removing memoization could cause performance regression if closestKnownNodesTask
+    // is executed multiple times per lookup. If needed, consider cats-effect-memoize library
+    // or manual Ref-based caching. Current usage appears to call this once per lookup.
     val closestKnownNodesTask = routerState.get.map { state =>
       state.kBuckets
         .closestNodes(targetNodeId, config.k + 1)

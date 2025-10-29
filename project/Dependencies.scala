@@ -100,12 +100,12 @@ object Dependencies {
 
   // Dependencies for scalanet module
   val scodec: Seq[ModuleID] = Seq(
-    "org.scodec" %% "scodec-core" % "1.11.10", // Stable version supporting Scala 2.13
+    "org.scodec" %% "scodec-core" % "1.11.11", // Latest stable supporting Scala 2.13
     "org.scodec" %% "scodec-bits" % "1.1.38"
   )
 
   val netty: Seq[ModuleID] = {
-    val nettyVersion = "4.1.109.Final" // Updated for security
+    val nettyVersion = "4.1.115.Final" // Updated for security (CVE-2024-29025, CVE-2024-47535 fixed)
     Seq(
       "io.netty" % "netty-handler" % nettyVersion,
       "io.netty" % "netty-handler-proxy" % nettyVersion, // For Socks5ProxyHandler
@@ -134,8 +134,8 @@ object Dependencies {
   )
 
   val crypto = Seq(
-    "org.bouncycastle" % "bcprov-jdk15on" % "1.70", // Updated for security
-    "org.bouncycastle" % "bcpkix-jdk15on" % "1.70"  // Additional bouncy castle package for X.509 certificates
+    "org.bouncycastle" % "bcprov-jdk15on" % "1.78", // Updated for security (CVE-2023-33201, CVE-2024-30171, CVE-2024-30172 fixed)
+    "org.bouncycastle" % "bcpkix-jdk15on" % "1.78"  // Additional bouncy castle package for X.509 certificates
   )
 
   val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
