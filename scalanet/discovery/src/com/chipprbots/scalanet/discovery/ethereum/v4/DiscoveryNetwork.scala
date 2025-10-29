@@ -104,7 +104,7 @@ object DiscoveryNetwork {
             }
             .completedL
             .startAndForget
-          cancelable <- CancelableF[Task](cancelToken.complete(()))
+          cancelable <- CancelableF[IO](cancelToken.complete(()))
         } yield cancelable
 
       private def handleChannel(
@@ -127,14 +127,14 @@ object DiscoveryNetwork {
                         IO.unit
 
                       case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
-                        Task(logger.debug(s"Ignoring expired request from ${channel.to}; ${p.expiration} < $timestamp"))
+                        IO(logger.debug(s"Ignoring expired request from ${channel.to}; ${p.expiration} < $timestamp"))
 
                       case p: Payload.Request =>
                         handleRequest(handler, channel, remotePublicKey, packet.hash, p)
                     }
 
                   case Attempt.Failure(err) =>
-                    Task(logger.debug(s"Failed to unpack packet: $err; ${packet.show}")) >>
+                    IO(logger.debug(s"Failed to unpack packet: $err; ${packet.show}")) >>
                       IO.raiseError(new PacketException(s"Failed to unpack message: $err"))
                 }
               }
@@ -199,7 +199,7 @@ object DiscoveryNetwork {
           .onErrorRecoverWith {
             case NonFatal(ex) =>
               // Not responding to this one, but it shouldn't stop handling further requests.
-              Task(logger.error(s"Error handling incoming request: $ex")).as(None)
+              IO(logger.error(s"Error handling incoming request: $ex")).as(None)
           }
           .flatMap(_.fold(IO.unit)(f))
 
@@ -302,7 +302,7 @@ object DiscoveryNetwork {
           for {
             expiring <- setExpiration(payload)
             packet <- pack(expiring)
-            _ <- Task(
+            _ <- IO(
               logger
                 .debug(s"Sending ${payload.getClass.getSimpleName} from ${peerGroup.processAddress} to ${channel.to}")
             )
@@ -318,7 +318,7 @@ object DiscoveryNetwork {
             deadline: Deadline
         )(pf: PartialFunction[Payload.Response, T]): Iterant[Task, T] =
           channel.nextChannelEvent
-            .timeoutL(Task(config.requestTimeout.min(deadline.timeLeft)))
+            .timeoutL(IO(config.requestTimeout.min(deadline.timeLeft)))
             .toIterant
             .collect {
               case MessageReceived(packet) => packet
@@ -336,7 +336,7 @@ object DiscoveryNetwork {
                         IO.pure(None)
 
                       case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
-                        Task(
+                        IO(
                           logger.debug(s"Ignoring expired response from ${channel.to}; ${p.expiration} < $timestamp")
                         ).as(None)
 
@@ -363,7 +363,7 @@ object DiscoveryNetwork {
             .headOptionL
             .onErrorRecoverWith {
               case NonFatal(ex) =>
-                Task(logger.debug(s"Failed to collect response from ${channel.to}: ${ex.getMessage}")).as(None)
+                IO(logger.debug(s"Failed to collect response from ${channel.to}: ${ex.getMessage}")).as(None)
             }
 
         /** Collect responses that match the partial function and fold them while the folder function returns Left.  */
@@ -382,7 +382,7 @@ object DiscoveryNetwork {
 
               case (_, Left(ex)) =>
                 // Unexpected error, discard results, if any.
-                Task(logger.debug(s"Failed to fold responses from ${channel.to}: ${ex.getMessage}")).as(Right(None))
+                IO(logger.debug(s"Failed to fold responses from ${channel.to}: ${ex.getMessage}")).as(Right(None))
 
               case (Some((acc, count)), Right(response)) =>
                 // New response, fold it with the existing to decide if we need more.
