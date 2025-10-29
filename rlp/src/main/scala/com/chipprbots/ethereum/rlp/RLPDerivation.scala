@@ -184,7 +184,7 @@ object RLPDerivation {
   }
 
   /** Derive encoder for product types (case classes) */
-  inline given derivedEncoder[T](using m: Mirror.ProductOf[T]): RLPEncoder[T] = {
+  inline given derivedEncoder[T](using m: Mirror.ProductOf[T]): RLPEncoder[T] with {} = {
     inline val policy = summonFrom {
       case p: DerivationPolicy => p
       case _ => DerivationPolicy.default
@@ -200,7 +200,7 @@ object RLPDerivation {
   }
 
   /** Derive decoder for product types (case classes) */
-  inline given derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T]): RLPDecoder[T] = {
+  inline given derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T]): RLPDecoder[T] with {} = {
     inline val policy = summonFrom {
       case p: DerivationPolicy => p
       case _ => DerivationPolicy.default
@@ -225,7 +225,7 @@ object RLPDerivation {
   inline given derivedCodec[T](using 
       m: Mirror.ProductOf[T],
       ct: ClassTag[T]
-  ): RLPCodec[T] = {
+  ): RLPCodec[T] with {} = {
     val enc = derivedEncoder[T](using m)
     val dec = derivedDecoder[T](using m, ct)
     RLPCodec[T](enc, dec)

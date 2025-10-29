@@ -21,12 +21,12 @@ object RLPImplicitDerivations {
   export RLPDerivation.{DerivationPolicy, FieldInfo, RLPListEncoder, RLPListDecoder}
   
   // Re-export the derivation policy default
-  given DerivationPolicy = DerivationPolicy.default
+  given defaultDerivationPolicy: DerivationPolicy = DerivationPolicy.default
   
   /** Derive RLP codec for a case class using Scala 3 Mirror.
     * This replaces the old Shapeless-based deriveLabelledGenericRLPCodec.
     */
-  inline def deriveLabelledGenericRLPCodec[T](using 
+  inline given deriveLabelledGenericRLPCodec[T](using 
       m: scala.deriving.Mirror.ProductOf[T],
       ct: scala.reflect.ClassTag[T]
   ): RLPCodec[T] = {
@@ -34,14 +34,14 @@ object RLPImplicitDerivations {
   }
   
   /** Derive RLP encoder for a case class. */
-  inline def deriveLabelledGenericRLPEncoder[T](using 
+  inline given deriveLabelledGenericRLPEncoder[T](using 
       m: scala.deriving.Mirror.ProductOf[T]
   ): RLPEncoder[T] = {
     RLPDerivation.derivedEncoder[T]
   }
   
   /** Derive RLP decoder for a case class. */
-  inline def deriveLabelledGenericRLPDecoder[T](using 
+  inline given deriveLabelledGenericRLPDecoder[T](using 
       m: scala.deriving.Mirror.ProductOf[T],
       ct: scala.reflect.ClassTag[T]
   ): RLPDecoder[T] = {
