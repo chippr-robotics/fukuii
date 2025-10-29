@@ -46,19 +46,19 @@ class KRouter[A](
     * random ids instead
     */
   private def startRefreshCycle(): IO[Unit] = {
-    Observable
-      .intervalWithFixedDelay(config.refreshRate, config.refreshRate)
-      .consumeWith(Consumer.foreachTask { _ =>
+    fs2.Stream.awakeEvery[IO](config.refreshRate)
+      .evalMap { _ =>
         lookup(KBuckets.generateRandomId(config.nodeRecord.id.length, rnd)).void
-      })
+      }
+      .compile.drain
   }
 
   // TODO[PM-1035]: parallelism should be configured by library user
-  private val responseTaskConsumer =
-    Consumer.foreachParallelIO[(KRequest[A], Option[KResponse[A]] => IO[Unit])](parallelism = 4) {
+  private def responseTaskConsumer(stream: fs2.Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])]): IO[Unit] = {
+    stream.parEvalMap(4) {
       case (FindNodes(uuid, nodeRecord, targetNodeId), responseHandler) =>
         for {
-          _ <- Task(
+          _ <- IO(
             logger.debug(
               s"Received request FindNodes(${nodeRecord.id.toHex}, $nodeRecord, ${targetNodeId.toHex})"
             )
@@ -66,22 +66,23 @@ class KRouter[A](
           state <- routerState.get
           closestNodes = state.kBuckets.closestNodes(targetNodeId, config.k).map(state.nodeRecords(_))
           response = Nodes(uuid, config.nodeRecord, closestNodes)
-          _ <- add(nodeRecord).startAndForget
+          _ <- add(nodeRecord).start.void
           responseTask <- responseHandler(Some(response))
         } yield responseTask
 
       case (Ping(uuid, nodeRecord), responseHandler) =>
         for {
-          _ <- Task(
+          _ <- IO(
             logger.debug(
               s"Received request Ping(${nodeRecord.id.toHex}, $nodeRecord)"
             )
           )
-          _ <- add(nodeRecord).startAndForget
+          _ <- add(nodeRecord).start.void
           response = Pong(uuid, config.nodeRecord)
           responseTask <- responseHandler(Some(response))
         } yield responseTask
-    }
+    }.compile.drain
+  }
 
   /**
     * Starts handling incoming requests. Infinite task.
@@ -89,9 +90,9 @@ class KRouter[A](
     * @return
     */
   private def startServerHandling(): IO[Unit] = {
-    // asyncBoundary means that we are giving up on observable back pressure and the consumer will need consume
-    // events as soon as available, it is behaviour similar to ConcurrentSubject
-    network.kRequests.asyncBoundary(OverflowStrategy.DropNew(config.serverBufferSize)).consumeWith(responseTaskConsumer)
+    // Using fs2 Stream buffer instead of Observable asyncBoundary
+    // The consumer will process events as they arrive with backpressure
+    responseTaskConsumer(network.kRequests.buffer(config.serverBufferSize))
   }
 
   /**
@@ -104,7 +105,7 @@ class KRouter[A](
     val loadKnownPeers = IO.traverse(config.knownPeers)(add)
     loadKnownPeers >> lookup(config.nodeRecord.id).attempt.flatMap {
       case Left(t) =>
-        Task {
+        IO {
           logger.error(s"Enrolment lookup failed with exception: $t")
           logger.debug(s"Enrolment failure stacktrace: ${t.getStackTrace.mkString("\n")}")
           Set.empty

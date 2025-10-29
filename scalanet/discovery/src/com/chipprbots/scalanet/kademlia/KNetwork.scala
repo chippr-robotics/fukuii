@@ -52,17 +52,16 @@ object KNetwork {
 
     override lazy val kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])] = {
       peerGroup.serverEventStream.collectChannelCreated
-        .mergeMap {
-          case (channel: Channel[A, KMessage[A]], release: IO[Unit]) =>
-            // NOTE: We cannot use mapEval with a Task here, because that would hold up
-            // the handling of further incoming requests. For example if instead of a
-            // request we got an incoming "response" type message that the collect
-            // discards, `headL` would eventually time out but while we wait for
-            // that the next incoming channel would not be picked up.
-            Stream.fromTask {
-              channel.channelEventObservable
-                .collect { case MessageReceived(req: KRequest[A]) => req }
-                .headL
+        .flatMap {
+          case (channel: Channel[A, KMessage[A]], release) =>
+            // NOTE: We use flatMap to avoid holding up the handling of further incoming requests.
+            // If we receive a non-request message that gets discarded by collect, we don't want
+            // to block the next incoming channel from being picked up.
+            Stream.eval {
+              channel.nextChannelEvent.toStream
+                .collect { case MessageReceived(req: KRequest[_]) => req.asInstanceOf[KRequest[A]] }
+                .head
+                .compile.lastOrError
                 .timeout(requestTimeout)
                 .map { request =>
                   Some {
@@ -75,7 +74,7 @@ object KNetwork {
                     }
                   }
                 }
-                .onErrorHandleWith {
+                .handleErrorWith {
                   case NonFatal(_) =>
                     // Most likely it wasn't a request that initiated the channel.
                     release.as(None)
