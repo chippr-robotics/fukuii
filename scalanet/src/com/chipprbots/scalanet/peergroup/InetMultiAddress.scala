@@ -53,7 +53,7 @@ case class InetMultiAddress(inetSocketAddress: InetSocketAddress) {
 }
 
 object InetMultiAddress {
-  implicit val addressableInetMultiAddressInst = new Addressable[InetMultiAddress] {
+  implicit val addressableInetMultiAddressInst: Addressable[InetMultiAddress] = new Addressable[InetMultiAddress] {
     override def getAddress(a: InetMultiAddress): InetSocketAddress = a.inetSocketAddress
   }
 }

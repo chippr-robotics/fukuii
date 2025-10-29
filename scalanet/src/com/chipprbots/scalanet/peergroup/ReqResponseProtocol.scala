@@ -37,7 +37,7 @@ class ReqResponseProtocol[A, M](
     group: PeerGroup[A, MessageEnvelope[M]],
     channelSemaphore: Semaphore[IO],
     channelMapRef: Ref[IO, ReqResponseProtocol.ChannelMap[A, M]],
-    fiberMapRef: Ref[IO, Map[ChannelId, Fiber[IO, Unit]]]
+    fiberMapRef: Ref[IO, Map[ChannelId, Fiber[IO, Throwable, Unit]]]
 )(a: Addressable[A]) {
 
   private def getChan(
@@ -49,7 +49,7 @@ class ReqResponseProtocol[A, M](
         IO.pure(channel)
 
       case None =>
-        channelSemaphore.withPermit {
+        channelSemaphore.permit.use { _ =>
           channelMapRef.get.map(_.get(channelId)).flatMap {
             case Some(channel) =>
               IO.pure(channel)
@@ -91,8 +91,12 @@ class ReqResponseProtocol[A, M](
       // Subscribe first so we don't miss the response.
       subscription <- c.subscribeForResponse(messageToSend.id, timeOutDuration).start
       _ <- c.sendMessage(messageToSend).timeout(timeOutDuration)
-      result <- subscription.join.map(_.m)
-    } yield result
+      envelope <- subscription.join.flatMap {
+        case cats.effect.Outcome.Succeeded(fa) => fa
+        case cats.effect.Outcome.Errored(e) => IO.raiseError(e)
+        case cats.effect.Outcome.Canceled() => IO.raiseError(new ReqResponseProtocol.RequestCanceledException(messageToSend.id))
+      }
+    } yield envelope.m
 
   /** Start handling requests in the background. */
   def startHandling(requestHandler: M => M): IO[Unit] = {
@@ -142,6 +146,11 @@ class ReqResponseProtocol[A, M](
 
 object ReqResponseProtocol {
   type ChannelId = (InetSocketAddress, InetSocketAddress)
+  
+  /** Exception thrown when a request fiber is canceled before receiving a response. */
+  class RequestCanceledException(requestId: UUID, cause: Throwable = null) 
+    extends RuntimeException(s"Request fiber for message $requestId was canceled", cause)
+  
   class ReqResponseChannel[A, M](
       channel: Channel[A, MessageEnvelope[M]],
       topic: fs2.concurrent.Topic[IO, ChannelEvent[MessageEnvelope[M]]],
@@ -201,14 +210,14 @@ object ReqResponseProtocol {
 
   private def buildProtocol[A, M](
       group: PeerGroup[A, MessageEnvelope[M]]
-  )(a: Addressable[A]): Resource[Task, ReqResponseProtocol[A, M]] = {
+  )(a: Addressable[A]): Resource[IO, ReqResponseProtocol[A, M]] = {
     Resource
       .make(
         for {
           channelSemaphore <- Semaphore[IO](1)
-          channelMapRef <- Ref.of[Task, ChannelMap[A, M]](Map.empty)
-          fiberMapRef <- Ref.of[Task, Map[ChannelId, Fiber[IO, Unit]]](Map.empty)
-          protocol = new ReqResponseProtocol[A, M](group, channelSemaphore, channelMapRef, fiberMapRef)
+          channelMapRef <- Ref.of[IO, ChannelMap[A, M]](Map.empty)
+          fiberMapRef <- Ref.of[IO, Map[ChannelId, Fiber[IO, Throwable, Unit]]](Map.empty)
+          protocol = new ReqResponseProtocol[A, M](group, channelSemaphore, channelMapRef, fiberMapRef)(a)
         } yield protocol
       ) { protocol =>
         protocol.cancelHandling() >>
@@ -218,12 +227,13 @@ object ReqResponseProtocol {
 
   def getTlsReqResponseProtocolClient[M](framingConfig: FramingConfig)(
       address: InetSocketAddress
-  )(c: Codec[M]): Resource[Task, ReqResponseProtocol[PeerInfo, M]] = {
-    implicit lazy val envelopeCodec = MessageEnvelope.defaultCodec[M]
+  )(implicit c: Codec[M]): Resource[IO, ReqResponseProtocol[PeerInfo, M]] = {
+    import DynamicTLSPeerGroup.PeerInfo.peerInfoAddressable
+    implicit lazy val envelopeCodec: Codec[MessageEnvelope[M]] = MessageEnvelope.defaultCodec[M]
     val rnd = new SecureRandom()
     val hostkeyPair = CryptoUtils.genEcKeyPair(rnd, Secp256k1.curveName)
     for {
-      config <- Resource.liftF(
+      config <- Resource.eval(
         IO.fromTry(
           DynamicTLSPeerGroup
             .Config(
@@ -240,17 +250,18 @@ object ReqResponseProtocol {
         )
       )
       pg <- DynamicTLSPeerGroup[MessageEnvelope[M]](config)
-      prot <- buildProtocol(pg)
+      prot <- buildProtocol(pg)(peerInfoAddressable)
     } yield prot
   }
 
   def getDynamicUdpReqResponseProtocolClient[M](
       address: InetSocketAddress
-  )(c: Codec[M]): Resource[Task, ReqResponseProtocol[InetMultiAddress, M]] = {
-    implicit val codec = MessageEnvelope.defaultCodec[M]
+  )(implicit c: Codec[M]): Resource[IO, ReqResponseProtocol[InetMultiAddress, M]] = {
+    import InetMultiAddress.addressableInetMultiAddressInst
+    implicit val codec: Codec[MessageEnvelope[M]] = MessageEnvelope.defaultCodec[M]
     for {
       pg <- DynamicUDPPeerGroup[MessageEnvelope[M]](DynamicUDPPeerGroup.Config(address))
-      prot <- buildProtocol(pg)
+      prot <- buildProtocol(pg)(addressableInetMultiAddressInst)
     } yield prot
   }
 

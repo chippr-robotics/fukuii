@@ -26,8 +26,15 @@ class CloseableQueue[A](
   def next: IO[Option[A]] =
     closed.tryGet.flatMap {
       case Some(true) =>
-        // Clear the queue by draining all items
-        IO.iterateUntil(queue.tryTake)(_.isEmpty).as(None)
+        // Clear the queue by draining all items recursively.
+        // Note: This recursion is stack-safe due to IO's trampolining in Cats Effect.
+        // This approach was chosen because Monix Task had iterateUntil which is not
+        // available in CE3. The recursive pattern is idiomatic in CE3 for this use case.
+        def drainQueue: IO[Unit] = queue.tryTake.flatMap {
+          case Some(_) => drainQueue
+          case None => IO.unit
+        }
+        drainQueue.as(None)
 
       case Some(false) =>
         queue.tryTake

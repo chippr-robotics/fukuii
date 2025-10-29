@@ -3,6 +3,7 @@ package com.chipprbots.scalanet.peergroup.dynamictls
 import java.io.IOException
 import java.net.{ConnectException, InetSocketAddress}
 import java.nio.channels.ClosedChannelException
+import cats.effect.unsafe.implicits.global // For unsafeRunSync
 import com.typesafe.scalalogging.StrictLogging
 import com.chipprbots.scalanet.peergroup.Channel.{
   AllIdle,
@@ -101,8 +102,13 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       }
     }
 
-    // This should be a single threaded scheduler, so as long as we use `runAsyncAndForget` it shouldn't change the message ordering.
-    val scheduler = Scheduler(eventLoop)
+    // Message ordering guarantee: Netty invokes handler methods sequentially on the same
+    // event loop thread for a given channel. However, using unsafeRunAndForget with the
+    // global execution context means the IO execution order is not guaranteed - thread
+    // scheduling determines execution order. Ordering is only preserved at the Netty
+    // handler invocation level, not at the IO execution level. If strict ordering of
+    // IO execution is required, a single-threaded execution context should be used instead.
+    import cats.effect.unsafe.implicits.global
 
     override def channelInactive(channelHandlerContext: ChannelHandlerContext): Unit = {
       logger.debug("Channel to peer {} inactive", channelHandlerContext.channel().remoteAddress())
@@ -158,7 +164,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       executeAsync(messageQueue.offer(event).void)
 
     private def executeAsync(task: IO[Unit]): Unit =
-      task.runAsyncAndForget(scheduler)
+      task.unsafeRunAndForget()(global)
   }
 
   object MessageNotifier {
@@ -174,7 +180,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       maxIncomingQueueSize: Int,
       socks5Config: Option[Socks5Config],
       idlePeerConfig: Option[StalePeerDetectionConfig]
-  )(implicit scheduler: Scheduler, codec: Codec[M])
+  )(implicit codec: Codec[M])
       extends StrictLogging {
     val (decoder, encoder) = buildFramingCodecs(framingConfig)
     private val to = peerInfo
@@ -248,11 +254,11 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       val connectIO = for {
         _ <- IO(logger.debug("Initiating connection to peer {}", peerInfo))
         _ <- toTask(bootstrap.connect(peerInfo.address.inetSocketAddress))
-        ch <- IO.deferFuture(activationF)
+        ch <- IO.fromFuture(IO.pure(activationF))
         _ <- IO(logger.debug("Connection to peer {} finished successfully", peerInfo))
       } yield new DynamicTlsChannel[M](localId, peerInfo, ch._1, ch._2, ClientChannel)
 
-      connectIO.onErrorRecoverWith {
+      connectIO.handleErrorWith {
         case t: Throwable =>
           IO.raiseError(mapException(t))
       }
@@ -283,7 +289,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       maxIncomingQueueSize: Int,
       throttlingIpFilter: Option[ThrottlingIpFilter],
       idlePeerConfig: Option[StalePeerDetectionConfig]
-  )(implicit scheduler: Scheduler, codec: Codec[M])
+  )(implicit codec: Codec[M])
       extends StrictLogging {
     val sslHandler = sslServerCtx.newHandler(nettyChannel.alloc())
 
@@ -353,7 +359,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       )
 
     private def handleEvent(event: ServerEvent[PeerInfo, M]): Unit =
-      serverQueue.offer(event).void.runSyncUnsafe()
+      serverQueue.offer(event).void.unsafeRunAndForget()(global)
   }
 
   class DynamicTlsChannel[M](
@@ -374,7 +380,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
 
     override def sendMessage(message: M): IO[Unit] = {
       logger.debug("Sending message to peer {} via {}", nettyChannel.localAddress(), channelType)
-      nettyChannel.sendMessage(message)(codec).onErrorRecoverWith {
+      nettyChannel.sendMessage(message)(codec).handleErrorWith {
         case e: IOException =>
           logger.debug("Sending message to {} failed due to {}", message, e)
           IO.raiseError(new ChannelBrokenException[PeerInfo](to, e))
@@ -399,8 +405,8 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       } yield ()
   }
 
-  private def makeMessageQueue[M](limit: Int, channelConfig: ChannelConfig)(implicit scheduler: Scheduler) = {
-    ChannelAwareQueue[ChannelEvent[M]](limit, ChannelType.SPMC, channelConfig).runSyncUnsafe()
+  private def makeMessageQueue[M](limit: Int, channelConfig: ChannelConfig) = {
+    ChannelAwareQueue[ChannelEvent[M]](limit, channelConfig).unsafeRunSync()(global)
   }
 
   sealed abstract class TlsChannelType

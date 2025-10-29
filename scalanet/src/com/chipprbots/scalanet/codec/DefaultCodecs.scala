@@ -19,7 +19,7 @@ object DefaultCodecs {
 
   val ipv4Pad = hex"00 00 00 00 00 00 00 00 00 00 FF FF"
 
-  implicit val inetAddress = Codec[InetAddress](
+  implicit val inetAddress: Codec[InetAddress] = Codec[InetAddress](
     (ia: InetAddress) => {
       val bts = ByteVector(ia.getAddress)
       if (bts.length == 4) {

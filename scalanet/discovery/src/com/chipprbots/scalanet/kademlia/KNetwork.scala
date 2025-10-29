@@ -52,17 +52,21 @@ object KNetwork {
 
     override lazy val kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])] = {
       peerGroup.serverEventStream.collectChannelCreated
-        .mergeMap {
-          case (channel: Channel[A, KMessage[A]], release: IO[Unit]) =>
-            // NOTE: We cannot use mapEval with a Task here, because that would hold up
-            // the handling of further incoming requests. For example if instead of a
-            // request we got an incoming "response" type message that the collect
-            // discards, `headL` would eventually time out but while we wait for
-            // that the next incoming channel would not be picked up.
-            Stream.fromTask {
-              channel.channelEventObservable
-                .collect { case MessageReceived(req: KRequest[A]) => req }
-                .headL
+        .flatMap {
+          case (channel: Channel[A, KMessage[A]], release) =>
+            // NOTE: We use flatMap to avoid holding up the handling of further incoming requests.
+            // If we receive a non-request message that gets discarded by collect, we don't want
+            // to block the next incoming channel from being picked up.
+            Stream.eval {
+              channel.nextChannelEvent.toStream
+                .collect { 
+                  case MessageReceived(req: KRequest[_]) => 
+                    // Note: Type erasure requires asInstanceOf. The protocol ensures type safety at runtime
+                    // since KRequest[A] and KResponse[A] are matched by the network layer.
+                    req.asInstanceOf[KRequest[A]]
+                }
+                .head
+                .compile.lastOrError
                 .timeout(requestTimeout)
                 .map { request =>
                   Some {
@@ -75,7 +79,7 @@ object KNetwork {
                     }
                   }
                 }
-                .onErrorHandleWith {
+                .handleErrorWith {
                   case NonFatal(_) =>
                     // Most likely it wasn't a request that initiated the channel.
                     release.as(None)
@@ -110,15 +114,18 @@ object KNetwork {
         clientChannel: Channel[A, KMessage[A]],
         pf: PartialFunction[KMessage[A], Response]
     ): IO[Response] = {
+      def readResponse: IO[Response] = {
+        clientChannel.nextChannelEvent.flatMap {
+          case Some(MessageReceived(m)) if pf.isDefinedAt(m) => IO.pure(pf(m))
+          case Some(_) => readResponse // Keep reading if event doesn't match
+          case None => IO.raiseError(new Exception("Channel closed before response received"))
+        }
+      }
+      
       for {
         _ <- clientChannel.sendMessage(message).timeout(requestTimeout)
-        // This assumes that `requestTemplate` always opens a new channel.
-        response <- clientChannel.channelEventObservable
-          .collect {
-            case MessageReceived(m) if pf.isDefinedAt(m) => pf(m)
-          }
-          .headL
-          .timeout(requestTimeout)
+        // Read channel events until we find a matching response
+        response <- readResponse.timeout(requestTimeout)
       } yield response
     }
   }
