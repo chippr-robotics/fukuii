@@ -27,10 +27,13 @@ object Dependencies {
     val akkaHttpVersion = "10.5.3" // Updated for Scala 3 support (10.5.x series)
 
     Seq(
-      "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
-      "ch.megard" %% "akka-http-cors" % "1.2.0", // Updated for Scala 3 and Akka HTTP 10.5.x
-      "de.heikoseeberger" %% "akka-http-json4s" % "1.39.2", // Updated for json4s 4.0.x compatibility
-      "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % "it,test"
+      // NOTE: Akka HTTP dependencies commented out for Scala 3 compatibility
+      // Akka is Scala 2.x only - migration to Apache Pekko required for Scala 3
+      // See: https://pekko.apache.org/docs/pekko/current/project/migration-guides.html
+      // "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
+      // "ch.megard" %% "akka-http-cors" % "1.2.0",
+      // "de.heikoseeberger" %% "akka-http-json4s" % "1.39.2",
+      // "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % "it,test"
     )
   }
 
@@ -100,8 +103,8 @@ object Dependencies {
 
   // Dependencies for scalanet module
   val scodec: Seq[ModuleID] = Seq(
-    "org.scodec" %% "scodec-core" % "1.11.11", // Scala 2.13 - last 1.x version
-    "org.scodec" %% "scodec-bits" % "1.2.1"    // Updated for broader compatibility
+    "org.scodec" %% "scodec-core" % "2.3.3", // Scala 3 compatible version
+    "org.scodec" %% "scodec-bits" % "1.2.1"  // Updated for broader compatibility
   )
 
   val netty: Seq[ModuleID] = {

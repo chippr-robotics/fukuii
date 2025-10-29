@@ -44,9 +44,9 @@ crossPaths := true
 ThisBuild / evictionErrorLevel := Level.Info
 
 val `scala-2.12` = "2.12.13"
-val `scala-2.13` = "2.13.14" // Previous version, deprecated
-val `scala-3` = "3.3.4" // Scala 3 LTS version - now the default
-val supportedScalaVersions = List(`scala-3`) // Scala 3 only after Shapeless migration
+val `scala-2.13` = "2.13.16" // Upgraded to 2.13.16 for BouncyCastle 1.82 and latest dependencies (SIP-51 requirement)
+val `scala-3` = "3.3.4" // Scala 3 LTS version - now the default after RLP migration
+val supportedScalaVersions = List(`scala-3`) // Scala 3 only after Shapeless → native derivation migration
 val scala3SupportedVersions = List(`scala-3`) // Scala 3 as primary version
 
 // Scala 2.x specific options
@@ -92,7 +92,7 @@ val scala3Options = Seq(
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   name := projectName,
   organization := "com.chipprbots",
-  scalaVersion := `scala-3`, // Primary version - Scala 3 after Shapeless migration
+  scalaVersion := `scala-3`, // Primary version - Scala 3 after RLP Shapeless → native derivation migration
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
   // NOTE: SemanticDB temporarily disabled for Scala 2.13.14 (not yet supported by semanticdb-scalac)
