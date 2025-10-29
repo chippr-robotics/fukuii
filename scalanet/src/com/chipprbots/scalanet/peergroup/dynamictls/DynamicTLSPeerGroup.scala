@@ -95,9 +95,9 @@ class DynamicTLSPeerGroup[M] private (
   private lazy val serverBind: ChannelFuture = serverBootstrap.bind(config.bindAddress)
 
   private def initialize: IO[Unit] =
-    toTask(serverBind).onErrorRecoverWith {
+    toIO(serverBind).handleErrorWith {
       case NonFatal(e) => IO.raiseError(InitializationError(e.getMessage, e.getCause))
-    } *> Task(logger.info(s"Server bound to address ${config.bindAddress}"))
+    } *> IO(logger.info(s"Server bound to address ${config.bindAddress}"))
 
   override def processAddress: PeerInfo = config.peerInfo
 
@@ -135,11 +135,11 @@ class DynamicTLSPeerGroup[M] private (
 
   private def shutdown: IO[Unit] = {
     for {
-      _ <- Task(logger.debug("Start shutdown of tls peer group for peer {}", processAddress))
+      _ <- IO(logger.debug("Start shutdown of tls peer group for peer {}", processAddress))
       _ <- serverQueue.close(discard = true)
-      _ <- toTask(serverBind.channel().close())
-      _ <- toTask(workerGroup.shutdownGracefully())
-      _ <- Task(logger.debug("Tls peer group shutdown for peer {}", processAddress))
+      _ <- toIO(serverBind.channel().close())
+      _ <- toIO(workerGroup.shutdownGracefully())
+      _ <- IO(logger.debug("Tls peer group shutdown for peer {}", processAddress))
     } yield ()
   }
 }
@@ -411,9 +411,9 @@ object DynamicTLSPeerGroup {
       for {
         // Using MPMC because the channel creation event is only pushed after the SSL handshake,
         // which should take place on the channel thread, not the boss thread.
-        queue <- CloseableQueue.unbounded[ServerEvent[PeerInfo, M]](ChannelType.MPMC)
+        queue <- CloseableQueue.unbounded
         // NOTE: The DynamicTLSPeerGroup creates Netty workgroups in its constructor, so calling `shutdown` is a must.
-        pg <- Task(new DynamicTLSPeerGroup[M](config, queue))
+        pg <- IO(new DynamicTLSPeerGroup[M](config, queue))
         // NOTE: In theory we wouldn't have to initialize a peer group (i.e. start listening to incoming events)
         // if all we wanted was to connect to remote clients, however to clean up we must call `shutdown` at which point
         // it will start and stop the server anyway, and the interface itself suggests that one can always start concuming

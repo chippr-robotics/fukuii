@@ -4,6 +4,7 @@ import cats.effect.{Ref, IO, Resource}
 import cats.effect.std.Semaphore
 import cats.effect.unsafe.implicits.global // For unsafeRunAndForget
 import cats.implicits._
+import cats.syntax.parallel._ // For parTraverse_
 import com.typesafe.scalalogging.StrictLogging
 import com.chipprbots.scalanet.peergroup.{Channel, Release, InetMultiAddress, CloseableQueue}
 import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, MessageReceived, DecodingError, UnexpectedError}
@@ -192,7 +193,7 @@ class StaticUDPPeerGroup[M] private (
   ): IO[Unit] =
     for {
       channels <- getChannels(remoteAddress)
-      _ <- IO.parTraverse_(channels)(f)
+      _ <- channels.parTraverse_(f)
     } yield ()
 
   /** Replicate the incoming message to the server channel and all client channels connected to the remote address. */
@@ -283,7 +284,7 @@ class StaticUDPPeerGroup[M] private (
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
-      _ <- toIO(serverBinding).handleErrorWith {
+      _ <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
@@ -301,7 +302,7 @@ class StaticUDPPeerGroup[M] private (
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
       // Stop the in and outgoing traffic.
-      _ <- toIO(serverBinding.channel.close())
+      _ <- toTask(serverBinding.channel.close())
     } yield ()
   }
 
@@ -351,7 +352,7 @@ object StaticUDPPeerGroup extends StrictLogging {
     Resource.make {
       IO(new NioEventLoopGroup())
     } { group =>
-      toIO(group.shutdownGracefully())
+      toTask(group.shutdownGracefully())
     }
 
   private class ChannelImpl[M](
@@ -391,7 +392,7 @@ object StaticUDPPeerGroup extends StrictLogging {
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
         packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress, localAddress)
-        _ <- toIO(nettyChannel.writeAndFlush(packet)).handleErrorWith {
+        _ <- toTask(nettyChannel.writeAndFlush(packet)).handleErrorWith {
           case _: IOException =>
             IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
         }

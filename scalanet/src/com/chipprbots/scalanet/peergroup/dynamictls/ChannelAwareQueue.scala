@@ -60,8 +60,8 @@ private[scalanet] final class ChannelAwareQueue[M] private (
 }
 
 object ChannelAwareQueue {
-  def apply[M](limit: Int, channelType: ChannelType, channelConfig: ChannelConfig): IO[ChannelAwareQueue[M]] = {
-    CloseableQueue.unbounded[M](channelType).map(queue => new ChannelAwareQueue[M](limit, queue, channelConfig))
+  def apply[M](limit: Int, channelConfig: ChannelConfig): IO[ChannelAwareQueue[M]] = {
+    CloseableQueue.unbounded[M].map(queue => new ChannelAwareQueue[M](limit, queue, channelConfig))
   }
 
 }
