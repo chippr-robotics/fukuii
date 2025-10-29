@@ -44,10 +44,10 @@ crossPaths := true
 ThisBuild / evictionErrorLevel := Level.Info
 
 val `scala-2.12` = "2.12.13"
-val `scala-2.13` = "2.13.14" // Upgraded for json4s 4.0.x and circe 0.14.10 (SIP-51 requirement)
-val `scala-3` = "3.3.4" // Scala 3 LTS version
-val supportedScalaVersions = List(`scala-2.12`, `scala-2.13`)
-val scala3SupportedVersions = List(`scala-2.13`, `scala-3`) // Cross-compilation target for Scala 3 migration
+val `scala-2.13` = "2.13.14" // Previous version, deprecated
+val `scala-3` = "3.3.4" // Scala 3 LTS version - now the default
+val supportedScalaVersions = List(`scala-3`) // Scala 3 only after Shapeless migration
+val scala3SupportedVersions = List(`scala-3`) // Scala 3 as primary version
 
 // Scala 2.x specific options
 val scala2Options = Seq(
@@ -92,7 +92,7 @@ val scala3Options = Seq(
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   name := projectName,
   organization := "com.chipprbots",
-  scalaVersion := `scala-2.13`, // Primary version - Scala 3 available via cross-compilation
+  scalaVersion := `scala-3`, // Primary version - Scala 3 after Shapeless migration
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
   // NOTE: SemanticDB temporarily disabled for Scala 2.13.14 (not yet supported by semanticdb-scalac)
@@ -247,7 +247,6 @@ lazy val rlp = {
     .settings(
       libraryDependencies ++=
         Dependencies.akkaUtil ++
-          Dependencies.shapeless ++
           Dependencies.testing
     )
 
