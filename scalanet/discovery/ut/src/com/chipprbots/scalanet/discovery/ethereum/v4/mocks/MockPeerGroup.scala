@@ -1,49 +1,53 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4.mocks
 
-import cats.effect.Resource
+import cats.effect.{Resource, IO, Ref}
+import cats.effect.std.Queue
 import com.chipprbots.scalanet.peergroup.PeerGroup
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
 import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, MessageReceived}
 import com.chipprbots.scalanet.peergroup.Channel
-import cats.effect.IO
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration._
 
 class MockPeerGroup[A, M](
-    override val processAddress: A
-)(implicit val s: Scheduler)
-    extends PeerGroup[A, M] {
+    override val processAddress: A,
+    serverEventsQueue: Queue[IO, ServerEvent[A, M]]
+) extends PeerGroup[A, M] {
 
   private val channels = TrieMap.empty[A, MockChannel[A, M]]
-  private val serverEvents = ConcurrentQueue[Task].unsafe[ServerEvent[A, M]](BufferCapacity.Unbounded())
 
   // Intended for the System Under Test to read incoming channels.
   override def nextServerEvent: IO[Option[PeerGroup.ServerEvent[A, M]]] =
-    serverEvents.poll.map(Some(_))
+    serverEventsQueue.take.map(Some(_))
 
   // Intended for the System Under Test to open outgoing channels.
-  override def client(to: A): Resource[Task, Channel[A, M]] = {
+  override def client(to: A): Resource[IO, Channel[A, M]] = {
     Resource.make(
       for {
         channel <- getOrCreateChannel(to)
-        _ <- Task(channel.refCount.increment())
+        _ <- IO(channel.refCount.increment())
       } yield channel
     ) { channel =>
-      Task(channel.refCount.decrement())
+      IO(channel.refCount.decrement())
     }
   }
 
   def getOrCreateChannel(to: A): IO[MockChannel[A, M]] =
-    Task(channels.getOrElseUpdate(to, new MockChannel[A, M](processAddress, to)))
+    IO(channels.getOrElseUpdate(to, new MockChannel[A, M](processAddress, to)))
 
   def createServerChannel(from: A): IO[MockChannel[A, M]] =
     for {
-      channel <- Task(new MockChannel[A, M](processAddress, from))
-      _ <- Task(channel.refCount.increment())
-      event = ChannelCreated(channel, Task(channel.refCount.decrement()))
-      _ <- serverEvents.offer(event)
+      channel <- IO(new MockChannel[A, M](processAddress, from))
+      _ <- IO(channel.refCount.increment())
+      event = ChannelCreated(channel, IO(channel.refCount.decrement()))
+      _ <- serverEventsQueue.offer(event)
     } yield channel
+}
+
+object MockPeerGroup {
+  def apply[A, M](processAddress: A): IO[MockPeerGroup[A, M]] =
+    Queue.unbounded[IO, ServerEvent[A, M]].map(queue => new MockPeerGroup(processAddress, queue))
 }
 
 class MockChannel[A, M](

@@ -18,7 +18,7 @@ import org.scalatestplus.mockito.MockitoSugar._
 import org.mockito.Mockito.{when}
 
 import scala.concurrent.duration._
-.Implicits.global
+
 import org.scalatest.concurrent.ScalaFutures._
 import com.chipprbots.scalanet.TaskValues._
 import KNetworkSpec._

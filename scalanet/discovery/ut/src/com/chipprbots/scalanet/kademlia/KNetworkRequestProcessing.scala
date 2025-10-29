@@ -45,7 +45,7 @@ object KNetworkRequestProcessing {
     private def ignore(
         handler: Option[KResponse[A]] => IO[Unit]
     ): None.type = {
-      handler(None).runSyncUnsafe()
+      handler(None).unsafeRunSync()
       None
     }
   }

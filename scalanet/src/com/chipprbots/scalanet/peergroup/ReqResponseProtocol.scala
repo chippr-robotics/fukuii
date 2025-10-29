@@ -96,18 +96,19 @@ class ReqResponseProtocol[A, M](
 
   /** Start handling requests in the background. */
   def startHandling(requestHandler: M => M): IO[Unit] = {
-    group.nextServerEvent.toObservable.collectChannelCreated
-      .foreachL {
+    group.nextServerEvent.toStream.collectChannelCreated
+      .evalMap {
         case (channel, release) =>
           val channelId = (a.getAddress(processAddress), a.getAddress(channel.to))
-          channel.nextChannelEvent.toIterant
+          channel.nextChannelEvent.toStream
             .collect {
               case MessageReceived(msg) => msg
             }
-            .mapEval { msg =>
+            .evalMap { msg =>
               channel.sendMessage(MessageEnvelope(msg.id, requestHandler(msg.m)))
             }
-            .completedL
+            .compile
+            .drain
             .guarantee {
               // Release the channel and remove the background process from the map.
               release >> fiberMapRef.update(_ - channelId)
@@ -117,8 +118,9 @@ class ReqResponseProtocol[A, M](
               // Remember we're running this so we can cancel when released.
               fiberMapRef.update(_.updated(channelId, fiber))
             }
-            .runAsyncAndForget
       }
+      .compile
+      .drain
   }
 
   /** Stop background fibers. */

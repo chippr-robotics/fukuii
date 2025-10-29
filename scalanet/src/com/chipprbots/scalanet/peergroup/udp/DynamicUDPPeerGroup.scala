@@ -221,7 +221,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
 
         /**
           *
-          * Another design possibility would be to return `IO.now()`, it would be more in spirit of udp i.e
+          * Another design possibility would be to return `IO.unit`, it would be more in spirit of udp i.e
           * sending the message and forgetting about whole world, but on the other hand it could lead to subtle bugs when user
           * of library would like to re-use channels
           *

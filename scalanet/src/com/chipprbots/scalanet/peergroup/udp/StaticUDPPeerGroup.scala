@@ -198,19 +198,19 @@ class StaticUDPPeerGroup[M] private (
   private def handleMessage(
       remoteAddress: InetSocketAddress,
       maybeMessage: Attempt[M]
-  )(implicit s: Scheduler): Unit =
+  ): Unit =
     executeAsync {
       replicateToChannels(remoteAddress)(_.handleMessage(maybeMessage))
     }
 
-  private def handleError(remoteAddress: InetSocketAddress, error: Throwable)(implicit s: Scheduler): Unit =
+  private def handleError(remoteAddress: InetSocketAddress, error: Throwable): Unit =
     executeAsync {
       replicateToChannels(remoteAddress)(_.handleError(error))
     }
 
   // Execute the task asynchronously. Has to be thread safe.
-  private def executeAsync(task: IO[Unit])(implicit s: Scheduler): Unit = {
-    task.runAsyncAndForget
+  private def executeAsync(task: IO[Unit]): Unit = {
+    task.unsafeRunAndForget()
   }
 
   private def tryDecodeDatagram(datagram: DatagramPacket): Attempt[M] =
@@ -244,7 +244,6 @@ class StaticUDPPeerGroup[M] private (
       .option[RecvByteBufAllocator](ChannelOption.RCVBUF_ALLOCATOR, bufferAllocator)
       .handler(new ChannelInitializer[NioDatagramChannel]() {
         override def initChannel(nettyChannel: NioDatagramChannel): Unit = {
-          implicit val scheduler = Scheduler(nettyChannel.eventLoop)
           nettyChannel
             .pipeline()
             .addLast(new ChannelInboundHandlerAdapter() {
