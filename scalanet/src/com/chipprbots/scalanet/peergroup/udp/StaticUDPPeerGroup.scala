@@ -4,7 +4,6 @@ import cats.effect.{Ref, IO, Resource}
 import cats.effect.std.Semaphore
 import cats.effect.unsafe.implicits.global // For unsafeRunAndForget
 import cats.implicits._
-import cats.syntax.parallel._ // For parTraverse_
 import com.typesafe.scalalogging.StrictLogging
 import com.chipprbots.scalanet.peergroup.{Channel, Release, InetMultiAddress, CloseableQueue}
 import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, MessageReceived, DecodingError, UnexpectedError}
@@ -193,7 +192,7 @@ class StaticUDPPeerGroup[M] private (
   ): IO[Unit] =
     for {
       channels <- getChannels(remoteAddress)
-      _ <- channels.toList.parTraverse_(f)
+      _ <- channels.toList.traverse_(f)
     } yield ()
 
   /** Replicate the incoming message to the server channel and all client channels connected to the remote address. */

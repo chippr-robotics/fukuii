@@ -91,12 +91,12 @@ class ReqResponseProtocol[A, M](
       // Subscribe first so we don't miss the response.
       subscription <- c.subscribeForResponse(messageToSend.id, timeOutDuration).start
       _ <- c.sendMessage(messageToSend).timeout(timeOutDuration)
-      result <- subscription.join.flatMap {
+      envelope <- subscription.join.flatMap {
         case cats.effect.Outcome.Succeeded(fa) => fa
         case cats.effect.Outcome.Errored(e) => IO.raiseError(e)
         case cats.effect.Outcome.Canceled() => IO.raiseError(new RuntimeException("Request fiber was canceled"))
       }
-    } yield result
+    } yield envelope.m
 
   /** Start handling requests in the background. */
   def startHandling(requestHandler: M => M): IO[Unit] = {
