@@ -522,7 +522,7 @@ addCommandAlias(
 // Version 3.2.2+ supports Scala 2.13.16, version 1.x for older Scala 2.13 versions
 (ThisBuild / scapegoatVersion) := (CrossVersion.partialVersion(scalaVersion.value) match {
   case Some((2, 13)) => "3.2.2"  // Scala 2.13.16+ supports Scapegoat 3.2.x
-  case Some((3, _))  => "3.2.2"  // Scala 3 (when dependencies are ready)
+  case Some((3, _))  => "3.1.4"  // Scala 3.3.4 supports Scapegoat 3.1.4
   case _             => "1.4.16" // Fallback for older versions
 })
 scapegoatReports := Seq("xml", "html")

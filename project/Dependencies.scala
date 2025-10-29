@@ -100,8 +100,8 @@ object Dependencies {
 
   // Dependencies for scalanet module
   val scodec: Seq[ModuleID] = Seq(
-    "org.scodec" %% "scodec-core" % "1.11.11", // Latest stable supporting Scala 2.13
-    "org.scodec" %% "scodec-bits" % "1.1.38"
+    "org.scodec" %% "scodec-core" % "1.11.11", // Scala 2.13 - last 1.x version
+    "org.scodec" %% "scodec-bits" % "1.2.1"    // Updated for broader compatibility
   )
 
   val netty: Seq[ModuleID] = {

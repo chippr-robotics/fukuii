@@ -7,6 +7,7 @@ import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
 import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.kademlia.XorOrdering
 import com.chipprbots.scalanet.peergroup.Addressable
+import fs2.Stream
 import java.net.InetAddress
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
@@ -368,7 +369,7 @@ object DiscoveryService {
         }
         .flatMap { peers =>
           // Send our new ENR sequence to the peers so they can pull our latest data.
-          peers.parTraverseN(config.kademliaAlpha)(pingAndMaybeUpdateTimestamp).start.void
+          peers.toList.parTraverseN(config.kademliaAlpha)(pingAndMaybeUpdateTimestamp(_)).start.void
         }
     }
 
