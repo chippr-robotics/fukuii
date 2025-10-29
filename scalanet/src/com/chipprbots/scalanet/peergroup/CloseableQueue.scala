@@ -1,10 +1,8 @@
 package com.chipprbots.scalanet.peergroup
 
 import cats.implicits._
-import cats.effect.concurrent.{TryableDeferred, Deferred}
-import monix.catnap.ConcurrentQueue
-import monix.eval.Task
-import monix.execution.{BufferCapacity, ChannelType}
+import cats.effect.{Deferred, IO}
+import cats.effect.std.Queue
 import scala.util.{Left, Right}
 
 /** Wraps an underlying concurrent queue so that polling can return None when
@@ -17,29 +15,29 @@ import scala.util.{Left, Right}
   * @param queue is the underlying message queue
   */
 class CloseableQueue[A](
-    closed: TryableDeferred[Task, Boolean],
-    queue: ConcurrentQueue[Task, A]
+    closed: Deferred[IO, Boolean],
+    queue: Queue[IO, A]
 ) {
   import CloseableQueue.Closed
 
   /** Fetch the next item from the queue, or None if the production has finished
     * and the queue has been emptied.
     */
-  def next: Task[Option[A]] =
+  def next: IO[Option[A]] =
     closed.tryGet.flatMap {
       case Some(true) =>
-        // `clear` must be called by the consumer side.
-        queue.clear.as(None)
+        // Clear the queue by draining all items
+        IO.iterateUntil(queue.tryTake)(_.isEmpty).as(None)
 
       case Some(false) =>
-        queue.tryPoll
+        queue.tryTake
 
       case None =>
-        Task.race(closed.get, queue.poll).flatMap {
+        IO.race(closed.get, queue.take).flatMap {
           case Left(_) =>
             next
           case Right(item) =>
-            Task.pure(Some(item))
+            IO.pure(Some(item))
         }
     }
 
@@ -47,33 +45,33 @@ class CloseableQueue[A](
     * If the queue is already closed it does nothing; this is because either the producer or the consumer
     * could have closed the queue before.
     */
-  def close(discard: Boolean): Task[Unit] =
+  def close(discard: Boolean): IO[Unit] =
     closed.complete(discard).attempt.void
 
   /** Close the queue and discard any remaining items in it. */
-  def closeAndDiscard: Task[Unit] = close(discard = true)
+  def closeAndDiscard: IO[Unit] = close(discard = true)
 
   /** Close the queue but allow the consumer to pull the remaining items from it. */
-  def closeAndKeep: Task[Unit] = close(discard = false)
+  def closeAndKeep: IO[Unit] = close(discard = false)
 
   /** Try to put a new item in the queue, unless the capactiy has been reached or the queue has been closed. */
-  def tryOffer(item: A): Task[Either[Closed, Boolean]] =
+  def tryOffer(item: A): IO[Either[Closed, Boolean]] =
     // We could drop the oldest item if the queue is full, rather than drop the latest,
     // but the capacity should be set so it only prevents DoS attacks, so it shouldn't
     // be that crucial to serve clients who overproduce.
     unlessClosed(queue.tryOffer(item))
 
   /** Try to put a new item in the queue unless the queue has already been closed. Waits if the capacity has been reached. */
-  def offer(item: A): Task[Either[Closed, Unit]] =
+  def offer(item: A): IO[Either[Closed, Unit]] =
     unlessClosed {
-      Task.race(closed.get, queue.offer(item)).map(_.leftMap(_ => Closed))
+      IO.race(closed.get, queue.offer(item)).map(_.leftMap(_ => Closed))
     }.map(_.joinRight)
 
-  private def unlessClosed[T](task: Task[T]): Task[Either[Closed, T]] =
+  private def unlessClosed[T](task: IO[T]): IO[Either[Closed, T]] =
     closed.tryGet
       .map(_.isDefined)
       .ifM(
-        Task.pure(Left(Closed)),
+        IO.pure(Left(Closed)),
         task.map(Right(_))
       )
 }
@@ -85,18 +83,13 @@ object CloseableQueue {
   type Closed = Closed.type
 
   /** Create a queue with a given capacity; 0 or negative means unbounded. */
-  def apply[A](capacity: Int, channelType: ChannelType) = {
-    val buffer = capacity match {
-      case i if i <= 0 => BufferCapacity.Unbounded()
-      // Capacity is approximate and a power of 2, min value 2.
-      case i => BufferCapacity.Bounded(math.max(2, i))
-    }
+  def apply[A](capacity: Int): IO[CloseableQueue[A]] = {
     for {
-      closed <- Deferred.tryable[Task, Boolean]
-      queue <- ConcurrentQueue.withConfig[Task, A](buffer, channelType)
+      closed <- Deferred[IO, Boolean]
+      queue <- if (capacity <= 0) Queue.unbounded[IO, A] else Queue.bounded[IO, A](capacity)
     } yield new CloseableQueue[A](closed, queue)
   }
 
-  def unbounded[A](channelType: ChannelType = ChannelType.MPMC) =
-    apply[A](capacity = 0, channelType)
+  def unbounded[A]: IO[CloseableQueue[A]] =
+    apply[A](capacity = 0)
 }

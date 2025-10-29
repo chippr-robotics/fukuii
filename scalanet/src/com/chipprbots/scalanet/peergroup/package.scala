@@ -1,8 +1,8 @@
 package com.chipprbots.scalanet
 
-import monix.eval.Task
+import cats.effect.IO
 
 package object peergroup {
-  // Task that closes a PeerGroup or Channel.
-  type Release = Task[Unit]
+  // IO that closes a PeerGroup or Channel.
+  type Release = IO[Unit]
 }

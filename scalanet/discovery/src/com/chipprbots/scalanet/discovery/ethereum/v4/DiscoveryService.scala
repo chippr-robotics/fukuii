@@ -1,7 +1,6 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import cats.effect.{Clock, Resource}
-import cats.effect.concurrent.{Deferred, Ref}
+import cats.effect.{IO, Resource, Temporal, Ref, Deferred}
 import cats.implicits._
 import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, SigAlg}
 import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
@@ -9,7 +8,6 @@ import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.kademlia.XorOrdering
 import com.chipprbots.scalanet.peergroup.Addressable
 import java.net.InetAddress
-import monix.eval.Task
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
 import scodec.{Codec, Attempt}
@@ -25,30 +23,30 @@ trait DiscoveryService {
 
   /** Try to look up a node either in the local cache or
     * by performing a recursive lookup on the network. */
-  def getNode(nodeId: Node.Id): Task[Option[Node]]
+  def getNode(nodeId: Node.Id): IO[Option[Node]]
 
   /** Return all currently bonded nodes. */
-  def getNodes: Task[Set[Node]]
+  def getNodes: IO[Set[Node]]
 
   /** Try to get the ENR record of the given node to add it to the cache. */
-  def addNode(node: Node): Task[Unit]
+  def addNode(node: Node): IO[Unit]
 
   /** Remove a node from the local cache. */
-  def removeNode(nodeId: Node.Id): Task[Unit]
+  def removeNode(nodeId: Node.Id): IO[Unit]
 
   /** Update the local node with an updated external address,
     * incrementing the local ENR sequence.
     */
-  def updateExternalAddress(ip: InetAddress): Task[Unit]
+  def updateExternalAddress(ip: InetAddress): IO[Unit]
 
   /** The local node representation. */
-  def getLocalNode: Task[Node]
+  def getLocalNode: IO[Node]
 
   /** Lookup the nodes closest to a given target. */
-  def getClosestNodes(target: Node.Id): Task[Seq[Node]]
+  def getClosestNodes(target: Node.Id): IO[Seq[Node]]
 
   /** Lookup a random target, to discover new nodes along the way. */
-  def getRandomNodes: Task[Set[Node]]
+  def getRandomNodes: IO[Set[Node]]
 }
 
 object DiscoveryService {
@@ -58,7 +56,7 @@ object DiscoveryService {
 
   type ENRSeq = Long
   type Timestamp = Long
-  type StateRef[A] = Ref[Task, State[A]]
+  type StateRef[A] = Ref[IO, State[A]]
 
   /** Implement the Discovery v4 protocol:
     *
@@ -83,8 +81,8 @@ object DiscoveryService {
       implicit sigalg: SigAlg,
       enrCodec: Codec[EthereumNodeRecord.Content],
       addressable: Addressable[A],
-      clock: Clock[Task]
-  ): Resource[Task, DiscoveryService] =
+      temporal: Temporal[IO]
+  ): Resource[IO, DiscoveryService] =
     Resource
       .make {
         for {
@@ -92,12 +90,12 @@ object DiscoveryService {
           _ <- checkKeySize("node ID", node.id, sigalg.PublicKeyBytesSize)
 
           // Use the current time to set the ENR sequence to something fresh.
-          now <- clock.monotonic(MILLISECONDS)
-          enr <- Task {
+          now <- temporal.monotonic.map(_.toMillis)
+          enr <- IO {
             EthereumNodeRecord.fromNode(node, privateKey, seq = now, tags.flatMap(_.toAttr): _*).require
           }
 
-          stateRef <- Ref[Task].of(State[A](node, enr, SubnetLimits.fromConfig(config)))
+          stateRef <- Ref[IO].of(State[A](node, enr, SubnetLimits.fromConfig(config)))
 
           service = new ServiceImpl[A](
             privateKey,
