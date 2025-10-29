@@ -6,9 +6,7 @@ ThisBuild / libraryDependencySchemes += "org.scala-lang.modules" %% "scala-xml" 
 addSbtPlugin("com.eed3si9n" % "sbt-buildinfo" % "0.10.0")
 addSbtPlugin("com.github.mwz" % "sbt-sonar" % "2.2.0")
 addSbtPlugin("com.lightbend.sbt" % "sbt-javaagent" % "0.1.6")
-// NOTE: sbt-scapegoat temporarily disabled due to Scala version upgrade to 2.13.8
-// Scapegoat 1.4.11 only supports Scala 2.13.6; will be re-enabled after Scala 3 migration
-// addSbtPlugin("com.sksamuel.scapegoat" % "sbt-scapegoat" % "1.2.13")
+addSbtPlugin("com.sksamuel.scapegoat" % "sbt-scapegoat" % "1.2.13") // Latest plugin version, supports Scala 3 via analyzer 3.x
 addSbtPlugin("com.thoughtworks.sbt-api-mappings" % "sbt-api-mappings" % "3.0.0")
 addSbtPlugin("com.timushev.sbt" % "sbt-updates" % "0.5.1")
 addSbtPlugin("com.typesafe.sbt" % "sbt-git" % "1.0.0")

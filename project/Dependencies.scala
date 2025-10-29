@@ -2,7 +2,7 @@ import sbt._
 
 object Dependencies {
 
-  private val akkaVersion = "2.6.20" // Updated for Scala 3 support (minimum version with Scala 3 artifacts)
+  private val akkaVersion = "2.6.21" // Updated for Scala 3 support - last 2.6.x release compatible with Akka HTTP 10.5.x
 
   val akkaUtil: Seq[ModuleID] =
     Seq(
@@ -17,16 +17,18 @@ object Dependencies {
       "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
       "com.typesafe.akka" %% "akka-testkit" % akkaVersion,
       "com.typesafe.akka" %% "akka-actor-testkit-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-stream" % akkaVersion,
-      "com.miguno.akka" %% "akka-mock-scheduler" % "0.5.5" % "it,test"
+      "com.typesafe.akka" %% "akka-stream" % akkaVersion
+      // NOTE: akka-mock-scheduler 0.5.5 is not available for Scala 3
+      // Commented out temporarily - tests that use this will need to be updated or skipped
+      // "com.miguno.akka" %% "akka-mock-scheduler" % "0.5.5" % "it,test"
     )
 
   val akkaHttp: Seq[ModuleID] = {
-    val akkaHttpVersion = "10.2.10" // Updated for Scala 3 support
+    val akkaHttpVersion = "10.5.3" // Updated for Scala 3 support (10.5.x series)
 
     Seq(
       "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
-      "ch.megard" %% "akka-http-cors" % "1.1.0",
+      "ch.megard" %% "akka-http-cors" % "1.2.0", // Updated for Scala 3 and Akka HTTP 10.5.x
       "de.heikoseeberger" %% "akka-http-json4s" % "1.39.2", // Updated for json4s 4.0.x compatibility
       "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % "it,test"
     )
@@ -128,7 +130,8 @@ object Dependencies {
     "org.jupnp" % "org.jupnp" % "2.5.2",
     "org.jupnp" % "org.jupnp.support" % "2.5.2",
     "org.jupnp" % "org.jupnp.tool" % "2.5.2",
-    "javax.servlet" % "javax.servlet-api" % "4.0.1"
+    "javax.servlet" % "javax.servlet-api" % "4.0.1",
+    "com.thesamet.scalapb" %% "scalapb-runtime" % Versions.scalapb // Required for Scala 3 support
   )
 
   val guava: Seq[ModuleID] = {
@@ -172,7 +175,7 @@ object Dependencies {
   }
 
   val shapeless: Seq[ModuleID] = Seq(
-    "com.chuusai" %% "shapeless" % "2.3.3"
+    "org.typelevel" %% "shapeless3-deriving" % "3.4.3"
   )
 
   val scaffeine: Seq[ModuleID] = Seq(
