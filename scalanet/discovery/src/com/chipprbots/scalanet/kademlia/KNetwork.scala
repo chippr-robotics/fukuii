@@ -114,15 +114,18 @@ object KNetwork {
         clientChannel: Channel[A, KMessage[A]],
         pf: PartialFunction[KMessage[A], Response]
     ): IO[Response] = {
+      def readResponse: IO[Response] = {
+        clientChannel.nextChannelEvent.flatMap {
+          case Some(MessageReceived(m)) if pf.isDefinedAt(m) => IO.pure(pf(m))
+          case Some(_) => readResponse // Keep reading if event doesn't match
+          case None => IO.raiseError(new Exception("Channel closed before response received"))
+        }
+      }
+      
       for {
         _ <- clientChannel.sendMessage(message).timeout(requestTimeout)
-        // This assumes that `requestTemplate` always opens a new channel.
-        response <- clientChannel.channelEventObservable
-          .collect {
-            case MessageReceived(m) if pf.isDefinedAt(m) => pf(m)
-          }
-          .headL
-          .timeout(requestTimeout)
+        // Read channel events until we find a matching response
+        response <- readResponse.timeout(requestTimeout)
       } yield response
     }
   }
