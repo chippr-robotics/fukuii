@@ -38,13 +38,14 @@ object Dependencies {
 
   val circe: Seq[ModuleID] = {
     val circeVersion = "0.14.10" // Updated for Scala 3 support
-    val circeGenericExtrasVersion = "0.14.4" // Last version with generic-extras
 
     Seq(
       "io.circe" %% "circe-core" % circeVersion,
       "io.circe" %% "circe-generic" % circeVersion,
-      "io.circe" %% "circe-parser" % circeVersion,
-      "io.circe" %% "circe-generic-extras" % circeGenericExtrasVersion // Separate versioning for generic-extras
+      "io.circe" %% "circe-parser" % circeVersion
+      // NOTE: circe-generic-extras is deprecated and not available for Scala 3
+      // Functionality has been integrated into circe-generic in 0.14.x
+      // See: https://github.com/circe/circe-generic-extras/issues/276
     )
   }
 
@@ -97,6 +98,21 @@ object Dependencies {
   // See scalanet/ATTRIBUTION.md for details
   val network: Seq[ModuleID] = Seq.empty
 
+  // Dependencies for scalanet module
+  val scodec: Seq[ModuleID] = Seq(
+    "org.scodec" %% "scodec-core" % "1.11.10", // For Scala 2.13
+    "org.scodec" %% "scodec-bits" % "1.1.38"
+  )
+
+  val netty: Seq[ModuleID] = {
+    val nettyVersion = "4.1.109.Final" // Updated for security
+    Seq(
+      "io.netty" % "netty-handler" % nettyVersion,
+      "io.netty" % "netty-transport" % nettyVersion,
+      "io.netty" % "netty-codec" % nettyVersion
+    )
+  }
+
   val logging = Seq(
     "ch.qos.logback" % "logback-classic" % "1.5.12", // Updated for better compatibility
     "com.typesafe.scala-logging" %% "scala-logging" % "3.9.5", // Updated for Scala 3 support
@@ -122,7 +138,7 @@ object Dependencies {
 
   val dependencies = Seq(
     jline,
-    "org.scala-lang.modules" %% "scala-parser-combinators" % "1.1.2",
+    "org.scala-lang.modules" %% "scala-parser-combinators" % "2.4.0", // Updated for Scala 3 support
     "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.1.0",
     "org.xerial.snappy" % "snappy-java" % "1.1.7.7",
     "org.web3j" % "core" % "4.5.11" % Test,
@@ -131,7 +147,7 @@ object Dependencies {
     "org.jupnp" % "org.jupnp.support" % "2.5.2",
     "org.jupnp" % "org.jupnp.tool" % "2.5.2",
     "javax.servlet" % "javax.servlet-api" % "4.0.1",
-    "com.thesamet.scalapb" %% "scalapb-runtime" % Versions.scalapb // Required for Scala 3 support
+    "com.thesamet.scalapb" %% "scalapb-runtime" % "0.11.17" // Required for Scala 3 support
   )
 
   val guava: Seq[ModuleID] = {
@@ -175,7 +191,7 @@ object Dependencies {
   }
 
   val shapeless: Seq[ModuleID] = Seq(
-    "org.typelevel" %% "shapeless3-deriving" % "3.4.3"
+    "com.chuusai" %% "shapeless" % "2.3.12" // Shapeless 2 for Scala 2.13, Shapeless 3 for Scala 3 migration
   )
 
   val scaffeine: Seq[ModuleID] = Seq(
