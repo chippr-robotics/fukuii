@@ -112,7 +112,7 @@ object DiscoveryService {
           // Setting the enrolled status here because we could potentially repeat enrollment until it succeeds.
           enroll = service.enroll.guarantee(stateRef.update(_.setEnrolled))
           // Periodically discover new nodes.
-          discover = service.lookupRandom.delayExecution(config.discoveryPeriod).loopForever
+          discover = Stream.fixedDelay[IO](config.discoveryPeriod).evalMap(_ => service.lookupRandom).compile.drain
           // Enrollment can be run in the background if it takes very long.
           discoveryFiber <- if (enrollInBackground) {
             (enroll >> discover).start
@@ -122,7 +122,7 @@ object DiscoveryService {
         } yield (service, cancelToken, discoveryFiber)
       } {
         case (_, cancelToken, discoveryFiber) =>
-          cancelToken.cancel >> discoveryFiber.cancel
+          cancelToken.complete(()).void >> discoveryFiber.cancel
       }
       .map(_._1)
 

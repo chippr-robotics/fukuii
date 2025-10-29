@@ -85,39 +85,36 @@ object DiscoveryNetwork {
       override def startHandling(handler: DiscoveryRPC[Peer[A]]): IO[Deferred[IO, Unit]] =
         for {
           cancelToken <- Deferred[IO, Unit]
-          _ <- peerGroup.nextServerEvent
-            .withCancelToken(cancelToken)
-            .toIterant
-            .mapEval {
+          _ <- Stream.repeatEval(peerGroup.nextServerEvent)
+            .interruptWhen(cancelToken)
+            .evalMap {
               case ChannelCreated(channel, release) =>
                 handleChannel(handler, channel, cancelToken)
                   .guarantee(release)
-                  .onErrorRecover {
+                  .recover {
                     case ex: TimeoutException =>
                     case NonFatal(ex) =>
                       logger.error(s"Error handling channel from ${channel.to}: $ex")
                   }
-                  .startAndForget
+                  .start.void
 
               case _ =>
                 IO.unit
             }
-            .completedL
-            .startAndForget
-          cancelable <- CancelableF[IO](cancelToken.complete(()))
-        } yield cancelable
+            .compile.drain
+            .start.void
+        } yield cancelToken
 
       private def handleChannel(
           handler: DiscoveryRPC[Peer[A]],
           channel: Channel[A, Packet],
           cancelToken: Deferred[IO, Unit]
       ): IO[Unit] = {
-        channel.nextChannelEvent
-          .withCancelToken(cancelToken)
+        Stream.repeatEval(channel.nextChannelEvent)
+          .interruptWhen(cancelToken)
           .timeout(config.messageExpiration) // Messages older than this would be ignored anyway.
-          .toIterant
-          .mapEval {
-            case MessageReceived(packet) =>
+          .evalMap {
+            case MessageReceived(packet: Packet) =>
               currentTimeSeconds.flatMap { timestamp =>
                 Packet.unpack(packet) match {
                   case Attempt.Successful((payload, remotePublicKey)) =>
@@ -149,7 +146,7 @@ object DiscoveryNetwork {
               // we do not use idle peer detection in discovery
               IO.unit
           }
-          .completedL
+          .compile.drain
       }
 
       private def handleRequest(
@@ -196,7 +193,7 @@ object DiscoveryNetwork {
           f: Res => IO[Unit]
       ): IO[Unit] =
         maybeResponse
-          .onErrorRecoverWith {
+          .recoverWith {
             case NonFatal(ex) =>
               // Not responding to this one, but it shouldn't stop handling further requests.
               IO(logger.error(s"Error handling incoming request: $ex")).as(None)
@@ -316,14 +313,14 @@ object DiscoveryNetwork {
             publicKey: PublicKey,
             // The absolute end we are willing to wait for the correct message to arrive.
             deadline: Deadline
-        )(pf: PartialFunction[Payload.Response, T]): Iterant[Task, T] =
-          channel.nextChannelEvent
-            .timeoutL(IO(config.requestTimeout.min(deadline.timeLeft)))
-            .toIterant
+        )(pf: PartialFunction[Payload.Response, T]): Stream[IO, T] =
+          Stream.repeatEval(
+            channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
+          )
             .collect {
-              case MessageReceived(packet) => packet
+              case MessageReceived(packet: Packet) => packet
             }
-            .mapEval { packet =>
+            .evalMap { (packet: Packet) =>
               currentTimeSeconds.flatMap { timestamp =>
                 Packet.unpack(packet) match {
                   case Attempt.Successful((payload, remotePublicKey)) =>
@@ -360,8 +357,8 @@ object DiscoveryNetwork {
         def collectFirstResponse[T](publicKey: PublicKey)(pf: PartialFunction[Payload.Response, T]): IO[Option[T]] =
           channel
             .collectResponses(publicKey: PublicKey, config.requestTimeout.fromNow)(pf)
-            .headOptionL
-            .onErrorRecoverWith {
+            .head.compile.last
+            .recoverWith {
               case NonFatal(ex) =>
                 IO(logger.debug(s"Failed to collect response from ${channel.to}: ${ex.getMessage}")).as(None)
             }
