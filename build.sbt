@@ -355,7 +355,7 @@ lazy val node = {
     node
   else
     //node.settings(PB.protocExecutable := file("protoc"))
-    node.settings((Compile / PB.runProtoc) := (args => Process("protoc", args) !))
+    node.settings((Compile / PB.runProtoc) := ((args: Seq[String]) => Process("protoc", args) !))
 
 }
 
