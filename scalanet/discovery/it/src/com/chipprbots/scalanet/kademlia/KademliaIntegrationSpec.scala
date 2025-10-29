@@ -3,8 +3,8 @@ package com.chipprbots.scalanet.kademlia
 import java.util.concurrent.{Executors, TimeUnit}
 import cats.effect.Resource
 import cats.implicits._
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+
 import org.scalatest.{Assertion, AsyncFlatSpec, BeforeAndAfterAll}
 import org.scalatest.Matchers._
 import org.scalatest.concurrent.{Eventually, IntegrationPatience}
@@ -27,7 +27,7 @@ abstract class KademliaIntegrationSpec(name: String)
 
   trait TestNode {
     def self: PeerRecord
-    def getPeers: Task[Seq[PeerRecord]]
+    def getPeers: IO[Seq[PeerRecord]]
   }
 
   def makeXorOrdering(nodeId: BitVector): Ordering[PeerRecord]
@@ -50,9 +50,9 @@ abstract class KademliaIntegrationSpec(name: String)
       testConfig: TestNodeKademliaConfig = defaultConfig
   ): Resource[Task, TestNode]
 
-  def haveSameNumberOfPeers(nodes: Seq[TestNode], expectedNumber: Int): Task[Boolean] = {
+  def haveSameNumberOfPeers(nodes: Seq[TestNode], expectedNumber: Int): IO[Boolean] = {
     for {
-      peersPerNode <- Task.traverse(nodes)(node => node.getPeers)
+      peersPerNode <- IO.traverse(nodes)(node => node.getPeers)
     } yield {
       peersPerNode.forall(peers => peers.size == expectedNumber)
     }
@@ -69,7 +69,7 @@ abstract class KademliaIntegrationSpec(name: String)
     ()
   }
 
-  def taskTestCase(t: => Task[Assertion]): Future[Assertion] = {
+  def taskTestCase(t: => IO[Assertion]): Future[Assertion] = {
     t.runToFuture
   }
 
@@ -199,7 +199,7 @@ abstract class KademliaIntegrationSpec(name: String)
       // A chain of nodes bootstrapping from each other
       node3 <- startNode(initialNodes = Set(node2.self), testConfig = lowRefConfig)
       node4 <- startNode(initialNodes = Set(node3.self), testConfig = lowRefConfig)
-      _ <- Resource.liftF(Task.sleep(10.seconds))
+      _ <- Resource.liftF(IO.sleep(10.seconds))
       // Now start a node that node1 wanted to bootstrap from, and join all the other nodes.
       // When node1 refreshes it will try to connect to node5 again and discover the others.
       node5 <- startNode(
@@ -252,7 +252,7 @@ abstract class KademliaIntegrationSpec(name: String)
     (for {
       nodes <- bootStrapNodeNeighbours.toList.map(node => startNode(node, testConfig = lowKConfig)).sequence
       bootNode <- startNode(bootStrapNode, initialNodes = bootStrapNodeNeighbours.map(_._1), testConfig = lowKConfig)
-      _ <- Resource.liftF(Task.sleep(2.seconds))
+      _ <- Resource.liftF(IO.sleep(2.seconds))
       rootNode <- startNode(testNode, initialNodes = Set(bootStrapNode._1), testConfig = lowKConfig)
     } yield (nodes, rootNode)).use {
       case (nodes, rootNode) =>

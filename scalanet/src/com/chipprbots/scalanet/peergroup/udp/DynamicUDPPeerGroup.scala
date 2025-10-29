@@ -19,8 +19,7 @@ import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.DatagramPacket
 import io.netty.channel.socket.nio.NioDatagramChannel
 import io.netty.util.concurrent.{Future, GenericFutureListener, Promise}
-import monix.eval.Task
-import monix.execution.{Scheduler, ChannelType}
+import cats.effect.IO
 import scodec.bits.BitVector
 import scodec.{Attempt, Codec}
 import scala.util.control.NonFatal
@@ -217,17 +216,17 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
 
     override val to: InetMultiAddress = InetMultiAddress(remoteAddress)
 
-    override def sendMessage(message: M): Task[Unit] = {
+    override def sendMessage(message: M): IO[Unit] = {
       if (closePromise.isDone) {
 
         /**
           *
-          * Another design possibility would be to return `Task.now()`, it would be more in spirit of udp i.e
+          * Another design possibility would be to return `IO.unit`, it would be more in spirit of udp i.e
           * sending the message and forgetting about whole world, but on the other hand it could lead to subtle bugs when user
           * of library would like to re-use channels
           *
           */
-        Task.raiseError(new ChannelAlreadyClosedException[InetMultiAddress](InetMultiAddress(localAddress), to))
+        IO.raiseError(new ChannelAlreadyClosedException[InetMultiAddress](InetMultiAddress(localAddress), to))
       } else {
         sendMessage(message, localAddress, remoteAddress, nettyChannel)
       }
@@ -236,19 +235,19 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
     override def nextChannelEvent =
       messageQueue.next
 
-    private def closeNettyChannel(channelType: ChannelType): Task[Unit] = {
+    private def closeNettyChannel(channelType: ChannelType): IO[Unit] = {
       channelType match {
         case ServerChannel =>
           // on netty side there is only one channel for accepting incoming connection so if we close it, we will effectively
           // close server
-          Task.now(())
+          IO.unit
         case ClientChannel =>
           // each client connection creates new channel on netty side
           toTask(nettyChannel.close())
       }
     }
 
-    private def closeChannel: Task[Unit] = {
+    private def closeChannel: IO[Unit] = {
       for {
         _ <- Task(logger.debug(s"Closing channel from ${localAddress} to ${remoteAddress}"))
         _ <- closeNettyChannel(channelType)
@@ -257,9 +256,9 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
       } yield ()
     }
 
-    private[udp] def close: Task[Unit] = {
+    private[udp] def close: IO[Unit] = {
       if (closePromise.isDone) {
-        Task.now(())
+        IO.unit
       } else {
         closeChannel.guarantee(Task(closePromise.trySuccess(this)).void)
       }
@@ -270,15 +269,15 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
         sender: InetSocketAddress,
         recipient: InetSocketAddress,
         nettyChannel: NioDatagramChannel
-    ): Task[Unit] = {
+    ): IO[Unit] = {
       for {
         _ <- Task(logger.debug(s"Sending message ${message.toString.take(100)}... to peer ${recipient}"))
-        encodedMessage <- Task.fromTry(codec.encode(message).toTry)
+        encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
         _ <- toTask(nettyChannel.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), recipient, sender)))
           .onErrorRecoverWith {
             case _: IOException =>
-              Task.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity()))
+              IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity()))
           }
       } yield ()
     }
@@ -290,18 +289,18 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
 
   private lazy val serverBind: ChannelFuture = serverBootstrap.bind(config.bindAddress)
 
-  private def initialize: Task[Unit] =
+  private def initialize: IO[Unit] =
     toTask(serverBind).onErrorRecoverWith {
-      case NonFatal(e) => Task.raiseError(InitializationError(e.getMessage, e.getCause))
+      case NonFatal(e) => IO.raiseError(InitializationError(e.getMessage, e.getCause))
     } *> Task(logger.info(s"Server bound to address ${config.bindAddress}"))
 
   override def processAddress: InetMultiAddress = config.processAddress
 
   override def client(to: InetMultiAddress): Resource[Task, Channel[InetMultiAddress, M]] = {
     Resource
-      .make(Task.suspend {
+      .make(IO.suspend {
         val cf = clientBootstrap.connect(to.inetSocketAddress)
-        val ct: Task[NioDatagramChannel] = toTask(cf).as(cf.channel().asInstanceOf[NioDatagramChannel])
+        val ct: IO[NioDatagramChannel] = toTask(cf).as(cf.channel().asInstanceOf[NioDatagramChannel])
         ct.map {
             nettyChannel =>
               val localAddress = nettyChannel.localAddress()
@@ -322,7 +321,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
           .onErrorRecoverWith {
             case NonFatal(ex) =>
               Task(logger.debug(s"UDP channel setup failed due to ${ex}", ex)) *>
-                Task.raiseError(new ChannelSetupException[InetMultiAddress](to, ex))
+                IO.raiseError(new ChannelSetupException[InetMultiAddress](to, ex))
           }
       })(_.close)
   }
@@ -330,7 +329,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
   override def nextServerEvent =
     serverQueue.next
 
-  private def shutdown: Task[Unit] = {
+  private def shutdown: IO[Unit] = {
     for {
       _ <- serverQueue.close(discard = true)
       _ <- toTask(serverBind.channel().close())

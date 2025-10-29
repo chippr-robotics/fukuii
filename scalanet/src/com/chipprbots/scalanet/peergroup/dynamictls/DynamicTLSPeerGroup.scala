@@ -26,8 +26,7 @@ import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.{NioServerSocketChannel, NioSocketChannel}
 import io.netty.handler.logging.{LogLevel, LoggingHandler}
 import io.netty.handler.ssl.SslContext
-import monix.eval.Task
-import monix.execution.{ChannelType, Scheduler}
+import cats.effect.IO
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import scodec.Codec
 import scodec.bits.BitVector
@@ -96,9 +95,9 @@ class DynamicTLSPeerGroup[M] private (
 
   private lazy val serverBind: ChannelFuture = serverBootstrap.bind(config.bindAddress)
 
-  private def initialize: Task[Unit] =
+  private def initialize: IO[Unit] =
     toTask(serverBind).onErrorRecoverWith {
-      case NonFatal(e) => Task.raiseError(InitializationError(e.getMessage, e.getCause))
+      case NonFatal(e) => IO.raiseError(InitializationError(e.getMessage, e.getCause))
     } *> Task(logger.info(s"Server bound to address ${config.bindAddress}"))
 
   override def processAddress: PeerInfo = config.peerInfo
@@ -109,7 +108,7 @@ class DynamicTLSPeerGroup[M] private (
     // Using Netty SSLEngine.getSession.putValue does not work as expected as until successfulhandshake there is no separate
     // session for each connection.
     Resource.make(
-      Task.suspend {
+      IO.suspend {
         new ClientChannelBuilder[M](
           config.peerInfo.id,
           to,
@@ -132,10 +131,10 @@ class DynamicTLSPeerGroup[M] private (
     createChannel(to, Some(proxyConfig))
   }
 
-  override def nextServerEvent: Task[Option[ServerEvent[PeerInfo, M]]] =
+  override def nextServerEvent: IO[Option[ServerEvent[PeerInfo, M]]] =
     serverQueue.next
 
-  private def shutdown: Task[Unit] = {
+  private def shutdown: IO[Unit] = {
     for {
       _ <- Task(logger.debug("Start shutdown of tls peer group for peer {}", processAddress))
       _ <- serverQueue.close(discard = true)

@@ -1,7 +1,6 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import cats.effect.{Clock, Resource}
-import cats.effect.concurrent.{Deferred, Ref}
+import cats.effect.{IO, Resource, Temporal, Ref, Deferred}
 import cats.implicits._
 import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, SigAlg}
 import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
@@ -9,7 +8,6 @@ import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.kademlia.XorOrdering
 import com.chipprbots.scalanet.peergroup.Addressable
 import java.net.InetAddress
-import monix.eval.Task
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
 import scodec.{Codec, Attempt}
@@ -25,30 +23,30 @@ trait DiscoveryService {
 
   /** Try to look up a node either in the local cache or
     * by performing a recursive lookup on the network. */
-  def getNode(nodeId: Node.Id): Task[Option[Node]]
+  def getNode(nodeId: Node.Id): IO[Option[Node]]
 
   /** Return all currently bonded nodes. */
-  def getNodes: Task[Set[Node]]
+  def getNodes: IO[Set[Node]]
 
   /** Try to get the ENR record of the given node to add it to the cache. */
-  def addNode(node: Node): Task[Unit]
+  def addNode(node: Node): IO[Unit]
 
   /** Remove a node from the local cache. */
-  def removeNode(nodeId: Node.Id): Task[Unit]
+  def removeNode(nodeId: Node.Id): IO[Unit]
 
   /** Update the local node with an updated external address,
     * incrementing the local ENR sequence.
     */
-  def updateExternalAddress(ip: InetAddress): Task[Unit]
+  def updateExternalAddress(ip: InetAddress): IO[Unit]
 
   /** The local node representation. */
-  def getLocalNode: Task[Node]
+  def getLocalNode: IO[Node]
 
   /** Lookup the nodes closest to a given target. */
-  def getClosestNodes(target: Node.Id): Task[Seq[Node]]
+  def getClosestNodes(target: Node.Id): IO[Seq[Node]]
 
   /** Lookup a random target, to discover new nodes along the way. */
-  def getRandomNodes: Task[Set[Node]]
+  def getRandomNodes: IO[Set[Node]]
 }
 
 object DiscoveryService {
@@ -58,7 +56,7 @@ object DiscoveryService {
 
   type ENRSeq = Long
   type Timestamp = Long
-  type StateRef[A] = Ref[Task, State[A]]
+  type StateRef[A] = Ref[IO, State[A]]
 
   /** Implement the Discovery v4 protocol:
     *
@@ -83,8 +81,8 @@ object DiscoveryService {
       implicit sigalg: SigAlg,
       enrCodec: Codec[EthereumNodeRecord.Content],
       addressable: Addressable[A],
-      clock: Clock[Task]
-  ): Resource[Task, DiscoveryService] =
+      temporal: Temporal[IO]
+  ): Resource[IO, DiscoveryService] =
     Resource
       .make {
         for {
@@ -92,12 +90,12 @@ object DiscoveryService {
           _ <- checkKeySize("node ID", node.id, sigalg.PublicKeyBytesSize)
 
           // Use the current time to set the ENR sequence to something fresh.
-          now <- clock.monotonic(MILLISECONDS)
-          enr <- Task {
+          now <- temporal.monotonic.map(_.toMillis)
+          enr <- IO {
             EthereumNodeRecord.fromNode(node, privateKey, seq = now, tags.flatMap(_.toAttr): _*).require
           }
 
-          stateRef <- Ref[Task].of(State[A](node, enr, SubnetLimits.fromConfig(config)))
+          stateRef <- Ref[IO].of(State[A](node, enr, SubnetLimits.fromConfig(config)))
 
           service = new ServiceImpl[A](
             privateKey,
@@ -128,7 +126,7 @@ object DiscoveryService {
       }
       .map(_._1)
 
-  protected[v4] def checkKeySize(name: String, key: BitVector, expectedBytesSize: Int): Task[Unit] =
+  protected[v4] def checkKeySize(name: String, key: BitVector, expectedBytesSize: Int): IO[Unit] =
     Task
       .raiseError(
         new IllegalArgumentException(
@@ -139,22 +137,22 @@ object DiscoveryService {
 
   protected[v4] case class BondingResults(
       // Completed if the remote poor responds with a Pong during the bonding process.
-      pongReceived: Deferred[Task, Boolean],
+      pongReceived: Deferred[IO, Boolean],
       // Completed if the remote peer pings us during the bonding process.
-      pingReceived: Deferred[Task, Unit]
+      pingReceived: Deferred[IO, Unit]
   )
   protected[v4] object BondingResults {
-    def apply(): Task[BondingResults] =
+    def apply(): IO[BondingResults] =
       for {
-        pong <- Deferred[Task, Boolean]
-        ping <- Deferred[Task, Unit]
+        pong <- Deferred[IO, Boolean]
+        ping <- Deferred[IO, Unit]
       } yield BondingResults(pong, ping)
 
     def unsafe(): BondingResults =
-      BondingResults(Deferred.unsafe[Task, Boolean], Deferred.unsafe[Task, Unit])
+      BondingResults(Deferred.unsafe[IO, Boolean], Deferred.unsafe[IO, Unit])
   }
 
-  protected[v4] type FetchEnrResult = Deferred[Task, Option[EthereumNodeRecord]]
+  protected[v4] type FetchEnrResult = Deferred[IO, Option[EthereumNodeRecord]]
 
   protected[v4] case class State[A](
       node: Node,
@@ -292,7 +290,7 @@ object DiscoveryService {
       toAddress: Node.Address => A,
       enrFilter: KeyValueTag.EnrFilter
   )(
-      implicit clock: Clock[Task],
+      implicit temporal: Temporal[IO],
       sigalg: SigAlg,
       enrCodec: Codec[EthereumNodeRecord.Content],
       addressable: Addressable[A]
@@ -300,27 +298,27 @@ object DiscoveryService {
       with DiscoveryRPC[Peer[A]]
       with LazyLogging {
 
-    override def getLocalNode: Task[Node] =
+    override def getLocalNode: IO[Node] =
       stateRef.get.map(_.node)
 
-    override def addNode(node: Node): Task[Unit] =
+    override def addNode(node: Node): IO[Unit] =
       maybeFetchEnr(toPeer(node), None)
 
-    override def getNodes: Task[Set[Node]] =
+    override def getNodes: IO[Set[Node]] =
       stateRef.get.map(_.nodeMap.values.toSet)
 
-    override def getNode(nodeId: Node.Id): Task[Option[Node]] =
+    override def getNode(nodeId: Node.Id): IO[Option[Node]] =
       stateRef.get.flatMap { state =>
         state.nodeMap.get(nodeId) match {
           case cached @ Some(_) =>
-            Task.pure(cached)
+            IO.pure(cached)
           case None =>
             lookup(nodeId).flatMap {
               case closest if closest.head.id == nodeId =>
                 maybeFetchEnr(toPeer(closest.head), None) >>
                   stateRef.get.map(_.nodeMap.get(nodeId))
               case _ =>
-                Task.pure(None)
+                IO.pure(None)
             }
         }
       }
@@ -328,7 +326,7 @@ object DiscoveryService {
     /** Perform a lookup and also make sure the closest results have their ENR records fetched,
       * to rule out the chance that incorrect details were relayed in the Neighbors response.
       */
-    override def getClosestNodes(target: Node.Id): Task[Seq[Node]] =
+    override def getClosestNodes(target: Node.Id): IO[Seq[Node]] =
       for {
         closest <- lookup(target)
         // Ensure we have an ENR record, so that the TCP port is retrieved from the source,
@@ -339,16 +337,16 @@ object DiscoveryService {
         resolved = closest.toList.flatMap(n => state.nodeMap.get(n.id))
       } yield resolved
 
-    override def getRandomNodes: Task[Set[Node]] =
+    override def getRandomNodes: IO[Set[Node]] =
       getClosestNodes(sigalg.newKeyPair._1).map(_.toSet)
 
-    override def removeNode(nodeId: Node.Id): Task[Unit] =
+    override def removeNode(nodeId: Node.Id): IO[Unit] =
       stateRef.update { state =>
         if (state.node.id == nodeId) state else state.removePeer(nodeId, toAddress)
       }
 
     /** Update the node and ENR of the local peer with the new address and ping peers with the new ENR seq. */
-    override def updateExternalAddress(ip: InetAddress): Task[Unit] = {
+    override def updateExternalAddress(ip: InetAddress): IO[Unit] = {
       stateRef
         .modify { state =>
           val node = Node(
@@ -370,7 +368,7 @@ object DiscoveryService {
         }
         .flatMap { peers =>
           // Send our new ENR sequence to the peers so they can pull our latest data.
-          Task.parTraverseN(config.kademliaAlpha)(peers)(pingAndMaybeUpdateTimestamp).startAndForget
+          IO.parTraverseN(config.kademliaAlpha)(peers)(pingAndMaybeUpdateTimestamp).startAndForget
         }
     }
 
@@ -426,16 +424,16 @@ object DiscoveryService {
     protected[v4] def toPeer(node: Node): Peer[A] =
       Peer(node.id, toAddress(node.address))
 
-    protected[v4] def currentTimeMillis: Task[Long] =
-      clock.realTime(MILLISECONDS)
+    protected[v4] def currentTimeMillis: IO[Long] =
+      temporal.realTime.map(_.toMillis)
 
-    protected[v4] def localEnrSeq: Task[ENRSeq] =
+    protected[v4] def localEnrSeq: IO[ENRSeq] =
       stateRef.get.map(_.enr.content.seq)
 
     /** Check if the given peer has a valid bond at the moment. */
     protected[v4] def isBonded(
         peer: Peer[A]
-    ): Task[Boolean] = {
+    ): IO[Boolean] = {
       currentTimeMillis.flatMap { now =>
         stateRef.get.map { state =>
           if (state.isSelf(peer))
@@ -452,7 +450,7 @@ object DiscoveryService {
     }
 
     /** Return Some response if the peer is bonded or log some hint about what was requested and return None. */
-    protected[v4] def respondIfBonded[T](caller: Peer[A], request: String)(response: Task[T]): Task[Option[T]] =
+    protected[v4] def respondIfBonded[T](caller: Peer[A], request: String)(response: IO[T]): IO[Option[T]] =
       isBonded(caller).flatMap {
         case true => response.map(Some(_))
         case false => Task(logger.debug(s"Ignoring $request request from unbonded $caller")).as(None)
@@ -469,7 +467,7 @@ object DiscoveryService {
       */
     protected[v4] def bond(
         peer: Peer[A]
-    ): Task[Boolean] =
+    ): IO[Boolean] =
       isBonded(peer).flatMap {
         case true =>
           // Check that we have an ENR for this peer.
@@ -478,7 +476,7 @@ object DiscoveryService {
         case false =>
           initBond(peer).flatMap {
             case Some(result) =>
-              result.pongReceived.get.timeoutTo(config.requestTimeout, Task.pure(false))
+              result.pongReceived.get.timeoutTo(config.requestTimeout, IO.pure(false))
 
             case None =>
               Task(logger.debug(s"Trying to bond with $peer...")) >>
@@ -509,7 +507,7 @@ object DiscoveryService {
       }
 
     /** Try to ping the remote peer and update the last pong timestamp if they respond. */
-    protected[v4] def pingAndMaybeUpdateTimestamp(peer: Peer[A]): Task[Option[Option[ENRSeq]]] =
+    protected[v4] def pingAndMaybeUpdateTimestamp(peer: Peer[A]): IO[Option[Option[ENRSeq]]] =
       for {
         enrSeq <- localEnrSeq
         maybeResponse <- rpc.ping(peer)(Some(enrSeq)).recover {
@@ -522,7 +520,7 @@ object DiscoveryService {
       * return the Deferred result we can wait on, otherwise add a new Deferred
       * and return None, in which case the caller has to perform the bonding.
       */
-    protected[v4] def initBond(peer: Peer[A]): Task[Option[BondingResults]] =
+    protected[v4] def initBond(peer: Peer[A]): IO[Option[BondingResults]] =
       for {
         results <- BondingResults()
         maybeExistingResults <- stateRef.modify { state =>
@@ -536,7 +534,7 @@ object DiscoveryService {
         }
       } yield maybeExistingResults
 
-    protected[v4] def updateLastPongTime(peer: Peer[A]): Task[Unit] =
+    protected[v4] def updateLastPongTime(peer: Peer[A]): IO[Unit] =
       currentTimeMillis.flatMap { now =>
         stateRef.update { state =>
           state.withLastPongTimestamp(peer, now)
@@ -546,14 +544,14 @@ object DiscoveryService {
     /** Update the bonding state of the peer with the result,
       * notifying all potentially waiting bonding processes about the outcome.
       */
-    protected[v4] def completePong(peer: Peer[A], responded: Boolean): Task[Unit] =
+    protected[v4] def completePong(peer: Peer[A], responded: Boolean): IO[Unit] =
       stateRef
         .modify { state =>
           val maybePongReceived = state.bondingResultsMap.get(peer).map(_.pongReceived)
           state.clearBondingResults(peer) -> maybePongReceived
         }
         .flatMap { maybePongReceived =>
-          maybePongReceived.fold(Task.unit)(_.complete(responded))
+          maybePongReceived.fold(IO.unit)(_.complete(responded))
         }
 
     /** Allow the remote peer to ping us during bonding, so that we can have a more
@@ -562,23 +560,23 @@ object DiscoveryService {
       *
       * The deferred should be completed by the ping handler.
       */
-    protected[v4] def awaitPing(peer: Peer[A]): Task[Unit] =
+    protected[v4] def awaitPing(peer: Peer[A]): IO[Unit] =
       stateRef.get
         .map { state =>
           state.bondingResultsMap.get(peer).map(_.pingReceived)
         }
         .flatMap { maybePingReceived =>
-          maybePingReceived.fold(Task.unit)(_.get.timeoutTo(config.requestTimeout, Task.unit))
+          maybePingReceived.fold(IO.unit)(_.get.timeoutTo(config.requestTimeout, IO.unit))
         }
 
     /** Complete any deferred we set up during a bonding process expecting a ping to arrive. */
-    protected[v4] def completePing(peer: Peer[A]): Task[Unit] =
+    protected[v4] def completePing(peer: Peer[A]): IO[Unit] =
       stateRef.get
         .map { state =>
           state.bondingResultsMap.get(peer).map(_.pingReceived)
         }
         .flatMap { maybePingReceived =>
-          maybePingReceived.fold(Task.unit)(_.complete(()).attempt.void)
+          maybePingReceived.fold(IO.unit)(_.complete(()).attempt.void)
         }
 
     /** Fetch the remote ENR if we don't already have it or if
@@ -592,7 +590,7 @@ object DiscoveryService {
         peer: Peer[A],
         maybeRemoteEnrSeq: Option[ENRSeq],
         delay: Boolean = false
-    ): Task[Unit] =
+    ): IO[Unit] =
       for {
         state <- stateRef.get
         maybeEnrAndNode = (state.enrMap.get(peer.id), state.nodeMap.get(peer.id))
@@ -619,10 +617,10 @@ object DiscoveryService {
     protected[v4] def fetchEnr(
         peer: Peer[A],
         delay: Boolean = false
-    ): Task[Option[EthereumNodeRecord]] = {
+    ): IO[Option[EthereumNodeRecord]] = {
       val waitOrFetch =
         for {
-          d <- Deferred[Task, Option[EthereumNodeRecord]]
+          d <- Deferred[IO, Option[EthereumNodeRecord]]
           decision <- stateRef.modify { state =>
             state.fetchEnrMap.get(peer) match {
               case Some(d) =>
@@ -635,7 +633,7 @@ object DiscoveryService {
 
       waitOrFetch.flatMap {
         case Left(wait) =>
-          wait.get.timeoutTo(config.requestTimeout, Task.pure(None))
+          wait.get.timeoutTo(config.requestTimeout, IO.pure(None))
 
         case Right(fetch) =>
           val maybeEnr = bond(peer).flatMap {
@@ -667,7 +665,7 @@ object DiscoveryService {
       }
     }
 
-    private def validateEnr(peer: Peer[A], enr: EthereumNodeRecord): Task[Option[EthereumNodeRecord]] = {
+    private def validateEnr(peer: Peer[A], enr: EthereumNodeRecord): IO[Option[EthereumNodeRecord]] = {
       enrFilter(enr) match {
         case Left(reject) =>
           Task(logger.debug(s"Ignoring ENR from $peer: $reject")) >>
@@ -716,7 +714,7 @@ object DiscoveryService {
         peer: Peer[A],
         enr: EthereumNodeRecord,
         address: Node.Address
-    ): Task[Option[EthereumNodeRecord]] = {
+    ): IO[Option[EthereumNodeRecord]] = {
       stateRef
         .modify { state =>
           if (state.isSelf(peer))
@@ -764,7 +762,7 @@ object DiscoveryService {
     }
 
     /** Forget everything about this peer. */
-    protected[v4] def removePeer(peer: Peer[A]): Task[Unit] =
+    protected[v4] def removePeer(peer: Peer[A]): IO[Unit] =
       stateRef.update(_.removePeer(peer, toAddress))
 
     /** Locate the k closest nodes to a node ID.
@@ -779,7 +777,7 @@ object DiscoveryService {
       *
       * https://github.com/ethereum/devp2p/blob/master/discv4.md#recursive-lookup
       */
-    protected[v4] def lookup(target: Node.Id): Task[SortedSet[Node]] = {
+    protected[v4] def lookup(target: Node.Id): IO[SortedSet[Node]] = {
       val targetId = Node.kademliaId(target)
 
       implicit val nodeOrdering: Ordering[Node] =
@@ -808,7 +806,7 @@ object DiscoveryService {
 
       } yield (state.node, closestOrBootstraps)
 
-      def fetchNeighbors(from: Node): Task[List[Node]] = {
+      def fetchNeighbors(from: Node): IO[List[Node]] = {
         val peer = toPeer(from)
 
         bond(peer).flatMap {
@@ -829,7 +827,7 @@ object DiscoveryService {
               .flatMap { neighbors =>
                 neighbors.filterA { neighbor =>
                   if (neighbor.address.checkRelay(peer))
-                    Task.pure(true)
+                    IO.pure(true)
                   else
                     Task(logger.debug(s"Ignoring neighbor $neighbor from ${peer.address} because of invalid relay IP."))
                       .as(false)
@@ -847,14 +845,14 @@ object DiscoveryService {
       // Make sure these new nodes can be bonded with before we consider them,
       // otherwise they might appear to be be closer to the target but actually
       // be fakes with unreachable addresses that could knock out legit nodes.
-      def bondNeighbors(neighbors: Seq[Node]): Task[Seq[Node]] =
+      def bondNeighbors(neighbors: Seq[Node]): IO[Seq[Node]] =
         for {
           _ <- Task(logger.debug(s"Bonding with ${neighbors.size} neighbors..."))
           bonded <- Task
             .parTraverseUnordered(neighbors) { neighbor =>
               bond(toPeer(neighbor)).flatMap {
                 case true =>
-                  Task.pure(Some(neighbor))
+                  IO.pure(Some(neighbor))
                 case false =>
                   Task(logger.debug(s"Could not bond with neighbor candidate $neighbor")).as(None)
               }
@@ -868,7 +866,7 @@ object DiscoveryService {
           closest: SortedSet[Node],
           asked: Set[Node],
           neighbors: Set[Node]
-      ): Task[SortedSet[Node]] = {
+      ): IO[SortedSet[Node]] = {
         // Contact the alpha closest nodes to the target that we haven't asked before.
         val contacts = closest
           .filterNot(asked)
@@ -906,7 +904,7 @@ object DiscoveryService {
     }
 
     /** Look up a random node ID to discover new peers. */
-    protected[v4] def lookupRandom: Task[Set[Node]] =
+    protected[v4] def lookupRandom: IO[Set[Node]] =
       Task(logger.info("Looking up a random target...")) >>
         lookup(target = sigalg.newKeyPair._1)
 
@@ -918,15 +916,15 @@ object DiscoveryService {
       * or `false` if none of them responded with a correct ENR,
       * which would mean we don't have anyone to do lookups with.
       */
-    protected[v4] def enroll: Task[Boolean] =
+    protected[v4] def enroll: IO[Boolean] =
       if (config.knownPeers.isEmpty)
-        Task.pure(false)
+        IO.pure(false)
       else {
         for {
           nodeId <- stateRef.get.map(_.node.id)
           bootstrapPeers = config.knownPeers.toList.map(toPeer).filterNot(_.id == nodeId)
           _ <- Task(logger.info(s"Enrolling with ${bootstrapPeers.size} bootstrap nodes."))
-          maybeBootstrapEnrs <- Task.parTraverseUnordered(bootstrapPeers)(fetchEnr(_, delay = true))
+          maybeBootstrapEnrs <- IO.parTraverseUnordered(bootstrapPeers)(fetchEnr(_, delay = true))
           enrolled = maybeBootstrapEnrs.count(_.isDefined)
           succeeded = enrolled > 0
           _ <- if (succeeded) {
@@ -935,7 +933,7 @@ object DiscoveryService {
                 logger.info(s"Successfully enrolled with $enrolled bootstrap nodes. Performing initial lookup...")
               )
               _ <- lookup(nodeId).doOnFinish {
-                _.fold(Task.unit)(ex => Task(logger.error(s"Error during initial lookup", ex)))
+                _.fold(IO.unit)(ex => Task(logger.error(s"Error during initial lookup", ex)))
               }
               nodeCount <- stateRef.get.map(_.nodeMap.size)
               _ <- Task(logger.info(s"Discovered $nodeCount nodes by the end of the lookup."))

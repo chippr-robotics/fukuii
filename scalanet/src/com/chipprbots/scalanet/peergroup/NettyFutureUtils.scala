@@ -2,20 +2,22 @@ package com.chipprbots.scalanet.peergroup
 
 import io.netty
 import io.netty.util.concurrent.{Future, GenericFutureListener}
-import monix.eval.Task
+import cats.effect.IO
 
 import java.util.concurrent.CancellationException
 
 private[scalanet] object NettyFutureUtils {
-  def toTask(f: => netty.util.concurrent.Future[_]): Task[Unit] = {
-    fromNettyFuture(Task.delay(f)).void
+  def toTask(f: => netty.util.concurrent.Future[_]): IO[Unit] = {
+    fromNettyFuture(IO.delay(f)).void
   }
 
-  def fromNettyFuture[A](ff: Task[netty.util.concurrent.Future[A]]): Task[A] = {
+  def fromNettyFuture[A](ff: IO[netty.util.concurrent.Future[A]]): IO[A] = {
     ff.flatMap { nettyFuture =>
-      Task.cancelable { cb =>
-        subscribeToFuture(nettyFuture, cb)
-        Task.delay({ nettyFuture.cancel(true); () })
+      IO.async { cb =>
+        IO {
+          subscribeToFuture(nettyFuture, cb)
+          Some(IO.delay({ nettyFuture.cancel(true); () }))
+        }
       }
     }
   }

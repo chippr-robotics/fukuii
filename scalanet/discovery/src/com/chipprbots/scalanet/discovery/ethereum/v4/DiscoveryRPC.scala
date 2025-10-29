@@ -2,7 +2,7 @@ package com.chipprbots.scalanet.discovery.ethereum.v4
 
 import com.chipprbots.scalanet.discovery.crypto.{PublicKey}
 import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
-import monix.eval.Task
+import cats.effect.IO
 
 /** The RPC method comprising the Discovery protocol between peers. */
 trait DiscoveryRPC[A] {
@@ -54,5 +54,5 @@ object DiscoveryRPC {
     * When remote, it returns None if the peer doesn't respond.
     * When local, returning None means ignoring the request.
     */
-  type Call[A, P <: Proc] = A => P#Req => Task[Option[P#Res]]
+  type Call[A, P <: Proc] = A => P#Req => IO[Option[P#Res]]
 }
