@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/images/fukuii-logo-cute.png" alt="Fukuii Logo" width="400"/>
+  <img src="assets/images/fukuii-logo-cute.png" alt="Fukuii Logo" width="400"/>
 </div>
 
 # Fukuii Ethereum Client

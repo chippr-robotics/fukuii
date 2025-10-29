@@ -220,8 +220,8 @@ sbt "crypto/+test"    # Test crypto module for all Scala versions
 - The codebase is now fully prepared for Scala 3 migration - dependencies support Scala 3.3.4 and code is syntactically ready
 - CI tests both Scala 2.13 and 3.3 versions
 - Scapegoat analysis temporarily disabled during Scala 2.13.8 → 3.3.4 transition (will use Scapegoat 2.x/3.x after migration)
-- See [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md) for details on updated dependencies
-- See [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md) for comprehensive validation results
+- See [Dependency Update Report](https://chippr-robotics.github.io/fukuii/dependencies/DEPENDENCY_UPDATE_REPORT) for details on updated dependencies
+- See [Phase 4 Validation Report](https://chippr-robotics.github.io/fukuii/scala3-migration/PHASE_4_VALIDATION_REPORT) for comprehensive validation results
 
 ## Pre-commit Hooks
 
