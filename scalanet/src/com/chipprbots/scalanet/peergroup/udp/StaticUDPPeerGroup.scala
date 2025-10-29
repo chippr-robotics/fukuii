@@ -56,7 +56,7 @@ class StaticUDPPeerGroup[M] private (
     workerGroup: NioEventLoopGroup,
     isShutdownRef: Ref[IO, Boolean],
     serverQueue: CloseableQueue[ServerEvent[InetMultiAddress, M]],
-    serverChannelSemaphore: Semaphore[Task],
+    serverChannelSemaphore: Semaphore[IO],
     serverChannelsRef: Ref[IO, Map[InetSocketAddress, StaticUDPPeerGroup.ChannelAlloc[M]]],
     clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]]
 )(implicit codec: Codec[M])
@@ -327,8 +327,8 @@ object StaticUDPPeerGroup extends StrictLogging {
       Resource.make {
         for {
           isShutdownRef <- Ref[IO].of(false)
-          serverQueue <- CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]](ChannelType.SPMC)
-          serverChannelSemaphore <- Semaphore[Task](1)
+          serverQueue <- CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]]
+          serverChannelSemaphore <- Semaphore[IO](1)
           serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ChannelAlloc[M]])
           clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
           peerGroup = new StaticUDPPeerGroup[M](
@@ -448,7 +448,7 @@ object StaticUDPPeerGroup extends StrictLogging {
           isClosedRef <- Ref[IO].of(false)
           // The publishing of messages happens asynchronously in this class,
           // so there can be multiple publications going on at the same time.
-          messageQueue <- CloseableQueue[ChannelEvent[M]](capacity, ChannelType.MPMC)
+          messageQueue <- CloseableQueue[ChannelEvent[M]](capacity)
           channel = new ChannelImpl[M](
             nettyChannel,
             localAddress,

@@ -77,7 +77,7 @@ class KRouterSpec extends FreeSpec with Eventually {
       val someNodeId = aRandomBitVector()
 
       when(knetwork.findNodes(to = bootstrapRecord, request = FindNodes(uuid, selfRecord, someNodeId)))
-        .thenReturn(IO.now(Nodes(uuid, bootstrapRecord, Seq.empty)))
+        .thenReturn(IO.pure(Nodes(uuid, bootstrapRecord, Seq.empty)))
 
       whenReady(krouter.get(someNodeId).runToFuture.failed) { e =>
         e shouldBe an[Exception]
@@ -96,11 +96,11 @@ class KRouterSpec extends FreeSpec with Eventually {
       val nodesResponse = Nodes(uuid, bootstrapRecord, Seq(otherNode))
 
       when(knetwork.findNodes(to = bootstrapRecord, request = FindNodes(uuid, selfRecord, otherNode.id)))
-        .thenReturn(IO.now(nodesResponse))
+        .thenReturn(IO.pure(nodesResponse))
 
       // Nodes are only considered found if they are online, i.e they respond to query
       when(knetwork.findNodes(to = otherNode, request = FindNodes(uuid, selfRecord, otherNode.id)))
-        .thenReturn(IO.now(Nodes(uuid, otherNode, Seq())))
+        .thenReturn(IO.pure(Nodes(uuid, otherNode, Seq())))
 
       // nodes are added in background, so to avoid flaky test eventually is needed
       eventually {
@@ -116,7 +116,7 @@ class KRouterSpec extends FreeSpec with Eventually {
 
       "when receiving a PING" in {
         when(handler.apply(Some(Pong(uuid, selfRecord)))).thenReturn(IO.unit)
-        when(knetwork.kRequests).thenReturn(Observable((Ping(uuid, otherRecord), handler)))
+        when(knetwork.kRequests).thenReturn(Stream((Ping(uuid, otherRecord), handler)))
 
         val krouter = aKRouter(selfRecord, Set.empty)
 
@@ -127,7 +127,7 @@ class KRouterSpec extends FreeSpec with Eventually {
 
       "when receiving a FIND_NODES" in {
         when(handler.apply(Some(Nodes(uuid, selfRecord, Seq(selfRecord))))).thenReturn(IO.unit)
-        when(knetwork.kRequests).thenReturn(Observable((FindNodes(uuid, otherRecord, otherRecord.id), handler)))
+        when(knetwork.kRequests).thenReturn(Stream((FindNodes(uuid, otherRecord, otherRecord.id), handler)))
 
         val krouter = aKRouter(selfRecord, Set.empty)
 
@@ -433,7 +433,7 @@ object KRouterSpec {
           currentState <- nodes.get
           response <- currentState.get(to.id) match {
             case Some(value) =>
-              IO.now(Nodes(request.requestId, value.myData, value.neigbours.map(_.myData)))
+              IO.pure(Nodes(request.requestId, value.myData, value.neigbours.map(_.myData)))
             case None =>
               IO.raiseError(new TimeoutException(s"Task timed-out after of inactivity"))
           }
@@ -445,7 +445,7 @@ object KRouterSpec {
           currentState <- nodes.get
           response <- currentState.get(to.id) match {
             case Some(value) =>
-              IO.now(Pong(request.requestId, value.myData))
+              IO.pure(Pong(request.requestId, value.myData))
             case None =>
               IO.raiseError(new TimeoutException(s"Task timed-out after of inactivity"))
           }
@@ -453,7 +453,7 @@ object KRouterSpec {
       }
 
       // No server request handling for now
-      override def kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])] = Observable.empty
+      override def kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])] = Stream.empty
     }
 
     def addNeighbours[A](
@@ -493,7 +493,7 @@ object KRouterSpec {
   val alpha = 1
   val k = 4000
 
-  when(knetwork.kRequests).thenReturn(Observable.empty)
+  when(knetwork.kRequests).thenReturn(Stream.empty)
 
   def aKRouter(
       nodeRecord: NodeRecord[String] = aRandomNodeRecord(),
@@ -524,12 +524,12 @@ object KRouterSpec {
     when(knetwork.ping(any(), any())).thenAnswer((invocation: InvocationOnMock) => {
       val to = invocation.getArgument(0).asInstanceOf[NodeRecord[String]]
       if (responsivePredicate(to))
-        IO.now(Pong(uuid, to))
+        IO.pure(Pong(uuid, to))
       else
         IO.raiseError(new Exception("Donnae want this one"))
     })
     val kRequests =
-      Observable.fromIterable(ids.map(id => (Ping(uuid, aRandomNodeRecord(bitLength).copy(id = id)), handler)))
+      Stream.emits(ids.map(id => (Ping(uuid, aRandomNodeRecord(bitLength).copy(id = id)), handler)))
 
     when(knetwork.kRequests).thenReturn(kRequests)
 
@@ -546,7 +546,7 @@ object KRouterSpec {
     when(knetwork.findNodes(anyOf(knownPeers), meq(FindNodes(uuid, nodeRecord, nodeRecord.id))))
       .thenAnswer((invocation: InvocationOnMock) => {
         val to = invocation.getArgument(0).asInstanceOf[NodeRecord[String]]
-        IO.now(Nodes(uuid, to, otherNodes))
+        IO.pure(Nodes(uuid, to, otherNodes))
       })
 
     ()

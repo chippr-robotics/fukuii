@@ -82,7 +82,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
     def sendMessage[M](m: M)(implicit codec: Codec[M]): IO[Unit] =
       for {
         enc <- IO.fromTry(codec.encode(m).toTry)
-        _ <- toIO(channel.writeAndFlush(Unpooled.wrappedBuffer(enc.toByteBuffer)))
+        _ <- toTask(channel.writeAndFlush(Unpooled.wrappedBuffer(enc.toByteBuffer)))
       } yield ()
   }
 
@@ -247,7 +247,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
     private[dynamictls] def initialize = {
       val connectIO = for {
         _ <- IO(logger.debug("Initiating connection to peer {}", peerInfo))
-        _ <- toIO(bootstrap.connect(peerInfo.address.inetSocketAddress))
+        _ <- toTask(bootstrap.connect(peerInfo.address.inetSocketAddress))
         ch <- IO.deferFuture(activationF)
         _ <- IO(logger.debug("Connection to peer {} finished successfully", peerInfo))
       } yield new DynamicTlsChannel[M](localId, peerInfo, ch._1, ch._2, ClientChannel)
@@ -392,8 +392,8 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
     private[peergroup] def close(): IO[Unit] =
       for {
         _ <- IO(logger.debug("Closing {} to peer {}", channelType, to))
-        _ <- toIO(nettyChannel.close())
-        _ <- toIO(nettyChannel.closeFuture())
+        _ <- toTask(nettyChannel.close())
+        _ <- toTask(nettyChannel.closeFuture())
         _ <- incomingMessagesQueue.close(discard = true).attempt
         _ <- IO(logger.debug("{} to peer {} closed", channelType, to))
       } yield ()

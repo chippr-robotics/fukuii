@@ -129,7 +129,7 @@ class KRouter[A](
   def get(key: BitVector): IO[NodeRecord[A]] = {
     Task(logger.debug(s"get(${key.toHex})")) *>
       getLocally(key) flatMap {
-      case Some(value) => IO.now(value)
+      case Some(value) => IO.pure(value)
       case None => getRemotely(key)
     }
   }
@@ -205,7 +205,7 @@ class KRouter[A](
 
   private def getRemotely(key: BitVector): IO[NodeRecord[A]] = {
     lookup(key) *> getLocally(key) flatMap {
-      case Some(value) => IO.now(value)
+      case Some(value) => IO.pure(value)
       case None => IO.raiseError(new Exception(s"Target node id ${key.toHex} not found"))
     }
 
@@ -269,7 +269,7 @@ class KRouter[A](
       query(to).attempt.flatMap {
         case Left(ex) =>
           Task(logger.debug(s"findNodes request for $to failed: $ex")) >>
-            IO.now(QueryResult.failed(to))
+            IO.pure(QueryResult.failed(to))
 
         case Right(nodes) =>
           // Adding node to kbuckets in background to not block lookup process
@@ -341,7 +341,7 @@ class KRouter[A](
     ): IO[NonEmptySet[NodeRecord[A]]] = {
       shouldFinishLookup(nodesToQuery, nodesFound, lookupState).flatMap {
         case true =>
-          IO.now(nodesFound)
+          IO.pure(nodesFound)
         case false =>
           val (toQuery, rest) = nodesToQuery.splitAt(config.alpha)
           for {
@@ -470,7 +470,7 @@ object KRouter {
       state <- Ref.of[Task, NodeRecordIndex[A]](
         getIndex(config, clock)
       )
-      router <- IO.now(new KRouter(config, network, state, clock, uuidSource))
+      router <- IO.pure(new KRouter(config, network, state, clock, uuidSource))
       _ <- router.enroll()
       // TODO: These should be fibers that get cleaned up.
       _ <- router.startServerHandling().startAndForget
@@ -501,7 +501,7 @@ object KRouter {
         getIndex(config, clock)
       )
       .flatMap { state =>
-        IO.now(new KRouter(config, network, state, clock, uuidSource)).flatMap { router =>
+        IO.pure(new KRouter(config, network, state, clock, uuidSource)).flatMap { router =>
           IO.parMap3(
             router.enroll(), // The results should be ready when we return the router.
             router.startServerHandling().startAndForget,

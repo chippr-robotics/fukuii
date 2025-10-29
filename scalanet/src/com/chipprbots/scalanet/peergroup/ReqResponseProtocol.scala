@@ -144,7 +144,8 @@ object ReqResponseProtocol {
   type ChannelId = (InetSocketAddress, InetSocketAddress)
   class ReqResponseChannel[A, M](
       channel: Channel[A, MessageEnvelope[M]],
-      concurrentChannel: ReqResponseChannel.ConChan[M],
+      topic: fs2.concurrent.Topic[IO, ChannelEvent[MessageEnvelope[M]]],
+      producerFiber: cats.effect.Fiber[IO, Throwable, Unit],
       val release: Release
   ) {
 
@@ -155,38 +156,34 @@ object ReqResponseProtocol {
         responseId: UUID,
         timeOutDuration: FiniteDuration
     ): IO[MessageEnvelope[M]] = {
-      concurrentChannel.consume.use { consumer =>
-        Iterant
-          .repeatEvalF(consumer.pull)
-          .flatMap[ChannelEvent[MessageEnvelope[M]]] {
-            case Left(e) => Iterant.haltS(e)
-            case Right(e) => Iterant.pure(e)
-          }
-          .collect {
-            case MessageReceived(response) if response.id == responseId => response
-          }
-          .headOptionL
-          .flatMap {
-            case None =>
-              IO.raiseError(new RuntimeException(s"Didn't receive a response for request $responseId"))
-            case Some(response) =>
-              IO.pure(response)
-          }
-          .timeout(timeOutDuration)
-      }
+      topic.subscribe(100)
+        .collect {
+          case MessageReceived(response) if response.id == responseId => response
+        }
+        .head
+        .compile
+        .lastOrError
+        .timeout(timeOutDuration)
+        .adaptError {
+          case _: java.util.concurrent.TimeoutException =>
+            new RuntimeException(s"Didn't receive a response for request $responseId")
+        }
     }
   }
   object ReqResponseChannel {
     // Sending a request subscribes to the common channel with a single underlying message queue,
     // expecting to see the response with the specific ID. To avoid message stealing, broadcast
-    // messages to a concurrent channel, so every consumer gets every message.
-    type ConChan[M] = ConcurrentChannel[Task, Option[Throwable], ChannelEvent[MessageEnvelope[M]]]
+    // messages to a Topic, so every consumer gets every message.
 
     def apply[A, M](channel: Channel[A, MessageEnvelope[M]], release: IO[Unit]): IO[ReqResponseChannel[A, M]] =
       for {
-        concurrentChannel <- ConcurrentChannel.of[Task, Option[Throwable], ChannelEvent[MessageEnvelope[M]]]
-        producer <- channel.nextChannelEvent.toIterant.pushToChannel(concurrentChannel).start
-      } yield new ReqResponseChannel(channel, concurrentChannel, producer.cancel >> release)
+        topic <- fs2.concurrent.Topic[IO, ChannelEvent[MessageEnvelope[M]]]
+        producer <- channel.nextChannelEvent.toStream
+          .evalMap(event => topic.publish1(event).as(event))
+          .compile
+          .drain
+          .start
+      } yield new ReqResponseChannel(channel, topic, producer, producer.cancel >> release)
   }
 
   type ChannelMap[A, M] = Map[ChannelId, ReqResponseChannel[A, M]]

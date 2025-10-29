@@ -240,7 +240,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
         case ServerChannel =>
           // on netty side there is only one channel for accepting incoming connection so if we close it, we will effectively
           // close server
-          IO.now(())
+          IO.unit
         case ClientChannel =>
           // each client connection creates new channel on netty side
           toTask(nettyChannel.close())
@@ -258,7 +258,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
 
     private[udp] def close: IO[Unit] = {
       if (closePromise.isDone) {
-        IO.now(())
+        IO.unit
       } else {
         closeChannel.guarantee(Task(closePromise.trySuccess(this)).void)
       }

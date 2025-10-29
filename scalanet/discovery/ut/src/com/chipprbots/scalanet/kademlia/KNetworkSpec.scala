@@ -54,8 +54,8 @@ class KNetworkSpec extends FlatSpec {
     class MockChannel {
       val channel = mock[Channel[String, KMessage[String]]]
       val closed = new AtomicBoolean(false)
-      val created = ChannelCreated(channel, Task { closed.set(true) })
-      val resource = Resource.make(IO.pure(channel))(_ => Task { closed.set(true) })
+      val created = ChannelCreated(channel, IO { closed.set(true) })
+      val resource = Resource.make(IO.pure(channel))(_ => IO { closed.set(true) })
     }
 
     val (network, peerGroup) = createKNetwork
@@ -208,19 +208,19 @@ object KNetworkSpec {
       peerGroup: PeerGroup[String, KMessage[String]],
       events: ServerEvent[String, KMessage[String]]*
   ) =
-    when(peerGroup.nextServerEvent).thenReturn(nextTask(events, complete = true))
+    when(peerGroup.nextServerEvent).thenReturn(nextIO(events, complete = true))
 
   private def mockChannelEvents(
       channel: Channel[String, KMessage[String]],
       events: ChannelEvent[KMessage[String]]*
   ) =
-    when(channel.nextChannelEvent).thenReturn(nextTask(events, complete = false))
+    when(channel.nextChannelEvent).thenReturn(nextIO(events, complete = false))
 
   private def nextIO[T](events: Seq[T], complete: Boolean): IO[Option[T]] = {
     val count = new AtomicInteger(0)
-    Task(count.getAndIncrement()).flatMap {
-      case i if i < events.size => Task(Some(events(i)))
-      case _ if complete => Task(None)
+    IO(count.getAndIncrement()).flatMap {
+      case i if i < events.size => IO(Some(events(i)))
+      case _ if complete => IO(None)
       case _ => IO.never
     }
   }
