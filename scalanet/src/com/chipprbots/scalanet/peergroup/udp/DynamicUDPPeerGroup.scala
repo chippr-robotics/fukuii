@@ -302,7 +302,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
 
   override def client(to: InetMultiAddress): Resource[IO, Channel[InetMultiAddress, M]] = {
     Resource
-      .make(IO.suspend {
+      .make({
         val cf = clientBootstrap.connect(to.inetSocketAddress)
         val ct: IO[NioDatagramChannel] = toTask(cf).as(cf.channel().asInstanceOf[NioDatagramChannel])
         ct.map {

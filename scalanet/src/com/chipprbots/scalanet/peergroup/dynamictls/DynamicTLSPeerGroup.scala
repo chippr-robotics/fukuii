@@ -107,18 +107,16 @@ class DynamicTLSPeerGroup[M] private (
     // Using Netty SSLEngine.getSession.putValue does not work as expected as until successfulhandshake there is no separate
     // session for each connection.
     Resource.make(
-      IO.suspend {
-        new ClientChannelBuilder[M](
-          config.peerInfo.id,
-          to,
-          clientBootstrap,
-          DynamicTLSPeerGroupUtils.buildCustomSSlContext(SSLContextForClient(to), config),
-          config.framingConfig,
-          config.maxIncomingMessageQueueSize,
-          proxyConfig,
-          config.stalePeerDetectionConfig
-        ).initialize
-      }
+      new ClientChannelBuilder[M](
+        config.peerInfo.id,
+        to,
+        clientBootstrap,
+        DynamicTLSPeerGroupUtils.buildCustomSSlContext(SSLContextForClient(to), config),
+        config.framingConfig,
+        config.maxIncomingMessageQueueSize,
+        proxyConfig,
+        config.stalePeerDetectionConfig
+      ).initialize
     )(_.close())
   }
 

@@ -212,7 +212,7 @@ object ReqResponseProtocol {
           channelSemaphore <- Semaphore[IO](1)
           channelMapRef <- Ref.of[IO, ChannelMap[A, M]](Map.empty)
           fiberMapRef <- Ref.of[IO, Map[ChannelId, Fiber[IO, Throwable, Unit]]](Map.empty)
-          protocol = new ReqResponseProtocol[A, M](group, channelSemaphore, channelMapRef, fiberMapRef)
+          protocol = new ReqResponseProtocol[A, M](group, channelSemaphore, channelMapRef, fiberMapRef)(a)
         } yield protocol
       ) { protocol =>
         protocol.cancelHandling() >>
@@ -222,8 +222,9 @@ object ReqResponseProtocol {
 
   def getTlsReqResponseProtocolClient[M](framingConfig: FramingConfig)(
       address: InetSocketAddress
-  )(c: Codec[M]): Resource[IO, ReqResponseProtocol[PeerInfo, M]] = {
-    implicit lazy val envelopeCodec = MessageEnvelope.defaultCodec[M]
+  )(implicit c: Codec[M]): Resource[IO, ReqResponseProtocol[PeerInfo, M]] = {
+    import DynamicTLSPeerGroup.PeerInfo.peerInfoAddressable
+    implicit lazy val envelopeCodec: Codec[MessageEnvelope[M]] = MessageEnvelope.defaultCodec[M]
     val rnd = new SecureRandom()
     val hostkeyPair = CryptoUtils.genEcKeyPair(rnd, Secp256k1.curveName)
     for {
@@ -244,17 +245,18 @@ object ReqResponseProtocol {
         )
       )
       pg <- DynamicTLSPeerGroup[MessageEnvelope[M]](config)
-      prot <- buildProtocol(pg)
+      prot <- buildProtocol(pg)(peerInfoAddressable)
     } yield prot
   }
 
   def getDynamicUdpReqResponseProtocolClient[M](
       address: InetSocketAddress
-  )(c: Codec[M]): Resource[IO, ReqResponseProtocol[InetMultiAddress, M]] = {
-    implicit val codec = MessageEnvelope.defaultCodec[M]
+  )(implicit c: Codec[M]): Resource[IO, ReqResponseProtocol[InetMultiAddress, M]] = {
+    import InetMultiAddress.addressableInetMultiAddressInst
+    implicit val codec: Codec[MessageEnvelope[M]] = MessageEnvelope.defaultCodec[M]
     for {
       pg <- DynamicUDPPeerGroup[MessageEnvelope[M]](DynamicUDPPeerGroup.Config(address))
-      prot <- buildProtocol(pg)
+      prot <- buildProtocol(pg)(addressableInetMultiAddressInst)
     } yield prot
   }
 
