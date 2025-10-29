@@ -1,10 +1,10 @@
 package com.chipprbots.scalanet.discovery
 
-import shapeless.tag, tag.@@
-
 /** Helper class to make it easier to tag raw types such as BitVector
   * to specializations so that the compiler can help make sure we are
-  * passign the right values to methods.
+  * passing the right values to methods.
+  *
+  * This now uses Scala 3's type system instead of Shapeless tags.
   *
   * Using it like so:
   *
@@ -18,7 +18,17 @@ import shapeless.tag, tag.@@
   *
   */
 trait Tagger[U, T] {
-  type Tagged = U @@ T
-  def apply(underlying: U): Tagged =
-    tag[T][U](underlying)
+  // In Scala 3, we use opaque type aliases for type-level tagging
+  // This provides zero-cost abstractions with type safety
+  opaque type Tagged = U
+  
+  object Tagged {
+    def apply(underlying: U): Tagged = underlying
+    
+    extension (tagged: Tagged) {
+      def value: U = tagged
+    }
+  }
+  
+  def apply(underlying: U): Tagged = Tagged(underlying)
 }
