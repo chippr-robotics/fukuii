@@ -282,12 +282,18 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
       } yield ()
     }
 
+    /**
+     * Handles channel events from Netty callbacks.
+     * 
+     * This method is called from Netty's event loop thread. It uses unsafeRunAndForget
+     * to execute IO operations in a fire-and-forget manner without blocking the Netty thread.
+     * Errors are logged but not propagated - this is intentional since we're in a callback
+     * context where exceptions cannot be safely thrown. Logging ensures visibility while
+     * allowing the handler to continue processing subsequent events.
+     */
     def handleEvent(event: ChannelEvent[M]): Unit = {
       messageQueue.tryOffer(event).void
         .handleErrorWith { e =>
-          // Error handling logs the failure but doesn't propagate.
-          // This is intentional: we're in a Netty callback and can't throw.
-          // Logging ensures visibility while allowing the handler to continue processing.
           IO(logger.error(s"Failed to offer event to messageQueue: ${e.getMessage}", e))
         }
         .unsafeRunAndForget()(global)

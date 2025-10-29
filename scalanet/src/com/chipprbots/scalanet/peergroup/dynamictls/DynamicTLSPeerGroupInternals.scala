@@ -102,10 +102,12 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       }
     }
 
-    // Message ordering is preserved because Netty invokes handler methods sequentially
-    // on the same event loop thread for a given channel. The use of unsafeRunAndForget
-    // with the global execution context does not break this guarantee, as long as handler
-    // methods are invoked in order by Netty.
+    // Message ordering guarantee: Netty invokes handler methods sequentially on the same
+    // event loop thread for a given channel. However, using unsafeRunAndForget with the
+    // global execution context means the IO execution order is not guaranteed - thread
+    // scheduling determines execution order. Ordering is only preserved at the Netty
+    // handler invocation level, not at the IO execution level. If strict ordering of
+    // IO execution is required, a single-threaded execution context should be used instead.
     import cats.effect.unsafe.implicits.global
 
     override def channelInactive(channelHandlerContext: ChannelHandlerContext): Unit = {
