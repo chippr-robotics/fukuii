@@ -114,7 +114,7 @@ object DiscoveryNetwork {
           .interruptWhen(cancelToken)
           .timeout(config.messageExpiration) // Messages older than this would be ignored anyway.
           .evalMap {
-            case MessageReceived(packet: Packet) =>
+            case MessageReceived(packet) =>
               currentTimeSeconds.flatMap { timestamp =>
                 Packet.unpack(packet) match {
                   case Attempt.Successful((payload, remotePublicKey)) =>
