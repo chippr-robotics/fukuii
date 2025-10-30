@@ -200,12 +200,12 @@ class PeerDiscoveryManager(
       recipient: ActorRef
   ): Unit = maybeRandomNodes.foreach { consumer =>
     pipeToRecipient[RandomNodeInfo](recipient) {
-      consumer.pull.uncons1.flatMap {
+      consumer.pull.uncons1.use {
         case None =>
           IO.raiseError(new IllegalStateException("The random node source is finished."))
         case Some((node, _)) =>
-          IO.pure(node)
-      }.compile.lastOrError.map(RandomNodeInfo(_))
+          IO.pure(RandomNodeInfo(node))
+      }
     }
   }
 
