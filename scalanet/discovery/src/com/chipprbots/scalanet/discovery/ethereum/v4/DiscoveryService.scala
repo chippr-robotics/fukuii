@@ -51,11 +51,10 @@ trait DiscoveryService {
 }
 
 object DiscoveryService {
-  import DiscoveryRPC.{Call, Proc}
+  import DiscoveryRPC.ENRSeq
   import DiscoveryNetwork.Peer
   import KBucketsWithSubnetLimits.SubnetLimits
-
-  type ENRSeq = Long
+  import com.chipprbots.scalanet.discovery.crypto.PublicKey
   type Timestamp = Long
   type StateRef[A] = Ref[IO, State[A]]
 
@@ -374,7 +373,7 @@ object DiscoveryService {
     }
 
     /** Handle incoming Ping request. */
-    override def ping: Call[Peer[A], Proc.Ping] =
+    override def ping: Peer[A] => Option[ENRSeq] => IO[Option[Option[ENRSeq]]] =
       caller =>
         maybeRemoteEnrSeq =>
           for {
@@ -400,14 +399,14 @@ object DiscoveryService {
           } yield Some(Some(enrSeq))
 
     /** Handle incoming FindNode request. */
-    override def findNode: Call[Peer[A], Proc.FindNode] =
+    override def findNode: Peer[A] => PublicKey => IO[Option[Seq[Node]]] =
       caller =>
         target =>
           respondIfBonded(caller, "FindNode") {
             for {
               state <- stateRef.get
               targetId = Node.kademliaId(target)
-              closestNodeIds = state.kBuckets.closestNodes(targetId, config.kademliaBucketSize)
+              closestNodeIds = state.kBuckets.closestNodes(targetId, config.kademliaBucketSize).map(Hash(_))
               closestNodes = closestNodeIds
                 .map(state.kademliaIdToNodeId)
                 .map(state.nodeMap)
@@ -415,7 +414,7 @@ object DiscoveryService {
           }
 
     /** Handle incoming ENRRequest. */
-    override def enrRequest: Call[Peer[A], Proc.ENRRequest] =
+    override def enrRequest: Peer[A] => Unit => IO[Option[EthereumNodeRecord]] =
       caller => _ => respondIfBonded(caller, "ENRRequest")(stateRef.get.map(_.enr))
 
     // The methods below are `protected[v4]` so that they can be called from tests individually.
@@ -723,12 +722,12 @@ object DiscoveryService {
           else {
             val (_, bucket) = state.kBuckets.getBucket(peer)
             val (addToBucket, maybeEvict) =
-              if (bucket.contains(peer.kademliaId) || bucket.size < config.kademliaBucketSize) {
+              if (bucket.contains(peer.kademliaId.value) || bucket.size < config.kademliaBucketSize) {
                 // We can just update the records, the bucket either has room or won't need to grow.
                 true -> None
               } else {
                 // We have to consider evicting somebody or dropping this node.
-                false -> Some(state.nodeMap(state.kademliaIdToNodeId(bucket.head)))
+                false -> Some(state.nodeMap(state.kademliaIdToNodeId(Hash(bucket.head))))
               }
             // Store the ENR record and maybe update the k-buckets.
             state.withEnrAndAddress(peer, enr, address, addToBucket) -> maybeEvict
@@ -782,7 +781,7 @@ object DiscoveryService {
       val targetId = Node.kademliaId(target)
 
       implicit val nodeOrdering: Ordering[Node] =
-        XorOrdering[Node, Hash](_.kademliaId)(targetId)
+        XorOrdering[Node, BitVector](_.kademliaId.value)(targetId.value)
 
       // Find the 16 closest nodes we know of.
       // We'll contact 'alpha' at a time but eventually try all of them
@@ -794,6 +793,7 @@ object DiscoveryService {
 
         closestIds = state.kBuckets
           .closestNodes(targetId, config.kademliaBucketSize)
+          .map(Hash(_))
 
         closestNodes = closestIds.map(state.kademliaIdToNodeId).map(state.nodeMap)
 

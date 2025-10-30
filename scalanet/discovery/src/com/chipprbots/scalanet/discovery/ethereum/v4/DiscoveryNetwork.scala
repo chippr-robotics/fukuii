@@ -88,8 +88,8 @@ object DiscoveryNetwork {
           _ <- Stream.repeatEval(peerGroup.nextServerEvent)
             .interruptWhen(cancelToken.get.attempt)
             .evalMap {
-              case ChannelCreated(channel: Channel[A, Packet], release) =>
-                handleChannel(handler, channel, cancelToken)
+              case Some(ChannelCreated(channel, release)) =>
+                handleChannel(handler, channel.asInstanceOf[Channel[A, Packet]], cancelToken)
                   .guarantee(release)
                   .recover {
                     case ex: TimeoutException =>
@@ -322,7 +322,7 @@ object DiscoveryNetwork {
             channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
           )
             .collect {
-              case MessageReceived(pkt: Packet) => pkt
+              case Some(MessageReceived(pkt)) => pkt.asInstanceOf[Packet]
             }
             .evalMap { receivedPacket =>
               currentTimeSeconds.flatMap { timestamp =>
