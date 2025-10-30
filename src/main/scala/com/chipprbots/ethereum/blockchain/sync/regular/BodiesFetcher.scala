@@ -74,6 +74,6 @@ object BodiesFetcher {
 
   sealed trait BodiesFetcherCommand
   final case class FetchBodies(hashes: Seq[ByteString]) extends BodiesFetcherCommand
-  final case object RetryBodiesRequest extends BodiesFetcherCommand
+  case object RetryBodiesRequest extends BodiesFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends BodiesFetcherCommand
 }

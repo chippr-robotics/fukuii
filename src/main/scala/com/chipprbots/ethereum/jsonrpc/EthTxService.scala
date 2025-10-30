@@ -189,12 +189,12 @@ class EthTxService(
       case Success(signedTransaction) =>
         if (SignedTransaction.getSender(signedTransaction).isDefined) {
           pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(signedTransaction)
-          Task.now(Right(SendRawTransactionResponse(signedTransaction.hash)))
+          IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
         } else {
-          Task.now(Left(JsonRpcError.InvalidRequest))
+          IO.pure(Left(JsonRpcError.InvalidRequest))
         }
       case Failure(_) =>
-        Task.now(Left(JsonRpcError.InvalidRequest))
+        IO.pure(Left(JsonRpcError.InvalidRequest))
     }
   }
 

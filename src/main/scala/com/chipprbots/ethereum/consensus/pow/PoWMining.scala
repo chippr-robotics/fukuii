@@ -87,10 +87,10 @@ class PoWMining private (
     }
 
   // no interactions are done with minerCoordinatorRef using the ask pattern
-  override def askMiner(msg: MockedMinerProtocol): Task[MockedMinerResponse] =
+  override def askMiner(msg: MockedMinerProtocol): IO[MockedMinerResponse] =
     mockedMinerRef
       .map(_.askFor[MockedMinerResponse](msg))
-      .getOrElse(Task.now(MinerNotExist))
+      .getOrElse(IO.pure(MinerNotExist))
 
   private[this] val mutex = new Object
 

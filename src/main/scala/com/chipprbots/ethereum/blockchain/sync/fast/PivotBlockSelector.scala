@@ -160,7 +160,7 @@ class PivotBlockSelector(
       timeout.cancel()
       if (waitingPeers.nonEmpty) { // There are more peers to ask
         val newTimeout = scheduler.scheduleOnce(peerResponseTimeout, self, ElectionPivotBlockTimeout)
-        val additionalPeer :: newWaitingPeers = waitingPeers
+        val additionalPeer :: newWaitingPeers = (waitingPeers: @unchecked)
 
         obtainBlockHeaderFromPeer(additionalPeer, pivotBlockNumber)
 

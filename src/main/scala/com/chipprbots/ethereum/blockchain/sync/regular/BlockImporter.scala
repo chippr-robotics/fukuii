@@ -86,6 +86,7 @@ class BlockImporter(
 
     // We don't want to lose a checkpoint
     case nc @ NewCheckpoint(_) if state.importing =>
+      implicit val ec = context.dispatcher
       context.system.scheduler.scheduleOnce(1.second, self, nc)
 
     case NewCheckpoint(block) if !state.importing =>
@@ -253,7 +254,6 @@ class BlockImporter(
           case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
-            Running
           case BlockImportFailedDueToMissingNode(missingNodeException) =>
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail =>
@@ -267,7 +267,7 @@ class BlockImporter(
   }
 
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit = {
-    val newBlocks = (blocks, weights).mapN(BlockToBroadcast)
+    val newBlocks = (blocks, weights).mapN(BlockToBroadcast.apply)
     broadcaster ! BroadcastBlocks(newBlocks)
   }
 

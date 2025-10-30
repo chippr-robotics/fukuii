@@ -6,6 +6,7 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Timers
 import org.apache.pekko.pattern.pipe
+import org.apache.pekko.pattern.PipeToSupport.PipeableFuture
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
@@ -369,8 +370,8 @@ object SyncStateSchedulerActor {
   ): Props =
     Props(new SyncStateSchedulerActor(sync, syncConfig, etcPeerManager, peerEventBus, blacklist, scheduler)(scheduler))
 
-  final case object PrintInfo
-  final case object PrintInfoKey
+  case object PrintInfo
+  case object PrintInfoKey
 
   sealed trait SyncStateSchedulerActorCommand
   final case class StartSyncingTo(stateRoot: ByteString, blockNumber: BigInt) extends SyncStateSchedulerActorCommand
@@ -407,7 +408,7 @@ object SyncStateSchedulerActor {
 
   final case class PeerRequest(peer: Peer, nodes: NonEmptyList[ByteString])
 
-  final case object RegisterScheduler
+  case object RegisterScheduler
 
   sealed trait ResponseProcessingResult
   case object UnrequestedResponse extends ResponseProcessingResult

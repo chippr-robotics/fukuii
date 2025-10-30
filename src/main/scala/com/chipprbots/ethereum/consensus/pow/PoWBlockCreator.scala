@@ -4,6 +4,7 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
+import cats.syntax.parallel._
 
 import scala.concurrent.duration.FiniteDuration
 

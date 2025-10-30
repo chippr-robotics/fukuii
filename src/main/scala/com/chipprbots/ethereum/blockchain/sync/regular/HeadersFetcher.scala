@@ -91,6 +91,6 @@ object HeadersFetcher {
   sealed trait HeadersFetcherCommand
   final case class FetchHeadersByNumber(block: BigInt, amount: BigInt) extends HeadersFetcherCommand
   final case class FetchHeadersByHash(block: ByteString, amount: BigInt) extends HeadersFetcherCommand
-  final case object RetryHeadersRequest extends HeadersFetcherCommand
+  case object RetryHeadersRequest extends HeadersFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends HeadersFetcherCommand
 }

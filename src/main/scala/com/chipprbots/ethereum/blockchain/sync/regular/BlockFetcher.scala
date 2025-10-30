@@ -338,10 +338,10 @@ object BlockFetcher {
   sealed trait FetchCommand
   final case class Start(importer: ClassicActorRef, fromBlock: BigInt) extends FetchCommand
   final case class FetchStateNode(hash: ByteString, replyTo: ClassicActorRef) extends FetchCommand
-  final case object RetryFetchStateNode extends FetchCommand
+  case object RetryFetchStateNode extends FetchCommand
   final case class PickBlocks(amount: Int, replyTo: ClassicActorRef) extends FetchCommand
   final case class StrictPickBlocks(from: BigInt, atLEastWith: BigInt, replyTo: ClassicActorRef) extends FetchCommand
-  final case object PrintStatus extends FetchCommand
+  case object PrintStatus extends FetchCommand
   final case class InvalidateBlocksFrom(fromBlock: BigInt, reason: String, toBlacklist: Option[BigInt])
       extends FetchCommand
 
@@ -355,8 +355,8 @@ object BlockFetcher {
   }
   final case class BlockImportFailed(blockNr: BigInt, reason: BlacklistReason) extends FetchCommand
   final case class InternalLastBlockImport(blockNr: BigInt) extends FetchCommand
-  final case object RetryBodiesRequest extends FetchCommand
-  final case object RetryHeadersRequest extends FetchCommand
+  case object RetryBodiesRequest extends FetchCommand
+  case object RetryHeadersRequest extends FetchCommand
   final case class AdaptedMessageFromEventBus(message: Message, peerId: PeerId) extends FetchCommand
   final case class ReceivedHeaders(peer: Peer, headers: Seq[BlockHeader]) extends FetchCommand
   final case class ReceivedBodies(peer: Peer, bodies: Seq[BlockBody]) extends FetchCommand

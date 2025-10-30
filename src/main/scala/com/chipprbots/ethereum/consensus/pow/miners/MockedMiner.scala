@@ -41,7 +41,8 @@ class MockedMiner(
     with ActorLogging {
   import configBuilder._
   import org.apache.pekko.pattern.pipe
-  implicit val scheduler: IORuntime = IORuntime(context.dispatcher)
+  // CE3: Using global IORuntime for actor operations
+  implicit val scheduler: IORuntime = IORuntime.global
 
   override def receive: Receive = stopped
 
@@ -101,6 +102,7 @@ class MockedMiner(
       )
       syncEventListener ! SyncProtocol.MinedBlock(minedBlock)
       // because of using seconds to calculate block timestamp, we can't mine blocks faster than one block per second
+      implicit val ec = context.dispatcher
       context.system.scheduler.scheduleOnce(1.second, self, MineBlock)
       context.become(working(numBlocks - 1, withTransactions, minedBlock, Some(state)))
 

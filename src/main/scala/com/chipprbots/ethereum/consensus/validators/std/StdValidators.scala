@@ -71,7 +71,7 @@ object StdValidators {
       _ <- self.blockValidator.validateHeaderAndBody(header, body)
     } yield BlockExecutionSuccess
 
-    result.left.map(ValidationBeforeExecError)
+    result.left.map(ValidationBeforeExecError.apply)
   }
 
   def validateBlockAfterExecution(
