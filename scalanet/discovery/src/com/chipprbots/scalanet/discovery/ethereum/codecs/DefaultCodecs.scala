@@ -32,10 +32,10 @@ object DefaultCodecs {
   // Note: deriveLabelledGeneric doesn't exist in scodec 2.x for Scala 3
   // These will need manual implementation or use of shapeless3-based derivation
   implicit val addressCodec: Codec[Node.Address] =
-    Codec[Node.Address] // Placeholder - needs proper implementation
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit val nodeCodec: Codec[Node] =
-    Codec[Node] // Placeholder - needs proper implementation
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit def sortedMapCodec[K: Codec: Ordering, V: Codec]: Codec[SortedMap[K, V]] =
     list(Codec[(K, V)]).xmap(
@@ -50,28 +50,28 @@ object DefaultCodecs {
     sortedMapCodec[ByteVector, ByteVector]
 
   implicit val enrContentCodec: Codec[EthereumNodeRecord.Content] =
-    Codec[EthereumNodeRecord.Content] // Placeholder
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit val enrCodec: Codec[EthereumNodeRecord] =
-    Codec[EthereumNodeRecord] // Placeholder
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit val pingCodec: Codec[Ping] =
-    Codec[Ping] // Placeholder
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit val pongCodec: Codec[Pong] =
-    Codec[Pong] // Placeholder
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit val findNodeCodec: Codec[FindNode] =
-    Codec[FindNode] // Placeholder
+    ??? // TODO: Needs proper implementation for Scala 3
 
-  implicit val neigbhorsCodec: Codec[Neighbors] =
-    Codec[Neighbors] // Placeholder
+  implicit val neighborsCodec: Codec[Neighbors] =
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit val enrRequestCodec: Codec[ENRRequest] =
-    Codec[ENRRequest] // Placeholder
+    ??? // TODO: Needs proper implementation for Scala 3
 
   implicit val enrResponseCodec: Codec[ENRResponse] =
-    Codec[ENRResponse] // Placeholder
+    ??? // TODO: Needs proper implementation for Scala 3
 
   // Use discriminated builder pattern for Scala 3 scodec 2.x
   implicit val payloadCodec: Codec[Payload] =
@@ -79,7 +79,7 @@ object DefaultCodecs {
       .subcaseP(1) { case p: Ping => p }(pingCodec)
       .subcaseP(2) { case p: Pong => p }(pongCodec)
       .subcaseP(3) { case f: FindNode => f }(findNodeCodec)
-      .subcaseP(4) { case n: Neighbors => n }(neigbhorsCodec)
+      .subcaseP(4) { case n: Neighbors => n }(neighborsCodec)
       .subcaseP(5) { case e: ENRRequest => e }(enrRequestCodec)
       .subcaseP(6) { case e: ENRResponse => e }(enrResponseCodec)
 }

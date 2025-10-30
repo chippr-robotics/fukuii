@@ -6,7 +6,7 @@ import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
 import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
 import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
 import scodec.codecs.{discriminated, uint4, bits, uuid}
-import scodec.{Codec, Encoder, Decoder}
+import scodec.Codec
 import scodec.bits.BitVector
 
 /** Encodings for scodec. */
