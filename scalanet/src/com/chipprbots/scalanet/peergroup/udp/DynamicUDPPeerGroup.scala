@@ -336,7 +336,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
               IO(logger.debug(s"UDP channel setup failed due to ${ex}", ex)) *>
                 IO.raiseError(new ChannelSetupException[InetMultiAddress](to, ex))
           }
-      })((ch: ChannelImpl) => ch.close)
+      })(ch => ch.close)
   }
 
   override def nextServerEvent =
