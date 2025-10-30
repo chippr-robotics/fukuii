@@ -88,7 +88,7 @@ object DiscoveryNetwork {
           _ <- Stream.repeatEval(peerGroup.nextServerEvent)
             .interruptWhen(cancelToken.get.attempt)
             .evalMap {
-              case ChannelCreated(channel, release) =>
+              case ChannelCreated(channel: Channel[A, Packet], release) =>
                 handleChannel(handler, channel, cancelToken)
                   .guarantee(release)
                   .recover {
@@ -114,9 +114,9 @@ object DiscoveryNetwork {
           .interruptWhen(cancelToken.get.attempt)
           .timeout(config.messageExpiration) // Messages older than this would be ignored anyway.
           .evalMap {
-            case MessageReceived(packet) =>
+            case MessageReceived(receivedPacket) =>
               currentTimeSeconds.flatMap { timestamp =>
-                Packet.unpack(packet) match {
+                Packet.unpack(receivedPacket) match {
                   case Attempt.Successful((payload, remotePublicKey)) =>
                     payload match {
                       case _: Payload.Response =>
@@ -127,11 +127,11 @@ object DiscoveryNetwork {
                         IO(logger.debug(s"Ignoring expired request from ${channel.to}; ${p.expiration} < $timestamp"))
 
                       case p: Payload.Request =>
-                        handleRequest(handler, channel, remotePublicKey, packet.hash, p)
+                        handleRequest(handler, channel, remotePublicKey, receivedPacket.hash, p)
                     }
 
                   case Attempt.Failure(err) =>
-                    IO(logger.debug(s"Failed to unpack packet: $err; ${packet.show}")) >>
+                    IO(logger.debug(s"Failed to unpack packet: $err; ${receivedPacket.show}")) >>
                       IO.raiseError(new PacketException(s"Failed to unpack message: $err"))
                 }
               }
@@ -318,11 +318,11 @@ object DiscoveryNetwork {
             channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
           )
             .collect {
-              case MessageReceived(packet) => packet
+              case MessageReceived(pkt) => pkt
             }
-            .evalMap { packet =>
+            .evalMap { receivedPacket =>
               currentTimeSeconds.flatMap { timestamp =>
-                val unpackResult = Packet.unpack(packet)
+                val unpackResult = Packet.unpack(receivedPacket)
                 unpackResult.toEither match {
                   case Right((payload, remotePublicKey)) =>
                     if (remotePublicKey != publicKey) {
