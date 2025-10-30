@@ -15,13 +15,13 @@ import java.net.InetAddress
 object DefaultCodecs {
 
   implicit val publicKeyCodec: Codec[PublicKey] =
-    bits.xmap(PublicKey(_), (pk: PublicKey) => pk: BitVector)
+    bits.xmap(PublicKey(_), (pk: PublicKey) => pk.value)
 
   implicit val signatureCodec: Codec[Signature] =
-    bits.xmap(Signature(_), (sig: Signature) => sig: BitVector)
+    bits.xmap(Signature(_), (sig: Signature) => sig.value)
 
   implicit val hashCodec: Codec[Hash] =
-    bits.xmap(Hash(_), (h: Hash) => h: BitVector)
+    bits.xmap(Hash(_), (h: Hash) => h.value)
 
   implicit val inetAddressCodec: Codec[InetAddress] =
     bits.xmap(
