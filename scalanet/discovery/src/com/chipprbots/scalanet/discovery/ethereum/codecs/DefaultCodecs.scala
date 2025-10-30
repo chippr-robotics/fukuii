@@ -6,8 +6,7 @@ import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload._
 import scodec.Codec
-import scodec.codecs.{Discriminated, Discriminator, uint4}
-import scodec.codecs.implicits._
+import scodec.codecs.{discriminated, uint4, bits, list}
 import scodec.bits.{BitVector, ByteVector}
 import scala.collection.SortedMap
 import scala.math.Ordering.Implicits._
@@ -16,26 +15,30 @@ import java.net.InetAddress
 object DefaultCodecs {
 
   implicit val publicKeyCodec: Codec[PublicKey] =
-    implicitly[Codec[BitVector]].xmap(PublicKey(_), identity)
+    bits.xmap(PublicKey(_), (pk: PublicKey) => pk: BitVector)
 
   implicit val signatureCodec: Codec[Signature] =
-    implicitly[Codec[BitVector]].xmap(Signature(_), identity)
+    bits.xmap(Signature(_), (sig: Signature) => sig: BitVector)
 
   implicit val hashCodec: Codec[Hash] =
-    implicitly[Codec[BitVector]].xmap(Hash(_), identity)
+    bits.xmap(Hash(_), (h: Hash) => h: BitVector)
 
   implicit val inetAddressCodec: Codec[InetAddress] =
-    implicitly[Codec[BitVector]]
-      .xmap(bits => InetAddress.getByAddress(bits.toByteArray), ip => BitVector(ip.getAddress))
+    bits.xmap(
+      bv => InetAddress.getByAddress(bv.toByteArray),
+      ip => BitVector(ip.getAddress)
+    )
 
+  // Note: deriveLabelledGeneric doesn't exist in scodec 2.x for Scala 3
+  // These will need manual implementation or use of shapeless3-based derivation
   implicit val addressCodec: Codec[Node.Address] =
-    Codec.deriveLabelledGeneric
+    Codec[Node.Address] // Placeholder - needs proper implementation
 
   implicit val nodeCodec: Codec[Node] =
-    Codec.deriveLabelledGeneric
+    Codec[Node] // Placeholder - needs proper implementation
 
-  implicit def sortedMapCodec[K: Codec: Ordering, V: Codec] =
-    implicitly[Codec[List[(K, V)]]].xmap(
+  implicit def sortedMapCodec[K: Codec: Ordering, V: Codec]: Codec[SortedMap[K, V]] =
+    list(Codec[(K, V)]).xmap(
       (kvs: List[(K, V)]) => SortedMap(kvs: _*),
       (sm: SortedMap[K, V]) => sm.toList
     )
@@ -47,50 +50,36 @@ object DefaultCodecs {
     sortedMapCodec[ByteVector, ByteVector]
 
   implicit val enrContentCodec: Codec[EthereumNodeRecord.Content] =
-    Codec.deriveLabelledGeneric
+    Codec[EthereumNodeRecord.Content] // Placeholder
 
   implicit val enrCodec: Codec[EthereumNodeRecord] =
-    Codec.deriveLabelledGeneric
+    Codec[EthereumNodeRecord] // Placeholder
 
   implicit val pingCodec: Codec[Ping] =
-    Codec.deriveLabelledGeneric
+    Codec[Ping] // Placeholder
 
   implicit val pongCodec: Codec[Pong] =
-    Codec.deriveLabelledGeneric
+    Codec[Pong] // Placeholder
 
   implicit val findNodeCodec: Codec[FindNode] =
-    Codec.deriveLabelledGeneric
+    Codec[FindNode] // Placeholder
 
   implicit val neigbhorsCodec: Codec[Neighbors] =
-    Codec.deriveLabelledGeneric
+    Codec[Neighbors] // Placeholder
 
   implicit val enrRequestCodec: Codec[ENRRequest] =
-    Codec.deriveLabelledGeneric
+    Codec[ENRRequest] // Placeholder
 
   implicit val enrResponseCodec: Codec[ENRResponse] =
-    Codec.deriveLabelledGeneric
+    Codec[ENRResponse] // Placeholder
 
-  implicit val payloadDiscriminated =
-    Discriminated[Payload, Int](uint4)
-
-  implicit val pingDiscriminator =
-    Discriminator[Payload, Ping, Int](1)
-
-  implicit val pongDiscriminator =
-    Discriminator[Payload, Pong, Int](2)
-
-  implicit val findNodeDiscriminator =
-    Discriminator[Payload, FindNode, Int](3)
-
-  implicit val neighborsDiscriminator =
-    Discriminator[Payload, Neighbors, Int](4)
-
-  implicit val enrRequestDiscriminator =
-    Discriminator[Payload, ENRRequest, Int](5)
-
-  implicit val enrResponseDiscriminator =
-    Discriminator[Payload, ENRResponse, Int](6)
-
+  // Use discriminated builder pattern for Scala 3 scodec 2.x
   implicit val payloadCodec: Codec[Payload] =
-    Codec.deriveCoproduct
+    discriminated[Payload].by(uint4)
+      .subcaseP(1) { case p: Ping => p }(pingCodec)
+      .subcaseP(2) { case p: Pong => p }(pongCodec)
+      .subcaseP(3) { case f: FindNode => f }(findNodeCodec)
+      .subcaseP(4) { case n: Neighbors => n }(neigbhorsCodec)
+      .subcaseP(5) { case e: ENRRequest => e }(enrRequestCodec)
+      .subcaseP(6) { case e: ENRResponse => e }(enrResponseCodec)
 }
