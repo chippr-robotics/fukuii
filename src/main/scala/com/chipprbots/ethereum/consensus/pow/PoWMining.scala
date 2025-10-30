@@ -69,7 +69,7 @@ class PoWMining private (
 
   @volatile private[pow] var minerCoordinatorRef: Option[ActorRef[CoordinatorProtocol]] = None
   // TODO in ETCM-773 remove MockedMiner
-  @volatile private[pow] var mockedMinerRef: Option[akka.actor.ActorRef] = None
+  @volatile private[pow] var mockedMinerRef: Option[org.apache.pekko.actor.ActorRef] = None
 
   final val BlockForgerDispatcherId = "mantis.async.dispatchers.block-forger"
   implicit private val timeout: Timeout = 5.seconds

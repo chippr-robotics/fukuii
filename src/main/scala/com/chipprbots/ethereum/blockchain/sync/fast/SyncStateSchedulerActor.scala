@@ -41,8 +41,8 @@ class SyncStateSchedulerActor(
     val etcPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
-    val scheduler: akka.actor.Scheduler
-)(implicit val actorScheduler: akka.actor.Scheduler)
+    val scheduler: org.apache.pekko.actor.Scheduler
+)(implicit val actorScheduler: org.apache.pekko.actor.Scheduler)
     extends Actor
     with PeerListSupportNg
     with ActorLogging
@@ -365,7 +365,7 @@ object SyncStateSchedulerActor {
       etcPeerManager: ActorRef,
       peerEventBus: ActorRef,
       blacklist: Blacklist,
-      scheduler: akka.actor.Scheduler
+      scheduler: org.apache.pekko.actor.Scheduler
   ): Props =
     Props(new SyncStateSchedulerActor(sync, syncConfig, etcPeerManager, peerEventBus, blacklist, scheduler)(scheduler))
 

@@ -155,7 +155,7 @@ lazy val scalanet = {
     .settings(
       Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
       libraryDependencies ++=
-        Dependencies.akka ++
+        Dependencies.pekko ++
           Dependencies.cats ++
           Dependencies.fs2 ++
           Dependencies.monix ++
@@ -185,7 +185,7 @@ lazy val scalanetDiscovery = {
       IntegrationTest / unmanagedSourceDirectories += baseDirectory.value / "it" / "src",
       Test / unmanagedSourceDirectories += baseDirectory.value / "ut" / "src",
       libraryDependencies ++=
-        Dependencies.akka ++
+        Dependencies.pekko ++
           Dependencies.cats ++
           Dependencies.fs2 ++
           Dependencies.monix ++
@@ -211,7 +211,7 @@ lazy val bytes = {
     .settings(publishSettings)
     .settings(
       libraryDependencies ++=
-        Dependencies.akkaUtil ++
+        Dependencies.pekkoUtil ++
           Dependencies.testing
     )
 
@@ -228,7 +228,7 @@ lazy val crypto = {
     .settings(publishSettings)
     .settings(
       libraryDependencies ++=
-        Dependencies.akkaUtil ++
+        Dependencies.pekkoUtil ++
           Dependencies.crypto ++
           Dependencies.testing
     )
@@ -246,13 +246,8 @@ lazy val rlp = {
     .settings(publishSettings)
     .settings(
       libraryDependencies ++=
-        Dependencies.akkaUtil ++
-          Dependencies.testing,
-      // Allow inline class duplication for RLP derivation
-      scalacOptions ++= (CrossVersion.partialVersion(scalaVersion.value) match {
-        case Some((3, _)) => Seq("-Wconf:msg=New anonymous class definition will be duplicated at each inline site:s")
-        case _ => Seq.empty
-      })
+        Dependencies.pekkoUtil ++
+          Dependencies.testing
     )
 
   rlp
@@ -274,8 +269,8 @@ lazy val node = {
 
   val dep = {
     Seq(
-      Dependencies.akka,
-      Dependencies.akkaHttp,
+      Dependencies.pekko,
+      Dependencies.pekkoHttp,
       Dependencies.apacheCommons,
       Dependencies.boopickle,
       Dependencies.cats,

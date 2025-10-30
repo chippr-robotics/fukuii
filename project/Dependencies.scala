@@ -6,12 +6,12 @@ object Dependencies {
   private val pekkoVersion = "1.2.1" // Latest Pekko version with Scala 3 support
   private val pekkoHttpVersion = "1.3.0" // Latest Pekko HTTP version
 
-  val akkaUtil: Seq[ModuleID] =
+  val pekkoUtil: Seq[ModuleID] =
     Seq(
       "org.apache.pekko" %% "pekko-actor" % pekkoVersion
     )
 
-  val akka: Seq[ModuleID] =
+  val pekko: Seq[ModuleID] =
     Seq(
       "org.apache.pekko" %% "pekko-actor" % pekkoVersion,
       "org.apache.pekko" %% "pekko-actor-typed" % pekkoVersion,
@@ -21,7 +21,7 @@ object Dependencies {
       "org.apache.pekko" %% "pekko-stream" % pekkoVersion
     )
 
-  val akkaHttp: Seq[ModuleID] = {
+  val pekkoHttp: Seq[ModuleID] = {
     Seq(
       "org.apache.pekko" %% "pekko-http" % pekkoHttpVersion,
       "org.apache.pekko" %% "pekko-http-cors" % pekkoHttpVersion,
@@ -196,8 +196,8 @@ object Dependencies {
     val provider = "io.kamon"
     val version = "2.7.5" // Updated for Scala 3 support
     Seq(
-      provider %% "kamon-prometheus" % version,
-      provider %% "kamon-akka" % version
+      provider %% "kamon-prometheus" % version
+      // Note: kamon-pekko not yet available, removed kamon-akka instrumentation
     )
   }
 

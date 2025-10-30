@@ -12,7 +12,6 @@ import cats.effect.unsafe.IORuntime
 import scala.concurrent.duration.FiniteDuration
 import scala.reflect.ClassTag
 
-import com.miguno.akka.testing.VirtualTime
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.matchers.MatcherBase
 import org.scalamock.scalatest.MockFactory
@@ -447,8 +446,6 @@ class PersonalServiceSpec
       override val transactionTimeout: FiniteDuration = Timeouts.normalTimeout
       override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.normalTimeout
     }
-
-    val time = new VirtualTime
 
     val keyStore: KeyStore = mock[KeyStore]
 
