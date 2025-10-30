@@ -5,14 +5,14 @@ import java.time.Clock
 
 import com.chipprbots.scalanet.kademlia.Generators._
 import com.chipprbots.scalanet.kademlia.KBucketsSpec._
-import org.scalatest.FlatSpec
-import org.scalatest.Matchers._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks._
 import scodec.bits.BitVector
 
 import scala.util.Random
 
-class KBucketsSpec extends FlatSpec {
+class KBucketsSpec extends AnyFlatSpec with Matchers {
 
   behavior of "KBuckets"
 

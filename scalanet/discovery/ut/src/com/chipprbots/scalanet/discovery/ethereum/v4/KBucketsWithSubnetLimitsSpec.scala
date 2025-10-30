@@ -1,6 +1,8 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import org.scalatest._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.Inspectors
 import java.net.InetSocketAddress
 import com.chipprbots.scalanet.discovery.ethereum.v4.KBucketsWithSubnetLimits.SubnetLimits
 import com.chipprbots.scalanet.discovery.ethereum.Node
@@ -10,7 +12,7 @@ import com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryNetwork.Peer
 import scodec.bits.BitVector
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
 
-class KBucketsWithSubnetLimitsSpec extends FlatSpec with Matchers with Inspectors {
+class KBucketsWithSubnetLimitsSpec extends AnyFlatSpec with Matchers with Inspectors {
 
   // For the tests I only care about the IP addresses; a 1-to-1 mapping is convenient.
   def fakeNodeId(address: InetAddress): Node.Id =

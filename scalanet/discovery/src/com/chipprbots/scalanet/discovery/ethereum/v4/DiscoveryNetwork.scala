@@ -1,5 +1,6 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
+import cats.Show
 import cats.implicits._
 import cats.effect.{IO, Temporal, Deferred}
 import com.typesafe.scalalogging.LazyLogging
@@ -88,7 +89,7 @@ object DiscoveryNetwork {
           _ <- Stream.repeatEval(peerGroup.nextServerEvent)
             .interruptWhen(cancelToken.get.attempt)
             .evalMap {
-              case ChannelCreated(channel: Channel[A, Packet], release) =>
+              case Some(ChannelCreated(channel: Channel[A, Packet], release)) =>
                 handleChannel(handler, channel, cancelToken)
                   .guarantee(release)
                   .recover {
@@ -112,12 +113,11 @@ object DiscoveryNetwork {
       ): IO[Unit] = {
         Stream.repeatEval(channel.nextChannelEvent)
           .interruptWhen(cancelToken.get.attempt)
-          .timeout(config.messageExpiration) // Messages older than this would be ignored anyway.
           .evalMap {
-            case MessageReceived(receivedPacket) =>
+            case Some(MessageReceived(receivedPacket: Packet)) =>
               currentTimeSeconds.flatMap { timestamp =>
-                Packet.unpack(receivedPacket) match {
-                  case Attempt.Successful((payload, remotePublicKey)) =>
+                Packet.unpack(receivedPacket).toEither match {
+                  case Right((payload, remotePublicKey)) =>
                     payload match {
                       case _: Payload.Response =>
                         // Not relevant on the server channel.
@@ -130,20 +130,24 @@ object DiscoveryNetwork {
                         handleRequest(handler, channel, remotePublicKey, receivedPacket.hash, p)
                     }
 
-                  case Attempt.Failure(err) =>
-                    IO(logger.debug(s"Failed to unpack packet: $err; ${receivedPacket.show}")) >>
+                  case Left(err) =>
+                    IO(logger.debug(s"Failed to unpack packet: $err; ${Show[Packet].show(receivedPacket)}")) >>
                       IO.raiseError(new PacketException(s"Failed to unpack message: $err"))
                 }
               }
 
-            case DecodingError =>
+            case Some(DecodingError) =>
               IO.raiseError(new PacketException("Failed to decode a message."))
 
-            case UnexpectedError(ex) =>
+            case Some(UnexpectedError(ex)) =>
               IO.raiseError(new PacketException(ex.getMessage))
 
-            case ChannelIdle(_, _) =>
+            case Some(ChannelIdle(_, _)) =>
               // we do not use idle peer detection in discovery
+              IO.unit
+            
+            case None =>
+              // Channel closed
               IO.unit
           }
           .compile.drain
@@ -318,7 +322,7 @@ object DiscoveryNetwork {
             channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
           )
             .collect {
-              case MessageReceived(pkt) => pkt
+              case Some(MessageReceived(pkt: Packet)) => pkt
             }
             .evalMap { receivedPacket =>
               currentTimeSeconds.flatMap { timestamp =>
@@ -370,31 +374,45 @@ object DiscoveryNetwork {
             pf: PartialFunction[Payload.Response, T]
         )(
             f: (Z, T) => Either[Z, Z]
-        ): IO[Option[Z]] =
-          channel
+        ): IO[Option[Z]] = {
+          val responses = channel
             .collectResponses(publicKey, timeout.fromNow)(pf)
             .attempt
-            .foldWhileLeftEvalL(IO.pure((seed -> 0).some)) {
-              case (Some((acc, count)), Left(ex: TimeoutException)) if count > 0 =>
+          
+          responses
+            .evalScan[IO, Either[Option[(Z, Int)], Option[(Z, Int)]]](Left(Some((seed, 0)))) {
+              case (Left(Some((acc, count))), Left(ex: TimeoutException)) if count > 0 =>
                 // We have a timeout but we already accumulated some results, so return those.
                 IO.pure(Right(Some((acc, count))))
 
-              case (_, Left(ex)) =>
+              case (Left(_), Left(ex)) =>
                 // Unexpected error, discard results, if any.
                 IO(logger.debug(s"Failed to fold responses from ${channel.to}: ${ex.getMessage}")).as(Right(None))
 
-              case (Some((acc, count)), Right(response)) =>
+              case (Left(Some((acc, count))), Right(response)) =>
                 // New response, fold it with the existing to decide if we need more.
                 val next = (acc: Z) => Some(acc -> (count + 1))
                 IO.pure(f(acc, response).bimap(next, next))
 
-              case (None, _) =>
+              case (Left(None), _) =>
                 // Invalid state - this cannot happen
                 IO.raiseError(
                   new IllegalStateException(s"Unexpected state while collecting responses from ${channel.to}")
                 )
+              
+              case (Right(result), _) =>
+                // Already finished, keep propagating the result
+                IO.pure(Right(result))
             }
-            .map(_.map(_._1))
+            .takeThrough(_.isLeft)
+            .compile
+            .last
+            .map {
+              case Some(Right(result)) => result.map(_._1)
+              case Some(Left(result)) => result.map(_._1)
+              case None => None
+            }
+        }
 
       }
     }

@@ -8,9 +8,10 @@ import com.chipprbots.scalanet.kademlia.{KBuckets, TimeSet}
 import com.chipprbots.scalanet.peergroup.Addressable
 import com.chipprbots.scalanet.peergroup.InetAddressOps._
 import java.net.InetAddress
+import scodec.bits.BitVector
 
 case class KBucketsWithSubnetLimits[A: Addressable](
-    table: KBuckets[Hash],
+    table: KBuckets[BitVector],
     limits: KBucketsWithSubnetLimits.SubnetLimits,
     tableLevelCounts: KBucketsWithSubnetLimits.TableLevelCounts,
     bucketLevelCounts: KBucketsWithSubnetLimits.BucketLevelCounts
@@ -19,12 +20,12 @@ case class KBucketsWithSubnetLimits[A: Addressable](
   import KBucketsWithSubnetLimits._
 
   def contains(peer: Peer[A]): Boolean =
-    table.contains(peer.kademliaId)
+    table.contains(peer.kademliaId.value)
 
   def touch(peer: Peer[A]): KBucketsWithSubnetLimits[A] =
     // Note that `KBuckets.touch` also adds, so if the the record
     // isn't in the table already then use `add` to maintain counts.
-    if (contains(peer)) copy(table = table.touch(peer.kademliaId)) else add(peer)
+    if (contains(peer)) copy(table = table.touch(peer.kademliaId.value)) else add(peer)
 
   /** Add the peer to the underlying K-table unless doing so would violate some limit. */
   def add(peer: Peer[A]): KBucketsWithSubnetLimits[A] =
@@ -44,7 +45,7 @@ case class KBucketsWithSubnetLimits[A: Addressable](
       if (isOverAnyLimit) this
       else {
         copy(
-          table = table.add(peer.kademliaId),
+          table = table.add(peer.kademliaId.value),
           tableLevelCounts = tlc,
           bucketLevelCounts = blc
         )
@@ -60,14 +61,14 @@ case class KBucketsWithSubnetLimits[A: Addressable](
       val tlc = decrementForTable(ip)
       val blc = decrementForBucket(idx, ip)
 
-      copy(table = table.remove(peer.kademliaId), tableLevelCounts = tlc, bucketLevelCounts = blc)
+      copy(table = table.remove(peer.kademliaId.value), tableLevelCounts = tlc, bucketLevelCounts = blc)
     }
 
-  def closestNodes(targetKademliaId: Hash, n: Int): List[Hash] =
-    table.closestNodes(targetKademliaId, n)
+  def closestNodes(targetKademliaId: Hash, n: Int): List[BitVector] =
+    table.closestNodes(targetKademliaId.value, n)
 
-  def getBucket(peer: Peer[A]): (Int, TimeSet[Hash]) =
-    table.getBucket(peer.kademliaId)
+  def getBucket(peer: Peer[A]): (Int, TimeSet[BitVector]) =
+    table.getBucket(peer.kademliaId.value)
 
   private def subnet(peer: Peer[A]): InetAddress =
     Addressable[A].getAddress(peer.address).getAddress.truncate(limits.prefixLength)
@@ -150,7 +151,7 @@ object KBucketsWithSubnetLimits {
       limits: SubnetLimits
   ): KBucketsWithSubnetLimits[A] = {
     KBucketsWithSubnetLimits[A](
-      new KBuckets[Hash](node.kademliaId, clock = java.time.Clock.systemUTC()),
+      new KBuckets[BitVector](node.kademliaId.value, clock = java.time.Clock.systemUTC()),
       limits,
       tableLevelCounts = Map.empty[InetAddress, Int],
       bucketLevelCounts = Map.empty[Int, Map[InetAddress, Int]]

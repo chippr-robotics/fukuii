@@ -4,6 +4,7 @@ import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
 import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
 import com.chipprbots.scalanet.kademlia.KMessage.{KRequest, KResponse}
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 
 import fs2.Stream
 

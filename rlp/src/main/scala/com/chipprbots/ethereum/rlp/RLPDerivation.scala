@@ -194,13 +194,11 @@ object RLPDerivation {
     * }}}
     */
   transparent inline def derivedEncoder[T](using m: Mirror.ProductOf[T], policy: DerivationPolicy = DerivationPolicy.default): RLPEncoder[T] =
-    new RLPEncoder[T] {
-      override def encode(obj: T): RLPEncodeable = {
-        val tuple = Tuple.fromProduct(obj.asInstanceOf[Product])
-        val labels = constValueTuple[m.MirroredElemLabels]
-        val (list, _) = encodeProductFields(tuple.asInstanceOf[Tuple], labels, policy)
-        list
-      }
+    RLPEncoder.instance[T] { obj =>
+      val tuple = Tuple.fromProduct(obj.asInstanceOf[Product])
+      val labels = constValueTuple[m.MirroredElemLabels]
+      val (list, _) = encodeProductFields(tuple.asInstanceOf[Tuple], labels, policy)
+      list
     }
 
   /** Derive decoder for product types (case classes).
@@ -216,8 +214,8 @@ object RLPDerivation {
     * }}}
     */
   transparent inline def derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T], policy: DerivationPolicy = DerivationPolicy.default): RLPDecoder[T] =
-    new RLPDecoder[T] {
-      override def decode(rlp: RLPEncodeable): T = rlp match {
+    RLPDecoder.instance[T] { rlp =>
+      rlp match {
         case list: RLPList =>
           val labels = constValueTuple[m.MirroredElemLabels]
           val (decoded, _) = decodeProductFields[m.MirroredElemTypes](

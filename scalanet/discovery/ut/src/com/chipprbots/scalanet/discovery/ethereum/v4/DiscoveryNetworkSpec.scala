@@ -15,7 +15,10 @@ import com.chipprbots.scalanet.NetUtils.aRandomAddress
 import java.net.InetSocketAddress
 
 import cats.effect.IO
-import org.scalatest._
+import cats.effect.unsafe.implicits.global
+import org.scalatest.flatspec.AsyncFlatSpec
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.Inspectors
 import scala.concurrent.duration._
 import scala.util.Random
 import scala.util.control.NoStackTrace
@@ -27,7 +30,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
   import DiscoveryNetworkSpec._
 
   def test(fixture: Fixture) = {
-    fixture.test.runToFuture
+    fixture.test.unsafeToFuture()
   }
 
   behavior of "ping"
@@ -510,7 +513,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         _ <- network.startHandling {
           StubDiscoveryRPC(
-            ping = _ => _ => Task(Some(Some(localENRSeq)))
+            ping = _ => _ => IO.pure(Some(Some(localENRSeq)))
           )
         }
         channel <- peerGroup.createServerChannel(from = remoteAddress)
@@ -536,7 +539,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         _ <- network.startHandling {
           StubDiscoveryRPC(
-            findNode = _ => _ => Task(Some(randomNodes))
+            findNode = _ => _ => IO.pure(Some(randomNodes))
           )
         }
         channel <- peerGroup.createServerChannel(from = remoteAddress)
@@ -575,7 +578,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       override val test = for {
         _ <- network.startHandling {
           StubDiscoveryRPC(
-            enrRequest = _ => _ => Task(Some(localENR))
+            enrRequest = _ => _ => IO.pure(Some(localENR))
           )
         }
         channel <- peerGroup.createServerChannel(from = remoteAddress)
@@ -615,7 +618,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
         override val test = for {
           _ <- network.startHandling(
             handleWithSome.withEffect {
-              Task { called = true }
+              IO.delay { called = true }
             }
           )
           channel <- peerGroup.createServerChannel(from = remoteAddress)
@@ -656,7 +659,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
 
     it should s"forward the caller to the $rpc handler" in test {
       new GenericRPCFixture {
-        def assertCaller(caller: Caller) = Task {
+        def assertCaller(caller: Caller) = IO.delay {
           caller shouldBe Peer(remotePublicKey, remoteAddress)
         }
 
@@ -681,7 +684,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
         // Only raising on the 1st call, to check that the 2nd succeeds.
         @volatile var raised = false
 
-        def raiseOnFirst() = Task {
+        def raiseOnFirst() = IO.delay {
           if (!raised) {
             raised = true
             throw TestException
@@ -758,7 +761,6 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
 }
 
 object DiscoveryNetworkSpec extends Matchers {
-  implicit val scheduler: Scheduler = Scheduler.Implicits.global
   implicit val sigalg: SigAlg = new MockSigAlg
 
   def randomBytes(n: Int) = {
@@ -796,7 +798,7 @@ object DiscoveryNetworkSpec extends Matchers {
 
     lazy val config = defaultConfig
 
-    lazy val localAddress = aRandomAddress()
+    lazy val localAddress: InetSocketAddress = aRandomAddress()
     // Keys for the System Under Test.
     lazy val (publicKey, privateKey) = sigalg.newKeyPair
 
@@ -813,9 +815,9 @@ object DiscoveryNetworkSpec extends Matchers {
     )
 
     // A random peer to talk to.
-    lazy val remoteAddress = aRandomAddress()
+    lazy val remoteAddress: InetSocketAddress = aRandomAddress()
     lazy val (remotePublicKey, remotePrivateKey) = sigalg.newKeyPair
-    lazy val remotePeer = Peer(remotePublicKey, remoteAddress)
+    lazy val remotePeer: Peer[InetSocketAddress] = Peer(remotePublicKey, remoteAddress)
 
     lazy val remoteENR = EthereumNodeRecord(
       signature = Signature(BitVector(randomBytes(sigalg.SignatureBytesSize))),
@@ -841,7 +843,7 @@ object DiscoveryNetworkSpec extends Matchers {
         localNodeAddress = toNodeAddress(localAddress),
         toNodeAddress = toNodeAddress,
         config = config
-      ).runSyncUnsafe()
+      ).unsafeRunSync()
 
     def assertExpirationSet(expiration: Long) =
       expiration shouldBe (currentTimeSeconds + config.messageExpiration.toSeconds) +- 3
@@ -859,7 +861,7 @@ object DiscoveryNetworkSpec extends Matchers {
           privateKey: PrivateKey
       ): IO[Packet] = {
         for {
-          packet <- Task(Packet.pack(payload, privateKey).require)
+          packet <- IO.delay(Packet.pack(payload, privateKey).require)
           _ <- channel.sendMessageToSUT(packet)
         } yield packet
       }
@@ -868,9 +870,9 @@ object DiscoveryNetworkSpec extends Matchers {
     type Caller = Peer[InetSocketAddress]
 
     case class StubDiscoveryRPC(
-        ping: DiscoveryRPC.Call[Caller, DiscoveryRPC.Proc.Ping] = _ => ???,
-        findNode: DiscoveryRPC.Call[Caller, DiscoveryRPC.Proc.FindNode] = _ => ???,
-        enrRequest: DiscoveryRPC.Call[Caller, DiscoveryRPC.Proc.ENRRequest] = _ => ???
+        ping: Caller => Option[Long] => IO[Option[Option[Long]]] = _ => _ => ???,
+        findNode: Caller => PublicKey => IO[Option[Seq[Node]]] = _ => _ => ???,
+        enrRequest: Caller => Unit => IO[Option[EthereumNodeRecord]] = _ => _ => ???
     ) extends DiscoveryRPC[Caller]
   }
 

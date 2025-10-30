@@ -313,7 +313,7 @@ class KRouter[A](
       // k nodes from already found or
       // alpha nodes from closest nodes received
       val (nodesToQueryFrom, nodesToTake) =
-        if (closestNodes.isEmpty) (nodesFound.toIterable, config.k) else (closestNodes.toIterable, config.alpha)
+        if (closestNodes.isEmpty) (nodesFound.toList, config.k) else (closestNodes.toSeq, config.alpha)
 
       for {
         nodesToQuery <- lookupState.modify { currentState =>

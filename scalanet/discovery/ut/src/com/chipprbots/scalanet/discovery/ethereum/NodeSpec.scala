@@ -1,12 +1,13 @@
 package com.chipprbots.scalanet.discovery.ethereum
 
-import org.scalatest._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 import java.net.InetAddress
 import org.scalatest.prop.TableDrivenPropertyChecks
 import com.chipprbots.scalanet.peergroup.InetMultiAddress
 import java.net.InetSocketAddress
 
-class NodeSpec extends FlatSpec with Matchers with TableDrivenPropertyChecks {
+class NodeSpec extends AnyFlatSpec with Matchers with TableDrivenPropertyChecks {
 
   behavior of "Node.Address.checkRelay"
 
