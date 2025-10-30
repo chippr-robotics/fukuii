@@ -44,7 +44,7 @@ object DiscoveryNetwork {
     */
   case class Peer[A](id: Node.Id, address: A) {
     override def toString: String =
-      s"Peer(id = ${id.toHex}, address = $address)"
+      s"Peer(id = ${id.value.toHex}, address = $address)"
 
     lazy val kademliaId: Hash = Node.kademliaId(id)
   }
@@ -323,22 +323,24 @@ object DiscoveryNetwork {
             .evalMap { packet =>
               currentTimeSeconds.flatMap { timestamp =>
                 Packet.unpack(packet) match {
-                  case Attempt.Successful((payload, remotePublicKey)) =>
-                    payload match {
-                      case _ if remotePublicKey != publicKey =>
-                        IO.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
+                  case Attempt.Successful(result) =>
+                    val (payload, remotePublicKey) = result
+                    if (remotePublicKey != publicKey) {
+                      IO.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
+                    } else {
+                      payload match {
+                        case _: Payload.Request =>
+                          // Not relevant on the client channel.
+                          IO.pure(None)
 
-                      case _: Payload.Request =>
-                        // Not relevant on the client channel.
-                        IO.pure(None)
+                        case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
+                          IO(
+                            logger.debug(s"Ignoring expired response from ${channel.to}; ${p.expiration} < $timestamp")
+                          ).as(None)
 
-                      case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
-                        IO(
-                          logger.debug(s"Ignoring expired response from ${channel.to}; ${p.expiration} < $timestamp")
-                        ).as(None)
-
-                      case p: Payload.Response =>
-                        IO.pure(Some(p))
+                        case p: Payload.Response =>
+                          IO.pure(Some(p))
+                      }
                     }
 
                   case Attempt.Failure(err) =>
