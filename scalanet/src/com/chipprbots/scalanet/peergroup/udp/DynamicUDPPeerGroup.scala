@@ -318,7 +318,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
             nettyChannel =>
               val localAddress = nettyChannel.localAddress()
               logger.debug(s"Generated local address for new client is $localAddress")
-              val channel: ChannelImpl = new ChannelImpl(
+              val channel = new ChannelImpl(
                 nettyChannel,
                 localAddress,
                 to.inetSocketAddress,
