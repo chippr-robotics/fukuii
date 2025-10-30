@@ -5,6 +5,7 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 
 import org.apache.pekko.actor._
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
 import org.apache.pekko.testkit.TestActorRef
 import org.apache.pekko.testkit.TestKit
 import org.apache.pekko.testkit.TestProbe
@@ -15,7 +16,6 @@ import scala.concurrent.duration._
 import com.github.blemale.scaffeine.Cache
 import com.github.blemale.scaffeine.Scaffeine
 import com.google.common.testing.FakeTicker
-import com.miguno.akka.testing.VirtualTime
 import org.bouncycastle.util.encoders.Hex
 import org.scalacheck.Arbitrary
 import org.scalacheck.Gen
@@ -127,7 +127,7 @@ class PeerManagerSpec
 
     probe.ref ! PoisonPill
 
-    time.advance(21000) // wait for next scan
+    testScheduler.timePasses(21000.millis) // wait for next scan
 
     eventually {
       peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetDiscoveredNodesInfo)
@@ -157,7 +157,7 @@ class PeerManagerSpec
 
     probe.ref ! PoisonPill
 
-    time.advance(21000) // connect to 2 bootstrap peers
+    testScheduler.timePasses(21000.millis) // connect to 2 bootstrap peers
 
     peerEventBus.expectMsg(Publish(PeerDisconnected(PeerId(probe.ref.path.name))))
   }
@@ -184,7 +184,7 @@ class PeerManagerSpec
     createdPeers.head.probe.expectMsgClass(classOf[PeerActor.ConnectTo])
     createdPeers(1).probe.expectMsgClass(classOf[PeerActor.ConnectTo])
 
-    time.advance(21000) // wait for next scan
+    testScheduler.timePasses(21000.millis) // wait for next scan
 
     eventually {
       peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetDiscoveredNodesInfo)
@@ -588,7 +588,7 @@ class PeerManagerSpec
   }
 
   trait TestSetup {
-    val time = new VirtualTime
+    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     case class TestPeer(peer: Peer, probe: TestProbe)
     var createdPeers: Seq[TestPeer] = Seq.empty
@@ -663,7 +663,7 @@ class PeerManagerSpec
           peerFactory,
           discoveryConfig,
           blacklist,
-          Some(time.scheduler)
+          Some(testScheduler)
         )
       )
     )(system)
@@ -675,7 +675,7 @@ class PeerManagerSpec
     }
 
     def handleInitialNodesDiscovery(): Unit = {
-      time.advance(6000) // wait for bootstrap nodes scan
+      testScheduler.timePasses(6000.millis) // wait for bootstrap nodes scan
 
       peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetDiscoveredNodesInfo)
       peerDiscoveryManager.reply(PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes))

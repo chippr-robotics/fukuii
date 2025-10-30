@@ -18,7 +18,6 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
-import com.miguno.akka.testing.VirtualTime
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.util.encoders.Hex
@@ -89,7 +88,7 @@ class PeerActorSpec
     rlpxConnection.watch(peer)
 
     (0 to 3).foreach { _ =>
-      time.advance(5.seconds)
+      testScheduler.timePasses(5.seconds)
       rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
       rlpxConnection.reply(RLPxConnectionHandler.ConnectionFailed)
     }
@@ -100,8 +99,8 @@ class PeerActorSpec
   it should "try to reconnect on broken rlpx connection" in new NodeStatusSetup with HandshakerSetup {
     implicit override lazy val system = ActorSystem("PeerActorSpec_System")
     override def protocol: Capability = Capability.ETH63
-
-    val time = new VirtualTime
+    
+    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val peerMessageBus = system.actorOf(PeerEventBusActor.props)
     var rlpxConnection = TestProbe() // var as we actually need new instances
@@ -119,7 +118,7 @@ class PeerActorSpec
           peerMessageBus,
           knownNodesManager.ref,
           false,
-          Some(time.scheduler),
+          Some(testScheduler),
           handshaker
         )
       )
@@ -136,7 +135,7 @@ class PeerActorSpec
 
     rlpxConnection.ref ! PoisonPill
     peer.unwatch(rlpxConnection.ref)
-    time.advance(2.seconds)
+    testScheduler.timePasses(2.seconds)
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
   }
 
@@ -355,7 +354,7 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.HandleConnection])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
-    time.advance(5.seconds)
+    testScheduler.timePasses(5.seconds)
     rlpxConnection.expectMsg(
       Timeouts.normalTimeout,
       RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.TimeoutOnReceivingAMessage))
@@ -500,7 +499,7 @@ class PeerActorSpec
     manager.expectNoMessage()
 
     // terminated only after peerConf.disconnectPoisonPillTimeout
-    time.advance(peerConf.disconnectPoisonPillTimeout)
+    testScheduler.timePasses(peerConf.disconnectPoisonPillTimeout)
 
     manager.expectTerminated(peer)
   }
@@ -599,8 +598,8 @@ class PeerActorSpec
     val daoForkBlockChainTotalDifficulty: BigInt = BigInt("39490964433395682584")
 
     val rlpxConnection: TestProbe = TestProbe()
-
-    val time = new VirtualTime
+    
+    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val peerMessageBus: ActorRef = system.actorOf(PeerEventBusActor.props)
 
@@ -615,7 +614,7 @@ class PeerActorSpec
           peerMessageBus,
           knownNodesManager.ref,
           false,
-          Some(time.scheduler),
+          Some(testScheduler),
           handshaker
         )
       )

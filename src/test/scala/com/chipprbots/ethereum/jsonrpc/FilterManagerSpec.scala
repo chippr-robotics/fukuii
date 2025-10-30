@@ -10,7 +10,6 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
-import com.miguno.akka.testing.VirtualTime
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
@@ -461,7 +460,7 @@ class FilterManagerSpec
     // the filter should work
     getLogsRes.txHashes shouldBe pendingTxs.map(_.tx.hash)
 
-    time.advance(15.seconds)
+    testScheduler.timePasses(15.seconds)
 
     // the filter should no longer exist
     val getLogsRes2 =
@@ -489,8 +488,8 @@ class FilterManagerSpec
     }
 
     val keyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
-
-    val time = new VirtualTime
+    
+    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val blockchainReader: BlockchainReader = mock[BlockchainReader]
     val blockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -529,7 +528,7 @@ class FilterManagerSpec
           pendingTransactionsManager.ref,
           config,
           txPoolConfig,
-          Some(time.scheduler)
+          Some(testScheduler)
         )
       )
     )
