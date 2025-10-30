@@ -86,6 +86,7 @@ class BlockImporter(
 
     // We don't want to lose a checkpoint
     case nc @ NewCheckpoint(_) if state.importing =>
+      implicit val ec = context.dispatcher
       context.system.scheduler.scheduleOnce(1.second, self, nc)
 
     case NewCheckpoint(block) if !state.importing =>

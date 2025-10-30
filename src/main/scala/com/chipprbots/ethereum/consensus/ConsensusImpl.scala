@@ -73,11 +73,11 @@ class ConsensusImpl(
 
     val consensusResult: IO[ConsensusResult] =
       if (currentBestBlock.isParentOf(branch.head)) {
-        IO.delay(importToTop(branch, currentBestBlockWeight)).evalOn(blockExecutionScheduler)
+        IO.delay(importToTop(branch, currentBestBlockWeight)).evalOn(blockExecutionScheduler.compute)
       } else {
         IO
           .delay(importToNewBranch(branch, currentBestBlock.number, currentBestBlockWeight))
-          .evalOn(blockExecutionScheduler)
+          .evalOn(blockExecutionScheduler.compute)
       }
 
     consensusResult.flatTap(result => IO(measureBlockMetrics(result)))
@@ -165,7 +165,7 @@ class ConsensusImpl(
             s"Error while trying to reorganise chain: $err"
           )
       },
-      SelectedNewBestBranch.tupled
+      { case (oldBranch, newBranch, weights) => SelectedNewBestBranch(oldBranch, newBranch, weights) }
     )
   }
 

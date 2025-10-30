@@ -84,7 +84,8 @@ class PeerManagerActor(
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerHandshaked)
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(context.system.scheduler)
-  implicit val monix: MonixScheduler = MonixScheduler(context.dispatcher)
+  // CE3: Using global IORuntime for actor operations
+  implicit val ioRuntime: IORuntime = IORuntime.global
 
   override val supervisorStrategy: OneForOneStrategy =
     OneForOneStrategy() { case _ =>
@@ -101,13 +102,15 @@ class PeerManagerActor(
       stash()
   }
 
-  private def scheduleNodesUpdate(): Unit =
+  private def scheduleNodesUpdate(): Unit = {
+    implicit val ec = context.dispatcher
     scheduler.scheduleWithFixedDelay(
       peerConfiguration.updateNodesInitialDelay,
       peerConfiguration.updateNodesInterval,
       peerDiscoveryManager,
       PeerDiscoveryManager.GetDiscoveredNodesInfo
     )
+  }
 
   private def listening(connectedPeers: ConnectedPeers): Receive =
     handleCommonMessages(connectedPeers)

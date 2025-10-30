@@ -118,7 +118,7 @@ class ConsensusAdapter(
           )
         case Right(_) => IO(log.debug("Block with hash {} validated successfully", Hex.toHexString(block.hash.toArray)))
       }
-      .evalOn(validationScheduler)
+      .evalOn(validationScheduler.compute)
 
   private def isBlockADuplicate(block: BlockHeader, currentBestBlockNumber: BigInt): Boolean = {
     val hash = block.hash
