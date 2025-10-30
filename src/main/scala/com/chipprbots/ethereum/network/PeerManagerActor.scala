@@ -11,6 +11,7 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import cats.syntax.parallel._
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -344,7 +345,7 @@ class PeerManagerActor(
       peerStatistics
         .askFor[PeerStatisticsActor.StatsForAll](PeerStatisticsActor.GetStatsForAll(window))
         .map(PruneIncomingPeers)
-        .runToFuture
+        .unsafeToFuture()
         .pipeTo(self)
 
     case PruneIncomingPeers(PeerStatisticsActor.StatsForAll(stats)) =>
@@ -376,18 +377,18 @@ class PeerManagerActor(
     prunedConnectedPeers
   }
 
-  private def getPeers(peers: Set[Peer]): Task[Peers] =
-    Task
-      .parSequence(peers.map(getPeerStatus))
+  private def getPeers(peers: Set[Peer]): IO[Peers] =
+    peers.toList
+      .parTraverse(getPeerStatus)
       .map(_.flatten.toMap)
       .map(Peers.apply)
 
-  private def getPeerStatus(peer: Peer): Task[Option[(Peer, PeerActor.Status)]] = {
+  private def getPeerStatus(peer: Peer): IO[Option[(Peer, PeerActor.Status)]] = {
     implicit val timeout: Timeout = Timeout(2.seconds)
     peer.ref
       .askFor[PeerActor.StatusResponse](PeerActor.GetStatus)
       .map(sr => Some((peer, sr.status)))
-      .onErrorHandle(_ => None)
+      .handleError(_ => None)
   }
 
   private def validateConnection(

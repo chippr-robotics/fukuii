@@ -201,25 +201,19 @@ class PeerDiscoveryManager(
       recipient: ActorRef
   ): Unit = maybeRandomNodes.foreach { consumer =>
     pipeToRecipient[RandomNodeInfo](recipient) {
-      consumer.pull
-        .flatMap {
-          case Left(None) =>
-            Task.raiseError(new IllegalStateException("The random node source is finished."))
-          case Left(Some(ex)) =>
-            Task.raiseError(ex)
-          case Right(node) =>
-            Task.pure(node)
-        }
-        .map(RandomNodeInfo(_))
+      consumer.pull.uncons1.flatMap {
+        case None =>
+          IO.raiseError(new IllegalStateException("The random node source is finished."))
+        case Some((node, _)) =>
+          IO.pure(node)
+      }.compile.lastOrError.map(RandomNodeInfo(_))
     }
   }
 
-  def pipeToRecipient[T](recipient: ActorRef)(task: Task[T]): Unit =
+  def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit =
     task
-      .doOnFinish {
-        _.fold(Task.unit)(ex => Task(log.error(ex, "Failed to relay result to recipient.")))
-      }
-      .runToFuture
+      .handleErrorWith(ex => IO(log.error(ex, "Failed to relay result to recipient.")).flatMap(_ => IO.raiseError(ex)))
+      .unsafeToFuture()
       .pipeTo(recipient)
 
   def toNode(enode: ENode): Node =
