@@ -86,7 +86,7 @@ object DiscoveryNetwork {
         for {
           cancelToken <- Deferred[IO, Unit]
           _ <- Stream.repeatEval(peerGroup.nextServerEvent)
-            .interruptWhen(cancelToken)
+            .interruptWhen(cancelToken.get.attempt)
             .evalMap {
               case ChannelCreated(channel, release) =>
                 handleChannel(handler, channel, cancelToken)
@@ -111,7 +111,7 @@ object DiscoveryNetwork {
           cancelToken: Deferred[IO, Unit]
       ): IO[Unit] = {
         Stream.repeatEval(channel.nextChannelEvent)
-          .interruptWhen(cancelToken)
+          .interruptWhen(cancelToken.get.attempt)
           .timeout(config.messageExpiration) // Messages older than this would be ignored anyway.
           .evalMap {
             case MessageReceived(packet) =>
@@ -322,9 +322,9 @@ object DiscoveryNetwork {
             }
             .evalMap { packet =>
               currentTimeSeconds.flatMap { timestamp =>
-                Packet.unpack(packet) match {
-                  case Attempt.Successful(result) =>
-                    val (payload, remotePublicKey) = result
+                val unpackResult = Packet.unpack(packet)
+                unpackResult.toEither match {
+                  case Right((payload, remotePublicKey)) =>
                     if (remotePublicKey != publicKey) {
                       IO.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
                     } else {
@@ -343,7 +343,7 @@ object DiscoveryNetwork {
                       }
                     }
 
-                  case Attempt.Failure(err) =>
+                  case Left(err) =>
                     IO.raiseError(
                       new IllegalArgumentException(s"Failed to unpack message: $err")
                     )
