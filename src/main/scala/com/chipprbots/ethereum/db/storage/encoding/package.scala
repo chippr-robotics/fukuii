@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.db.storage
 import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.StoredNode
 import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.StoredNodeSnapshot
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.{given, _}
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 
 package object encoding {
@@ -26,25 +26,34 @@ package object encoding {
 
   private val storedNodeEncDec = new RLPDecoder[StoredNode] with RLPEncoder[StoredNode] {
     override def decode(rlp: RLPEncodeable): StoredNode = rlp match {
-      case RLPList(nodeEncoded, references, lastUsedByBlock) => StoredNode(nodeEncoded, references, lastUsedByBlock)
+      case RLPList(nodeEncoded, references, lastUsedByBlock) => 
+        StoredNode(
+          byteStringFromEncodeable(nodeEncoded), 
+          intFromEncodeable(references), 
+          bigIntFromEncodeable(lastUsedByBlock)
+        )
       case _ => throw new RuntimeException("Error when decoding stored node")
     }
 
-    override def encode(obj: StoredNode): RLPEncodeable = RLPList(obj.nodeEncoded, obj.references, obj.lastUsedByBlock)
+    override def encode(obj: StoredNode): RLPEncodeable = RLPList(
+      toEncodeable(obj.nodeEncoded), 
+      toEncodeable(obj.references), 
+      toEncodeable(obj.lastUsedByBlock)
+    )
   }
 
   private val snapshotEncDec = new RLPDecoder[StoredNodeSnapshot] with RLPEncoder[StoredNodeSnapshot] {
     override def decode(rlp: RLPEncodeable): StoredNodeSnapshot = rlp match {
       case RLPList(nodeHash, storedNode) =>
-        StoredNodeSnapshot(byteStringFromEncodeable(nodeHash), Some(storedNodeFromBytes(storedNode)))
+        StoredNodeSnapshot(byteStringFromEncodeable(nodeHash), Some(storedNodeFromBytes(byteArrayFromEncodeable(storedNode))))
       case RLPValue(nodeHash) => StoredNodeSnapshot(byteStringFromEncodeable(nodeHash), None)
       case _                  => throw new RuntimeException("Error when decoding stored nodes")
     }
 
     override def encode(objs: StoredNodeSnapshot): RLPEncodeable = objs match {
       case StoredNodeSnapshot(nodeHash, Some(storedNode)) =>
-        RLPList(byteStringToEncodeable(nodeHash), storedNodeToBytes(storedNode))
-      case StoredNodeSnapshot(nodeHash, None) => RLPValue(byteStringToEncodeable(nodeHash))
+        RLPList(toEncodeable(nodeHash), toEncodeable(storedNodeToBytes(storedNode)))
+      case StoredNodeSnapshot(nodeHash, None) => RLPValue(nodeHash.toArray[Byte])
     }
   }
 }

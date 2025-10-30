@@ -226,21 +226,21 @@ object BlockHeaderImplicits {
             checkpointOptionDecoder.decode(encodedCheckpoint)
           )
           BlockHeader(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce,
+            byteStringFromEncodeable(parentHash),
+            byteStringFromEncodeable(ommersHash),
+            byteStringFromEncodeable(beneficiary),
+            byteStringFromEncodeable(stateRoot),
+            byteStringFromEncodeable(transactionsRoot),
+            byteStringFromEncodeable(receiptsRoot),
+            byteStringFromEncodeable(logsBloom),
+            bigIntFromEncodeable(difficulty),
+            bigIntFromEncodeable(number),
+            bigIntFromEncodeable(gasLimit),
+            bigIntFromEncodeable(gasUsed),
+            longFromEncodeable(unixTimestamp),
+            byteStringFromEncodeable(extraData),
+            byteStringFromEncodeable(mixHash),
+            byteStringFromEncodeable(nonce),
             extraFields
           )
 
@@ -262,56 +262,21 @@ object BlockHeaderImplicits {
               nonce
             ) =>
           BlockHeader(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce
-          )
-
-        case RLPList(
-              parentHash,
-              ommersHash,
-              beneficiary,
-              stateRoot,
-              transactionsRoot,
-              receiptsRoot,
-              logsBloom,
-              difficulty,
-              number,
-              gasLimit,
-              gasUsed,
-              unixTimestamp,
-              extraData,
-              mixHash,
-              nonce
-            ) =>
-          BlockHeader(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce
+            byteStringFromEncodeable(parentHash),
+            byteStringFromEncodeable(ommersHash),
+            byteStringFromEncodeable(beneficiary),
+            byteStringFromEncodeable(stateRoot),
+            byteStringFromEncodeable(transactionsRoot),
+            byteStringFromEncodeable(receiptsRoot),
+            byteStringFromEncodeable(logsBloom),
+            bigIntFromEncodeable(difficulty),
+            bigIntFromEncodeable(number),
+            bigIntFromEncodeable(gasLimit),
+            bigIntFromEncodeable(gasUsed),
+            longFromEncodeable(unixTimestamp),
+            byteStringFromEncodeable(extraData),
+            byteStringFromEncodeable(mixHash),
+            byteStringFromEncodeable(nonce)
           )
 
         case _ =>
