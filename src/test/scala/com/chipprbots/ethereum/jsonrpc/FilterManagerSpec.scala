@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
 import org.apache.pekko.pattern.ask
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
 import org.apache.pekko.testkit.TestActorRef
 import org.apache.pekko.testkit.TestKit
 import org.apache.pekko.testkit.TestProbe

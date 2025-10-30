@@ -5,6 +5,7 @@ import java.net.URI
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
 import org.apache.pekko.testkit.TestProbe
 
 import scala.concurrent.duration._
