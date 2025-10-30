@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.sync.util
 
-import akka.actor.ActorRef
-import akka.actor.typed
-import akka.actor.typed.scaladsl.adapter._
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.typed
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.util.ByteString
 
 import cats.effect.Resource
 

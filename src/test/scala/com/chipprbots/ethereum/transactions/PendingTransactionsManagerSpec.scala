@@ -2,11 +2,11 @@ package com.chipprbots.ethereum.transactions
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.pattern.ask
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 

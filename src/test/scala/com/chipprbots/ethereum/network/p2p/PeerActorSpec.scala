@@ -5,15 +5,15 @@ import java.net.URI
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.PoisonPill
-import akka.actor.Props
-import akka.actor.Terminated
-import akka.testkit.TestActorRef
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.PoisonPill
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Terminated
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.language.postfixOps

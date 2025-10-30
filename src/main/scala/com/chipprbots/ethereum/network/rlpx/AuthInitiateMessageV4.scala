@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.rlpx
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.math.ec.ECPoint
 

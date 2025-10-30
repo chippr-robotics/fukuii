@@ -2,10 +2,10 @@ package com.chipprbots.ethereum.logger
 
 import java.util.concurrent.atomic.AtomicInteger
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.dispatch._
-import akka.event.Logging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.dispatch._
+import org.apache.pekko.event.Logging
 
 import com.typesafe.config.Config
 

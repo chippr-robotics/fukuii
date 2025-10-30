@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalactic.anyvals.PosInt
 import org.scalatest.EitherValues

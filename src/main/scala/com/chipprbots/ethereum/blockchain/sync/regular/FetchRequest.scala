@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.ActorRef
-import akka.pattern.ask
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 

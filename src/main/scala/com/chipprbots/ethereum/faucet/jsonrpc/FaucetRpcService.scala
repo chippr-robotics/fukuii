@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.pattern.RetrySupport
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.pattern.RetrySupport
+import org.apache.pekko.util.Timeout
 
 import com.chipprbots.ethereum.faucet.FaucetConfig
 import com.chipprbots.ethereum.faucet.FaucetConfigBuilder

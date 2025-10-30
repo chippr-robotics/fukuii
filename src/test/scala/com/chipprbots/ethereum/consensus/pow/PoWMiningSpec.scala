@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.consensus.pow
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalamock.scalatest.MockFactory

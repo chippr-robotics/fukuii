@@ -26,14 +26,17 @@ case object Secp256k1 extends KeyType {
   val curveName = "secp256k1"
   val n = 2
   
-  // Codec for the singleton Secp256k1 - no data to encode/decode, just returns the constant
-  given Codec[Secp256k1.type] = constCodec(Secp256k1)
+  // Codec for the singleton Secp256k1 - empty codec that just returns the object
+  given Codec[Secp256k1.type] = Codec(
+    _ => Attempt.successful(BitVector.empty),
+    _ => Attempt.successful(DecodeResult(Secp256k1, BitVector.empty))
+  )
 }
 
 object KeyType {
   // scodec 2.x: Discriminated codec using given instances
   given Codec[KeyType] = discriminated[KeyType].by(uint8)
-    .typecase(2, Codec[Secp256k1.type])
+    .typecase(2, summon[Codec[Secp256k1.type]])
 }
 
 private[scalanet] object DynamicTLSExtension {

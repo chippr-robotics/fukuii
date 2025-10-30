@@ -4,9 +4,9 @@ import java.time.Duration
 import java.util.Date
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 import cats.syntax.parallel._

@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.actor.ActorLogging
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid

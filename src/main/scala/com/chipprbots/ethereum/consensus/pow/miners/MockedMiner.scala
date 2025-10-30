@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.actor.Status.Failure
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Status.Failure
+import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 
@@ -40,7 +40,7 @@ class MockedMiner(
 ) extends Actor
     with ActorLogging {
   import configBuilder._
-  import akka.pattern.pipe
+  import org.apache.pekko.pattern.pipe
   implicit val scheduler: IORuntime = IORuntime(context.dispatcher)
 
   override def receive: Receive = stopped

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.extvm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.google.protobuf.{ByteString => GByteString}
 

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpecLike

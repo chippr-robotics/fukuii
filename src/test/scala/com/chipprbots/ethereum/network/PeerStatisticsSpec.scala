@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.network
 
-import akka.actor._
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
+import org.apache.pekko.actor._
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
 
 import scala.concurrent.duration._
 

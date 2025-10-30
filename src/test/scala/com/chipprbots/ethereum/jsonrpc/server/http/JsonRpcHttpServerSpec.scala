@@ -3,20 +3,20 @@ package com.chipprbots.ethereum.jsonrpc.server.http
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.model._
-import akka.http.scaladsl.model.headers.HttpOrigin
-import akka.http.scaladsl.model.headers.Origin
-import akka.http.scaladsl.model.headers._
-import akka.http.scaladsl.server.Route
-import akka.http.scaladsl.testkit.ScalatestRouteTest
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.scaladsl.model._
+import org.apache.pekko.http.scaladsl.model.headers.HttpOrigin
+import org.apache.pekko.http.scaladsl.model.headers.Origin
+import org.apache.pekko.http.scaladsl.model.headers._
+import org.apache.pekko.http.scaladsl.server.Route
+import org.apache.pekko.http.scaladsl.testkit.ScalatestRouteTest
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 
-import ch.megard.akka.http.cors.scaladsl.model.HttpOriginMatcher
+import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.json4s.DefaultFormats
 import org.json4s.Extraction
 import org.json4s.JsonAST.JInt

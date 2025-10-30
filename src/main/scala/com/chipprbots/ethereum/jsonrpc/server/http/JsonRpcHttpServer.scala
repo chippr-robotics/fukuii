@@ -3,10 +3,10 @@ package com.chipprbots.ethereum.jsonrpc.server.http
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.model._
-import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.server._
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.scaladsl.model._
+import org.apache.pekko.http.scaladsl.server.Directives._
+import org.apache.pekko.http.scaladsl.server._
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -15,12 +15,11 @@ import cats.syntax.all._
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
-import ch.megard.akka.http.cors.javadsl.CorsRejection
-import ch.megard.akka.http.cors.scaladsl.CorsDirectives._
-import ch.megard.akka.http.cors.scaladsl.model.HttpOriginMatcher
-import ch.megard.akka.http.cors.scaladsl.settings.CorsSettings
+import org.apache.pekko.http.cors.javadsl.CorsRejection
+import org.apache.pekko.http.cors.scaladsl.CorsDirectives._
+import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
+import org.apache.pekko.http.cors.scaladsl.settings.CorsSettings
 import com.typesafe.config.{Config => TypesafeConfig}
-import de.heikoseeberger.akkahttpjson4s.Json4sSupport
 import org.json4s.DefaultFormats
 import org.json4s.Formats
 import org.json4s.JInt

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.utils
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import boopickle.DefaultBasic._
 import boopickle.Pickler

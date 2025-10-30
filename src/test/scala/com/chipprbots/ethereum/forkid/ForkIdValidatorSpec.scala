@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.forkid
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime

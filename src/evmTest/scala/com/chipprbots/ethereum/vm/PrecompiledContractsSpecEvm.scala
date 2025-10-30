@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.vm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto._
 import com.chipprbots.ethereum.domain.SignedTransaction.{FirstByteOfAddress, LastByteOfAddress}

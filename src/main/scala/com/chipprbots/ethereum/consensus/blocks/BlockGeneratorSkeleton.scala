@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.consensus.blocks
 
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig

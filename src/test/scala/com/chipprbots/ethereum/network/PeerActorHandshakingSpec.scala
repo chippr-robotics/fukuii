@@ -3,11 +3,11 @@ package com.chipprbots.ethereum.network
 import java.net.InetSocketAddress
 import java.net.URI
 
-import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.testkit.TestActorRef
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.Props
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import com.miguno.akka.testing.VirtualTime
 import org.scalatest.flatspec.AnyFlatSpec

@@ -2,38 +2,32 @@ import sbt._
 
 object Dependencies {
 
-  private val akkaVersion = "2.6.21" // Updated for Scala 3 support - last 2.6.x release compatible with Akka HTTP 10.5.x
+  // Apache Pekko - Scala 3 compatible fork of Akka
+  private val pekkoVersion = "1.2.1" // Latest Pekko version with Scala 3 support
+  private val pekkoHttpVersion = "1.3.0" // Latest Pekko HTTP version
 
   val akkaUtil: Seq[ModuleID] =
     Seq(
-      "com.typesafe.akka" %% "akka-actor" % akkaVersion
+      "org.apache.pekko" %% "pekko-actor" % pekkoVersion
     )
 
   val akka: Seq[ModuleID] =
     Seq(
-      "com.typesafe.akka" %% "akka-actor" % akkaVersion,
-      "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-slf4j" % akkaVersion,
-      "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-testkit" % akkaVersion,
-      "com.typesafe.akka" %% "akka-actor-testkit-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-stream" % akkaVersion
-      // NOTE: akka-mock-scheduler 0.5.5 is not available for Scala 3
-      // Commented out temporarily - tests that use this will need to be updated or skipped
-      // "com.miguno.akka" %% "akka-mock-scheduler" % "0.5.5" % "it,test"
+      "org.apache.pekko" %% "pekko-actor" % pekkoVersion,
+      "org.apache.pekko" %% "pekko-actor-typed" % pekkoVersion,
+      "org.apache.pekko" %% "pekko-slf4j" % pekkoVersion,
+      "org.apache.pekko" %% "pekko-testkit" % pekkoVersion % "it,test",
+      "org.apache.pekko" %% "pekko-actor-testkit-typed" % pekkoVersion % "it,test",
+      "org.apache.pekko" %% "pekko-stream" % pekkoVersion
     )
 
   val akkaHttp: Seq[ModuleID] = {
-    val akkaHttpVersion = "10.5.3" // Updated for Scala 3 support (10.5.x series)
-
     Seq(
-      // NOTE: Akka HTTP dependencies commented out for Scala 3 compatibility
-      // Akka is Scala 2.x only - migration to Apache Pekko required for Scala 3
-      // See: https://pekko.apache.org/docs/pekko/current/project/migration-guides.html
-      // "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
-      // "ch.megard" %% "akka-http-cors" % "1.2.0",
-      // "de.heikoseeberger" %% "akka-http-json4s" % "1.39.2",
-      // "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % "it,test"
+      "org.apache.pekko" %% "pekko-http" % pekkoHttpVersion,
+      "org.apache.pekko" %% "pekko-http-cors" % pekkoHttpVersion,
+      "org.apache.pekko" %% "pekko-http-testkit" % pekkoHttpVersion % "it,test",
+      // Note: pekko-http-json4s not yet available, using custom JSON marshalling with json4s
+      "org.json4s" %% "json4s-native" % "4.0.7"
     )
   }
 

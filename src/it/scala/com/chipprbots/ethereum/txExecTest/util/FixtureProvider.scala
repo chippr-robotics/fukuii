@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.txExecTest.util
 
 import java.io.Closeable
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.io.Source
 import scala.util.Try

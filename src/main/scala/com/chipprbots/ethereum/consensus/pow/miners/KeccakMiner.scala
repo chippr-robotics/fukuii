@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Future
 import cats.effect.unsafe.IORuntime

@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.mpt
 
 import java.util
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.rlp.RLPEncodeable

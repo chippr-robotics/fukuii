@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.network.rlpx
 
 import java.io.IOException
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer

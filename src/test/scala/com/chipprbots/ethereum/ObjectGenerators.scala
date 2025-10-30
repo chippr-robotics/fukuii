@@ -3,7 +3,7 @@ package com.chipprbots.ethereum
 import java.math.BigInteger
 import java.security.SecureRandom
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalacheck.Arbitrary

@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
 
 import scala.collection.immutable.Queue
 

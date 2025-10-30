@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.handshaker
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage

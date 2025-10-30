@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.typed.ActorRef
-import akka.util.ByteString
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator.CoordinatorProtocol
 import com.chipprbots.ethereum.domain.Block

@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.rpcTest
 import java.math.BigInteger
 import java.security.SecureRandom
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.jdk.CollectionConverters._
 import scala.language.implicitConversions

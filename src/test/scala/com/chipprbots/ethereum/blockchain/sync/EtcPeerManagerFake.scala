@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.blockchain.sync
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import cats.effect.Deferred
 import cats.effect.IO

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.must.Matchers

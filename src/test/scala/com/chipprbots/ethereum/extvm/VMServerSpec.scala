@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.extvm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.Ignore

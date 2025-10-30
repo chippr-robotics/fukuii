@@ -2,8 +2,8 @@ package com.chipprbots.ethereum.utils
 
 import java.net.InetSocketAddress
 
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._

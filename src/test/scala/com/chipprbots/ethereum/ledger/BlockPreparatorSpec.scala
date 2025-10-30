@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
-import akka.util.ByteString.{empty => bEmpty}
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.ByteString.{empty => bEmpty}
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters

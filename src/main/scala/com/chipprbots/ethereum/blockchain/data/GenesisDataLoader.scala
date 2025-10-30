@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.blockchain.data
 
 import java.io.FileNotFoundException
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.io.Source
 import scala.util.Failure

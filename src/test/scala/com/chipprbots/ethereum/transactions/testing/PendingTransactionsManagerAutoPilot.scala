@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.transactions.testing
-import akka.actor.ActorRef
-import akka.testkit.TestActor.AutoPilot
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender

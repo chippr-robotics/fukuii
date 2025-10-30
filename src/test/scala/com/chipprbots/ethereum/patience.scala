@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum
 
-import akka.util.Timeout
+import org.apache.pekko.util.Timeout
 
 import scala.concurrent.duration._
 

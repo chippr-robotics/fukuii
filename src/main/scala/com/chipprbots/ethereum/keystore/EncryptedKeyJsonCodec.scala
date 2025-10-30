@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.keystore
 
 import java.util.UUID
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Try
 

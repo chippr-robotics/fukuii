@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -74,7 +74,7 @@ class PendingTransactionsManager(
     with ActorLogging {
 
   import PendingTransactionsManager._
-  import akka.pattern.ask
+  import org.apache.pekko.pattern.ask
 
   metrics.gauge(
     "transactions.pool.size.gauge",

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.db.storage
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import boopickle.Default._
 

@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import java.time.Duration
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Try
 
