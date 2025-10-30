@@ -74,7 +74,10 @@ object DefaultCodecs {
     ??? // TODO: Needs proper implementation for Scala 3
 
   // Use discriminated builder pattern for Scala 3 scodec 2.x
+  // TODO: Implement dependent codecs before enabling payloadCodec
   implicit val payloadCodec: Codec[Payload] =
+    ??? // Depends on unimplemented codecs above
+    /*
     discriminated[Payload].by(uint4)
       .subcaseP(1) { case p: Ping => p }(pingCodec)
       .subcaseP(2) { case p: Pong => p }(pongCodec)
@@ -82,4 +85,5 @@ object DefaultCodecs {
       .subcaseP(4) { case n: Neighbors => n }(neighborsCodec)
       .subcaseP(5) { case e: ENRRequest => e }(enrRequestCodec)
       .subcaseP(6) { case e: ENRResponse => e }(enrResponseCodec)
+    */
 }
