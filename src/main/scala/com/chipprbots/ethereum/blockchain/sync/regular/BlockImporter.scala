@@ -253,8 +253,6 @@ class BlockImporter(
           case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
-            Running
-            ()
           case BlockImportFailedDueToMissingNode(missingNodeException) =>
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail =>
