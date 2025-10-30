@@ -247,7 +247,12 @@ lazy val rlp = {
     .settings(
       libraryDependencies ++=
         Dependencies.akkaUtil ++
-          Dependencies.testing
+          Dependencies.testing,
+      // Allow inline class duplication for RLP derivation
+      scalacOptions ++= (CrossVersion.partialVersion(scalaVersion.value) match {
+        case Some((3, _)) => Seq("-Wconf:msg=New anonymous class definition will be duplicated at each inline site:s")
+        case _ => Seq.empty
+      })
     )
 
   rlp
