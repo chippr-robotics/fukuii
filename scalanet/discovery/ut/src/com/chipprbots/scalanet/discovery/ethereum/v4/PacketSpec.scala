@@ -1,18 +1,19 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import com.chipprbots.scalanet.discovery.crypto.{Signature, PrivateKey, PublicKey}
+import com.chipprbots.scalanet.discovery.crypto.{Signature, PrivateKey, PublicKey, SigAlg}
 import com.chipprbots.scalanet.discovery.hash.{Hash, Keccak256}
 import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs
 import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.MockSigAlg
-import org.scalatest._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 import scodec.{Attempt, Codec, Err}
 import scodec.bits.BitVector
 import scala.util.Random
 
-class PacketSpec extends FlatSpec with Matchers {
+class PacketSpec extends AnyFlatSpec with Matchers {
 
   import DefaultCodecs._
-  implicit val sigalg = new MockSigAlg()
+  implicit val sigalg: SigAlg = new MockSigAlg()
 
   implicit val packetCodec = Packet.packetCodec(allowDecodeOverMaxPacketSize = false)
 

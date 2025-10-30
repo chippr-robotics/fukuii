@@ -45,7 +45,7 @@ class MockSigAlg extends SigAlg {
   }
 
   override def toPublicKey(privateKey: PrivateKey): PublicKey =
-    PublicKey(privateKey)
+    PublicKey(privateKey.value)
 
   override def compressPublicKey(publicKey: PublicKey): PublicKey =
     publicKey

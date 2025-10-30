@@ -13,8 +13,11 @@ import com.chipprbots.scalanet.kademlia.Xor
 import com.chipprbots.scalanet.NetUtils.aRandomAddress
 import java.net.InetSocketAddress
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 
-import org.scalatest._
+import org.scalatest.flatspec.AsyncFlatSpec
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.Inspectors
 import org.scalatest.prop.TableDrivenPropertyChecks
 import scala.concurrent.duration._
 import scala.util.Random
@@ -26,7 +29,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   import DefaultCodecs._
 
   def test(fixture: Fixture) =
-    fixture.test.timeout(15.seconds).runToFuture
+    fixture.test.timeout(15.seconds).unsafeToFuture()
 
   behavior of "isBonded"
 
@@ -353,7 +356,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
         ping = _ => _ => IO.pure(Some(None)),
-        enrRequest = _ => _ => Task(Some(remoteENR))
+        enrRequest = _ => _ => IO.pure(Some(remoteENR))
       )
       val previousAddress = aRandomAddress()
       val previousNode = makeNode(remotePublicKey, previousAddress)
@@ -384,10 +387,10 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         ping = _ => _ => IO.pure(Some(None)),
         enrRequest = _ =>
           _ =>
-            Task {
+            IO.delay {
               callCount.increment()
               Some(remoteENR)
-            }.delayExecution(100.millis) // Delay so the first is still running when the second is started.
+            }.delayBy(100.millis) // Delay so the first is still running when the second is started.
       )
 
       override val test = for {
@@ -404,7 +407,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
         ping = _ => _ => IO.pure(Some(None)),
-        enrRequest = _ => _ => Task(Some(remoteENR))
+        enrRequest = _ => _ => IO.pure(Some(remoteENR))
       )
       override val test = for {
         _ <- service.fetchEnr(remotePeer)
@@ -422,7 +425,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
         ping = _ => _ => IO.pure(Some(None)),
-        enrRequest = _ => _ => Task(Some(remoteENR.copy(signature = Signature(remoteENR.signature.reverse))))
+        enrRequest = _ => _ => IO.pure(Some(remoteENR.copy(signature = Signature(remoteENR.signature.reverse))))
       )
       override val test = for {
         _ <- stateRef.update(_.withEnrAndAddress(remotePeer, remoteENR, remoteNode.address))
@@ -440,7 +443,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
         ping = _ => _ => IO.pure(Some(None)),
-        enrRequest = _ => _ => Task(None)
+        enrRequest = _ => _ => IO.pure(None)
       )
       override val test = for {
         _ <- stateRef.update(_.withLastPongTimestamp(remotePeer, System.currentTimeMillis))
@@ -470,7 +473,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
 
     override lazy val rpc = unimplementedRPC.copy(
       ping = _ => _ => IO.pure(Some(None)),
-      enrRequest = _ => _ => Task(Some(remoteENR))
+      enrRequest = _ => _ => IO.pure(Some(remoteENR))
     )
 
     override def test =
@@ -585,8 +588,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
   it should "respond with the ENR sequence and bond with the caller after enrollment" in test {
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
-        ping = _ => _ => Task(Some(None)),
-        enrRequest = _ => _ => Task(Some(remoteENR))
+        ping = _ => _ => IO.pure(Some(None)),
+        enrRequest = _ => _ => IO.pure(Some(remoteENR))
       )
       override val test = for {
         _ <- stateRef.update(_.setEnrolled)
@@ -694,8 +697,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
             ((remoteNode -> remoteENR) +: randomNodes).find(_._1.id == peer.id).map(_._2)
           },
       findNode = _ =>
-        targetPublicKey =>
-          Task {
+        (targetPublicKey: PublicKey) =>
+          IO.delay {
             expectedTarget.foreach(targetPublicKey shouldBe _)
           } >>
             IO.pure {
@@ -1115,17 +1118,17 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
 
 object DiscoveryServiceSpec {
   import DefaultCodecs._
+  import com.chipprbots.scalanet.discovery.crypto.SigAlg
 
-  implicit val scheduler: Scheduler = Scheduler.Implicits.global
-  implicit val sigalg = new MockSigAlg()
+  implicit val sigalg: SigAlg = new MockSigAlg()
 
   /** Placeholder implementation that throws if any RPC method is called. */
   case class StubDiscoveryRPC(
-      ping: DiscoveryRPC.Call[Peer[InetSocketAddress], DiscoveryRPC.Proc.Ping] = _ =>
+      ping: Peer[InetSocketAddress] => Option[Long] => IO[Option[Option[Long]]] = _ => _ =>
         sys.error("Didn't expect to call ping"),
-      findNode: DiscoveryRPC.Call[Peer[InetSocketAddress], DiscoveryRPC.Proc.FindNode] = _ =>
+      findNode: Peer[InetSocketAddress] => PublicKey => IO[Option[Seq[Node]]] = _ => _ =>
         sys.error("Didn't expect to call findNode"),
-      enrRequest: DiscoveryRPC.Call[Peer[InetSocketAddress], DiscoveryRPC.Proc.ENRRequest] = _ =>
+      enrRequest: Peer[InetSocketAddress] => Unit => IO[Option[EthereumNodeRecord]] = _ => _ =>
         sys.error("Didn't expect to call enrRequest")
   ) extends DiscoveryRPC[Peer[InetSocketAddress]]
 
@@ -1138,23 +1141,25 @@ object DiscoveryServiceSpec {
 
   trait Fixture {
     def test: IO[Assertion]
+    
+    implicit val sigAlg: com.chipprbots.scalanet.discovery.crypto.SigAlg = sigalg
 
     def makeNode(publicKey: PublicKey, address: InetSocketAddress) =
       Node(publicKey, Node.Address(address.getAddress, address.getPort, address.getPort))
 
     lazy val (localPublicKey, localPrivateKey) = sigalg.newKeyPair
-    lazy val localAddress = aRandomAddress()
+    lazy val localAddress: InetSocketAddress = aRandomAddress()
     lazy val localNode = makeNode(localPublicKey, localAddress)
-    lazy val localPeer = Peer(localPublicKey, localAddress)
+    lazy val localPeer: Peer[InetSocketAddress] = Peer(localPublicKey, localAddress)
     lazy val localENR = EthereumNodeRecord.fromNode(localNode, localPrivateKey, seq = 1).require
 
-    lazy val remoteAddress = aRandomAddress()
+    lazy val remoteAddress: InetSocketAddress = aRandomAddress()
     lazy val (remotePublicKey, remotePrivateKey) = sigalg.newKeyPair
     lazy val remoteNode = makeNode(remotePublicKey, remoteAddress)
-    lazy val remotePeer = Peer(remotePublicKey, remoteAddress)
+    lazy val remotePeer: Peer[InetSocketAddress] = Peer(remotePublicKey, remoteAddress)
     lazy val remoteENR = EthereumNodeRecord.fromNode(remoteNode, remotePrivateKey, seq = 1).require
 
-    lazy val stateRef = Ref.unsafe[Task, DiscoveryService.State[InetSocketAddress]](
+    lazy val stateRef = Ref.unsafe[IO, DiscoveryService.State[InetSocketAddress]](
       DiscoveryService.State[InetSocketAddress](localNode, localENR, SubnetLimits.fromConfig(config))
     )
 
