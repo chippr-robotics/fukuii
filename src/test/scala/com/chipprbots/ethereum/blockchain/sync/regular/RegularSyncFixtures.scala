@@ -99,7 +99,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           system.scheduler,
           this
         )
-        .withDispatcher("akka.actor.default-dispatcher")
+        .withDispatcher("pekko.actor.default-dispatcher")
     )
 
     val defaultTd = 12345

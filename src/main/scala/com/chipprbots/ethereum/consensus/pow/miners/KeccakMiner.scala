@@ -26,7 +26,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 class KeccakMiner(
     blockCreator: PoWBlockCreator,
-    syncController: akka.actor.ActorRef,
+    syncController: org.apache.pekko.actor.ActorRef,
     ethMiningService: EthMiningService
 )(implicit scheduler: IORuntime)
     extends Miner
