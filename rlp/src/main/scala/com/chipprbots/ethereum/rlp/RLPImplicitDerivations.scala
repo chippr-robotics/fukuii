@@ -31,6 +31,7 @@ object RLPImplicitDerivations {
     * 
     * @example {{{
     *   import RLPImplicitDerivations.{given, *}
+    *   import RLPImplicits.{given, *}  // for base type encoders/decoders
     *   case class MyData(field1: Int, field2: String)
     *   val codec = summon[RLPCodec[MyData]]  // automatically derived
     * }}}

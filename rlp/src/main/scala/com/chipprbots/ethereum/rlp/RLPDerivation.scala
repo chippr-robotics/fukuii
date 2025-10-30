@@ -210,8 +210,9 @@ object RLPDerivation {
     * For automatic implicit derivation, use RLPImplicitDerivations.
     * 
     * @example {{{
-    *   given ClassTag[MyCase] = ...
-    *   val decoder = RLPDerivation.derivedDecoder[MyCase]
+    *   case class MyData(field1: Int, field2: String)
+    *   given ClassTag[MyData] = ClassTag(classOf[MyData])
+    *   val decoder = RLPDerivation.derivedDecoder[MyData]
     * }}}
     */
   transparent inline def derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T], policy: DerivationPolicy = DerivationPolicy.default): RLPDecoder[T] =
@@ -237,8 +238,9 @@ object RLPDerivation {
     * For automatic implicit derivation, use RLPImplicitDerivations.
     * 
     * @example {{{
-    *   given ClassTag[MyCase] = ...
-    *   val codec = RLPDerivation.derivedCodec[MyCase]
+    *   case class MyData(field1: Int, field2: String)
+    *   given ClassTag[MyData] = ClassTag(classOf[MyData])
+    *   val codec = RLPDerivation.derivedCodec[MyData]
     * }}}
     */
   transparent inline def derivedCodec[T](using 
