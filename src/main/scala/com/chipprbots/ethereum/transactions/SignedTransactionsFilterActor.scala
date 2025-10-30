@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.Actor
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.dispatch.BoundedMessageQueueSemantics
-import akka.dispatch.RequiresMessageQueue
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.dispatch.BoundedMessageQueueSemantics
+import org.apache.pekko.dispatch.RequiresMessageQueue
 
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer

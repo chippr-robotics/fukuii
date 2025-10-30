@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.network.rlpx
 
 import java.util.concurrent.atomic.AtomicInteger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Failure
 import scala.util.Success

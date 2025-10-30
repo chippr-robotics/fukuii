@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.consensus.pow
 
-import akka.actor.ActorRef
-import akka.actor.testkit.typed.LoggingEvent
-import akka.actor.testkit.typed.scaladsl.LoggingTestKit
-import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-import akka.actor.typed
-import akka.actor.typed.scaladsl.adapter._
-import akka.testkit.TestActor
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.testkit.typed.LoggingEvent
+import org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.typed
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.testkit.TestActor
+import org.apache.pekko.testkit.TestProbe
 
 import cats.effect.IO
 

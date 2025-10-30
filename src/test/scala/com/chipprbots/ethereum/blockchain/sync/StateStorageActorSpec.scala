@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import akka.actor.ActorSystem
-import akka.pattern._
-import akka.testkit.TestActorRef
-import akka.testkit.TestKit
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.pattern._
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestKit
 
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike

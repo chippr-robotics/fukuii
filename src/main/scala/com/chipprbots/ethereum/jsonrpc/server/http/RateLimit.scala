@@ -2,16 +2,15 @@ package com.chipprbots.ethereum.jsonrpc.server.http
 
 import java.time.Duration
 
-import akka.NotUsed
-import akka.http.scaladsl.model.RemoteAddress
-import akka.http.scaladsl.model.StatusCodes
-import akka.http.scaladsl.server.Directive0
-import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.server.Route
+import org.apache.pekko.NotUsed
+import org.apache.pekko.http.scaladsl.model.RemoteAddress
+import org.apache.pekko.http.scaladsl.model.StatusCodes
+import org.apache.pekko.http.scaladsl.server.Directive0
+import org.apache.pekko.http.scaladsl.server.Directives._
+import org.apache.pekko.http.scaladsl.server.Route
 
 import com.google.common.base.Ticker
 import com.google.common.cache.CacheBuilder
-import de.heikoseeberger.akkahttpjson4s.Json4sSupport
 import org.json4s.DefaultFormats
 import org.json4s.Formats
 import org.json4s.Serialization

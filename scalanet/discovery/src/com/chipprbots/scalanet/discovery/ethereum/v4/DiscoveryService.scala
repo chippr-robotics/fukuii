@@ -7,6 +7,7 @@ import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
 import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.kademlia.XorOrdering
 import com.chipprbots.scalanet.peergroup.Addressable
+import fs2.Stream
 import java.net.InetAddress
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
@@ -112,7 +113,7 @@ object DiscoveryService {
           // Setting the enrolled status here because we could potentially repeat enrollment until it succeeds.
           enroll = service.enroll.guarantee(stateRef.update(_.setEnrolled))
           // Periodically discover new nodes.
-          discover = service.lookupRandom.delayExecution(config.discoveryPeriod).loopForever
+          discover = Stream.fixedDelay[IO](config.discoveryPeriod).evalMap(_ => service.lookupRandom).compile.drain
           // Enrollment can be run in the background if it takes very long.
           discoveryFiber <- if (enrollInBackground) {
             (enroll >> discover).start
@@ -122,12 +123,12 @@ object DiscoveryService {
         } yield (service, cancelToken, discoveryFiber)
       } {
         case (_, cancelToken, discoveryFiber) =>
-          cancelToken.cancel >> discoveryFiber.cancel
+          cancelToken.complete(()).void >> discoveryFiber.cancel
       }
       .map(_._1)
 
   protected[v4] def checkKeySize(name: String, key: BitVector, expectedBytesSize: Int): IO[Unit] =
-    Task
+    IO
       .raiseError(
         new IllegalArgumentException(
           s"Expected the $name to be ${expectedBytesSize} bytes; got ${key.size / 8} bytes."
@@ -368,7 +369,7 @@ object DiscoveryService {
         }
         .flatMap { peers =>
           // Send our new ENR sequence to the peers so they can pull our latest data.
-          IO.parTraverseN(config.kademliaAlpha)(peers)(pingAndMaybeUpdateTimestamp).startAndForget
+          peers.toList.parTraverse(pingAndMaybeUpdateTimestamp(_)).start.void
         }
     }
 
@@ -392,7 +393,7 @@ object DiscoveryService {
                 // Try to bond back, if this is a new node.
                 bond(caller)
               )
-              .startAndForget
+              .start.void
               .whenA(hasEnrolled)
             // Return the latet local ENR sequence.
             enrSeq <- localEnrSeq
@@ -453,7 +454,7 @@ object DiscoveryService {
     protected[v4] def respondIfBonded[T](caller: Peer[A], request: String)(response: IO[T]): IO[Option[T]] =
       isBonded(caller).flatMap {
         case true => response.map(Some(_))
-        case false => Task(logger.debug(s"Ignoring $request request from unbonded $caller")).as(None)
+        case false => IO(logger.debug(s"Ignoring $request request from unbonded $caller")).as(None)
       }
 
     /** Runs the bonding process with the peer, unless already bonded.
@@ -471,7 +472,7 @@ object DiscoveryService {
       isBonded(peer).flatMap {
         case true =>
           // Check that we have an ENR for this peer.
-          maybeFetchEnr(peer, maybeRemoteEnrSeq = None, delay = false).startAndForget.as(true)
+          maybeFetchEnr(peer, maybeRemoteEnrSeq = None, delay = false).start.void.as(true)
 
         case false =>
           initBond(peer).flatMap {
@@ -479,12 +480,12 @@ object DiscoveryService {
               result.pongReceived.get.timeoutTo(config.requestTimeout, IO.pure(false))
 
             case None =>
-              Task(logger.debug(s"Trying to bond with $peer...")) >>
+              IO(logger.debug(s"Trying to bond with $peer...")) >>
                 pingAndMaybeUpdateTimestamp(peer)
                   .flatMap {
                     case Some(maybeRemoteEnrSeq) =>
                       for {
-                        _ <- Task(logger.debug(s"$peer responded to bond attempt."))
+                        _ <- IO(logger.debug(s"$peer responded to bond attempt."))
                         // Allow some time for the reciprocating ping to arrive.
                         _ <- awaitPing(peer)
                         // Complete all bonds waiting on this pong, after any pings were received
@@ -492,12 +493,12 @@ object DiscoveryService {
                         _ <- completePong(peer, responded = true)
                         // We need the ENR record for the full address to be verified.
                         // First allow some time for our Pong to go back to the caller.
-                        _ <- maybeFetchEnr(peer, maybeRemoteEnrSeq, delay = true).startAndForget
+                        _ <- maybeFetchEnr(peer, maybeRemoteEnrSeq, delay = true).start.void
                       } yield true
 
                     case None =>
                       for {
-                        _ <- Task(logger.debug(s"$peer did not respond to bond attempt."))
+                        _ <- IO(logger.debug(s"$peer did not respond to bond attempt."))
                         _ <- removePeer(peer)
                         _ <- completePong(peer, responded = false)
                       } yield false
@@ -551,7 +552,7 @@ object DiscoveryService {
           state.clearBondingResults(peer) -> maybePongReceived
         }
         .flatMap { maybePongReceived =>
-          maybePongReceived.fold(IO.unit)(_.complete(responded))
+          maybePongReceived.fold(IO.unit)(_.complete(responded).void)
         }
 
     /** Allow the remote peer to ping us during bonding, so that we can have a more
@@ -638,17 +639,17 @@ object DiscoveryService {
         case Right(fetch) =>
           val maybeEnr = bond(peer).flatMap {
             case false =>
-              Task(logger.debug(s"Could not bond with $peer to fetch ENR")).as(None)
+              IO(logger.debug(s"Could not bond with $peer to fetch ENR")).as(None)
             case true =>
-              Task(logger.debug(s"Fetching the ENR from $peer...")) >>
+              IO(logger.debug(s"Fetching the ENR from $peer...")) >>
                 rpc
                   .enrRequest(peer)(())
-                  .delayExecution(if (delay) config.requestTimeout else Duration.Zero)
+                  .delayBy(if (delay) config.requestTimeout else Duration.Zero)
                   .flatMap {
                     case None =>
                       // At this point we are still bonded with the peer, so they think they can send us requests.
                       // We just have to keep trying to get an ENR for them, until then we can't use them for routing.
-                      Task(logger.debug(s"Could not fetch ENR from $peer")).as(None)
+                      IO(logger.debug(s"Could not fetch ENR from $peer")).as(None)
 
                     case Some(enr) =>
                       validateEnr(peer, enr)
@@ -658,7 +659,7 @@ object DiscoveryService {
           maybeEnr
             .recoverWith {
               case NonFatal(ex) =>
-                Task(logger.debug(s"Failed not fetch ENR from $peer: $ex")).as(None)
+                IO(logger.debug(s"Failed to fetch ENR from $peer: $ex")).as(None)
             }
             .flatTap(fetch.complete)
             .guarantee(stateRef.update(_.clearEnrFetch(peer)))
@@ -668,7 +669,7 @@ object DiscoveryService {
     private def validateEnr(peer: Peer[A], enr: EthereumNodeRecord): IO[Option[EthereumNodeRecord]] = {
       enrFilter(enr) match {
         case Left(reject) =>
-          Task(logger.debug(s"Ignoring ENR from $peer: $reject")) >>
+          IO(logger.debug(s"Ignoring ENR from $peer: $reject")) >>
             removePeer(peer).as(None)
 
         case Right(()) =>
@@ -678,24 +679,24 @@ object DiscoveryService {
               // otherwise if there's no address we can use remove the peer.
               Node.Address.fromEnr(enr) match {
                 case None =>
-                  Task(logger.debug(s"Could not extract node address from ENR $enr")) >>
+                  IO(logger.debug(s"Could not extract node address from ENR $enr")) >>
                     removePeer(peer).as(None)
 
                 case Some(address) if !address.checkRelay(peer) =>
-                  Task(logger.debug(s"Ignoring ENR with $address from $peer because of invalid relay IP.")) >>
+                  IO(logger.debug(s"Ignoring ENR with $address from $peer because of invalid relay IP.")) >>
                     removePeer(peer).as(None)
 
                 case Some(address) =>
-                  Task(logger.info(s"Storing the ENR for $peer")) >>
+                  IO(logger.info(s"Storing the ENR for $peer")) >>
                     storePeer(peer, enr, address)
               }
 
             case Attempt.Successful(false) =>
-              Task(logger.info(s"Could not validate ENR signature from $peer!")) >>
+              IO(logger.info(s"Could not validate ENR signature from $peer!")) >>
                 removePeer(peer).as(None)
 
             case Attempt.Failure(err) =>
-              Task(logger.error(s"Error validating ENR from $peer: $err")).as(None)
+              IO(logger.error(s"Error validating ENR from $peer: $err")).as(None)
           }
       }
     }
@@ -735,7 +736,7 @@ object DiscoveryService {
         }
         .flatMap {
           case None =>
-            Task(logger.debug(s"Added $peer to the k-buckets.")).as(Some(enr))
+            IO(logger.debug(s"Added $peer to the k-buckets.")).as(Some(enr))
 
           case Some(evictionCandidate) =>
             val evictionPeer = toPeer(evictionCandidate)
@@ -747,14 +748,14 @@ object DiscoveryService {
                 // lookups, but won't return the peer itself in results.
                 // A more sophisticated approach would be to put them in a separate replacement
                 // cache for the bucket where they can be drafted from if someone cannot bond again.
-                Task(logger.debug(s"Not adding $peer to the k-buckets, keeping $evictionPeer")) >>
+                IO(logger.debug(s"Not adding $peer to the k-buckets, keeping $evictionPeer")) >>
                   stateRef.update(_.withTouch(evictionPeer)).as(None)
 
               case false =>
                 // Get rid of the non-responding peer and add the new one
                 // then try to add this one again (something else might be trying as well,
                 // don't want to end up overfilling the bucket).
-                Task(logger.debug(s"Evicting $evictionPeer, maybe replacing with $peer")) >>
+                IO(logger.debug(s"Evicting $evictionPeer, maybe replacing with $peer")) >>
                   removePeer(evictionPeer) >>
                   storePeer(peer, enr, address)
             }
@@ -816,12 +817,12 @@ object DiscoveryService {
               .flatMap {
                 case None =>
                   for {
-                    _ <- Task(logger.debug(s"Received no response for neighbors for $target from ${peer.address}"))
+                    _ <- IO(logger.debug(s"Received no response for neighbors for $target from ${peer.address}"))
                     // The other node has possibly unbonded from us, or it was still enrolling when we bonded. Try bonding next time.
                     _ <- stateRef.update(_.clearLastPongTimestamp(peer))
                   } yield Nil
                 case Some(neighbors) =>
-                  Task(logger.debug(s"Received ${neighbors.size} neighbors for $target from ${peer.address}"))
+                  IO(logger.debug(s"Received ${neighbors.size} neighbors for $target from ${peer.address}"))
                     .as(neighbors.toList)
               }
               .flatMap { neighbors =>
@@ -829,16 +830,16 @@ object DiscoveryService {
                   if (neighbor.address.checkRelay(peer))
                     IO.pure(true)
                   else
-                    Task(logger.debug(s"Ignoring neighbor $neighbor from ${peer.address} because of invalid relay IP."))
+                    IO(logger.debug(s"Ignoring neighbor $neighbor from ${peer.address} because of invalid relay IP."))
                       .as(false)
                 }
               }
               .recoverWith {
                 case NonFatal(ex) =>
-                  Task(logger.debug(s"Failed to fetch neighbors of $target from ${peer.address}: $ex")).as(Nil)
+                  IO(logger.debug(s"Failed to fetch neighbors of $target from ${peer.address}: $ex")).as(Nil)
               }
           case false =>
-            Task(logger.debug(s"Could not bond with ${peer.address} to fetch neighbors of $target")).as(Nil)
+            IO(logger.debug(s"Could not bond with ${peer.address} to fetch neighbors of $target")).as(Nil)
         }
       }
 
@@ -847,18 +848,17 @@ object DiscoveryService {
       // be fakes with unreachable addresses that could knock out legit nodes.
       def bondNeighbors(neighbors: Seq[Node]): IO[Seq[Node]] =
         for {
-          _ <- Task(logger.debug(s"Bonding with ${neighbors.size} neighbors..."))
-          bonded <- Task
-            .parTraverseUnordered(neighbors) { neighbor =>
+          _ <- IO(logger.debug(s"Bonding with ${neighbors.size} neighbors..."))
+          bonded <- neighbors.toList.parTraverse { neighbor =>
               bond(toPeer(neighbor)).flatMap {
                 case true =>
                   IO.pure(Some(neighbor))
                 case false =>
-                  Task(logger.debug(s"Could not bond with neighbor candidate $neighbor")).as(None)
+                  IO(logger.debug(s"Could not bond with neighbor candidate $neighbor")).as(None)
               }
             }
             .map(_.flatten)
-          _ <- Task(logger.debug(s"Bonded with ${bonded.size} neighbors out of ${neighbors.size}."))
+          _ <- IO(logger.debug(s"Bonded with ${bonded.size} neighbors out of ${neighbors.size}."))
         } yield bonded
 
       def loop(
@@ -875,15 +875,14 @@ object DiscoveryService {
           .toList
 
         if (contacts.isEmpty) {
-          Task(
+          IO(
             logger.debug(s"Lookup for $target finished; asked ${asked.size} nodes, found ${neighbors.size} neighbors.")
           ).as(closest)
         } else {
-          Task(
+          IO(
             logger.debug(s"Lookup for $target contacting ${contacts.size} new nodes; asked ${asked.size} nodes so far.")
           ) >>
-            Task
-              .parTraverseUnordered(contacts)(fetchNeighbors)
+            contacts.toList.parTraverse(fetchNeighbors)
               .map(_.flatten.distinct.filterNot(neighbors))
               .flatMap(bondNeighbors)
               .flatMap { newNeighbors =>
@@ -891,7 +890,7 @@ object DiscoveryService {
                 val nextAsked = asked ++ contacts
                 val nextNeighbors = neighbors ++ newNeighbors
                 val newClosest = nextClosest diff closest
-                Task(logger.debug(s"Lookup for $target found ${newClosest.size} neighbors closer than before.")) >>
+                IO(logger.debug(s"Lookup for $target found ${newClosest.size} neighbors closer than before.")) >>
                   loop(local, nextClosest, nextAsked, nextNeighbors)
               }
         }
@@ -905,7 +904,7 @@ object DiscoveryService {
 
     /** Look up a random node ID to discover new peers. */
     protected[v4] def lookupRandom: IO[Set[Node]] =
-      Task(logger.info("Looking up a random target...")) >>
+      IO(logger.info("Looking up a random target...")) >>
         lookup(target = sigalg.newKeyPair._1)
 
     /** Look up self with the bootstrap nodes. First we have to fetch their ENR
@@ -923,23 +922,24 @@ object DiscoveryService {
         for {
           nodeId <- stateRef.get.map(_.node.id)
           bootstrapPeers = config.knownPeers.toList.map(toPeer).filterNot(_.id == nodeId)
-          _ <- Task(logger.info(s"Enrolling with ${bootstrapPeers.size} bootstrap nodes."))
-          maybeBootstrapEnrs <- IO.parTraverseUnordered(bootstrapPeers)(fetchEnr(_, delay = true))
+          _ <- IO(logger.info(s"Enrolling with ${bootstrapPeers.size} bootstrap nodes."))
+          maybeBootstrapEnrs <- bootstrapPeers.parTraverse(fetchEnr(_, delay = true))
           enrolled = maybeBootstrapEnrs.count(_.isDefined)
           succeeded = enrolled > 0
           _ <- if (succeeded) {
             for {
-              _ <- Task(
+              _ <- IO(
                 logger.info(s"Successfully enrolled with $enrolled bootstrap nodes. Performing initial lookup...")
               )
-              _ <- lookup(nodeId).doOnFinish {
-                _.fold(IO.unit)(ex => Task(logger.error(s"Error during initial lookup", ex)))
+              _ <- lookup(nodeId).attempt.flatMap {
+                case Right(_) => IO.unit
+                case Left(ex) => IO(logger.error(s"Error during initial lookup", ex))
               }
               nodeCount <- stateRef.get.map(_.nodeMap.size)
-              _ <- Task(logger.info(s"Discovered $nodeCount nodes by the end of the lookup."))
+              _ <- IO(logger.info(s"Discovered $nodeCount nodes by the end of the lookup."))
             } yield ()
           } else {
-            Task(logger.warn("Failed to enroll with any of the the bootstrap nodes."))
+            IO(logger.warn("Failed to enroll with any of the the bootstrap nodes."))
           }
         } yield succeeded
       }

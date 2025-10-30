@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.consensus.pow.blocks
 
 import java.util.function.UnaryOperator
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.blocks._
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator

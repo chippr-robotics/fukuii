@@ -1,15 +1,15 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.AllForOneStrategy
-import akka.actor.Cancellable
-import akka.actor.Props
-import akka.actor.Scheduler
-import akka.actor.SupervisorStrategy
-import akka.actor.typed.scaladsl.adapter._
-import akka.actor.typed.{ActorRef => TypedActorRef}
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.AllForOneStrategy
+import org.apache.pekko.actor.Cancellable
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.actor.SupervisorStrategy
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.actor.typed.{ActorRef => TypedActorRef}
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol

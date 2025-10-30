@@ -64,7 +64,7 @@ object Channel {
   sealed abstract class ChannelEvent[+M]
   final case class MessageReceived[M](m: M) extends ChannelEvent[M]
   final case class UnexpectedError(e: Throwable) extends ChannelEvent[Nothing]
-  final case object DecodingError extends ChannelEvent[Nothing]
+  case object DecodingError extends ChannelEvent[Nothing]
 
   /**
     *  only used in DynamicTlsPeerGroup, indicated that there was no action on particular channel

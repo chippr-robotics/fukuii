@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 import scala.jdk.CollectionConverters._

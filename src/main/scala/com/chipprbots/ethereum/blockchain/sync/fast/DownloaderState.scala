@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 

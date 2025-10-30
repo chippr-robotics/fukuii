@@ -3,16 +3,16 @@ package com.chipprbots.ethereum.jsonrpc.client
 import java.util.UUID
 import javax.net.ssl.SSLContext
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.ConnectionContext
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.HttpsConnectionContext
-import akka.http.scaladsl.model._
-import akka.http.scaladsl.settings.ClientConnectionSettings
-import akka.http.scaladsl.settings.ConnectionPoolSettings
-import akka.http.scaladsl.unmarshalling.Unmarshal
-import akka.stream.StreamTcpException
-import akka.stream.scaladsl.TcpIdleTimeoutException
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.scaladsl.ConnectionContext
+import org.apache.pekko.http.scaladsl.Http
+import org.apache.pekko.http.scaladsl.HttpsConnectionContext
+import org.apache.pekko.http.scaladsl.model._
+import org.apache.pekko.http.scaladsl.settings.ClientConnectionSettings
+import org.apache.pekko.http.scaladsl.settings.ConnectionPoolSettings
+import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
+import org.apache.pekko.stream.StreamTcpException
+import org.apache.pekko.stream.scaladsl.TcpIdleTimeoutException
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime

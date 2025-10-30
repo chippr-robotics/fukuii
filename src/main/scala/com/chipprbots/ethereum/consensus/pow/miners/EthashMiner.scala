@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.{ActorRef => ClassicActorRef}
-import akka.util.ByteString
+import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Future
 import cats.effect.unsafe.IORuntime

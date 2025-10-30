@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime

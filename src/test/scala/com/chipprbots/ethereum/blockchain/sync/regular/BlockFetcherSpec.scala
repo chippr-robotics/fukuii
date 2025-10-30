@@ -2,12 +2,12 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorSystem
-import akka.actor.testkit.typed.scaladsl.ActorTestKit
-import akka.actor.typed.ActorRef
-import akka.actor.typed.scaladsl.adapter._
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._

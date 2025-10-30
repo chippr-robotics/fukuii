@@ -4,7 +4,7 @@ import java.net.URI
 import java.nio.ByteBuffer
 import java.security.SecureRandom
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Random
 

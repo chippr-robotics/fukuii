@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.ActorRef
+import org.apache.pekko.actor.ActorRef
 
 import scala.util.Random
 

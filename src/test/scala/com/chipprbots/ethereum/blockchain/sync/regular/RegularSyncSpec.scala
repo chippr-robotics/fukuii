@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.typed
-import akka.actor.typed.{ActorRef => TypedActorRef}
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.typed
+import org.apache.pekko.actor.typed.{ActorRef => TypedActorRef}
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import cats.effect.Resource
 import cats.effect.IO
@@ -186,7 +186,7 @@ class RegularSyncSpec
       })
 
       "blacklist peer which sends headers that were not requested" in sync(new Fixture(testSystem) {
-        import akka.actor.typed.scaladsl.adapter._
+        import org.apache.pekko.actor.typed.scaladsl.adapter._
 
         val blockImporter = TestProbe()
         val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
@@ -216,7 +216,7 @@ class RegularSyncSpec
       })
 
       "blacklist peer which sends bodies that were not requested" in sync(new Fixture(testSystem) {
-        import akka.actor.typed.scaladsl.adapter._
+        import org.apache.pekko.actor.typed.scaladsl.adapter._
 
         var blockFetcherAdapter: TypedActorRef[MessageFromPeer] = _
         val blockImporter = TestProbe()

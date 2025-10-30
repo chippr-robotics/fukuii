@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration

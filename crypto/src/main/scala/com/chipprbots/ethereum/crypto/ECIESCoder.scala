@@ -44,13 +44,13 @@ object ECIESCoder {
       cipher: Array[Byte],
       macData: Option[Array[Byte]]
   ): Array[Byte] = {
-    val aesEngine = new AESEngine
+    val aesEngine = AESEngine.newInstance()
 
     val iesEngine = new EthereumIESEngine(
       kdf = Left(new ConcatKDFBytesGenerator(new SHA256Digest)),
       mac = new HMac(new SHA256Digest),
       hash = new SHA256Digest,
-      cipher = Some(new BufferedBlockCipher(new SICBlockCipher(aesEngine))),
+      cipher = Some(new BufferedBlockCipher(SICBlockCipher.newInstance(aesEngine))),
       IV = IV,
       prvSrc = Left(new ECPrivateKeyParameters(prv, curve)),
       pubSrc = Left(new ECPublicKeyParameters(ephem, curve))
@@ -89,13 +89,13 @@ object ECIESCoder {
   }
 
   private def makeIESEngine(pub: ECPoint, prv: BigInteger, IV: Option[Array[Byte]]) = {
-    val aesEngine = new AESEngine
+    val aesEngine = AESEngine.newInstance()
 
     val iesEngine = new EthereumIESEngine(
       kdf = Left(new ConcatKDFBytesGenerator(new SHA256Digest)),
       mac = new HMac(new SHA256Digest),
       hash = new SHA256Digest,
-      cipher = Some(new BufferedBlockCipher(new SICBlockCipher(aesEngine))),
+      cipher = Some(new BufferedBlockCipher(SICBlockCipher.newInstance(aesEngine))),
       IV = IV,
       prvSrc = Left(new ECPrivateKeyParameters(prv, curve)),
       pubSrc = Left(new ECPublicKeyParameters(pub, curve))

@@ -9,16 +9,13 @@ import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils
 import org.bouncycastle.math.ec.custom.sec.SecP256K1Curve
 import org.joda.time.{DateTime, Interval}
 import scodec.bits.BitVector
-import scodec.codecs.{Discriminated, Discriminator, ascii, bits, uint8}
+import scodec.codecs.{ascii, bits, uint8, discriminated, discriminatorFallback, constant as constCodec}
 import scodec.{Attempt, Codec, DecodeResult, SizeBound}
 
 import scala.util.{Failure, Success, Try}
 
 sealed trait KeyType {
   def n: Int
-}
-object KeyType {
-  implicit val d: Discriminated[KeyType, Int] = Discriminated[KeyType, Int](uint8)
 }
 
 /**
@@ -28,7 +25,18 @@ object KeyType {
 case object Secp256k1 extends KeyType {
   val curveName = "secp256k1"
   val n = 2
-  implicit val Secp256k1Disc: Discriminator[KeyType, Secp256k1.type, Int] = Discriminator[KeyType, Secp256k1.type, Int](n)
+  
+  // Codec for the singleton Secp256k1 - empty codec that just returns the object
+  given Codec[Secp256k1.type] = Codec(
+    _ => Attempt.successful(BitVector.empty),
+    _ => Attempt.successful(DecodeResult(Secp256k1, BitVector.empty))
+  )
+}
+
+object KeyType {
+  // scodec 2.x: Discriminated codec using given instances
+  given Codec[KeyType] = discriminated[KeyType].by(uint8)
+    .typecase(2, summon[Codec[Secp256k1.type]])
 }
 
 private[scalanet] object DynamicTLSExtension {
@@ -51,7 +59,7 @@ private[scalanet] object DynamicTLSExtension {
   case class ExtensionPublicKey private (keyType: KeyType, encodedPublicKey: PublicKey)
 
   object ExtensionPublicKey {
-    private val keyCodec = Codec[KeyType]
+    private val keyCodec = summon[Codec[KeyType]]
 
     val extensionPublicKeyCodec = new Codec[ExtensionPublicKey] {
       override def encode(value: ExtensionPublicKey): Attempt[BitVector] = {

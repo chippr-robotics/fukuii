@@ -2,15 +2,15 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.PoisonPill
-import akka.pattern.ask
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestKitBase
-import akka.testkit.TestProbe
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.PoisonPill
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestKitBase
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.Eq
 import cats.data.NonEmptyList

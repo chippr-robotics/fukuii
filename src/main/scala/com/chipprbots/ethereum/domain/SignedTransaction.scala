@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.domain
 
 import java.math.BigInteger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime

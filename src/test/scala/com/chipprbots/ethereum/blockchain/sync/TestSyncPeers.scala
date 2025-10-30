@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.blockchain.sync
 import java.net.InetSocketAddress
 
-import akka.actor.ActorSystem
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo

@@ -1,12 +1,12 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.Actor
-import akka.actor.Actor.Receive
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.NotInfluenceReceiveTimeout
-import akka.actor.Props
-import akka.actor.ReceiveTimeout
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.Actor.Receive
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.NotInfluenceReceiveTimeout
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.ReceiveTimeout
 
 import cats.data.NonEmptyList
 import cats.effect.IO

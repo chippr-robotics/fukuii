@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.crypto
 
 import java.io.ByteArrayInputStream
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.BufferedBlockCipher
 import org.bouncycastle.crypto.Digest

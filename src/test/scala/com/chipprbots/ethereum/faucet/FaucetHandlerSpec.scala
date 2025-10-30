@@ -2,14 +2,14 @@ package com.chipprbots.ethereum.faucet
 
 import java.security.SecureRandom
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.pattern.gracefulStop
-import akka.testkit.ImplicitSender
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.Props
+import org.apache.pekko.pattern.gracefulStop
+import org.apache.pekko.testkit.ImplicitSender
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime

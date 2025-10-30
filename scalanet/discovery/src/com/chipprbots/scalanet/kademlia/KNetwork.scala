@@ -9,6 +9,7 @@ import com.chipprbots.scalanet.peergroup.{Channel, PeerGroup}
 import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
 import cats.effect.IO
 import fs2.Stream
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.util.control.NonFatal
 
 trait KNetwork[A] {
@@ -47,7 +48,7 @@ object KNetwork {
 
   class KNetworkScalanetImpl[A](
       peerGroup: PeerGroup[A, KMessage[A]],
-      requestTimeout: FiniteDuration = 3 seconds
+      requestTimeout: FiniteDuration = 3.seconds
   ) extends KNetwork[A] {
 
     override lazy val kRequests: Stream[IO, (KRequest[A], Option[KResponse[A]] => IO[Unit])] = {

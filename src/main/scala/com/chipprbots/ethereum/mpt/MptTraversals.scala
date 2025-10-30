@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.mpt
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded

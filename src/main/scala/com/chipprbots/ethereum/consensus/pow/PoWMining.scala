@@ -2,10 +2,10 @@ package com.chipprbots.ethereum
 package consensus
 package pow
 
-import akka.actor.typed.ActorRef
-import akka.actor.typed.DispatcherSelector
-import akka.actor.typed.scaladsl.adapter._
-import akka.util.Timeout
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.DispatcherSelector
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 

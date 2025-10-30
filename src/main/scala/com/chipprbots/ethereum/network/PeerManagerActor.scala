@@ -4,10 +4,10 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.util.Collections.newSetFromMap
 
-import akka.actor.SupervisorStrategy.Stop
-import akka.actor._
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.SupervisorStrategy.Stop
+import org.apache.pekko.actor._
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -60,7 +60,7 @@ class PeerManagerActor(
   val maxBlacklistedNodes: Int = 32 * 8 * discoveryConfig.kademliaBucketSize
 
   import PeerManagerActor._
-  import akka.pattern.pipe
+  import org.apache.pekko.pattern.pipe
 
   val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
 

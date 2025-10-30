@@ -2,8 +2,8 @@ package com.chipprbots.ethereum.network
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorRef
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.FiniteDuration
 

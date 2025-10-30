@@ -2,9 +2,9 @@ package com.chipprbots.ethereum.jsonrpc
 
 import java.time.Duration
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 

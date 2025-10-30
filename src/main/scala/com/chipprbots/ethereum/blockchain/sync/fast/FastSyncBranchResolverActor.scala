@@ -1,12 +1,12 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.actor.Scheduler
-import akka.actor.Terminated
-import akka.actor.Timers
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.actor.Terminated
+import org.apache.pekko.actor.Timers
 
 import scala.concurrent.duration._
 

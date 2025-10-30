@@ -6,7 +6,7 @@ import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
 
-import akka.actor.ActorSystem
+import org.apache.pekko.actor.ActorSystem
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime

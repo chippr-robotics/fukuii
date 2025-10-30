@@ -4,11 +4,11 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.util.concurrent.TimeUnit
 
-import akka.actor._
-import akka.testkit.TestActorRef
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor._
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 

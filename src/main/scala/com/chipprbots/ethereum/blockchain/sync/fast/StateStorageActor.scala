@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.pattern.pipe
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.pattern.pipe
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime

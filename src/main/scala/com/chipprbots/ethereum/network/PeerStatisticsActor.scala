@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.network
 
 import java.time.Clock
 
-import akka.actor._
+import org.apache.pekko.actor._
 
 import scala.concurrent.duration.FiniteDuration
 

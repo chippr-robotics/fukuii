@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.{ActorSystem => ClassicSystem}
-import akka.testkit.TestActorRef
-import akka.testkit.TestKit
+import org.apache.pekko.actor.{ActorSystem => ClassicSystem}
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestKit
 
 import cats.effect.IO
 

@@ -6,7 +6,6 @@ import com.chipprbots.scalanet.peergroup.InetMultiAddress
 import scodec.bits.{BitVector, ByteVector}
 import scodec.{Codec, DecodeResult}
 import scodec.codecs._
-import shapeless.Lazy
 import scodec.bits._
 
 /**
@@ -49,7 +48,7 @@ object DefaultCodecs {
     ("inetSocketAddress" | Codec[InetSocketAddress])
   }.as[InetMultiAddress]
 
-  implicit def seqCoded[A](implicit listCodec: Lazy[Codec[List[A]]]): Codec[Seq[A]] = {
-    listCodec.value.xmap(l => l.toSeq, seq => seq.toList)
+  implicit def seqCoded[A](implicit listCodec: Codec[List[A]]): Codec[Seq[A]] = {
+    listCodec.xmap(l => l.toSeq, seq => seq.toList)
   }
 }

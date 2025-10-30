@@ -202,9 +202,8 @@ object ReqResponseProtocol {
 
     /** scodec scpecific codec for a single message. */
     def defaultCodec[M: Codec]: Codec[MessageEnvelope[M]] = {
-      import scodec.codecs.implicits._
-      // Default scodec product codec deriviation due to implicits
-      implicitly[Codec[MessageEnvelope[M]]]
+      // scodec 2.x: Use Codec.derived for automatic derivation
+      Codec.derived[MessageEnvelope[M]]
     }
   }
 

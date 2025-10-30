@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.testkit.ExplicitlyTriggeredScheduler
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestActorRef
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.Props
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
 import scala.concurrent.duration._

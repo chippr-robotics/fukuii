@@ -8,7 +8,8 @@ import java.util.concurrent.CancellationException
 
 private[scalanet] object NettyFutureUtils {
   def toTask(f: => netty.util.concurrent.Future[_]): IO[Unit] = {
-    fromNettyFuture(IO.delay(f)).void
+    val future = f  // Assign to val first as required by Scala 3
+    fromNettyFuture(IO.delay(future)).void
   }
 
   def fromNettyFuture[A](ff: IO[netty.util.concurrent.Future[A]]): IO[A] = {

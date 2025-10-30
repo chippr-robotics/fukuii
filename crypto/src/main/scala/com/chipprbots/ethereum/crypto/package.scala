@@ -3,7 +3,7 @@ package com.chipprbots.ethereum
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.asn1.sec.SECNamedCurves
 import org.bouncycastle.asn1.x9.X9ECParameters

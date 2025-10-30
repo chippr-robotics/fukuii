@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.db.storage
 
 import java.nio.ByteBuffer
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 

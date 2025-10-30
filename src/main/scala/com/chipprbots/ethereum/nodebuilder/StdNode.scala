@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.nodebuilder
 
-import akka.actor.typed.ActorSystem
-import akka.util.ByteString
+import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global

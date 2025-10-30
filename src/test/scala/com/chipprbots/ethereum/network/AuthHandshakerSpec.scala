@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.network
 import java.math.BigInteger
 import java.net.URI
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPrivateKeyParameters

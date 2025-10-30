@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.vm.utils
 
 import java.io.File
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 import io.circe.parser.decode
 import io.circe.generic.extras.Configuration
 import io.circe.generic.extras.auto._

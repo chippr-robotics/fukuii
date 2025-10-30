@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.db
 import java.io.File
 import java.nio.file.Files
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks

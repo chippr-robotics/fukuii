@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.mpt
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 
