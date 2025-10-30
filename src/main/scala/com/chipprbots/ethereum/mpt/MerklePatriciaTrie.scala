@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.mpt
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.{encode => encodeRLP}
 import com.chipprbots.ethereum.utils.ByteUtils.matchingLength
 
@@ -295,7 +296,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
             val newLeafNode = LeafNode(existingKey.tail, storedValue)
             BranchNode.withSingleChild(existingKey(0), newLeafNode, None) -> Some(newLeafNode)
           }
-        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) = put(temporalBranchNode, searchKey, value)
+        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) = (put(temporalBranchNode, searchKey, value): @unchecked)
         NodeInsertResult(
           newNode = newBranchNode,
           toDeleteFromStorage = node :: toDeleteFromStorage.filterNot(_ == temporalBranchNode)

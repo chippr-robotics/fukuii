@@ -15,6 +15,7 @@ import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.util.Try
 
+import org.json4s.Extraction.extract
 import org.json4s.Formats
 import org.json4s.JsonAST.JValue
 import org.json4s.native
@@ -98,7 +99,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
     private def handleNextRequest(): Unit =
       readNextMessage() match {
         case Some(nextMsgJson) =>
-          val request = nextMsgJson.extract[JsonRpcRequest]
+          val request = extract[JsonRpcRequest](nextMsgJson)
           val responseF = jsonRpcController.handleRequest(request)
           responseF.unsafeRunTimed(awaitTimeout) match {
             case Some(response) =>

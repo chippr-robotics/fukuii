@@ -10,6 +10,7 @@ import org.bouncycastle.util.encoders.Hex
 import org.json4s.CustomSerializer
 import org.json4s.DefaultFormats
 import org.json4s.Extraction
+import org.json4s.Extraction.extract
 import org.json4s.Formats
 import org.json4s.JField
 import org.json4s.JsonAST.JObject
@@ -17,6 +18,7 @@ import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
 import org.json4s.JsonDSL._
 import org.json4s.native.JsonMethods._
+import org.json4s._
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.keystore.EncryptedKey._
@@ -57,15 +59,15 @@ object EncryptedKeyJsonCodec {
   def fromJson(jsonStr: String): Either[String, EncryptedKey] = Try {
     val json = parse(jsonStr).transformField { case JField(k, v) => JField(k.toLowerCase, v) }
 
-    val uuid = UUID.fromString((json \ "id").extract[String])
-    val address = Address((json \ "address").extract[String])
-    val version = (json \ "version").extract[Int]
+    val uuid = UUID.fromString(extract[String](json \ "id"))
+    val address = Address(extract[String](json \ "address"))
+    val version = extract[Int](json \ "version")
 
     val crypto = json \ "crypto"
-    val cipher = (crypto \ "cipher").extract[String]
-    val ciphertext = (crypto \ "ciphertext").extract[ByteString]
-    val iv = (crypto \ "cipherparams" \ "iv").extract[ByteString]
-    val mac = (crypto \ "mac").extract[ByteString]
+    val cipher = extract[String](crypto \ "cipher")
+    val ciphertext = extract[ByteString](crypto \ "ciphertext")
+    val iv = extract[ByteString](crypto \ "cipherparams" \ "iv")
+    val mac = extract[ByteString](crypto \ "mac")
 
     val kdfParams = extractKdf(crypto)
     val cryptoSpec = CryptoSpec(cipher, ciphertext, iv, kdfParams, mac)
@@ -85,13 +87,13 @@ object EncryptedKeyJsonCodec {
     }
 
   private def extractKdf(crypto: JValue): KdfParams = {
-    val kdf = (crypto \ "kdf").extract[String]
+    val kdf = extract[String](crypto \ "kdf")
     kdf.toLowerCase match {
       case Scrypt =>
-        (crypto \ "kdfparams").extract[ScryptParams]
+        extract[ScryptParams](crypto \ "kdfparams")
 
       case Pbkdf2 =>
-        (crypto \ "kdfparams").extract[Pbkdf2Params]
+        extract[Pbkdf2Params](crypto \ "kdfparams")
     }
   }
 
