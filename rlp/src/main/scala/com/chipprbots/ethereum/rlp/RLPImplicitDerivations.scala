@@ -25,23 +25,41 @@ object RLPImplicitDerivations {
   
   /** Derive RLP codec for a case class using Scala 3 Mirror.
     * This replaces the old Shapeless-based deriveLabelledGenericRLPCodec.
+    * 
+    * Note: For explicit derivation, call RLPDerivation.derivedCodec[T] directly.
+    * This given instance is for automatic implicit resolution.
+    * 
+    * @example {{{
+    *   import RLPImplicitDerivations.{given, *}
+    *   import RLPImplicits.{given, *}  // for base type encoders/decoders
+    *   case class MyData(field1: Int, field2: String)
+    *   val codec = summon[RLPCodec[MyData]]  // automatically derived
+    * }}}
     */
-  inline given deriveLabelledGenericRLPCodec[T](using 
+  transparent inline given deriveLabelledGenericRLPCodec[T](using 
       m: scala.deriving.Mirror.ProductOf[T],
       ct: scala.reflect.ClassTag[T]
   ): RLPCodec[T] = {
     RLPDerivation.derivedCodec[T]
   }
   
-  /** Derive RLP encoder for a case class. */
-  inline given deriveLabelledGenericRLPEncoder[T](using 
+  /** Derive RLP encoder for a case class.
+    * 
+    * Note: For explicit derivation, call RLPDerivation.derivedEncoder[T] directly.
+    * This given instance is for automatic implicit resolution.
+    */
+  transparent inline given deriveLabelledGenericRLPEncoder[T](using 
       m: scala.deriving.Mirror.ProductOf[T]
   ): RLPEncoder[T] = {
     RLPDerivation.derivedEncoder[T]
   }
   
-  /** Derive RLP decoder for a case class. */
-  inline given deriveLabelledGenericRLPDecoder[T](using 
+  /** Derive RLP decoder for a case class.
+    * 
+    * Note: For explicit derivation, call RLPDerivation.derivedDecoder[T] directly.
+    * This given instance is for automatic implicit resolution.
+    */
+  transparent inline given deriveLabelledGenericRLPDecoder[T](using 
       m: scala.deriving.Mirror.ProductOf[T],
       ct: scala.reflect.ClassTag[T]
   ): RLPDecoder[T] = {
