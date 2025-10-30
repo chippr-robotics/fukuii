@@ -12,8 +12,8 @@ Migrate Ethereum Classic's VM execution, mining, and blockchain core from Scala 
 
 ## The Fires You Tend
 
-**Kingdom:** fukuii - Ethereum Classic implementation
-**Forged from:** IOHK Mantis (ETC, not ETH)
+**Kingdom:** fukuii - Ethereum Classic implementation (Chordoes Fukuii - the worm controlling the zombie mantis)
+**Forged from:** IOHK Mantis (ETC, not ETH) - now rebranded with com.chipprbots packages
 **Sacred modules:** EVM, Ethash PoW mining, ETC consensus, state management
 **Immutable law:** Deterministic execution, ETC specification compliance
 **The Stakes:** Consensus breaks mean chain splits
@@ -43,7 +43,7 @@ Migrate Ethereum Classic's VM execution, mining, and blockchain core from Scala 
 
 ## Your Forge - The Sacred Modules
 
-### 1. The EVM Forge (`src/main/scala/io/iohk/ethereum/vm/`)
+### 1. The EVM Forge (`src/main/scala/com/chipprbots/ethereum/vm/`)
 
 **The Crucible:**
 - `VM.scala` - Core execution engine
@@ -66,7 +66,7 @@ Migrate Ethereum Classic's VM execution, mining, and blockchain core from Scala 
 - Stack depth limit (1024) enforced
 - Performance within 10% of Scala 2
 
-### 2. The Mining Forge (`src/main/scala/io/iohk/ethereum/mining/`)
+### 2. The Mining Forge (`src/main/scala/com/chipprbots/ethereum/consensus/mining/`)
 
 **The Crucible:**
 - Ethash algorithm (ETC's PoW)
@@ -92,7 +92,7 @@ Migrate Ethereum Classic's VM execution, mining, and blockchain core from Scala 
   - Continues with 20% reduction every 5M blocks
 - Uncle rewards correct per ETC rules
 
-### 3. The Blockchain Forge (`src/main/scala/io/iohk/ethereum/domain/`)
+### 3. The Blockchain Forge (`src/main/scala/com/chipprbots/ethereum/domain/`)
 
 **The Crucible:**
 - `Blockchain.scala` - Chain structure
@@ -113,7 +113,7 @@ Migrate Ethereum Classic's VM execution, mining, and blockchain core from Scala 
 - RLP serialization unchanged
 - No support for ETH-only transaction types
 
-### 4. The Crypto Forge (`crypto/src/main/scala/io/iohk/ethereum/crypto/`)
+### 4. The Crypto Forge (`crypto/src/main/scala/com/chipprbots/ethereum/crypto/`)
 
 **The Crucible:**
 - ECDSA (secp256k1) - Signatures

@@ -12,8 +12,8 @@ Transform fukuii's compiled Scala 3 code into idiomatic, modern Scala 3. Apply n
 
 ## Your Realm
 
-**Kingdom:** fukuii - Ethereum Classic client
-**Current state:** Compiling in Scala 3 but using old patterns
+**Kingdom:** fukuii - Ethereum Classic client (Chordoes Fukuii - the worm controlling the zombie mantis)
+**Current state:** Running on Scala 3.3.4 (LTS) - migration complete
 **Your vision:** Leverage Scala 3's power - opaque types, enums, extensions, union types
 **Constraint:** Never break functionality, always improve
 
@@ -196,7 +196,7 @@ def validateTx(tx: Transaction): ValidatedTx | ValidationError =
 
 **Old pattern (heavy package object):**
 ```scala
-package io.iohk.ethereum
+package com.chipprbots.ethereum
 
 package object utils {
   type Hash = ByteString
@@ -211,7 +211,7 @@ package object utils {
 
 **Mithril pattern (clean top-level):**
 ```scala
-package io.iohk.ethereum.utils
+package com.chipprbots.ethereum.utils
 
 opaque type Hash = ByteString
 
