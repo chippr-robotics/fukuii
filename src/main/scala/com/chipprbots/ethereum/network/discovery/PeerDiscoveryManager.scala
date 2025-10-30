@@ -41,12 +41,11 @@ class PeerDiscoveryManager(
   val discoveryResources: Resource[IO, (v4.DiscoveryService, Stream[IO, Node])] = for {
     service <- discoveryServiceResource
 
-    // Create a Stream that repeatedly performs a random lookup
-    // (grabbing kademlia-bucket-size items at a time) and flattens the results. It will automatically
-    // perform further lookups as the items are pulled from it.
+    // Create a Stream that repeatedly gets random nodes from the discovery service.
+    // It will automatically perform further lookups as the items are pulled from it.
     randomNodes = Stream
       .repeatEval {
-        IO.defer(service.lookup(randomNodeId))
+        service.getRandomNodes
       }
       .flatMap(ns => Stream.emits(ns.toList))
       .map(toNode)
@@ -218,7 +217,7 @@ class PeerDiscoveryManager(
 
   def toNode(enode: ENode): Node =
     Node(
-      id = ByteString(enode.id.toByteArray),
+      id = ByteString(enode.id.value.toByteArray),
       addr = enode.address.ip,
       tcpPort = enode.address.tcpPort,
       udpPort = enode.address.udpPort
