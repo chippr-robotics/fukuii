@@ -185,8 +185,13 @@ object RLPDerivation {
 
   /** Derive encoder for product types (case classes).
     * 
-    * Note: This method returns a new encoder instance on each call.
-    * For repeated use, cache the result or use the given instances from RLPImplicitDerivations.
+    * This is a transparent inline method that performs compile-time derivation.
+    * Use this for explicit derivation where you directly call the method.
+    * For automatic implicit derivation, use RLPImplicitDerivations.
+    * 
+    * @example {{{
+    *   val encoder = RLPDerivation.derivedEncoder[MyCase]
+    * }}}
     */
   transparent inline def derivedEncoder[T](using m: Mirror.ProductOf[T], policy: DerivationPolicy = DerivationPolicy.default): RLPEncoder[T] =
     new RLPEncoder[T] {
@@ -200,8 +205,14 @@ object RLPDerivation {
 
   /** Derive decoder for product types (case classes).
     * 
-    * Note: This method returns a new decoder instance on each call.
-    * For repeated use, cache the result or use the given instances from RLPImplicitDerivations.
+    * This is a transparent inline method that performs compile-time derivation.
+    * Use this for explicit derivation where you directly call the method.
+    * For automatic implicit derivation, use RLPImplicitDerivations.
+    * 
+    * @example {{{
+    *   given ClassTag[MyCase] = ...
+    *   val decoder = RLPDerivation.derivedDecoder[MyCase]
+    * }}}
     */
   transparent inline def derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T], policy: DerivationPolicy = DerivationPolicy.default): RLPDecoder[T] =
     new RLPDecoder[T] {
@@ -221,8 +232,14 @@ object RLPDerivation {
 
   /** Derive both encoder and decoder for product types.
     * 
-    * Note: This method returns a new codec instance on each call.
-    * For repeated use, cache the result or use the given instances from RLPImplicitDerivations.
+    * This is a transparent inline method that performs compile-time derivation.
+    * Use this for explicit derivation where you directly call the method.
+    * For automatic implicit derivation, use RLPImplicitDerivations.
+    * 
+    * @example {{{
+    *   given ClassTag[MyCase] = ...
+    *   val codec = RLPDerivation.derivedCodec[MyCase]
+    * }}}
     */
   transparent inline def derivedCodec[T](using 
       m: Mirror.ProductOf[T],
