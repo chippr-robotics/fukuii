@@ -183,8 +183,12 @@ object RLPDerivation {
     }
   }
 
-  /** Derive encoder for product types (case classes) */
-  given derivedEncoder[T](using m: Mirror.ProductOf[T])(using policy: DerivationPolicy = DerivationPolicy.default): RLPEncoder[T] =
+  /** Derive encoder for product types (case classes).
+    * 
+    * Note: This method returns a new encoder instance on each call.
+    * For repeated use, cache the result or use the given instances from RLPImplicitDerivations.
+    */
+  transparent inline def derivedEncoder[T](using m: Mirror.ProductOf[T], policy: DerivationPolicy = DerivationPolicy.default): RLPEncoder[T] =
     new RLPEncoder[T] {
       override def encode(obj: T): RLPEncodeable = {
         val tuple = Tuple.fromProduct(obj.asInstanceOf[Product])
@@ -194,8 +198,12 @@ object RLPDerivation {
       }
     }
 
-  /** Derive decoder for product types (case classes) */
-  given derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T])(using policy: DerivationPolicy = DerivationPolicy.default): RLPDecoder[T] =
+  /** Derive decoder for product types (case classes).
+    * 
+    * Note: This method returns a new decoder instance on each call.
+    * For repeated use, cache the result or use the given instances from RLPImplicitDerivations.
+    */
+  transparent inline def derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T], policy: DerivationPolicy = DerivationPolicy.default): RLPDecoder[T] =
     new RLPDecoder[T] {
       override def decode(rlp: RLPEncodeable): T = rlp match {
         case list: RLPList =>
@@ -211,12 +219,17 @@ object RLPDerivation {
       }
     }
 
-  /** Derive both encoder and decoder for product types */
-  given derivedCodec[T](using 
+  /** Derive both encoder and decoder for product types.
+    * 
+    * Note: This method returns a new codec instance on each call.
+    * For repeated use, cache the result or use the given instances from RLPImplicitDerivations.
+    */
+  transparent inline def derivedCodec[T](using 
       m: Mirror.ProductOf[T],
-      ct: ClassTag[T]
+      ct: ClassTag[T],
+      policy: DerivationPolicy = DerivationPolicy.default
   ): RLPCodec[T] =
-    val enc = derivedEncoder[T](using m)
-    val dec = derivedDecoder[T](using m, ct)
+    val enc = derivedEncoder[T](using m, policy)
+    val dec = derivedDecoder[T](using m, ct, policy)
     RLPCodec[T](enc, dec)
 }
