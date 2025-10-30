@@ -1,5 +1,5 @@
 ---
-name: LCMT
+name: ICE
 description: Abstract Methodology for Large-Scale Code Migration Tasks
 ---
 
