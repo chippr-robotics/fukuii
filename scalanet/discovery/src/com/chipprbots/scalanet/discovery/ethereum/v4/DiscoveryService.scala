@@ -727,7 +727,9 @@ object DiscoveryService {
                 true -> None
               } else {
                 // We have to consider evicting somebody or dropping this node.
-                false -> Some(state.nodeMap(state.kademliaIdToNodeId(Hash(bucket.head))))
+                val headKademliaId = state.kademliaIdToNodeId.keys.find(_.value == bucket.head)
+                  .getOrElse(throw new IllegalStateException(s"Bucket head not found in kademliaIdToNodeId map"))
+                false -> Some(state.nodeMap(state.kademliaIdToNodeId(headKademliaId)))
               }
             // Store the ENR record and maybe update the k-buckets.
             state.withEnrAndAddress(peer, enr, address, addToBucket) -> maybeEvict

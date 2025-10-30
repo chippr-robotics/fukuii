@@ -1,5 +1,6 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
+import cats.Show
 import cats.implicits._
 import cats.effect.{IO, Temporal, Deferred}
 import com.typesafe.scalalogging.LazyLogging
@@ -88,8 +89,8 @@ object DiscoveryNetwork {
           _ <- Stream.repeatEval(peerGroup.nextServerEvent)
             .interruptWhen(cancelToken.get.attempt)
             .evalMap {
-              case Some(ChannelCreated(channel, release)) =>
-                handleChannel(handler, channel.asInstanceOf[Channel[A, Packet]], cancelToken)
+              case Some(ChannelCreated(channel: Channel[A, Packet], release)) =>
+                handleChannel(handler, channel, cancelToken)
                   .guarantee(release)
                   .recover {
                     case ex: TimeoutException =>
@@ -115,8 +116,7 @@ object DiscoveryNetwork {
           .evalMap {
             case Some(MessageReceived(receivedPacket: Packet)) =>
               currentTimeSeconds.flatMap { timestamp =>
-                val unpackResult = Packet.unpack(receivedPacket)
-                unpackResult.toEither match {
+                Packet.unpack(receivedPacket).toEither match {
                   case Right((payload, remotePublicKey)) =>
                     payload match {
                       case _: Payload.Response =>
@@ -131,7 +131,7 @@ object DiscoveryNetwork {
                     }
 
                   case Left(err) =>
-                    IO(logger.debug(s"Failed to unpack packet: $err; ${Packet.show.show(receivedPacket)}")) >>
+                    IO(logger.debug(s"Failed to unpack packet: $err; ${Show[Packet].show(receivedPacket)}")) >>
                       IO.raiseError(new PacketException(s"Failed to unpack message: $err"))
                 }
               }
@@ -322,7 +322,7 @@ object DiscoveryNetwork {
             channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
           )
             .collect {
-              case Some(MessageReceived(pkt)) => pkt.asInstanceOf[Packet]
+              case Some(MessageReceived(pkt: Packet)) => pkt
             }
             .evalMap { receivedPacket =>
               currentTimeSeconds.flatMap { timestamp =>
@@ -392,7 +392,7 @@ object DiscoveryNetwork {
               case (Left(Some((acc, count))), Right(response)) =>
                 // New response, fold it with the existing to decide if we need more.
                 val next = (acc: Z) => Some(acc -> (count + 1))
-                IO.pure(f(acc, response).bimap(next, next).swap)
+                IO.pure(f(acc, response).bimap(next, next))
 
               case (Left(None), _) =>
                 // Invalid state - this cannot happen
