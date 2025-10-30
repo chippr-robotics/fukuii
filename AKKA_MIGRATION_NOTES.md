@@ -2,7 +2,7 @@
 
 ## Summary
 
-The fukuii project has successfully migrated from Akka to Apache Pekko (Akka's Scala 3 compatible fork). All direct Akka references have been removed and replaced with Pekko equivalents.
+The Fukuii project has successfully migrated from Akka to Apache Pekko (Akka's Scala 3 compatible fork). All direct Akka references have been removed and replaced with Pekko equivalents.
 
 ## Migration Status: ✅ Complete
 
@@ -29,7 +29,7 @@ The fukuii project has successfully migrated from Akka to Apache Pekko (Akka's S
 
 ### 1. VirtualTime Test Utility (Low Priority)
 
-**Issue**: Several test files still import `com.miguno.akka.testing.VirtualTime`, which is an Akka-specific testing utility that doesn't exist for Pekko.
+**Issue**: Several test files still import `com.miguno.akka.testing.VirtualTime`, which is a third-party Akka-specific testing library that doesn't exist for Pekko. This is an external dependency (not part of core Akka), so there's no automatic migration path.
 
 **Affected Files**:
 - `src/test/scala/com/chipprbots/ethereum/blockchain/sync/PivotBlockSelectorSpec.scala`
@@ -43,6 +43,16 @@ The fukuii project has successfully migrated from Akka to Apache Pekko (Akka's S
 **Impact**: These tests are likely not compiling or running correctly due to the missing dependency.
 
 **Solution**: Tests should be updated to use Pekko's built-in `ExplicitlyTriggeredScheduler` (see `SyncControllerSpec.scala` for an example that already uses this). The configuration file `src/test/resources/explicit-scheduler.conf` has already been updated to use the Pekko version.
+
+**Migration Steps**:
+1. Remove the `com.miguno.akka.testing.VirtualTime` import
+2. Import: `import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler`
+3. Replace `val time = new VirtualTime` with access to the test scheduler:
+   ```scala
+   private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+   ```
+4. Replace `time.advance(duration)` with `testScheduler.timePasses(duration)`
+5. Replace `time.scheduler` with `testScheduler`
 
 **Priority**: Low - these are test utilities, not production code
 
