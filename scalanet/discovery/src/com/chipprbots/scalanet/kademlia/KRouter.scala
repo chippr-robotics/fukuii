@@ -29,7 +29,7 @@ class KRouter[A](
 ) {
   import KRouter.NodeId
 
-  private implicit val nodeId = NodeId(config.nodeRecord.id.toHex)
+  private implicit val nodeId: NodeId = NodeId(config.nodeRecord.id.toHex)
 
   private val logger = Logger.takingImplicit[NodeId](getClass)
 
