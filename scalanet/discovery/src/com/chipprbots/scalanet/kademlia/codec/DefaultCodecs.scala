@@ -17,7 +17,7 @@ object DefaultCodecs extends DefaultCodecDerivations {
 
 trait DefaultCodecDerivations {
   implicit def nodeRecordCodec[A: Codec]: Codec[NodeRecord[A]] = {
-    (bits :: Codec[A]).as[NodeRecord[A]]
+    (bits :: Codec[A] :: Codec[A]).as[NodeRecord[A]]
   }
 
   implicit def findNodesCodec[A: Codec]: Codec[FindNodes[A]] = {
