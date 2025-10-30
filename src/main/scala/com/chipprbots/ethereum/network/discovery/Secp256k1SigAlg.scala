@@ -64,7 +64,7 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
   override def removeRecoveryId(signature: Signature): Signature =
     signature.value.size / 8 match {
       case SignatureBytesSize =>
-        Signature(signature.dropRight(8))
+        Signature(signature.value.dropRight(8))
       case SignatureWithoutRecoveryBytesSize =>
         signature
       case other =>
@@ -72,15 +72,15 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
     }
 
   override def compressPublicKey(publicKey: PublicKey): PublicKey =
-    publicKey.size / 8 match {
+    publicKey.value.size / 8 match {
       case PublicKeyBytesSize =>
         // This is a public key without the prefix, it consists of an x and y bigint.
         // To compress we drop y, and the first byte becomes 02 for even values of y and 03 for odd values.
-        val point = crypto.curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKey.toByteArray)
+        val point = crypto.curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKey.value.toByteArray)
         val key = new ECPublicKeyParameters(point, crypto.curve)
         val bytes = key.getQ.getEncoded(true) // compressed encoding
         val compressed = PublicKey(BitVector(bytes))
-        assert(compressed.size == PublicKeyCompressedBytesSize * 8)
+        assert(compressed.value.size == PublicKeyCompressedBytesSize * 8)
         compressed
 
       case PublicKeyCompressedBytesSize =>
@@ -95,12 +95,12 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
   // https://bitcoin.stackexchange.com/questions/86234/how-to-uncompress-a-public-key
   // https://bitcoin.stackexchange.com/questions/44024/get-uncompressed-public-key-from-compressed-form
   def decompressPublicKey(publicKey: PublicKey): PublicKey =
-    publicKey.size / 8 match {
+    publicKey.value.size / 8 match {
       case PublicKeyBytesSize =>
         publicKey
 
       case PublicKeyCompressedBytesSize =>
-        val point = crypto.curve.getCurve.decodePoint(publicKey.toByteArray)
+        val point = crypto.curve.getCurve.decodePoint(publicKey.value.toByteArray)
         val key = new ECPublicKeyParameters(point, crypto.curve)
         val bytes = key.getQ.getEncoded(false).drop(1) // uncompressed encoding, drop prefix.
         toPublicKey(bytes)
@@ -128,20 +128,20 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
   }
 
   override def toPublicKey(privateKey: PrivateKey): PublicKey = {
-    val publicKeyBytes = crypto.pubKeyFromPrvKey(privateKey.toByteArray)
+    val publicKeyBytes = crypto.pubKeyFromPrvKey(privateKey.value.toByteArray)
     toPublicKey(publicKeyBytes)
   }
 
   private def toPublicKey(publicKeyBytes: Array[Byte]): PublicKey = {
     // Discovery uses 64 byte keys, without the prefix.
     val publicKey = PublicKey(BitVector(publicKeyBytes))
-    assert(publicKey.size == PublicKeyBytesSize * 8, s"Unexpected public key size: ${publicKey.size / 8} bytes")
+    assert(publicKey.value.size == PublicKeyBytesSize * 8, s"Unexpected public key size: ${publicKey.value.size / 8} bytes")
     publicKey
   }
 
   private def toPrivateKey(privateKeyBytes: Array[Byte]): PrivateKey = {
     val privateKey = PrivateKey(BitVector(privateKeyBytes))
-    assert(privateKey.size == PrivateKeyBytesSize * 8, s"Unexpected private key size: ${privateKey.size / 8} bytes")
+    assert(privateKey.value.size == PrivateKeyBytesSize * 8, s"Unexpected private key size: ${privateKey.value.size / 8} bytes")
     privateKey
   }
 

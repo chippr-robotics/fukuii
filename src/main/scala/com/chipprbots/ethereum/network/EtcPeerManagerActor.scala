@@ -351,7 +351,7 @@ object EtcPeerManagerActor {
       PeerInfo(remoteStatus, forkAccepted = false)
   }
 
-  private case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
+  case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
 
   case object GetHandshakedPeers
 

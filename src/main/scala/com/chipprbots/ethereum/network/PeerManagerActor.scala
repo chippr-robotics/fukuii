@@ -6,6 +6,7 @@ import java.util.Collections.newSetFromMap
 
 import org.apache.pekko.actor.SupervisorStrategy.Stop
 import org.apache.pekko.actor._
+import org.apache.pekko.pattern.pipe
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
@@ -270,7 +271,7 @@ class PeerManagerActor(
 
   private def handleCommonMessages(connectedPeers: ConnectedPeers): Receive = {
     case GetPeers =>
-      getPeers(connectedPeers.peers.values.toSet).runToFuture.pipeTo(sender())
+      getPeers(connectedPeers.peers.values.toSet).unsafeToFuture().pipeTo(sender())
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
       connectedPeers.getPeer(peerId).get.ref ! PeerActor.SendMessage(message)
