@@ -19,7 +19,7 @@ object Node {
 
   /** The ID of the node is the 64 bit public key, but for the XOR distance we use its hash. */
   protected[discovery] def kademliaId(id: PublicKey): Hash =
-    Keccak256(id)
+    Keccak256(id.value)
 
   case class Address(
       ip: InetAddress,

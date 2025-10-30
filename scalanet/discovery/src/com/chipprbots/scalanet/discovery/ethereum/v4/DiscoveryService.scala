@@ -87,8 +87,8 @@ object DiscoveryService {
     Resource
       .make {
         for {
-          _ <- checkKeySize("private key", privateKey, sigalg.PrivateKeyBytesSize)
-          _ <- checkKeySize("node ID", node.id, sigalg.PublicKeyBytesSize)
+          _ <- checkKeySize("private key", privateKey.value, sigalg.PrivateKeyBytesSize)
+          _ <- checkKeySize("node ID", node.id.value, sigalg.PublicKeyBytesSize)
 
           // Use the current time to set the ENR sequence to something fresh.
           now <- temporal.monotonic.map(_.toMillis)
@@ -788,7 +788,7 @@ object DiscoveryService {
       // We'll contact 'alpha' at a time but eventually try all of them
       // unless better candidates are found.
       val init = for {
-        _ <- checkKeySize("target public key", target, sigalg.PublicKeyBytesSize)
+        _ <- checkKeySize("target public key", target.value, sigalg.PublicKeyBytesSize)
 
         state <- stateRef.get
 

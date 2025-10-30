@@ -1,10 +1,13 @@
 package com.chipprbots.scalanet.kademlia.codec
 
+import java.util.UUID
 import com.chipprbots.scalanet.kademlia.KMessage
 import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
 import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
-import scodec.codecs.{Discriminated, Discriminator, uint4}
+import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
+import scodec.codecs.{discriminated, uint4, bits, uuid}
 import scodec.Codec
+import scodec.bits.BitVector
 
 /** Encodings for scodec. */
 object DefaultCodecs extends DefaultCodecDerivations {
@@ -13,24 +16,32 @@ object DefaultCodecs extends DefaultCodecDerivations {
 }
 
 trait DefaultCodecDerivations {
-  implicit def kMessageDiscriminator[A]: Discriminated[KMessage[A], Int] =
-    Discriminated[KMessage[A], Int](uint4)
+  implicit def nodeRecordCodec[A: Codec]: Codec[NodeRecord[A]] = {
+    (bits :: Codec[A]).as[NodeRecord[A]]
+  }
 
-  implicit def findNodesDiscriminator[A]: Discriminator[KMessage[A], FindNodes[A], Int] =
-    Discriminator[KMessage[A], FindNodes[A], Int](0)
+  implicit def findNodesCodec[A: Codec]: Codec[FindNodes[A]] = {
+    (uuid :: Codec[NodeRecord[A]] :: bits).as[FindNodes[A]]
+  }
 
-  implicit def pingDiscriminator[A]: Discriminator[KMessage[A], Ping[A], Int] =
-    Discriminator[KMessage[A], Ping[A], Int](1)
+  implicit def pingCodec[A: Codec]: Codec[Ping[A]] = {
+    (uuid :: Codec[NodeRecord[A]]).as[Ping[A]]
+  }
 
-  implicit def nodesDiscriminator[A]: Discriminator[KMessage[A], Nodes[A], Int] =
-    Discriminator[KMessage[A], Nodes[A], Int](2)
+  implicit def nodesCodec[A: Codec]: Codec[Nodes[A]] = {
+    import com.chipprbots.scalanet.codec.DefaultCodecs.seqCoded
+    (uuid :: Codec[NodeRecord[A]] :: Codec[Seq[NodeRecord[A]]]).as[Nodes[A]]
+  }
 
-  implicit def pongDiscriminator[A]: Discriminator[KMessage[A], Pong[A], Int] =
-    Discriminator[KMessage[A], Pong[A], Int](3)
+  implicit def pongCodec[A: Codec]: Codec[Pong[A]] = {
+    (uuid :: Codec[NodeRecord[A]]).as[Pong[A]]
+  }
 
   protected def deriveKMessageCodec[A: Codec]: Codec[KMessage[A]] = {
-    import com.chipprbots.scalanet.codec.DefaultCodecs.seqCoded
-    import scodec.codecs.implicits._
-    implicitly[Codec[KMessage[A]]]
+    discriminated[KMessage[A]].by(uint4)
+      .subcaseP(0) { case f: FindNodes[A] => f }(findNodesCodec[A])
+      .subcaseP(1) { case p: Ping[A] => p }(pingCodec[A])
+      .subcaseP(2) { case n: Nodes[A] => n }(nodesCodec[A])
+      .subcaseP(3) { case p: Pong[A] => p }(pongCodec[A])
   }
 }

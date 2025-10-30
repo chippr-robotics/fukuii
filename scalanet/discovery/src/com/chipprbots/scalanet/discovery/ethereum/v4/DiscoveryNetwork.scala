@@ -44,7 +44,7 @@ object DiscoveryNetwork {
     */
   case class Peer[A](id: Node.Id, address: A) {
     override def toString: String =
-      s"Peer(id = ${id.toHex}, address = $address)"
+      s"Peer(id = ${id.value.toHex}, address = $address)"
 
     lazy val kademliaId: Hash = Node.kademliaId(id)
   }
@@ -86,9 +86,9 @@ object DiscoveryNetwork {
         for {
           cancelToken <- Deferred[IO, Unit]
           _ <- Stream.repeatEval(peerGroup.nextServerEvent)
-            .interruptWhen(cancelToken)
+            .interruptWhen(cancelToken.get.attempt)
             .evalMap {
-              case ChannelCreated(channel, release) =>
+              case ChannelCreated(channel: Channel[A, Packet], release) =>
                 handleChannel(handler, channel, cancelToken)
                   .guarantee(release)
                   .recover {
@@ -111,12 +111,12 @@ object DiscoveryNetwork {
           cancelToken: Deferred[IO, Unit]
       ): IO[Unit] = {
         Stream.repeatEval(channel.nextChannelEvent)
-          .interruptWhen(cancelToken)
+          .interruptWhen(cancelToken.get.attempt)
           .timeout(config.messageExpiration) // Messages older than this would be ignored anyway.
           .evalMap {
-            case MessageReceived(packet) =>
+            case MessageReceived(receivedPacket) =>
               currentTimeSeconds.flatMap { timestamp =>
-                Packet.unpack(packet) match {
+                Packet.unpack(receivedPacket) match {
                   case Attempt.Successful((payload, remotePublicKey)) =>
                     payload match {
                       case _: Payload.Response =>
@@ -127,11 +127,11 @@ object DiscoveryNetwork {
                         IO(logger.debug(s"Ignoring expired request from ${channel.to}; ${p.expiration} < $timestamp"))
 
                       case p: Payload.Request =>
-                        handleRequest(handler, channel, remotePublicKey, packet.hash, p)
+                        handleRequest(handler, channel, remotePublicKey, receivedPacket.hash, p)
                     }
 
                   case Attempt.Failure(err) =>
-                    IO(logger.debug(s"Failed to unpack packet: $err; ${packet.show}")) >>
+                    IO(logger.debug(s"Failed to unpack packet: $err; ${receivedPacket.show}")) >>
                       IO.raiseError(new PacketException(s"Failed to unpack message: $err"))
                 }
               }
@@ -318,30 +318,32 @@ object DiscoveryNetwork {
             channel.nextChannelEvent.timeoutTo(config.requestTimeout.min(deadline.timeLeft), IO.raiseError(new TimeoutException()))
           )
             .collect {
-              case MessageReceived(packet) => packet
+              case MessageReceived(pkt) => pkt
             }
-            .evalMap { packet =>
+            .evalMap { receivedPacket =>
               currentTimeSeconds.flatMap { timestamp =>
-                Packet.unpack(packet) match {
-                  case Attempt.Successful((payload, remotePublicKey)) =>
-                    payload match {
-                      case _ if remotePublicKey != publicKey =>
-                        IO.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
+                val unpackResult = Packet.unpack(receivedPacket)
+                unpackResult.toEither match {
+                  case Right((payload, remotePublicKey)) =>
+                    if (remotePublicKey != publicKey) {
+                      IO.raiseError(new PacketException("Remote public key did not match the expected peer ID."))
+                    } else {
+                      payload match {
+                        case _: Payload.Request =>
+                          // Not relevant on the client channel.
+                          IO.pure(None)
 
-                      case _: Payload.Request =>
-                        // Not relevant on the client channel.
-                        IO.pure(None)
+                        case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
+                          IO(
+                            logger.debug(s"Ignoring expired response from ${channel.to}; ${p.expiration} < $timestamp")
+                          ).as(None)
 
-                      case p: Payload.HasExpiration[_] if isExpired(p, timestamp) =>
-                        IO(
-                          logger.debug(s"Ignoring expired response from ${channel.to}; ${p.expiration} < $timestamp")
-                        ).as(None)
-
-                      case p: Payload.Response =>
-                        IO.pure(Some(p))
+                        case p: Payload.Response =>
+                          IO.pure(Some(p))
+                      }
                     }
 
-                  case Attempt.Failure(err) =>
+                  case Left(err) =>
                     IO.raiseError(
                       new IllegalArgumentException(s"Failed to unpack message: $err")
                     )

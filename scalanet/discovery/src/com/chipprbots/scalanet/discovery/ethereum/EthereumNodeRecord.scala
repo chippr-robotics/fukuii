@@ -92,7 +92,7 @@ object EthereumNodeRecord {
 
     val standardAttrs = List(
       Keys.id -> ByteVector("v4".getBytes(UTF_8)),
-      Keys.secp256k1 -> sigalg.compressPublicKey(sigalg.toPublicKey(privateKey)).toByteVector,
+      Keys.secp256k1 -> sigalg.compressPublicKey(sigalg.toPublicKey(privateKey)).value.toByteVector,
       ipKey -> ByteVector(node.address.ip.getAddress),
       tcpKey -> ByteVector.fromInt(node.address.tcpPort),
       udpKey -> ByteVector.fromInt(node.address.udpPort)
