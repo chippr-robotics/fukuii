@@ -254,6 +254,7 @@ class BlockImporter(
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
             Running
+            ()
           case BlockImportFailedDueToMissingNode(missingNodeException) =>
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail =>
@@ -267,7 +268,7 @@ class BlockImporter(
   }
 
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit = {
-    val newBlocks = (blocks, weights).mapN(BlockToBroadcast)
+    val newBlocks = (blocks, weights).mapN(BlockToBroadcast.apply)
     broadcaster ! BroadcastBlocks(newBlocks)
   }
 

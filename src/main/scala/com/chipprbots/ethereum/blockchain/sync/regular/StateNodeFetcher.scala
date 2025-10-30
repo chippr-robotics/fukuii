@@ -103,7 +103,7 @@ object StateNodeFetcher {
 
   sealed trait StateNodeFetcherCommand
   final case class FetchStateNode(hash: ByteString, originalSender: ClassicActorRef) extends StateNodeFetcherCommand
-  final case object RetryStateNodeRequest extends StateNodeFetcherCommand
+  case object RetryStateNodeRequest extends StateNodeFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends StateNodeFetcherCommand
 
   final case class StateNodeRequester(hash: ByteString, replyTo: ClassicActorRef)

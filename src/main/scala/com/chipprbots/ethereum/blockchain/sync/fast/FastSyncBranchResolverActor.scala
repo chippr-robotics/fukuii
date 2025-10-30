@@ -278,7 +278,7 @@ object FastSyncBranchResolverActor {
     )
 
     sealed trait BranchResolutionFailure
-    final case object NoCommonBlockFound extends BranchResolutionFailure
+    case object NoCommonBlockFound extends BranchResolutionFailure
     final case class BlockHeaderNotFound(blockHeaderNum: BigInt) extends BranchResolutionFailure
   }
 

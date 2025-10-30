@@ -101,7 +101,7 @@ object ValidatorsExecutor {
       )
     } yield BlockExecutionSuccess
 
-    result.left.map(ValidationBeforeExecError)
+    result.left.map(ValidationBeforeExecError.apply)
   }
 
   def validateBlockAfterExecution(
