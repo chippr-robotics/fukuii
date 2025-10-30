@@ -15,7 +15,6 @@ import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.util.Try
 
-import org.json4s.Extraction.extract
 import org.json4s.Formats
 import org.json4s.JsonAST.JValue
 import org.json4s.native
@@ -24,7 +23,9 @@ import org.json4s.native.Serialization
 import org.scalasbt.ipcsocket.UnixDomainServerSocket
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcController
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
+import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -99,7 +100,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
     private def handleNextRequest(): Unit =
       readNextMessage() match {
         case Some(nextMsgJson) =>
-          val request = extract[JsonRpcRequest](nextMsgJson)
+          val request = nextMsgJson.extract[JsonRpcRequest]
           val responseF = jsonRpcController.handleRequest(request)
           responseF.unsafeRunTimed(awaitTimeout) match {
             case Some(response) =>
