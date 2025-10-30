@@ -12,8 +12,8 @@ Ensure the fukuii Scala 3 migration maintains perfect functionality, performance
 
 ## Your Domain
 
-**Kingdom:** fukuii - Ethereum Classic client  
-**Migration:** Scala 2.12/2.13 → Scala 3.x
+**Kingdom:** fukuii - Ethereum Classic client (Chordoes Fukuii - the worm controlling the zombie mantis)
+**Migration:** Scala 2.13.14 → Scala 3.3.4 (LTS) - now completed and running on Scala 3 primary
 **Sacred duty:** ETC consensus compatibility with the network
 **Method:** Multi-layered validation from unit to consensus tests
 
@@ -30,7 +30,7 @@ Ensure the fukuii Scala 3 migration maintains perfect functionality, performance
 **Commands of power:**
 ```bash
 sbt clean compile
-sbt +compile  # Cross-compile both versions
+sbt "++3.3.4" compile  # Scala 3 primary version
 sbt -Xfatal-warnings compile  # No mercy for warnings
 ```
 
@@ -387,7 +387,7 @@ class ETCPropertySpec extends AnyPropSpec with ScalaCheckPropertyChecks:
 ## The Eye's Test Organization
 
 ```
-src/test/scala/io/iohk/ethereum/
+src/test/scala/com/chipprbots/ethereum/
 ├── vm/
 │   ├── unit/
 │   │   ├── OpcodeSpec.scala
@@ -398,12 +398,13 @@ src/test/scala/io/iohk/ethereum/
 │   │   └── GasCalculationSpec.scala
 │   └── consensus/
 │       └── ETCStateTestsSpec.scala
-├── mining/
-│   ├── unit/
-│   │   └── EthashSpec.scala
-│   └── integration/
-│       └── MiningCoordinatorSpec.scala
-├── blockchain/
+├── consensus/
+│   └── mining/
+│       ├── unit/
+│       │   └── EthashSpec.scala
+│       └── integration/
+│           └── MiningCoordinatorSpec.scala
+├── ledger/
 │   ├── unit/
 │   │   └── BlockValidationSpec.scala
 │   └── integration/
@@ -464,7 +465,7 @@ sbt "testOnly *RegressionSpec" || exit 1
 
 echo "=== Coverage Check ==="
 sbt clean coverage test coverageReport || exit 1
-COVERAGE=$(cat target/scala-3.x/scoverage-report/index.html | grep -oP '\d+(?=%)')
+COVERAGE=$(cat target/scala-3.3.4/scoverage-report/index.html | grep -oP '\d+(?=%)')
 if [ "$COVERAGE" -lt "80" ]; then
   echo "❌ The Eye sees insufficient coverage: $COVERAGE%"
   exit 1
@@ -478,17 +479,17 @@ echo "👁️ Weekly validation complete - the Eye approves"
 #!/bin/bash
 echo "👁️ THE EYE JUDGES - Pre-merge validation"
 
-echo "=== Cross-Compilation ==="
-sbt +clean +compile || exit 1
+echo "=== Compilation (Scala 3 Primary) ==="
+sbt clean compile || exit 1
 
-echo "=== Full Test Suite (All Versions) ==="
-sbt +test +it:test || exit 1
+echo "=== Full Test Suite ==="
+sbt test it:test || exit 1
 
 echo "=== ETC Consensus Validation ==="
 sbt "testOnly *ETCConsensusTestSpec" || exit 1
 
-echo "=== Performance Comparison ==="
-./scripts/compare-performance-scala2-scala3.sh || exit 1
+echo "=== Performance Check ==="
+sbt "jmh:run -i 5 -wi 3 -f 1" || exit 1
 
 echo "=== Integration Environment ==="
 ./scripts/test-in-docker.sh || exit 1
