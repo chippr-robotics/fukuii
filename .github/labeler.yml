@@ -1,5 +1,26 @@
 # Automatically label PRs based on changed files
 
+# Agent-specific labels (when agents are working on their respective domains)
+'agent: wraith 👻':
+  - changed-files:
+    - any-glob-to-any-file: ['**/*.scala', 'build.sbt', 'project/**/*']
+
+'agent: mithril ✨':
+  - changed-files:
+    - any-glob-to-any-file: ['**/*.scala']
+
+'agent: ICE 🧊':
+  - changed-files:
+    - any-glob-to-any-file: ['**/*.scala', '**/*.md', 'build.sbt']
+
+'agent: eye 👁️':
+  - changed-files:
+    - any-glob-to-any-file: ['**/test/**/*', '**/*Spec.scala', '**/*Test.scala']
+
+'agent: forge 🔨':
+  - changed-files:
+    - any-glob-to-any-file: ['src/main/scala/**/vm/**/*', 'src/main/scala/**/consensus/**/*', 'src/main/scala/**/mining/**/*', 'crypto/**/*']
+
 'documentation':
   - changed-files:
     - any-glob-to-any-file: ['**/*.md', 'docs/**/*', 'README.*']
