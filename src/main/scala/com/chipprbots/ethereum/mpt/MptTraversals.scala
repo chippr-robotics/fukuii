@@ -50,7 +50,7 @@ object MptTraversals {
       }
       val terminatorAsArray: ByteString = items.last match {
         case RLPValue(bytes) => ByteString(bytes)
-        case _ => throw new MPTException("Invalid Branch Node terminator: unexpected RLP structure")
+        case other => throw new MPTException(s"Invalid Branch Node terminator: expected RLPValue but got ${other.getClass.getSimpleName}")
       }
       BranchNode(
         children = children,
