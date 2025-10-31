@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
+import org.json4s._
 import org.json4s.Extraction
 import org.json4s.JsonAST._
 

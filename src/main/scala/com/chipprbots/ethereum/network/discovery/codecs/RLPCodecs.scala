@@ -53,13 +53,13 @@ trait ContentCodecs {
     summon[RLPCodec[Array[Byte]]].xmap(ByteVector(_), _.toArray)
 
   given hashRLPCodec: RLPCodec[Hash] =
-    summon[RLPCodec[BitVector]].xmap(Hash(_), identity)
+    summon[RLPCodec[BitVector]].xmap(Hash(_), _.value)
 
   given publicKeyRLPCodec: RLPCodec[PublicKey] =
-    summon[RLPCodec[BitVector]].xmap(PublicKey(_), identity)
+    summon[RLPCodec[BitVector]].xmap(PublicKey(_), _.value)
 
   given signatureRLPCodec: RLPCodec[Signature] =
-    summon[RLPCodec[BitVector]].xmap(Signature(_), identity)
+    summon[RLPCodec[BitVector]].xmap(Signature(_), _.value)
 
   given nodeAddressRLPCodec: RLPCodec[Node.Address] = deriveLabelledGenericRLPCodec
 

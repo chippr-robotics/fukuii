@@ -15,6 +15,7 @@ import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.util.Try
 
+import org.json4s._
 import org.json4s.Formats
 import org.json4s.JsonAST.JValue
 import org.json4s.native
@@ -112,7 +113,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
                 "2.0",
                 None,
                 Some(JsonRpcError(-32000, "Request timed out", None)),
-                request.id
+                request.id.getOrElse(JNull)
               )
               out.write((Serialization.write(errorResponse) + '\n').getBytes())
               out.flush()

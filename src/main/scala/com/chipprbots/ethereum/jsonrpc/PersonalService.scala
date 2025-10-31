@@ -169,7 +169,7 @@ class PersonalService(
   }
 
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse] =
-    Task(unlockedWallets.get(request.tx.from)).flatMap {
+    IO(unlockedWallets.get(request.tx.from)).flatMap {
       case Some(wallet) =>
         val futureTxHash = sendTransaction(request.tx, wallet)
         futureTxHash.map(txHash => Right(SendTransactionResponse(txHash)))

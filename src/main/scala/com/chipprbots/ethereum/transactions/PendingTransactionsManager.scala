@@ -91,12 +91,13 @@ class PendingTransactionsManager(
     .newBuilder()
     .expireAfterWrite(txPoolConfig.transactionTimeout._1, txPoolConfig.transactionTimeout._2)
     .maximumSize(txPoolConfig.txPoolSize)
-    .removalListener((notification: RemovalNotification[ByteString, PendingTransaction]) =>
-      if (notification.wasEvicted()) {
-        log.debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
-        knownTransactions = knownTransactions.filterNot(_._1 == notification.getKey)
-      }
-    )
+    .removalListener(new com.google.common.cache.RemovalListener[ByteString, PendingTransaction] {
+      def onRemoval(notification: RemovalNotification[ByteString, PendingTransaction]): Unit =
+        if (notification.wasEvicted()) {
+          log.debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
+          knownTransactions = knownTransactions.filterNot(_._1 == notification.getKey)
+        }
+    })
     .build()
 
   implicit val timeout: Timeout = Timeout(3.seconds)

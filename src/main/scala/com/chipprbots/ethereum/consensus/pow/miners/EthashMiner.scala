@@ -51,11 +51,11 @@ class EthashMiner(
         submitHashRate(ethMiningService, System.nanoTime() - startTime, miningResult)
         handleMiningResult(miningResult, syncController, block)
       }
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Error occurred while mining: ", ex)
         PoWMiningCoordinator.MiningUnsuccessful
       }
-      .runToFuture
+      .unsafeToFuture()
   }
 
   private def doMining(blockNumber: Long, block: Block)(implicit

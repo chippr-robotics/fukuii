@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsM
 object FaucetMethodsImplicits extends JsonMethodsImplicits {
 
   implicit val sendFundsRequestDecoder: JsonMethodDecoder[SendFundsRequest] = {
-    case Some(JArray((input: JString) :: Nil)) => extractAddress(input).map(SendFundsRequest)
+    case Some(JArray((input: JString) :: Nil)) => extractAddress(input).map(SendFundsRequest.apply)
     case _                                     => Left(InvalidParams())
   }
 

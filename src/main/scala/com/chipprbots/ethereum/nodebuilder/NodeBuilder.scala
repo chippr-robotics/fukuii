@@ -214,7 +214,7 @@ trait ConsensusBuilder {
       blockchainReader,
       blockQueue,
       blockValidation,
-      Scheduler(system.dispatchers.lookup("validation-context"))
+      IORuntime.global
     )
 }
 
@@ -796,7 +796,7 @@ trait PortForwardingBuilder {
 
   def startPortForwarding(): Future[Unit] = {
     portForwardingRelease.compareAndSet(None, Some(portForwarding.memoize))
-    portForwardingRelease.get().fold(Future.unit)(_.unsafeToFuture()(ioRuntime).void)
+    portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
   }
 
   def stopPortForwarding(): Future[Unit] =

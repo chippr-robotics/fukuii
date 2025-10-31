@@ -22,11 +22,12 @@ object AuthInitiateMessageV4 extends AuthInitiateEcdsaCodec {
 
   implicit class AuthInitiateMessageV4Dec(val bytes: Array[Byte]) extends AnyVal {
     def toAuthInitiateMessageV4: AuthInitiateMessageV4 = rawDecode(bytes) match {
-      case RLPList(signatureBytes, publicKeyBytes, nonce, version, _*) =>
-        val signature = decodeECDSA(signatureBytes)
+      case RLPList(RLPValue(signatureBytesArr), RLPValue(publicKeyBytesArr), RLPValue(nonceArr), RLPValue(versionArr), _*) =>
+        val signature = decodeECDSA(signatureBytesArr)
         val publicKey =
-          curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: (publicKeyBytes: Array[Byte]))
-        AuthInitiateMessageV4(signature, publicKey, ByteString(nonce: Array[Byte]), version)
+          curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKeyBytesArr)
+        val version = BigInt(versionArr).toInt
+        AuthInitiateMessageV4(signature, publicKey, ByteString(nonceArr), version)
       case _ => throw new RuntimeException("Cannot decode auth initiate message")
     }
   }

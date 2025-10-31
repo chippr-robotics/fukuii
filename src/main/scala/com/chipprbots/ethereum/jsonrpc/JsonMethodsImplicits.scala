@@ -136,7 +136,7 @@ trait JsonMethodsImplicits {
       case JString("pending")  => Right(BlockParam.Pending)
       case other =>
         extractQuantity(other)
-          .map(BlockParam.WithNumber)
+          .map(BlockParam.WithNumber.apply)
           .left
           .map(_ => JsonRpcError.InvalidParams(s"Invalid default block param: $other"))
     }
@@ -154,7 +154,7 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
     new JsonMethodDecoder[Sha3Request] with JsonEncoder[Sha3Response] {
       override def decodeJson(params: Option[JArray]): Either[JsonRpcError, Sha3Request] =
         params match {
-          case Some(JArray((input: JString) :: Nil)) => extractBytes(input).map(Sha3Request)
+          case Some(JArray((input: JString) :: Nil)) => extractBytes(input).map(Sha3Request.apply)
           case _                                     => Left(InvalidParams())
         }
 
@@ -307,7 +307,7 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, LockAccountRequest] =
         params match {
           case Some(JArray(JString(addr) :: _)) =>
-            extractAddress(addr).map(LockAccountRequest)
+            extractAddress(addr).map(LockAccountRequest.apply)
           case _ =>
             Left(InvalidParams())
         }

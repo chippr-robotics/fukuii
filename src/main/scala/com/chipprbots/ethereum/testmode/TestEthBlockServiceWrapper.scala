@@ -186,6 +186,6 @@ object EthTransactionResponse {
       input = stx.tx.payload,
       r = stx.signature.r,
       s = stx.signature.s,
-      v = stx.signature.v
+      v = BigInt(stx.signature.v)
     )
 }

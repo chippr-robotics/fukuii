@@ -35,7 +35,7 @@ class EthUserService(
   import EthUserService._
 
   def getCode(req: GetCodeRequest): ServiceResponse[GetCodeResponse] =
-    Task {
+    IO {
       resolveBlock(req.block).map { case ResolvedBlock(block, _) =>
         val world = InMemoryWorldStateProxy(
           evmCodeStorage,
@@ -73,7 +73,7 @@ class EthUserService(
     }
 
   private def withAccount[T](address: Address, blockParam: BlockParam)(makeResponse: Account => T): ServiceResponse[T] =
-    Task {
+    IO {
       resolveBlock(blockParam)
         .map { case ResolvedBlock(block, _) =>
           blockchainReader

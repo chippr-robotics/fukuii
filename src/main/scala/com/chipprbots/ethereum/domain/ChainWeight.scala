@@ -24,7 +24,7 @@ case class ChainWeight(
   }
 
   def asTuple: (BigInt, BigInt) =
-    ChainWeight.unapply(this).get
+    (lastCheckpointNumber, totalDifficulty)
 
   // Test API
 

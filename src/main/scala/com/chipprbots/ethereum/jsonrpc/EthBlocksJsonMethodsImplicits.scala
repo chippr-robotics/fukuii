@@ -7,6 +7,8 @@ import org.json4s.JsonAST.JField
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
 import org.json4s.JsonDSL._
+import org.json4s.JsonAST.JObject
+import org.json4s.jvalue2monadic
 
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
@@ -27,7 +29,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
       override def decodeJson(params: Option[JArray]): Either[JsonRpcError, TxCountByBlockHashRequest] =
         params match {
           case Some(JArray(JString(input) :: Nil)) =>
-            extractHash(input).map(TxCountByBlockHashRequest)
+            extractHash(input).map(TxCountByBlockHashRequest.apply)
           case _ => Left(InvalidParams())
         }
 

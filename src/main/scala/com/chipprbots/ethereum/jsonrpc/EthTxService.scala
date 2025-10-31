@@ -96,8 +96,8 @@ class EthTxService(
     eventualMaybeData.map(txResponse => Right(GetTransactionByHashResponse(txResponse.map(TransactionResponse(_)))))
   }
 
-  private def getTransactionDataByHash(txHash: ByteString): Task[Option[TransactionData]] = {
-    val maybeTxPendingResponse: Task[Option[TransactionData]] = getTransactionsFromPool.map {
+  private def getTransactionDataByHash(txHash: ByteString): IO[Option[TransactionData]] = {
+    val maybeTxPendingResponse: IO[Option[TransactionData]] = getTransactionsFromPool.map {
       _.pendingTransactions.map(_.stx.tx).find(_.hash == txHash).map(TransactionData(_))
     }
 
@@ -113,7 +113,7 @@ class EthTxService(
   }
 
   def getTransactionReceipt(req: GetTransactionReceiptRequest): ServiceResponse[GetTransactionReceiptResponse] =
-    Task {
+    IO {
       val result: Option[TransactionReceiptResponse] = for {
         TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(req.txHash)
         Block(header, body) <- blockchainReader.getBlockByHash(blockHash)
@@ -155,7 +155,7 @@ class EthTxService(
       .map(td => Right(GetTransactionByBlockHashAndIndexResponse(td.map(TransactionResponse(_)))))
 
   private def getTransactionByBlockHashAndIndex(blockHash: ByteString, transactionIndex: BigInt) =
-    Task {
+    IO {
       for {
         blockWithTx <- blockchainReader.getBlockByHash(blockHash)
         blockTxs = blockWithTx.body.transactionList if transactionIndex >= 0 && transactionIndex < blockTxs.size
@@ -167,7 +167,7 @@ class EthTxService(
     val blockDifference = 30
     val bestBlock = blockchainReader.getBestBlockNumber()
 
-    Task {
+    IO {
       val bestBranch = blockchainReader.getBestBranch()
       val gasPrice = ((bestBlock - blockDifference) to bestBlock)
         .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
@@ -208,7 +208,7 @@ class EthTxService(
     */
   def getTransactionByBlockNumberAndIndex(
       req: GetTransactionByBlockNumberAndIndexRequest
-  ): ServiceResponse[GetTransactionByBlockNumberAndIndexResponse] = Task {
+  ): ServiceResponse[GetTransactionByBlockNumberAndIndexResponse] = IO {
     getTransactionDataByBlockNumberAndIndex(req.block, req.transactionIndex)
       .map(_.map(TransactionResponse(_)))
       .map(GetTransactionByBlockNumberAndIndexResponse)
@@ -224,7 +224,7 @@ class EthTxService(
     */
   def getRawTransactionByBlockNumberAndIndex(
       req: GetTransactionByBlockNumberAndIndexRequest
-  ): ServiceResponse[RawTransactionResponse] = Task {
+  ): ServiceResponse[RawTransactionResponse] = IO {
     getTransactionDataByBlockNumberAndIndex(req.block, req.transactionIndex)
       .map(x => x.map(_.stx))
       .map(RawTransactionResponse)
