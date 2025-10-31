@@ -9,7 +9,11 @@
 # (EVM, mining, blockchain core, cryptography)
 'agent: forge 🔨':
   - changed-files:
-    - any-glob-to-any-file: ['src/main/scala/**/vm/**/*', 'src/main/scala/**/consensus/**/*', 'src/main/scala/**/mining/**/*', 'crypto/**/*']
+    - any-glob-to-any-file:
+        - 'src/main/scala/**/vm/**/*'
+        - 'src/main/scala/**/consensus/**/*'
+        - 'src/main/scala/**/mining/**/*'
+        - 'crypto/**/*'
 
 # Note: Other agent labels are typically applied manually:
 # - agent: wraith 👻 - For compilation error fixes (manual)
