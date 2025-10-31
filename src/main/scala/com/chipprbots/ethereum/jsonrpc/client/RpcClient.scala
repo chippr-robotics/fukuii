@@ -62,7 +62,7 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
   }
 
   private def getResult[T: Decoder](jsonResponse: Json): Either[RpcError, T] =
-    jsonResponse.hcursor.downField("error").as[JsonRpcError] match {
+    (jsonResponse.hcursor.downField("error").as[JsonRpcError]: @annotation.nowarn("msg=not inlined")) match {
       case Right(error) =>
         Left(RpcClientError(s"Node returned an error: ${error.message} (${error.code})"))
       case Left(_) =>

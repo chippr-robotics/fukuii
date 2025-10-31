@@ -259,7 +259,6 @@ class BlockImporter(
           case BlockImportFailed(error) if informFetcherOnFail =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number, BlacklistReason.BlockImportError(error))
           case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
-          case result => log.error("Unknown block import result {}", result)
         }
         .map(_ => Running),
       blockImportType

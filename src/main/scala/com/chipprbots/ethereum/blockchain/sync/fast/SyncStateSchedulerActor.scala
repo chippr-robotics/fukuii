@@ -88,20 +88,22 @@ class SyncStateSchedulerActor(
       self ! RequestFailed(peer, "Peer disconnected in the middle of request")
   }
 
-  private val loadingCancelable = sync.loadFilterFromBlockchain.unsafeRunCancelable() { (result: Either[Throwable, BloomFilterLoadingResult]) =>
-    result match {
-      case Left(value) =>
-        log.error(
-          "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
-            "which may result with degraded performance",
-          value
-        )
-        self ! BloomFilterResult(BloomFilterLoadingResult())
-      case Right(value) =>
-        log.info("Bloom filter loading finished")
-        self ! BloomFilterResult(value)
+  private val loadingCancelable = sync.loadFilterFromBlockchain.attempt.flatMap { result =>
+    IO {
+      result match {
+        case Left(value) =>
+          log.error(
+            "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
+              "which may result with degraded performance",
+            value
+          )
+          self ! BloomFilterResult(BloomFilterLoadingResult())
+        case Right(value) =>
+          log.info("Bloom filter loading finished")
+          self ! BloomFilterResult(value)
+      }
     }
-  }
+  }.start.unsafeRunSync()(monixScheduler)
 
   def waitingForBloomFilterToLoad(lastReceivedCommand: Option[(SyncStateSchedulerActorCommand, ActorRef)]): Receive =
     handlePeerListMessages.orElse {
@@ -339,7 +341,7 @@ class SyncStateSchedulerActor(
   override def receive: Receive = waitingForBloomFilterToLoad(None)
 
   override def postStop(): Unit = {
-    loadingCancelable.cancel()
+    loadingCancelable.cancel.unsafeRunSync()(monixScheduler)
     super.postStop()
   }
 }

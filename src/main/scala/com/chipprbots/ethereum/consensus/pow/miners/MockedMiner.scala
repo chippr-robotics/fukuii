@@ -43,6 +43,7 @@ class MockedMiner(
   import org.apache.pekko.pattern.pipe
   // CE3: Using global IORuntime for actor operations
   implicit val scheduler: IORuntime = IORuntime.global
+  implicit val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
   override def receive: Receive = stopped
 

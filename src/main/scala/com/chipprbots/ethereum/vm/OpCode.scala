@@ -806,7 +806,7 @@ case object JUMPI extends OpCode(0x57, 2, 0, _.G_high) with ConstGas {
 
     if (cond.isZero)
       state.withStack(stack1).step()
-    else if (pos == dest && state.program.validJumpDestinations.contains(dest))
+    else if (pos == UInt256(dest) && state.program.validJumpDestinations.contains(dest))
       state.withStack(stack1).goto(dest)
     else
       state.withError(InvalidJump(pos))
@@ -927,7 +927,8 @@ sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0
   def this(code: Int) = this(code, code - 0xa0)
 
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
-    val (Seq(offset, size, topics @ _*), stack1) = state.stack.pop(delta: Int)
+    val (stack1Items, stack1) = state.stack.pop(delta: Int)
+    val (offset +: size +: topics) = stack1Items: @unchecked
     val (data, memory) = state.memory.load(offset, size)
     val logEntry = TxLogEntry(state.env.ownerAddr, topics.map(_.bytes), data)
 
@@ -935,7 +936,8 @@ sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0
   }
 
   protected def varGas[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): BigInt = {
-    val (Seq(offset, size, _*), _) = state.stack.pop(delta: Int)
+    val (stack1Items, _) = state.stack.pop(delta: Int)
+    val (offset +: size +: _) = stack1Items: @unchecked
     val memCost = state.config.calcMemCost(state.memory.size, offset, size)
     val logCost = state.config.feeSchedule.G_logdata * size + i * state.config.feeSchedule.G_logtopic
     memCost + logCost

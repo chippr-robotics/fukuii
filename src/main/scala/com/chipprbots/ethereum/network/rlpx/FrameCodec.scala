@@ -31,14 +31,14 @@ class FrameCodec(private val secrets: Secrets) {
 
   // needs to be lazy to enable mocking
   private lazy val enc: StreamCipher = {
-    val cipher = new SICBlockCipher(new AESEngine)
+    val cipher = new SICBlockCipher(new AESEngine): @annotation.nowarn("cat=deprecation")
     cipher.init(true, new ParametersWithIV(new KeyParameter(secrets.aes), allZerosIV))
     cipher
   }
 
   // needs to be lazy to enable mocking
   private lazy val dec: StreamCipher = {
-    val cipher = new SICBlockCipher(new AESEngine)
+    val cipher = new SICBlockCipher(new AESEngine): @annotation.nowarn("cat=deprecation")
     cipher.init(false, new ParametersWithIV(new KeyParameter(secrets.aes), allZerosIV))
     cipher
   }
@@ -198,7 +198,7 @@ class FrameCodec(private val secrets: Secrets) {
   }
 
   private def makeMacCipher: AESEngine = {
-    val macc = new AESEngine
+    val macc = new AESEngine: @annotation.nowarn("cat=deprecation")
     macc.init(true, new KeyParameter(secrets.mac))
     macc
   }

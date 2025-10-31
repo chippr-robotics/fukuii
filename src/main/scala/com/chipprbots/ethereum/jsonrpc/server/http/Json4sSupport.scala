@@ -16,17 +16,17 @@ trait Json4sSupport {
 
   implicit def formats: Formats
 
-  implicit def json4sUnmarshaller: FromEntityUnmarshaller[AnyRef] =
+  implicit def json4sUnmarshaller[A <: AnyRef: Manifest]: FromEntityUnmarshaller[A] =
     Unmarshaller.byteStringUnmarshaller
       .forContentTypes(MediaTypes.`application/json`)
       .map { bytes =>
-        serialization.read[AnyRef](bytes.utf8String)
+        serialization.read[A](bytes.utf8String)
       }
 
   implicit def json4sMarshaller[A <: AnyRef]: ToEntityMarshaller[A] =
     Marshaller.oneOf(
-      Marshaller.withFixedContentType(MediaTypes.`application/json`) { value =>
-        HttpEntity(MediaTypes.`application/json`, serialization.write(value))
+      Marshaller.withFixedContentType(MediaTypes.`application/json`) { (value: A) =>
+        HttpEntity(MediaTypes.`application/json`, serialization.write(value: AnyRef))
       }
     )
 }

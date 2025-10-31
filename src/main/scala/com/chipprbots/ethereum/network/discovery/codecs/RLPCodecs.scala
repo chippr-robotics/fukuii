@@ -61,7 +61,23 @@ trait ContentCodecs {
   given signatureRLPCodec: RLPCodec[Signature] =
     summon[RLPCodec[BitVector]].xmap(Signature(_), _.value)
 
-  given nodeAddressRLPCodec: RLPCodec[Node.Address] = deriveLabelledGenericRLPCodec
+  given nodeAddressRLPCodec: RLPCodec[Node.Address] = RLPCodec.instance[Node.Address](
+    { case Node.Address(ip, udpPort, tcpPort) =>
+      RLPList(
+        RLPEncoder.encode(ip.getAddress),
+        RLPEncoder.encode(udpPort),
+        RLPEncoder.encode(tcpPort)
+      )
+    },
+    {
+      case RLPList(ipBytes, udpPort, tcpPort) =>
+        Node.Address(
+          InetAddress.getByAddress(ipBytes.decodeAs[Array[Byte]]("ip")),
+          udpPort.decodeAs[Int]("udpPort"),
+          tcpPort.decodeAs[Int]("tcpPort")
+        )
+    }
+  )
 
   given nodeRLPCodec: RLPCodec[Node] =
     RLPCodec.instance[Node](
@@ -144,17 +160,116 @@ trait PayloadCodecs { self: ContentCodecs =>
   given payloadDerivationPolicy: DerivationPolicy =
     DerivationPolicy.default.copy(omitTrailingOptionals = true)
 
-  given pingRLPCodec: RLPCodec[Payload.Ping] = deriveLabelledGenericRLPCodec
+  given pingRLPCodec: RLPCodec[Payload.Ping] = RLPCodec.instance[Payload.Ping](
+    { case Payload.Ping(version, from, to, expiration, enrSeq) =>
+      val items = List(
+        RLPEncoder.encode(version),
+        RLPEncoder.encode(from),
+        RLPEncoder.encode(to),
+        RLPEncoder.encode(expiration)
+      ) ++ enrSeq.toList.map(RLPEncoder.encode(_))
+      RLPList(items: _*)
+    },
+    {
+      case RLPList(version, from, to, expiration) =>
+        Payload.Ping(
+          version.decodeAs[Int]("version"),
+          from.decodeAs[Node.Address]("from"),
+          to.decodeAs[Node.Address]("to"),
+          expiration.decodeAs[Long]("expiration"),
+          None
+        )
+      case RLPList(version, from, to, expiration, enrSeq) =>
+        Payload.Ping(
+          version.decodeAs[Int]("version"),
+          from.decodeAs[Node.Address]("from"),
+          to.decodeAs[Node.Address]("to"),
+          expiration.decodeAs[Long]("expiration"),
+          Some(enrSeq.decodeAs[Long]("enrSeq"))
+        )
+    }
+  )
 
-  given pongRLPCodec: RLPCodec[Payload.Pong] = deriveLabelledGenericRLPCodec
+  given pongRLPCodec: RLPCodec[Payload.Pong] = RLPCodec.instance[Payload.Pong](
+    { case Payload.Pong(to, pingHash, expiration, enrSeq) =>
+      val items = List(
+        RLPEncoder.encode(to),
+        RLPEncoder.encode(pingHash),
+        RLPEncoder.encode(expiration)
+      ) ++ enrSeq.toList.map(RLPEncoder.encode(_))
+      RLPList(items: _*)
+    },
+    {
+      case RLPList(to, pingHash, expiration) =>
+        Payload.Pong(
+          to.decodeAs[Node.Address]("to"),
+          pingHash.decodeAs[Hash]("pingHash"),
+          expiration.decodeAs[Long]("expiration"),
+          None
+        )
+      case RLPList(to, pingHash, expiration, enrSeq) =>
+        Payload.Pong(
+          to.decodeAs[Node.Address]("to"),
+          pingHash.decodeAs[Hash]("pingHash"),
+          expiration.decodeAs[Long]("expiration"),
+          Some(enrSeq.decodeAs[Long]("enrSeq"))
+        )
+    }
+  )
 
-  given findNodeRLPCodec: RLPCodec[Payload.FindNode] = deriveLabelledGenericRLPCodec
+  given findNodeRLPCodec: RLPCodec[Payload.FindNode] = RLPCodec.instance[Payload.FindNode](
+    { case Payload.FindNode(target, expiration) =>
+      RLPList(
+        RLPEncoder.encode(target),
+        RLPEncoder.encode(expiration)
+      )
+    },
+    { case RLPList(target, expiration) =>
+      Payload.FindNode(
+        target.decodeAs[PublicKey]("target"),
+        expiration.decodeAs[Long]("expiration")
+      )
+    }
+  )
 
-  given neighborsRLPCodec: RLPCodec[Payload.Neighbors] = deriveLabelledGenericRLPCodec
+  given neighborsRLPCodec: RLPCodec[Payload.Neighbors] = RLPCodec.instance[Payload.Neighbors](
+    { case Payload.Neighbors(nodes, expiration) =>
+      RLPList(
+        RLPEncoder.encode(nodes),
+        RLPEncoder.encode(expiration)
+      )
+    },
+    { case RLPList(nodes, expiration) =>
+      Payload.Neighbors(
+        nodes.decodeAs[List[Node]]("nodes"),
+        expiration.decodeAs[Long]("expiration")
+      )
+    }
+  )
 
-  given enrRequestRLPCodec: RLPCodec[Payload.ENRRequest] = deriveLabelledGenericRLPCodec
+  given enrRequestRLPCodec: RLPCodec[Payload.ENRRequest] = RLPCodec.instance[Payload.ENRRequest](
+    { case Payload.ENRRequest(expiration) =>
+      RLPList(RLPEncoder.encode(expiration))
+    },
+    { case RLPList(expiration) =>
+      Payload.ENRRequest(expiration.decodeAs[Long]("expiration"))
+    }
+  )
 
-  given enrResponseRLPCodec: RLPCodec[Payload.ENRResponse] = deriveLabelledGenericRLPCodec
+  given enrResponseRLPCodec: RLPCodec[Payload.ENRResponse] = RLPCodec.instance[Payload.ENRResponse](
+    { case Payload.ENRResponse(requestHash, enr) =>
+      RLPList(
+        RLPEncoder.encode(requestHash),
+        RLPEncoder.encode(enr)
+      )
+    },
+    { case RLPList(requestHash, enr) =>
+      Payload.ENRResponse(
+        requestHash.decodeAs[Hash]("requestHash"),
+        enr.decodeAs[EthereumNodeRecord]("enr")
+      )
+    }
+  )
 
   private object PacketType {
     val Ping: Byte = 0x01

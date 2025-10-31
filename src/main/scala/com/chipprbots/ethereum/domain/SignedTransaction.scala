@@ -112,7 +112,6 @@ object SignedTransaction {
         getLegacyTransactionRawSignature(signedTransaction.signature, chainIdOpt)
       case _: TransactionWithAccessList =>
         getTWALRawSignature(signedTransaction.signature)
-      case _ => throw new IllegalArgumentException(s"Transaction type not supported for $signedTransaction")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -201,7 +200,6 @@ object SignedTransaction {
         getLegacyEthereumSignature(rawSignature, chainIdOpt)
       case _: TransactionWithAccessList =>
         getTWALEthereumSignature(rawSignature)
-      case _ => throw new IllegalArgumentException(s"Transaction type not supported for $tx")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -365,7 +363,6 @@ object SignedTransaction {
     signedTransaction.tx match {
       case _: LegacyTransaction            => getLegacyBytesToSign(signedTransaction)
       case twal: TransactionWithAccessList => getTWALBytesToSign(twal)
-      case _ => throw new IllegalArgumentException(s"unknown transaction type for $signedTransaction")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.

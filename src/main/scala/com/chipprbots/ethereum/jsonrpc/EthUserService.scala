@@ -81,7 +81,7 @@ class EthUserService(
             .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
         }
         .map(makeResponse)
-    }.onErrorRecover { case _: MissingNodeException =>
+    }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
 
