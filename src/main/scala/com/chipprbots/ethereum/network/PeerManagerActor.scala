@@ -393,7 +393,7 @@ class PeerManagerActor(
         case _: java.util.concurrent.TimeoutException =>
           IO.pure(None) // Expected timeout, no logging needed
         case err =>
-          IO(log.error(err, s"Failed to get status for peer: ${peer.id}")).as(None)
+          IO.delay(log.error(err, s"Failed to get status for peer: ${peer.id}")).as(None)
       }
   }
 
