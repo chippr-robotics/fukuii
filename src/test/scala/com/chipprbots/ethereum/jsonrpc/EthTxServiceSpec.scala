@@ -46,7 +46,7 @@ class EthTxServiceSpec
   it should "answer eth_getTransactionByBlockHashAndIndex with None when there is no block with the requested hash" in new TestSetup {
     val txIndexToRequest = blockToRequest.body.transactionList.size / 2
     val request = GetTransactionByBlockHashAndIndexRequest(blockToRequest.header.hash, txIndexToRequest)
-    val response = ethTxService.getTransactionByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getTransactionByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     response.transactionResponse shouldBe None
   }
@@ -58,7 +58,7 @@ class EthTxServiceSpec
     val requestWithInvalidIndex = GetTransactionByBlockHashAndIndexRequest(blockToRequest.header.hash, invalidTxIndex)
     val response = ethTxService
       .getTransactionByBlockHashAndIndex(requestWithInvalidIndex)
-      .runSyncUnsafe(Duration.Inf)
+      .unsafeRunSync()
       .toOption
       .get
 
@@ -70,7 +70,7 @@ class EthTxServiceSpec
 
     val txIndexToRequest = blockToRequest.body.transactionList.size / 2
     val request = GetTransactionByBlockHashAndIndexRequest(blockToRequest.header.hash, txIndexToRequest)
-    val response = ethTxService.getTransactionByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getTransactionByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     val requestedStx = blockToRequest.body.transactionList.apply(txIndexToRequest)
     val expectedTxResponse = TransactionResponse(requestedStx, Some(blockToRequest.header), Some(txIndexToRequest))
@@ -83,7 +83,7 @@ class EthTxServiceSpec
     val request = GetTransactionByBlockHashAndIndexRequest(blockToRequest.header.hash, txIndexToRequest)
 
     // when
-    val response = ethTxService.getRawTransactionByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getRawTransactionByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     // then
     response.transactionResponse shouldBe None
@@ -99,7 +99,7 @@ class EthTxServiceSpec
     // when
     val response = ethTxService
       .getRawTransactionByBlockHashAndIndex(requestWithInvalidIndex)
-      .runSyncUnsafe(Duration.Inf)
+      .unsafeRunSync()
       .toOption
       .value
 
@@ -114,7 +114,7 @@ class EthTxServiceSpec
     val request = GetTransactionByBlockHashAndIndexRequest(blockToRequest.header.hash, txIndexToRequest)
 
     // when
-    val response = ethTxService.getRawTransactionByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getRawTransactionByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     // then
     val expectedTxResponse = blockToRequest.body.transactionList.lift(txIndexToRequest)
@@ -193,7 +193,7 @@ class EthTxServiceSpec
 
     val txIndex: Int = 1
     val request = GetTransactionByBlockNumberAndIndexRequest(BlockParam.Latest, txIndex)
-    val response = ethTxService.getTransactionByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getTransactionByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     val expectedTxResponse =
       TransactionResponse(blockToRequest.body.transactionList(txIndex), Some(blockToRequest.header), Some(txIndex))
@@ -206,7 +206,7 @@ class EthTxServiceSpec
     val txIndex: Int = blockToRequest.body.transactionList.length + 42
     val request =
       GetTransactionByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequest.header.number), txIndex)
-    val response = ethTxService.getTransactionByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getTransactionByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.transactionResponse shouldBe None
   }
@@ -217,7 +217,7 @@ class EthTxServiceSpec
     val txIndex: Int = 1
     val request =
       GetTransactionByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequest.header.number - 42), txIndex)
-    val response = ethTxService.getTransactionByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getTransactionByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.transactionResponse shouldBe None
   }
@@ -228,7 +228,7 @@ class EthTxServiceSpec
 
     val txIndex: Int = 1
     val request = GetTransactionByBlockNumberAndIndexRequest(BlockParam.Latest, txIndex)
-    val response = ethTxService.getRawTransactionByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getRawTransactionByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     val expectedTxResponse = blockToRequest.body.transactionList.lift(txIndex)
     response.transactionResponse shouldBe expectedTxResponse
@@ -240,7 +240,7 @@ class EthTxServiceSpec
     val txIndex: Int = blockToRequest.body.transactionList.length + 42
     val request =
       GetTransactionByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequest.header.number), txIndex)
-    val response = ethTxService.getRawTransactionByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getRawTransactionByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.transactionResponse shouldBe None
   }
@@ -251,7 +251,7 @@ class EthTxServiceSpec
     val txIndex: Int = 1
     val request =
       GetTransactionByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequest.header.number - 42), txIndex)
-    val response = ethTxService.getRawTransactionByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethTxService.getRawTransactionByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.transactionResponse shouldBe None
   }
