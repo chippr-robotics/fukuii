@@ -332,7 +332,7 @@ object FastSyncBranchResolverActorSpec extends Logger {
 
   private val responsesTopicIO: IO[Topic[IO, MessageFromPeer]] = Topic[IO, MessageFromPeer]
   private val responsesTopic: Topic[IO, MessageFromPeer] = responsesTopicIO.unsafeRunSync()(IORuntime.global)
-  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit](IORuntime.global)
+  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit]
 
   var responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
 

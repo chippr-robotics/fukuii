@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.proof.MptProofVerifier
 import com.chipprbots.ethereum.proof.ProofVerifyResult.ValidProof
+import com.chipprbots.ethereum.domain.Account.accountSerializer
 
 class BlockchainSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
 

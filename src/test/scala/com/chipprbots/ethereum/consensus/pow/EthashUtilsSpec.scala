@@ -24,9 +24,9 @@ class EthashUtilsSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     val seedEpoch383 = ByteStringUtils.string2hash("bf532874eb434842e7a3e4acd113fe454541651872760d9b95d11d7f90ca25dc")
     val table: TableFor2[Long, ByteString] = Table(
       ("blockNumber", "referenceSeed"),
-      (0, seedEpoch0),
-      (1, seedEpoch0),
-      (30_000, seedEpoch1),
+      (0L, seedEpoch0),
+      (1L, seedEpoch0),
+      (30_000L, seedEpoch1),
       (ecip1099forkBlockNumber, seedEpoch382),
       (ecip1099forkBlockNumber + 30_000, seedEpoch382),
       (ecip1099forkBlockNumber + 60_000, seedEpoch383)

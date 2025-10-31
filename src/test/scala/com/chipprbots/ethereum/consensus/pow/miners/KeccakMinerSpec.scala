@@ -51,6 +51,8 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers {
   }
 
   trait TestSetup extends ScalaTestWithActorTestKit with MinerSpecSetup {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    
     implicit private val durationTimeout: Duration = Timeouts.miningTimeout
 
     implicit override lazy val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig

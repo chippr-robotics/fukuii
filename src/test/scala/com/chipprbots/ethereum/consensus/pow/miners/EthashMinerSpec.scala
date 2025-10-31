@@ -53,6 +53,8 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers {
   }
 
   class TestSetup extends MinerSpecSetup with Eventually with MiningPatience {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    
     override val origin: Block = Block(
       Fixtures.Blocks.Genesis.header.copy(
         difficulty = UInt256(Hex.decode("0400")).toBigInt,

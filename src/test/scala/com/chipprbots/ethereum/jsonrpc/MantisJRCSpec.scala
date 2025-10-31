@@ -65,7 +65,7 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
   def createFixture() = new Fixture
 
   "Mantis JRC" - {
-    "should handle mantis_getAccountTransactions" in testCaseM { fixture =>
+    "should handle mantis_getAccountTransactions" in testCaseM[IO] { fixture =>
       import fixture._
       val block = Fixtures.Blocks.Block3125369
       val sentTx = block.body.transactionList.head

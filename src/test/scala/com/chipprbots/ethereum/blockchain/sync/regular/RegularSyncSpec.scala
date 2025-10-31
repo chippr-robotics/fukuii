@@ -84,13 +84,15 @@ class RegularSyncSpec
   override def afterEach(): Unit =
     TestKit.shutdownActorSystem(testSystem)
 
-  def sync[T <: Fixture](test: => T): Future[Assertion] =
+  def sync[T <: Fixture](test: => T): Future[Assertion] = {
+    import scala.concurrent.ExecutionContext.Implicits.global
     Future {
       test
       // this makes sure that actors are all done after the test (believe me, afterEach does not work with mocks)
       TestKit.shutdownActorSystem(testSystem)
       succeed
     }
+  }
 
   "Regular Sync" when {
     "initializing" should {
@@ -295,7 +297,7 @@ class RegularSyncSpec
           (blockchainReader.getBestBlockNumber _).when().onCall(() => bestBlock.number)
           override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
           (consensusAdapter
-            .evaluateBranchBlock(_: Block)(_: Scheduler, _: BlockchainConfig))
+            .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
             .when(*, *, *)
             .onCall((block, _, _) => fakeEvaluateBlock(block))
           override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
