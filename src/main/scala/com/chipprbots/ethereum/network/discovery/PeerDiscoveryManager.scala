@@ -208,7 +208,7 @@ class PeerDiscoveryManager(
 
   def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit =
     task
-      .handleErrorWith(ex => IO(log.error(ex, "Failed to relay result to recipient.")).flatMap(_ => IO.raiseError(ex)))
+      .onError(ex => IO(log.error(ex, "Failed to relay result to recipient.")))
       .unsafeToFuture()
       .pipeTo(recipient)
 

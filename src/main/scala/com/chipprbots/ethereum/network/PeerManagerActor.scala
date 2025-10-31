@@ -389,9 +389,14 @@ class PeerManagerActor(
     peer.ref
       .askFor[PeerActor.StatusResponse](PeerActor.GetStatus)
       .map(sr => Some((peer, sr.status)))
-      .handleError { err =>
-        log.error(err, s"Failed to get status for peer: ${peer.id}")
-        None
+      .handleErrorWith {
+        case _: java.util.concurrent.TimeoutException =>
+          IO.pure(None) // Expected timeout, no logging needed
+        case err =>
+          IO {
+            log.error(err, s"Failed to get status for peer: ${peer.id}")
+            None
+          }
       }
   }
 
