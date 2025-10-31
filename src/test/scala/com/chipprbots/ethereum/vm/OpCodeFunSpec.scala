@@ -63,7 +63,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (a, _) = stateIn.stack.pop()
-        val (result, _) = = stateOut.pop()
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(a)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -78,7 +78,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (Seq(a, b), _) = stateIn.stack.pop(2)
-        val (result, _) = = stateOut.pop()
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(a, b)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -93,7 +93,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (Seq(a, b, c), _) = stateIn.stack.pop(3)
-        val (result, _) = = stateOut.pop()
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(a, b, c)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -107,7 +107,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (result, _) = = stateOut.pop()
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(stateIn)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -145,7 +145,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       withStackVerification(op, stateIn, stateOut) {
         val (Seq(offset, size), _) = stateIn.stack.pop(2)
         val (data, mem1) = stateIn.memory.load(offset, size)
-        val (result, _) = = stateOut.pop()
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual UInt256(kec256(data.toArray))
 
         val expectedState = stateIn.withStack(stateOut.stack).withMemory(mem1).step()
@@ -217,7 +217,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (offset, _) = stateIn.stack.pop()
-        val (data, _) = = stateOut.pop()
+        val (data, _) = stateOut.stack.pop()
         data shouldEqual UInt256(OpCode.sliceBytes(stateIn.inputData, offset, 32))
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -378,7 +378,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (offset, _) = stateIn.stack.pop()
-        val (result, _) = = stateOut.pop()
+        val (result, _) = stateOut.stack.pop()
         val (data, _) = stateIn.memory.load(offset)
         result shouldEqual data
 
@@ -437,7 +437,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       withStackVerification(op, stateIn, stateOut) {
         val (offset, _) = stateIn.stack.pop()
         val data = stateIn.storage.load(offset)
-        val (result, _) = = stateOut.pop()
+        val (result, _) = stateOut.stack.pop()
         result.toBigInt shouldEqual data
 
         stateOut shouldEqual stateIn

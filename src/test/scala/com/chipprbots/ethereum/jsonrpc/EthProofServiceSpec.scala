@@ -71,7 +71,8 @@ class EthProofServiceSpec
       .getOrElse(fail())
       .proofAccount
 
-    (givenResult.address should matchTo(address))
+    val givenAddress = givenResult.address
+    givenAddress should matchTo(address)
     givenResult.codeHash shouldBe account.codeHash
     givenResult.storageHash shouldBe account.storageRoot
 
