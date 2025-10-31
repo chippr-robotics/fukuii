@@ -97,8 +97,8 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
     val (prvKey, pubKey) = keyPairToByteStrings(walletKeyPair)
     val wallet: Wallet = Wallet(Address(crypto.kec256(pubKey)), prvKey)
 
-    // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
-    val walletRpcClient: WalletRpcClient = mock[WalletRpcClient].asInstanceOf[WalletRpcClient]
+    // MIGRATION: Scala 3 mock cannot infer complex parameterized types - use null as placeholder since never invoked
+    val walletRpcClient: WalletRpcClient = null.asInstanceOf[WalletRpcClient]
     val mockKeyStore: KeyStore = mock[KeyStore]
     val config: FaucetConfig =
       FaucetConfig(

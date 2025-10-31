@@ -445,8 +445,8 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       override val rateLimit: RateLimitConfig = rateLimitEnabledConfig
     }
 
-    // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
-    val mockJsonRpcController: JsonRpcController = mock[JsonRpcController].asInstanceOf[JsonRpcController]
+    // MIGRATION: Scala 3 mock cannot infer complex parameterized types - use null as placeholder since never invoked
+    val mockJsonRpcController: JsonRpcController = null.asInstanceOf[JsonRpcController]
     val mockJsonRpcHealthChecker: JsonRpcHealthChecker = mock[JsonRpcHealthChecker]
 
     val mockJsonRpcHttpServer = new FakeJsonRpcHttpServer(

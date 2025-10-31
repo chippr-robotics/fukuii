@@ -196,8 +196,8 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
-    val mockHandshaker: AuthHandshaker = mock[AuthHandshaker].asInstanceOf[AuthHandshaker]
+    // MIGRATION: Scala 3 mock cannot infer complex parameterized types - use null as placeholder since never invoked
+    val mockHandshaker: AuthHandshaker = null.asInstanceOf[AuthHandshaker]
     val connection: TestProbe = TestProbe()
     val mockMessageCodec: MessageCodec = mock[MessageCodec]
     val mockHelloExtractor: HelloCodec = mock[HelloCodec]

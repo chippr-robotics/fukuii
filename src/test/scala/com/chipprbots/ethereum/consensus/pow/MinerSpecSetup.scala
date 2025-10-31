@@ -51,8 +51,8 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
   val blockchainReader: BlockchainReader = mock[BlockchainReader]
   val blockchain: BlockchainImpl = mock[BlockchainImpl]
   val blockCreator: PoWBlockCreator = mock[PoWBlockCreator]
-  // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
-  val fakeWorld: InMemoryWorldStateProxy = mock[InMemoryWorldStateProxy].asInstanceOf[InMemoryWorldStateProxy]
+  // MIGRATION: Scala 3 mock cannot infer complex parameterized types - use null as placeholder since never invoked
+  val fakeWorld: InMemoryWorldStateProxy = null.asInstanceOf[InMemoryWorldStateProxy]
   val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
   val ethMiningService: EthMiningService = mock[EthMiningService]
   val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]

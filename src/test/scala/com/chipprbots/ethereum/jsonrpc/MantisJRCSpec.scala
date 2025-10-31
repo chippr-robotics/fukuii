@@ -28,8 +28,17 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
     val web3Service: Web3Service = mock[Web3Service]
-    // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
-    val netService: NetService = mock[NetService].asInstanceOf[NetService]
+    // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
+    implicit val testSystem: org.apache.pekko.actor.ActorSystem = org.apache.pekko.actor.ActorSystem("MantisJRCSpec-test")
+    val netService: NetService = new NetService(
+      new java.util.concurrent.atomic.AtomicReference(com.chipprbots.ethereum.utils.NodeStatus(
+        com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening, 
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening
+      )),
+      org.apache.pekko.testkit.TestProbe().ref,
+      com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
+    )
     val personalService: PersonalService = mock[PersonalService]
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
