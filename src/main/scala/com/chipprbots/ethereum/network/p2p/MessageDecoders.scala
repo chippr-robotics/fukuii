@@ -231,7 +231,9 @@ object ETH68MessageDecoder extends MessageDecoder {
       case Codes.NewPooledTransactionHashesCode    => Try(payload.toNewPooledTransactionHashes).toEither
       case Codes.GetPooledTransactionsCode         => Try(payload.toGetPooledTransactions).toEither
       case Codes.PooledTransactionsCode            => Try(payload.toPooledTransactions).toEither
-      // GetNodeData and NodeData are removed in ETH68
+      // GetNodeData and NodeData are explicitly removed in ETH68
+      case Codes.GetNodeDataCode                   => Left(new RuntimeException("GetNodeData (0x0d) is not supported in eth/68"))
+      case Codes.NodeDataCode                      => Left(new RuntimeException("NodeData (0x0e) is not supported in eth/68"))
       case Codes.GetReceiptsCode                   => Try(payload.toGetReceipts).toEither
       case Codes.ReceiptsCode                      => Try(payload.toReceipts).toEither
       case _                                       => Left(new RuntimeException(s"Unknown eth/68 message type: $msgCode"))

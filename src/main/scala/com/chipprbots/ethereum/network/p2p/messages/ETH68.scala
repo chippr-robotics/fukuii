@@ -16,5 +16,5 @@ package com.chipprbots.ethereum.network.p2p.messages
 object ETH68 {
   // ETH68 uses all messages from ETH66 (with request-id) and ETH67 (enhanced NewPooledTransactionHashes)
   // The only difference is that GetNodeData and NodeData messages are not supported
-  // This is enforced in the MessageDecoder for ETH68
+  // This is enforced in the MessageDecoder for ETH68 by explicitly rejecting these message codes
 }

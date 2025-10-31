@@ -176,18 +176,20 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
     }
 
     "decoding GetNodeData" should {
-      "fail with error" in {
+      "fail with specific error message" in {
         val payload = Array[Byte](0x01, 0x02, 0x03)
         val result = messageDecoder(version).fromBytes(Codes.GetNodeDataCode, payload)
         result.isLeft shouldBe true
+        result.left.map(_.getMessage) shouldBe Left("GetNodeData (0x0d) is not supported in eth/68")
       }
     }
 
     "decoding NodeData" should {
-      "fail with error" in {
+      "fail with specific error message" in {
         val payload = Array[Byte](0x01, 0x02, 0x03)
         val result = messageDecoder(version).fromBytes(Codes.NodeDataCode, payload)
         result.isLeft shouldBe true
+        result.left.map(_.getMessage) shouldBe Left("NodeData (0x0e) is not supported in eth/68")
       }
     }
   }
