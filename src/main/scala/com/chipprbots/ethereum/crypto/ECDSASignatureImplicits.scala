@@ -6,6 +6,7 @@ object ECDSASignatureImplicits {
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
   import com.chipprbots.ethereum.rlp.RLPImplicits._
+  import com.chipprbots.ethereum.rlp.RLPImplicits.given
   import com.chipprbots.ethereum.rlp._
 
   implicit val ecdsaSignatureDec: RLPDecoder[ECDSASignature] = new RLPDecoder[ECDSASignature] {

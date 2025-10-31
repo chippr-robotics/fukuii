@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.utils.ByteUtils._
 import com.chipprbots.ethereum.utils.Hex
 
 import RLPImplicitConversions._
+import RLPImplicits.given
 
 case class ForkId(hash: BigInt, next: Option[BigInt]) {
   override def toString(): String = s"ForkId(0x${Hex.toHexString(hash.toUnsignedByteArray)}, $next)"
