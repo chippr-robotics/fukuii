@@ -127,7 +127,7 @@ class ShiftingOpCodeSpec extends AnyWordSpec with Matchers with ScalaCheckProper
             val state: ProgramState[MockWorldState, MockStorage] = prepareProgramState(assemblyCode, arg1, arg2)
 
             val result: ProgramState[MockWorldState, MockStorage] = SHL.execute(state)
-            result.stack.pop._1 shouldBe UInt256(expectedResult)
+            result.stack.pop()._1 shouldBe UInt256(expectedResult)
           }
       }
 
@@ -137,7 +137,7 @@ class ShiftingOpCodeSpec extends AnyWordSpec with Matchers with ScalaCheckProper
             val state: ProgramState[MockWorldState, MockStorage] = prepareProgramState(assemblyCode, arg1, arg2)
 
             val result: ProgramState[MockWorldState, MockStorage] = SHR.execute(state)
-            result.stack.pop._1 shouldBe UInt256(expectedResult)
+            result.stack.pop()._1 shouldBe UInt256(expectedResult)
           }
       }
 
@@ -147,7 +147,7 @@ class ShiftingOpCodeSpec extends AnyWordSpec with Matchers with ScalaCheckProper
             val state: ProgramState[MockWorldState, MockStorage] = prepareProgramState(assemblyCode, arg1, arg2)
 
             val result: ProgramState[MockWorldState, MockStorage] = SAR.execute(state)
-            result.stack.pop._1 shouldBe UInt256(expectedResult)
+            result.stack.pop()._1 shouldBe UInt256(expectedResult)
           }
       }
     }

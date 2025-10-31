@@ -71,7 +71,7 @@ class EthProofServiceSpec
       .getOrElse(fail())
       .proofAccount
 
-    givenResult.address should matchTo(address)
+    (givenResult.address should matchTo(address))
     givenResult.codeHash shouldBe account.codeHash
     givenResult.storageHash shouldBe account.storageRoot
 
@@ -101,14 +101,14 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        (accountProof.address should matchTo(address))
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.map { v =>
           v.proof.nonEmpty shouldBe true
@@ -126,14 +126,14 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        (accountProof.address should matchTo(address))
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         r.proofAccount.storageProof.map { v =>
           v.proof.nonEmpty shouldBe true
@@ -152,14 +152,14 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        (accountProof.address should matchTo(address))
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.size shouldBe 2
         accountProof.storageProof.map { v =>
@@ -180,14 +180,14 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        (accountProof.address should matchTo(address))
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.size shouldBe 3
         expectedValueStorageKey.forall(accountProof.storageProof.map(_.value).contains) shouldBe true
@@ -202,14 +202,14 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        (accountProof.address should matchTo(address))
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.size shouldBe 0
       }
