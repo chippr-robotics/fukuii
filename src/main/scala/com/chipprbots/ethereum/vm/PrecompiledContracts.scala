@@ -89,7 +89,7 @@ object PrecompiledContracts {
 
       val g = gas(context.inputData, etcFork, ethFork)
 
-      val (result, error, gasRemaining): (ByteString, Option[ProgramError], BigInt) =
+      val (result, error, gasRemaining): (ByteString, Option[ProgramError], BigInt) = (
         if (g <= context.startGas)
           exec(context.inputData) match {
             case Some(returnData) => (returnData, None, context.startGas - g)
@@ -97,6 +97,7 @@ object PrecompiledContracts {
           }
         else
           (ByteString.empty, Some(OutOfGas), 0)
+      ): @unchecked
 
       ProgramResult(
         result,

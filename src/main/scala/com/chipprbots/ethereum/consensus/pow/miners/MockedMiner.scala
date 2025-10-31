@@ -5,6 +5,7 @@ import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Status.Failure
+import org.apache.pekko.pattern.pipe
 import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
@@ -43,6 +44,7 @@ class MockedMiner(
   import org.apache.pekko.pattern.pipe
   // CE3: Using global IORuntime for actor operations
   implicit val scheduler: IORuntime = IORuntime.global
+  implicit val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
   override def receive: Receive = stopped
 

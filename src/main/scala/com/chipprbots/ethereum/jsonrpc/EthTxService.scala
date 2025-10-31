@@ -211,7 +211,7 @@ class EthTxService(
   ): ServiceResponse[GetTransactionByBlockNumberAndIndexResponse] = IO {
     getTransactionDataByBlockNumberAndIndex(req.block, req.transactionIndex)
       .map(_.map(TransactionResponse(_)))
-      .map(GetTransactionByBlockNumberAndIndexResponse)
+      .map(GetTransactionByBlockNumberAndIndexResponse.apply)
   }
 
   /** eth_getRawTransactionByBlockNumberAndIndex Returns raw transaction data of a transaction with the block number and
@@ -227,7 +227,7 @@ class EthTxService(
   ): ServiceResponse[RawTransactionResponse] = IO {
     getTransactionDataByBlockNumberAndIndex(req.block, req.transactionIndex)
       .map(x => x.map(_.stx))
-      .map(RawTransactionResponse)
+      .map(RawTransactionResponse.apply)
   }
 
   private def getTransactionDataByBlockNumberAndIndex(block: BlockParam, transactionIndex: BigInt) =

@@ -345,7 +345,6 @@ class PeerManagerActor(
       // Ask for the whole statistics duration, we'll use averages to make it fair.
       val window = peerConfiguration.statSlotCount * peerConfiguration.statSlotDuration
 
-      implicit val ec = context.dispatcher
       peerStatistics
         .askFor[PeerStatisticsActor.StatsForAll](PeerStatisticsActor.GetStatsForAll(window))
         .map(PruneIncomingPeers.apply)

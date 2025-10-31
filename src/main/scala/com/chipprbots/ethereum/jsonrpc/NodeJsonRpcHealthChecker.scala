@@ -73,7 +73,7 @@ class NodeJsonRpcHealthChecker(
 
   private val syncStatusHC =
     JsonRpcHealthcheck
-      .fromIO("syncStatus", syncingController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus))
+      .fromTask("syncStatus", syncingController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus))
       .map(_.withInfo {
         case NotSyncing                                          => "STARTING"
         case s: Syncing if isConsideredSyncing(s.blocksProgress) => "SYNCING"

@@ -789,6 +789,7 @@ trait PortForwardingBuilder {
     .whenA(Config.Network.automaticPortForwarding)
     .allocated
     .map(_._2)
+    .flatten
 
   // reference to an IO that produces the release IO,
   // memoized to prevent running multiple port forwarders at once
