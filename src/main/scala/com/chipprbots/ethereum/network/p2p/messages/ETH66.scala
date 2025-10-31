@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 /** ETH66 protocol messages - adds request-id to all request/response pairs
@@ -31,18 +32,18 @@ object ETH66 {
           case Left(blockNumber) => RLPList(blockNumber, maxHeaders, skip, if (reverse) 1 else 0)
           case Right(blockHash)  => RLPList(blockHash, maxHeaders, skip, if (reverse) 1 else 0)
         }
-        RLPList(requestId, blockQuery)
+        RLPList(RLPValue(requestId.toByteArray), blockQuery)
       }
     }
 
     implicit class GetBlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetBlockHeaders: GetBlockHeaders = rawDecode(bytes) match {
-        case RLPList(requestId, RLPList((block: RLPValue), maxHeaders, skip, reverse))
+        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), maxHeaders, skip, reverse))
             if block.bytes.length < 32 =>
-          GetBlockHeaders(requestId, Left(block), maxHeaders, skip, (reverse: Int) == 1)
+          GetBlockHeaders(BigInt(1, requestIdBytes), Left(block), maxHeaders, skip, (reverse: Int) == 1)
 
-        case RLPList(requestId, RLPList((block: RLPValue), maxHeaders, skip, reverse)) =>
-          GetBlockHeaders(requestId, Right(block), maxHeaders, skip, (reverse: Int) == 1)
+        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), maxHeaders, skip, reverse)) =>
+          GetBlockHeaders(BigInt(1, requestIdBytes), Right(block), maxHeaders, skip, (reverse: Int) == 1)
 
         case _ => throw new RuntimeException("Cannot decode GetBlockHeaders")
       }
@@ -78,13 +79,14 @@ object ETH66 {
       override def code: Int = Codes.BlockHeadersCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(msg.requestId, RLPList(msg.headers.map(_.toRLPEncodable): _*))
+        RLPList(RLPValue(msg.requestId.toByteArray), RLPList(msg.headers.map(_.toRLPEncodable): _*))
     }
 
     implicit class BlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
       def toBlockHeaders: BlockHeaders = rawDecode(bytes) match {
-        case RLPList(requestId, rlpList: RLPList) => BlockHeaders(requestId, rlpList.items.map(_.toBlockHeader))
-        case _                                    => throw new RuntimeException("Cannot decode BlockHeaders")
+        case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          BlockHeaders(BigInt(1, requestIdBytes), rlpList.items.map(_.toBlockHeader))
+        case _ => throw new RuntimeException("Cannot decode BlockHeaders")
       }
     }
   }
@@ -102,13 +104,14 @@ object ETH66 {
 
       override def code: Int = Codes.GetBlockBodiesCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(msg.requestId, toRlpList(msg.hashes))
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.hashes))
     }
 
     implicit class GetBlockBodiesDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetBlockBodies: GetBlockBodies = rawDecode(bytes) match {
-        case RLPList(requestId, rlpList: RLPList) => GetBlockBodies(requestId, fromRlpList[ByteString](rlpList))
-        case _                                    => throw new RuntimeException("Cannot decode GetBlockBodies")
+        case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          GetBlockBodies(BigInt(1, requestIdBytes), fromRlpList[ByteString](rlpList))
+        case _ => throw new RuntimeException("Cannot decode GetBlockBodies")
       }
     }
   }
@@ -133,13 +136,14 @@ object ETH66 {
       override def code: Int = Codes.BlockBodiesCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(msg.requestId, RLPList(msg.bodies.map(_.toRLPEncodable): _*))
+        RLPList(RLPValue(msg.requestId.toByteArray), RLPList(msg.bodies.map(_.toRLPEncodable): _*))
     }
 
     implicit class BlockBodiesDec(val bytes: Array[Byte]) extends AnyVal {
       def toBlockBodies: BlockBodies = rawDecode(bytes) match {
-        case RLPList(requestId, rlpList: RLPList) => BlockBodies(requestId, rlpList.items.map(_.toBlockBody))
-        case _                                    => throw new RuntimeException("Cannot decode BlockBodies")
+        case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          BlockBodies(BigInt(1, requestIdBytes), rlpList.items.map(_.toBlockBody))
+        case _ => throw new RuntimeException("Cannot decode BlockBodies")
       }
     }
   }
@@ -156,13 +160,14 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.GetPooledTransactionsCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(msg.requestId, toRlpList(msg.txHashes))
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.txHashes))
     }
 
     implicit class GetPooledTransactionsDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetPooledTransactions: GetPooledTransactions = rawDecode(bytes) match {
-        case RLPList(requestId, rlpList: RLPList) => GetPooledTransactions(requestId, fromRlpList[ByteString](rlpList))
-        case _                                    => throw new RuntimeException("Cannot decode GetPooledTransactions")
+        case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          GetPooledTransactions(BigInt(1, requestIdBytes), fromRlpList[ByteString](rlpList))
+        case _ => throw new RuntimeException("Cannot decode GetPooledTransactions")
       }
     }
   }
@@ -189,7 +194,7 @@ object ETH66 {
       override def code: Int = Codes.PooledTransactionsCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(msg.requestId, RLPList(msg.txs.map(_.toRLPEncodable): _*))
+        RLPList(RLPValue(msg.requestId.toByteArray), RLPList(msg.txs.map(_.toRLPEncodable): _*))
     }
 
     implicit class PooledTransactionsDec(val bytes: Array[Byte]) extends AnyVal {
@@ -197,8 +202,8 @@ object ETH66 {
       import BaseETH6XMessages.TypedTransaction._
 
       def toPooledTransactions: PooledTransactions = rawDecode(bytes) match {
-        case RLPList(requestId, rlpList: RLPList) =>
-          PooledTransactions(requestId, rlpList.items.toTypedRLPEncodables.map(_.toSignedTransaction))
+        case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          PooledTransactions(BigInt(1, requestIdBytes), rlpList.items.toTypedRLPEncodables.map(_.toSignedTransaction))
         case _ => throw new RuntimeException("Cannot decode PooledTransactions")
       }
     }
@@ -223,13 +228,14 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.GetNodeDataCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(msg.requestId, toRlpList(msg.mptElementsHashes))
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.mptElementsHashes))
     }
 
     implicit class GetNodeDataDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetNodeData: GetNodeData = rawDecode(bytes) match {
-        case RLPList(requestId, rlpList: RLPList) => GetNodeData(requestId, fromRlpList[ByteString](rlpList))
-        case _                                    => throw new RuntimeException("Cannot decode GetNodeData")
+        case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          GetNodeData(BigInt(1, requestIdBytes), fromRlpList[ByteString](rlpList))
+        case _ => throw new RuntimeException("Cannot decode GetNodeData")
       }
     }
   }
@@ -250,13 +256,14 @@ object ETH66 {
         with RLPSerializable {
 
       override def code: Int = Codes.NodeDataCode
-      override def toRLPEncodable: RLPEncodeable = RLPList(msg.requestId, msg.values)
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), msg.values)
     }
 
     implicit class NodeDataDec(val bytes: Array[Byte]) extends AnyVal {
       def toNodeData: NodeData = rawDecode(bytes) match {
-        case RLPList(requestId, (rlpList: RLPList)) => NodeData(requestId, rlpList)
-        case _                                      => throw new RuntimeException("Cannot decode NodeData")
+        case RLPList(RLPValue(requestIdBytes), (rlpList: RLPList)) =>
+          NodeData(BigInt(1, requestIdBytes), rlpList)
+        case _ => throw new RuntimeException("Cannot decode NodeData")
       }
     }
   }
@@ -276,13 +283,14 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.GetReceiptsCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(msg.requestId, toRlpList(msg.blockHashes))
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.blockHashes))
     }
 
     implicit class GetReceiptsDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetReceipts: GetReceipts = rawDecode(bytes) match {
-        case RLPList(requestId, rlpList: RLPList) => GetReceipts(requestId, fromRlpList[ByteString](rlpList))
-        case _                                    => throw new RuntimeException("Cannot decode GetReceipts")
+        case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          GetReceipts(BigInt(1, requestIdBytes), fromRlpList[ByteString](rlpList))
+        case _ => throw new RuntimeException("Cannot decode GetReceipts")
       }
     }
   }
@@ -306,13 +314,14 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.ReceiptsCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(msg.requestId, msg.receiptsForBlocks)
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), msg.receiptsForBlocks)
     }
 
     implicit class ReceiptsDec(val bytes: Array[Byte]) extends AnyVal {
       def toReceipts: Receipts = rawDecode(bytes) match {
-        case RLPList(requestId, (rlpList: RLPList)) => Receipts(requestId, rlpList)
-        case _                                      => throw new RuntimeException("Cannot decode Receipts")
+        case RLPList(RLPValue(requestIdBytes), (rlpList: RLPList)) =>
+          Receipts(BigInt(1, requestIdBytes), rlpList)
+        case _ => throw new RuntimeException("Cannot decode Receipts")
       }
     }
   }
