@@ -177,12 +177,21 @@ Agent labels also indicate risk level:
 - 🧊 **ICE**: Large-scale migrations need careful planning
 - ✨ **mithril**: Refactoring must preserve functionality
 
+## Creating Labels in GitHub
+
+Before the agent labels can be used, they must first be created in the GitHub repository. See [CREATE_LABELS.md](CREATE_LABELS.md) for detailed instructions on:
+- Creating labels via GitHub UI
+- Creating labels via GitHub CLI
+- Creating labels via API
+- Recommended colors for each label
+
 ## Label Configuration
 
 The agent label patterns are defined in `.github/labeler.yml`. If you need to update the patterns or add new agents, edit that file and update this documentation accordingly.
 
 ## Related Documentation
 
+- [Creating Agent Labels](CREATE_LABELS.md): Step-by-step guide to create labels
 - [Agent Definitions](.github/agents/): Individual agent instruction files
 - [Workflow Documentation](.github/workflows/README.md): GitHub Actions workflows
 - [PR Management Workflow](.github/workflows/pr-management.yml): Auto-labeling implementation
