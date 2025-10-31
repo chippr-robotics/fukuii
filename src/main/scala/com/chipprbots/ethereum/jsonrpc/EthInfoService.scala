@@ -139,7 +139,7 @@ class EthInfoService(
         call(CallRequest(CallTx(tx.from, tx.to, tx.gas, tx.gasPrice, tx.value, ByteString(data)), req.block))
           .map(_.map { callResponse =>
             IeleCallResponse(
-              rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])(seqEncDec[ByteString]())
+              rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])
             )
           })
       case Left(error) => IO.pure(Left(error))

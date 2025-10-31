@@ -164,14 +164,14 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
 
   // Based on whether we have the recovery ID in the signature we may have to try 1 or 2 signatures.
   private def toECDSASignatures(signature: Signature): Iterable[ECDSASignature] =
-    signature.size / 8 match {
+    signature.value.size / 8 match {
       case SignatureBytesSize =>
-        val signatureBytes = signature.toByteArray
+        val signatureBytes = signature.value.toByteArray
         adjustV(signatureBytes, wireToV)
         Iterable(toECDSASignature(signatureBytes))
 
       case SignatureWithoutRecoveryBytesSize =>
-        val signatureBytes = signature.toByteArray
+        val signatureBytes = signature.value.toByteArray
         // Try all allowed points signs.
         ECDSASignature.allowedPointSigns.toIterable.map { v =>
           toECDSASignature(signatureBytes :+ v)
