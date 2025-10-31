@@ -201,10 +201,28 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    val mockHandshaker: AuthHandshaker = mock[AuthHandshaker]
+    val mockHandshaker: AuthHandshaker = createStubAuthHandshaker()
     val connection: TestProbe = TestProbe()
     val mockMessageCodec: MessageCodec = mock[MessageCodec]
     val mockHelloExtractor: HelloCodec = mock[HelloCodec]
+    
+    private def createStubAuthHandshaker(): AuthHandshaker = {
+      import java.security.SecureRandom
+      import com.chipprbots.ethereum.crypto.generateKeyPair
+      
+      val sr = new SecureRandom()
+      
+      AuthHandshaker(
+        nodeKey = generateKeyPair(sr),
+        nonce = ByteString.empty,
+        ephemeralKey = generateKeyPair(sr),
+        secureRandom = sr,
+        isInitiator = false,
+        initiatePacketOpt = None,
+        responsePacketOpt = None,
+        remotePubKeyOpt = None
+      )
+    }
 
     val uri = new URI(
       "enode://18a551bee469c2e02de660ab01dede06503c986f6b8520cb5a65ad122df88b17b285e3fef09a40a0d44f99e014f8616cf1ebc2e094f96c6e09e2f390f5d34857@47.90.36.129:30303"

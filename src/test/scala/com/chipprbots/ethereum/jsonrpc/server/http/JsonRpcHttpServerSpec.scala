@@ -450,7 +450,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       override val rateLimit: RateLimitConfig = rateLimitEnabledConfig
     }
 
-    val mockJsonRpcController: JsonRpcController = mock[JsonRpcController]
+    val mockJsonRpcController: JsonRpcController = createStubJsonRpcController()
     val mockJsonRpcHealthChecker: JsonRpcHealthChecker = mock[JsonRpcHealthChecker]
 
     val mockJsonRpcHttpServer = new FakeJsonRpcHttpServer(
@@ -459,6 +459,48 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       config = serverConfig,
       cors = serverConfig.corsAllowedOrigins
     )
+    
+    private def createStubJsonRpcController(): JsonRpcController = {
+      import com.chipprbots.ethereum.jsonrpc._
+      import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
+      import java.util.concurrent.atomic.AtomicReference
+      import com.chipprbots.ethereum.utils.{NodeStatus, ServerStatus}
+      import com.chipprbots.ethereum.crypto.generateKeyPair
+      import org.apache.pekko.actor.ActorRef
+      import java.security.SecureRandom
+      import scala.concurrent.duration._
+      
+      val stubNodeStatus = NodeStatus(
+        key = generateKeyPair(new SecureRandom()),
+        serverStatus = ServerStatus.NotListening,
+        discoveryStatus = ServerStatus.NotListening
+      )
+      
+      val stubNetService = new NetService(
+        new AtomicReference[NodeStatus](stubNodeStatus),
+        mock[ActorRef],
+        NetService.NetServiceConfig(10.seconds)
+      )
+      
+      JsonRpcController(
+        web3Service = mock[Web3Service],
+        netService = stubNetService,
+        ethInfoService = mock[EthInfoService],
+        ethMiningService = mock[EthMiningService],
+        ethBlocksService = mock[EthBlocksService],
+        ethTxService = mock[EthTxService],
+        ethUserService = mock[EthUserService],
+        ethFilterService = mock[EthFilterService],
+        personalService = mock[PersonalService],
+        testServiceOpt = None,
+        debugService = mock[DebugService],
+        qaService = mock[QAService],
+        checkpointingService = mock[CheckpointingService],
+        mantisService = mock[MantisService],
+        proofService = mock[ProofService],
+        config = mock[JsonRpcConfig]
+      )
+    }
 
     val corsAllowedOrigin: HttpOrigin = HttpOrigin("http://localhost:3333")
     val mockJsonRpcHttpServerWithCors = new FakeJsonRpcHttpServer(

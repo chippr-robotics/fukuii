@@ -129,8 +129,15 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
     val ethereumConfigMsg: Hello.Config.EthereumConfig = msg.Hello.Config.EthereumConfig(ethereumConfig)
     val helloMsg: Hello = msg.Hello(version = "2.2", config = ethereumConfigMsg)
 
-    val messageHandler: MessageHandler = mock[MessageHandler]
+    val messageHandler: MessageHandler = createStubMessageHandler()
     val vmServer = new VMServer(messageHandler)
+    
+    private def createStubMessageHandler(): MessageHandler = {
+      import org.apache.pekko.stream.scaladsl.{SinkQueueWithCancel, SourceQueueWithComplete}
+      val stubIn = mock[SinkQueueWithCancel[ByteString]]
+      val stubOut = mock[SourceQueueWithComplete[ByteString]]
+      new MessageHandler(stubIn, stubOut)
+    }
 
     def expectAccountQuery(address: Address, response: Account): Unit = {
       val expectedQueryMsg = msg.VMQuery(VMQuery.Query.GetAccount(msg.GetAccount(address.bytes)))

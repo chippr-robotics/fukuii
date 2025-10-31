@@ -82,8 +82,16 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   trait TestSetup {
     val addr: Address = Address("0xFF")
-    val messageHandler: MessageHandler = mock[MessageHandler]
+    val messageHandler: MessageHandler = createStubMessageHandler()
     val world: World = World(accountStartNonce = 0, noEmptyAccountsCond = true, messageHandler = messageHandler)
+    
+    private def createStubMessageHandler(): MessageHandler = {
+      import org.apache.pekko.stream.scaladsl.{SinkQueueWithCancel, SourceQueueWithComplete}
+      import org.apache.pekko.util.ByteString
+      val stubIn = mock[SinkQueueWithCancel[ByteString]]
+      val stubOut = mock[SourceQueueWithComplete[ByteString]]
+      new MessageHandler(stubIn, stubOut)
+    }
   }
 
 }
