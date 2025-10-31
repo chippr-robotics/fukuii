@@ -496,7 +496,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (dest, _) = stateIn.stack.pop()
-        if (dest == UInt256(dest.toInt) && stateIn.program.validJumpDestinations.contains(dest.toInt))
+        if (dest <= UInt256(Int.MaxValue) && stateIn.program.validJumpDestinations.contains(dest.toInt))
           stateOut shouldEqual stateIn.withStack(stateOut.stack).goto(dest.toInt)
         else
           stateOut shouldEqual stateIn.withError(InvalidJump(dest))
@@ -577,7 +577,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
         val expectedState =
           if (cond.isZero)
             stateIn.withStack(stateOut.stack).step()
-          else if (dest == UInt256(dest.toInt) && stateIn.program.validJumpDestinations.contains(dest.toInt))
+          else if (dest <= UInt256(Int.MaxValue) && stateIn.program.validJumpDestinations.contains(dest.toInt))
             stateIn.withStack(stateOut.stack).goto(dest.toInt)
           else
             stateIn.withError(InvalidJump(dest))
