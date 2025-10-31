@@ -45,7 +45,8 @@ class PoWMiningSpec
   }
 
   it should "use RestrictedPoWBlockGeneratorImpl block generator for RestrictedPoWMinerData" in new TestSetup {
-    val key = mock[AsymmetricCipherKeyPair]
+    // MIGRATION: Can't mock Java classes in Scala 3 - use real instance instead
+    val key = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
 
     val powMining = PoWMining(
       vm,

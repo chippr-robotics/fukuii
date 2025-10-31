@@ -196,7 +196,8 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    val mockHandshaker: AuthHandshaker = mock[AuthHandshaker]
+    // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
+    val mockHandshaker: AuthHandshaker = mock[AuthHandshaker].asInstanceOf[AuthHandshaker]
     val connection: TestProbe = TestProbe()
     val mockMessageCodec: MessageCodec = mock[MessageCodec]
     val mockHelloExtractor: HelloCodec = mock[HelloCodec]
@@ -243,7 +244,13 @@ class RLPxConnectionHandlerSpec
       val response = ByteString("response data")
       (mockHandshaker.handleInitialMessage _)
         .expects(data)
-        .returning((response, AuthHandshakeSuccess(mock[Secrets], ByteString())))
+        // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
+        // Create a minimal Secrets instance for test purposes
+        .returning((response, AuthHandshakeSuccess(
+          new Secrets(Array.emptyByteArray, Array.emptyByteArray, Array.emptyByteArray, 
+            new org.bouncycastle.crypto.digests.KeccakDigest(256), 
+            new org.bouncycastle.crypto.digests.KeccakDigest(256)), 
+          ByteString())))
       (mockHelloExtractor.readHello _)
         .expects(ByteString.empty)
         .returning(Some((Hello(5, "", Capability.ETH63 :: Nil, 30303, ByteString("abc")), Seq.empty)))

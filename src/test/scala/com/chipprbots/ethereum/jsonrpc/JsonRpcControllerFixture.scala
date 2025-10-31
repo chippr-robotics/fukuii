@@ -89,7 +89,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem)
 
   val appStateStorage: AppStateStorage = mock[AppStateStorage]
   val web3Service = new Web3Service
-  val netService: NetService = mock[NetService]
+  // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
+  val netService: NetService = mock[NetService].asInstanceOf[NetService]
 
   val ethInfoService = new EthInfoService(
     blockchain,

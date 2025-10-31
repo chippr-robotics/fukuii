@@ -77,7 +77,8 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   trait TestSetup {
     val addr: Address = Address("0xFF")
-    val messageHandler: MessageHandler = mock[MessageHandler]
+    // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
+    val messageHandler: MessageHandler = mock[MessageHandler].asInstanceOf[MessageHandler]
     val world: World = World(accountStartNonce = 0, noEmptyAccountsCond = true, messageHandler = messageHandler)
   }
 

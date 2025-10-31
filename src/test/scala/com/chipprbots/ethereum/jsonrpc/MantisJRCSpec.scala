@@ -28,7 +28,8 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
     val web3Service: Web3Service = mock[Web3Service]
-    val netService: NetService = mock[NetService]
+    // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
+    val netService: NetService = mock[NetService].asInstanceOf[NetService]
     val personalService: PersonalService = mock[PersonalService]
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
