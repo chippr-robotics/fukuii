@@ -129,8 +129,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
     val ethereumConfigMsg: Hello.Config.EthereumConfig = msg.Hello.Config.EthereumConfig(ethereumConfig)
     val helloMsg: Hello = msg.Hello(version = "2.2", config = ethereumConfigMsg)
 
-    // SCALA 3 MIGRATION: Cannot mock MessageHandler due to scalamock limitation - using ??? placeholder
-    val messageHandler: MessageHandler = ???
+    val messageHandler: MessageHandler = mock[MessageHandler]
     val vmServer = new VMServer(messageHandler)
 
     def expectAccountQuery(address: Address, response: Account): Unit = {

@@ -102,8 +102,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
     val (prvKey, pubKey) = keyPairToByteStrings(walletKeyPair)
     val wallet: Wallet = Wallet(Address(crypto.kec256(pubKey)), prvKey)
 
-    // SCALA 3 MIGRATION: Cannot mock WalletRpcClient due to scalamock limitation - using ??? placeholder
-    val walletRpcClient: WalletRpcClient = ???
+    val walletRpcClient: WalletRpcClient = mock[WalletRpcClient]
     val mockKeyStore: KeyStore = mock[KeyStore]
     val config: FaucetConfig =
       FaucetConfig(

@@ -226,8 +226,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val resultQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.CallResult(callResultMsg))
 
-    // SCALA 3 MIGRATION: Cannot mock MessageHandler due to scalamock limitation - using ??? placeholder
-    val messageHandler: MessageHandler = ???
+    val messageHandler: MessageHandler = mock[MessageHandler]
 
     val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("mantis", None, "127.0.0.1", 0)
     val vmClient = new VMClient(externalVmConfig, messageHandler, testMode = false)

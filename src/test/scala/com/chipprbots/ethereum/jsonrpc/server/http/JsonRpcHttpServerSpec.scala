@@ -450,8 +450,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       override val rateLimit: RateLimitConfig = rateLimitEnabledConfig
     }
 
-    // SCALA 3 MIGRATION: Cannot mock JsonRpcController due to scalamock limitation - using ??? placeholder
-    val mockJsonRpcController: JsonRpcController = ???
+    val mockJsonRpcController: JsonRpcController = mock[JsonRpcController]
     val mockJsonRpcHealthChecker: JsonRpcHealthChecker = mock[JsonRpcHealthChecker]
 
     val mockJsonRpcHttpServer = new FakeJsonRpcHttpServer(

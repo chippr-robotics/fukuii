@@ -201,8 +201,7 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    // SCALA 3 MIGRATION: Cannot mock AuthHandshaker due to scalamock limitation - using ??? placeholder
-    val mockHandshaker: AuthHandshaker = ???
+    val mockHandshaker: AuthHandshaker = mock[AuthHandshaker]
     val connection: TestProbe = TestProbe()
     val mockMessageCodec: MessageCodec = mock[MessageCodec]
     val mockHelloExtractor: HelloCodec = mock[HelloCodec]

@@ -82,8 +82,7 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   trait TestSetup {
     val addr: Address = Address("0xFF")
-    // SCALA 3 MIGRATION: Cannot mock MessageHandler due to scalamock limitation - using ??? placeholder
-    val messageHandler: MessageHandler = ???
+    val messageHandler: MessageHandler = mock[MessageHandler]
     val world: World = World(accountStartNonce = 0, noEmptyAccountsCond = true, messageHandler = messageHandler)
   }
 

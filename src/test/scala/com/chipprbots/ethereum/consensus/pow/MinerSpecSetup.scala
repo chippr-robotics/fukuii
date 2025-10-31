@@ -51,8 +51,7 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
   val blockchainReader: BlockchainReader = mock[BlockchainReader]
   val blockchain: BlockchainImpl = mock[BlockchainImpl]
   val blockCreator: PoWBlockCreator = mock[PoWBlockCreator]
-  // SCALA 3 MIGRATION: Cannot mock InMemoryWorldStateProxy due to scalamock limitation - using ??? placeholder
-  val fakeWorld: InMemoryWorldStateProxy = ???
+  val fakeWorld: InMemoryWorldStateProxy = mock[InMemoryWorldStateProxy]
   val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
   val ethMiningService: EthMiningService = mock[EthMiningService]
   val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
