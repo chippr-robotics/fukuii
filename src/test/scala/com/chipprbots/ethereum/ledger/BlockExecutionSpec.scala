@@ -32,8 +32,7 @@ import com.chipprbots.ethereum.vm.OutOfGas
 
 import org.scalatest.Ignore
 
-// SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (InMemoryWorldStateProxy in LedgerTestSetup)
-// This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking InMemoryWorldStateProxy
+// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in LedgerTestSetup
 // scalastyle:off magic.number
 @Ignore
 class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckPropertyChecks {

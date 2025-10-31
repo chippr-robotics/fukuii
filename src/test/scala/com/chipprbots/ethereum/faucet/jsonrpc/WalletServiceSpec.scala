@@ -29,11 +29,7 @@ import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
 import com.chipprbots.ethereum.rlp
 
-import org.scalatest.Ignore
-
-// SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (WalletRpcClient with lambda type parameters)
-// This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking WalletRpcClient
-@Ignore
+// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for WalletRpcClient
 class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global

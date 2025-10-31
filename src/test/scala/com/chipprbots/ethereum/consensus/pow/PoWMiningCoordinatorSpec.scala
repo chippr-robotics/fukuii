@@ -28,8 +28,7 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 
 import org.scalatest.Ignore
 
-// SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (InMemoryWorldStateProxy in MinerSpecSetup)
-// This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking InMemoryWorldStateProxy
+// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
 @Ignore
 class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with Matchers {
 
