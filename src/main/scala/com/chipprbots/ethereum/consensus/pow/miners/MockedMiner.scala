@@ -86,7 +86,7 @@ class MockedMiner(
       if (numBlocks > 0) {
         blockCreator
           .getBlockForMining(parentBlock, withTransactions, initialWorldStateBeforeExecution)
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(self)
       } else {
         log.info(s"Mining all mocked blocks successful")

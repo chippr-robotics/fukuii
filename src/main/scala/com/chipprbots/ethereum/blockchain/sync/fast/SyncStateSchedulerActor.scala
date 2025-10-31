@@ -88,17 +88,19 @@ class SyncStateSchedulerActor(
       self ! RequestFailed(peer, "Peer disconnected in the middle of request")
   }
 
-  private val loadingCancelable = sync.loadFilterFromBlockchain.unsafeRunCancelable() {
-    case Left(value) =>
-      log.error(
-        "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
-          "which may result with degraded performance",
-        value
-      )
-      self ! BloomFilterResult(BloomFilterLoadingResult())
-    case Right(value) =>
-      log.info("Bloom filter loading finished")
-      self ! BloomFilterResult(value)
+  private val loadingCancelable = sync.loadFilterFromBlockchain.unsafeRunCancelable() { (result: Either[Throwable, BloomFilterLoadingResult]) =>
+    result match {
+      case Left(value) =>
+        log.error(
+          "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
+            "which may result with degraded performance",
+          value
+        )
+        self ! BloomFilterResult(BloomFilterLoadingResult())
+      case Right(value) =>
+        log.info("Bloom filter loading finished")
+        self ! BloomFilterResult(value)
+    }
   }
 
   def waitingForBloomFilterToLoad(lastReceivedCommand: Option[(SyncStateSchedulerActorCommand, ActorRef)]): Receive =
@@ -225,7 +227,7 @@ class SyncStateSchedulerActor(
             )
             val (requests, newState1) = newState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
             requests.foreach(req => requestNodes(req))
-            pipe(IO(processNodes(newState1, nodes)).unsafeToFuture())(self)
+            IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)(context.dispatcher)
             context.become(syncing(newState1))
 
           case (Some((nodes, newState)), None) =>
@@ -234,7 +236,7 @@ class SyncStateSchedulerActor(
               newState.numberOfRemainingRequests
             )
             // we do not have any peers and cannot assign new tasks, but we can still process remaining requests
-            pipe(IO(processNodes(newState, nodes)).unsafeToFuture())(self)
+            IO(processNodes(newState, nodes)).unsafeToFuture().pipeTo(self)(context.dispatcher)
             context.become(syncing(newState))
 
           case (None, Some(peers)) =>
@@ -278,7 +280,7 @@ class SyncStateSchedulerActor(
         } else {
           log.debug("Response received while idle. Initiating response processing")
           val newState = currentState.initProcessing
-          pipe(IO(processNodes(newState, result)).unsafeToFuture())(self)
+          IO(processNodes(newState, result)).unsafeToFuture().pipeTo(self)(context.dispatcher)
           context.become(syncing(newState))
         }
 

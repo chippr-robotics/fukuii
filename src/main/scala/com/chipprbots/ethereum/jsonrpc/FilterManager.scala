@@ -112,7 +112,7 @@ class FilterManager(
           .map { pendingTransactions =>
             PendingTransactionFilterLogs(pendingTransactions.map(_.stx.tx.hash))
           }
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(sender())
 
       case None =>
@@ -192,7 +192,7 @@ class FilterManager(
             val filtered = pendingTransactions.filter(_.addTimestamp > lastCheckTimestamp)
             PendingTransactionFilterChanges(filtered.map(_.stx.tx.hash))
           }
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(sender())
 
       case None =>

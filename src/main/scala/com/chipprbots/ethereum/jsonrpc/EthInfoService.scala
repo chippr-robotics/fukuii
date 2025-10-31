@@ -120,7 +120,7 @@ class EthInfoService(
       .map(_.asRight)
 
   def call(req: CallRequest): ServiceResponse[CallResponse] =
-    Task {
+    IO {
       doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
     }
 

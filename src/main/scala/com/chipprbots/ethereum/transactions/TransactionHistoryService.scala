@@ -66,7 +66,7 @@ class TransactionHistoryService(
     pendingTransactionsManager
       .askFor[PendingTransactionsManager.PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .map(_.pendingTransactions.toList)
-      .onErrorRecoverWith { case ex: Throwable =>
+      .handleErrorWith { case ex: Throwable =>
         log.error("Failed to get pending transactions, passing empty transactions list", ex)
         IO.pure(List.empty)
       }

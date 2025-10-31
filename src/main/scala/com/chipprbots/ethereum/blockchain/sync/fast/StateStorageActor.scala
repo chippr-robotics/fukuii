@@ -64,7 +64,7 @@ class StateStorageActor extends Actor with ActorLogging {
         result
       }
     }
-    pipe(persistingQueues.unsafeToFuture())(self)
+    persistingQueues.unsafeToFuture().pipeTo(self)(context.dispatcher)
     context.become(busy(storage, None))
   }
 

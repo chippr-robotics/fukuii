@@ -22,7 +22,7 @@ trait TransactionPicker extends Logger {
   def getTransactionsFromPool: IO[PendingTransactionsResponse] =
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Failed to get transactions, mining block with empty transactions list", ex)
         PendingTransactionsResponse(Nil)
       }

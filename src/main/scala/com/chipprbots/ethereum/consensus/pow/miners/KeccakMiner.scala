@@ -46,11 +46,11 @@ class KeccakMiner(
         submitHashRate(ethMiningService, System.nanoTime() - startTime, miningResult)
         handleMiningResult(miningResult, syncController, block)
       }
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Error occurred while mining: ", ex)
         PoWMiningCoordinator.MiningUnsuccessful
       }
-      .runToFuture
+      .unsafeToFuture()
   }
 
   private def doMining(block: Block, numRounds: Int): (Long, MiningResult) = {
