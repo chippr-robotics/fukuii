@@ -38,12 +38,12 @@ object ETH66 {
 
     implicit class GetBlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetBlockHeaders: GetBlockHeaders = rawDecode(bytes) match {
-        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), maxHeaders, skip, reverse))
+        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes)))
             if block.bytes.length < 32 =>
-          GetBlockHeaders(BigInt(1, requestIdBytes), Left(block), maxHeaders, skip, (reverse: Int) == 1)
+          GetBlockHeaders(BigInt(1, requestIdBytes), Left(BigInt(1, block.bytes)), BigInt(1, maxHeadersBytes), BigInt(1, skipBytes), BigInt(1, reverseBytes).toInt == 1)
 
-        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), maxHeaders, skip, reverse)) =>
-          GetBlockHeaders(BigInt(1, requestIdBytes), Right(block), maxHeaders, skip, (reverse: Int) == 1)
+        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))) =>
+          GetBlockHeaders(BigInt(1, requestIdBytes), Right(ByteString(block.bytes)), BigInt(1, maxHeadersBytes), BigInt(1, skipBytes), BigInt(1, reverseBytes).toInt == 1)
 
         case _ => throw new RuntimeException("Cannot decode GetBlockHeaders")
       }

@@ -272,53 +272,53 @@ object BaseETH6XMessages {
         case PrefixedRLPEncodable(
               Transaction.Type01,
               RLPList(
-                chainId,
-                nonce,
-                gasPrice,
-                gasLimit,
+                RLPValue(chainIdBytes),
+                RLPValue(nonceBytes),
+                RLPValue(gasPriceBytes),
+                RLPValue(gasLimitBytes),
                 (receivingAddress: RLPValue),
-                value,
-                payload,
+                RLPValue(valueBytes),
+                RLPValue(payloadBytes),
                 (accessList: RLPList),
-                pointSign,
-                signatureRandom,
-                signature
+                RLPValue(pointSignBytes),
+                RLPValue(signatureRandomBytes),
+                RLPValue(signatureBytes)
               )
             ) =>
           val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
           SignedTransaction(
             TransactionWithAccessList(
-              chainId,
-              nonce,
-              gasPrice,
-              gasLimit,
+              BigInt(1, chainIdBytes),
+              BigInt(1, nonceBytes),
+              BigInt(1, gasPriceBytes),
+              BigInt(1, gasLimitBytes),
               receivingAddressOpt,
-              value,
-              payload,
+              BigInt(1, valueBytes),
+              ByteString(payloadBytes),
               fromRlpList[AccessListItem](accessList).toList
             ),
-            (pointSign: Int).toByte,
-            signatureRandom,
-            signature
+            BigInt(1, pointSignBytes).toInt.toByte,
+            ByteString(signatureRandomBytes),
+            ByteString(signatureBytes)
           )
 
         case RLPList(
-              nonce,
-              gasPrice,
-              gasLimit,
+              RLPValue(nonceBytes),
+              RLPValue(gasPriceBytes),
+              RLPValue(gasLimitBytes),
               (receivingAddress: RLPValue),
-              value,
-              payload,
-              pointSign,
-              signatureRandom,
-              signature
+              RLPValue(valueBytes),
+              RLPValue(payloadBytes),
+              RLPValue(pointSignBytes),
+              RLPValue(signatureRandomBytes),
+              RLPValue(signatureBytes)
             ) =>
           val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
           SignedTransaction(
-            LegacyTransaction(nonce, gasPrice, gasLimit, receivingAddressOpt, value, payload),
-            (pointSign: Int).toByte,
-            signatureRandom,
-            signature
+            LegacyTransaction(BigInt(1, nonceBytes), BigInt(1, gasPriceBytes), BigInt(1, gasLimitBytes), receivingAddressOpt, BigInt(1, valueBytes), ByteString(payloadBytes)),
+            BigInt(1, pointSignBytes).toInt.toByte,
+            ByteString(signatureRandomBytes),
+            ByteString(signatureBytes)
           )
         case _ =>
           throw new RuntimeException("Cannot decode SignedTransaction")
