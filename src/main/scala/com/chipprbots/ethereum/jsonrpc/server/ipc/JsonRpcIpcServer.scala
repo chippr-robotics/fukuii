@@ -113,7 +113,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
                 "2.0",
                 None,
                 Some(JsonRpcError(-32000, "Request timed out", None)),
-                request.id
+                request.id.getOrElse(JNull)
               )
               out.write((Serialization.write(errorResponse) + '\n').getBytes())
               out.flush()

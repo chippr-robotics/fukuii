@@ -42,9 +42,9 @@ class TransactionHistoryService(
           .emits(block.body.transactionList.reverse.toSeq)
           .collect(Function.unlift(MinedTxChecker.checkTx(_, account)))
           .evalMap { case (tx, mkExtendedData) =>
-            (getBlockReceipts, getLastCheckpoint).mapN(
-              MinedTxChecker.getMinedTxData(tx, block, _, _).map(mkExtendedData(_))
-            )
+            (getBlockReceipts, getLastCheckpoint).mapN { (blockReceipts, lastCheckpoint) =>
+              MinedTxChecker.getMinedTxData(tx, block, blockReceipts, lastCheckpoint).map(mkExtendedData(_))
+            }
           }
           .collect { case Some(data) =>
             data
@@ -147,7 +147,7 @@ object TransactionHistoryService {
 
       val isCheckpointed = lastCheckpointBlockNumber >= block.number
 
-      (Some(block.header), maybeIndex, maybeGasUsed, Some(isCheckpointed)).mapN(MinedTransactionData)
+      (Some(block.header), maybeIndex, maybeGasUsed, Some(isCheckpointed)).mapN(MinedTransactionData.apply)
     }
   }
 }

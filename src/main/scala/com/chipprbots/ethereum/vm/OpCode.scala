@@ -927,7 +927,7 @@ sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0
   def this(code: Int) = this(code, code - 0xa0)
 
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
-    val (Seq(offset, size, topics @ _*), stack1) = state.stack.pop(delta)
+    val (Seq(offset, size, topics @ _*), stack1) = state.stack.pop(delta: Int)
     val (data, memory) = state.memory.load(offset, size)
     val logEntry = TxLogEntry(state.env.ownerAddr, topics.map(_.bytes), data)
 
@@ -935,7 +935,7 @@ sealed abstract class LogOp(code: Int, val i: Int) extends OpCode(code, i + 2, 0
   }
 
   protected def varGas[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): BigInt = {
-    val (Seq(offset, size, _*), _) = state.stack.pop(delta)
+    val (Seq(offset, size, _*), _) = state.stack.pop(delta: Int)
     val memCost = state.config.calcMemCost(state.memory.size, offset, size)
     val logCost = state.config.feeSchedule.G_logdata * size + i * state.config.feeSchedule.G_logtopic
     memCost + logCost

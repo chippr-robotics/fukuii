@@ -226,8 +226,9 @@ class SyncStateSchedulerActor(
               peers.size
             )
             val (requests, newState1) = newState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
+            implicit val ec = context.dispatcher
             requests.foreach(req => requestNodes(req))
-            IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)(context.dispatcher)
+            IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)
             context.become(syncing(newState1))
 
           case (Some((nodes, newState)), None) =>
@@ -236,7 +237,7 @@ class SyncStateSchedulerActor(
               newState.numberOfRemainingRequests
             )
             // we do not have any peers and cannot assign new tasks, but we can still process remaining requests
-            IO(processNodes(newState, nodes)).unsafeToFuture().pipeTo(self)(context.dispatcher)
+            IO(processNodes(newState, nodes)).unsafeToFuture().pipeTo(self)
             context.become(syncing(newState))
 
           case (None, Some(peers)) =>
@@ -280,7 +281,7 @@ class SyncStateSchedulerActor(
         } else {
           log.debug("Response received while idle. Initiating response processing")
           val newState = currentState.initProcessing
-          IO(processNodes(newState, result)).unsafeToFuture().pipeTo(self)(context.dispatcher)
+          IO(processNodes(newState, result)).unsafeToFuture().pipeTo(self)
           context.become(syncing(newState))
         }
 
