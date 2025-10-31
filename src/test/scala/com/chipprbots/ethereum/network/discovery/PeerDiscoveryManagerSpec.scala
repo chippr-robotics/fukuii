@@ -253,9 +253,9 @@ class PeerDiscoveryManagerSpec
       implicit val nodeOrd: Ordering[ENode] =
         Ordering.by(_.id.value.toByteArray.toSeq)
 
-      (discoveryService.lookup _)
-        .expects(*)
-        .returning(IO { lookupCount.incrementAndGet(); SortedSet(randomNodes.map(toENode).toSeq: _*) })
+      (() => discoveryService.getRandomNodes)
+        .expects()
+        .returning(IO { lookupCount.incrementAndGet(); randomNodes.map(toENode).toSet })
         .repeat(expectedLookups)
 
       override lazy val discoveryConfig =

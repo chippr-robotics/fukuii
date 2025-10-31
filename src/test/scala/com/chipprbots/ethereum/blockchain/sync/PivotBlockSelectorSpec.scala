@@ -523,7 +523,7 @@ class PivotBlockSelectorSpec
 
     val fastSync: TestProbe = TestProbe()
     
-    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     lazy val pivotBlockSelector: ActorRef = system.actorOf(
       PivotBlockSelector.props(

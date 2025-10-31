@@ -280,7 +280,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     val cmpFuncUInt256 = Seq[CFUI](_ > _, _ >= _, _ < _, _ <= _)
     val cmpFuncBigInt = Seq[CFBI](_ > _, _ >= _, _ < _, _ <= _)
-    val comparators = cmpFuncUInt256.zip(cmpFuncBigInt).map(Cmp.tupled)
+    val comparators = cmpFuncUInt256.zip(cmpFuncBigInt).map { case (uint, bi) => Cmp(uint, bi) }
 
     val uint256Gen = getUInt256Gen()
 

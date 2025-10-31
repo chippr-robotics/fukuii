@@ -29,7 +29,7 @@ class QAServiceSpec
     with ByteGenerators
     with AsyncMockFactory {
 
-  "QAService" should "send msg to miner and return miner's response" in testCaseM { fixture =>
+  "QAService" should "send msg to miner and return miner's response" in testCaseM[IO] { fixture =>
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
@@ -39,7 +39,7 @@ class QAServiceSpec
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Right(MineBlocksResponse(MiningOrdered)))
   }
 
-  it should "send msg to miner and return InternalError in case of problems" in testCaseM { fixture =>
+  it should "send msg to miner and return InternalError in case of problems" in testCaseM[IO] { fixture =>
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
@@ -94,7 +94,7 @@ class QAServiceSpec
     }
   }
 
-  it should "return federation public keys when requesting federation members info" in testCaseM { fixture =>
+  it should "return federation public keys when requesting federation members info" in testCaseM[IO] { fixture =>
     import fixture._
     val result: ServiceResponse[GetFederationMembersInfoResponse] =
       qaService.getFederationMembersInfo(GetFederationMembersInfoRequest())

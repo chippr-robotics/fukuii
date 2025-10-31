@@ -13,6 +13,7 @@ import org.json4s.Extraction
 import org.json4s.Formats
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
+import org.json4s.jvalue2monadic
 import org.scalatest.concurrent.Eventually
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
