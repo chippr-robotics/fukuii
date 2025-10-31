@@ -2,6 +2,8 @@
 
 # Agent-specific labels (primarily for manual use, but auto-applied for specific domains)
 # These labels indicate which specialized agent should review or work on the changes
+# Note: Agent labels may overlap with module labels (e.g., 'crypto' + 'agent: forge')
+# This is intentional - module labels indicate *what* changed, agent labels indicate *who* should review
 
 # agent: forge 🔨 - Applied automatically for consensus-critical code
 # (EVM, mining, blockchain core, cryptography)

@@ -192,6 +192,6 @@ The agent label patterns are defined in `.github/labeler.yml`. If you need to up
 ## Related Documentation
 
 - [Creating Agent Labels](CREATE_LABELS.md): Step-by-step guide to create labels
-- [Agent Definitions](.github/agents/): Individual agent instruction files
-- [Workflow Documentation](.github/workflows/README.md): GitHub Actions workflows
-- [PR Management Workflow](.github/workflows/pr-management.yml): Auto-labeling implementation
+- [Agent Definitions](agents/): Individual agent instruction files
+- [Workflow Documentation](workflows/README.md): GitHub Actions workflows
+- [PR Management Workflow](workflows/pr-management.yml): Auto-labeling implementation

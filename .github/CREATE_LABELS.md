@@ -16,7 +16,7 @@ This guide explains how to create the agent labels in your GitHub repository.
 |------------|-------------|-------|-------|
 | `agent: wraith 👻` | Compilation errors and Scala 3 migration | `#B60205` (red) | 👻 |
 | `agent: mithril ✨` | Code modernization and Scala 3 features | `#FFD700` (gold) | ✨ |
-| `agent: ICE 🧊` | Large-scale migrations and strategic planning | `#0E8A16` (blue) | 🧊 |
+| `agent: ICE 🧊` | Large-scale migrations and strategic planning | `#0E8A16` (green) | 🧊 |
 | `agent: eye 👁️` | Testing, validation, and quality assurance | `#1D76DB` (blue) | 👁️ |
 | `agent: forge 🔨` | Consensus-critical code (EVM, mining, crypto) | `#D93F0B` (orange) | 🔨 |
 
