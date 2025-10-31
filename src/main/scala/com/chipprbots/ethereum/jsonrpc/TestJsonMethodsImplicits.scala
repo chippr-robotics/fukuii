@@ -6,6 +6,7 @@ import cats.implicits._
 
 import scala.util.Try
 
+import org.json4s._
 import org.json4s.Extraction
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
