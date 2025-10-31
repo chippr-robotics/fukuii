@@ -6,6 +6,7 @@ import org.json4s.JsonAST.JBool
 import org.json4s.JsonAST.JField
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
+import org.json4s.JsonDSL._
 
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams

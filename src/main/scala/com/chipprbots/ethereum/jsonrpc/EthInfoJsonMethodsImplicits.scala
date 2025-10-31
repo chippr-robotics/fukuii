@@ -8,6 +8,7 @@ import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
+import org.json4s._
 
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams

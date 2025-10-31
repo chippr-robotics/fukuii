@@ -15,6 +15,7 @@ import org.json4s.DefaultFormats
 import org.json4s.Formats
 import org.json4s.JString
 import org.json4s.JValue
+import org.json4s.Extraction
 
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.ByteStringJsonSerializer
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.UInt256JsonSerializer
@@ -91,7 +92,7 @@ class GenesisDataLoader(
     import org.json4s.native.JsonMethods.parse
     implicit val formats: Formats = DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer
     for {
-      genesisData <- Try(parse(genesisJson).extract[GenesisData])
+      genesisData <- Try(Extraction.extract[GenesisData](parse(genesisJson)))
       _ <- loadGenesisData(genesisData)
     } yield ()
   }
