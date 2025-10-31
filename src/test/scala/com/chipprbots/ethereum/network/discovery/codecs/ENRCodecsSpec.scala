@@ -15,7 +15,7 @@ import com.chipprbots.scalanet.discovery.hash.Keccak256
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.bits.ByteVector
-import scodec.bits.HexStringSyntax
+import scodec.bits.Literal.given
 
 import com.chipprbots.ethereum.network.discovery.Secp256k1SigAlg
 import com.chipprbots.ethereum.rlp
