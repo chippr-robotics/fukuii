@@ -795,8 +795,8 @@ trait PortForwardingBuilder {
   private val portForwardingRelease = new AtomicReference(Option.empty[IO[IO[Unit]]])
 
   def startPortForwarding(): Future[Unit] = {
-    portForwardingRelease.compareAndSet(None, Some(portForwarding.memoize.flatMap(identity)))
-    portForwardingRelease.get().fold(Future.unit)(_.flatten.unsafeToFuture()(ioRuntime))
+    portForwardingRelease.compareAndSet(None, Some(portForwarding.memoize))
+    portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
   }
 
   def stopPortForwarding(): Future[Unit] =

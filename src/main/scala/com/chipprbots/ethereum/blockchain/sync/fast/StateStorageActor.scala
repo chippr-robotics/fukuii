@@ -63,7 +63,6 @@ class StateStorageActor extends Actor with ActorLogging {
       } else {
         result
       }
-    implicit val ec = context.dispatcher
     }
     persistingQueues.unsafeToFuture().pipeTo(self)
     context.become(busy(storage, None))
