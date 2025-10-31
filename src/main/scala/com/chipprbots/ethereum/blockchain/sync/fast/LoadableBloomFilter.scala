@@ -23,7 +23,7 @@ class LoadableBloomFilter[A](bloomFilter: BloomFilter[A], source: Stream[IO, Eit
       .compile
       .lastOrError
       .memoize
-      .flatMap(identity)
+      .flatten
 
   def put(elem: A): Boolean = bloomFilter.put(elem)
 

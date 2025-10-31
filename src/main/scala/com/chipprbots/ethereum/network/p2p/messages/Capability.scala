@@ -59,7 +59,7 @@ object Capability {
 
   implicit class CapabilityRLPEncodableDec(val rLPEncodeable: RLPEncodeable) extends AnyVal {
     def toCapability: Option[Capability] = rLPEncodeable match {
-      case RLPList(RLPValue(nameBytes), RLPValue(versionBytes)) => 
+      case RLPList(RLPValue(nameBytes), RLPValue(versionBytes)) if versionBytes.nonEmpty => 
         parse(s"${new String(nameBytes)}/${versionBytes(0)}")
       case _ => throw new RLPException("Cannot decode Capability")
     }
