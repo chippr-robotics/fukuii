@@ -16,6 +16,7 @@ import org.bouncycastle.crypto.params.ParametersWithIV
 
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
 case class Frame(header: Header, `type`: Int, payload: ByteString)
 
