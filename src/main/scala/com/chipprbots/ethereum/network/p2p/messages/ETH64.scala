@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 object ETH64 {
@@ -46,26 +47,33 @@ object ETH64 {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        RLPList(protocolVersion, networkId, totalDifficulty, bestHash, genesisHash, forkId.toRLPEncodable)
+        RLPList(
+          RLPValue(BigInt(protocolVersion).toByteArray),
+          RLPValue(BigInt(networkId).toByteArray),
+          RLPValue(totalDifficulty.toByteArray),
+          bestHash,
+          genesisHash,
+          forkId.toRLPEncodable
+        )
       }
     }
 
     implicit class StatusDec(val bytes: Array[Byte]) extends AnyVal {
       def toStatus: Status = rawDecode(bytes) match {
         case RLPList(
-              protocolVersion,
-              networkId,
-              totalDifficulty,
-              bestHash,
-              genesisHash,
+              RLPValue(protocolVersionBytes),
+              RLPValue(networkIdBytes),
+              RLPValue(totalDifficultyBytes),
+              RLPValue(bestHashBytes),
+              RLPValue(genesisHashBytes),
               forkId
             ) =>
           Status(
-            protocolVersion,
-            networkId,
-            totalDifficulty,
-            bestHash,
-            genesisHash,
+            BigInt(1, protocolVersionBytes).toInt,
+            BigInt(1, networkIdBytes).toInt,
+            BigInt(1, totalDifficultyBytes),
+            ByteString(bestHashBytes),
+            ByteString(genesisHashBytes),
             decode[ForkId](forkId)
           )
 

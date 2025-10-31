@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 object ETH61 {
@@ -24,8 +25,12 @@ object ETH61 {
 
     implicit class NewBlockHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewBlockHashes: NewBlockHashes = rawDecode(bytes) match {
-        case rlpList: RLPList => NewBlockHashes(rlpList.items.map(e => ByteString(e: Array[Byte])))
-        case _                => throw new RuntimeException("Cannot decode NewBlockHashes")
+        case rlpList: RLPList => 
+          NewBlockHashes(rlpList.items.map {
+            case RLPValue(bytes) => ByteString(bytes)
+            case _ => throw new RuntimeException("Cannot decode NewBlockHashes: invalid item")
+          })
+        case _ => throw new RuntimeException("Cannot decode NewBlockHashes")
       }
 
     }
@@ -49,8 +54,9 @@ object ETH61 {
 
     implicit class BlockHashesFromNumberDec(val bytes: Array[Byte]) extends AnyVal {
       def toBlockHashesFromNumber: BlockHashesFromNumber = rawDecode(bytes) match {
-        case RLPList(number, maxBlocks) => BlockHashesFromNumber(number, maxBlocks)
-        case _                          => throw new RuntimeException("Cannot decode BlockHashesFromNumber")
+        case RLPList(RLPValue(numberBytes), RLPValue(maxBlocksBytes)) => 
+          BlockHashesFromNumber(BigInt(1, numberBytes), BigInt(1, maxBlocksBytes))
+        case _ => throw new RuntimeException("Cannot decode BlockHashesFromNumber")
       }
     }
   }

@@ -35,6 +35,7 @@ object Block {
 
   implicit class BlockEnc(val obj: Block) extends RLPSerializable {
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.given
 
     override def toRLPEncodable: RLPEncodeable = RLPList(
       obj.header.toRLPEncodable,
@@ -45,7 +46,9 @@ object Block {
 
   implicit class BlockDec(val bytes: Array[Byte]) extends AnyVal {
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
+    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.given
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.TypedTransaction._
+    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.TypedTransaction.given
     def toBlock: Block = rawDecode(bytes) match {
       case RLPList(header: RLPList, stx: RLPList, uncles: RLPList) =>
         Block(

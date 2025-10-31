@@ -43,7 +43,7 @@ class EtcPeerManagerActor(
 ) extends Actor
     with ActorLogging {
 
-  private type PeersWithInfo = Map[PeerId, PeerWithInfo]
+  private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -351,7 +351,7 @@ object EtcPeerManagerActor {
       PeerInfo(remoteStatus, forkAccepted = false)
   }
 
-  private case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
+  private[network] case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
 
   case object GetHandshakedPeers
 

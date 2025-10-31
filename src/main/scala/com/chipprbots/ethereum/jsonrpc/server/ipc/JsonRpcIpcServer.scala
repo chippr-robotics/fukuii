@@ -23,7 +23,9 @@ import org.json4s.native.Serialization
 import org.scalasbt.ipcsocket.UnixDomainServerSocket
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcController
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
+import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.utils.Logger
