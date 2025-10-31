@@ -61,7 +61,7 @@ object ETH67 {
     override def code: Int = Codes.NewPooledTransactionHashesCode
 
     override def toString: String = {
-      val txInfo = (types, sizes, hashes).zipped.map { (typ, size, hash) =>
+      val txInfo = types.lazyZip(sizes).lazyZip(hashes).map { (typ, size, hash) =>
         s"(type=$typ, size=$size, hash=${Hex.toHexString(hash.toArray[Byte])})"
       }
       s"NewPooledTransactionHashes { txs: ${txInfo.mkString(", ")} }"
