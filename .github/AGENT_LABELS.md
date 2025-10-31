@@ -108,24 +108,41 @@ This document describes the automated agent labels used in the fukuii project. W
 
 ## How Agent Labels Work
 
-### Automatic Labeling
+### Automatic vs Manual Labeling
 
-Agent labels are automatically applied by the GitHub Actions workflow (`.github/workflows/pr-management.yml`) using the configuration in `.github/labeler.yml`.
+Agent labels serve two purposes:
+1. **Automatic labeling** for specific critical domains
+2. **Manual labeling** to assign agents to issues or PRs
 
-When a PR is opened or updated, the workflow:
-1. Analyzes which files were changed
-2. Matches file patterns to agent domains
-3. Applies appropriate agent labels
+#### Automatically Applied Labels
 
-### Multiple Agents
+Only **`agent: forge 🔨`** is automatically applied when PRs modify consensus-critical code:
+- VM execution code (`src/main/scala/**/vm/**/*`)
+- Consensus logic (`src/main/scala/**/consensus/**/*`)
+- Mining code (`src/main/scala/**/mining/**/*`)
+- Cryptographic operations (`crypto/**/*`)
 
-A PR can receive multiple agent labels if it touches multiple domains. For example:
-- A PR that modifies both test files and VM code would get both `agent: eye 👁️` and `agent: forge 🔨`
-- A PR that fixes Scala 3 compilation errors across multiple modules would get `agent: wraith 👻`
+This automatic labeling ensures that changes to the most critical parts of the codebase receive specialized review from the forge agent's domain expertise.
 
-### Manual Labeling
+#### Manually Applied Labels
 
-While labels are typically applied automatically, maintainers can also manually add agent labels to issues or PRs to indicate which agent should review or work on them.
+The other agent labels are typically applied manually:
+- **`agent: wraith 👻`** - Manually add when fixing compilation errors or Scala 3 migration issues
+- **`agent: mithril ✨`** - Manually add when refactoring code to use modern Scala 3 features
+- **`agent: ICE 🧊`** - Manually add for large-scale migration planning and documentation tasks
+- **`agent: eye 👁️`** - Manually add when the focus is on testing, validation, or quality assurance
+
+### When to Apply Agent Labels Manually
+
+Maintainers and contributors should manually add agent labels to:
+- **Issues**: To indicate which specialized agent should handle the issue
+- **PRs**: To request review from a specific agent domain expert
+- **Planning**: To organize work by agent specialization
+
+For example:
+- An issue about fixing 50 compilation errors → Add `agent: wraith 👻`
+- An issue about improving test coverage → Add `agent: eye 👁️`
+- A PR that modernizes implicit syntax → Add `agent: mithril ✨`
 
 ## Agent Label Guidelines
 
