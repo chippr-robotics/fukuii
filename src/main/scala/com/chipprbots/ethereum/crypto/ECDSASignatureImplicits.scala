@@ -11,8 +11,9 @@ object ECDSASignatureImplicits {
 
   implicit val ecdsaSignatureDec: RLPDecoder[ECDSASignature] = new RLPDecoder[ECDSASignature] {
     override def decode(rlp: RLPEncodeable): ECDSASignature = rlp match {
-      case RLPList(r, s, v) => ECDSASignature(r: ByteString, s: ByteString, v)
-      case _                => throw new RuntimeException("Cannot decode ECDSASignature")
+      case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) => 
+        ECDSASignature(ByteString(r), ByteString(s), v(0))
+      case _ => throw new RuntimeException("Cannot decode ECDSASignature")
     }
   }
 
