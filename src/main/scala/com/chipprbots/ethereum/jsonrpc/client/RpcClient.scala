@@ -37,6 +37,15 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
 
   import RpcClient._
 
+  // Manual decoder for JsonRpcError to handle json4s JValue field
+  private implicit val jsonRpcErrorDecoder: Decoder[JsonRpcError] = (c) =>
+    for {
+      code <- c.downField("code").as[Int]
+      message <- c.downField("message").as[String]
+      // Skip decoding the 'data' field since it's json4s JValue which circe can't decode
+      // We only need code and message for error handling
+    } yield JsonRpcError(code, message, None)
+
   lazy val connectionContext: HttpsConnectionContext = if (node.scheme.startsWith("https")) {
     getSSLContext().toOption.fold(Http().defaultClientHttpsContext)(ConnectionContext.httpsClient)
   } else {
