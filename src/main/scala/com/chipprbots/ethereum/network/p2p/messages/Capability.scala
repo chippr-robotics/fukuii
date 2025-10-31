@@ -12,8 +12,8 @@ import com.chipprbots.ethereum.rlp.rawDecode
 
 sealed trait ProtocolFamily
 object ProtocolFamily {
-  final case object ETH extends ProtocolFamily
-  final case object ETC extends ProtocolFamily
+  case object ETH extends ProtocolFamily
+  case object ETC extends ProtocolFamily
   implicit class ProtocolFamilyEnc(val msg: ProtocolFamily) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = msg match {
       case ETH => RLPValue("eth".getBytes())

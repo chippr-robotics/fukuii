@@ -6,7 +6,6 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Timers
 import org.apache.pekko.pattern.pipe
-import org.apache.pekko.pattern.PipeToSupport.PipeableFuture
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
@@ -50,6 +49,7 @@ class SyncStateSchedulerActor(
     with Timers {
 
   implicit private val monixScheduler: IORuntime = IORuntime.global
+  implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
   private def getFreePeers(state: DownloaderState): List[Peer] =
     peersToDownloadFrom.collect {
@@ -225,7 +225,7 @@ class SyncStateSchedulerActor(
             )
             val (requests, newState1) = newState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
             requests.foreach(req => requestNodes(req))
-            IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)
+            pipe(IO(processNodes(newState1, nodes)).unsafeToFuture())(self)
             context.become(syncing(newState1))
 
           case (Some((nodes, newState)), None) =>
@@ -234,7 +234,7 @@ class SyncStateSchedulerActor(
               newState.numberOfRemainingRequests
             )
             // we do not have any peers and cannot assign new tasks, but we can still process remaining requests
-            IO(processNodes(newState, nodes)).unsafeToFuture().pipeTo(self)
+            pipe(IO(processNodes(newState, nodes)).unsafeToFuture())(self)
             context.become(syncing(newState))
 
           case (None, Some(peers)) =>
@@ -278,7 +278,7 @@ class SyncStateSchedulerActor(
         } else {
           log.debug("Response received while idle. Initiating response processing")
           val newState = currentState.initProcessing
-          IO(processNodes(newState, result)).unsafeToFuture().pipeTo(self)
+          pipe(IO(processNodes(newState, result)).unsafeToFuture())(self)
           context.become(syncing(newState))
         }
 

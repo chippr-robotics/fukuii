@@ -271,7 +271,8 @@ class PeerManagerActor(
 
   private def handleCommonMessages(connectedPeers: ConnectedPeers): Receive = {
     case GetPeers =>
-      getPeers(connectedPeers.peers.values.toSet).unsafeToFuture().pipeTo(sender())
+      implicit val ec = context.dispatcher
+      pipe(getPeers(connectedPeers.peers.values.toSet).unsafeToFuture())(sender())
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
       connectedPeers.getPeer(peerId).get.ref ! PeerActor.SendMessage(message)
@@ -339,15 +340,15 @@ class PeerManagerActor(
   private def handlePruning(connectedPeers: ConnectedPeers): Receive = {
     case SchedulePruneIncomingPeers =>
       implicit val timeout: Timeout = Timeout(peerConfiguration.updateNodesInterval)
+      implicit val ec = context.dispatcher
 
       // Ask for the whole statistics duration, we'll use averages to make it fair.
       val window = peerConfiguration.statSlotCount * peerConfiguration.statSlotDuration
 
-      peerStatistics
+      pipe(peerStatistics
         .askFor[PeerStatisticsActor.StatsForAll](PeerStatisticsActor.GetStatsForAll(window))
         .map(PruneIncomingPeers)
-        .unsafeToFuture()
-        .pipeTo(self)
+        .unsafeToFuture())(self)
 
     case PruneIncomingPeers(PeerStatisticsActor.StatsForAll(stats)) =>
       val prunedConnectedPeers = pruneIncomingPeers(connectedPeers, stats)
