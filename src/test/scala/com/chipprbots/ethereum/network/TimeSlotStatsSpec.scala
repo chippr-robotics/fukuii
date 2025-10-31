@@ -262,6 +262,6 @@ object TimeSlotStatsSpec {
         clock.windByMillis(duration.toMillis)
         stats.add(key, stat)
       }
-      window <- Gen.choose(0, stats.duration.toSeconds * 2).map(_.seconds)
+      window <- Gen.choose(0L, stats.duration.toSeconds * 2).map(_.seconds)
     } yield (stats, clock, window)
 }

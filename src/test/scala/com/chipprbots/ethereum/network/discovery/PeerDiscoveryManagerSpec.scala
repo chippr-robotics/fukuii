@@ -251,7 +251,7 @@ class PeerDiscoveryManagerSpec
       val lookupCount = new AtomicInteger(0)
 
       implicit val nodeOrd: Ordering[ENode] =
-        Ordering.by(_.id.toByteArray.toSeq)
+        Ordering.by(_.id.value.toByteArray.toSeq)
 
       (discoveryService.lookup _)
         .expects(*)
