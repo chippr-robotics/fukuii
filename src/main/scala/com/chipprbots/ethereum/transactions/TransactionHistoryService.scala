@@ -42,12 +42,12 @@ class TransactionHistoryService(
           .emits(block.body.transactionList.reverse.toSeq)
           .collect(Function.unlift(MinedTxChecker.checkTx(_, account)))
           .evalMap { case (tx, mkExtendedData) =>
-            for {
+            (for {
               blockReceiptsIO <- getBlockReceipts
               lastCheckpointIO <- getLastCheckpoint
               blockReceipts <- blockReceiptsIO
               lastCheckpoint <- lastCheckpointIO
-            } yield MinedTxChecker.getMinedTxData(tx, block, blockReceipts, lastCheckpoint).map(mkExtendedData(_))
+            } yield MinedTxChecker.getMinedTxData(tx, block, blockReceipts, lastCheckpoint).map(mkExtendedData(_)))
           }
           .collect { case Some(data) =>
             data

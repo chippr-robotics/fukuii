@@ -5,7 +5,6 @@ import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Status.Failure
-import org.apache.pekko.pattern.pipe
 import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime

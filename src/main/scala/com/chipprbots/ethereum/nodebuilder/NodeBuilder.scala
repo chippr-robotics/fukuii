@@ -789,14 +789,13 @@ trait PortForwardingBuilder {
     .whenA(Config.Network.automaticPortForwarding)
     .allocated
     .map(_._2)
-    .flatten
 
   // reference to an IO that produces the release IO,
   // memoized to prevent running multiple port forwarders at once
   private val portForwardingRelease = new AtomicReference(Option.empty[IO[IO[Unit]]])
 
   def startPortForwarding(): Future[Unit] = {
-    portForwardingRelease.compareAndSet(None, Some(portForwarding.memoize))
+    portForwardingRelease.compareAndSet(None, Some(portForwarding))
     portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
   }
 
