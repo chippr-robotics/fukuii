@@ -7,6 +7,8 @@ import org.apache.pekko.pattern.pipe
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.ExecutionContext
+
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -48,6 +50,7 @@ class StateStorageActor extends Actor with ActorLogging {
 
   private def persistState(storage: FastSyncStateStorage, syncState: SyncState): Unit = {
     implicit val runtime: IORuntime = IORuntime.global
+    implicit val ec: ExecutionContext = context.dispatcher
 
     val persistingQueues: IO[Try[FastSyncStateStorage]] = IO {
       lazy val result = Try(storage.putSyncState(syncState))
@@ -61,7 +64,7 @@ class StateStorageActor extends Actor with ActorLogging {
         result
       }
     }
-    persistingQueues.unsafeToFuture().pipeTo(self)
+    pipe(persistingQueues.unsafeToFuture())(self)
     context.become(busy(storage, None))
   }
 

@@ -206,11 +206,12 @@ class PeerDiscoveryManager(
     }
   }
 
-  def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit =
-    task
+  def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit = {
+    implicit val ec = context.dispatcher
+    pipe(task
       .onError(ex => IO(log.error(ex, "Failed to relay result to recipient.")))
-      .unsafeToFuture()
-      .pipeTo(recipient)
+      .unsafeToFuture())(recipient)
+  }
 
   def toNode(enode: ENode): Node =
     Node(

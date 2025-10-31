@@ -84,7 +84,10 @@ object ETH63 {
     }
 
     implicit class MptNodeRLPEncodableDec(val rlp: RLPEncodeable) extends AnyVal {
-      def toMptNode: MptNode = MptTraversals.decodeNode(rlp)
+      def toMptNode: MptNode = rlp match {
+        case RLPValue(bytes) => MptTraversals.decodeNode(bytes)
+        case _ => throw new RuntimeException("Cannot decode MptNode from non-RLPValue")
+      }
     }
   }
 
@@ -104,7 +107,10 @@ object ETH63 {
 
     implicit class NodeDataDec(val bytes: Array[Byte]) extends AnyVal {
       def toNodeData: NodeData = rawDecode(bytes) match {
-        case rlpList: RLPList => NodeData(rlpList.items.map(e => e: ByteString))
+        case rlpList: RLPList => NodeData(rlpList.items.map {
+          case RLPValue(bytes) => ByteString(bytes)
+          case _ => throw new RuntimeException("Cannot decode NodeData item")
+        })
         case _                => throw new RuntimeException("Cannot decode NodeData")
       }
     }
@@ -158,8 +164,8 @@ object ETH63 {
 
     implicit class TxLogEntryDec(rlp: RLPEncodeable) {
       def toTxLogEntry: TxLogEntry = rlp match {
-        case RLPList(loggerAddress, logTopics: RLPList, data) =>
-          TxLogEntry(Address(loggerAddress: ByteString), fromRlpList[ByteString](logTopics), data)
+        case RLPList(RLPValue(loggerAddressBytes), logTopics: RLPList, RLPValue(dataBytes)) =>
+          TxLogEntry(Address(ByteString(loggerAddressBytes)), fromRlpList[ByteString](logTopics), ByteString(dataBytes))
 
         case _ => throw new RuntimeException("Cannot decode TransactionLog")
       }
@@ -210,13 +216,13 @@ object ETH63 {
     implicit class ReceiptRLPEncodableDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
 
       def toLegacyReceipt: LegacyReceipt = rlpEncodeable match {
-        case RLPList(postTransactionStateHash, cumulativeGasUsed, logsBloomFilter, logs: RLPList) =>
+        case RLPList(postTransactionStateHash, RLPValue(cumulativeGasUsedBytes), RLPValue(logsBloomFilterBytes), logs: RLPList) =>
           val stateHash = postTransactionStateHash match {
             case RLPValue(bytes) if bytes.length > 1                     => HashOutcome(ByteString(bytes))
             case RLPValue(bytes) if bytes.length == 1 && bytes.head == 1 => SuccessOutcome
             case _                                                       => FailureOutcome
           }
-          LegacyReceipt(stateHash, cumulativeGasUsed, logsBloomFilter, logs.items.map(_.toTxLogEntry))
+          LegacyReceipt(stateHash, BigInt(1, cumulativeGasUsedBytes), ByteString(logsBloomFilterBytes), logs.items.map(_.toTxLogEntry))
         case _ => throw new RuntimeException("Cannot decode Receipt")
       }
 

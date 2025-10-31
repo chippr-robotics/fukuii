@@ -111,8 +111,8 @@ object ETC64 {
       def toNewBlock: NewBlock = rawDecode(bytes) match {
         case RLPList(
               RLPList(blockHeader, transactionList: RLPList, (uncleNodesList: RLPList)),
-              totalDifficulty,
-              lastCheckpointNumber
+              RLPValue(totalDifficultyBytes),
+              RLPValue(lastCheckpointNumberBytes)
             ) =>
           NewBlock(
             Block(
@@ -122,7 +122,7 @@ object ETC64 {
                 uncleNodesList.items.map(_.toBlockHeader)
               )
             ),
-            ChainWeight(lastCheckpointNumber, totalDifficulty)
+            ChainWeight(BigInt(1, lastCheckpointNumberBytes), BigInt(1, totalDifficultyBytes))
           )
         case _ => throw new RuntimeException("Cannot decode NewBlock ETC64 version")
       }
