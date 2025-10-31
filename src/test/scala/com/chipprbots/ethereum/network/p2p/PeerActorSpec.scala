@@ -101,7 +101,7 @@ class PeerActorSpec
     implicit override lazy val system = ActorSystem("PeerActorSpec_System")
     override def protocol: Capability = Capability.ETH63
     
-    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val peerMessageBus = system.actorOf(PeerEventBusActor.props)
     var rlpxConnection = TestProbe() // var as we actually need new instances
@@ -600,7 +600,7 @@ class PeerActorSpec
 
     val rlpxConnection: TestProbe = TestProbe()
     
-    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val peerMessageBus: ActorRef = system.actorOf(PeerEventBusActor.props)
 

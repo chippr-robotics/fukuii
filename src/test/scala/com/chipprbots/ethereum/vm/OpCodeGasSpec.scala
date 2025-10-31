@@ -373,7 +373,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
     forAll(stateGen) { stateIn =>
       val stateOut = op.execute(stateIn)
-      val (offset, _) = stateIn.stack.pop
+      val (offset, _) = stateIn.stack.pop()
       val expectedGas = G_verylow + config.calcMemCost(stateIn.memory.size, offset, UInt256.Size)
 
       verifyGas(expectedGas, stateIn, stateOut)
@@ -391,7 +391,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
     forAll(stateGen) { stateIn =>
       val stateOut = op.execute(stateIn)
-      val (offset, _) = stateIn.stack.pop
+      val (offset, _) = stateIn.stack.pop()
       val expectedGas = G_verylow + config.calcMemCost(stateIn.memory.size, offset, UInt256.Size)
 
       verifyGas(expectedGas, stateIn, stateOut)
@@ -409,7 +409,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
     forAll(stateGen) { stateIn =>
       val stateOut = op.execute(stateIn)
-      val (offset, _) = stateIn.stack.pop
+      val (offset, _) = stateIn.stack.pop()
       val expectedGas = G_verylow + config.calcMemCost(stateIn.memory.size, offset, 1)
 
       verifyGas(expectedGas, stateIn, stateOut)
@@ -500,7 +500,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
     forAll(stateGen) { stateIn =>
       val stateOut = op.execute(stateIn)
 
-      val (Seq(offset, size, _*), _) = stateIn.stack.pop(op.delta)
+      val (Seq(offset, size, _*), _) = (stateIn.stack.pop(op.delta): @unchecked)
       val memCost = config.calcMemCost(stateIn.memory.size, offset, size)
       val logCost = G_logdata * size + op.i * G_logtopic
       val expectedGas: BigInt = G_log + memCost + logCost
@@ -551,7 +551,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
     // Sending refund to a non-existent account
     forAll(stateGen) { stateIn =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       whenever(stateIn.world.getAccount(Address(refund)).isEmpty) {
         val stateOut = op.execute(stateIn)
         stateOut.gasRefund shouldEqual R_selfdestruct
@@ -561,7 +561,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
     // Sending refund to an already existing account
     forAll(stateGen) { stateIn =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       val world = stateIn.world.saveAccount(Address(refund), Account.empty())
       val updatedStateIn = stateIn.withWorld(world)
       val stateOut = op.execute(updatedStateIn)
@@ -571,7 +571,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
     // Owner account was already selfdestructed
     forAll(stateGen) { stateIn =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       whenever(stateIn.world.getAccount(Address(refund)).isEmpty) {
         val updatedStateIn = stateIn.withAddressToDelete(stateIn.env.ownerAddr)
         val stateOut = op.execute(updatedStateIn)

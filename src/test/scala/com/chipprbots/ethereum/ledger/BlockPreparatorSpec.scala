@@ -61,7 +61,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
             .executeTransaction(stx.tx, stx.senderAddress, header, worldWithMinerAndOriginAccounts)
             .worldState
 
-        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe (initialOriginNonce + 1)
+        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe UInt256(initialOriginNonce + 1)
       }
 
       "executing a tx that results in a message call" in new TestSetup {
@@ -85,7 +85,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
             .executeTransaction(stx.tx, stx.senderAddress, header, worldWithMinerAndOriginAccounts)
             .worldState
 
-        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe (initialOriginNonce + 1)
+        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe UInt256(initialOriginNonce + 1)
       }
     }
 

@@ -588,7 +588,7 @@ class PeerManagerSpec
   }
 
   trait TestSetup {
-    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     case class TestPeer(peer: Peer, probe: TestProbe)
     var createdPeers: Seq[TestPeer] = Seq.empty
