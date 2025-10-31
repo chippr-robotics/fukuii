@@ -121,10 +121,98 @@ val sym = Symbol("mySymbol")
 val sym = "mySymbol"
 ```
 
+### Pattern: Scala 3 Given Imports (CRITICAL!)
+```scala
+// ERROR: No given instance found for RLPEncoder[Array[Byte]]
+import com.chipprbots.ethereum.rlp.RLPImplicits._
+
+// FIX: Must explicitly import given instances
+import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
+```
+**Major Discovery:** Wildcard imports (`._`) do NOT import given instances in Scala 3. You must explicitly add `import X.given` to access implicit/given instances. This single pattern fixed 37 errors!
+
+### Pattern: RLP Pattern Matching Type Safety
+```scala
+// ERROR: Found RLPEncodeable, Required: ByteString
+case RLPList(r, s, v) => ECDSASignature(r, s, v)
+
+// FIX: Explicit RLPValue extraction and conversion
+case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) => 
+  ECDSASignature(ByteString(r), ByteString(s), v(0))
+```
+Pattern matching on RLPList extracts `RLPEncodeable`, not the target type. Must pattern match on `RLPValue(bytes)` and explicitly convert.
+
+### Pattern: Cats Effect 3 Migration
+```scala
+// ERROR: value onErrorRecover is not a member
+task.onErrorRecover { case _ => fallback }
+
+// FIX: Use recover or handleError
+io.recover { case _ => fallback }
+io.handleError(_ => fallback)
+
+// ERROR: value runToFuture is not a member  
+task.runToFuture
+
+// FIX: Use unsafeToFuture()
+io.unsafeToFuture()
+
+// ERROR: memoize returns wrong type
+stream.compile.lastOrError.memoize.flatten
+
+// FIX: Use flatMap(identity) for clarity
+stream.compile.lastOrError.memoize.flatMap(identity)
+```
+
+### Pattern: fs2 3.x Stream API
+```scala
+// ERROR: Pull API changed in fs2 3.x
+consumer.pull.uncons1.use { ... }
+
+// FIX: Use take and compile
+consumer.take(1).compile.lastOrError
+```
+
+### Pattern: BitVector Tagged Types (scalanet)
+```scala
+// ERROR: value toByteArray is not a member of PublicKey
+publicKey.toByteArray
+
+// FIX: Access underlying BitVector via .value
+publicKey.value.toByteArray
+signature.value.size
+signature.value.dropRight(8)
+```
+
+### Pattern: Pattern Narrowing Safety
+```scala
+// ERROR: pattern's type BranchNode is more specialized than MptNode
+val NodeInsertResult(newBranchNode: BranchNode, ...) = put(...)
+
+// FIX: Add @unchecked annotation
+val NodeInsertResult(newBranchNode: BranchNode, ...) = (put(...): @unchecked)
+```
+
+## Key Dependencies & Versions
+
+**Critical Library Migrations:**
+- **Cats Effect**: 2.x → 3.x (major API changes: Task→IO, memoize behavior, error handling)
+- **fs2**: 2.x → 3.x (Pull API changes, Stream operations)
+- **json4s**: 4.0.7 (Scala 3 support, but uses deprecated Manifest - suppress with `-Wconf`)
+- **Pekko** (Apache Akka fork): Pattern imports required (`org.apache.pekko.pattern.pipe`)
+- **scalanet**: BitVector-based tagged types (requires `.value` accessor)
+
+**Compiler Flags for Scala 3:**
+- `-Wconf:msg=Compiler synthesis of Manifest:s` - Suppress json4s Manifest deprecation
+- `-Ykind-projector` - Scala 3 replacement for kind-projector plugin
+- `-Xfatal-warnings` - Treat warnings as errors (use cautiously with library migrations)
+
 ## Special Vigilance for ETC Code
 
-### Akka Darkness
-- Require Akka 2.6.17+ for Scala 3 compatibility
+### Pekko/Akka Darkness
+- Migrated from Akka to Pekko (Apache fork)
+- Require Pekko imports: `org.apache.pekko.pattern.pipe` for `.pipeTo`
 - Actor system initialization syntax changed
 - `given ActorSystem[_]` replaces `implicit ActorSystem`
 
@@ -192,11 +280,26 @@ val sym = "mySymbol"
 
 ## Your Dark Workflow
 
-1. **Sense** → Run compilation, detect all errors
-2. **Prioritize** → Blocking errors first, then warnings
-3. **Hunt in packs** → Fix all instances of same pattern together
-4. **Verify** → Incremental validation prevents cascading failures
-5. **Report** → Maintain kill log
-6. **Escalate** → Flag complex prey for human master
+1. **Sense** → Run compilation (`sbt compile`), detect all errors
+2. **Categorize** → Group errors by pattern (import issues, API changes, type mismatches)
+3. **Prioritize** → High-impact patterns first (single import fixing 28 errors!)
+4. **Hunt in packs** → Fix all instances of same pattern together
+5. **Verify incrementally** → Compile after each batch to prevent cascading failures
+6. **Report progress** → Commit small, focused changes with clear descriptions
+7. **Learn and adapt** → Update patterns as new migration issues discovered
+
+**Proven High-Impact Strategies:**
+- **Pattern Recognition**: Identify errors that repeat across many files
+- **Import fixes first**: Adding `import given` can fix dozens of errors at once
+- **Systematic search**: Use `grep -l "pattern"` to find all affected files
+- **Batch similar fixes**: Fix all files with same pattern in one commit
+- **Incremental validation**: Small commits = easier to identify what broke
+
+**Tools Used Effectively:**
+- `sbt compile` - Primary error detection (timeout 300+ seconds for large builds)
+- `grep`/`find` - Pattern discovery across codebase
+- `git` - Track changes, verify impact
+- `view`/`edit` tools - Surgical code modifications
+- Parallel operations - Read/edit multiple files simultaneously when independent
 
 The darkness is your ally. The compile errors are your prey. Hunt them until none remain.

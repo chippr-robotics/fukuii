@@ -389,7 +389,10 @@ class PeerManagerActor(
     peer.ref
       .askFor[PeerActor.StatusResponse](PeerActor.GetStatus)
       .map(sr => Some((peer, sr.status)))
-      .handleError(_ => None)
+      .handleError { err =>
+        log.error(err, s"Failed to get status for peer: ${peer.id}")
+        None
+      }
   }
 
   private def validateConnection(

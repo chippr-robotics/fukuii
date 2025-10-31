@@ -346,8 +346,8 @@ class TestService(
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .timeout(timeout.duration)
-      .recover { case _ =>
-        log.error("Error getting transactions")
+      .recover { case ex =>
+        log.error("Error getting transactions", ex)
         PendingTransactionsResponse(Nil)
       }
       .map { pendingTxs =>
