@@ -218,8 +218,8 @@ trait DaoForkTestSetup extends TestSetup with MockFactory {
 
   lazy val testBlockchainReader: BlockchainReader = mock[BlockchainReader]
   lazy val testBlockchain: BlockchainImpl = mock[BlockchainImpl]
-  // MIGRATION: Scala 3 mock cannot infer complex parameterized types - use null as placeholder since never invoked
-  val worldState: InMemoryWorldStateProxy = null.asInstanceOf[InMemoryWorldStateProxy]
+  // SCALA 3 MIGRATION: Cannot mock InMemoryWorldStateProxy due to scalamock limitation - using ??? placeholder
+  val worldState: InMemoryWorldStateProxy = ???
   val proDaoBlock: Block = Fixtures.Blocks.ProDaoForkBlock.block
 
   val supportDaoForkConfig: DaoForkConfig = new DaoForkConfig {
