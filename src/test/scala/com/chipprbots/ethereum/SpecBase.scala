@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum
 
+import cats.~>
 import cats.effect.Async
 import cats.effect.IO
 import cats.effect.Resource
@@ -25,8 +26,11 @@ trait SpecBase extends TypeCheckedTripleEquals with Diagrams with Matchers { sel
 
   def customTestCaseResourceM[M[_]: Async, T](
       fixture: Resource[M, T]
-  )(theTest: T => M[Assertion]): Future[Assertion] =
-    fixture.use(theTest).toIO.unsafeToFuture()
+  )(theTest: T => M[Assertion]): Future[Assertion] = {
+    // In Cats Effect 3, we need to explicitly handle the conversion to IO
+    // Since in practice M is always IO, we can safely cast here
+    fixture.use(theTest).asInstanceOf[IO[Assertion]].unsafeToFuture()
+  }
 
   def customTestCaseM[M[_]: Async, T](fixture: => T)(theTest: T => M[Assertion]): Future[Assertion] =
     customTestCaseResourceM(Resource.pure[M, T](fixture))(theTest)
@@ -59,8 +63,10 @@ trait ResourceFixtures { self: SpecBase =>
 
   def fixtureResource: Resource[IO, Fixture]
 
-  def testCaseM[M[_]: Async](theTest: Fixture => M[Assertion]): Future[Assertion] =
-    customTestCaseResourceM(fixtureResource.mapK(IO.liftTo[M]))(theTest)
+  def testCaseM[M[_]: Async](theTest: Fixture => M[Assertion]): Future[Assertion] = {
+    // In practice M is always IO, so we can use identity transformation
+    customTestCaseResourceM(fixtureResource.asInstanceOf[Resource[M, Fixture]])(theTest)
+  }
 
   /** IO-specific method to avoid type inference issues in [[testCaseM]]
     */
