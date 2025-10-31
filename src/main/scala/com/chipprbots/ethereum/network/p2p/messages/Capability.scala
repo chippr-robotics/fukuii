@@ -26,11 +26,19 @@ sealed abstract class Capability(val name: ProtocolFamily, val version: Byte)
 object Capability {
   case object ETH63 extends Capability(ProtocolFamily.ETH, 63) // scalastyle:ignore magic.number
   case object ETH64 extends Capability(ProtocolFamily.ETH, 64) // scalastyle:ignore magic.number
+  case object ETH65 extends Capability(ProtocolFamily.ETH, 65) // scalastyle:ignore magic.number
+  case object ETH66 extends Capability(ProtocolFamily.ETH, 66) // scalastyle:ignore magic.number
+  case object ETH67 extends Capability(ProtocolFamily.ETH, 67) // scalastyle:ignore magic.number
+  case object ETH68 extends Capability(ProtocolFamily.ETH, 68) // scalastyle:ignore magic.number
   case object ETC64 extends Capability(ProtocolFamily.ETC, 64) // scalastyle:ignore magic.number
 
   def parse(s: String): Option[Capability] = s match {
     case "eth/63" => Some(ETH63)
     case "eth/64" => Some(ETH64)
+    case "eth/65" => Some(ETH65)
+    case "eth/66" => Some(ETH66)
+    case "eth/67" => Some(ETH67)
+    case "eth/68" => Some(ETH68)
     case "etc/64" => Some(ETC64)
     case _        => None // TODO: log unknown capability?
   }
