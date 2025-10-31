@@ -65,7 +65,7 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
   trait TestSetup extends EphemBlockchainTestSetup {
     implicit override lazy val system: ActorSystem = ActorSystem("KnownNodesManagerSpec_System")
     
-    private def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
     val config: KnownNodesManagerConfig = KnownNodesManagerConfig(persistInterval = 5.seconds, maxPersistedNodes = 5)
 
     val client: TestProbe = TestProbe()
