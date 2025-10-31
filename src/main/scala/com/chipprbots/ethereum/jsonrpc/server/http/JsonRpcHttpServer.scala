@@ -51,7 +51,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
   lazy val jsonRpcErrorCodes: List[Int] =
     List(JsonRpcError.InvalidRequest.code, JsonRpcError.ParseError.code, JsonRpcError.InvalidParams().code)
 
-  val corsSettings: CorsSettings = CorsSettings.defaultSettings
+  val corsSettings: CorsSettings = (CorsSettings.defaultSettings: @annotation.nowarn("cat=deprecation"))
     .withAllowGenericHttpRequests(true)
     .withAllowedOrigins(corsAllowedOrigins)
 

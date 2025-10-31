@@ -188,6 +188,7 @@ object ETH63 {
         receipt match {
           case _: LegacyReceipt => legacyRLPReceipt
           case _: Type01Receipt => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
+          case _: TypedLegacyReceipt => legacyRLPReceipt // Handle typed legacy receipts
         }
       }
     }

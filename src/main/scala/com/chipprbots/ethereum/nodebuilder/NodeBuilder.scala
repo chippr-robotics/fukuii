@@ -106,7 +106,7 @@ trait ActorSystemBuilder {
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {
-  lazy val pruningMode: PruningMode = PruningConfig(Config.config).mode
+  override val pruningMode: PruningMode = PruningConfig(Config.config).mode
 }
 
 trait StorageBuilder {
@@ -913,4 +913,7 @@ trait Node
     with CheckpointBlockGeneratorBuilder
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
-    with BlacklistBuilder
+    with BlacklistBuilder {
+  // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
+  override implicit val ioRuntime: IORuntime = IORuntime.global
+}

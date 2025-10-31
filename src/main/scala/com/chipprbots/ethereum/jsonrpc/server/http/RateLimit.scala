@@ -22,8 +22,8 @@ import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitCo
 
 class RateLimit(config: RateLimitConfig) extends Directive0 with Json4sSupport {
 
-  implicit private val serialization: Serialization = native.Serialization
-  implicit private val formats: Formats = DefaultFormats + JsonSerializers.RpcErrorJsonSerializer
+  override implicit def serialization: Serialization = native.Serialization
+  override implicit def formats: Formats = DefaultFormats + JsonSerializers.RpcErrorJsonSerializer
 
   private[this] lazy val minInterval = config.minRequestInterval.toSeconds
 

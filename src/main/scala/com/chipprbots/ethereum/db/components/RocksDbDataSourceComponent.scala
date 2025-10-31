@@ -6,6 +6,6 @@ import com.chipprbots.ethereum.utils.Config
 
 trait RocksDbDataSourceComponent extends DataSourceComponent {
 
-  lazy val dataSource: RocksDbDataSource = RocksDbDataSource(Config.Db.RocksDb, Namespaces.nsSeq)
+  override val dataSource: RocksDbDataSource = RocksDbDataSource(Config.Db.RocksDb, Namespaces.nsSeq)
 
 }

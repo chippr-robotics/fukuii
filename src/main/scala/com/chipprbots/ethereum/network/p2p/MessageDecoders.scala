@@ -251,6 +251,5 @@ object EthereumMessageDecoder {
       case Capability.ETH66 => ETH66MessageDecoder.orElse(NetworkMessageDecoder)
       case Capability.ETH67 => ETH67MessageDecoder.orElse(NetworkMessageDecoder)
       case Capability.ETH68 => ETH68MessageDecoder.orElse(NetworkMessageDecoder)
-      case _                => throw new RuntimeException(s"Unsupported Protocol Version $protocolVersion")
     }
 }
