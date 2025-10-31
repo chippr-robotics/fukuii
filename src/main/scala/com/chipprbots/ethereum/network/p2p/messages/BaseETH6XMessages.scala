@@ -24,7 +24,13 @@ object BaseETH6XMessages {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        RLPList(protocolVersion, networkId, totalDifficulty, bestHash, genesisHash)
+        RLPList(
+          RLPValue(BigInt(protocolVersion).toByteArray),
+          RLPValue(BigInt(networkId).toByteArray),
+          RLPValue(totalDifficulty.toByteArray),
+          bestHash,
+          genesisHash
+        )
       }
     }
 
@@ -109,7 +115,7 @@ object BaseETH6XMessages {
             RLPList(block.body.transactionList.map(_.toRLPEncodable): _*),
             RLPList(block.body.uncleNodesList.map(_.toRLPEncodable): _*)
           ),
-          totalDifficulty
+          RLPValue(totalDifficulty.toByteArray)
         )
       }
     }
@@ -119,7 +125,7 @@ object BaseETH6XMessages {
       import TypedTransaction._
 
       def toNewBlock: NewBlock = rawDecode(bytes) match {
-        case RLPList(RLPList(blockHeader, transactionList: RLPList, uncleNodesList: RLPList), totalDifficulty) =>
+        case RLPList(RLPList(blockHeader, transactionList: RLPList, uncleNodesList: RLPList), RLPValue(totalDifficultyBytes)) =>
           NewBlock(
             Block(
               blockHeader.toBlockHeader,
@@ -128,7 +134,7 @@ object BaseETH6XMessages {
                 uncleNodesList.items.map(_.toBlockHeader)
               )
             ),
-            totalDifficulty
+            BigInt(1, totalDifficultyBytes)
           )
 
         case _ => throw new RuntimeException("Cannot decode NewBlock")
@@ -202,15 +208,15 @@ object BaseETH6XMessages {
             PrefixedRLPEncodable(
               Transaction.Type01,
               RLPList(
-                chainId,
-                nonce,
-                gasPrice,
-                gasLimit,
+                RLPValue(chainId.toByteArray),
+                RLPValue(nonce.toByteArray),
+                RLPValue(gasPrice.toByteArray),
+                RLPValue(gasLimit.toByteArray),
                 receivingAddressBytes,
-                value,
+                RLPValue(value.toByteArray),
                 payload,
                 toRlpList(accessList),
-                signedTx.signature.v,
+                RLPValue(BigInt(signedTx.signature.v).toByteArray),
                 signedTx.signature.r,
                 signedTx.signature.s
               )
@@ -218,13 +224,13 @@ object BaseETH6XMessages {
 
           case LegacyTransaction(nonce, gasPrice, gasLimit, _, value, payload) =>
             RLPList(
-              nonce,
-              gasPrice,
-              gasLimit,
+              RLPValue(nonce.toByteArray),
+              RLPValue(gasPrice.toByteArray),
+              RLPValue(gasLimit.toByteArray),
               receivingAddressBytes,
-              value,
+              RLPValue(value.toByteArray),
               payload,
-              signedTx.signature.v,
+              RLPValue(BigInt(signedTx.signature.v).toByteArray),
               signedTx.signature.r,
               signedTx.signature.s
             )
