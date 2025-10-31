@@ -24,13 +24,13 @@ class Secp256k1SigAlgSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "generate new keypairs" in new SignatureFixture {
-    publicKey.toByteVector should have size 64
-    privateKey.toByteVector should have size 32
+    publicKey.value.toByteVector should have size 64
+    privateKey.value.toByteVector should have size 32
   }
 
   it should "compress a public key" in new SignatureFixture {
     val compressedPublicKey = sigalg.compressPublicKey(publicKey)
-    compressedPublicKey.toByteVector should have size 33
+    compressedPublicKey.value.toByteVector should have size 33
   }
 
   it should "not compress an alredy compressed public key" in new SignatureFixture {
@@ -53,7 +53,7 @@ class Secp256k1SigAlgSpec extends AnyFlatSpec with Matchers {
 
   it should "sign some data" in new SignatureFixture {
     val signature = sigalg.sign(privateKey, data)
-    signature.toByteVector should have size 65
+    signature.value.toByteVector should have size 65
   }
 
   it should "verify a full signature" in new SignatureFixture {

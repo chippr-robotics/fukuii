@@ -72,7 +72,7 @@ class EthProofServiceSpec
       .proofAccount
 
     val givenAddress = givenResult.address
-    givenAddress should matchTo(address)
+    givenAddress shouldBe address
     givenResult.codeHash shouldBe account.codeHash
     givenResult.storageHash shouldBe account.storageRoot
 
@@ -102,7 +102,7 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        (accountProof.address should matchTo(address))
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
@@ -127,7 +127,7 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        (accountProof.address should matchTo(address))
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
@@ -153,7 +153,7 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        (accountProof.address should matchTo(address))
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
@@ -181,7 +181,7 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        (accountProof.address should matchTo(address))
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
@@ -203,7 +203,7 @@ class EthProofServiceSpec
       l => l,
       r => {
         val accountProof = r.proofAccount
-        (accountProof.address should matchTo(address))
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }

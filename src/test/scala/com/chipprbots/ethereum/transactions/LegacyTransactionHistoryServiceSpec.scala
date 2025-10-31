@@ -181,7 +181,7 @@ class LegacyTransactionHistoryServiceSpec
         assert(!block3.hasCheckpoint)
         assert(lastCheckpoint === block2.number)
         assert(block2.hasCheckpoint)
-        response should matchTo(List(expectedNonCheckpointedTxData, expectedCheckpointedTxData))
+        response shouldBe List(expectedNonCheckpointedTxData, expectedCheckpointedTxData)
       }
   }
 }
