@@ -6,11 +6,13 @@ import java.util.Collections.newSetFromMap
 
 import org.apache.pekko.actor.SupervisorStrategy.Stop
 import org.apache.pekko.actor._
+import org.apache.pekko.pattern.pipe
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import cats.syntax.parallel._
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -269,7 +271,7 @@ class PeerManagerActor(
 
   private def handleCommonMessages(connectedPeers: ConnectedPeers): Receive = {
     case GetPeers =>
-      getPeers(connectedPeers.peers.values.toSet).runToFuture.pipeTo(sender())
+      getPeers(connectedPeers.peers.values.toSet).unsafeToFuture().pipeTo(sender())
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
       connectedPeers.getPeer(peerId).get.ref ! PeerActor.SendMessage(message)
@@ -344,7 +346,7 @@ class PeerManagerActor(
       peerStatistics
         .askFor[PeerStatisticsActor.StatsForAll](PeerStatisticsActor.GetStatsForAll(window))
         .map(PruneIncomingPeers)
-        .runToFuture
+        .unsafeToFuture()
         .pipeTo(self)
 
     case PruneIncomingPeers(PeerStatisticsActor.StatsForAll(stats)) =>
@@ -376,18 +378,23 @@ class PeerManagerActor(
     prunedConnectedPeers
   }
 
-  private def getPeers(peers: Set[Peer]): Task[Peers] =
-    Task
-      .parSequence(peers.map(getPeerStatus))
+  private def getPeers(peers: Set[Peer]): IO[Peers] =
+    peers.toList
+      .parTraverse(getPeerStatus)
       .map(_.flatten.toMap)
       .map(Peers.apply)
 
-  private def getPeerStatus(peer: Peer): Task[Option[(Peer, PeerActor.Status)]] = {
+  private def getPeerStatus(peer: Peer): IO[Option[(Peer, PeerActor.Status)]] = {
     implicit val timeout: Timeout = Timeout(2.seconds)
     peer.ref
       .askFor[PeerActor.StatusResponse](PeerActor.GetStatus)
       .map(sr => Some((peer, sr.status)))
-      .onErrorHandle(_ => None)
+      .handleErrorWith {
+        case _: java.util.concurrent.TimeoutException =>
+          IO.pure(None) // Expected timeout, no logging needed
+        case err =>
+          IO.delay(log.error(err, s"Failed to get status for peer: ${peer.id}")).as(None)
+      }
   }
 
   private def validateConnection(

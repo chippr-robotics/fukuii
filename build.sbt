@@ -86,6 +86,7 @@ def fatalWarningsScala2 = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("tru
 // Scala 3 warning options
 val scala3Options = Seq(
   "-Xfatal-warnings",
+  "-Wconf:msg=Compiler synthesis of Manifest:s", // Suppress Manifest deprecation from json4s (library limitation)
   "-Ykind-projector" // Scala 3 replacement for kind-projector plugin
 )
 

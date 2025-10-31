@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.blockchain.sync.fast
 import org.apache.pekko.actor.Actor
 import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.pattern.pipe
-import org.apache.pekko.pattern.PipeToSupport.PipeableFuture
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime

@@ -7,6 +7,7 @@ import org.bouncycastle.math.ec.ECPoint
 import com.chipprbots.ethereum.crypto._
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 object AuthInitiateMessageV4 extends AuthInitiateEcdsaCodec {
