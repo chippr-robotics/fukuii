@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
+import com.chipprbots.ethereum.consensus.mining.RichMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
@@ -116,7 +117,7 @@ class EthMiningService(
   def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
     mining.ifEthash[ServiceResponse[SubmitWorkResponse]] { ethash =>
       reportActive()
-      Task {
+      IO {
         ethash.blockGenerator.getPrepared(req.powHeaderHash) match {
           case Some(pendingBlock) if blockchainReader.getBestBlockNumber() <= pendingBlock.block.header.number =>
             import pendingBlock._
@@ -160,7 +161,7 @@ class EthMiningService(
     lastActive.updateAndGet(_ => Some(now))
   }
 
-  private def getOmmersFromPool(parentBlockHash: ByteString): Task[OmmersPool.Ommers] =
+  private def getOmmersFromPool(parentBlockHash: ByteString): IO[OmmersPool.Ommers] =
     mining.ifEthash { ethash =>
       val miningConfig = ethash.config.specific
       implicit val timeout: Timeout = Timeout(miningConfig.ommerPoolQueryTimeout)

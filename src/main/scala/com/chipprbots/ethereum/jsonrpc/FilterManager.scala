@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 import scala.concurrent.ExecutionContext
@@ -40,6 +41,7 @@ class FilterManager(
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(system.scheduler)
   implicit private val executionContext: ExecutionContext = system.dispatcher
+  implicit private val ioRuntime: IORuntime = IORuntime.global
 
   val maxBlockHashesChanges = 256
 

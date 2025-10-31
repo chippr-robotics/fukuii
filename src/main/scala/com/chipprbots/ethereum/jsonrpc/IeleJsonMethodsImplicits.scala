@@ -108,7 +108,7 @@ object IeleJsonMethodsImplicits extends JsonMethodsImplicits {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, SendIeleTransactionRequest] =
         params match {
           case Some(JArray(JObject(tx) :: _)) =>
-            extractIeleTx(tx.toMap).map(SendIeleTransactionRequest)
+            extractIeleTx(tx.toMap).map(SendIeleTransactionRequest.apply)
           case _ =>
             Left(InvalidParams())
         }

@@ -45,7 +45,7 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, SendTransactionRequest] =
         params match {
           case Some(JArray(JObject(tx) :: _)) =>
-            extractTx(tx.toMap).map(SendTransactionRequest)
+            extractTx(tx.toMap).map(SendTransactionRequest.apply)
           case _ =>
             Left(InvalidParams())
         }
