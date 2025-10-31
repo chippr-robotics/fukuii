@@ -87,7 +87,8 @@ def fatalWarningsScala2 = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("tru
 val scala3Options = Seq(
   "-Xfatal-warnings",
   "-Wconf:msg=Compiler synthesis of Manifest:s", // Suppress Manifest deprecation from json4s (library limitation)
-  "-Ykind-projector" // Scala 3 replacement for kind-projector plugin
+  "-Ykind-projector", // Scala 3 replacement for kind-projector plugin
+  "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
 
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
