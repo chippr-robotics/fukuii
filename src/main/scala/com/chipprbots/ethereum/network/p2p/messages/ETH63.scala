@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 object ETH63 {
@@ -54,8 +55,13 @@ object ETH63 {
 
     implicit class AccountDec(val bytes: Array[Byte]) extends AnyVal {
       def toAccount: Account = rawDecode(bytes) match {
-        case RLPList(nonce, balance, storageRoot, codeHash) =>
-          Account(nonce.toUInt256, balance.toUInt256, storageRoot, codeHash)
+        case RLPList(RLPValue(nonceBytes), RLPValue(balanceBytes), RLPValue(storageRootBytes), RLPValue(codeHashBytes)) =>
+          Account(
+            UInt256(BigInt(1, nonceBytes)),
+            UInt256(BigInt(1, balanceBytes)),
+            ByteString(storageRootBytes),
+            ByteString(codeHashBytes)
+          )
         case _ => throw new RuntimeException("Cannot decode Account")
       }
     }
@@ -90,7 +96,7 @@ object ETH63 {
       import MptNodeEncoders._
 
       override def code: Int = Codes.NodeDataCode
-      override def toRLPEncodable: RLPEncodeable = msg.values
+      override def toRLPEncodable: RLPEncodeable = toRlpList(msg.values)
 
       @throws[RLPException]
       def getMptNode(index: Int): MptNode = msg.values(index).toArray[Byte].toMptNode
