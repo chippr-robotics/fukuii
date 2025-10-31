@@ -4,6 +4,7 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPException
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable
 import com.chipprbots.ethereum.rlp.RLPValue
@@ -58,8 +59,9 @@ object Capability {
 
   implicit class CapabilityRLPEncodableDec(val rLPEncodeable: RLPEncodeable) extends AnyVal {
     def toCapability: Option[Capability] = rLPEncodeable match {
-      case RLPList(name, version) => parse(s"${stringEncDec.decode(name)}/${byteEncDec.decode(version)}")
-      case _                      => throw new RLPException("Cannot decode Capability")
+      case RLPList(RLPValue(nameBytes), RLPValue(versionBytes)) => 
+        parse(s"${new String(nameBytes)}/${versionBytes(0)}")
+      case _ => throw new RLPException("Cannot decode Capability")
     }
   }
 
