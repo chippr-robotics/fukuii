@@ -51,10 +51,10 @@ object ECDSASignature {
 
   /** Sign a messageHash, expected to be a Keccak256 hash of the original data. */
   def sign(messageHash: Array[Byte], keyPair: AsymmetricCipherKeyPair): ECDSASignature = {
-    require(
-      messageHash.size == 32,
-      s"The message should be a hash, expected to be 32 bytes; got ${messageHash.size} bytes."
-    )
+    if (messageHash.size != 32)
+      throw new IllegalArgumentException(
+        s"The message should be a hash, expected to be 32 bytes; got ${messageHash.size} bytes."
+      )
     val signer = new ECDSASigner(new HMacDSAKCalculator(new SHA256Digest))
     signer.init(true, keyPair.getPrivate)
     val components = signer.generateSignature(messageHash)

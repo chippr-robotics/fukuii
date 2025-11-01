@@ -69,8 +69,10 @@ object ByteUtils {
   }
 
   def or(arrays: Array[Byte]*): Array[Byte] = {
-    require(arrays.map(_.length).distinct.length <= 1, "All the arrays should have the same length")
-    require(arrays.nonEmpty, "There should be one or more arrays")
+    if (arrays.map(_.length).distinct.length > 1)
+      throw new IllegalArgumentException("All the arrays should have the same length")
+    if (arrays.isEmpty)
+      throw new IllegalArgumentException("There should be one or more arrays")
 
     val zeroes = Array.fill(arrays.head.length)(0.toByte)
     arrays.foldLeft[Array[Byte]](zeroes) { case (prevOr, array) =>
@@ -79,8 +81,10 @@ object ByteUtils {
   }
 
   def and(arrays: Array[Byte]*): Array[Byte] = {
-    require(arrays.map(_.length).distinct.length <= 1, "All the arrays should have the same length")
-    require(arrays.nonEmpty, "There should be one or more arrays")
+    if (arrays.map(_.length).distinct.length > 1)
+      throw new IllegalArgumentException("All the arrays should have the same length")
+    if (arrays.isEmpty)
+      throw new IllegalArgumentException("There should be one or more arrays")
 
     val ones = Array.fill(arrays.head.length)(0xff.toByte)
     arrays.foldLeft[Array[Byte]](ones) { case (prevOr, array) =>
