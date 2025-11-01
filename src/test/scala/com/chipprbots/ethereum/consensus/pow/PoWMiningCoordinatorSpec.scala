@@ -30,7 +30,7 @@ import org.scalatest.Ignore
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
 @Ignore
-class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with Matchers {
+class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with Matchers with org.scalamock.scalatest.MockFactory {
 
   "PoWMinerCoordinator actor" - {
     "should throw exception when starting with other message than StartMining(mode)" in new TestSetup(
@@ -181,6 +181,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
   }
 
   class TestSetup(coordinatorName: String) extends MinerSpecSetup {
+    this: org.scalamock.scalatest.MockFactory =>
     override lazy val mining: PoWMining = buildPoWConsensus().withBlockGenerator(blockGenerator)
 
     val parentBlockNumber: Int = 23499

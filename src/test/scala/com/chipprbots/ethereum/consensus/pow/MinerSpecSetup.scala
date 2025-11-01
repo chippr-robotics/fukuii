@@ -38,7 +38,8 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
-trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with BlockchainConfigBuilder {
+trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
+  this: org.scalamock.scalatest.MockFactory =>
   implicit val classicSystem: ClassicSystem = ClassicSystem()
   implicit val runtime: IORuntime = IORuntime.global
   val parentActor: TestProbe = TestProbe()

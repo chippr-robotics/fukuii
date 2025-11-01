@@ -56,7 +56,8 @@ class EthMiningServiceSpec
     with WithActorSystemShutDown
     with Matchers
     with ScalaFutures
-    with NormalPatience {
+    with NormalPatience
+    with org.scalamock.scalatest.MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global
 
@@ -255,7 +256,7 @@ class EthMiningServiceSpec
   }
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
-  class TestSetup(implicit system: ActorSystem) extends MockFactory with EphemBlockchainTestSetup with ApisBuilder {
+  class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
     override lazy val mining: TestMining = buildTestMining().withBlockGenerator(blockGenerator)

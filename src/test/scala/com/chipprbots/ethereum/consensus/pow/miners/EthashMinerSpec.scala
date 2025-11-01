@@ -23,7 +23,7 @@ import org.scalatest.Ignore
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
 @Ignore
-class EthashMinerSpec extends AnyFlatSpec with Matchers {
+class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scalatest.MockFactory {
   final val PoWMinerSpecTag: Tag = Tag("EthashMinerSpec")
 
   "EthashMiner actor" should "mine valid blocks" taggedAs PoWMinerSpecTag in new TestSetup {

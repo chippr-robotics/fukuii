@@ -141,7 +141,7 @@ class EthUserServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetTransactionCountResponse(BigInt(999)))
   }
 
-  class TestSetup() extends MockFactory with EphemBlockchainTestSetup {
+  class TestSetup() extends EphemBlockchainTestSetup {
     lazy val ethUserService = new EthUserService(
       blockchain,
       blockchainReader,

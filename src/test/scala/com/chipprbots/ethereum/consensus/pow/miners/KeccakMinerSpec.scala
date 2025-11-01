@@ -26,7 +26,7 @@ import org.scalatest.Ignore
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
 @Ignore
-class KeccakMinerSpec extends AnyFlatSpec with Matchers {
+class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scalatest.MockFactory {
   "KeccakMiner actor" should "mine valid blocks" in new TestSetup {
     val parentBlock: Block = origin
     setBlockForMining(parentBlock)

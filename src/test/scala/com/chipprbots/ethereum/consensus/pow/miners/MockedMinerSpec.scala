@@ -30,7 +30,8 @@ class MockedMinerSpec
     extends TestKit(ClassicSystem("MockedPowMinerSpec_System"))
     with AnyWordSpecLike
     with Matchers
-    with WithActorSystemShutDown {
+    with WithActorSystemShutDown
+    with org.scalamock.scalatest.MockFactory {
 
   implicit private val timeout: Duration = 1.minute
 

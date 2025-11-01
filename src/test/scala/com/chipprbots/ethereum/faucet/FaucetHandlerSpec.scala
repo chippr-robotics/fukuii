@@ -120,8 +120,7 @@ class FaucetHandlerSpec
   implicit val ec: ExecutionContext = ExecutionContext.global
   implicit val runtime: IORuntime = IORuntime.global
 
-  trait TestSetup extends MockFactory with FaucetConfigBuilder {
-
+  trait TestSetup extends FaucetConfigBuilder {
     val walletService: WalletService = mock[WalletService]
     val paymentAddress: Address = Address("0x99")
 
