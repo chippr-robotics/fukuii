@@ -23,7 +23,7 @@ We are committed to providing a welcoming and inclusive environment for all cont
 
 To contribute to Fukuii, you'll need:
 
-- **JDK 17** - Required for building and running the project
+- **JDK 21** - Required for building and running the project
 - **sbt** - Scala build tool (version 1.10.7 or higher)
 - **Git** - For version control
 - **Optional**: Python (for auxiliary scripts)
@@ -512,7 +512,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 ### Reminders
 
-- **JDK Compatibility**: Code must work on JDK 17
+- **JDK Compatibility**: Code must work on JDK 21
 - **Scala Version Support**: Code should compile on both Scala 2.13.6 and 3.3.4 (LTS)
 - **Cross-Compilation**: Test changes on both Scala versions when possible
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
@@ -547,7 +547,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 2. Add comprehensive tests (unit + integration if needed)
 3. Update documentation (README, scaladoc)
 4. Run formatCheck and linters
-5. Ensure JDK 17 compatibility
+5. Ensure JDK 21 compatibility
 ```
 
 **When refactoring:**
@@ -563,10 +563,10 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 1. Always use the latest stable versions to avoid future update cycles
 2. Check the GitHub Advisory Database for known vulnerabilities
 3. Verify compatibility with project requirements:
-   - JDK 17 compatibility
+   - JDK 21 compatibility
    - Scala 2.13.14 support (primary version)
    - Scala 3.3.4 cross-compilation support where applicable
-4. Test thoroughly on JDK 17
+4. Test thoroughly on JDK 21
 5. Test cross-compilation: `sbt "bytes/+compile"` for affected modules
 6. Update version numbers in project/Dependencies.scala
 7. Document any breaking changes or migration steps
@@ -579,8 +579,8 @@ Before submitting a PR, verify:
 - [ ] `sbt formatCheck` passes (both Scala 2.13 and 3.3)
 - [ ] `sbt compile-all` succeeds (Scala 2.13)
 - [ ] `sbt compileScala3` succeeds (Scala 3.3)
-- [ ] `sbt testAll` passes (on JDK 17, Scala 2.13)
-- [ ] `sbt testScala3` passes (on JDK 17, Scala 3.3)
+- [ ] `sbt testAll` passes (on JDK 21, Scala 2.13)
+- [ ] `sbt testScala3` passes (on JDK 21, Scala 3.3)
 - [ ] `sbt "IntegrationTest / test"` passes for integration tests
 - [ ] No new compiler warnings introduced
 - [ ] Documentation updated for user-facing changes

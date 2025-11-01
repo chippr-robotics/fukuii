@@ -1,7 +1,7 @@
 # Development image for Fukuii builds
 # This image includes JDK and SBT for development and CI/CD
 
-FROM eclipse-temurin:17-jdk-jammy
+FROM eclipse-temurin:21-jdk-jammy
 
 LABEL org.opencontainers.image.title="Fukuii Development Image"
 LABEL org.opencontainers.image.description="Development environment for Fukuii Ethereum Client"

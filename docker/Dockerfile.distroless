@@ -2,7 +2,7 @@
 # This version uses Google's distroless image for maximum security and minimal size
 
 # Stage 1: Build stage using full JDK
-FROM eclipse-temurin:17-jdk-jammy AS builder
+FROM eclipse-temurin:21-jdk-jammy AS builder
 
 # Install required build tools
 RUN apt-get update && \
@@ -29,7 +29,7 @@ RUN cd target/universal && \
     mv "$DIST_DIR" /fukuii-dist
 
 # Stage 2: Runtime stage using distroless
-FROM gcr.io/distroless/java17-debian12:nonroot
+FROM gcr.io/distroless/java21-debian12:nonroot
 
 LABEL org.opencontainers.image.title="Fukuii Ethereum Client (Distroless)"
 LABEL org.opencontainers.image.description="Fukuii - A Scala-based Ethereum Classic client (distroless)"
