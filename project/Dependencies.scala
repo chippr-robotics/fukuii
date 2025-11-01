@@ -152,9 +152,9 @@ object Dependencies {
     "org.xerial.snappy" % "snappy-java" % "1.1.10.5", // Stable version
     "org.web3j" % "core" % "4.9.8" % Test, // Stable version without jc-kzg-4844 dependency issues
     "io.vavr" % "vavr" % "1.0.0-alpha-4", // Latest alpha
-    "org.jupnp" % "org.jupnp" % "3.0.2", // Stable version
-    "org.jupnp" % "org.jupnp.support" % "3.0.2",
-    "org.jupnp" % "org.jupnp.tool" % "3.0.2",
+    "org.jupnp" % "org.jupnp" % "2.5.2", // Keep original version for API compatibility
+    "org.jupnp" % "org.jupnp.support" % "2.5.2",
+    "org.jupnp" % "org.jupnp.tool" % "2.5.2",
     "javax.servlet" % "javax.servlet-api" % "4.0.1",
     "com.thesamet.scalapb" %% "scalapb-runtime" % "0.11.17"
   )
@@ -180,7 +180,7 @@ object Dependencies {
 
   val micrometer: Seq[ModuleID] = {
     val provider = "io.micrometer"
-    val version = "1.13.0" // Stable version
+    val version = "1.5.5" // Keep original version for API compatibility
     Seq(
       // Required to compile metrics library https://github.com/micrometer-metrics/micrometer/issues/1133#issuecomment-452434205
       "com.google.code.findbugs" % "jsr305" % "3.0.2" % Optional,
