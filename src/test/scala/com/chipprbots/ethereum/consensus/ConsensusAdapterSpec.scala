@@ -34,7 +34,7 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
+class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures with org.scalamock.scalatest.MockFactory {
 
   implicit override val patienceConfig: PatienceConfig =
     PatienceConfig(timeout = scaled(2 seconds), interval = scaled(1 second))

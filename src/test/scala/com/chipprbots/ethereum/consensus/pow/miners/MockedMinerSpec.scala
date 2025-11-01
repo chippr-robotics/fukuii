@@ -222,8 +222,9 @@ class MockedMinerSpec
     }
   }
 
-  class TestSetup(implicit system: ClassicSystem) extends MinerSpecSetup {
+  trait TestSetup extends MinerSpecSetup {
     this: org.scalamock.scalatest.MockFactory =>
+    implicit def system: ClassicSystem
     val noMessageTimeOut: FiniteDuration = 3.seconds
 
     val miner: TestActorRef[Nothing] = TestActorRef(

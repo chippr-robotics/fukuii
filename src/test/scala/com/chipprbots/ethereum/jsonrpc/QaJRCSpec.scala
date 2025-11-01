@@ -37,7 +37,8 @@ class QaJRCSpec
     with Matchers
     with PatienceConfiguration
     with NormalPatience
-    with JsonMethodsImplicits {
+    with JsonMethodsImplicits
+    with org.scalamock.scalatest.MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global
 
@@ -242,12 +243,8 @@ class QaJRCSpec
     }
   }
 
-  trait TestSetup
-      extends MockFactory
-      with JRCMatchers
-      with ByteGenerators
-      with BlockchainConfigBuilder
-      with ApisBuilder {
+  trait TestSetup extends JRCMatchers with ByteGenerators with BlockchainConfigBuilder with ApisBuilder {
+    this: org.scalamock.scalatest.MockFactory =>
     def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
     val appStateStorage: AppStateStorage = mock[AppStateStorage]

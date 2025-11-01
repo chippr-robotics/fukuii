@@ -216,7 +216,7 @@ trait BlockchainSetup extends TestSetup {
     SignedTransaction.sign(validTx, originKeyPair, Some(blockchainConfig.chainId))
 }
 
-trait DaoForkTestSetup extends TestSetup with MockFactory {
+trait DaoForkTestSetup extends TestSetup { self: org.scalamock.scalatest.MockFactory =>
 
   lazy val testBlockchainReader: BlockchainReader = mock[BlockchainReader]
   lazy val testBlockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -438,7 +438,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   }
 }
 
-trait MockBlockchain extends MockFactory { self: TestSetupWithVmAndValidators =>
+trait MockBlockchain { self: TestSetupWithVmAndValidators with org.scalamock.scalatest.MockFactory =>
   // + cake overrides
 
   override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
@@ -492,7 +492,7 @@ trait MockBlockchain extends MockFactory { self: TestSetupWithVmAndValidators =>
     (() => blockchainReader.genesisHeader).expects().returning(header)
 }
 
-trait EphemBlockchain extends TestSetupWithVmAndValidators with MockFactory {
+trait EphemBlockchain extends TestSetupWithVmAndValidators { self: org.scalamock.scalatest.MockFactory =>
   override lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, SyncConfig(Config.config))
 
   def blockImportWithMockedBlockExecution(blockExecutionMock: BlockExecution): ConsensusAdapter =
