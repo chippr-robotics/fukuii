@@ -70,11 +70,7 @@ jobs:
       
       - name: Check code formatting (diagnostic)
         run: |
-          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
-            sbt "++3.3.4" scalafmtCheckAll 2>&1 | tee format-check.log
-          else
-            sbt scalafmtCheckAll 2>&1 | tee format-check.log
-          fi
+          sbt "++3.3.4" scalafmtCheckAll 2>&1 | tee format-check.log
           echo "--- Last 200 lines of format check output ---"
           tail -n 200 format-check.log
           if grep -E "(error|failed|Failed to format|Unexpected formatting diff|does not match the file on disk)" format-check.log; then
@@ -123,15 +119,11 @@ jobs:
           if-no-files-found: warn
       
       - name: Build assembly
-        # Only build assembly for Scala 3.3 (primary version)
-        if: matrix.scala-version == '3.3'
         run: sbt "++3.3.4" assembly
         env:
           FUKUII_DEV: true
       
       - name: Build distribution
-        # Only build distribution for Scala 3.3 (primary version)
-        if: matrix.scala-version == '3.3'
         run: sbt "++3.3.4" dist
         env:
           FUKUII_DEV: true
@@ -147,7 +139,6 @@ jobs:
           if-no-files-found: warn
       
       - name: Upload build artifacts
-        if: matrix.scala-version == '3.3'
         uses: actions/upload-artifact@v4
         with:
           name: fukuii-distribution-jdk17-scala-${{ matrix.scala-version }}
