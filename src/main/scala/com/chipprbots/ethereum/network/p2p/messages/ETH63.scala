@@ -45,11 +45,17 @@ object ETH63 {
 
   object AccountImplicits {
     import UInt256RLPImplicits._
+    import RLPImplicits.byteStringEncDec
 
     implicit class AccountEnc(val account: Account) extends RLPSerializable {
       override def toRLPEncodable: RLPEncodeable = {
         import account._
-        RLPList(nonce.toRLPEncodable, balance.toRLPEncodable, storageRoot, codeHash)
+        RLPList(
+          nonce.toRLPEncodable,
+          balance.toRLPEncodable,
+          byteStringEncDec.encode(storageRoot),
+          byteStringEncDec.encode(codeHash)
+        )
       }
     }
 
