@@ -8,6 +8,7 @@ import cats.effect.Resource
 import cats.effect.Deferred
 import cats.effect.Ref
 import cats.effect.IO
+import cats.syntax.parallel._
 import fs2.Stream
 
 import scala.util.Random

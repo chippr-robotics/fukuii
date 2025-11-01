@@ -63,7 +63,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       with SecureRandomBuilder {
     implicit lazy val timeout: Timeout = remainingOrDefault
     implicit override lazy val system: ActorSystem = _system
-    implicit val ioRuntime: IORuntime = IORuntime.global
+    implicit override lazy val ioRuntime: IORuntime = IORuntime.global
     override lazy val syncConfig: SyncConfig =
       defaultSyncConfig.copy(blockHeadersPerRequest = 2, blockBodiesPerRequest = 2)
     val handshakedPeers: Map[Peer, PeerInfo] =

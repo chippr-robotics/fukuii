@@ -54,8 +54,7 @@ object DumpChainApp
     extends App
     with NodeKeyBuilder
     with SecureRandomBuilder
-    with AuthHandshakerBuilder
-    with MockFactory {
+    with AuthHandshakerBuilder {
   val conf: config.Config = ConfigFactory.load("txExecTest/chainDump.conf")
   val node: String = conf.getString("node")
   val genesisHash: ByteString = ByteString(Hex.decode(conf.getString("genesisHash")))
@@ -99,8 +98,9 @@ object DumpChainApp
     new RocksDbDataSourceComponent with PruningConfig with Storages.DefaultStorages
 
   val blockchain: Blockchain = new BlockchainMock(genesisHash)
-  val blockchainReader: BlockchainReader = mock[BlockchainReader]
-  (blockchainReader.getHashByBlockNumber _).expects(*, *).returning(Some(genesisHash))
+  // Create BlockchainReader using actual storages
+  // The app uses it primarily for getHashByBlockNumber which will return the genesis hash
+  val blockchainReader: BlockchainReader = BlockchainReader(storagesInstance.storages)
 
   val nodeStatus: NodeStatus =
     NodeStatus(key = nodeKey, serverStatus = ServerStatus.NotListening, discoveryStatus = ServerStatus.NotListening)
