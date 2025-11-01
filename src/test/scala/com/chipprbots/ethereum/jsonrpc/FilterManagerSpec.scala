@@ -41,7 +41,8 @@ class FilterManagerSpec
     with WithActorSystemShutDown
     with Matchers
     with ScalaFutures
-    with NormalPatience {
+    with NormalPatience
+    with org.scalamock.scalatest.MockFactory {
 
   "FilterManager" should "handle log filter logs and changes" in new TestSetup {
 
@@ -474,7 +475,7 @@ class FilterManagerSpec
     getLogsRes2 shouldBe LogFilterLogs(Nil)
   }
 
-  class TestSetup(implicit system: ActorSystem) extends MockFactory with SecureRandomBuilder {
+  class TestSetup(implicit system: ActorSystem) extends SecureRandomBuilder {
 
     val config: FilterConfig = new FilterConfig {
       override val filterTimeout = Timeouts.longTimeout

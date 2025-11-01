@@ -153,7 +153,7 @@ class EthServiceSpec
   }
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
-  class TestSetup(implicit system: ActorSystem) extends MockFactory with EphemBlockchainTestSetup {
+  class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
     val keyStore: KeyStore = mock[KeyStore]

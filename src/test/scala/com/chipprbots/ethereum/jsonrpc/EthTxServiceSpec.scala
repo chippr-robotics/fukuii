@@ -373,7 +373,7 @@ class EthTxServiceSpec
   }
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
-  class TestSetup(implicit system: ActorSystem) extends MockFactory with EphemBlockchainTestSetup {
+  class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup {
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
     val pendingTransactionsManager: TestProbe = TestProbe()
     val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds

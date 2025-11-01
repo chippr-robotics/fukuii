@@ -24,14 +24,14 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 
 import org.scalatest.Ignore
 
-// SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (InMemoryWorldStateProxy in MinerSpecSetup)
-// This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking InMemoryWorldStateProxy
+// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
 @Ignore
 class MockedMinerSpec
     extends TestKit(ClassicSystem("MockedPowMinerSpec_System"))
     with AnyWordSpecLike
     with Matchers
-    with WithActorSystemShutDown {
+    with WithActorSystemShutDown
+    with org.scalamock.scalatest.MockFactory {
 
   implicit private val timeout: Duration = 1.minute
 
@@ -223,6 +223,7 @@ class MockedMinerSpec
   }
 
   class TestSetup(implicit system: ClassicSystem) extends MinerSpecSetup {
+    this: org.scalamock.scalatest.MockFactory =>
     val noMessageTimeOut: FiniteDuration = 3.seconds
 
     val miner: TestActorRef[Nothing] = TestActorRef(

@@ -28,7 +28,8 @@ class PoWMiningSpec
     extends TestKit(ActorSystem("PoWMiningSpec_System"))
     with AnyFlatSpecLike
     with WithActorSystemShutDown
-    with Matchers {
+    with Matchers
+    with org.scalamock.scalatest.MockFactory {
 
   "PoWMining" should "use NoAdditionalPoWData block generator for PoWBlockGeneratorImpl" in new TestSetup {
     val powMining = PoWMining(
@@ -137,7 +138,7 @@ class PoWMiningSpec
     powMining.minerCoordinatorRef.isDefined shouldBe true
   }
 
-  trait TestSetup extends EphemBlockchainTestSetup with MockFactory {
+  trait TestSetup extends EphemBlockchainTestSetup {
     override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
     override lazy val blockchain: BlockchainImpl = mock[BlockchainImpl]
     val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]

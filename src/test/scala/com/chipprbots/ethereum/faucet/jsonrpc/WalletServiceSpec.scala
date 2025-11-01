@@ -29,11 +29,7 @@ import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
 import com.chipprbots.ethereum.rlp
 
-import org.scalatest.Ignore
-
-// SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (WalletRpcClient with lambda type parameters)
-// This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking WalletRpcClient
-@Ignore
+// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for WalletRpcClient
 class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global
@@ -102,8 +98,22 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
     val (prvKey, pubKey) = keyPairToByteStrings(walletKeyPair)
     val wallet: Wallet = Wallet(Address(crypto.kec256(pubKey)), prvKey)
 
-    val walletRpcClient: WalletRpcClient = mock[WalletRpcClient]
+    val walletRpcClient: WalletRpcClient = createStubWalletRpcClient()
     val mockKeyStore: KeyStore = mock[KeyStore]
+    
+    private def createStubWalletRpcClient(): WalletRpcClient = {
+      import org.apache.pekko.actor.ActorSystem
+      import org.apache.pekko.http.scaladsl.model.Uri
+      import javax.net.ssl.SSLContext
+      import scala.concurrent.ExecutionContext
+      
+      implicit val stubActorSystem: ActorSystem = mock[ActorSystem]
+      implicit val stubEc: ExecutionContext = mock[ExecutionContext]
+      val stubGetSSLContext: () => Either[com.chipprbots.ethereum.security.SSLError, SSLContext] = 
+        () => Left(mock[com.chipprbots.ethereum.security.SSLError])
+      
+      new WalletRpcClient(Uri("http://localhost"), 10.seconds, stubGetSSLContext)
+    }
     val config: FaucetConfig =
       FaucetConfig(
         walletAddress = wallet.address,

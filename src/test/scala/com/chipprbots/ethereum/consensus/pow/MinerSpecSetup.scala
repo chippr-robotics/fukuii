@@ -38,7 +38,8 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
-trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with BlockchainConfigBuilder {
+trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
+  this: org.scalamock.scalatest.MockFactory =>
   implicit val classicSystem: ClassicSystem = ClassicSystem()
   implicit val runtime: IORuntime = IORuntime.global
   val parentActor: TestProbe = TestProbe()
@@ -51,10 +52,25 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
   val blockchainReader: BlockchainReader = mock[BlockchainReader]
   val blockchain: BlockchainImpl = mock[BlockchainImpl]
   val blockCreator: PoWBlockCreator = mock[PoWBlockCreator]
-  val fakeWorld: InMemoryWorldStateProxy = mock[InMemoryWorldStateProxy]
+  val fakeWorld: InMemoryWorldStateProxy = createStubWorldStateProxy()
   val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
   val ethMiningService: EthMiningService = mock[EthMiningService]
   val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
+  
+  private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
+    // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
+    val stubEvmCodeStorage = mock[EvmCodeStorage]
+    val stubMptStorage = mock[com.chipprbots.ethereum.db.storage.MptStorage]
+    InMemoryWorldStateProxy(
+      stubEvmCodeStorage,
+      stubMptStorage,
+      _ => None,
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+  }
 
   lazy val vm: VMImpl = new VMImpl
 

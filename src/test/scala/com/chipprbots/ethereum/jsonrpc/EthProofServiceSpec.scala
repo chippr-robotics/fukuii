@@ -217,8 +217,7 @@ class EthProofServiceSpec
     )
   }
 
-  class TestSetup() extends MockFactory with EphemBlockchainTestSetup with ApisBuilder {
-
+  class TestSetup() extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
     val balance: UInt256 = UInt256(0)

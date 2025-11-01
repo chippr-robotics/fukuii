@@ -32,6 +32,8 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
@@ -218,8 +220,23 @@ trait DaoForkTestSetup extends TestSetup with MockFactory {
 
   lazy val testBlockchainReader: BlockchainReader = mock[BlockchainReader]
   lazy val testBlockchain: BlockchainImpl = mock[BlockchainImpl]
-  val worldState: InMemoryWorldStateProxy = mock[InMemoryWorldStateProxy]
+  val worldState: InMemoryWorldStateProxy = createStubWorldStateProxy()
   val proDaoBlock: Block = Fixtures.Blocks.ProDaoForkBlock.block
+  
+  private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
+    // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
+    val stubEvmCodeStorage = mock[EvmCodeStorage]
+    val stubMptStorage = mock[MptStorage]
+    InMemoryWorldStateProxy(
+      stubEvmCodeStorage,
+      stubMptStorage,
+      _ => None,
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+  }
 
   val supportDaoForkConfig: DaoForkConfig = new DaoForkConfig {
     override val blockExtraData: Option[ByteString] = Some(ByteString("refund extra data"))
