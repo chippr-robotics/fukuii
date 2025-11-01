@@ -77,7 +77,8 @@ object Dependencies {
     )
   }
 
-
+  // Monix removed - fully migrated to Cats Effect 3 IO and fs2.Stream
+  val monix = Seq.empty[ModuleID]
 
   val fs2: Seq[ModuleID] = {
     val fs2Version = "3.10.2" // Stable with CE3 and Scala 3 support
