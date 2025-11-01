@@ -3,8 +3,8 @@ import sbt._
 object Dependencies {
 
   // Apache Pekko - Scala 3 compatible fork of Akka
-  private val pekkoVersion = "1.1.2" // Latest stable Pekko version with Scala 3 support
-  private val pekkoHttpVersion = "1.1.0" // Latest stable Pekko HTTP version
+  private val pekkoVersion = "1.1.2" // Stable version for compatibility (newer versions like 1.2.1 had dependency issues)
+  private val pekkoHttpVersion = "1.1.0" // Stable version for compatibility
 
   val pekkoUtil: Seq[ModuleID] =
     Seq(
@@ -198,8 +198,6 @@ object Dependencies {
       // Note: kamon-pekko not yet available, removed kamon-akka instrumentation
     )
   }
-
-
 
   val scaffeine: Seq[ModuleID] = Seq(
     "com.github.blemale" %% "scaffeine" % "5.3.0" % "compile", // Updated for Scala 3 support
