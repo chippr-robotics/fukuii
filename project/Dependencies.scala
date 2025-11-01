@@ -78,8 +78,7 @@ object Dependencies {
     )
   }
 
-  // Monix removed - fully migrated to Cats Effect 3 IO and fs2.Stream
-  val monix = Seq.empty[ModuleID]
+
 
   val fs2: Seq[ModuleID] = {
     val fs2Version = "3.9.3" // Latest stable with CE3 support
@@ -200,9 +199,7 @@ object Dependencies {
     )
   }
 
-  // Shapeless removed - now using Scala 3 native derivation (Mirror-based)
-  // See RLPDerivation.scala for the new implementation
-  val shapeless: Seq[ModuleID] = Seq.empty
+
 
   val scaffeine: Seq[ModuleID] = Seq(
     "com.github.blemale" %% "scaffeine" % "5.3.0" % "compile", // Updated for Scala 3 support
