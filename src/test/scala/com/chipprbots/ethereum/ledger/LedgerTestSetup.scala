@@ -301,9 +301,11 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   override lazy val mining: TestMining = buildTestMining()
   // - cake overrides
 
-  val blockQueue: BlockQueue
+  lazy val blockQueue: BlockQueue
 
-  implicit val runtimeContext: IORuntime = IORuntime.global
+  implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+  // Provide runtimeContext as alias for compatibility
+  implicit val runtimeContext: IORuntime = ioRuntime
 
   override lazy val consensusAdapter: ConsensusAdapter = mkConsensus()
 
@@ -506,7 +508,7 @@ trait CheckpointHelpers {
     new CheckpointBlockGenerator().generate(parent, checkpoint)
 }
 
-trait OmmersTestSetup extends EphemBlockchain {
+trait OmmersTestSetup extends EphemBlockchain { self: org.scalamock.scalatest.MockFactory =>
   object OmmerValidation extends Mocks.MockValidatorsAlwaysSucceed {
     override val ommersValidator: OmmersValidator =
       new StdOmmersValidator(blockHeaderValidator)
