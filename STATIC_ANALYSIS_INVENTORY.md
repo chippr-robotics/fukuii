@@ -1,11 +1,11 @@
 # Static Analysis Toolchain Inventory
 
 **Date**: October 26, 2025 *(Historical snapshot during Scala 2 to 3 migration)*  
-**Updated**: November 1, 2025 *(Migration completed - now Scala 3 only)*  
+**Updated**: November 1, 2025 *(Phase 5 Cleanup completed - Scala 3 only)*  
 **Repository**: chippr-robotics/fukuii  
 **Purpose**: Inventory current static analysis toolchain for state, versioning, appropriateness, ordering, and current issues
 
-> **Note**: This document was originally created during the Scala 2 to 3 migration and contains historical references to Scala 2.13. The migration was completed in October 2025, and the project now uses Scala 3.3.4 exclusively.
+> **Note**: This document was originally created during the Scala 2 to 3 migration. The migration was completed in October 2025, and Phase 5 cleanup has been completed. The project now uses Scala 3.3.4 exclusively with all Scala 2 cross-compilation support removed.
 
 ---
 
@@ -19,11 +19,12 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 5. **Scoverage** - Code coverage
 6. **SBT Sonar** - Integration with SonarQube
 
-**Current State**: The toolchain is in excellent condition with Scala 3 support added:
-- ✅ **NEW**: Scala 3.3.4 (LTS) cross-compilation support added
-- ✅ **UPDATED**: Scalafmt 2.7.5 → 3.8.3 (Scala 3 support)
+**Current State**: The toolchain is in excellent condition for Scala 3:
+- ✅ **COMPLETED**: Scala 3.3.4 (LTS) exclusive support
+- ✅ **COMPLETED**: Phase 5 cleanup - Scala 2 cross-compilation removed
+- ✅ **UPDATED**: Scalafmt 2.7.5 → 3.8.3 (Scala 3 native dialect)
 - ✅ **UPDATED**: sbt-scalafmt 2.4.2 → 2.5.2 (Scala 3 support)
-- ✅ **NEW**: Added sbt-scala3-migrate 0.6.1 plugin
+- ✅ **REMOVED**: sbt-scala3-migrate plugin (no longer needed)
 - ✅ **RESOLVED**: All Scalafix violations fixed (12 files updated)
 - ✅ **UPDATED**: Scalafix 0.9.29 → 0.10.4
 - ✅ **UPDATED**: organize-imports 0.5.0 → 0.6.0
@@ -31,6 +32,7 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 - ✅ **RESOLVED**: All scalafmt formatting violations
 - ✅ **REMOVED**: Scalastyle (unmaintained since 2017) - functionality migrated to Scalafix
 - ✅ **COMPLETED**: Migration to Scala 3.3.4 (October 2025)
+- ✅ **COMPLETED**: Phase 5 cleanup (November 2025)
 
 ---
 
@@ -39,11 +41,13 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 **Primary Version:** Scala 3.3.4 (LTS)
 
 **Migration Status:**
-- Migration from Scala 2.13 completed in October 2025
-- All tooling updated for Scala 3 compatibility
-- No cross-compilation (Scala 3 only)
+- ✅ Migration from Scala 2.13 completed in October 2025
+- ✅ Phase 5 cleanup completed in November 2025
+- ✅ All tooling updated for Scala 3 compatibility
+- ✅ Scala 3 only (no cross-compilation)
+- ✅ All Scala 2-specific code and configuration removed
 
-See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed Scala 2 to 3 migration.
+See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed Scala 2 to 3 migration and Phase 5 cleanup.
 
 ---
 
@@ -65,20 +69,13 @@ See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed 
 version = "3.8.3"
 align.preset = some
 maxColumn = 120
-runner.dialect = scala213source3  # Allows Scala 3 syntax in Scala 2.13 code
+runner.dialect = scala3  # Scala 3 native dialect
 rewrite.rules = [AvoidInfix, RedundantBraces, RedundantParens, SortModifiers]
-
-# Scala 3 specific overrides
-fileOverride {
-  "glob:**/scala-3/**/*.scala" {
-    runner.dialect = scala3
-  }
-}
 ```
 
-**Current State**: ✅ **PASSING** with Scala 3 support
+**Current State**: ✅ **PASSING** with Scala 3 native dialect
 - All files are formatted properly
-- Supports both Scala 2.13 and Scala 3 syntax
+- Uses Scala 3 dialect exclusively
 
 **SBT Commands**:
 - `sbt scalafmtAll` - Format all sources
@@ -95,7 +92,7 @@ fileOverride {
 **Recommendation**: 
 - ✅ COMPLETED: Fixed the formatting violation in VMServerSpec.scala
 - ✅ COMPLETED: Updated to Scalafmt 3.8.3 with Scala 3 support
-- ✅ COMPLETED: Configured for cross-version formatting (Scala 2.13 + 3.3)
+- ✅ COMPLETED: Configured for Scala 3 native dialect (Phase 5 cleanup)
 
 ---
 
@@ -211,43 +208,23 @@ OrganizeImports {
 
 ---
 
-### 3. Scala 3 Migrate (Migration Tooling) - ✅ NEW
+### 3. Scala 3 Migrate (Migration Tooling) - ✅ REMOVED
 
-**Purpose**: Automated tooling to help migrate from Scala 2 to Scala 3, identifying incompatibilities and suggesting fixes.
+**Status**: ✅ **REMOVED** (November 2025 - Phase 5 cleanup)
 
-**Configuration Files**:
-- Configured via SBT plugin
+**Reason for Removal**: 
+- Migration to Scala 3.3.4 completed in October 2025
+- Plugin no longer needed for Scala 3-only project
+- Command aliases removed as part of Phase 5 cleanup
 
-**Version Information**:
-- **SBT Plugin**: ch.epfl.scala:sbt-scala3-migrate:0.6.1
-
-**Current State**: ✅ **CONFIGURED** (October 26, 2025)
-- Plugin added to project/plugins.sbt
-- Available for migration analysis
-
-**SBT Commands**:
-- `sbt scala3Migrate` - Run full migration analysis
-- `sbt scala3MigrateSyntax` - Check syntax compatibility
-- `sbt compileScala3` - Compile with Scala 3 (shortcut: `sbt "++3.3.4" compile-all`)
-- `sbt testScala3` - Test with Scala 3 (shortcut: `sbt "++3.3.4" testAll`)
-
-**Features**:
-- Identifies Scala 3 incompatibilities in source code
-- Suggests rewrites for deprecated syntax
-- Provides migration guidance
-- Helps with gradual migration strategy
-
-**Analysis**:
-- ✅ **Version**: 0.6.1 is the latest stable version
-- ✅ **Appropriateness**: Essential for Scala 3 migration
-- ✅ **Current State**: Configured and ready to use
-- ✅ **Integration**: Works alongside existing toolchain
+**Previous Configuration**:
+- Was used during migration to identify incompatibilities
+- Helped with syntax migration and compatibility checks
+- All migration tasks completed successfully
 
 **Recommendation**: 
-- ✅ COMPLETED: Added scala3-migrate plugin
-- ✅ COMPLETED: Added migration command aliases
-- Use `sbt scala3Migrate` to identify incompatibilities before full migration
-- Migrate modules incrementally using the tool's guidance
+- ✅ COMPLETED: Successfully migrated from Scala 2.13 to Scala 3.3.4
+- ✅ COMPLETED: Removed plugin and command aliases (Phase 5)
 
 ---
 
@@ -414,36 +391,34 @@ coverageExcludedFiles := Seq(
 
 ### Current CI Workflow (`.github/workflows/ci.yml`)
 
-**Matrix Build Strategy**: ✅ Tests both Scala 2.13 and Scala 3.3
+**Build Strategy**: ✅ Scala 3.3.4 only (Phase 5 cleanup completed)
 
-**Execution Order (per Scala version)**:
-1. **Compile** - `sbt compile-all` or `sbt "++3.3.4" compile-all` (compiles all modules)
-2. **Format Check** - `sbt formatCheck` or `sbt "++3.3.4" formatCheck` (scalafmt + scalafix --check)
-3. **Scapegoat Analysis** - `sbt runScapegoat` (Scala 2.13 only - not yet Scala 3 compatible)
-4. **Tests with Coverage** - `sbt testCoverage` or `sbt "++3.3.4" testCoverage` (runs all tests with coverage)
-5. **Build** - `sbt assembly` + `sbt dist` (Scala 2.13 only - primary build)
+**Execution Order**:
+1. **Compile** - `sbt compile-all` (compiles all modules)
+2. **Format Check** - `sbt formatCheck` (scalafmt + scalafix --check)
+3. **Scapegoat Analysis** - `sbt runScapegoat` (Scala 3 compatible version)
+4. **Tests with Coverage** - `sbt testCoverage` (runs all tests with coverage)
+5. **Build** - `sbt assembly` + `sbt dist` (distribution artifacts)
 
-**Matrix Configuration**:
-- **Scala 2.13.6**: Full pipeline (compilation, formatting, Scapegoat, tests, coverage, build artifacts)
-- **Scala 3.3.4**: Compilation, formatting, tests, and coverage (Scapegoat excluded due to tool limitation)
+**Configuration**:
+- **Scala 3.3.4 LTS**: Single version pipeline (compilation, formatting, Scapegoat, tests, coverage, build artifacts)
 
 **Missing from CI**:
 - ❌ SonarQube integration (optional enhancement)
 
 **Integrated in CI**:
-- ✅ Cross-compilation testing (Scala 2.13 + 3.3)
-- ✅ Scapegoat analysis (Scala 2.13 only)
-- ✅ Code coverage measurement with Scoverage (both versions)
-- ✅ Coverage reports published as artifacts with version tags (30-day retention)
-- ✅ Version-specific artifact naming
+- ✅ Scala 3.3.4 LTS (single version)
+- ✅ Scapegoat analysis (Scala 3 compatible)
+- ✅ Code coverage measurement with Scoverage
+- ✅ Coverage reports published as artifacts (30-day retention)
 
 ### Analysis of Ordering
 
 ✅ **Good Ordering**:
-1. Compile first - Ensures code compiles before style checks (both Scala versions)
+1. Compile first - Ensures code compiles before style checks
 2. Formatting check early - Fast feedback on style issues (includes Scalafmt + Scalafix)
-3. Scapegoat runs after compilation and formatting - Finds bugs and code smells (Scala 2.13)
-4. Tests with coverage run after all static checks - Comprehensive test validation with metrics (both versions)
+3. Scapegoat runs after compilation and formatting - Finds bugs and code smells
+4. Tests with coverage run after all static checks - Comprehensive test validation with metrics
 
 ✅ **Current Implementation**:
 The pipeline follows optimal ordering with all quality gates integrated:
@@ -454,8 +429,7 @@ The pipeline follows optimal ordering with all quality gates integrated:
 - ✅ Comprehensive static analysis (Scapegoat + Scoverage)
 - ✅ Coverage measurement with 70% minimum threshold
 - ✅ Artifacts published for reports (Scapegoat + Coverage)
-- ✅ Cross-version testing (Scala 2.13 + 3.3)
-- ✅ Matrix builds prevent version-specific regressions
+- ✅ Scala 3 LTS version only (no cross-compilation overhead)
 
 
 ---
@@ -509,34 +483,7 @@ compile-all → scapegoat (all modules)
 - ✅ Integrated into CI pipeline
 - Generates XML and HTML reports
 
-### `scala3Migrate` (NEW)
-```
-scala3-migrate
-```
-- Runs Scala 3 migration analysis
-- Identifies incompatibilities
-- Suggests migration path
 
-### `scala3MigrateSyntax` (NEW)
-```
-scala3-migrate-syntax
-```
-- Checks syntax compatibility with Scala 3
-- Faster than full migration analysis
-
-### `compileScala3` (NEW)
-```
-++3.3.4 → compile-all
-```
-- Compiles all modules with Scala 3.3.4
-- Verifies Scala 3 compatibility
-
-### `testScala3` (NEW)
-```
-++3.3.4 → testAll
-```
-- Runs all tests with Scala 3.3.4
-- Validates Scala 3 runtime behavior
 
 ---
 
@@ -544,17 +491,17 @@ scala3-migrate-syntax
 
 | Tool | Version | Status | In CI | Scala 3 Support | Update Priority |
 |------|---------|--------|-------|----------------|----------------|
-| Scalafmt | 3.8.3 / 2.5.2 | ✅ Passing | ✅ Yes (both versions) | ✅ Yes | ✅ Complete |
-| Scalafix | 0.10.4 | ✅ Passing | ✅ Yes (both versions) | ⚠️ Limited | ✅ Complete |
-| Scala3-Migrate | 0.6.1 | ✅ Configured | ❌ Manual | ✅ Yes | ✅ Complete |
-| Scapegoat | 1.2.13 / 1.4.11 | ✅ Configured | ✅ Yes (2.13 only) | ❌ No | ✅ Complete |
-| Scoverage | 2.0.10 | ✅ Configured | ✅ Yes (both versions) | ✅ Yes | ✅ Complete |
+| Scalafmt | 3.8.3 / 2.5.2 | ✅ Passing | ✅ Yes | ✅ Yes | ✅ Complete |
+| Scalafix | 0.10.4 | ✅ Passing | ✅ Yes | ⚠️ Limited | ✅ Complete |
+| Scapegoat | 1.2.13 / 3.1.4 | ✅ Configured | ✅ Yes | ✅ Yes | ✅ Complete |
+| Scoverage | 2.0.10 | ✅ Configured | ✅ Yes | ✅ Yes | ✅ Complete |
 | SBT Sonar | 2.2.0 | ⚠️ Inactive | ❌ No | ❓ Unknown | Low |
 
 **Notes**: 
 - Scalastyle has been removed (October 26, 2025) as it was unmaintained since 2017. Its functionality has been migrated to Scalafix and Scalafmt.
-- CI now runs matrix builds for both Scala 2.13.6 and 3.3.4
-- Scapegoat only runs on Scala 2.13 (not yet compatible with Scala 3)
+- Scala3-Migrate has been removed (November 2025 - Phase 5) as migration is complete
+- CI runs on Scala 3.3.4 LTS only (no cross-compilation)
+- All tools are now Scala 3 compatible
 
 ---
 
@@ -729,43 +676,43 @@ Based on CI logs and manual runs (per Scala version in matrix):
 - **Scapegoat**: ~43s (Scala 2.13 only)
 - **Tests with Coverage**: Variable (several minutes, longer than without coverage)
 
-**Total CI time**: ~10-16 minutes (matrix build with 2 Scala versions)
-- Scala 2.13: ~5-8 minutes (full pipeline)
-- Scala 3.3: ~5-8 minutes (compilation, formatting, tests)
+**Total CI time**: ~5-8 minutes (single Scala 3.3.4 version)
+- Scala 3.3.4: ~5-8 minutes (full pipeline)
 
 **Note**: 
 - Coverage instrumentation adds ~20-30% overhead to test execution time, but provides valuable metrics
-- Matrix builds run in parallel, so total wall time is not doubled
+- Simplified to single Scala version reduces CI overhead
 
 ---
 
 ## Conclusion
 
-The Fukuii project has a comprehensive static analysis toolchain with excellent coverage of formatting, linting, code quality, test coverage, and Scala 3 migration support:
+The Fukuii project has a comprehensive static analysis toolchain with excellent coverage of formatting, linting, code quality, and test coverage for Scala 3:
 
-1. ✅ **Formatting and linting unified** under Scalafmt and Scalafix (with Scala 3 support)
-2. ✅ **Removed unmaintained tools** (Scalastyle)
-3. ✅ **Integrated bug detection** (Scapegoat now in CI and passing)
-4. ✅ **Updated outdated tools** (Scapegoat to 1.4.11, Scoverage to 2.0.10, Scalafmt to 3.8.3)
+1. ✅ **Formatting and linting unified** under Scalafmt and Scalafix (Scala 3 native)
+2. ✅ **Removed unmaintained tools** (Scalastyle, scala3-migrate)
+3. ✅ **Integrated bug detection** (Scapegoat in CI with Scala 3 support)
+4. ✅ **Updated tools** (Scapegoat to 3.1.4, Scoverage to 2.0.10, Scalafmt to 3.8.3)
 5. ✅ **Fixed legitimate code issues** (6 critical unsafe code patterns resolved)
 6. ✅ **Comprehensive code coverage** (Scoverage 2.0.10 with 70% threshold)
-7. ✅ **Scala 3 cross-compilation support** (Scala 3.3.4 LTS with migration tooling)
+7. ✅ **Scala 3 exclusive** (Scala 3.3.4 LTS only, no cross-compilation)
+8. ✅ **Phase 5 cleanup complete** (All Scala 2 artifacts removed)
 
-**Overall Assessment**: 🟢 **Excellent - Complete, modern, and future-ready toolchain**
+**Overall Assessment**: 🟢 **Excellent - Complete, modern, Scala 3 native toolchain**
 
-The toolchain has been fully modernized and is feature-complete with forward compatibility:
+The toolchain has been fully modernized and simplified for Scala 3:
 - Scalastyle removed and migrated to Scalafix
-- Scapegoat updated, configured, and integrated into CI with proper exclusions
+- Scapegoat updated to 3.1.4 for Scala 3 support
 - Scoverage updated to 2.0.10 and integrated into CI with coverage thresholds
-- Scalafmt updated to 3.8.3 with full Scala 3 support
-- Scala 3.3.4 (LTS) cross-compilation configured
-- scala3-migrate plugin added for gradual migration
-- CI matrix builds test both Scala 2.13 and 3.3
+- Scalafmt updated to 3.8.3 with Scala 3 native dialect
+- Scala 3.3.4 (LTS) exclusive support
+- scala3-migrate plugin removed (migration complete)
+- All Scala 2 cross-compilation removed (Phase 5 cleanup)
 - All static analysis tools now running in CI pipeline and passing
 - Critical unsafe code issues fixed in crypto and rlp modules
 - Overly strict inspections disabled to prevent false positive failures
 - Coverage reports published as CI artifacts for tracking trends
-- Complete documentation updates for Scala 3 migration
+- Complete documentation updates for Scala 3 migration and Phase 5 cleanup
 
 ---
 

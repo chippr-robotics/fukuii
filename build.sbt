@@ -12,14 +12,7 @@ val nixBuild = sys.props.isDefinedAt("nix")
 // Enable dev mode: disable certain flags, etc.
 val fukuiiDev = sys.props.get("fukuiiDev").contains("true") || sys.env.get("FUKUII_DEV").contains("true")
 
-// Scala 2.x specific optimizations
-lazy val scala2OptimizationsForProd = Seq(
-  "-opt:l:method", // method-local optimizations
-  "-opt:l:inline", // inlining optimizations
-  "-opt-inline-from:com.chipprbots.**" // inlining the project only
-)
-
-// Scala 3 has a different optimizer, these flags are not needed
+// Scala 3 has a different optimizer, no explicit optimization flags needed
 lazy val scala3OptimizationsForProd = Seq.empty[String]
 
 // Releasing. https://github.com/olafurpg/sbt-ci-release
@@ -43,19 +36,10 @@ crossPaths := true
 // patch for error on 'early-semver' problems
 ThisBuild / evictionErrorLevel := Level.Info
 
-val `scala-2.12` = "2.12.13"
-val `scala-2.13` = "2.13.16" // Upgraded to 2.13.16 for BouncyCastle 1.82 and latest dependencies (SIP-51 requirement)
-val `scala-3` = "3.3.4" // Scala 3 LTS version - now the default after RLP migration
-val supportedScalaVersions = List(`scala-3`) // Scala 3 only after Shapeless → native derivation migration
-val scala3SupportedVersions = List(`scala-3`) // Scala 3 as primary version
+val `scala-3` = "3.3.4" // Scala 3 LTS version
+val supportedScalaVersions = List(`scala-3`) // Scala 3 only
 
-// Scala 2.x specific options
-val scala2Options = Seq(
-  "-Ywarn-unused",
-  "-Xlint"
-)
-
-// Common options for both Scala 2 and Scala 3
+// Base scalac options
 val baseScalacOptions = Seq(
   "-unchecked",
   "-deprecation",
@@ -64,26 +48,7 @@ val baseScalacOptions = Seq(
   "utf-8"
 )
 
-// https://www.scala-lang.org/2021/01/12/configuring-and-suppressing-warnings.html
-// cat={warning-name}:ws prints a summary with the number of warnings of the given type
-// any:e turns all remaining warnings into errors
-// Scala 2 only - Scala 3 uses different warning configuration
-def fatalWarningsScala2 = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("true")) {
-  "-Wconf:any:w"
-} else {
-  "-Wconf:" ++ Seq(
-    // Let's turn those gradually into errors:
-    "cat=deprecation:ws",
-    "cat=lint-package-object-classes:ws",
-    "cat=unused:ws",
-    "cat=lint-infer-any:ws",
-    "cat=lint-byname-implicit:ws",
-    "cat=other-match-analysis:ws",
-    "any:e"
-  ).mkString(",")
-}) ++ Seq("-Ypatmat-exhaust-depth", "off")
-
-// Scala 3 warning options
+// Scala 3 warning and feature options
 val scala3Options = Seq(
   "-Wunused:all", // Enable unused warnings for Scala 3 (required for scalafix)
   "-Wconf:msg=Compiler synthesis of Manifest:s,cat=unused:s,any:e", // Suppress Manifest and unused warnings, error on others
@@ -94,13 +59,9 @@ val scala3Options = Seq(
 def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   name := projectName,
   organization := "com.chipprbots",
-  scalaVersion := `scala-3`, // Primary version - Scala 3 after RLP Shapeless → native derivation migration
+  scalaVersion := `scala-3`,
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
-  // NOTE: SemanticDB temporarily disabled for Scala 2.13.14 (not yet supported by semanticdb-scalac)
-  // Will be re-enabled when semanticdb adds 2.13.14 support or after Scala 3 migration
-  // semanticdbEnabled := true, // enable SemanticDB
-  // semanticdbVersion := scalafixSemanticdb.revision, // use Scalafix compatible version
   ThisBuild / scalafixDependencies ++= List(
     "com.github.liancheng" %% "organize-imports" % "0.6.0"
   ),
@@ -108,20 +69,11 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   resolvers += "Sonatype OSS Snapshots".at("https://oss.sonatype.org/content/repositories/snapshots"),
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
-  // Configure scalacOptions based on Scala version
+  // Configure scalacOptions for Scala 3
   scalacOptions := {
     val base = baseScalacOptions
-    val (versionSpecific, optimizations) = CrossVersion.partialVersion(scalaVersion.value) match {
-      case Some((3, _)) => 
-        (scala3Options, if (fukuiiDev) Seq.empty else scala3OptimizationsForProd)
-      case Some((2, 13)) => 
-        (scala2Options ++ fatalWarningsScala2, if (fukuiiDev) Seq.empty else scala2OptimizationsForProd)
-      case Some((2, 12)) => 
-        (scala2Options ++ fatalWarningsScala2, if (fukuiiDev) Seq.empty else scala2OptimizationsForProd)
-      case _ => 
-        (Seq.empty, Seq.empty)
-    }
-    base ++ versionSpecific ++ optimizations
+    val optimizations = if (fukuiiDev) Seq.empty else scala3OptimizationsForProd
+    base ++ scala3Options ++ optimizations
   },
   (Compile / console / scalacOptions) ~= (_.filterNot(
     Set(
@@ -139,7 +91,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
 
 val publishSettings = Seq(
   publish / skip := false,
-  crossScalaVersions := scala3SupportedVersions // Use Scala 2.13 and 3.3.4 for published libraries
+  crossScalaVersions := supportedScalaVersions // Scala 3 only
 )
 
 // Adding an "it" config because in `Dependencies.scala` some are declared with `% "it,test"`
@@ -385,9 +337,6 @@ lazy val node = {
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
       batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml""""
     )
-    .settings(
-      crossScalaVersions := scala3SupportedVersions // Enable cross-compilation for main node project
-    )
 
   if (!nixBuild)
     node
@@ -515,40 +464,10 @@ addCommandAlias(
     |""".stripMargin
 )
 
-// Scala 3 migration commands
-addCommandAlias(
-  "scala3Migrate",
-  """; scala3-migrate
-    |""".stripMargin
-)
 
-addCommandAlias(
-  "scala3MigrateSyntax",
-  """; scala3-migrate-syntax
-    |""".stripMargin
-)
 
-addCommandAlias(
-  "compileScala3",
-  """; ++3.3.4
-    |; compile-all
-    |""".stripMargin
-)
-
-addCommandAlias(
-  "testScala3",
-  """; ++3.3.4
-    |; testAll
-    |""".stripMargin
-)
-
-// Scapegoat configuration
-// Version 3.2.2+ supports Scala 2.13.16, version 1.x for older Scala 2.13 versions
-(ThisBuild / scapegoatVersion) := (CrossVersion.partialVersion(scalaVersion.value) match {
-  case Some((2, 13)) => "3.2.2"  // Scala 2.13.16+ supports Scapegoat 3.2.x
-  case Some((3, _))  => "3.1.4"  // Scala 3.3.4 supports Scapegoat 3.1.4
-  case _             => "1.4.16" // Fallback for older versions
-})
+// Scapegoat configuration for Scala 3
+(ThisBuild / scapegoatVersion) := "3.1.4"
 scapegoatReports := Seq("xml", "html")
 scapegoatConsoleOutput := false
 scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")

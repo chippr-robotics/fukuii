@@ -6,14 +6,13 @@ ThisBuild / libraryDependencySchemes += "org.scala-lang.modules" %% "scala-xml" 
 addSbtPlugin("com.eed3si9n" % "sbt-buildinfo" % "0.10.0")
 addSbtPlugin("com.github.mwz" % "sbt-sonar" % "2.2.0")
 addSbtPlugin("com.lightbend.sbt" % "sbt-javaagent" % "0.1.6")
-addSbtPlugin("com.sksamuel.scapegoat" % "sbt-scapegoat" % "1.2.13") // Latest plugin version, supports Scala 3 via analyzer 3.x
+addSbtPlugin("com.sksamuel.scapegoat" % "sbt-scapegoat" % "1.2.13")
 addSbtPlugin("com.thoughtworks.sbt-api-mappings" % "sbt-api-mappings" % "3.0.0")
 addSbtPlugin("com.timushev.sbt" % "sbt-updates" % "0.5.1")
 addSbtPlugin("com.typesafe.sbt" % "sbt-git" % "1.0.0")
 addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "1.7.5")
 addSbtPlugin("io.kamon" % "sbt-kanela-runner" % "2.0.5")
-addSbtPlugin("org.scalameta" % "sbt-scalafmt" % "2.5.2") // Updated for Scala 3 support
+addSbtPlugin("org.scalameta" % "sbt-scalafmt" % "2.5.2")
 addSbtPlugin("org.scoverage" % "sbt-scoverage" % "2.0.10")
 addSbtPlugin("com.geirsson" % "sbt-ci-release" % "1.5.6")
-addSbtPlugin("ch.epfl.scala" % "sbt-scalafix" % "0.13.0") // Updated for better Scala version support
-// addSbtPlugin("ch.epfl.scala" % "sbt-scala3-migrate" % "0.6.1") // Scala 3 migration tooling - temporarily disabled during Shapeless migration
+addSbtPlugin("ch.epfl.scala" % "sbt-scalafix" % "0.13.0")
