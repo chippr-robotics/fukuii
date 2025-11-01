@@ -68,12 +68,18 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Check code formatting
+      - name: Check code formatting (diagnostic)
         run: |
           if [ "${{ matrix.scala-version }}" = "3.3" ]; then
-            sbt "++3.3.4" formatCheck
+            sbt "++3.3.4" formatCheck 2>&1 | tee format-check.log
           else
-            sbt formatCheck
+            sbt formatCheck 2>&1 | tee format-check.log
+          fi
+          echo "--- Last 200 lines of format check output ---"
+          tail -n 200 format-check.log
+          if grep -E "(error|failed|Failed to format|Unexpected formatting diff|does not match the file on disk)" format-check.log; then
+            echo "ERROR: Code formatting issues detected. See output above."
+            exit 1
           fi
         env:
           FUKUII_DEV: true
