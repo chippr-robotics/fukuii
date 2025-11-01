@@ -3,8 +3,8 @@ import sbt._
 object Dependencies {
 
   // Apache Pekko - Scala 3 compatible fork of Akka
-  private val pekkoVersion = "1.3.0" // Latest Pekko version with Scala 3 support (Nov 2024)
-  private val pekkoHttpVersion = "1.3.0" // Latest Pekko HTTP version
+  private val pekkoVersion = "1.1.2" // Latest stable Pekko version with Scala 3 support
+  private val pekkoHttpVersion = "1.1.0" // Latest stable Pekko HTTP version
 
   val pekkoUtil: Seq[ModuleID] =
     Seq(
@@ -34,7 +34,7 @@ object Dependencies {
   val json4s = Seq("org.json4s" %% "json4s-native" % "4.0.7") // Updated for Scala 3 support
 
   val circe: Seq[ModuleID] = {
-    val circeVersion = "0.14.11" // Latest stable with Scala 3 support
+    val circeVersion = "0.14.10" // Stable with Scala 3 support
 
     Seq(
       "io.circe" %% "circe-core" % circeVersion,
@@ -49,13 +49,13 @@ object Dependencies {
   val boopickle = Seq("io.suzaku" %% "boopickle" % "1.4.0") // Updated for Scala 3 support
 
   val rocksDb = Seq(
-    "org.rocksdb" % "rocksdbjni" % "9.7.4" // Latest stable
+    "org.rocksdb" % "rocksdbjni" % "8.11.4" // Stable version
   )
 
   val enumeratum: Seq[ModuleID] = Seq(
-    "com.beachape" %% "enumeratum" % "1.7.6", // Latest stable with Scala 3 support
-    "com.beachape" %% "enumeratum-cats" % "1.7.6",
-    "com.beachape" %% "enumeratum-scalacheck" % "1.7.6" % Test
+    "com.beachape" %% "enumeratum" % "1.7.5", // Stable with Scala 3 support
+    "com.beachape" %% "enumeratum-cats" % "1.7.5",
+    "com.beachape" %% "enumeratum-scalacheck" % "1.7.5" % Test
   )
 
   val testing: Seq[ModuleID] = Seq(
@@ -68,10 +68,10 @@ object Dependencies {
   )
 
   val cats: Seq[ModuleID] = {
-    val catsVersion = "2.12.0" // Latest stable with Scala 3 support
-    val catsEffectVersion = "3.5.7" // Latest Cats Effect 3 with Scala 3 support
+    val catsVersion = "2.10.0" // Stable with Scala 3 support
+    val catsEffectVersion = "3.5.4" // Stable Cats Effect 3 with Scala 3 support
     Seq(
-      "org.typelevel" %% "mouse" % "1.3.2", // Latest stable with Scala 3 support
+      "org.typelevel" %% "mouse" % "1.2.3", // Stable with Scala 3 support
       "org.typelevel" %% "cats-core" % catsVersion,
       "org.typelevel" %% "cats-effect" % catsEffectVersion
     )
@@ -80,7 +80,7 @@ object Dependencies {
 
 
   val fs2: Seq[ModuleID] = {
-    val fs2Version = "3.11.0" // Latest stable with CE3 and Scala 3 support
+    val fs2Version = "3.10.2" // Stable with CE3 and Scala 3 support
     Seq(
       "co.fs2" %% "fs2-core" % fs2Version,
       "co.fs2" %% "fs2-io" % fs2Version,
@@ -94,7 +94,7 @@ object Dependencies {
 
   // Dependencies for scalanet module
   val scodec: Seq[ModuleID] = Seq(
-    "org.scodec" %% "scodec-core" % "2.3.4", // Latest stable with Scala 3 support
+    "org.scodec" %% "scodec-core" % "2.3.3", // Stable with Scala 3 support
     "org.scodec" %% "scodec-bits" % "1.2.1"
   )
 
@@ -119,12 +119,12 @@ object Dependencies {
   )
 
   val logging = Seq(
-    "ch.qos.logback" % "logback-classic" % "1.5.15", // Latest stable
+    "ch.qos.logback" % "logback-classic" % "1.5.12", // Stable version
     "com.typesafe.scala-logging" %% "scala-logging" % "3.9.5",
     "net.logstash.logback" % "logstash-logback-encoder" % "8.0",
     "org.codehaus.janino" % "janino" % "3.1.12",
-    "org.typelevel" %% "log4cats-core" % "2.7.0", // Latest stable with Scala 3 support
-    "org.typelevel" %% "log4cats-slf4j" % "2.7.0"
+    "org.typelevel" %% "log4cats-core" % "2.6.0", // Stable with Scala 3 support
+    "org.typelevel" %% "log4cats-slf4j" % "2.6.0"
   )
 
   val crypto = Seq(
@@ -137,21 +137,21 @@ object Dependencies {
   val cli = Seq("com.monovore" %% "decline" % "2.4.1") // Updated for Scala 3 support
 
   val apacheCommons = Seq(
-    "commons-io" % "commons-io" % "2.18.0" // Latest stable
+    "commons-io" % "commons-io" % "2.16.1" // Stable version
   )
 
-  val jline = "org.jline" % "jline" % "3.27.1" // Latest stable
+  val jline = "org.jline" % "jline" % "3.26.1" // Stable version
 
-  val jna = "net.java.dev.jna" % "jna" % "5.16.0" // Latest stable
+  val jna = "net.java.dev.jna" % "jna" % "5.14.0" // Stable version
 
   val dependencies = Seq(
     jline,
     "org.scala-lang.modules" %% "scala-parser-combinators" % "2.4.0",
-    "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.6.2", // Latest stable
-    "org.xerial.snappy" % "snappy-java" % "1.1.10.7", // Latest stable
-    "org.web3j" % "core" % "4.12.3" % Test, // Latest stable
+    "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.6.2", // Stable version
+    "org.xerial.snappy" % "snappy-java" % "1.1.10.5", // Stable version
+    "org.web3j" % "core" % "4.11.3" % Test, // Stable version
     "io.vavr" % "vavr" % "1.0.0-alpha-4", // Latest alpha
-    "org.jupnp" % "org.jupnp" % "3.0.2", // Latest stable
+    "org.jupnp" % "org.jupnp" % "3.0.2", // Stable version
     "org.jupnp" % "org.jupnp.support" % "3.0.2",
     "org.jupnp" % "org.jupnp.tool" % "3.0.2",
     "javax.servlet" % "javax.servlet-api" % "4.0.1",
@@ -159,7 +159,7 @@ object Dependencies {
   )
 
   val guava: Seq[ModuleID] = {
-    val version = "33.3.1-jre" // Latest stable
+    val version = "33.0.0-jre" // Stable version
     Seq(
       "com.google.guava" % "guava" % version,
       "com.google.guava" % "guava-testlib" % version % "test"
@@ -168,7 +168,7 @@ object Dependencies {
 
   val prometheus: Seq[ModuleID] = {
     val provider = "io.prometheus"
-    val version = "0.16.0" // Latest stable
+    val version = "0.16.0" // Stable version
     Seq(
       provider % "simpleclient" % version,
       provider % "simpleclient_logback" % version,
@@ -179,7 +179,7 @@ object Dependencies {
 
   val micrometer: Seq[ModuleID] = {
     val provider = "io.micrometer"
-    val version = "1.14.2" // Latest stable
+    val version = "1.13.0" // Stable version
     Seq(
       // Required to compile metrics library https://github.com/micrometer-metrics/micrometer/issues/1133#issuecomment-452434205
       "com.google.code.findbugs" % "jsr305" % "3.0.2" % Optional,
@@ -191,7 +191,7 @@ object Dependencies {
 
   val kamon: Seq[ModuleID] = {
     val provider = "io.kamon"
-    val version = "3.0.1" // Latest stable with Scala 3 support
+    val version = "2.7.5" // Stable with Scala 3 support
     Seq(
       provider %% "kamon-prometheus" % version
       // Note: kamon-pekko not yet available, removed kamon-akka instrumentation
