@@ -63,8 +63,13 @@ class MockedMiner(
               sender() ! MiningError(error)
           }
         case None =>
-          val parentBlock = blockchainReader.getBestBlock()
-          startMiningBlocks(mineBlocks, parentBlock.get)
+          blockchainReader
+            .getBestBlock()
+            .fold {
+              sender() ! MiningError("Unable to get best block for mining")
+            } { parentBlock =>
+              startMiningBlocks(mineBlocks, parentBlock)
+            }
       }
   }
 

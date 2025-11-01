@@ -58,7 +58,11 @@ object PrecompiledContracts {
     * not point to a precompiled contract - callers should first check with `isDefinedAt`
     */
   def run[W <: WorldStateProxy[W, S], S <: Storage[S]](context: ProgramContext[W, S]): ProgramResult[W, S] =
-    getContract(context).get.run(context)
+    getContract(context)
+      .getOrElse(
+        throw new IllegalStateException("Precompiled contract not found for address")
+      )
+      .run(context)
 
   private def getContract(context: ProgramContext[_, _]): Option[PrecompiledContract] =
     context.recipientAddr.flatMap { addr =>

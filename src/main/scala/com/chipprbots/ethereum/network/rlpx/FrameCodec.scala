@@ -105,7 +105,11 @@ class FrameCodec(private val secrets: Secrets) {
       bodySize = (bodySize << 8) + (headBuffer(2) & 0xff)
 
       val rlpList = rlp.decode[Seq[Int]](headBuffer.drop(3)).lift
-      val protocol = rlpList(0).get
+      val protocol = rlpList
+        .get(0)
+        .getOrElse(
+          throw new IllegalStateException("Protocol field missing in RLP header")
+        )
       val contextId = rlpList(1)
       val totalPacketSize = rlpList(2)
 

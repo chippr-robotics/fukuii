@@ -275,7 +275,7 @@ class PeerManagerActor(
       getPeers(connectedPeers.peers.values.toSet).unsafeToFuture().pipeTo(sender())
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
-      connectedPeers.getPeer(peerId).get.ref ! PeerActor.SendMessage(message)
+      connectedPeers.getPeer(peerId).foreach(peer => peer.ref ! PeerActor.SendMessage(message))
 
     case Terminated(ref) =>
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)

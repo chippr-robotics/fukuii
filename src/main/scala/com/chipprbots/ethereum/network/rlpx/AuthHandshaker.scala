@@ -163,7 +163,11 @@ case class AuthHandshaker(
     val token = bigIntegerToBytes(sharedSecret, NonceSize)
     val signed = xor(token, nonce.toArray)
 
-    val signaturePubBytes = signature.publicKey(signed).get
+    val signaturePubBytes = signature
+      .publicKey(signed)
+      .getOrElse(
+        throw new IllegalStateException("Unable to recover public key from signature")
+      )
 
     curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: signaturePubBytes)
   }
