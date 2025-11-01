@@ -38,12 +38,12 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class BlockImporterItSpec
-    extends MockFactory
-    with AnyFlatSpecLike
+    extends AnyFlatSpecLike
     with Matchers
     with BeforeAndAfterAll
     with Eventually
-    with NormalPatience {
+    with NormalPatience
+    with MockFactory {
 
   implicit val testRuntime: IORuntime = IORuntime.global
 
