@@ -76,16 +76,16 @@ class EthMiningServiceSpec
       .expects(parentBlock, *, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
-    
+
     // Start the getWork call asynchronously
     val workFuture = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
-    
+
     // Handle the actor messages
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
     ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
     ommersPool.reply(OmmersPool.Ommers(Nil))
-    
+
     // Wait for the result
     import scala.concurrent.Await
     import scala.concurrent.duration._
@@ -101,9 +101,11 @@ class EthMiningServiceSpec
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
 
     (blockGenerator.getPrepared _).expects(*).returning(Some(PendingBlock(block, Nil)))
-    ethMiningService.submitWork(
-      SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32)))
-    ).unsafeRunSync()
+    ethMiningService
+      .submitWork(
+        SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32)))
+      )
+      .unsafeRunSync()
 
     val response = ethMiningService.getMining(GetMiningRequest())
 
@@ -133,16 +135,16 @@ class EthMiningServiceSpec
       .expects(parentBlock, *, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
-    
+
     // Start the getWork call asynchronously
     val workFuture = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
-    
+
     // Handle the actor messages
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
     ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
     ommersPool.reply(OmmersPool.Ommers(Nil))
-    
+
     // Wait for the result
     import scala.concurrent.Await
     import scala.concurrent.duration._
