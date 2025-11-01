@@ -85,8 +85,8 @@ def fatalWarningsScala2 = Seq(if (sys.env.get("FUKUII_FULL_WARNS").contains("tru
 
 // Scala 3 warning options
 val scala3Options = Seq(
-  "-Xfatal-warnings",
-  "-Wconf:msg=Compiler synthesis of Manifest:s", // Suppress Manifest deprecation from json4s (library limitation)
+  "-Wunused:all", // Enable unused warnings for Scala 3 (required for scalafix)
+  "-Wconf:msg=Compiler synthesis of Manifest:s,cat=unused:s,any:e", // Suppress Manifest and unused warnings, error on others
   "-Ykind-projector", // Scala 3 replacement for kind-projector plugin
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )
