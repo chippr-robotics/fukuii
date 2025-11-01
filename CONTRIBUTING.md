@@ -470,8 +470,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 ### Reminders
 
 - **JDK Compatibility**: Code must work on JDK 17
-- **Scala Version Support**: Code should compile on both Scala 2.13.6 and 3.3.4 (LTS)
-- **Cross-Compilation**: Test changes on both Scala versions when possible
+- **Scala Version**: Code must compile on Scala 3.3.4 (LTS)
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
 - **Rebranding**: This is a rebrand from "Mantis" to "Fukuii" - update any remaining "mantis" or "io.iohk" references
