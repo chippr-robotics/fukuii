@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   test:
-    name: Test and Build (JDK 17, Scala ${{ matrix.scala-version }})
+    name: Test and Build (JDK 21, Scala ${{ matrix.scala-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -31,11 +31,11 @@ jobs:
           submodules: recursive
           fetch-depth: 0
       
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
           cache: 'sbt'
       
       - name: Cache Coursier
@@ -45,9 +45,9 @@ jobs:
             ~/.cache/coursier
             ~/.ivy2/cache
             ~/.sbt
-          key: ${{ runner.os }}-sbt-17-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          key: ${{ runner.os }}-sbt-21-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
           restore-keys: |
-            ${{ runner.os }}-sbt-17-
+            ${{ runner.os }}-sbt-21-
             ${{ runner.os }}-sbt-
       
       - name: Set up SBT
@@ -91,7 +91,7 @@ jobs:
         if: always() && matrix.scala-version == '2.13'
         uses: actions/upload-artifact@v4
         with:
-          name: scapegoat-reports-jdk17-scala-${{ matrix.scala-version }}
+          name: scapegoat-reports-jdk21-scala-${{ matrix.scala-version }}
           path: |
             **/target/scala-*/scapegoat-report/**
           retention-days: 7
@@ -111,7 +111,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports-jdk17-scala-${{ matrix.scala-version }}
+          name: coverage-reports-jdk21-scala-${{ matrix.scala-version }}
           path: |
             **/target/scala-*/scoverage-report/**
             **/target/scala-*/scoverage-data/**
@@ -132,7 +132,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-jdk17-scala-${{ matrix.scala-version }}
+          name: test-results-jdk21-scala-${{ matrix.scala-version }}
           path: |
             **/target/test-reports/**
           retention-days: 7
@@ -141,7 +141,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fukuii-distribution-jdk17-scala-${{ matrix.scala-version }}
+          name: fukuii-distribution-jdk21-scala-${{ matrix.scala-version }}
           path: |
             target/universal/*.zip
             **/target/scala-*/*-assembly-*.jar

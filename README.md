@@ -98,7 +98,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 1. Click the green "Code" button on the repository page
 2. Select "Open with Codespaces"
-3. Wait for the environment to initialize (automatically installs JDK 17, SBT, and Scala)
+3. Wait for the environment to initialize (automatically installs JDK 21, SBT, and Scala)
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
@@ -106,7 +106,7 @@ See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
 To build Fukuii from source locally you will need:
 
-- **JDK 17**
+- **JDK 21**
 - **sbt** (Scala build tool, version 1.10.7+)
 - **Python** (for certain auxiliary scripts)
 

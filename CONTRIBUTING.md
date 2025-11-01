@@ -23,7 +23,7 @@ We are committed to providing a welcoming and inclusive environment for all cont
 
 To contribute to Fukuii, you'll need:
 
-- **JDK 17** - Required for building and running the project
+- **JDK 21** - Required for building and running the project
 - **sbt** - Scala build tool (version 1.10.7 or higher)
 - **Git** - For version control
 - **Optional**: Python (for auxiliary scripts)
@@ -128,12 +128,12 @@ sbt testCoverage
 This will:
 1. Enable coverage instrumentation
 2. Run all tests across all modules
-3. Generate coverage reports in `target/scala-2.13/scoverage-report/`
+3. Generate coverage reports in `target/scala-3.3.4/scoverage-report/`
 4. Aggregate coverage across all modules
 
 **Coverage reports locations:**
-- HTML report: `target/scala-2.13/scoverage-report/index.html`
-- XML report: `target/scala-2.13/scoverage-report/cobertura.xml`
+- HTML report: `target/scala-3.3.4/scoverage-report/index.html`
+- XML report: `target/scala-3.3.4/scoverage-report/cobertura.xml`
 
 **Coverage thresholds:**
 - Minimum statement coverage: 70%
@@ -469,7 +469,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 ### Reminders
 
-- **JDK Compatibility**: Code must work on JDK 17
+- **JDK Compatibility**: Code must work on JDK 21
 - **Scala Version**: Code must compile on Scala 3.3.4 (LTS)
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
@@ -503,7 +503,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 2. Add comprehensive tests (unit + integration if needed)
 3. Update documentation (README, scaladoc)
 4. Run formatCheck and linters
-5. Ensure JDK 17 compatibility
+5. Ensure JDK 21 compatibility
 ```
 
 **When refactoring:**
@@ -519,9 +519,9 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 1. Always use the latest stable versions to avoid future update cycles
 2. Check the GitHub Advisory Database for known vulnerabilities
 3. Verify compatibility with project requirements:
-   - JDK 17 compatibility
+   - JDK 21 compatibility
    - Scala 3.3.4 support (primary version)
-4. Test thoroughly on JDK 17
+4. Test thoroughly on JDK 21
 5. Update version numbers in project/Dependencies.scala
 6. Document any breaking changes or migration steps
 7. Update security-sensitive dependencies (Netty, BouncyCastle, etc.) to latest patch versions
@@ -532,7 +532,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 Before submitting a PR, verify:
 - [ ] `sbt formatCheck` passes
 - [ ] `sbt compile-all` succeeds
-- [ ] `sbt testAll` passes (on JDK 17)
+- [ ] `sbt testAll` passes (on JDK 21)
 - [ ] `sbt "IntegrationTest / test"` passes for integration tests
 - [ ] No new compiler warnings introduced
 - [ ] Documentation updated for user-facing changes
