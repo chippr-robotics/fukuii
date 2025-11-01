@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object BaseETH6XMessages {
   object Status {
@@ -211,31 +212,31 @@ object BaseETH6XMessages {
             PrefixedRLPEncodable(
               Transaction.Type01,
               RLPList(
-                RLPValue(chainId.toByteArray),
-                RLPValue(nonce.toByteArray),
-                RLPValue(gasPrice.toByteArray),
-                RLPValue(gasLimit.toByteArray),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainId)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(nonce)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasPrice)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
                 receivingAddressBytes,
-                RLPValue(value.toByteArray),
-                payload,
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(value)),
+                RLPValue(payload.toArray),
                 toRlpList(accessList),
-                RLPValue(BigInt(signedTx.signature.v).toByteArray),
-                signedTx.signature.r,
-                signedTx.signature.s
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(signedTx.signature.v))),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.r)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.s))
               )
             )
 
           case LegacyTransaction(nonce, gasPrice, gasLimit, _, value, payload) =>
             RLPList(
-              RLPValue(nonce.toByteArray),
-              RLPValue(gasPrice.toByteArray),
-              RLPValue(gasLimit.toByteArray),
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(nonce)),
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasPrice)),
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
               receivingAddressBytes,
-              RLPValue(value.toByteArray),
-              payload,
-              RLPValue(BigInt(signedTx.signature.v).toByteArray),
-              signedTx.signature.r,
-              signedTx.signature.s
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(value)),
+              RLPValue(payload.toArray),
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(signedTx.signature.v))),
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.r)),
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.s))
             )
         }
       }
