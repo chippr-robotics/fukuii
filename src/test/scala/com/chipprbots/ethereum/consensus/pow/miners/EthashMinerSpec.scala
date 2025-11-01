@@ -57,6 +57,7 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
   }
 
   class TestSetup extends MinerSpecSetup with Eventually with MiningPatience {
+    this: org.scalamock.scalatest.MockFactory =>
     import scala.concurrent.ExecutionContext.Implicits.global
     
     override val origin: Block = Block(

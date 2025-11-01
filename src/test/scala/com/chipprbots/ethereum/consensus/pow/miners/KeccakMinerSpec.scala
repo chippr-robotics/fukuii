@@ -55,6 +55,7 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
   }
 
   trait TestSetup extends ScalaTestWithActorTestKit with MinerSpecSetup {
+    this: org.scalamock.scalatest.MockFactory =>
     import scala.concurrent.ExecutionContext.Implicits.global
     
     implicit private val durationTimeout: Duration = Timeouts.miningTimeout

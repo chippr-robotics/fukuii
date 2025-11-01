@@ -58,6 +58,7 @@ class JsonRpcControllerEthSpec
     with WithActorSystemShutDown
     with JRCMatchers
     with ScalaCheckPropertyChecks
+    with org.scalamock.scalatest.MockFactory
     with ScalaFutures
     with LongPatience
     with Eventually {

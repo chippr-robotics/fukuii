@@ -223,6 +223,7 @@ class MockedMinerSpec
   }
 
   class TestSetup(implicit system: ClassicSystem) extends MinerSpecSetup {
+    this: org.scalamock.scalatest.MockFactory =>
     val noMessageTimeOut: FiniteDuration = 3.seconds
 
     val miner: TestActorRef[Nothing] = TestActorRef(

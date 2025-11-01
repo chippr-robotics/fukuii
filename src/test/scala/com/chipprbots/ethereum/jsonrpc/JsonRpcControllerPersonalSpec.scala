@@ -34,6 +34,7 @@ class JsonRpcControllerPersonalSpec
     with WithActorSystemShutDown
     with Matchers
     with JRCMatchers
+    with org.scalamock.scalatest.MockFactory
     with ScalaCheckPropertyChecks
     with ScalaFutures
     with LongPatience

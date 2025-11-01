@@ -41,10 +41,10 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.FilterConfig
 
 class JsonRpcControllerFixture(implicit system: ActorSystem)
-    extends MockFactory
-    with EphemBlockchainTestSetup
+    extends EphemBlockchainTestSetup
     with JsonMethodsImplicits
-    with ApisBuilder {
+    with ApisBuilder
+    with org.scalamock.scalatest.MockFactory {
 
   def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
