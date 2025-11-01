@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        scala-version: ['2.13', '3.3']
+        scala-version: ['3.3']
       fail-fast: false
     
     steps:
@@ -123,16 +123,16 @@ jobs:
           if-no-files-found: warn
       
       - name: Build assembly
-        # Only build assembly for Scala 2.13 (primary version)
-        if: matrix.scala-version == '2.13'
-        run: sbt assembly
+        # Only build assembly for Scala 3.3 (primary version)
+        if: matrix.scala-version == '3.3'
+        run: sbt "++3.3.4" assembly
         env:
           FUKUII_DEV: true
       
       - name: Build distribution
-        # Only build distribution for Scala 2.13 (primary version)
-        if: matrix.scala-version == '2.13'
-        run: sbt dist
+        # Only build distribution for Scala 3.3 (primary version)
+        if: matrix.scala-version == '3.3'
+        run: sbt "++3.3.4" dist
         env:
           FUKUII_DEV: true
       
@@ -147,7 +147,7 @@ jobs:
           if-no-files-found: warn
       
       - name: Upload build artifacts
-        if: matrix.scala-version == '2.13'
+        if: matrix.scala-version == '3.3'
         uses: actions/upload-artifact@v4
         with:
           name: fukuii-distribution-jdk17-scala-${{ matrix.scala-version }}

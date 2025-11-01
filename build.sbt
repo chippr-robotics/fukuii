@@ -46,8 +46,8 @@ ThisBuild / evictionErrorLevel := Level.Info
 val `scala-2.12` = "2.12.13"
 val `scala-2.13` = "2.13.16" // Upgraded to 2.13.16 for BouncyCastle 1.82 and latest dependencies (SIP-51 requirement)
 val `scala-3` = "3.3.4" // Scala 3 LTS version - now the default after RLP migration
-val supportedScalaVersions = List(`scala-2.13`, `scala-3`) // Support both Scala 2.13 and 3 for CI
-val scala3SupportedVersions = List(`scala-2.13`, `scala-3`) // Support both Scala 2.13 and 3 for published libraries
+val supportedScalaVersions = List(`scala-3`) // Scala 3 only after Shapeless → native derivation migration
+val scala3SupportedVersions = List(`scala-3`) // Scala 3 as primary version
 
 // Scala 2.x specific options
 val scala2Options = Seq(
@@ -139,7 +139,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
 
 val publishSettings = Seq(
   publish / skip := false,
-  crossScalaVersions := scala3SupportedVersions // Cross-build for Scala 2.13 and 3.3.4
+  crossScalaVersions := scala3SupportedVersions // Use Scala 2.13 and 3.3.4 for published libraries
 )
 
 // Adding an "it" config because in `Dependencies.scala` some are declared with `% "it,test"`
