@@ -75,8 +75,21 @@ class EthMiningServiceSpec
       )(_: BlockchainConfig))
       .expects(parentBlock, *, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
-    blockchainWriter.storeBlock(parentBlock).commit()
-    ethMiningService.getWork(GetWorkRequest())
+    blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+    
+    // Start the getWork call asynchronously
+    val workFuture = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+    
+    // Handle the actor messages
+    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
+    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
+    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
+    ommersPool.reply(OmmersPool.Ommers(Nil))
+    
+    // Wait for the result
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    Await.result(workFuture, 10.seconds)
 
     val response = ethMiningService.getMining(GetMiningRequest())
 
@@ -88,10 +101,9 @@ class EthMiningServiceSpec
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
 
     (blockGenerator.getPrepared _).expects(*).returning(Some(PendingBlock(block, Nil)))
-    (appStateStorage.getBestBlockNumber _).expects().returning(0)
     ethMiningService.submitWork(
       SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32)))
-    )
+    ).unsafeRunSync()
 
     val response = ethMiningService.getMining(GetMiningRequest())
 
@@ -120,8 +132,21 @@ class EthMiningServiceSpec
       )(_: BlockchainConfig))
       .expects(parentBlock, *, *, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
-    blockchainWriter.storeBlock(parentBlock).commit()
-    ethMiningService.getWork(GetWorkRequest())
+    blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+    
+    // Start the getWork call asynchronously
+    val workFuture = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+    
+    // Handle the actor messages
+    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
+    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
+    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
+    ommersPool.reply(OmmersPool.Ommers(Nil))
+    
+    // Wait for the result
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    Await.result(workFuture, 10.seconds)
 
     Thread.sleep(minerActiveTimeout.toMillis)
 
@@ -190,7 +215,6 @@ class EthMiningServiceSpec
     val headerHash = ByteString(Hex.decode("01" * 32))
 
     (blockGenerator.getPrepared _).expects(headerHash).returning(Some(PendingBlock(block, Nil)))
-    (appStateStorage.getBestBlockNumber _).expects().returning(0)
 
     val req = SubmitWorkRequest(ByteString("nonce"), headerHash, ByteString(Hex.decode("01" * 32)))
 
@@ -203,7 +227,6 @@ class EthMiningServiceSpec
     val headerHash = ByteString(Hex.decode("01" * 32))
 
     (blockGenerator.getPrepared _).expects(headerHash).returning(None)
-    (appStateStorage.getBestBlockNumber _).expects().returning(0)
 
     val req = SubmitWorkRequest(ByteString("nonce"), headerHash, ByteString(Hex.decode("01" * 32)))
 
@@ -258,7 +281,6 @@ class EthMiningServiceSpec
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
-    val appStateStorage: AppStateStorage = mock[AppStateStorage]
     override lazy val mining: TestMining = buildTestMining().withBlockGenerator(blockGenerator)
     override lazy val miningConfig = MiningConfigs.miningConfig
 
