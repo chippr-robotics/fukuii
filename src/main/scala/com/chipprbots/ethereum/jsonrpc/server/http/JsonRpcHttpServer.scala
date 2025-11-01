@@ -89,8 +89,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
         case reqSeq =>
           complete {
-            reqSeq
-              .toList
+            reqSeq.toList
               .traverse(request => jsonRpcController.handleRequest(request))
               .unsafeToFuture()
           }

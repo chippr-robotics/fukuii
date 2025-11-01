@@ -23,7 +23,11 @@ import com.chipprbots.ethereum.proof.MptProofVerifier
 import com.chipprbots.ethereum.proof.ProofVerifyResult.ValidProof
 import com.chipprbots.ethereum.domain.Account.accountSerializer
 
-class BlockchainSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with org.scalamock.scalatest.MockFactory {
+class BlockchainSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ScalaCheckPropertyChecks
+    with org.scalamock.scalatest.MockFactory {
 
   val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(2, 5).sample.get
   val checkpointBlockGenerator = new CheckpointBlockGenerator

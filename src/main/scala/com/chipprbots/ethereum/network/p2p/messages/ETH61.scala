@@ -25,10 +25,10 @@ object ETH61 {
 
     implicit class NewBlockHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewBlockHashes: NewBlockHashes = rawDecode(bytes) match {
-        case rlpList: RLPList => 
+        case rlpList: RLPList =>
           NewBlockHashes(rlpList.items.map {
             case RLPValue(bytes) => ByteString(bytes)
-            case _ => throw new RuntimeException("Cannot decode NewBlockHashes: invalid item")
+            case _               => throw new RuntimeException("Cannot decode NewBlockHashes: invalid item")
           })
         case _ => throw new RuntimeException("Cannot decode NewBlockHashes")
       }
@@ -54,7 +54,7 @@ object ETH61 {
 
     implicit class BlockHashesFromNumberDec(val bytes: Array[Byte]) extends AnyVal {
       def toBlockHashesFromNumber: BlockHashesFromNumber = rawDecode(bytes) match {
-        case RLPList(RLPValue(numberBytes), RLPValue(maxBlocksBytes)) => 
+        case RLPList(RLPValue(numberBytes), RLPValue(maxBlocksBytes)) =>
           BlockHashesFromNumber(BigInt(1, numberBytes), BigInt(1, maxBlocksBytes))
         case _ => throw new RuntimeException("Cannot decode BlockHashesFromNumber")
       }

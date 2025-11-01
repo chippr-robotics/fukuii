@@ -348,7 +348,8 @@ class PeerManagerActor(
       peerStatistics
         .askFor[PeerStatisticsActor.StatsForAll](PeerStatisticsActor.GetStatsForAll(window))
         .map(PruneIncomingPeers.apply)
-        .unsafeToFuture().pipeTo(self)
+        .unsafeToFuture()
+        .pipeTo(self)
 
     case PruneIncomingPeers(PeerStatisticsActor.StatsForAll(stats)) =>
       val prunedConnectedPeers = pruneIncomingPeers(connectedPeers, stats)

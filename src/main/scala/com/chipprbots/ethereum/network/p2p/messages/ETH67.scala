@@ -11,12 +11,12 @@ import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
-/** ETH67 protocol messages - enhances transaction announcement with types and sizes
-  * See https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth67
+/** ETH67 protocol messages - enhances transaction announcement with types and sizes See
+  * https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth67
   *
   * The main change in ETH67 is that NewPooledTransactionHashes now includes:
-  * - transaction types (legacy, EIP-2930, EIP-1559, etc.)
-  * - transaction sizes (to help with bandwidth management)
+  *   - transaction types (legacy, EIP-2930, EIP-1559, etc.)
+  *   - transaction sizes (to help with bandwidth management)
   */
 object ETH67 {
 
@@ -54,8 +54,7 @@ object ETH67 {
     * @param hashes
     *   Transaction hashes
     */
-  case class NewPooledTransactionHashes(types: Seq[Byte], sizes: Seq[BigInt], hashes: Seq[ByteString])
-      extends Message {
+  case class NewPooledTransactionHashes(types: Seq[Byte], sizes: Seq[BigInt], hashes: Seq[ByteString]) extends Message {
     require(types.size == sizes.size && sizes.size == hashes.size, "types, sizes, and hashes must have same length")
 
     override def code: Int = Codes.NewPooledTransactionHashesCode

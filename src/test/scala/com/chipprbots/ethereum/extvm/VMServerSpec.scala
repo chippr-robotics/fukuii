@@ -131,7 +131,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val messageHandler: MessageHandler = createStubMessageHandler()
     val vmServer = new VMServer(messageHandler)
-    
+
     private def createStubMessageHandler(): MessageHandler = {
       import org.apache.pekko.stream.scaladsl.{SinkQueueWithCancel, SourceQueueWithComplete}
       val stubIn = mock[SinkQueueWithCancel[ByteString]]

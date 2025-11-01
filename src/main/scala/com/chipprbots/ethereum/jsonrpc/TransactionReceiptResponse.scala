@@ -75,7 +75,9 @@ object TransactionReceiptResponse {
   ): TransactionReceiptResponse = {
     val contractAddress = if (stx.tx.isContractInit) {
       // do not subtract 1 from nonce because in transaction we have nonce of account before transaction execution
-      val hash = kec256(rlp.encode(RLPList(toEncodeable(signedTransactionSender.bytes), UInt256(stx.tx.nonce).toRLPEncodable)))
+      val hash = kec256(
+        rlp.encode(RLPList(toEncodeable(signedTransactionSender.bytes), UInt256(stx.tx.nonce).toRLPEncodable))
+      )
       Some(Address(hash))
     } else {
       None

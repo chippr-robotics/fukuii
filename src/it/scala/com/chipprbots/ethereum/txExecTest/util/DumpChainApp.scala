@@ -50,11 +50,7 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 
-object DumpChainApp
-    extends App
-    with NodeKeyBuilder
-    with SecureRandomBuilder
-    with AuthHandshakerBuilder {
+object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder with AuthHandshakerBuilder {
   val conf: config.Config = ConfigFactory.load("txExecTest/chainDump.conf")
   val node: String = conf.getString("node")
   val genesisHash: ByteString = ByteString(Hex.decode(conf.getString("genesisHash")))

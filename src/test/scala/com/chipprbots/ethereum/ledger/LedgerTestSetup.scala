@@ -222,7 +222,7 @@ trait DaoForkTestSetup extends TestSetup { self: org.scalamock.scalatest.MockFac
   lazy val testBlockchain: BlockchainImpl = mock[BlockchainImpl]
   val worldState: InMemoryWorldStateProxy = createStubWorldStateProxy()
   val proDaoBlock: Block = Fixtures.Blocks.ProDaoForkBlock.block
-  
+
   private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
     // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
     val stubEvmCodeStorage = mock[EvmCodeStorage]

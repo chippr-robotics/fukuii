@@ -100,7 +100,7 @@ class PeerActorSpec
   it should "try to reconnect on broken rlpx connection" in new NodeStatusSetup with HandshakerSetup {
     implicit override lazy val system = ActorSystem("PeerActorSpec_System")
     override def protocol: Capability = Capability.ETH63
-    
+
     def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val peerMessageBus = system.actorOf(PeerEventBusActor.props)
@@ -599,7 +599,7 @@ class PeerActorSpec
     val daoForkBlockChainTotalDifficulty: BigInt = BigInt("39490964433395682584")
 
     val rlpxConnection: TestProbe = TestProbe()
-    
+
     def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val peerMessageBus: ActorRef = system.actorOf(PeerEventBusActor.props)

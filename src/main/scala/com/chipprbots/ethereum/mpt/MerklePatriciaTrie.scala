@@ -296,7 +296,8 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
             val newLeafNode = LeafNode(existingKey.tail, storedValue)
             BranchNode.withSingleChild(existingKey(0), newLeafNode, None) -> Some(newLeafNode)
           }
-        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) = (put(temporalBranchNode, searchKey, value): @unchecked)
+        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) =
+          put(temporalBranchNode, searchKey, value): @unchecked
         NodeInsertResult(
           newNode = newBranchNode,
           toDeleteFromStorage = node :: toDeleteFromStorage.filterNot(_ == temporalBranchNode)
@@ -307,7 +308,8 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         val temporalNode =
           if (ml == existingKey.length) BranchNode.withValueOnly(storedValue.toArray[Byte])
           else LeafNode(existingKey.drop(ml), storedValue)
-        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) = (put(temporalNode, searchKeySuffix, value): @unchecked)
+        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) =
+          put(temporalNode, searchKeySuffix, value): @unchecked
         val newExtNode = ExtensionNode(ByteString(searchKeyPrefix), newBranchNode)
         NodeInsertResult(
           newNode = newExtNode,
@@ -334,7 +336,8 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
             val newExtNode = ExtensionNode(sharedKey.tail, next)
             BranchNode.withSingleChild(sharedKeyHead, newExtNode, None) -> Some(newExtNode)
           }
-        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) = (put(temporalBranchNode, searchKey, value): @unchecked)
+        val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) =
+          put(temporalBranchNode, searchKey, value): @unchecked
         NodeInsertResult(
           newNode = newBranchNode,
           toDeleteFromStorage = extensionNode :: toDeleteFromStorage.filterNot(_ == temporalBranchNode)
@@ -342,7 +345,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       case ml if ml == sharedKey.length =>
         // Current extension node's key is a prefix of the one being inserted, so we insert recursively on the extension's child
         val NodeInsertResult(newChild: BranchNode, toDeleteFromStorage) =
-          (put(extensionNode.next, searchKey.drop(ml), value): @unchecked)
+          put(extensionNode.next, searchKey.drop(ml), value): @unchecked
         val newExtNode = ExtensionNode(sharedKey, newChild)
         NodeInsertResult(
           newNode = newExtNode,
@@ -353,7 +356,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         val (sharedKeyPrefix, sharedKeySuffix) = sharedKey.splitAt(ml)
         val temporalExtensionNode = ExtensionNode(sharedKeySuffix, next)
         val NodeInsertResult(newBranchNode: BranchNode, toDeleteFromStorage) =
-          (put(temporalExtensionNode, searchKey.drop(ml), value): @unchecked)
+          put(temporalExtensionNode, searchKey.drop(ml), value): @unchecked
         val newExtNode = ExtensionNode(sharedKeyPrefix, newBranchNode)
         NodeInsertResult(
           newNode = newExtNode,

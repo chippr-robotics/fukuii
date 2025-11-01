@@ -226,7 +226,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("mantis", None, "127.0.0.1", 0)
     val vmClient = new VMClient(externalVmConfig, messageHandler, testMode = false)
-    
+
     private def createStubMessageHandler(): MessageHandler = {
       import org.apache.pekko.stream.scaladsl.{SinkQueueWithCancel, SourceQueueWithComplete}
       val stubIn = mock[SinkQueueWithCancel[ByteString]]

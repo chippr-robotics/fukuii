@@ -38,7 +38,7 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
   import RpcClient._
 
   // Manual decoder for JsonRpcError to handle json4s JValue field
-  private implicit val jsonRpcErrorDecoder: Decoder[JsonRpcError] = (c) =>
+  implicit private val jsonRpcErrorDecoder: Decoder[JsonRpcError] = c =>
     for {
       code <- c.downField("code").as[Int]
       message <- c.downField("message").as[String]

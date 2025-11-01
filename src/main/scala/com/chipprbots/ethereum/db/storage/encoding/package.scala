@@ -26,18 +26,18 @@ package object encoding {
 
   private val storedNodeEncDec = new RLPDecoder[StoredNode] with RLPEncoder[StoredNode] {
     override def decode(rlp: RLPEncodeable): StoredNode = rlp match {
-      case RLPList(nodeEncoded, references, lastUsedByBlock) => 
+      case RLPList(nodeEncoded, references, lastUsedByBlock) =>
         StoredNode(
-          byteStringFromEncodeable(nodeEncoded), 
-          intFromEncodeable(references), 
+          byteStringFromEncodeable(nodeEncoded),
+          intFromEncodeable(references),
           bigIntFromEncodeable(lastUsedByBlock)
         )
       case _ => throw new RuntimeException("Error when decoding stored node")
     }
 
     override def encode(obj: StoredNode): RLPEncodeable = RLPList(
-      toEncodeable(obj.nodeEncoded), 
-      toEncodeable(obj.references), 
+      toEncodeable(obj.nodeEncoded),
+      toEncodeable(obj.references),
       toEncodeable(obj.lastUsedByBlock)
     )
   }
@@ -45,7 +45,10 @@ package object encoding {
   private val snapshotEncDec = new RLPDecoder[StoredNodeSnapshot] with RLPEncoder[StoredNodeSnapshot] {
     override def decode(rlp: RLPEncodeable): StoredNodeSnapshot = rlp match {
       case RLPList(nodeHash, storedNode) =>
-        StoredNodeSnapshot(byteStringFromEncodeable(nodeHash), Some(storedNodeFromBytes(byteArrayFromEncodeable(storedNode))))
+        StoredNodeSnapshot(
+          byteStringFromEncodeable(nodeHash),
+          Some(storedNodeFromBytes(byteArrayFromEncodeable(storedNode)))
+        )
       case RLPValue(nodeHash) => StoredNodeSnapshot(byteStringFromEncodeable(nodeHash), None)
       case _                  => throw new RuntimeException("Error when decoding stored nodes")
     }

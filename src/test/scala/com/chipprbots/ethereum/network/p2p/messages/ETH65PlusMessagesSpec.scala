@@ -94,7 +94,10 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
     "encoding and decoding BlockBodies with request-id" should {
       "return same result" in {
         val msg =
-          ETH66.BlockBodies(requestId = 42, bodies = Seq(Fixtures.Blocks.Block3125369.body, Fixtures.Blocks.DaoForkBlock.body))
+          ETH66.BlockBodies(
+            requestId = 42,
+            bodies = Seq(Fixtures.Blocks.Block3125369.body, Fixtures.Blocks.DaoForkBlock.body)
+          )
         verify(msg, (m: ETH66.BlockBodies) => m.toBytes, Codes.BlockBodiesCode, version)
       }
     }

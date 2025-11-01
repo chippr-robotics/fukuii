@@ -34,7 +34,14 @@ object WireProtocol {
       import Capability._
 
       def toHello: Hello = rawDecode(bytes) match {
-        case RLPList(RLPValue(p2pVersionBytes), RLPValue(clientIdBytes), (capabilities: RLPList), RLPValue(listenPortBytes), RLPValue(nodeIdBytes), _*) =>
+        case RLPList(
+              RLPValue(p2pVersionBytes),
+              RLPValue(clientIdBytes),
+              (capabilities: RLPList),
+              RLPValue(listenPortBytes),
+              RLPValue(nodeIdBytes),
+              _*
+            ) =>
           val p2pVersion = BigInt(p2pVersionBytes).toLong
           val clientId = new String(clientIdBytes, java.nio.charset.StandardCharsets.UTF_8)
           val listenPort = BigInt(listenPortBytes).toLong
@@ -111,10 +118,10 @@ object WireProtocol {
 
     implicit class DisconnectDec(val bytes: Array[Byte]) extends AnyVal {
       def toDisconnect: Disconnect = rawDecode(bytes) match {
-        case RLPList(RLPValue(reasonBytes), _*) => 
+        case RLPList(RLPValue(reasonBytes), _*) =>
           val reason = BigInt(reasonBytes).toLong
           Disconnect(reason = reason)
-        case _                   => throw new RuntimeException("Cannot decode Disconnect")
+        case _ => throw new RuntimeException("Cannot decode Disconnect")
       }
     }
   }

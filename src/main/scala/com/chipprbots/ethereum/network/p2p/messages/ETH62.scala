@@ -29,7 +29,7 @@ object ETH62 {
 
     implicit class BlockHashRLPEncodableDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
       def toBlockHash: BlockHash = rlpEncodeable match {
-        case RLPList(RLPValue(hashBytes), RLPValue(numberBytes)) => 
+        case RLPList(RLPValue(hashBytes), RLPValue(numberBytes)) =>
           BlockHash(ByteString(hashBytes), BigInt(1, numberBytes))
         case _ => throw new RuntimeException("Cannot decode BlockHash")
       }
@@ -92,20 +92,20 @@ object ETH62 {
 
     implicit class GetBlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetBlockHeaders: GetBlockHeaders = rawDecode(bytes) match {
-        case RLPList(RLPValue(blockBytes), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes)) 
+        case RLPList(RLPValue(blockBytes), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))
             if blockBytes.length < 32 =>
           GetBlockHeaders(
-            Left(BigInt(1, blockBytes)), 
-            BigInt(1, maxHeadersBytes), 
-            BigInt(1, skipBytes), 
+            Left(BigInt(1, blockBytes)),
+            BigInt(1, maxHeadersBytes),
+            BigInt(1, skipBytes),
             BigInt(1, reverseBytes) == 1
           )
 
         case RLPList(RLPValue(blockBytes), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes)) =>
           GetBlockHeaders(
-            Right(ByteString(blockBytes)), 
-            BigInt(1, maxHeadersBytes), 
-            BigInt(1, skipBytes), 
+            Right(ByteString(blockBytes)),
+            BigInt(1, maxHeadersBytes),
+            BigInt(1, skipBytes),
             BigInt(1, reverseBytes) == 1
           )
 

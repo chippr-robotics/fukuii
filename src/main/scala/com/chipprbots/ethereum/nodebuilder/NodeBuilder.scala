@@ -914,5 +914,5 @@ trait Node
     with PortForwardingBuilder
     with BlacklistBuilder {
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
-  override implicit val ioRuntime: IORuntime = IORuntime.global
+  implicit override val ioRuntime: IORuntime = IORuntime.global
 }
