@@ -424,7 +424,9 @@ object SyncStateScheduler {
         }
 
       val newActive = activeRequest - request.nodeHash
-      val newMemBatch = memBatch + (request.nodeHash -> ((request.resolvedData.get, request.requestType)))
+      val newMemBatch = request.resolvedData.fold(memBatch) { data =>
+        memBatch + (request.nodeHash -> ((data, request.requestType)))
+      }
 
       val (newRequests, newBatch) = go(newActive, newMemBatch, request.parents)
       copy(activeRequest = newRequests, memBatch = newBatch)

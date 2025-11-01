@@ -141,7 +141,9 @@ class SyncStateSchedulerActor(
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
     // TODO handle case when we already have root i.e state is synced up to this point
-    val initState = sync.initState(root).get
+    val initState = sync.initState(root).getOrElse {
+      throw new IllegalStateException(s"Failed to initialize state sync for root ${ByteStringUtils.hash2string(root)}")
+    }
     context.become(
       syncing(
         SyncSchedulerActorState.initial(initState, initialStats, bn, initiator)
@@ -266,12 +268,14 @@ class SyncStateSchedulerActor(
         }
 
       case Sync if currentState.hasRemainingPendingRequests && currentState.restartHasBeenRequested =>
-        handleRestart(
-          currentState.currentSchedulerState,
-          currentState.currentStats,
-          currentState.targetBlock,
-          currentState.restartRequested.get
-        )
+        currentState.restartRequested.foreach { restartRequester =>
+          handleRestart(
+            currentState.currentSchedulerState,
+            currentState.currentStats,
+            currentState.targetBlock,
+            restartRequester
+          )
+        }
 
       case Sync if !currentState.hasRemainingPendingRequests =>
         finalizeSync(currentState)

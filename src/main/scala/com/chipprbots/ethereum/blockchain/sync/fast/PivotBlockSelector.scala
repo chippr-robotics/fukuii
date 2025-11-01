@@ -154,7 +154,7 @@ class PivotBlockSelector(
     // All peers responded - consensus reached
     if (peersToAsk.isEmpty && maybeBlockHeaderWithVotes.exists(hWv => hWv.votes >= minPeersToChoosePivotBlock)) {
       timeout.cancel()
-      sendResponseAndCleanup(maybeBlockHeaderWithVotes.get.header)
+      maybeBlockHeaderWithVotes.foreach(hWv => sendResponseAndCleanup(hWv.header))
       // Consensus could not be reached - ask additional peer if available
     } else if (!isPossibleToReachConsensus(peersToAsk.size, maybeBlockHeaderWithVotes.map(_.votes).getOrElse(0))) {
       timeout.cancel()

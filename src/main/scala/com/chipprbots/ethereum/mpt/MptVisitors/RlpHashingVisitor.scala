@@ -41,9 +41,7 @@ class NodeCapper(withUpdates: Boolean) {
 class RlpHashingVisitor(downstream: MptVisitor[RLPEncodeable], depth: Int, nodeCapper: NodeCapper)
     extends MptVisitor[RLPEncodeable] {
   def visitLeaf(value: LeafNode): RLPEncodeable =
-    if (value.parsedRlp.isDefined) {
-      value.parsedRlp.get
-    } else {
+    value.parsedRlp.getOrElse {
       val leafEncoded = downstream.visitLeaf(value)
       nodeCapper.capNode(leafEncoded, depth)
     }
@@ -68,11 +66,9 @@ class RlpHashingBranchVisitor(
     nodeCapper: NodeCapper
 ) extends BranchVisitor[RLPEncodeable] {
   override def done(): RLPEncodeable =
-    if (parsedRlp.isEmpty) {
+    parsedRlp.getOrElse {
       val branchEncoded = downstream.done()
       nodeCapper.capNode(branchEncoded, depth)
-    } else {
-      parsedRlp.get
     }
 
   override def visitChild(): MptVisitor[RLPEncodeable] =
@@ -101,10 +97,8 @@ class RlpHashingExtensionVisitor(
     new RlpHashingVisitor(downstream.visitNext(), depth + 1, nodeCapper)
 
   override def done(): RLPEncodeable =
-    if (parsedRlp.isEmpty) {
+    parsedRlp.getOrElse {
       val extensionNodeEncoded = downstream.done()
       nodeCapper.capNode(extensionNodeEncoded, depth)
-    } else {
-      parsedRlp.get
     }
 }
