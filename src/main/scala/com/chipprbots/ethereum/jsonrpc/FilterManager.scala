@@ -138,17 +138,11 @@ class FilterManager(
               ) =>
             blockchainReader.getReceiptsByHash(header.hash) match {
               case Some(receipts) =>
-                blockchainReader
-                  .getBlockBodyByHash(header.hash)
-                  .fold(
-                    recur(currentBlockNumber + 1, toBlockNumber, logsSoFar)
-                  ) { body =>
-                    recur(
-                      currentBlockNumber + 1,
-                      toBlockNumber,
-                      logsSoFar ++ getLogsFromBlock(filter, Block(header, body), receipts)
-                    )
-                  }
+                val bodyOpt = blockchainReader.getBlockBodyByHash(header.hash)
+                val newLogs = bodyOpt.fold(logsSoFar) { body =>
+                  logsSoFar ++ getLogsFromBlock(filter, Block(header, body), receipts)
+                }
+                recur(currentBlockNumber + 1, toBlockNumber, newLogs)
               case None => logsSoFar
             }
           case Some(_) => recur(currentBlockNumber + 1, toBlockNumber, logsSoFar)

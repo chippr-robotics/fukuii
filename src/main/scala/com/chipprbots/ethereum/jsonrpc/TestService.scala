@@ -389,7 +389,7 @@ class TestService(
     if (blockOpt.isEmpty) {
       AccountsInRangeResponse(Map(), ByteString(0)).rightNow
     } else {
-      val blockNumber = blockOpt.map(_.header.number).getOrElse(0)
+      val blockNumber: BigInt = blockOpt.map(_.header.number).getOrElse(BigInt(0))
       val accountBatch: Seq[(ByteString, Address)] = accountHashWithAdresses.view
         .dropWhile { case (hash, _) => UInt256(hash) < UInt256(request.parameters.addressHash) }
         .filter { case (_, address) =>
