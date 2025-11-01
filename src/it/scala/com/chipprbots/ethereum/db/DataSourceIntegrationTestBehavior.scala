@@ -55,7 +55,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
   // scalastyle:off
   def dataSource(createDataSource: => String => DataSource): Unit = {
     it should "be able to insert keys in separate updates" in {
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
@@ -73,7 +73,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
     }
 
     it should "be able to insert keys in a single update" in {
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
@@ -89,7 +89,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
     }
 
     it should "be able to update keys in separate updates" in {
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
@@ -108,7 +108,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
     }
 
     it should "be able to update keys in a single update" in {
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
@@ -127,7 +127,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
     }
 
     it should "be cleared" in {
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
@@ -144,7 +144,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
     }
 
     it should "be able to be closed and then continuing using it" in {
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
@@ -163,7 +163,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
 
     it should "be destroyed" in {
       withDir { path =>
-        forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+        forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
           db.update(prepareUpdate(toUpsert = keyList.zip(keyList)))
@@ -183,7 +183,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
 
     it should "be able to handle inserts to multiple namespaces with the same key" in {
       val OtherNamespace2: IndexedSeq[Byte] = IndexedSeq[Byte]('h'.toByte)
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)
@@ -208,7 +208,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
 
     it should "be able to handle removals from multiple namespaces with the same key" in {
       val OtherNamespace2: IndexedSeq[Byte] = IndexedSeq[Byte]('h'.toByte)
-      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { unFilteredKeyList: Seq[ByteString] =>
+      forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
           val db = createDataSource(path)

@@ -305,7 +305,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
 
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
   // Provide runtimeContext as alias for compatibility
-  implicit val runtimeContext: IORuntime = ioRuntime
+  implicit def runtimeContext: IORuntime = ioRuntime
 
   override lazy val consensusAdapter: ConsensusAdapter = mkConsensus()
 
