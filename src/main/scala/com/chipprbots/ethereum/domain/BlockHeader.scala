@@ -146,6 +146,8 @@ object BlockHeaderImplicits {
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
   import com.chipprbots.ethereum.rlp.RLPImplicits._
+  import com.chipprbots.ethereum.rlp.RLPValue
+  import com.chipprbots.ethereum.utils.ByteUtils
 
   implicit class BlockHeaderEnc(blockHeader: BlockHeader) extends RLPSerializable {
     // scalastyle:off method.length
@@ -154,41 +156,41 @@ object BlockHeaderImplicits {
       extraFields match {
         case HefPostEcip1097(maybeCheckpoint) =>
           RLPList(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce,
+            parentHash.toArray,
+            ommersHash.toArray,
+            beneficiary.toArray,
+            stateRoot.toArray,
+            transactionsRoot.toArray,
+            receiptsRoot.toArray,
+            logsBloom.toArray,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+            extraData.toArray,
+            mixHash.toArray,
+            nonce.toArray,
             maybeCheckpoint
           )
 
         case HefEmpty =>
           RLPList(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce
+            parentHash.toArray,
+            ommersHash.toArray,
+            beneficiary.toArray,
+            stateRoot.toArray,
+            transactionsRoot.toArray,
+            receiptsRoot.toArray,
+            logsBloom.toArray,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+            extraData.toArray,
+            mixHash.toArray,
+            nonce.toArray
           )
       }
     }
