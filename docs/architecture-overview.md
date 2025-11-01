@@ -756,9 +756,10 @@ sequenceDiagram
 ## Technology Stack
 
 ### Languages & Frameworks
-- **Scala 2.13**: Primary programming language
-- **Akka**: Actor-based concurrency framework
-- **Monix**: Functional reactive programming
+- **Scala 3.3.4** (LTS): Primary programming language
+- **Apache Pekko**: Actor-based concurrency framework (Scala 3 compatible fork of Akka)
+- **Cats Effect 3**: Functional effect system
+- **fs2**: Functional streaming library
 - **Cats**: Functional programming library
 
 ### Storage

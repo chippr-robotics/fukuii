@@ -8,7 +8,7 @@ The devcontainer configuration sets up a complete Scala development environment 
 
 - **JDK 17** (Temurin distribution) - Required for building Fukuii
 - **SBT 1.5.4+** - Scala Build Tool for compiling and testing
-- **Scala 2.13.6** - Primary Scala version used by the project
+- **Scala 3.3.4** (LTS) - Primary Scala version used by the project
 - **Metals** - Scala Language Server for VS Code
 - **Git submodules** - Automatically initialized on container creation
 
