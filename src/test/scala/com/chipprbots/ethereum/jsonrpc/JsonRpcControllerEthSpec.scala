@@ -59,6 +59,7 @@ class JsonRpcControllerEthSpec
     with JRCMatchers
     with ScalaCheckPropertyChecks
     with org.scalamock.scalatest.MockFactory
+    with JsonRpcControllerTestSupport
     with ScalaFutures
     with LongPatience
     with Eventually {
