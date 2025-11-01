@@ -71,9 +71,9 @@ jobs:
       - name: Check code formatting (diagnostic)
         run: |
           if [ "${{ matrix.scala-version }}" = "3.3" ]; then
-            sbt "++3.3.4" formatCheck 2>&1 | tee format-check.log
+            sbt "++3.3.4" scalafmtCheckAll 2>&1 | tee format-check.log
           else
-            sbt formatCheck 2>&1 | tee format-check.log
+            sbt scalafmtCheckAll 2>&1 | tee format-check.log
           fi
           echo "--- Last 200 lines of format check output ---"
           tail -n 200 format-check.log
