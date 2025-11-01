@@ -192,7 +192,8 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
-  trait TestSetup extends MockFactory with SecureRandomBuilder {
+  trait TestSetup extends SecureRandomBuilder {
+    this: org.scalamock.scalatest.MockFactory =>
 
     // Mock parameters for RLPxConnectionHandler
     val mockMessageDecoder: MessageDecoder = new MessageDecoder {

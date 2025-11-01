@@ -42,7 +42,7 @@ import org.scalatest.Ignore
 // SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (JsonRpcController with Option[TestService])
 // This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking JsonRpcController
 @Ignore
-class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteTest {
+class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteTest with org.scalamock.scalatest.MockFactory {
 
   import JsonRpcHttpServerSpec._
 
@@ -413,7 +413,8 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  trait TestSetup extends MockFactory {
+  trait TestSetup {
+    this: org.scalamock.scalatest.MockFactory =>
     val jsonRpc = "2.0"
     val id = 1
     val jsonRequest: ByteString = ByteString(s"""{"jsonrpc":"$jsonRpc", "method": "eth_blockNumber", "id": "$id"}""")

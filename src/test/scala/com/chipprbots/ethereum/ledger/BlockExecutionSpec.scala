@@ -35,7 +35,7 @@ import org.scalatest.Ignore
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in LedgerTestSetup
 // scalastyle:off magic.number
 @Ignore
-class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckPropertyChecks {
+class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckPropertyChecks with org.scalamock.scalatest.MockFactory {
 
   "BlockExecution" should {
 

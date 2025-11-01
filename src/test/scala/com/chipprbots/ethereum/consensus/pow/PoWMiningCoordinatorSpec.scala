@@ -33,17 +33,15 @@ import org.scalatest.Ignore
 class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with Matchers with org.scalamock.scalatest.MockFactory {
 
   "PoWMinerCoordinator actor" - {
-    "should throw exception when starting with other message than StartMining(mode)" in new TestSetup(
-      "FailedCoordinator"
-    ) {
+    "should throw exception when starting with other message than StartMining(mode)" in new TestSetup {
+      override def coordinatorName = "FailedCoordinator"
       LoggingTestKit.error("StopMining").expect {
         coordinator ! StopMining
       }
     }
 
-    "should start recurrent mining when receiving message StartMining(RecurrentMining)" in new TestSetup(
-      "RecurrentMining"
-    ) {
+    "should start recurrent mining when receiving message StartMining(RecurrentMining)" in new TestSetup {
+      override def coordinatorName = "RecurrentMining"
       setBlockForMining(parentBlock)
       LoggingTestKit.info("Received message SetMiningMode(RecurrentMining)").expect {
         coordinator ! SetMiningMode(RecurrentMining)
@@ -51,9 +49,8 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
       coordinator ! StopMining
     }
 
-    "should start on demand mining when receiving message StartMining(OnDemandMining)" in new TestSetup(
-      "OnDemandMining"
-    ) {
+    "should start on demand mining when receiving message StartMining(OnDemandMining)" in new TestSetup {
+      override def coordinatorName = "OnDemandMining"
       LoggingTestKit.info("Received message SetMiningMode(OnDemandMining)").expect {
         coordinator ! SetMiningMode(OnDemandMining)
       }
@@ -61,9 +58,8 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
     }
 
     "in Recurrent Mining" - {
-      "MineNext starts EthashMiner if mineWithKeccak is false" in new TestSetup(
-        "EthashMining"
-      ) {
+      "MineNext starts EthashMiner if mineWithKeccak is false" in new TestSetup {
+        override def coordinatorName = "EthashMining"
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
         LoggingTestKit.debug("Mining with Ethash").expect {
@@ -73,9 +69,8 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "MineNext starts KeccakMiner if mineWithKeccak is true" in new TestSetup(
-        "KeccakMining"
-      ) {
+      "MineNext starts KeccakMiner if mineWithKeccak is true" in new TestSetup {
+        override def coordinatorName = "KeccakMining"
         override val coordinator = system.systemActorOf(
           PoWMiningCoordinator(
             sync.ref,
@@ -101,9 +96,8 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
           }
       }
 
-      "Miners mine recurrently" in new TestSetup(
-        "RecurrentMining"
-      ) {
+      "Miners mine recurrently" in new TestSetup {
+        override def coordinatorName = "RecurrentMining"
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
             sync.ref,
@@ -127,9 +121,8 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "Continue to attempt to mine if blockchainReader.getBestBlock() return None" in new TestSetup(
-        "AlwaysMine"
-      ) {
+      "Continue to attempt to mine if blockchainReader.getBestBlock() return None" in new TestSetup {
+        override def coordinatorName = "AlwaysMine"
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
             sync.ref,
@@ -155,7 +148,8 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "StopMining stops PoWMinerCoordinator" in new TestSetup("StoppingMining") {
+      "StopMining stops PoWMinerCoordinator" in new TestSetup {
+        override def coordinatorName = "StoppingMining"
         val probe = TestProbe()
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
@@ -180,8 +174,9 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
     }
   }
 
-  class TestSetup(coordinatorName: String) extends MinerSpecSetup {
+  trait TestSetup extends MinerSpecSetup {
     this: org.scalamock.scalatest.MockFactory =>
+    def coordinatorName: String
     override lazy val mining: PoWMining = buildPoWConsensus().withBlockGenerator(blockGenerator)
 
     val parentBlockNumber: Int = 23499

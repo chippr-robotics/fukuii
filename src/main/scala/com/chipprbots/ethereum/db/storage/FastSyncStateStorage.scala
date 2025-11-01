@@ -43,7 +43,7 @@ class FastSyncStateStorage(val dataSource: DataSource)
   override def keyDeserializer: IndexedSeq[Byte] => String = b =>
     new String(b.toArray, StorageStringCharset.UTF8Charset)
 
-  override def valueSerializer: SyncState => IndexedSeq[Byte] = ss => compactPickledBytes(Pickle.intoBytes(ss)): @annotation.nowarn("msg=not inlined")
+  override def valueSerializer: SyncState => IndexedSeq[Byte] = ss => compactPickledBytes(Pickle.intoBytes(ss))
 
   override def valueDeserializer: IndexedSeq[Byte] => SyncState =
     (bytes: IndexedSeq[Byte]) => Unpickle[SyncState].fromBytes(ByteBuffer.wrap(bytes.toArray[Byte]))

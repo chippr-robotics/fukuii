@@ -40,11 +40,23 @@ import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.FilterConfig
 
-class JsonRpcControllerFixture(implicit system: ActorSystem)
+/** Factory for creating JsonRpcControllerFixture instances with mocks.
+  * This is needed because in Scala 3, MockFactory requires TestSuite self-type,
+  * which anonymous classes created by 'new' don't satisfy.
+  */
+object JsonRpcControllerFixture {
+  def apply()(implicit system: ActorSystem, mockFactory: org.scalamock.scalatest.MockFactory): JsonRpcControllerFixture = {
+    new JsonRpcControllerFixture()(system, mockFactory)
+  }
+}
+
+class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.scalamock.scalatest.MockFactory)
     extends EphemBlockchainTestSetup
     with JsonMethodsImplicits
-    with ApisBuilder
-    with org.scalamock.scalatest.MockFactory {
+    with ApisBuilder {
+
+  // Import all mockFactory members to enable mock creation and expectations
+  import mockFactory._
 
   def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
@@ -61,11 +73,14 @@ class JsonRpcControllerFixture(implicit system: ActorSystem)
   val syncingController: TestProbe = TestProbe()
 
   override lazy val stxLedger: StxLedger = mock[StxLedger]
-  override lazy val validators: ValidatorsExecutor = mock[ValidatorsExecutor]
-  (() => validators.signedTransactionValidator)
-    .expects()
-    .returns(null)
-    .anyNumberOfTimes()
+  override lazy val validators: ValidatorsExecutor = {
+    val v = mock[ValidatorsExecutor]
+    (() => v.signedTransactionValidator)
+      .expects()
+      .returns(null)
+      .anyNumberOfTimes()
+    v
+  }
 
   override lazy val mining: TestMining = buildTestMining()
     .withValidators(validators)

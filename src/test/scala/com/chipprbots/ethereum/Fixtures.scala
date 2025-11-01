@@ -255,7 +255,7 @@ object Fixtures {
         mixHash = ByteString(Hex.decode("5b5acbf4bf305f948bd7be176047b20623e1417f75597341a059729165b92397")),
         nonce = ByteString(Hex.decode("bede87201de42426"))
       )
-      override lazy val body: BlockBody = BlockBody(
+      override val body: BlockBody = BlockBody(
         transactionList = Seq[SignedTransaction](
           SignedTransaction(
             tx = LegacyTransaction(
@@ -344,9 +344,9 @@ object Fixtures {
         mixHash = ByteString(Hex.decode("7f9ac1ddeafff0f926ed9887b8cf7d50c3f919d902e618b957022c46c8b404a6")),
         nonce = ByteString(Hex.decode("60832709c8979daa"))
       )
-      override lazy val body: BlockBody = BlockBody.empty
-      override lazy val transactionHashes: Seq[ByteString] = ???
-      override lazy val size: Long = ???
+      override val body: BlockBody = BlockBody.empty
+      override val transactionHashes: Seq[ByteString] = ???
+      override val size: Long = ???
     }
 
   }

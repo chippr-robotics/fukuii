@@ -112,13 +112,13 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     }
 
   sealed trait LocalPruningConfigBuilder extends PruningConfigBuilder {
-    override lazy val pruningMode: PruningMode = ArchivePruning
+    override val pruningMode: PruningMode = ArchivePruning
   }
 
   lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
   lazy val storagesInstance: RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
     new RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages {
-      override lazy val dataSource: RocksDbDataSource =
+      override val dataSource: RocksDbDataSource =
         RocksDbDataSource(getRockDbTestConfig(tempDir.toAbsolutePath.toString), Namespaces.nsSeq)
     }
   implicit override lazy val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig

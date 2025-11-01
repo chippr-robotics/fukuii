@@ -18,11 +18,11 @@ class ContractTest extends AnyFlatSpec with Matchers {
 
   "Ledger" should "execute and validate" in new ScenarioSetup {
     val fixtures: FixtureProvider.Fixture = FixtureProvider.loadFixtures("/txExecTest/purchaseContract")
-    lazy val testBlockchainStorages = FixtureProvider.prepareStorages(2, fixtures)
+    override val testBlockchainStorages = FixtureProvider.prepareStorages(2, fixtures)
 
     // block only with ether transfers
     override lazy val blockValidation =
-      new BlockValidation(mining, blockchainReader, BlockQueue(blockchainReader, syncConfig))
+      new BlockValidation(mining, blockchainReader, BlockQueue(blockchainReader, this.syncConfig))
     override lazy val blockExecution =
       new BlockExecution(
         blockchain,
