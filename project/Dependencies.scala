@@ -150,7 +150,7 @@ object Dependencies {
     "org.scala-lang.modules" %% "scala-parser-combinators" % "2.4.0",
     "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.6.2", // Stable version
     "org.xerial.snappy" % "snappy-java" % "1.1.10.5", // Stable version
-    "org.web3j" % "core" % "4.11.3" % Test, // Stable version
+    "org.web3j" % "core" % "4.9.8" % Test, // Stable version without jc-kzg-4844 dependency issues
     "io.vavr" % "vavr" % "1.0.0-alpha-4", // Latest alpha
     "org.jupnp" % "org.jupnp" % "3.0.2", // Stable version
     "org.jupnp" % "org.jupnp.support" % "3.0.2",
