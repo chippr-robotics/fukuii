@@ -6,7 +6,7 @@ import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
 
-import akka.actor.ActorSystem
+import org.apache.pekko.actor.ActorSystem
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -15,6 +15,7 @@ import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.util.Try
 
+import org.json4s._
 import org.json4s.Formats
 import org.json4s.JsonAST.JValue
 import org.json4s.native
@@ -23,7 +24,9 @@ import org.json4s.native.Serialization
 import org.scalasbt.ipcsocket.UnixDomainServerSocket
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcController
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
+import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -110,7 +113,7 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
                 "2.0",
                 None,
                 Some(JsonRpcError(-32000, "Request timed out", None)),
-                request.id
+                request.id.getOrElse(JNull)
               )
               out.write((Serialization.write(errorResponse) + '\n').getBytes())
               out.flush()

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.validators.std
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -71,7 +71,7 @@ object StdValidators {
       _ <- self.blockValidator.validateHeaderAndBody(header, body)
     } yield BlockExecutionSuccess
 
-    result.left.map(ValidationBeforeExecError)
+    result.left.map(ValidationBeforeExecError.apply)
   }
 
   def validateBlockAfterExecution(

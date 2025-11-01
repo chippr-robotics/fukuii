@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -37,7 +37,8 @@ class QaJRCSpec
     with Matchers
     with PatienceConfiguration
     with NormalPatience
-    with JsonMethodsImplicits {
+    with JsonMethodsImplicits
+    with org.scalamock.scalatest.MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global
 
@@ -242,17 +243,23 @@ class QaJRCSpec
     }
   }
 
-  trait TestSetup
-      extends MockFactory
-      with JRCMatchers
-      with ByteGenerators
-      with BlockchainConfigBuilder
-      with ApisBuilder {
+  trait TestSetup extends JRCMatchers with ByteGenerators with BlockchainConfigBuilder with ApisBuilder {
+    this: org.scalamock.scalatest.MockFactory =>
     def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
     val web3Service: Web3Service = mock[Web3Service]
-    val netService: NetService = mock[NetService]
+    // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
+    implicit val testSystem: org.apache.pekko.actor.ActorSystem = org.apache.pekko.actor.ActorSystem("QaJRCSpec-test")
+    val netService: NetService = new NetService(
+      new java.util.concurrent.atomic.AtomicReference(com.chipprbots.ethereum.utils.NodeStatus(
+        com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening, 
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening
+      )),
+      org.apache.pekko.testkit.TestProbe().ref,
+      com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
+    )
     val personalService: PersonalService = mock[PersonalService]
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]

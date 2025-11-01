@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalamock.handlers.CallHandler0
 import org.scalamock.handlers.CallHandler1

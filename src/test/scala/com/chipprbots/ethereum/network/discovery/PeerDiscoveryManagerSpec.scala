@@ -2,13 +2,13 @@ package com.chipprbots.ethereum.network.discovery
 
 import java.net.URI
 
-import akka.actor.ActorSystem
-import akka.pattern.AskTimeoutException
-import akka.pattern.ask
-import akka.testkit.TestActorRef
-import akka.testkit.TestKit
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.pattern.AskTimeoutException
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.Resource
 import cats.effect.IO
@@ -251,11 +251,11 @@ class PeerDiscoveryManagerSpec
       val lookupCount = new AtomicInteger(0)
 
       implicit val nodeOrd: Ordering[ENode] =
-        Ordering.by(_.id.toByteArray.toSeq)
+        Ordering.by(_.id.value.toByteArray.toSeq)
 
-      (discoveryService.lookup _)
-        .expects(*)
-        .returning(IO { lookupCount.incrementAndGet(); SortedSet(randomNodes.map(toENode).toSeq: _*) })
+      (() => discoveryService.getRandomNodes)
+        .expects()
+        .returning(IO { lookupCount.incrementAndGet(); randomNodes.map(toENode).toSet })
         .repeat(expectedLookups)
 
       override lazy val discoveryConfig =

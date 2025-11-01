@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
@@ -22,7 +22,7 @@ trait TransactionPicker extends Logger {
   def getTransactionsFromPool: IO[PendingTransactionsResponse] =
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Failed to get transactions, mining block with empty transactions list", ex)
         PendingTransactionsResponse(Nil)
       }

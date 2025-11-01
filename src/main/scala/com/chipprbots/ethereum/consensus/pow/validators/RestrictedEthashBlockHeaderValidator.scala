@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow.validators
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.pow.RestrictedPoWSigner
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError

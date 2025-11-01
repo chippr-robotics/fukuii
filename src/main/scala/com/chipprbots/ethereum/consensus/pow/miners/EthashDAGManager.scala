@@ -4,7 +4,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Failure
 import scala.util.Success

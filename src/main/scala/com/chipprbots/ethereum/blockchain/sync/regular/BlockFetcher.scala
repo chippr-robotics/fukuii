@@ -1,14 +1,14 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.typed.ActorRef
-import akka.actor.typed.Behavior
-import akka.actor.typed.scaladsl.AbstractBehavior
-import akka.actor.typed.scaladsl.ActorContext
-import akka.actor.typed.scaladsl.Behaviors
-import akka.actor.typed.scaladsl.adapter._
-import akka.actor.{ActorRef => ClassicActorRef}
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
@@ -338,10 +338,10 @@ object BlockFetcher {
   sealed trait FetchCommand
   final case class Start(importer: ClassicActorRef, fromBlock: BigInt) extends FetchCommand
   final case class FetchStateNode(hash: ByteString, replyTo: ClassicActorRef) extends FetchCommand
-  final case object RetryFetchStateNode extends FetchCommand
+  case object RetryFetchStateNode extends FetchCommand
   final case class PickBlocks(amount: Int, replyTo: ClassicActorRef) extends FetchCommand
   final case class StrictPickBlocks(from: BigInt, atLEastWith: BigInt, replyTo: ClassicActorRef) extends FetchCommand
-  final case object PrintStatus extends FetchCommand
+  case object PrintStatus extends FetchCommand
   final case class InvalidateBlocksFrom(fromBlock: BigInt, reason: String, toBlacklist: Option[BigInt])
       extends FetchCommand
 
@@ -355,8 +355,8 @@ object BlockFetcher {
   }
   final case class BlockImportFailed(blockNr: BigInt, reason: BlacklistReason) extends FetchCommand
   final case class InternalLastBlockImport(blockNr: BigInt) extends FetchCommand
-  final case object RetryBodiesRequest extends FetchCommand
-  final case object RetryHeadersRequest extends FetchCommand
+  case object RetryBodiesRequest extends FetchCommand
+  case object RetryHeadersRequest extends FetchCommand
   final case class AdaptedMessageFromEventBus(message: Message, peerId: PeerId) extends FetchCommand
   final case class ReceivedHeaders(peer: Peer, headers: Seq[BlockHeader]) extends FetchCommand
   final case class ReceivedBodies(peer: Peer, bodies: Seq[BlockBody]) extends FetchCommand

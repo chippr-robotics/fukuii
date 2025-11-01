@@ -2,17 +2,17 @@ package com.chipprbots.ethereum.logger
 
 import java.util.concurrent.atomic.AtomicInteger
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.dispatch._
-import akka.event.Logging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.dispatch._
+import org.apache.pekko.event.Logging
 
 import com.typesafe.config.Config
 
 /** Logs the mailbox size when exceeding the configured limit. It logs at most once per second when the messages are
   * enqueued or dequeued.
   *
-  * Configuration: <pre> akka.actor.default-mailbox { mailbox-type = akka.contrib.mailbox.LoggingMailboxType size-limit
+  * Configuration: <pre> pekko.actor.default-mailbox { mailbox-type = org.apache.pekko.contrib.mailbox.LoggingMailboxType size-limit
   * \= 20 } </pre>
   */
 class LoggingMailboxType(settings: ActorSystem.Settings, config: Config)

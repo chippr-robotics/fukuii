@@ -2,15 +2,15 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
-import com.miguno.akka.testing.VirtualTime
 import org.scalatest.BeforeAndAfter
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -116,7 +116,7 @@ class PivotBlockSelectorSpec
 
     updateHandshakedPeers(HandshakedPeers(threeAcceptedPeers))
 
-    time.advance(syncConfig.startRetryInterval)
+    testScheduler.timePasses(syncConfig.startRetryInterval)
 
     peerMessageBus.expectMsgAllOf(
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer1.id))),
@@ -158,7 +158,7 @@ class PivotBlockSelectorSpec
 
     fastSync.expectNoMessage() // consensus not reached - process have to be repeated
 
-    time.advance(syncConfig.startRetryInterval)
+    testScheduler.timePasses(syncConfig.startRetryInterval)
 
     peerMessageBus.expectMsgAllOf(
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer1.id))),
@@ -198,7 +198,7 @@ class PivotBlockSelectorSpec
 
     fastSync.expectNoMessage() // consensus not reached - process have to be repeated
 
-    time.advance(syncConfig.startRetryInterval)
+    testScheduler.timePasses(syncConfig.startRetryInterval)
 
     peerMessageBus.expectMsgAllOf(
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer1.id))),
@@ -232,7 +232,7 @@ class PivotBlockSelectorSpec
       Unsubscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer1.id))),
       Unsubscribe()
     )
-    time.advance(syncConfig.syncRetryInterval)
+    testScheduler.timePasses(syncConfig.syncRetryInterval)
 
     fastSync.expectNoMessage() // consensus not reached - process have to be repeated
     peerMessageBus.expectNoMessage()
@@ -374,7 +374,7 @@ class PivotBlockSelectorSpec
 
     fastSync.expectNoMessage() // consensus not reached - process have to be repeated
 
-    time.advance(syncConfig.startRetryInterval)
+    testScheduler.timePasses(syncConfig.startRetryInterval)
 
     peerMessageBus.expectMsgAllOf(
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer1.id))),
@@ -522,14 +522,15 @@ class PivotBlockSelectorSpec
     )
 
     val fastSync: TestProbe = TestProbe()
-    val time = new VirtualTime
+    
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     lazy val pivotBlockSelector: ActorRef = system.actorOf(
       PivotBlockSelector.props(
         etcPeerManager.ref,
         peerMessageBus.ref,
         defaultSyncConfig,
-        time.scheduler,
+        testScheduler,
         fastSync.ref,
         blacklist
       )

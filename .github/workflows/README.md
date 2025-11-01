@@ -163,6 +163,15 @@ git push origin v1.0.0
 3. **Issue linking:** Reminds to link issues in PR description
 
 **Labels Applied:**
+
+**Agent Labels:** (see [AGENT_LABELS.md](../AGENT_LABELS.md) for details)
+- `agent: wraith 👻` - Compilation errors and Scala 3 migration
+- `agent: mithril ✨` - Code modernization and Scala 3 features
+- `agent: ICE 🧊` - Large-scale migrations and strategic planning
+- `agent: eye 👁️` - Testing, validation, and quality assurance
+- `agent: forge 🔨` - Consensus-critical code (EVM, mining, crypto)
+
+**Standard Labels:**
 - `documentation` - Markdown and doc changes
 - `dependencies` - Dependency updates
 - `docker` - Docker-related changes

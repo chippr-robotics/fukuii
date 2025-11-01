@@ -29,7 +29,9 @@ import com.chipprbots.ethereum.rlp.RLPValue
 class RLPCodecsSpec extends AnyFlatSpec with Matchers {
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
   import com.chipprbots.ethereum.rlp.RLPImplicits._
+  import com.chipprbots.ethereum.rlp.RLPImplicits.given
   import RLPCodecs._
+  import RLPCodecs.given
 
   implicit val sigalg: Secp256k1SigAlg = new Secp256k1SigAlg()
 
@@ -131,7 +133,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
               areEqual(a, b)
             }
           case (a: RLPValue, b: RLPValue) =>
-            a.sameElements(b)
+            a.bytes.sameElements(b.bytes)
           case _ =>
             false
         }

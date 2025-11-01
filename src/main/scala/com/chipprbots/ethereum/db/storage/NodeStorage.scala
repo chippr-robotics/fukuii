@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.db.storage
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import fs2.Stream
@@ -12,7 +12,7 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 
-sealed trait NodesStorage extends {
+sealed trait NodesStorage {
   def get(key: NodeHash): Option[NodeEncoded]
   def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesStorage
   def updateCond(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)], inMemory: Boolean): NodesStorage

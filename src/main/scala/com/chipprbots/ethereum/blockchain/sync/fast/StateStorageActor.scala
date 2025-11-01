@@ -1,11 +1,13 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.pattern.pipe
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.pattern.pipe
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+
+import scala.concurrent.ExecutionContext
 
 import scala.util.Failure
 import scala.util.Success
@@ -48,6 +50,7 @@ class StateStorageActor extends Actor with ActorLogging {
 
   private def persistState(storage: FastSyncStateStorage, syncState: SyncState): Unit = {
     implicit val runtime: IORuntime = IORuntime.global
+    implicit val ec: ExecutionContext = context.dispatcher
 
     val persistingQueues: IO[Try[FastSyncStateStorage]] = IO {
       lazy val result = Try(storage.putSyncState(syncState))

@@ -1,14 +1,15 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.Actor
-import akka.actor.ActorRef
-import akka.actor.Cancellable
-import akka.actor.Props
-import akka.actor.Scheduler
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Cancellable
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 import scala.concurrent.ExecutionContext
@@ -35,11 +36,12 @@ class FilterManager(
 ) extends Actor {
 
   import FilterManager._
-  import akka.pattern.pipe
+  import org.apache.pekko.pattern.pipe
   import context.system
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(system.scheduler)
   implicit private val executionContext: ExecutionContext = system.dispatcher
+  implicit private val ioRuntime: IORuntime = IORuntime.global
 
   val maxBlockHashesChanges = 256
 
@@ -112,7 +114,7 @@ class FilterManager(
           .map { pendingTransactions =>
             PendingTransactionFilterLogs(pendingTransactions.map(_.stx.tx.hash))
           }
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(sender())
 
       case None =>
@@ -192,7 +194,7 @@ class FilterManager(
             val filtered = pendingTransactions.filter(_.addTimestamp > lastCheckTimestamp)
             PendingTransactionFilterChanges(filtered.map(_.stx.tx.hash))
           }
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(sender())
 
       case None =>

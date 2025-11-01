@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.sync
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 
@@ -31,7 +31,7 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
       _ <- peer2.importBlocksUntil(1000)(IdentityUpdate)
       _ <- peer3.importBlocksUntil(1000)(IdentityUpdate)
       _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
-      _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+      _ <- peer1.startFastSync().delayBy(50.milliseconds)
       _ <- peer1.waitForFastSyncFinish()
     } yield {
       assert(
@@ -51,7 +51,7 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
         _ <- peer2.importBlocksUntil(1000)(updateStateAtBlock(500))
         _ <- peer3.importBlocksUntil(1000)(updateStateAtBlock(500))
         _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
-        _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+        _ <- peer1.startFastSync().delayBy(50.milliseconds)
         _ <- peer1.waitForFastSyncFinish()
       } yield {
         val trie = peer1.getBestBlockTrie()
@@ -84,7 +84,7 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
         _ <- peer4.importBlocksUntil(1000)(updateStateAtBlock(500))
 
         _ <- peer1.connectToPeers(Set(peer2.node, peer3.node, peer4.node))
-        _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+        _ <- peer1.startFastSync().delayBy(50.milliseconds)
         _ <- peer1.waitForFastSyncFinish()
       } yield {
         val trie = peer1.getBestBlockTrie()
@@ -117,7 +117,7 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
         _ <- peer4.importBlocksUntil(1000)(updateStateAtBlock(500))
 
         _ <- peer1.connectToPeers(Set(peer2.node, peer3.node, peer4.node))
-        _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+        _ <- peer1.startFastSync().delayBy(50.milliseconds)
         _ <- peer1.waitForFastSyncFinish()
       } yield {
         val trie = peer1.getBestBlockTrie()
@@ -141,8 +141,8 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     for {
       _ <- peer2.importBlocksUntil(1000)(IdentityUpdate)
       _ <- peer1.connectToPeers(Set(peer2.node))
-      _ <- peer2.importBlocksUntil(2000)(IdentityUpdate).startAndForget
-      _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+      _ <- peer2.importBlocksUntil(2000)(IdentityUpdate).start.void
+      _ <- peer1.startFastSync().delayBy(50.milliseconds)
       _ <- peer1.waitForFastSyncFinish()
     } yield assert(
       peer1.blockchainReader
@@ -156,8 +156,8 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     for {
       _ <- peer2.importBlocksUntil(1000)(IdentityUpdate)
       _ <- peer1.connectToPeers(Set(peer2.node))
-      _ <- peer2.importBlocksUntil(2000)(updateStateAtBlock(1500)).startAndForget
-      _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+      _ <- peer2.importBlocksUntil(2000)(updateStateAtBlock(1500)).start.void
+      _ <- peer1.startFastSync().delayBy(50.milliseconds)
       _ <- peer1.waitForFastSyncFinish()
     } yield assert(
       peer1.blockchainReader
@@ -174,7 +174,7 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
       _ <- peer1.importBlocksUntil(2000)(updateStateAtBlock(1500))
       _ <- peer1.startWithState()
       _ <- peer1.connectToPeers(Set(peer2.node))
-      _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+      _ <- peer1.startFastSync().delayBy(50.milliseconds)
       _ <- peer1.waitForFastSyncFinish()
     } yield assert(
       peer1.blockchainReader
@@ -195,7 +195,7 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
       _ <- peer4.importBlocksUntil(3000)(updateStateAtBlock(1001, endAccount = 3000))
 
       _ <- peer1.connectToPeers(Set(peer2.node, peer3.node, peer4.node))
-      _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+      _ <- peer1.startFastSync().delayBy(50.milliseconds)
       _ <- peer1.waitForFastSyncFinish()
     } yield {
       val trie = peer1.getBestBlockTrie()
@@ -222,7 +222,7 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
       _ <- peer2.importBlocksUntil(1200)(IdentityUpdate)
       _ <- peer3.importBlocksUntil(1200)(IdentityUpdate)
       _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
-      _ <- peer1.startFastSync().delayExecution(50.milliseconds)
+      _ <- peer1.startFastSync().delayBy(50.milliseconds)
       _ <- peer1.waitForFastSyncFinish()
     } yield assert(
       peer1.blockchainReader

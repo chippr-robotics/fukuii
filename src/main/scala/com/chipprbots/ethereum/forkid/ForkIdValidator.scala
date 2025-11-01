@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.forkid
 
 import java.util.zip.CRC32
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.Monad
 import cats.data.EitherT._

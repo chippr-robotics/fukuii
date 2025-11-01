@@ -53,10 +53,10 @@ object Packet {
   private val packetEncoder: Encoder[Packet] =
     Encoder[Packet] { (packet: Packet) =>
       for {
-        _ <- Attempt.guard(packet.hash.size == MacBitsSize, "Unexpected hash size.")
-        _ <- Attempt.guard(packet.signature.size == SigBitsSize, "Unexpected signature size.")
+        _ <- Attempt.guard(packet.hash.value.size == MacBitsSize, "Unexpected hash size.")
+        _ <- Attempt.guard(packet.signature.value.size == SigBitsSize, "Unexpected signature size.")
         bits <- Attempt.successful {
-          packet.hash ++ packet.signature ++ packet.data
+          packet.hash.value ++ packet.signature.value ++ packet.data
         }
         _ <- Attempt.guard(bits.size <= MaxPacketBitsSize, "Encoded packet exceeded maximum size.")
       } yield bits
@@ -76,19 +76,19 @@ object Packet {
     for {
       data <- codec.encode(payload)
       signature = sigalg.sign(privateKey, data)
-      hash = Keccak256(signature ++ data)
+      hash = Keccak256(signature.value ++ data)
     } yield Packet(hash, signature, data)
 
   /** Validate the hash, recover the public key by validating the signature, and deserialize the payload. */
   def unpack(packet: Packet)(implicit codec: Codec[Payload], sigalg: SigAlg): Attempt[(Payload, PublicKey)] =
     for {
-      hash <- Attempt.successful(Keccak256(packet.signature ++ packet.data))
+      hash <- Attempt.successful(Keccak256(packet.signature.value ++ packet.data))
       _ <- Attempt.guard(hash == packet.hash, "Invalid hash.")
       publicKey <- sigalg.recoverPublicKey(packet.signature, packet.data)
       payload <- codec.decodeValue(packet.data)
     } yield (payload, publicKey)
 
   implicit val show: Show[Packet] = Show.show[Packet] { p =>
-    s"""Packet(hash = hex"${p.hash.toHex}", signature = hex"${p.signature.toHex}", data = hex"${p.data.toHex}")"""
+    s"""Packet(hash = hex"${p.hash.value.toHex}", signature = hex"${p.signature.value.toHex}", data = hex"${p.data.toHex}")"""
   }
 }

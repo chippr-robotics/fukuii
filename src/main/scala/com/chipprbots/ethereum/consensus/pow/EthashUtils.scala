@@ -5,7 +5,7 @@ import java.lang.Integer.remainderUnsigned
 import java.math.BigInteger
 import java.util
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 

@@ -13,10 +13,16 @@ package object messages {
     val GetBlockBodiesCode: Int = SubProtocolOffset + 0x05
     val BlockBodiesCode: Int = SubProtocolOffset + 0x06
     val NewBlockCode: Int = SubProtocolOffset + 0x07
-    // This message is removed in ETH62 and this code is reused in ETH65 with different msg type
+    // This message is removed in ETH62 and this code 0x08 is reused in ETH65 with different msg type
     val BlockHashesFromNumberCode: Int = SubProtocolOffset + 0x08
+    // New in ETH65: Transaction pool messages
+    val NewPooledTransactionHashesCode: Int = SubProtocolOffset + 0x08
+    val GetPooledTransactionsCode: Int = SubProtocolOffset + 0x09
+    val PooledTransactionsCode: Int = SubProtocolOffset + 0x0a
+    // State sync messages (removed in ETH68)
     val GetNodeDataCode: Int = SubProtocolOffset + 0x0d
     val NodeDataCode: Int = SubProtocolOffset + 0x0e
+    // Receipt messages
     val GetReceiptsCode: Int = SubProtocolOffset + 0x0f
     val ReceiptsCode: Int = SubProtocolOffset + 0x10
   }

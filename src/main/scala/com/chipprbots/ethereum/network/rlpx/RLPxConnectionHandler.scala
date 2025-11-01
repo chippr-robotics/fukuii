@@ -3,11 +3,11 @@ package com.chipprbots.ethereum.network.rlpx
 import java.net.InetSocketAddress
 import java.net.URI
 
-import akka.actor._
-import akka.io.IO
-import akka.io.Tcp
-import akka.io.Tcp._
-import akka.util.ByteString
+import org.apache.pekko.actor._
+import org.apache.pekko.io.IO
+import org.apache.pekko.io.Tcp
+import org.apache.pekko.io.Tcp._
+import org.apache.pekko.util.ByteString
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration._

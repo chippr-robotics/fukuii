@@ -1,16 +1,16 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.pattern.ask
-import akka.testkit.TestActorRef
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.Props
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
-import com.miguno.akka.testing.VirtualTime
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
@@ -41,7 +41,8 @@ class FilterManagerSpec
     with WithActorSystemShutDown
     with Matchers
     with ScalaFutures
-    with NormalPatience {
+    with NormalPatience
+    with org.scalamock.scalatest.MockFactory {
 
   "FilterManager" should "handle log filter logs and changes" in new TestSetup {
 
@@ -461,7 +462,7 @@ class FilterManagerSpec
     // the filter should work
     getLogsRes.txHashes shouldBe pendingTxs.map(_.tx.hash)
 
-    time.advance(15.seconds)
+    testScheduler.timePasses(15.seconds)
 
     // the filter should no longer exist
     val getLogsRes2 =
@@ -474,7 +475,7 @@ class FilterManagerSpec
     getLogsRes2 shouldBe LogFilterLogs(Nil)
   }
 
-  class TestSetup(implicit system: ActorSystem) extends MockFactory with SecureRandomBuilder {
+  class TestSetup(implicit system: ActorSystem) extends SecureRandomBuilder {
 
     val config: FilterConfig = new FilterConfig {
       override val filterTimeout = Timeouts.longTimeout
@@ -489,8 +490,8 @@ class FilterManagerSpec
     }
 
     val keyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
-
-    val time = new VirtualTime
+    
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val blockchainReader: BlockchainReader = mock[BlockchainReader]
     val blockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -529,7 +530,7 @@ class FilterManagerSpec
           pendingTransactionsManager.ref,
           config,
           txPoolConfig,
-          Some(time.scheduler)
+          Some(testScheduler)
         )
       )
     )

@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.vm
 
-import akka.util.ByteString
-import akka.util.ByteString.{empty => bEmpty}
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.ByteString.{empty => bEmpty}
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalacheck.Arbitrary
@@ -46,7 +46,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     val codeGen = getByteStringGen(0, 512)
 
     forAll(stateGen) { stateIn =>
-      val (addrUint, _) = stateIn.stack.pop
+      val (addrUint, _) = stateIn.stack.pop()
       val addr = Address(addrUint)
       stateIn.accessedAddresses shouldNot contain(addr)
 
@@ -57,7 +57,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     }
 
     forAll(stateGen, codeGen) { (stateIn, extCode) =>
-      val (addrUint, _) = stateIn.stack.pop
+      val (addrUint, _) = stateIn.stack.pop()
       val addr = Address(addrUint)
       val program = Program(extCode)
       val world1 = stateIn.world.saveCode(addr, program.code)
@@ -139,7 +139,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     forAll(stateGen) { stateIn =>
       stateIn.accessedStorageKeys shouldBe empty
-      val (offset, _) = stateIn.stack.pop
+      val (offset, _) = stateIn.stack.pop()
 
       val stateOut = op.execute(stateIn)
 
@@ -148,7 +148,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     }
 
     forAll(stateGen) { stateIn =>
-      val (offset, _) = stateIn.stack.pop
+      val (offset, _) = stateIn.stack.pop()
 
       val stateOut = op.execute(stateIn.addAccessedStorageKey(stateIn.ownAddress, offset))
 
@@ -168,7 +168,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     // Sending refund to a non-existent account
     forAll(stateGen, addressAlreadyAccessedGen) { (stateIn, addressAlreadyAccessed) =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       val refundAddress = Address(refund)
       whenever(stateIn.world.getAccount(refundAddress).isEmpty && stateIn.ownBalance > 0) {
         val stateOut =
@@ -183,7 +183,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     // Sending refund to an already existing account not dead account
     forAll(stateGen, addressAlreadyAccessedGen) { (stateIn, addressAlreadyAccessed) =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       val refundAddress = Address(refund)
       val world = stateIn.world.saveAccount(refundAddress, Account.empty().increaseNonce())
       val updatedStateIn = stateIn.withWorld(world)
@@ -199,7 +199,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     // Owner account was already selfdestructed
     forAll(stateGen, addressAlreadyAccessedGen) { (stateIn, addressAlreadyAccessed) =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       val refundAddress = Address(refund)
       whenever(stateIn.world.getAccount(refundAddress).isEmpty && stateIn.ownBalance > 0) {
         val updatedStateIn = stateIn.withAddressToDelete(stateIn.env.ownerAddr)

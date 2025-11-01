@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 object ETH63 {
@@ -54,8 +55,13 @@ object ETH63 {
 
     implicit class AccountDec(val bytes: Array[Byte]) extends AnyVal {
       def toAccount: Account = rawDecode(bytes) match {
-        case RLPList(nonce, balance, storageRoot, codeHash) =>
-          Account(nonce.toUInt256, balance.toUInt256, storageRoot, codeHash)
+        case RLPList(RLPValue(nonceBytes), RLPValue(balanceBytes), RLPValue(storageRootBytes), RLPValue(codeHashBytes)) =>
+          Account(
+            UInt256(BigInt(1, nonceBytes)),
+            UInt256(BigInt(1, balanceBytes)),
+            ByteString(storageRootBytes),
+            ByteString(codeHashBytes)
+          )
         case _ => throw new RuntimeException("Cannot decode Account")
       }
     }
@@ -78,7 +84,10 @@ object ETH63 {
     }
 
     implicit class MptNodeRLPEncodableDec(val rlp: RLPEncodeable) extends AnyVal {
-      def toMptNode: MptNode = MptTraversals.decodeNode(rlp)
+      def toMptNode: MptNode = rlp match {
+        case RLPValue(bytes) => MptTraversals.decodeNode(bytes)
+        case _ => throw new RuntimeException("Cannot decode MptNode from non-RLPValue")
+      }
     }
   }
 
@@ -90,7 +99,7 @@ object ETH63 {
       import MptNodeEncoders._
 
       override def code: Int = Codes.NodeDataCode
-      override def toRLPEncodable: RLPEncodeable = msg.values
+      override def toRLPEncodable: RLPEncodeable = toRlpList(msg.values)
 
       @throws[RLPException]
       def getMptNode(index: Int): MptNode = msg.values(index).toArray[Byte].toMptNode
@@ -98,7 +107,10 @@ object ETH63 {
 
     implicit class NodeDataDec(val bytes: Array[Byte]) extends AnyVal {
       def toNodeData: NodeData = rawDecode(bytes) match {
-        case rlpList: RLPList => NodeData(rlpList.items.map(e => e: ByteString))
+        case rlpList: RLPList => NodeData(rlpList.items.map {
+          case RLPValue(bytes) => ByteString(bytes)
+          case _ => throw new RuntimeException("Cannot decode NodeData item")
+        })
         case _                => throw new RuntimeException("Cannot decode NodeData")
       }
     }
@@ -152,8 +164,8 @@ object ETH63 {
 
     implicit class TxLogEntryDec(rlp: RLPEncodeable) {
       def toTxLogEntry: TxLogEntry = rlp match {
-        case RLPList(loggerAddress, logTopics: RLPList, data) =>
-          TxLogEntry(Address(loggerAddress: ByteString), fromRlpList[ByteString](logTopics), data)
+        case RLPList(RLPValue(loggerAddressBytes), logTopics: RLPList, RLPValue(dataBytes)) =>
+          TxLogEntry(Address(ByteString(loggerAddressBytes)), fromRlpList[ByteString](logTopics), ByteString(dataBytes))
 
         case _ => throw new RuntimeException("Cannot decode TransactionLog")
       }
@@ -176,6 +188,7 @@ object ETH63 {
         receipt match {
           case _: LegacyReceipt => legacyRLPReceipt
           case _: Type01Receipt => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
+          case _: TypedLegacyReceipt => legacyRLPReceipt // Handle typed legacy receipts
         }
       }
     }
@@ -204,13 +217,13 @@ object ETH63 {
     implicit class ReceiptRLPEncodableDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
 
       def toLegacyReceipt: LegacyReceipt = rlpEncodeable match {
-        case RLPList(postTransactionStateHash, cumulativeGasUsed, logsBloomFilter, logs: RLPList) =>
+        case RLPList(postTransactionStateHash, RLPValue(cumulativeGasUsedBytes), RLPValue(logsBloomFilterBytes), logs: RLPList) =>
           val stateHash = postTransactionStateHash match {
             case RLPValue(bytes) if bytes.length > 1                     => HashOutcome(ByteString(bytes))
             case RLPValue(bytes) if bytes.length == 1 && bytes.head == 1 => SuccessOutcome
             case _                                                       => FailureOutcome
           }
-          LegacyReceipt(stateHash, cumulativeGasUsed, logsBloomFilter, logs.items.map(_.toTxLogEntry))
+          LegacyReceipt(stateHash, BigInt(1, cumulativeGasUsedBytes), ByteString(logsBloomFilterBytes), logs.items.map(_.toTxLogEntry))
         case _ => throw new RuntimeException("Cannot decode Receipt")
       }
 

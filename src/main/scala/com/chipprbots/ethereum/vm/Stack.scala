@@ -19,7 +19,7 @@ object Stack {
   */
 class Stack private (private val underlying: Vector[UInt256], val maxSize: Int) {
 
-  def pop: (UInt256, Stack) = underlying.lastOption match {
+  def pop(): (UInt256, Stack) = underlying.lastOption match {
     case Some(word) =>
       val updated = underlying.dropRight(1)
       (word, copy(updated))

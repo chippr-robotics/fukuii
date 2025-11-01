@@ -3,13 +3,13 @@ package com.chipprbots.ethereum.network
 import java.net.InetSocketAddress
 import java.net.URI
 
-import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.testkit.TestActorRef
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.Props
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
-import com.miguno.akka.testing.VirtualTime
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -103,7 +103,7 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
     rlpxConnectionProbe.reply(RLPxConnectionHandler.ConnectionEstablished(ByteString()))
 
     rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.SendMessage(defaultHello))
-    time.advance(defaultTimeout * 2)
+    testScheduler.timePasses(defaultTimeout * 2)
 
     // Test that the handshake failed
     rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(defaultReasonDisconnect)))
@@ -152,8 +152,8 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
 
   trait TestSetup extends EphemBlockchainTestSetup {
     implicit override lazy val system: ActorSystem = ActorSystem("PeerActorSpec_System")
-
-    val time = new VirtualTime
+    
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val uri = new URI(
       "enode://18a551bee469c2e02de660ab01dede06503c986f6b8520cb5a65ad122df88b17b285e3fef09a40a0d44f99e014f8616cf1ebc2e094f96c6e09e2f390f5d34857@47.90.36.129:30303"
@@ -171,7 +171,7 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
           peerEventBus = peerMessageBus.ref,
           knownNodesManager = knownNodesManager.ref,
           incomingConnection = false,
-          externalSchedulerOpt = Some(time.scheduler),
+          externalSchedulerOpt = Some(testScheduler),
           initHandshaker = handshaker
         )
       )

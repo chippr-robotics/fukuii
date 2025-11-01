@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Future
 import cats.effect.unsafe.IORuntime
@@ -26,7 +26,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 class KeccakMiner(
     blockCreator: PoWBlockCreator,
-    syncController: akka.actor.ActorRef,
+    syncController: org.apache.pekko.actor.ActorRef,
     ethMiningService: EthMiningService
 )(implicit scheduler: IORuntime)
     extends Miner
@@ -46,11 +46,11 @@ class KeccakMiner(
         submitHashRate(ethMiningService, System.nanoTime() - startTime, miningResult)
         handleMiningResult(miningResult, syncController, block)
       }
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Error occurred while mining: ", ex)
         PoWMiningCoordinator.MiningUnsuccessful
       }
-      .runToFuture
+      .unsafeToFuture()
   }
 
   private def doMining(block: Block, numRounds: Int): (Long, MiningResult) = {

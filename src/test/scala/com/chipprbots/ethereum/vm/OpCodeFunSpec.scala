@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.vm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
@@ -62,8 +62,8 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (a, _) = stateIn.stack.pop
-        val (result, _) = stateOut.stack.pop
+        val (a, _) = stateIn.stack.pop()
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(a)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -78,7 +78,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (Seq(a, b), _) = stateIn.stack.pop(2)
-        val (result, _) = stateOut.stack.pop
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(a, b)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -93,7 +93,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       withStackVerification(op, stateIn, stateOut) {
         val (Seq(a, b, c), _) = stateIn.stack.pop(3)
-        val (result, _) = stateOut.stack.pop
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(a, b, c)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -107,7 +107,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (result, _) = stateOut.stack.pop
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual op.f(stateIn)
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -145,7 +145,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       withStackVerification(op, stateIn, stateOut) {
         val (Seq(offset, size), _) = stateIn.stack.pop(2)
         val (data, mem1) = stateIn.memory.load(offset, size)
-        val (result, _) = stateOut.stack.pop
+        val (result, _) = stateOut.stack.pop()
         result shouldEqual UInt256(kec256(data.toArray))
 
         val expectedState = stateIn.withStack(stateOut.stack).withMemory(mem1).step()
@@ -156,14 +156,14 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
   test(BALANCE) { op =>
     forAll(getProgramStateGen(), getUInt256Gen()) { (stateIn, accountBalance) =>
-      val (addr, _) = stateIn.stack.pop
+      val (addr, _) = stateIn.stack.pop()
       val stateOut = executeOp(op, stateIn)
       withStackVerification(op, stateIn, stateOut) {
-        val (_, stack1) = stateIn.stack.pop
+        val (_, stack1) = stateIn.stack.pop()
         stateOut shouldEqual stateIn.addAccessedAddress(Address(addr)).withStack(stack1.push(UInt256.Zero)).step()
       }
 
-      val (_, stack1) = stateIn.stack.pop
+      val (_, stack1) = stateIn.stack.pop()
 
       val account = Account(balance = accountBalance)
       val world1 = stateIn.world.saveAccount(Address(addr.mod(UInt256(BigInt(2).pow(160)))), account)
@@ -180,14 +180,14 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
   test(EXTCODEHASH) { op =>
     forAll(getProgramStateGen(), getByteStringGen(0, 256)) { (stateIn, extCode) =>
-      val (addr, _) = stateIn.stack.pop
+      val (addr, _) = stateIn.stack.pop()
       val stateOut = executeOp(op, stateIn)
       withStackVerification(op, stateIn, stateOut) {
-        val (_, stack1) = stateIn.stack.pop
+        val (_, stack1) = stateIn.stack.pop()
         stateOut shouldEqual stateIn.addAccessedAddress(Address(addr)).withStack(stack1.push(UInt256.Zero)).step()
       }
 
-      val (_, stack1) = stateIn.stack.pop
+      val (_, stack1) = stateIn.stack.pop()
       val codeHash = kec256(extCode)
 
       val account = Account(codeHash = codeHash)
@@ -216,8 +216,8 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (offset, _) = stateIn.stack.pop
-        val (data, _) = stateOut.stack.pop
+        val (offset, _) = stateIn.stack.pop()
+        val (data, _) = stateOut.stack.pop()
         data shouldEqual UInt256(OpCode.sliceBytes(stateIn.inputData, offset, 32))
 
         val expectedState = stateIn.withStack(stateOut.stack).step()
@@ -277,14 +277,14 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
     val codeGen = getByteStringGen(0, 512)
 
     forAll(stateGen, codeGen) { (stateIn, extCode) =>
-      val (addr, _) = stateIn.stack.pop
+      val (addr, _) = stateIn.stack.pop()
       val stateOut = executeOp(op, stateIn)
       withStackVerification(op, stateIn, stateOut) {
-        val (_, stack1) = stateIn.stack.pop
+        val (_, stack1) = stateIn.stack.pop()
         stateOut shouldEqual stateIn.addAccessedAddress(Address(addr)).withStack(stack1.push(UInt256.Zero)).step()
       }
 
-      val (_, stack1) = stateIn.stack.pop
+      val (_, stack1) = stateIn.stack.pop()
       val program = Program(extCode)
       val world1 = stateIn.world.saveCode(Address(addr), program.code)
 
@@ -310,7 +310,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
 
       doSave <- Gen.oneOf(false, true, true)
 
-      addr = Address(stateIn.stack.pop._1)
+      addr = Address(stateIn.stack.pop()._1)
       hash = kec256(extCode)
       world = if (doSave) stateIn.world.saveAccount(addr, Account.empty().copy(codeHash = hash)) else stateIn.world
     } yield stateIn.withWorld(world)
@@ -343,7 +343,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (blockHeaderNumber, stack1) = stateIn.stack.pop
+        val (blockHeaderNumber, stack1) = stateIn.stack.pop()
 
         val withinLimits =
           stateIn.env.blockHeader.number - blockHeaderNumber.toBigInt <= 256 &&
@@ -377,8 +377,8 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (offset, _) = stateIn.stack.pop
-        val (result, _) = stateOut.stack.pop
+        val (offset, _) = stateIn.stack.pop()
+        val (result, _) = stateOut.stack.pop()
         val (data, _) = stateIn.memory.load(offset)
         result shouldEqual data
 
@@ -435,9 +435,9 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (offset, _) = stateIn.stack.pop
+        val (offset, _) = stateIn.stack.pop()
         val data = stateIn.storage.load(offset)
-        val (result, _) = stateOut.stack.pop
+        val (result, _) = stateOut.stack.pop()
         result.toBigInt shouldEqual data
 
         stateOut shouldEqual stateIn
@@ -495,8 +495,8 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (dest, _) = stateIn.stack.pop
-        if (dest == dest.toInt && stateIn.program.validJumpDestinations.contains(dest.toInt))
+        val (dest, _) = stateIn.stack.pop()
+        if (dest <= UInt256(Int.MaxValue) && stateIn.program.validJumpDestinations.contains(dest.toInt))
           stateOut shouldEqual stateIn.withStack(stateOut.stack).goto(dest.toInt)
         else
           stateOut shouldEqual stateIn.withError(InvalidJump(dest))
@@ -577,7 +577,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
         val expectedState =
           if (cond.isZero)
             stateIn.withStack(stateOut.stack).step()
-          else if (dest == dest.toInt && stateIn.program.validJumpDestinations.contains(dest.toInt))
+          else if (dest <= UInt256(Int.MaxValue) && stateIn.program.validJumpDestinations.contains(dest.toInt))
             stateIn.withStack(stateOut.stack).goto(dest.toInt)
           else
             stateIn.withError(InvalidJump(dest))
@@ -693,7 +693,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (Seq(offset, size, topics @ _*), stack1) = stateIn.stack.pop(op.delta)
+        val (Seq(offset, size, topics @ _*), stack1) = (stateIn.stack.pop(op.delta): @unchecked)
         val (data, mem1) = stateIn.memory.load(offset, size)
         val logEntry = TxLogEntry(stateIn.env.ownerAddr, topics.map(_.bytes), data)
         val expectedState = stateIn.withStack(stack1).withMemory(mem1).withLog(logEntry).step()
@@ -797,7 +797,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
     forAll(stateGen) { stateIn =>
       val stateOut = executeOp(op, stateIn)
       withStackVerification(op, stateIn, stateOut) {
-        val (refundAddr, stack1) = stateIn.stack.pop
+        val (refundAddr, stack1) = stateIn.stack.pop()
         val world1 = stateIn.world
           .transfer(stateIn.ownAddress, Address(refundAddr), stateIn.ownBalance)
         val expectedState = stateIn

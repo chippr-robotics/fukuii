@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.consensus.blocks
 
 import java.time.Instant
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 

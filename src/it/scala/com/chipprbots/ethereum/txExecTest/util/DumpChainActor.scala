@@ -3,10 +3,10 @@ package com.chipprbots.ethereum.txExecTest.util
 import java.io.FileWriter
 import java.net.URI
 
-import akka.actor.Actor
-import akka.actor.ActorRef
-import akka.actor._
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor._
+import org.apache.pekko.util.ByteString
 
 import scala.collection.immutable.HashMap
 import scala.concurrent.ExecutionContext.Implicits.global

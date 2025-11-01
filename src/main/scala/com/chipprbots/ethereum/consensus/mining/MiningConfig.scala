@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.mining
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.typesafe.config.{Config => TypesafeConfig}
 

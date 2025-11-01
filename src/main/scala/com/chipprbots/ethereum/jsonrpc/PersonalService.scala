@@ -2,9 +2,9 @@ package com.chipprbots.ethereum.jsonrpc
 
 import java.time.Duration
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
@@ -23,7 +23,7 @@ import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.{given, _}
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddOrOverrideTransaction
@@ -169,7 +169,7 @@ class PersonalService(
   }
 
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse] =
-    Task(unlockedWallets.get(request.tx.from)).flatMap {
+    IO(unlockedWallets.get(request.tx.from)).flatMap {
       case Some(wallet) =>
         val futureTxHash = sendTransaction(request.tx, wallet)
         futureTxHash.map(txHash => Right(SendTransactionResponse(txHash)))
@@ -182,8 +182,8 @@ class PersonalService(
 
     val args = tx.arguments.getOrElse(Nil)
     val dataEither = (tx.function, tx.contractCode) match {
-      case (Some(function), None)     => Right(rlp.encode(RLPList(function, args)))
-      case (None, Some(contractCode)) => Right(rlp.encode(RLPList(contractCode, args)))
+      case (Some(function), None)     => Right(rlp.encode(RLPList(toEncodeable(function), toEncodeable(args))))
+      case (None, Some(contractCode)) => Right(rlp.encode(RLPList(toEncodeable(contractCode), toEncodeable(args))))
       case _ => Left(JsonRpcError.InvalidParams("Iele transaction should contain either functionName or contractCode"))
     }
 

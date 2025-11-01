@@ -2,14 +2,14 @@ package com.chipprbots.ethereum.blockchain.sync.fast
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.pattern.gracefulStop
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.pattern.gracefulStop
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.Deferred
 import cats.effect.IO
@@ -332,7 +332,7 @@ object FastSyncBranchResolverActorSpec extends Logger {
 
   private val responsesTopicIO: IO[Topic[IO, MessageFromPeer]] = Topic[IO, MessageFromPeer]
   private val responsesTopic: Topic[IO, MessageFromPeer] = responsesTopicIO.unsafeRunSync()(IORuntime.global)
-  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit](IORuntime.global)
+  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit]
 
   var responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
 

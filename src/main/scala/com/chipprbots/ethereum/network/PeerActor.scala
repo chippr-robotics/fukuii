@@ -3,11 +3,11 @@ package com.chipprbots.ethereum.network
 import java.net.InetSocketAddress
 import java.net.URI
 
-import akka.NotUsed
-import akka.actor.SupervisorStrategy.Escalate
-import akka.actor._
-import akka.stream.scaladsl.Source
-import akka.util.ByteString
+import org.apache.pekko.NotUsed
+import org.apache.pekko.actor.SupervisorStrategy.Escalate
+import org.apache.pekko.actor._
+import org.apache.pekko.stream.scaladsl.Source
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 

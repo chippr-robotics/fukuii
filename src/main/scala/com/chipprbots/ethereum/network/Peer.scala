@@ -2,10 +2,10 @@ package com.chipprbots.ethereum.network
 
 import java.net.InetSocketAddress
 
-import akka.NotUsed
-import akka.actor.ActorRef
-import akka.stream.scaladsl.Source
-import akka.util.ByteString
+import org.apache.pekko.NotUsed
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.stream.scaladsl.Source
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
 import com.chipprbots.ethereum.network.p2p.Message

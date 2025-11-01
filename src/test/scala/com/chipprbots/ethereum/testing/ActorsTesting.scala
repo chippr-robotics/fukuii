@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.testing
-import akka.actor.ActorRef
-import akka.testkit.TestActor.AutoPilot
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.testkit.TestActor.AutoPilot
 
 object ActorsTesting {
   def simpleAutoPilot(makeResponse: PartialFunction[Any, Any]): AutoPilot =

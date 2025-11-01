@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
-import akka.util.ByteString.{empty => bEmpty}
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.ByteString.{empty => bEmpty}
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
@@ -61,7 +61,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
             .executeTransaction(stx.tx, stx.senderAddress, header, worldWithMinerAndOriginAccounts)
             .worldState
 
-        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe (initialOriginNonce + 1)
+        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe UInt256(initialOriginNonce + 1)
       }
 
       "executing a tx that results in a message call" in new TestSetup {
@@ -85,7 +85,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
             .executeTransaction(stx.tx, stx.senderAddress, header, worldWithMinerAndOriginAccounts)
             .worldState
 
-        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe (initialOriginNonce + 1)
+        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe UInt256(initialOriginNonce + 1)
       }
     }
 

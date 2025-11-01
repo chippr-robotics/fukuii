@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -44,6 +44,8 @@ class JsonRpcControllerSpec
     with WithActorSystemShutDown
     with Matchers
     with JRCMatchers
+    with org.scalamock.scalatest.MockFactory
+    with JsonRpcControllerTestSupport
     with ScalaCheckPropertyChecks
     with ScalaFutures
     with LongPatience

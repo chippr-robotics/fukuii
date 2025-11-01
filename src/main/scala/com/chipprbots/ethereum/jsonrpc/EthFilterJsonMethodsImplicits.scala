@@ -1,9 +1,11 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
+import org.json4s._
 import org.json4s.Extraction
 import org.json4s.JsonAST._
+import org.json4s.JsonDSL._
 
 import com.chipprbots.ethereum.jsonrpc.EthFilterService._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams

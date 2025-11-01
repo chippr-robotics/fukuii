@@ -1,11 +1,13 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
+import org.json4s.JsonDSL._
+import org.json4s._
 
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
@@ -106,7 +108,7 @@ object IeleJsonMethodsImplicits extends JsonMethodsImplicits {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, SendIeleTransactionRequest] =
         params match {
           case Some(JArray(JObject(tx) :: _)) =>
-            extractIeleTx(tx.toMap).map(SendIeleTransactionRequest)
+            extractIeleTx(tx.toMap).map(SendIeleTransactionRequest.apply)
           case _ =>
             Left(InvalidParams())
         }

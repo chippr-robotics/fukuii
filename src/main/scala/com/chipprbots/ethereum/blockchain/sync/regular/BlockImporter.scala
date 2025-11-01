@@ -1,12 +1,12 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.Actor
-import akka.actor.Actor.Receive
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.NotInfluenceReceiveTimeout
-import akka.actor.Props
-import akka.actor.ReceiveTimeout
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.Actor.Receive
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.NotInfluenceReceiveTimeout
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.ReceiveTimeout
 
 import cats.data.NonEmptyList
 import cats.effect.IO
@@ -86,6 +86,7 @@ class BlockImporter(
 
     // We don't want to lose a checkpoint
     case nc @ NewCheckpoint(_) if state.importing =>
+      implicit val ec = context.dispatcher
       context.system.scheduler.scheduleOnce(1.second, self, nc)
 
     case NewCheckpoint(block) if !state.importing =>
@@ -253,13 +254,11 @@ class BlockImporter(
           case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
-            Running
           case BlockImportFailedDueToMissingNode(missingNodeException) =>
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number, BlacklistReason.BlockImportError(error))
           case BlockEnqueued | DuplicateBlock | UnknownParent | BlockImportFailed(_) => ()
-          case result => log.error("Unknown block import result {}", result)
         }
         .map(_ => Running),
       blockImportType
@@ -267,7 +266,7 @@ class BlockImporter(
   }
 
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit = {
-    val newBlocks = (blocks, weights).mapN(BlockToBroadcast)
+    val newBlocks = (blocks, weights).mapN(BlockToBroadcast.apply)
     broadcaster ! BroadcastBlocks(newBlocks)
   }
 

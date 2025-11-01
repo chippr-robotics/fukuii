@@ -6,11 +6,11 @@ import java.nio.file.Path
 import java.time.Clock
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.TestProbe
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
@@ -112,13 +112,13 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     }
 
   sealed trait LocalPruningConfigBuilder extends PruningConfigBuilder {
-    override lazy val pruningMode: PruningMode = ArchivePruning
+    override val pruningMode: PruningMode = ArchivePruning
   }
 
   lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
   lazy val storagesInstance: RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
     new RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages {
-      override lazy val dataSource: RocksDbDataSource =
+      override val dataSource: RocksDbDataSource =
         RocksDbDataSource(getRockDbTestConfig(tempDir.toAbsolutePath.toString), Namespaces.nsSeq)
     }
   implicit override lazy val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig

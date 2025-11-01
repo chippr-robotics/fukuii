@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import akka.actor.ActorSystem
+import org.apache.pekko.actor.ActorSystem
 
 import cats.effect.unsafe.IORuntime
 

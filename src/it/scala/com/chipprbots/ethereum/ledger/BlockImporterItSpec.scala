@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.actor.ActorRef
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
@@ -38,12 +38,12 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class BlockImporterItSpec
-    extends MockFactory
-    with AnyFlatSpecLike
+    extends AnyFlatSpecLike
     with Matchers
     with BeforeAndAfterAll
     with Eventually
-    with NormalPatience {
+    with NormalPatience
+    with MockFactory {
 
   implicit val testRuntime: IORuntime = IORuntime.global
 

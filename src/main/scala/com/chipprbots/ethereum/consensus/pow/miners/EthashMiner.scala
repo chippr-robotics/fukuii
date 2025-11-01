@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.{ActorRef => ClassicActorRef}
-import akka.util.ByteString
+import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Future
 import cats.effect.unsafe.IORuntime
@@ -51,11 +51,11 @@ class EthashMiner(
         submitHashRate(ethMiningService, System.nanoTime() - startTime, miningResult)
         handleMiningResult(miningResult, syncController, block)
       }
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Error occurred while mining: ", ex)
         PoWMiningCoordinator.MiningUnsuccessful
       }
-      .runToFuture
+      .unsafeToFuture()
   }
 
   private def doMining(blockNumber: Long, block: Block)(implicit

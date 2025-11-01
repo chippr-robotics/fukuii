@@ -2,14 +2,14 @@ package com.chipprbots.ethereum.network
 
 import java.net.URI
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.Props
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
+import org.apache.pekko.testkit.TestProbe
 
 import scala.concurrent.duration._
 
-import com.miguno.akka.testing.VirtualTime
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -28,7 +28,7 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
     client.expectMsg(KnownNodesManager.KnownNodes(Set(uri(1), uri(2))))
     storagesInstance.storages.knownNodesStorage.getKnownNodes() shouldBe Set.empty
 
-    time.advance(config.persistInterval + 10.seconds)
+    testScheduler.timePasses(config.persistInterval + 10.seconds)
 
     knownNodesManager.tell(KnownNodesManager.GetKnownNodes, client.ref)
     client.expectMsg(KnownNodesManager.KnownNodes(Set(uri(1), uri(2))))
@@ -39,7 +39,7 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
     knownNodesManager.tell(KnownNodesManager.RemoveKnownNode(uri(1)), client.ref)
     knownNodesManager.tell(KnownNodesManager.RemoveKnownNode(uri(4)), client.ref)
 
-    time.advance(config.persistInterval + 10.seconds)
+    testScheduler.timePasses(config.persistInterval + 10.seconds)
 
     knownNodesManager.tell(KnownNodesManager.GetKnownNodes, client.ref)
     client.expectMsg(KnownNodesManager.KnownNodes(Set(uri(2), uri(3))))
@@ -54,7 +54,7 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
     (1 to 10).foreach { n =>
       knownNodesManager.tell(KnownNodesManager.AddKnownNode(uri(n)), client.ref)
     }
-    time.advance(config.persistInterval + 1.seconds)
+    testScheduler.timePasses(config.persistInterval + 1.seconds)
 
     knownNodesManager.tell(KnownNodesManager.GetKnownNodes, client.ref)
     client.expectMsgClass(classOf[KnownNodesManager.KnownNodes])
@@ -64,8 +64,8 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
 
   trait TestSetup extends EphemBlockchainTestSetup {
     implicit override lazy val system: ActorSystem = ActorSystem("KnownNodesManagerSpec_System")
-
-    val time = new VirtualTime
+    
+    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
     val config: KnownNodesManagerConfig = KnownNodesManagerConfig(persistInterval = 5.seconds, maxPersistedNodes = 5)
 
     val client: TestProbe = TestProbe()
@@ -73,7 +73,7 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
     def uri(n: Int): URI = new URI(s"enode://test$n@test$n.com:9000")
 
     val knownNodesManager: ActorRef = system.actorOf(
-      Props(new KnownNodesManager(config, storagesInstance.storages.knownNodesStorage, Some(time.scheduler)))
+      Props(new KnownNodesManager(config, storagesInstance.storages.knownNodesStorage, Some(testScheduler)))
     )
   }
 

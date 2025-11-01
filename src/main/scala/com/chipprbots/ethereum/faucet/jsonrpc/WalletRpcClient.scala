@@ -2,9 +2,9 @@ package com.chipprbots.ethereum.faucet.jsonrpc
 
 import javax.net.ssl.SSLContext
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.model.Uri
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.scaladsl.model.Uri
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 

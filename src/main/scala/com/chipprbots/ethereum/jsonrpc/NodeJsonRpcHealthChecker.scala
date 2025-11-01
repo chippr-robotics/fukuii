@@ -3,8 +3,8 @@ package com.chipprbots.ethereum.jsonrpc
 import java.time.Duration
 import java.time.Instant
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 import cats.syntax.parallel._
@@ -90,7 +90,7 @@ class NodeJsonRpcHealthChecker(
       syncStatusHC
     ).parSequence
       .map(_.map(_.toResult))
-      .map(HealthcheckResponse)
+      .map(HealthcheckResponse.apply)
 
     handleResponse(responseTask)
   }

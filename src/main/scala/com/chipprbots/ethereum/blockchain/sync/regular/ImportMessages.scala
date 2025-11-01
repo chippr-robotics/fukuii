@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.event.Logging._
-import akka.util.ByteString
+import org.apache.pekko.event.Logging._
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException

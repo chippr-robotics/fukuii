@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.rlpx.Header
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable
 import com.chipprbots.ethereum.rlp.rawDecode
@@ -49,7 +50,8 @@ class FrameCodecSpec extends AnyFlatSpec with Matchers {
 
     implicit class DummyMsgDec(val bytes: Array[Byte]) {
       def toSample: DummyMsg = rawDecode(bytes) match {
-        case RLPList(aField, anotherField) => DummyMsg(aField, anotherField)
+        case RLPList(aField, anotherField) => 
+          DummyMsg(aField.decodeAs[Int]("aField"), ByteString(anotherField.decodeAs[Array[Byte]]("anotherField")))
         case _                             => throw new RuntimeException("Cannot decode Status")
       }
     }

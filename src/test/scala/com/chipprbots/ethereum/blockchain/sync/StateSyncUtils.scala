@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncResponse
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage

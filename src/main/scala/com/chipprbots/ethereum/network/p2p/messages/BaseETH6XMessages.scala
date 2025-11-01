@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPCodec.Ops
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -23,25 +24,31 @@ object BaseETH6XMessages {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        RLPList(protocolVersion, networkId, totalDifficulty, bestHash, genesisHash)
+        RLPList(
+          RLPValue(BigInt(protocolVersion).toByteArray),
+          RLPValue(BigInt(networkId).toByteArray),
+          RLPValue(totalDifficulty.toByteArray),
+          bestHash,
+          genesisHash
+        )
       }
     }
 
     implicit class StatusDec(val bytes: Array[Byte]) extends AnyVal {
       def toStatus: Status = rawDecode(bytes) match {
         case RLPList(
-              protocolVersion,
-              networkId,
-              totalDifficulty,
-              bestHash,
-              genesisHash
+              RLPValue(protocolVersionBytes),
+              RLPValue(networkIdBytes),
+              RLPValue(totalDifficultyBytes),
+              RLPValue(bestHashBytes),
+              RLPValue(genesisHashBytes)
             ) =>
           Status(
-            protocolVersion,
-            networkId,
-            totalDifficulty,
-            bestHash,
-            genesisHash
+            BigInt(1, protocolVersionBytes).toInt,
+            BigInt(1, networkIdBytes).toInt,
+            BigInt(1, totalDifficultyBytes),
+            ByteString(bestHashBytes),
+            ByteString(genesisHashBytes)
           )
 
         case _ => throw new RuntimeException("Cannot decode Status")
@@ -108,7 +115,7 @@ object BaseETH6XMessages {
             RLPList(block.body.transactionList.map(_.toRLPEncodable): _*),
             RLPList(block.body.uncleNodesList.map(_.toRLPEncodable): _*)
           ),
-          totalDifficulty
+          RLPValue(totalDifficulty.toByteArray)
         )
       }
     }
@@ -118,7 +125,7 @@ object BaseETH6XMessages {
       import TypedTransaction._
 
       def toNewBlock: NewBlock = rawDecode(bytes) match {
-        case RLPList(RLPList(blockHeader, transactionList: RLPList, uncleNodesList: RLPList), totalDifficulty) =>
+        case RLPList(RLPList(blockHeader, transactionList: RLPList, uncleNodesList: RLPList), RLPValue(totalDifficultyBytes)) =>
           NewBlock(
             Block(
               blockHeader.toBlockHeader,
@@ -127,7 +134,7 @@ object BaseETH6XMessages {
                 uncleNodesList.items.map(_.toBlockHeader)
               )
             ),
-            totalDifficulty
+            BigInt(1, totalDifficultyBytes)
           )
 
         case _ => throw new RuntimeException("Cannot decode NewBlock")
@@ -201,15 +208,15 @@ object BaseETH6XMessages {
             PrefixedRLPEncodable(
               Transaction.Type01,
               RLPList(
-                chainId,
-                nonce,
-                gasPrice,
-                gasLimit,
+                RLPValue(chainId.toByteArray),
+                RLPValue(nonce.toByteArray),
+                RLPValue(gasPrice.toByteArray),
+                RLPValue(gasLimit.toByteArray),
                 receivingAddressBytes,
-                value,
+                RLPValue(value.toByteArray),
                 payload,
                 toRlpList(accessList),
-                signedTx.signature.v,
+                RLPValue(BigInt(signedTx.signature.v).toByteArray),
                 signedTx.signature.r,
                 signedTx.signature.s
               )
@@ -217,13 +224,13 @@ object BaseETH6XMessages {
 
           case LegacyTransaction(nonce, gasPrice, gasLimit, _, value, payload) =>
             RLPList(
-              nonce,
-              gasPrice,
-              gasLimit,
+              RLPValue(nonce.toByteArray),
+              RLPValue(gasPrice.toByteArray),
+              RLPValue(gasLimit.toByteArray),
               receivingAddressBytes,
-              value,
+              RLPValue(value.toByteArray),
               payload,
-              signedTx.signature.v,
+              RLPValue(BigInt(signedTx.signature.v).toByteArray),
               signedTx.signature.r,
               signedTx.signature.s
             )
@@ -265,53 +272,53 @@ object BaseETH6XMessages {
         case PrefixedRLPEncodable(
               Transaction.Type01,
               RLPList(
-                chainId,
-                nonce,
-                gasPrice,
-                gasLimit,
+                RLPValue(chainIdBytes),
+                RLPValue(nonceBytes),
+                RLPValue(gasPriceBytes),
+                RLPValue(gasLimitBytes),
                 (receivingAddress: RLPValue),
-                value,
-                payload,
+                RLPValue(valueBytes),
+                RLPValue(payloadBytes),
                 (accessList: RLPList),
-                pointSign,
-                signatureRandom,
-                signature
+                RLPValue(pointSignBytes),
+                RLPValue(signatureRandomBytes),
+                RLPValue(signatureBytes)
               )
             ) =>
           val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
           SignedTransaction(
             TransactionWithAccessList(
-              chainId,
-              nonce,
-              gasPrice,
-              gasLimit,
+              BigInt(1, chainIdBytes),
+              BigInt(1, nonceBytes),
+              BigInt(1, gasPriceBytes),
+              BigInt(1, gasLimitBytes),
               receivingAddressOpt,
-              value,
-              payload,
+              BigInt(1, valueBytes),
+              ByteString(payloadBytes),
               fromRlpList[AccessListItem](accessList).toList
             ),
-            (pointSign: Int).toByte,
-            signatureRandom,
-            signature
+            BigInt(1, pointSignBytes).toInt.toByte,
+            ByteString(signatureRandomBytes),
+            ByteString(signatureBytes)
           )
 
         case RLPList(
-              nonce,
-              gasPrice,
-              gasLimit,
+              RLPValue(nonceBytes),
+              RLPValue(gasPriceBytes),
+              RLPValue(gasLimitBytes),
               (receivingAddress: RLPValue),
-              value,
-              payload,
-              pointSign,
-              signatureRandom,
-              signature
+              RLPValue(valueBytes),
+              RLPValue(payloadBytes),
+              RLPValue(pointSignBytes),
+              RLPValue(signatureRandomBytes),
+              RLPValue(signatureBytes)
             ) =>
           val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
           SignedTransaction(
-            LegacyTransaction(nonce, gasPrice, gasLimit, receivingAddressOpt, value, payload),
-            (pointSign: Int).toByte,
-            signatureRandom,
-            signature
+            LegacyTransaction(BigInt(1, nonceBytes), BigInt(1, gasPriceBytes), BigInt(1, gasLimitBytes), receivingAddressOpt, BigInt(1, valueBytes), ByteString(payloadBytes)),
+            BigInt(1, pointSignBytes).toInt.toByte,
+            ByteString(signatureRandomBytes),
+            ByteString(signatureBytes)
           )
         case _ =>
           throw new RuntimeException("Cannot decode SignedTransaction")

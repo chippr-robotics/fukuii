@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.ommers
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.ImplicitSender
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.ImplicitSender
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.freespec.AnyFreeSpecLike
@@ -125,7 +125,8 @@ class OmmersPoolSpec
     }
   }
 
-  trait TestSetup extends MockFactory {
+  trait TestSetup {
+    this: org.scalamock.scalatest.MockFactory =>
 
     // In order to support all the blocks for the given scenarios
     val ommersPoolSize: Int = 8

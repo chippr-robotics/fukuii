@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
 import cats.implicits._
 import cats.effect.IO
@@ -42,9 +42,12 @@ class TransactionHistoryService(
           .emits(block.body.transactionList.reverse.toSeq)
           .collect(Function.unlift(MinedTxChecker.checkTx(_, account)))
           .evalMap { case (tx, mkExtendedData) =>
-            (getBlockReceipts, getLastCheckpoint).mapN(
-              MinedTxChecker.getMinedTxData(tx, block, _, _).map(mkExtendedData(_))
-            )
+            (for {
+              blockReceiptsIO <- getBlockReceipts
+              lastCheckpointIO <- getLastCheckpoint
+              blockReceipts <- blockReceiptsIO
+              lastCheckpoint <- lastCheckpointIO
+            } yield MinedTxChecker.getMinedTxData(tx, block, blockReceipts, lastCheckpoint).map(mkExtendedData(_)))
           }
           .collect { case Some(data) =>
             data
@@ -66,7 +69,7 @@ class TransactionHistoryService(
     pendingTransactionsManager
       .askFor[PendingTransactionsManager.PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .map(_.pendingTransactions.toList)
-      .onErrorRecoverWith { case ex: Throwable =>
+      .handleErrorWith { case ex: Throwable =>
         log.error("Failed to get pending transactions, passing empty transactions list", ex)
         IO.pure(List.empty)
       }
@@ -147,7 +150,7 @@ object TransactionHistoryService {
 
       val isCheckpointed = lastCheckpointBlockNumber >= block.number
 
-      (Some(block.header), maybeIndex, maybeGasUsed, Some(isCheckpointed)).mapN(MinedTransactionData)
+      (Some(block.header), maybeIndex, maybeGasUsed, Some(isCheckpointed)).mapN(MinedTransactionData.apply)
     }
   }
 }

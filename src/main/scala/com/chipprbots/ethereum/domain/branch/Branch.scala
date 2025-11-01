@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.domain.branch
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 sealed trait Branch
 

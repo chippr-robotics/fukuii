@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 
@@ -49,33 +49,33 @@ class EthBlocksServiceSpec
     val bestBlockNumber = 10
     blockchainWriter.saveBestKnownBlocks(ByteString.empty, bestBlockNumber)
 
-    val response = ethBlocksService.bestBlockNumber(BestBlockNumberRequest()).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.bestBlockNumber(BestBlockNumberRequest()).unsafeRunSync().toOption.get
     response.bestBlockNumber shouldEqual bestBlockNumber
   }
 
   it should "answer eth_getBlockTransactionCountByHash with None when the requested block isn't in the blockchain" in new TestSetup {
     val request = TxCountByBlockHashRequest(blockToRequestHash)
-    val response = ethBlocksService.getBlockTransactionCountByHash(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getBlockTransactionCountByHash(request).unsafeRunSync().toOption.get
     response.txsQuantity shouldBe None
   }
 
   it should "answer eth_getBlockTransactionCountByHash with the block has no tx when the requested block is in the blockchain and has no tx" in new TestSetup {
     blockchainWriter.storeBlock(blockToRequest.copy(body = BlockBody(Nil, Nil))).commit()
     val request = TxCountByBlockHashRequest(blockToRequestHash)
-    val response = ethBlocksService.getBlockTransactionCountByHash(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getBlockTransactionCountByHash(request).unsafeRunSync().toOption.get
     response.txsQuantity shouldBe Some(0)
   }
 
   it should "answer eth_getBlockTransactionCountByHash correctly when the requested block is in the blockchain and has some tx" in new TestSetup {
     blockchainWriter.storeBlock(blockToRequest).commit()
     val request = TxCountByBlockHashRequest(blockToRequestHash)
-    val response = ethBlocksService.getBlockTransactionCountByHash(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getBlockTransactionCountByHash(request).unsafeRunSync().toOption.get
     response.txsQuantity shouldBe Some(blockToRequest.body.transactionList.size)
   }
 
   it should "answer eth_getBlockByHash with None when the requested block isn't in the blockchain" in new TestSetup {
     val request = BlockByBlockHashRequest(blockToRequestHash, fullTxs = true)
-    val response = ethBlocksService.getByBlockHash(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getByBlockHash(request).unsafeRunSync().toOption.get
     response.blockResponse shouldBe None
   }
 
@@ -86,7 +86,7 @@ class EthBlocksServiceSpec
       .commit()
 
     val request = BlockByBlockHashRequest(blockToRequestHash, fullTxs = true)
-    val response = ethBlocksService.getByBlockHash(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getByBlockHash(request).unsafeRunSync().toOption.get
 
     val stxResponses = blockToRequest.body.transactionList.zipWithIndex.map { case (stx, txIndex) =>
       TransactionResponse(stx, Some(blockToRequest.header), Some(txIndex))
@@ -103,7 +103,7 @@ class EthBlocksServiceSpec
     blockchainWriter.storeBlock(blockToRequest).commit()
 
     val request = BlockByBlockHashRequest(blockToRequestHash, fullTxs = true)
-    val response = ethBlocksService.getByBlockHash(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getByBlockHash(request).unsafeRunSync().toOption.get
 
     val stxResponses = blockToRequest.body.transactionList.zipWithIndex.map { case (stx, txIndex) =>
       TransactionResponse(stx, Some(blockToRequest.header), Some(txIndex))
@@ -122,7 +122,7 @@ class EthBlocksServiceSpec
 
     val request = BlockByBlockHashRequest(blockToRequestHash, fullTxs = true)
     val response =
-      ethBlocksService.getByBlockHash(request.copy(fullTxs = false)).runSyncUnsafe(Duration.Inf).toOption.get
+      ethBlocksService.getByBlockHash(request.copy(fullTxs = false)).unsafeRunSync().toOption.get
 
     response.blockResponse shouldBe Some(
       BlockResponse(blockToRequest, fullTxs = false, weight = Some(blockWeight))
@@ -166,7 +166,7 @@ class EthBlocksServiceSpec
 
   it should "answer eth_getBlockByNumber with None when the requested block isn't in the blockchain" in new TestSetup {
     val request = BlockByNumberRequest(BlockParam.WithNumber(blockToRequestNumber), fullTxs = true)
-    val response = ethBlocksService.getBlockByNumber(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getBlockByNumber(request).unsafeRunSync().toOption.get
     response.blockResponse shouldBe None
   }
 
@@ -178,7 +178,7 @@ class EthBlocksServiceSpec
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 
     val request = BlockByNumberRequest(BlockParam.WithNumber(blockToRequestNumber), fullTxs = true)
-    val response = ethBlocksService.getBlockByNumber(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getBlockByNumber(request).unsafeRunSync().toOption.get
 
     val stxResponses = blockToRequest.body.transactionList.zipWithIndex.map { case (stx, txIndex) =>
       TransactionResponse(stx, Some(blockToRequest.header), Some(txIndex))
@@ -196,7 +196,7 @@ class EthBlocksServiceSpec
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 
     val request = BlockByNumberRequest(BlockParam.WithNumber(blockToRequestNumber), fullTxs = true)
-    val response = ethBlocksService.getBlockByNumber(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getBlockByNumber(request).unsafeRunSync().toOption.get
 
     val stxResponses = blockToRequest.body.transactionList.zipWithIndex.map { case (stx, txIndex) =>
       TransactionResponse(stx, Some(blockToRequest.header), Some(txIndex))
@@ -216,7 +216,7 @@ class EthBlocksServiceSpec
 
     val request = BlockByNumberRequest(BlockParam.WithNumber(blockToRequestNumber), fullTxs = true)
     val response =
-      ethBlocksService.getBlockByNumber(request.copy(fullTxs = false)).runSyncUnsafe(Duration.Inf).toOption.get
+      ethBlocksService.getBlockByNumber(request.copy(fullTxs = false)).unsafeRunSync().toOption.get
 
     response.blockResponse shouldBe Some(
       BlockResponse(blockToRequest, fullTxs = false, weight = Some(blockWeight))
@@ -253,7 +253,7 @@ class EthBlocksServiceSpec
   it should "answer eth_getUncleByBlockHashAndIndex with None when the requested block isn't in the blockchain" in new TestSetup {
     val uncleIndexToRequest = 0
     val request = UncleByBlockHashAndIndexRequest(blockToRequestHash, uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).unsafeRunSync().toOption.get
     response.uncleBlockResponse shouldBe None
   }
 
@@ -263,7 +263,7 @@ class EthBlocksServiceSpec
 
     val uncleIndexToRequest = 0
     val request = UncleByBlockHashAndIndexRequest(blockToRequestHash, uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe None
   }
@@ -277,13 +277,13 @@ class EthBlocksServiceSpec
     val response1 =
       ethBlocksService
         .getUncleByBlockHashAndIndex(request.copy(uncleIndex = 1))
-        .runSyncUnsafe(Duration.Inf)
+        .unsafeRunSync()
         .toOption
         .get
     val response2 =
       ethBlocksService
         .getUncleByBlockHashAndIndex(request.copy(uncleIndex = -1))
-        .runSyncUnsafe(Duration.Inf)
+        .unsafeRunSync()
         .toOption
         .get
 
@@ -296,7 +296,7 @@ class EthBlocksServiceSpec
 
     val uncleIndexToRequest = 0
     val request = UncleByBlockHashAndIndexRequest(blockToRequestHash, uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, None, pendingBlock = false))
     response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe None
@@ -312,7 +312,7 @@ class EthBlocksServiceSpec
 
     val uncleIndexToRequest = 0
     val request = UncleByBlockHashAndIndexRequest(blockToRequestHash, uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, Some(uncleWeight), pendingBlock = false))
     response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(uncleWeight)
@@ -323,7 +323,7 @@ class EthBlocksServiceSpec
   it should "answer eth_getUncleByBlockNumberAndIndex with None when the requested block isn't in the blockchain" in new TestSetup {
     val uncleIndexToRequest = 0
     val request = UncleByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequestNumber), uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
     response.uncleBlockResponse shouldBe None
   }
 
@@ -333,7 +333,7 @@ class EthBlocksServiceSpec
 
     val uncleIndexToRequest = 0
     val request = UncleByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequestNumber), uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe None
   }
@@ -347,13 +347,13 @@ class EthBlocksServiceSpec
     val response1 =
       ethBlocksService
         .getUncleByBlockNumberAndIndex(request.copy(uncleIndex = 1))
-        .runSyncUnsafe(Duration.Inf)
+        .unsafeRunSync()
         .toOption
         .get
     val response2 =
       ethBlocksService
         .getUncleByBlockNumberAndIndex(request.copy(uncleIndex = -1))
-        .runSyncUnsafe(Duration.Inf)
+        .unsafeRunSync()
         .toOption
         .get
 
@@ -367,7 +367,7 @@ class EthBlocksServiceSpec
 
     val uncleIndexToRequest = 0
     val request = UncleByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequestNumber), uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, None, pendingBlock = false))
     response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe None
@@ -384,7 +384,7 @@ class EthBlocksServiceSpec
 
     val uncleIndexToRequest = 0
     val request = UncleByBlockNumberAndIndexRequest(BlockParam.WithNumber(blockToRequestNumber), uncleIndexToRequest)
-    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).runSyncUnsafe(Duration.Inf).toOption.get
+    val response = ethBlocksService.getUncleByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, Some(uncleWeight), pendingBlock = false))
     response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(uncleWeight)
@@ -414,7 +414,7 @@ class EthBlocksServiceSpec
     )
   }
 
-  class TestSetup() extends MockFactory with EphemBlockchainTestSetup {
+  class TestSetup() extends EphemBlockchainTestSetup {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
 

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.data.EitherT
 import cats.effect.IO

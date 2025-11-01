@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.implicits._
@@ -177,7 +177,7 @@ class EthProofService(
       address: Address,
       storageKeys: Seq[StorageProofKey],
       block: BlockParam
-  ): Task[Either[JsonRpcError, ProofAccount]] = Task {
+  ): IO[Either[JsonRpcError, ProofAccount]] = IO {
     for {
       blockNumber <- resolveBlock(block).map(_.block.number)
       account <- Either.fromOption(

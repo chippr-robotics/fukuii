@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.extvm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.utils.VmConfig
 import com.chipprbots.ethereum.vm._
 import com.chipprbots.ethereum.vm.utils.MockVmInput
 
+// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for MessageHandler
 class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   import com.chipprbots.ethereum.Fixtures.Blocks._
@@ -221,10 +222,17 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val resultQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.CallResult(callResultMsg))
 
-    val messageHandler: MessageHandler = mock[MessageHandler]
+    val messageHandler: MessageHandler = createStubMessageHandler()
 
     val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("mantis", None, "127.0.0.1", 0)
     val vmClient = new VMClient(externalVmConfig, messageHandler, testMode = false)
+    
+    private def createStubMessageHandler(): MessageHandler = {
+      import org.apache.pekko.stream.scaladsl.{SinkQueueWithCancel, SourceQueueWithComplete}
+      val stubIn = mock[SinkQueueWithCancel[ByteString]]
+      val stubOut = mock[SourceQueueWithComplete[ByteString]]
+      new MessageHandler(stubIn, stubOut)
+    }
   }
 
 }

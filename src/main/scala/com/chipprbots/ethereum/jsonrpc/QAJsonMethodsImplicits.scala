@@ -1,7 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
+import org.json4s._
 import org.json4s.Extraction
 import org.json4s.JsonAST._
 
@@ -33,7 +34,7 @@ object QAJsonMethodsImplicits extends JsonMethodsImplicits {
 
       def encodeJson(t: MineBlocksResponse): JValue = JObject(
         "responseType" -> JString(t.responseType.entryName),
-        "message" -> t.message.fold[JValue](JNull)(JString)
+        "message" -> t.message.fold[JValue](JNull)(JString.apply)
       )
     }
 

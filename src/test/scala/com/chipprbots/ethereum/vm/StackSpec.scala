@@ -20,7 +20,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
 
   test("pop single element") {
     forAll(stackGen) { stack =>
-      val (v, stack1) = stack.pop
+      val (v, stack1) = stack.pop()
       if (stack.size > 0) {
         v shouldEqual stack.toSeq.head
         stack1.toSeq shouldEqual stack.toSeq.tail
@@ -33,7 +33,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
 
   test("pop single element from an empty stack") {
     forAll(intGen.map(Stack.empty)) { emptyStack =>
-      val (value, newStack) = emptyStack.pop
+      val (value, newStack) = emptyStack.pop()
       value shouldEqual UInt256.Zero
       newStack should be(emptyStack)
     }

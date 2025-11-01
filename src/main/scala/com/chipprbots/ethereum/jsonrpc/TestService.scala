@@ -1,10 +1,11 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 import scala.util.Failure
@@ -345,8 +346,8 @@ class TestService(
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .timeout(timeout.duration)
-      .onErrorRecover { case _ =>
-        log.error("Error getting transactions")
+      .recover { case ex =>
+        log.error("Error getting transactions", ex)
         PendingTransactionsResponse(Nil)
       }
       .map { pendingTxs =>

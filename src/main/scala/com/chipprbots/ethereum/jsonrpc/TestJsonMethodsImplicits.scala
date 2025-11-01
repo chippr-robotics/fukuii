@@ -1,11 +1,12 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.implicits._
 
 import scala.util.Try
 
+import org.json4s._
 import org.json4s.Extraction
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
@@ -25,7 +26,7 @@ object TestJsonMethodsImplicits extends JsonMethodsImplicits {
 
       private def extractAccounts(accountsJson: JValue): Either[JsonRpcError, Map[ByteString, GenesisAccount]] =
         for {
-          mapping <- Try(accountsJson.extract[JObject]).toEither.leftMap(e => InvalidParams(e.toString))
+          mapping <- Try(Extraction.extract[JObject](accountsJson)).toEither.leftMap(e => InvalidParams(e.toString))
           accounts <- mapping.obj.traverse { case (key, value) =>
             for {
               address <- extractBytes(key)
@@ -36,7 +37,7 @@ object TestJsonMethodsImplicits extends JsonMethodsImplicits {
 
       private def extractAccount(accountJson: JValue): Either[JsonRpcError, GenesisAccount] =
         for {
-          storageObject <- Try((accountJson \ "storage").extract[JObject]).toEither.leftMap(e =>
+          storageObject <- Try(Extraction.extract[JObject](accountJson \ "storage")).toEither.leftMap(e =>
             InvalidParams(e.toString)
           )
           storage <- storageObject.obj.traverse {
@@ -44,10 +45,10 @@ object TestJsonMethodsImplicits extends JsonMethodsImplicits {
               Try(UInt256(decode(key)) -> UInt256(decode(value))).toEither.leftMap(e => InvalidParams(e.toString))
             case _ => Left(InvalidParams())
           }
-          balance = UInt256(decode((accountJson \ "balance").extract[String]))
-          code = decode((accountJson \ "code").extract[String])
+          balance = UInt256(decode(Extraction.extract[String](accountJson \ "balance")))
+          code = decode(Extraction.extract[String](accountJson \ "code"))
           codeOpt = if (code.isEmpty) None else Some(ByteString(code))
-          nonce = decode((accountJson \ "nonce").extract[String])
+          nonce = decode(Extraction.extract[String](accountJson \ "nonce"))
           nonceOpt = if (nonce.isEmpty || UInt256(nonce) == UInt256.Zero) None else Some(UInt256(nonce))
         } yield GenesisAccount(
           None,

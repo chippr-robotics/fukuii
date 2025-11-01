@@ -4,7 +4,7 @@ import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Random
 

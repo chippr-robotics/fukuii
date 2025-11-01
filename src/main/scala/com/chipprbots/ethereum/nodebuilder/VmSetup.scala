@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.nodebuilder
 
 // import java.lang.ProcessBuilder.Redirect
 
-import akka.actor.ActorSystem
+import org.apache.pekko.actor.ActorSystem
 
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.utils.BlockchainConfig

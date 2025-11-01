@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 import cats.syntax.either._
@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -119,7 +120,7 @@ class EthInfoService(
       .map(_.asRight)
 
   def call(req: CallRequest): ServiceResponse[CallResponse] =
-    Task {
+    IO {
       doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
     }
 
@@ -138,7 +139,7 @@ class EthInfoService(
         call(CallRequest(CallTx(tx.from, tx.to, tx.gas, tx.gasPrice, tx.value, ByteString(data)), req.block))
           .map(_.map { callResponse =>
             IeleCallResponse(
-              rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])(seqEncDec[ByteString]())
+              rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])
             )
           })
       case Left(error) => IO.pure(Left(error))

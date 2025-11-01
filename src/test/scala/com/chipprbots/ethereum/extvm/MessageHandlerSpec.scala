@@ -2,15 +2,15 @@ package com.chipprbots.ethereum.extvm
 
 import java.math.BigInteger
 
-import akka.actor.ActorSystem
-import akka.stream.OverflowStrategy
-import akka.stream.scaladsl.Keep
-import akka.stream.scaladsl.Sink
-import akka.stream.scaladsl.SinkQueueWithCancel
-import akka.stream.scaladsl.Source
-import akka.stream.scaladsl.SourceQueueWithComplete
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.stream.OverflowStrategy
+import org.apache.pekko.stream.scaladsl.Keep
+import org.apache.pekko.stream.scaladsl.Sink
+import org.apache.pekko.stream.scaladsl.SinkQueueWithCancel
+import org.apache.pekko.stream.scaladsl.Source
+import org.apache.pekko.stream.scaladsl.SourceQueueWithComplete
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext.Implicits.global
 
@@ -30,7 +30,7 @@ import com.chipprbots.ethereum.vm.Generators
 class MessageHandlerSpec extends AnyFlatSpec with Matchers with MockFactory with ScalaCheckPropertyChecks {
 
   import Implicits._
-  import akka.pattern.pipe
+  import org.apache.pekko.pattern.pipe
   import scala.concurrent.duration._
 
   "MessageHandler" should "send arbitrary messages" in {

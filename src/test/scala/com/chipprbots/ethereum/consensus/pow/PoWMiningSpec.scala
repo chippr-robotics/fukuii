@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.consensus.pow
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalamock.scalatest.MockFactory
@@ -28,7 +28,8 @@ class PoWMiningSpec
     extends TestKit(ActorSystem("PoWMiningSpec_System"))
     with AnyFlatSpecLike
     with WithActorSystemShutDown
-    with Matchers {
+    with Matchers
+    with org.scalamock.scalatest.MockFactory {
 
   "PoWMining" should "use NoAdditionalPoWData block generator for PoWBlockGeneratorImpl" in new TestSetup {
     val powMining = PoWMining(
@@ -45,7 +46,8 @@ class PoWMiningSpec
   }
 
   it should "use RestrictedPoWBlockGeneratorImpl block generator for RestrictedPoWMinerData" in new TestSetup {
-    val key = mock[AsymmetricCipherKeyPair]
+    // MIGRATION: Can't mock Java classes in Scala 3 - use real instance instead
+    val key = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
 
     val powMining = PoWMining(
       vm,
@@ -136,7 +138,7 @@ class PoWMiningSpec
     powMining.minerCoordinatorRef.isDefined shouldBe true
   }
 
-  trait TestSetup extends EphemBlockchainTestSetup with MockFactory {
+  trait TestSetup extends EphemBlockchainTestSetup {
     override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
     override lazy val blockchain: BlockchainImpl = mock[BlockchainImpl]
     val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]

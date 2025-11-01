@@ -1,12 +1,12 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.actor.Timers
-import akka.pattern.pipe
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Timers
+import org.apache.pekko.pattern.pipe
+import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
@@ -41,14 +41,15 @@ class SyncStateSchedulerActor(
     val etcPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
-    val scheduler: akka.actor.Scheduler
-)(implicit val actorScheduler: akka.actor.Scheduler)
+    val scheduler: org.apache.pekko.actor.Scheduler
+)(implicit val actorScheduler: org.apache.pekko.actor.Scheduler)
     extends Actor
     with PeerListSupportNg
     with ActorLogging
     with Timers {
 
   implicit private val monixScheduler: IORuntime = IORuntime.global
+  implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
   private def getFreePeers(state: DownloaderState): List[Peer] =
     peersToDownloadFrom.collect {
@@ -87,18 +88,22 @@ class SyncStateSchedulerActor(
       self ! RequestFailed(peer, "Peer disconnected in the middle of request")
   }
 
-  private val loadingCancelable = sync.loadFilterFromBlockchain.unsafeRunCancelable() {
-    case Left(value) =>
-      log.error(
-        "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
-          "which may result with degraded performance",
-        value
-      )
-      self ! BloomFilterResult(BloomFilterLoadingResult())
-    case Right(value) =>
-      log.info("Bloom filter loading finished")
-      self ! BloomFilterResult(value)
-  }
+  private val loadingCancelable = sync.loadFilterFromBlockchain.attempt.flatMap { result =>
+    IO {
+      result match {
+        case Left(value) =>
+          log.error(
+            "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
+              "which may result with degraded performance",
+            value
+          )
+          self ! BloomFilterResult(BloomFilterLoadingResult())
+        case Right(value) =>
+          log.info("Bloom filter loading finished")
+          self ! BloomFilterResult(value)
+      }
+    }
+  }.start.unsafeRunSync()(monixScheduler)
 
   def waitingForBloomFilterToLoad(lastReceivedCommand: Option[(SyncStateSchedulerActorCommand, ActorRef)]): Receive =
     handlePeerListMessages.orElse {
@@ -223,6 +228,7 @@ class SyncStateSchedulerActor(
               peers.size
             )
             val (requests, newState1) = newState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
+            implicit val ec = context.dispatcher
             requests.foreach(req => requestNodes(req))
             IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)
             context.become(syncing(newState1))
@@ -335,7 +341,7 @@ class SyncStateSchedulerActor(
   override def receive: Receive = waitingForBloomFilterToLoad(None)
 
   override def postStop(): Unit = {
-    loadingCancelable.cancel()
+    loadingCancelable.cancel.unsafeRunSync()(monixScheduler)
     super.postStop()
   }
 }
@@ -365,12 +371,12 @@ object SyncStateSchedulerActor {
       etcPeerManager: ActorRef,
       peerEventBus: ActorRef,
       blacklist: Blacklist,
-      scheduler: akka.actor.Scheduler
+      scheduler: org.apache.pekko.actor.Scheduler
   ): Props =
     Props(new SyncStateSchedulerActor(sync, syncConfig, etcPeerManager, peerEventBus, blacklist, scheduler)(scheduler))
 
-  final case object PrintInfo
-  final case object PrintInfoKey
+  case object PrintInfo
+  case object PrintInfoKey
 
   sealed trait SyncStateSchedulerActorCommand
   final case class StartSyncingTo(stateRoot: ByteString, blockNumber: BigInt) extends SyncStateSchedulerActorCommand
@@ -407,7 +413,7 @@ object SyncStateSchedulerActor {
 
   final case class PeerRequest(peer: Peer, nodes: NonEmptyList[ByteString])
 
-  final case object RegisterScheduler
+  case object RegisterScheduler
 
   sealed trait ResponseProcessingResult
   case object UnrequestedResponse extends ResponseProcessingResult

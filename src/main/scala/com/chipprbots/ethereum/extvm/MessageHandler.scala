@@ -2,9 +2,9 @@ package com.chipprbots.ethereum.extvm
 
 import java.math.BigInteger
 
-import akka.stream.scaladsl.SinkQueueWithCancel
-import akka.stream.scaladsl.SourceQueueWithComplete
-import akka.util.ByteString
+import org.apache.pekko.stream.scaladsl.SinkQueueWithCancel
+import org.apache.pekko.stream.scaladsl.SourceQueueWithComplete
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global

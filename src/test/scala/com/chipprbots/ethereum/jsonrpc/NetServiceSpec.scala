@@ -3,9 +3,9 @@ package com.chipprbots.ethereum.jsonrpc
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestProbe
 
 import cats.effect.unsafe.IORuntime
 

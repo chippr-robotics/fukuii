@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.blockchain.data
 
 import java.io.FileNotFoundException
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.io.Source
 import scala.util.Failure
@@ -15,6 +15,7 @@ import org.json4s.DefaultFormats
 import org.json4s.Formats
 import org.json4s.JString
 import org.json4s.JValue
+import org.json4s.Extraction
 
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.ByteStringJsonSerializer
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.UInt256JsonSerializer
@@ -30,7 +31,7 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.JsonMethodsImplicits
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -91,7 +92,7 @@ class GenesisDataLoader(
     import org.json4s.native.JsonMethods.parse
     implicit val formats: Formats = DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer
     for {
-      genesisData <- Try(parse(genesisJson).extract[GenesisData])
+      genesisData <- Try(Extraction.extract[GenesisData](parse(genesisJson)))
       _ <- loadGenesisData(genesisData)
     } yield ()
   }

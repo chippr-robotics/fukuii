@@ -2,14 +2,17 @@ package com.chipprbots.scalanet.discovery.ethereum
 
 import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs
 import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.MockSigAlg
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
 import java.net.InetAddress
-import org.scalatest._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.Inspectors
 
-class EthereumNodeRecordSpec extends FlatSpec with Matchers {
+class EthereumNodeRecordSpec extends AnyFlatSpec with Matchers {
   import DefaultCodecs._
   import EthereumNodeRecord.Keys
 
-  implicit val sigalg = new MockSigAlg()
+  implicit val sigalg: SigAlg = new MockSigAlg()
   val (publicKey, privateKey) = sigalg.newKeyPair
 
   behavior of "fromNode"

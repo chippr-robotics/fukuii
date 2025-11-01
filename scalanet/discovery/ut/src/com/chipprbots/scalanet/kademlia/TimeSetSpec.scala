@@ -3,19 +3,19 @@ package com.chipprbots.scalanet.kademlia
 import java.time.Clock
 
 import org.mockito.Mockito.when
-import org.scalatest.FlatSpec
-import org.scalatest.Matchers._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.mockito.MockitoSugar._
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks._
 
 import scala.util.Random
 
-class TimeSetSpec extends FlatSpec {
+class TimeSetSpec extends AnyFlatSpec with Matchers {
 
   private val random = new Random()
   private val clock = mock[Clock]
 
-  "touch" should "resort elements by access time" in forAll { s: Set[String] =>
+  "touch" should "resort elements by access time" in forAll { (s: Set[String]) =>
     {
       when(clock.millis()).thenReturn(0)
       val ss: Seq[String] = s.toSeq

@@ -5,6 +5,7 @@ import java.time.Clock
 import java.util.{Random, UUID}
 
 import cats.syntax.all._
+import cats.effect.std.Semaphore
 import cats.data.NonEmptySet
 import cats.effect.Ref
 import com.typesafe.scalalogging.{CanLog, Logger}
@@ -28,7 +29,7 @@ class KRouter[A](
 ) {
   import KRouter.NodeId
 
-  private implicit val nodeId = NodeId(config.nodeRecord.id.toHex)
+  private implicit val nodeId: NodeId = NodeId(config.nodeRecord.id.toHex)
 
   private val logger = Logger.takingImplicit[NodeId](getClass)
 
@@ -102,7 +103,7 @@ class KRouter[A](
     * @return
     */
   private def enroll(): IO[Set[NodeRecord[A]]] = {
-    val loadKnownPeers = IO.traverse(config.knownPeers)(add)
+    val loadKnownPeers = config.knownPeers.toList.traverse(add)
     loadKnownPeers >> lookup(config.nodeRecord.id).attempt.flatMap {
       case Left(t) =>
         IO {
@@ -312,7 +313,7 @@ class KRouter[A](
       // k nodes from already found or
       // alpha nodes from closest nodes received
       val (nodesToQueryFrom, nodesToTake) =
-        if (closestNodes.isEmpty) (nodesFound.toIterable, config.k) else (closestNodes.toIterable, config.alpha)
+        if (closestNodes.isEmpty) (nodesFound.toList, config.k) else (closestNodes.toSeq, config.alpha)
 
       for {
         nodesToQuery <- lookupState.modify { currentState =>
@@ -352,7 +353,7 @@ class KRouter[A](
         case false =>
           val (toQuery, rest) = nodesToQuery.splitAt(config.alpha)
           for {
-            queryResults <- IO.parTraverseUnordered(toQuery) { knownNode =>
+            queryResults <- toQuery.toList.parTraverse { knownNode =>
               handleQuery(knownNode)
             }
 
@@ -474,14 +475,14 @@ object KRouter {
       uuidSource: () => UUID = () => UUID.randomUUID()
   ): IO[KRouter[A]] = {
     for {
-      state <- Ref.of[Task, NodeRecordIndex[A]](
+      state <- Ref.of[IO, NodeRecordIndex[A]](
         getIndex(config, clock)
       )
       router <- IO.pure(new KRouter(config, network, state, clock, uuidSource))
       _ <- router.enroll()
       // TODO: These should be fibers that get cleaned up.
-      _ <- router.startServerHandling().startAndForget
-      _ <- router.startRefreshCycle().startAndForget
+      _ <- router.startServerHandling().start.void
+      _ <- router.startRefreshCycle().start.void
     } yield router
   }
 
@@ -504,16 +505,16 @@ object KRouter {
       uuidSource: () => UUID = () => UUID.randomUUID()
   ): IO[KRouter[A]] = {
     Ref
-      .of[Task, NodeRecordIndex[A]](
+      .of[IO, NodeRecordIndex[A]](
         getIndex(config, clock)
       )
       .flatMap { state =>
         IO.pure(new KRouter(config, network, state, clock, uuidSource)).flatMap { router =>
-          IO.parMap3(
+          (
             router.enroll(), // The results should be ready when we return the router.
-            router.startServerHandling().startAndForget,
-            router.startRefreshCycle().startAndForget
-          )((_, _, _) => router)
+            router.startServerHandling().start.void,
+            router.startRefreshCycle().start.void
+          ).parMapN((_, _, _) => router)
         }
       }
   }

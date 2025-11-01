@@ -1,17 +1,19 @@
 package com.chipprbots.ethereum.crypto
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 object ECDSASignatureImplicits {
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
   import com.chipprbots.ethereum.rlp.RLPImplicits._
+  import com.chipprbots.ethereum.rlp.RLPImplicits.given
   import com.chipprbots.ethereum.rlp._
 
   implicit val ecdsaSignatureDec: RLPDecoder[ECDSASignature] = new RLPDecoder[ECDSASignature] {
     override def decode(rlp: RLPEncodeable): ECDSASignature = rlp match {
-      case RLPList(r, s, v) => ECDSASignature(r: ByteString, s: ByteString, v)
-      case _                => throw new RuntimeException("Cannot decode ECDSASignature")
+      case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) if v.nonEmpty => 
+        ECDSASignature(ByteString(r), ByteString(s), v.head)
+      case _ => throw new RuntimeException("Cannot decode ECDSASignature")
     }
   }
 

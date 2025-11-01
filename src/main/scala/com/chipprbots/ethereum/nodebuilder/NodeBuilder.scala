@@ -3,9 +3,9 @@ package com.chipprbots.ethereum.nodebuilder
 import java.time.Clock
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.util.ByteString
 
 import cats.implicits._
 
@@ -106,7 +106,7 @@ trait ActorSystemBuilder {
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {
-  lazy val pruningMode: PruningMode = PruningConfig(Config.config).mode
+  override val pruningMode: PruningMode = PruningConfig(Config.config).mode
 }
 
 trait StorageBuilder {
@@ -214,7 +214,7 @@ trait ConsensusBuilder {
       blockchainReader,
       blockQueue,
       blockValidation,
-      Scheduler(system.dispatchers.lookup("validation-context"))
+      IORuntime.global
     )
 }
 
@@ -795,8 +795,8 @@ trait PortForwardingBuilder {
   private val portForwardingRelease = new AtomicReference(Option.empty[IO[IO[Unit]]])
 
   def startPortForwarding(): Future[Unit] = {
-    portForwardingRelease.compareAndSet(None, Some(portForwarding.memoize))
-    portForwardingRelease.get().fold(Future.unit)(_.unsafeToFuture()(ioRuntime).void)
+    portForwardingRelease.compareAndSet(None, Some(portForwarding))
+    portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
   }
 
   def stopPortForwarding(): Future[Unit] =
@@ -912,4 +912,7 @@ trait Node
     with CheckpointBlockGeneratorBuilder
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
-    with BlacklistBuilder
+    with BlacklistBuilder {
+  // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
+  override implicit val ioRuntime: IORuntime = IORuntime.global
+}

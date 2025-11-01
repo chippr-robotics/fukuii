@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -13,6 +13,7 @@ import org.json4s.Extraction
 import org.json4s.Formats
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
+import org.json4s.jvalue2monadic
 import org.scalatest.concurrent.Eventually
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -57,6 +58,8 @@ class JsonRpcControllerEthSpec
     with WithActorSystemShutDown
     with JRCMatchers
     with ScalaCheckPropertyChecks
+    with org.scalamock.scalatest.MockFactory
+    with JsonRpcControllerTestSupport
     with ScalaFutures
     with LongPatience
     with Eventually {

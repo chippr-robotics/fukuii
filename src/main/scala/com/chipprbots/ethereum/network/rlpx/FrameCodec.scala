@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.network.rlpx
 
 import java.io.IOException
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
@@ -16,6 +16,7 @@ import org.bouncycastle.crypto.params.ParametersWithIV
 
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
 case class Frame(header: Header, `type`: Int, payload: ByteString)
 
@@ -30,14 +31,14 @@ class FrameCodec(private val secrets: Secrets) {
 
   // needs to be lazy to enable mocking
   private lazy val enc: StreamCipher = {
-    val cipher = new SICBlockCipher(new AESEngine)
+    val cipher = new SICBlockCipher(new AESEngine): @annotation.nowarn("cat=deprecation")
     cipher.init(true, new ParametersWithIV(new KeyParameter(secrets.aes), allZerosIV))
     cipher
   }
 
   // needs to be lazy to enable mocking
   private lazy val dec: StreamCipher = {
-    val cipher = new SICBlockCipher(new AESEngine)
+    val cipher = new SICBlockCipher(new AESEngine): @annotation.nowarn("cat=deprecation")
     cipher.init(false, new ParametersWithIV(new KeyParameter(secrets.aes), allZerosIV))
     cipher
   }
@@ -103,7 +104,7 @@ class FrameCodec(private val secrets: Secrets) {
       bodySize = (bodySize << 8) + (headBuffer(1) & 0xff)
       bodySize = (bodySize << 8) + (headBuffer(2) & 0xff)
 
-      val rlpList = rlp.decode[Seq[Int]](headBuffer.drop(3))(seqEncDec[Int]()).lift
+      val rlpList = rlp.decode[Seq[Int]](headBuffer.drop(3)).lift
       val protocol = rlpList(0).get
       val contextId = rlpList(1)
       val totalPacketSize = rlpList(2)
@@ -135,7 +136,7 @@ class FrameCodec(private val secrets: Secrets) {
       frame.header.contextId.foreach(cid => headerDataElems :+= rlp.encode(cid))
       frame.header.totalPacketSize.foreach(tfs => headerDataElems :+= rlp.encode(tfs))
 
-      val headerData = rlp.encode(headerDataElems)(seqEncDec[Array[Byte]]())
+      val headerData = rlp.encode(headerDataElems)
       System.arraycopy(headerData, 0, headBuffer, 3, headerData.length)
       enc.processBytes(headBuffer, 0, 16, headBuffer, 0)
       updateMac(secrets.egressMac, headBuffer, 0, headBuffer, 16, egress = true)
@@ -197,7 +198,7 @@ class FrameCodec(private val secrets: Secrets) {
   }
 
   private def makeMacCipher: AESEngine = {
-    val macc = new AESEngine
+    val macc = new AESEngine: @annotation.nowarn("cat=deprecation")
     macc.init(true, new KeyParameter(secrets.mac))
     macc
   }

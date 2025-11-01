@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc.serialization
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.CustomSerializer

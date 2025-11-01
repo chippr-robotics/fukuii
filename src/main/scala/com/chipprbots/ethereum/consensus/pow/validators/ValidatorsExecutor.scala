@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow.validators
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.mining.GetNBlocksBack
@@ -101,7 +101,7 @@ object ValidatorsExecutor {
       )
     } yield BlockExecutionSuccess
 
-    result.left.map(ValidationBeforeExecError)
+    result.left.map(ValidationBeforeExecError.apply)
   }
 
   def validateBlockAfterExecution(

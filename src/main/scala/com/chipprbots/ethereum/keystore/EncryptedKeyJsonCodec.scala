@@ -2,11 +2,12 @@ package com.chipprbots.ethereum.keystore
 
 import java.util.UUID
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
+import org.json4s._
 import org.json4s.CustomSerializer
 import org.json4s.DefaultFormats
 import org.json4s.Extraction

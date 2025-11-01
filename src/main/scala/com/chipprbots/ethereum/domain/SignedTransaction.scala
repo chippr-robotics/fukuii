@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.domain
 
 import java.math.BigInteger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -19,7 +19,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.{given, _}
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -112,7 +112,6 @@ object SignedTransaction {
         getLegacyTransactionRawSignature(signedTransaction.signature, chainIdOpt)
       case _: TransactionWithAccessList =>
         getTWALRawSignature(signedTransaction.signature)
-      case _ => throw new IllegalArgumentException(s"Transaction type not supported for $signedTransaction")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -201,7 +200,6 @@ object SignedTransaction {
         getLegacyEthereumSignature(rawSignature, chainIdOpt)
       case _: TransactionWithAccessList =>
         getTWALEthereumSignature(rawSignature)
-      case _ => throw new IllegalArgumentException(s"Transaction type not supported for $tx")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -296,7 +294,14 @@ object SignedTransaction {
     */
   private def generalTransactionBytes(tx: Transaction): Array[Byte] = {
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.emptyByteArray)
-    crypto.kec256(rlpEncode(RLPList(tx.nonce, tx.gasPrice, tx.gasLimit, receivingAddressAsArray, tx.value, tx.payload)))
+    crypto.kec256(rlpEncode(RLPList(
+      toEncodeable(tx.nonce), 
+      toEncodeable(tx.gasPrice), 
+      toEncodeable(tx.gasLimit), 
+      toEncodeable(receivingAddressAsArray), 
+      toEncodeable(tx.value), 
+      toEncodeable(tx.payload)
+    )))
   }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -313,15 +318,15 @@ object SignedTransaction {
     crypto.kec256(
       rlpEncode(
         RLPList(
-          tx.nonce,
-          tx.gasPrice,
-          tx.gasLimit,
-          receivingAddressAsArray,
-          tx.value,
-          tx.payload,
-          chainId,
-          valueForEmptyR,
-          valueForEmptyS
+          toEncodeable(tx.nonce),
+          toEncodeable(tx.gasPrice),
+          toEncodeable(tx.gasLimit),
+          toEncodeable(receivingAddressAsArray),
+          toEncodeable(tx.value),
+          toEncodeable(tx.payload),
+          toEncodeable(chainId),
+          toEncodeable(valueForEmptyR),
+          toEncodeable(valueForEmptyS)
         )
       )
     )
@@ -339,7 +344,7 @@ object SignedTransaction {
       case _: LegacyTransaction
           if stx.signature.v == ECDSASignature.negativePointSign || stx.signature.v == ECDSASignature.positivePointSign =>
         None
-      case _: LegacyTransaction            => Some(blockchainConfig.chainId)
+      case _: LegacyTransaction            => Some(BigInt(blockchainConfig.chainId.toInt))
       case twal: TransactionWithAccessList => Some(twal.chainId)
     }
     chainIdOpt.map(_.toByte)
@@ -358,7 +363,6 @@ object SignedTransaction {
     signedTransaction.tx match {
       case _: LegacyTransaction            => getLegacyBytesToSign(signedTransaction)
       case twal: TransactionWithAccessList => getTWALBytesToSign(twal)
-      case _ => throw new IllegalArgumentException(s"unknown transaction type for $signedTransaction")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.

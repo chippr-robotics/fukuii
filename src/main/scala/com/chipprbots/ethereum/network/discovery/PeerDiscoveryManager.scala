@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.network.discovery
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.pattern.pipe
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.pattern.pipe
+import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 import cats.effect.Resource
@@ -41,12 +41,11 @@ class PeerDiscoveryManager(
   val discoveryResources: Resource[IO, (v4.DiscoveryService, Stream[IO, Node])] = for {
     service <- discoveryServiceResource
 
-    // Create a Stream that repeatedly performs a random lookup
-    // (grabbing kademlia-bucket-size items at a time) and flattens the results. It will automatically
-    // perform further lookups as the items are pulled from it.
+    // Create a Stream that repeatedly gets random nodes from the discovery service.
+    // It will automatically perform further lookups as the items are pulled from it.
     randomNodes = Stream
       .repeatEval {
-        IO.defer(service.lookup(randomNodeId))
+        service.getRandomNodes
       }
       .flatMap(ns => Stream.emits(ns.toList))
       .map(toNode)
@@ -201,30 +200,22 @@ class PeerDiscoveryManager(
       recipient: ActorRef
   ): Unit = maybeRandomNodes.foreach { consumer =>
     pipeToRecipient[RandomNodeInfo](recipient) {
-      consumer.pull
-        .flatMap {
-          case Left(None) =>
-            Task.raiseError(new IllegalStateException("The random node source is finished."))
-          case Left(Some(ex)) =>
-            Task.raiseError(ex)
-          case Right(node) =>
-            Task.pure(node)
-        }
-        .map(RandomNodeInfo(_))
+      consumer.take(1).compile.lastOrError.flatMap { node =>
+        IO.pure(RandomNodeInfo(node))
+      }
     }
   }
 
-  def pipeToRecipient[T](recipient: ActorRef)(task: Task[T]): Unit =
+  def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit = {
+    implicit val ec = context.dispatcher
     task
-      .doOnFinish {
-        _.fold(Task.unit)(ex => Task(log.error(ex, "Failed to relay result to recipient.")))
-      }
-      .runToFuture
-      .pipeTo(recipient)
+      .onError(ex => IO(log.error(ex, "Failed to relay result to recipient.")))
+      .unsafeToFuture().pipeTo(recipient)
+  }
 
   def toNode(enode: ENode): Node =
     Node(
-      id = ByteString(enode.id.toByteArray),
+      id = ByteString(enode.id.value.toByteArray),
       addr = enode.address.ip,
       tcpPort = enode.address.tcpPort,
       udpPort = enode.address.udpPort

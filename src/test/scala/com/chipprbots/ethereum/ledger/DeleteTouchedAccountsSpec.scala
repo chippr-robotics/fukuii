@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -129,7 +129,7 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers {
 
     // - cake overrides
 
-    val conf: BlockchainConfigForEvm = BlockchainConfigForEvm(blockchainConfig)
+    val conf: BlockchainConfigForEvm = BlockchainConfigForEvm(DeleteTouchedAccountsSpec.this.blockchainConfig)
     val postEip161Config: EvmConfig = EvmConfig.PostEIP161ConfigBuilder(conf)
     val postEip160Config: EvmConfig = EvmConfig.PostEIP160ConfigBuilder(conf)
 

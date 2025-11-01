@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.testmode
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.domain.Block
@@ -186,6 +186,6 @@ object EthTransactionResponse {
       input = stx.tx.payload,
       r = stx.signature.r,
       s = stx.signature.s,
-      v = stx.signature.v
+      v = BigInt(stx.signature.v)
     )
 }

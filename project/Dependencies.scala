@@ -2,35 +2,32 @@ import sbt._
 
 object Dependencies {
 
-  private val akkaVersion = "2.6.21" // Updated for Scala 3 support - last 2.6.x release compatible with Akka HTTP 10.5.x
+  // Apache Pekko - Scala 3 compatible fork of Akka
+  private val pekkoVersion = "1.2.1" // Latest Pekko version with Scala 3 support
+  private val pekkoHttpVersion = "1.3.0" // Latest Pekko HTTP version
 
-  val akkaUtil: Seq[ModuleID] =
+  val pekkoUtil: Seq[ModuleID] =
     Seq(
-      "com.typesafe.akka" %% "akka-actor" % akkaVersion
+      "org.apache.pekko" %% "pekko-actor" % pekkoVersion
     )
 
-  val akka: Seq[ModuleID] =
+  val pekko: Seq[ModuleID] =
     Seq(
-      "com.typesafe.akka" %% "akka-actor" % akkaVersion,
-      "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-slf4j" % akkaVersion,
-      "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-testkit" % akkaVersion,
-      "com.typesafe.akka" %% "akka-actor-testkit-typed" % akkaVersion,
-      "com.typesafe.akka" %% "akka-stream" % akkaVersion
-      // NOTE: akka-mock-scheduler 0.5.5 is not available for Scala 3
-      // Commented out temporarily - tests that use this will need to be updated or skipped
-      // "com.miguno.akka" %% "akka-mock-scheduler" % "0.5.5" % "it,test"
+      "org.apache.pekko" %% "pekko-actor" % pekkoVersion,
+      "org.apache.pekko" %% "pekko-actor-typed" % pekkoVersion,
+      "org.apache.pekko" %% "pekko-slf4j" % pekkoVersion,
+      "org.apache.pekko" %% "pekko-testkit" % pekkoVersion % "it,test",
+      "org.apache.pekko" %% "pekko-actor-testkit-typed" % pekkoVersion % "it,test",
+      "org.apache.pekko" %% "pekko-stream" % pekkoVersion
     )
 
-  val akkaHttp: Seq[ModuleID] = {
-    val akkaHttpVersion = "10.5.3" // Updated for Scala 3 support (10.5.x series)
-
+  val pekkoHttp: Seq[ModuleID] = {
     Seq(
-      "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
-      "ch.megard" %% "akka-http-cors" % "1.2.0", // Updated for Scala 3 and Akka HTTP 10.5.x
-      "de.heikoseeberger" %% "akka-http-json4s" % "1.39.2", // Updated for json4s 4.0.x compatibility
-      "com.typesafe.akka" %% "akka-http-testkit" % akkaHttpVersion % "it,test"
+      "org.apache.pekko" %% "pekko-http" % pekkoHttpVersion,
+      "org.apache.pekko" %% "pekko-http-cors" % pekkoHttpVersion,
+      "org.apache.pekko" %% "pekko-http-testkit" % pekkoHttpVersion % "it,test",
+      // Note: pekko-http-json4s not yet available, using custom JSON marshalling with json4s
+      "org.json4s" %% "json4s-native" % "4.0.7"
     )
   }
 
@@ -100,8 +97,8 @@ object Dependencies {
 
   // Dependencies for scalanet module
   val scodec: Seq[ModuleID] = Seq(
-    "org.scodec" %% "scodec-core" % "1.11.11", // Latest stable supporting Scala 2.13
-    "org.scodec" %% "scodec-bits" % "1.1.38"
+    "org.scodec" %% "scodec-core" % "2.3.3", // Scala 3 compatible version
+    "org.scodec" %% "scodec-bits" % "1.2.1"  // Updated for broader compatibility
   )
 
   val netty: Seq[ModuleID] = {
@@ -134,8 +131,8 @@ object Dependencies {
   )
 
   val crypto = Seq(
-    "org.bouncycastle" % "bcprov-jdk15on" % "1.78", // Updated for security (CVE-2023-33201, CVE-2024-30171, CVE-2024-30172 fixed)
-    "org.bouncycastle" % "bcpkix-jdk15on" % "1.78"  // Additional bouncy castle package for X.509 certificates
+    "org.bouncycastle" % "bcprov-jdk18on" % "1.82", // Updated for JDK 18+ compatibility (jdk15on artifacts discontinued)
+    "org.bouncycastle" % "bcpkix-jdk18on" % "1.82"  // Additional bouncy castle package for X.509 certificates
   )
 
   val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
@@ -199,14 +196,14 @@ object Dependencies {
     val provider = "io.kamon"
     val version = "2.7.5" // Updated for Scala 3 support
     Seq(
-      provider %% "kamon-prometheus" % version,
-      provider %% "kamon-akka" % version
+      provider %% "kamon-prometheus" % version
+      // Note: kamon-pekko not yet available, removed kamon-akka instrumentation
     )
   }
 
-  val shapeless: Seq[ModuleID] = Seq(
-    "com.chuusai" %% "shapeless" % "2.3.12" // Shapeless 2 for Scala 2.13
-  )
+  // Shapeless removed - now using Scala 3 native derivation (Mirror-based)
+  // See RLPDerivation.scala for the new implementation
+  val shapeless: Seq[ModuleID] = Seq.empty
 
   val scaffeine: Seq[ModuleID] = Seq(
     "com.github.blemale" %% "scaffeine" % "5.3.0" % "compile", // Updated for Scala 3 support

@@ -2,7 +2,7 @@
   <img src="assets/images/fukuii-logo-cute.png" alt="Fukuii Logo" width="400"/>
 </div>
 
-# Fukuii Ethereum Client
+# 🧠🐛 Fukuii Ethereum Client
 
 [![CI](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml)
 

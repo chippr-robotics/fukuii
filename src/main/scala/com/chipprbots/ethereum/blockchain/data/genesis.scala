@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.data
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.UInt256
 

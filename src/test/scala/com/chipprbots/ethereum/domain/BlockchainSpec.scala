@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.domain
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalacheck.Gen
 import org.scalamock.scalatest.MockFactory
@@ -21,8 +21,9 @@ import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.proof.MptProofVerifier
 import com.chipprbots.ethereum.proof.ProofVerifyResult.ValidProof
+import com.chipprbots.ethereum.domain.Account.accountSerializer
 
-class BlockchainSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
+class BlockchainSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with org.scalamock.scalatest.MockFactory {
 
   val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(2, 5).sample.get
   val checkpointBlockGenerator = new CheckpointBlockGenerator
@@ -259,7 +260,7 @@ class BlockchainSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCh
     }
   }
 
-  trait TestSetup extends MockFactory {
+  trait TestSetup {
     val maxNumberBlocksToImport: Int = 30
 
     trait StubPersistingBlockchainSetup {

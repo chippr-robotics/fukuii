@@ -174,7 +174,7 @@ class StaticUDPPeerGroup[M] private (
 
   private def getClientChannels(remoteAddress: InetSocketAddress): IO[Iterable[ChannelImpl[M]]] =
     clientChannelsRef.get.map {
-      _.getOrElse(remoteAddress, Set.empty).toIterable.map(_._1)
+      _.getOrElse(remoteAddress, Set.empty).toSeq.map(_._1)
     }
 
   private def getChannels(remoteAddress: InetSocketAddress): IO[Iterable[ChannelImpl[M]]] =

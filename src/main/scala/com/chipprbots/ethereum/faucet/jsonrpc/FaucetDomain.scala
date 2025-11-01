@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.faucet.FaucetStatus

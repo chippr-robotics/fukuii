@@ -1,12 +1,12 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Cancellable
-import akka.actor.Props
-import akka.actor.Scheduler
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Cancellable
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.FiniteDuration
@@ -160,7 +160,7 @@ class PivotBlockSelector(
       timeout.cancel()
       if (waitingPeers.nonEmpty) { // There are more peers to ask
         val newTimeout = scheduler.scheduleOnce(peerResponseTimeout, self, ElectionPivotBlockTimeout)
-        val additionalPeer :: newWaitingPeers = waitingPeers
+        val additionalPeer :: newWaitingPeers = (waitingPeers: @unchecked)
 
         obtainBlockHeaderFromPeer(additionalPeer, pivotBlockNumber)
 

@@ -11,9 +11,10 @@ import com.chipprbots.scalanet.peergroup.{Channel, PeerGroup}
 import com.chipprbots.scalanet.kademlia.KNetwork.KNetworkScalanetImpl
 import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import fs2.Stream
-import org.scalatest.FlatSpec
-import org.scalatest.Matchers._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.mockito.MockitoSugar._
 import org.mockito.Mockito.{when}
 
@@ -30,10 +31,10 @@ import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
 import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
 import java.util.concurrent.atomic.AtomicInteger
 
-class KNetworkSpec extends FlatSpec {
+class KNetworkSpec extends AnyFlatSpec with Matchers {
   import KNetworkRequestProcessing._
 
-  implicit val patienceConfig = PatienceConfig(1 second)
+  implicit val patienceConfig: PatienceConfig = PatienceConfig(1.second)
 
   private val getFindNodesRequest: KNetwork[String] => IO[KRequest[String]] = getActualRequest(_.findNodesRequests())
   private val getPingRequest: KNetwork[String] => IO[KRequest[String]] = getActualRequest(_.pingRequests())
@@ -80,7 +81,7 @@ class KNetworkSpec extends FlatSpec {
       mockServerEvents(peerGroup, channelCreated)
       mockChannelEvents(channel)
 
-      val t = requestExtractor(network).runToFuture.failed.futureValue
+      val t = requestExtractor(network).unsafeToFuture().failed.futureValue
 
       // The timeout on the channel doesn't cause this exception, but rather the fact
       // that there's no subsequent server event and the server observable
@@ -117,7 +118,7 @@ class KNetworkSpec extends FlatSpec {
       mockChannelEvents(channel2.channel, MessageReceived(request))
 
       // Process incoming channels and requests. Need to wait a little to allow channel1 to time out.
-      val actualRequest = requestExtractor(network).delayResult(requestTimeout).evaluated
+      val actualRequest = requestExtractor(network).delayBy(requestTimeout).evaluated
 
       actualRequest shouldBe request
       channel1.closed.get shouldBe true
@@ -174,20 +175,20 @@ class KNetworkSpec extends FlatSpec {
     when(channel2.channel.sendMessage(pong)).thenReturn(IO.unit)
 
     // `pingRequests` consumes all requests and call `ignore` on the FindNodes, passing None which should close the channel.
-    val (actualRequest, handler) = network.pingRequests().headL.evaluated
+    val (actualRequest, handler) = network.pingRequests().compile.toList.map(_.head).evaluated
 
     actualRequest shouldBe ping
     channel1.closed.get shouldBe true
     channel2.closed.get shouldBe false
 
-    handler(Some(pong)).runToFuture.futureValue
+    handler(Some(pong)).unsafeToFuture().futureValue
     channel2.closed.get shouldBe true
   }
 }
 
 object KNetworkSpec {
 
-  val requestTimeout = 50.millis
+  val requestTimeout: FiniteDuration = 50.millis
 
   private val nodeRecord: NodeRecord[String] = Generators.aRandomNodeRecord()
   private val targetRecord: NodeRecord[String] = Generators.aRandomNodeRecord()
@@ -228,10 +229,10 @@ object KNetworkSpec {
   private def getActualRequest[Request <: KRequest[String]](rpc: KNetwork[String] => Stream[IO, (Request, _)])(
       network: KNetwork[String]
   ): IO[Request] = {
-    rpc(network).headL.map(_._1)
+    rpc(network).compile.toList.map(_.head._1)
   }
 
   def sendResponse(network: KNetwork[String], response: KResponse[String]): IO[Unit] = {
-    network.kRequests.headL.flatMap { case (_, handler) => handler(Some(response)) }
+    network.kRequests.compile.toList.map(_.head).flatMap { case (_, handler) => handler(Some(response)) }
   }
 }

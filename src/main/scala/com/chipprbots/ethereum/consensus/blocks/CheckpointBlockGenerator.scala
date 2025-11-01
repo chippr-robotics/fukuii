@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.blocks
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.ECDSASignatureImplicits.ECDSASignatureOrdering
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostEcip1097

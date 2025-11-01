@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow.validators
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
@@ -195,7 +195,7 @@ class EthashBlockHeaderValidatorSpec
   it should "mark as valid a post ecip1098 block opt-out with opt out undefined" in new EphemBlockchainTestSetup {
     val ecip1098BlockNumber = validBlockHeader.number / 2
     val blockchainConfigWithECIP1098Enabled: BlockchainConfig =
-      blockchainConfig.withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = ecip1098BlockNumber))
+      EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = ecip1098BlockNumber))
 
     val validHeader = validBlockHeader.copy(extraFields = HefEmpty)
 
@@ -251,7 +251,7 @@ class EthashBlockHeaderValidatorSpec
 
   it should "properly calculate the difficulty after muir glacier delay" in new EphemBlockchainTestSetup {
     val blockchainConfigWithoutDifficultyBombRemoval: BlockchainConfig =
-      blockchainConfig.withUpdatedForkBlocks(
+      EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
         _.copy(
           difficultyBombRemovalBlockNumber = BigInt("1000000000000"),
           difficultyBombPauseBlockNumber = 0,

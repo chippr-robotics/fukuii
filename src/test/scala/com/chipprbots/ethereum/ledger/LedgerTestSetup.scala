@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
-import akka.util.ByteString.{empty => bEmpty}
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.ByteString.{empty => bEmpty}
 
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
@@ -32,6 +32,8 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
@@ -183,7 +185,7 @@ trait TestSetup extends SecureRandomBuilder with EphemBlockchainTestSetup {
 }
 
 trait BlockchainSetup extends TestSetup {
-  val blockchainStorages: storagesInstance.Storages = storagesInstance.storages
+  val blockchainStorages = storagesInstance.storages
 
   val validBlockParentHeader: BlockHeader = defaultBlockHeader.copy(stateRoot = initialWorld.stateRootHash)
   val validBlockParentBlock: Block = Block(validBlockParentHeader, BlockBody.empty)
@@ -214,12 +216,27 @@ trait BlockchainSetup extends TestSetup {
     SignedTransaction.sign(validTx, originKeyPair, Some(blockchainConfig.chainId))
 }
 
-trait DaoForkTestSetup extends TestSetup with MockFactory {
+trait DaoForkTestSetup extends TestSetup { self: org.scalamock.scalatest.MockFactory =>
 
   lazy val testBlockchainReader: BlockchainReader = mock[BlockchainReader]
   lazy val testBlockchain: BlockchainImpl = mock[BlockchainImpl]
-  val worldState: InMemoryWorldStateProxy = mock[InMemoryWorldStateProxy]
+  val worldState: InMemoryWorldStateProxy = createStubWorldStateProxy()
   val proDaoBlock: Block = Fixtures.Blocks.ProDaoForkBlock.block
+  
+  private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
+    // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
+    val stubEvmCodeStorage = mock[EvmCodeStorage]
+    val stubMptStorage = mock[MptStorage]
+    InMemoryWorldStateProxy(
+      stubEvmCodeStorage,
+      stubMptStorage,
+      _ => None,
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+  }
 
   val supportDaoForkConfig: DaoForkConfig = new DaoForkConfig {
     override val blockExtraData: Option[ByteString] = Some(ByteString("refund extra data"))
@@ -284,9 +301,11 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   override lazy val mining: TestMining = buildTestMining()
   // - cake overrides
 
-  val blockQueue: BlockQueue
+  lazy val blockQueue: BlockQueue
 
-  implicit val runtimeContext: IORuntime = IORuntime.global
+  implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+  // Provide runtimeContext as alias for compatibility
+  implicit def runtimeContext: IORuntime = ioRuntime
 
   override lazy val consensusAdapter: ConsensusAdapter = mkConsensus()
 
@@ -416,12 +435,12 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
       // Using the global IORuntime is appropriate here because, in test scenarios,
       // validation operations do not require a custom runtime with specific threading characteristics.
       // Tests are typically run in isolation, so contention and performance concerns are minimal.
-      runtime
+      runtimeContext
     )
   }
 }
 
-trait MockBlockchain extends MockFactory { self: TestSetupWithVmAndValidators =>
+trait MockBlockchain { self: TestSetupWithVmAndValidators with org.scalamock.scalatest.MockFactory =>
   // + cake overrides
 
   override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
@@ -475,7 +494,7 @@ trait MockBlockchain extends MockFactory { self: TestSetupWithVmAndValidators =>
     (() => blockchainReader.genesisHeader).expects().returning(header)
 }
 
-trait EphemBlockchain extends TestSetupWithVmAndValidators with MockFactory {
+trait EphemBlockchain extends TestSetupWithVmAndValidators { self: org.scalamock.scalatest.MockFactory =>
   override lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, SyncConfig(Config.config))
 
   def blockImportWithMockedBlockExecution(blockExecutionMock: BlockExecution): ConsensusAdapter =
@@ -489,7 +508,7 @@ trait CheckpointHelpers {
     new CheckpointBlockGenerator().generate(parent, checkpoint)
 }
 
-trait OmmersTestSetup extends EphemBlockchain {
+trait OmmersTestSetup extends EphemBlockchain { self: org.scalamock.scalatest.MockFactory =>
   object OmmerValidation extends Mocks.MockValidatorsAlwaysSucceed {
     override val ommersValidator: OmmersValidator =
       new StdOmmersValidator(blockHeaderValidator)

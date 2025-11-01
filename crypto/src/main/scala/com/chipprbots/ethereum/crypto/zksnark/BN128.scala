@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.crypto.zksnark
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.zksnark.BN128.Point
 import com.chipprbots.ethereum.crypto.zksnark.FiniteField.Ops._

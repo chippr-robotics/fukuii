@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.rlp
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.language.implicitConversions
 
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.{given, *}
 
 object RLPImplicitConversions {
 

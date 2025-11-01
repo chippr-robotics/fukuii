@@ -1,12 +1,12 @@
 package com.chipprbots.scalanet.kademlia
 
-import org.scalatest.FlatSpec
-import org.scalatest.Matchers._
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
 import scodec.bits.BitVector
 import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
 import scala.collection.SortedSet
 
-class XorOrderingSpec extends FlatSpec {
+class XorOrderingSpec extends AnyFlatSpec with Matchers {
 
   val id0 = BitVector.fromValidBin("0000")
 

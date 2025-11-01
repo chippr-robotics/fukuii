@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 class TestNode extends BaseNode {
 
-  val ioRuntime: IORuntime = IORuntime.global
+  override val ioRuntime: IORuntime = IORuntime.global
 
   lazy val testModeComponentsProvider: TestModeComponentsProvider =
     new TestModeComponentsProvider(

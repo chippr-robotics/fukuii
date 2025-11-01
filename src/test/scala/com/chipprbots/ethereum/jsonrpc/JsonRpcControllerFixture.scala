@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
@@ -40,11 +40,23 @@ import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.FilterConfig
 
-class JsonRpcControllerFixture(implicit system: ActorSystem)
-    extends MockFactory
-    with EphemBlockchainTestSetup
+/** Factory for creating JsonRpcControllerFixture instances with mocks.
+  * This is needed because in Scala 3, MockFactory requires TestSuite self-type,
+  * which anonymous classes created by 'new' don't satisfy.
+  */
+object JsonRpcControllerFixture {
+  def apply()(implicit system: ActorSystem, mockFactory: org.scalamock.scalatest.MockFactory): JsonRpcControllerFixture = {
+    new JsonRpcControllerFixture()(system, mockFactory)
+  }
+}
+
+class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.scalamock.scalatest.MockFactory)
+    extends EphemBlockchainTestSetup
     with JsonMethodsImplicits
     with ApisBuilder {
+
+  // Import all mockFactory members to enable mock creation and expectations
+  import mockFactory._
 
   def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
@@ -61,11 +73,14 @@ class JsonRpcControllerFixture(implicit system: ActorSystem)
   val syncingController: TestProbe = TestProbe()
 
   override lazy val stxLedger: StxLedger = mock[StxLedger]
-  override lazy val validators: ValidatorsExecutor = mock[ValidatorsExecutor]
-  (() => validators.signedTransactionValidator)
-    .expects()
-    .returns(null)
-    .anyNumberOfTimes()
+  override lazy val validators: ValidatorsExecutor = {
+    val v = mock[ValidatorsExecutor]
+    (() => v.signedTransactionValidator)
+      .expects()
+      .returns(null)
+      .anyNumberOfTimes()
+    v
+  }
 
   override lazy val mining: TestMining = buildTestMining()
     .withValidators(validators)
@@ -89,7 +104,16 @@ class JsonRpcControllerFixture(implicit system: ActorSystem)
 
   val appStateStorage: AppStateStorage = mock[AppStateStorage]
   val web3Service = new Web3Service
-  val netService: NetService = mock[NetService]
+  // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
+  val netService: NetService = new NetService(
+    new java.util.concurrent.atomic.AtomicReference(com.chipprbots.ethereum.utils.NodeStatus(
+      com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
+      com.chipprbots.ethereum.utils.ServerStatus.NotListening, 
+      com.chipprbots.ethereum.utils.ServerStatus.NotListening
+    )),
+    org.apache.pekko.testkit.TestProbe()(system).ref,
+    com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
+  )
 
   val ethInfoService = new EthInfoService(
     blockchain,

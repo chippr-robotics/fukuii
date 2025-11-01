@@ -2,10 +2,10 @@ package com.chipprbots.ethereum
 package consensus
 package pow
 
-import akka.actor.typed.ActorRef
-import akka.actor.typed.DispatcherSelector
-import akka.actor.typed.scaladsl.adapter._
-import akka.util.Timeout
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.DispatcherSelector
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
@@ -69,7 +69,7 @@ class PoWMining private (
 
   @volatile private[pow] var minerCoordinatorRef: Option[ActorRef[CoordinatorProtocol]] = None
   // TODO in ETCM-773 remove MockedMiner
-  @volatile private[pow] var mockedMinerRef: Option[akka.actor.ActorRef] = None
+  @volatile private[pow] var mockedMinerRef: Option[org.apache.pekko.actor.ActorRef] = None
 
   final val BlockForgerDispatcherId = "mantis.async.dispatchers.block-forger"
   implicit private val timeout: Timeout = 5.seconds
@@ -87,10 +87,10 @@ class PoWMining private (
     }
 
   // no interactions are done with minerCoordinatorRef using the ask pattern
-  override def askMiner(msg: MockedMinerProtocol): Task[MockedMinerResponse] =
+  override def askMiner(msg: MockedMinerProtocol): IO[MockedMinerResponse] =
     mockedMinerRef
       .map(_.askFor[MockedMinerResponse](msg))
-      .getOrElse(Task.now(MinerNotExist))
+      .getOrElse(IO.pure(MinerNotExist))
 
   private[this] val mutex = new Object
 

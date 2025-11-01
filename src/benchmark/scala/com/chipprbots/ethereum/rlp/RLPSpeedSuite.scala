@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.rlp
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.domain.Block._
 import com.chipprbots.ethereum.domain._

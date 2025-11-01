@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.db.storage
 
 import java.util.concurrent.TimeUnit
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration

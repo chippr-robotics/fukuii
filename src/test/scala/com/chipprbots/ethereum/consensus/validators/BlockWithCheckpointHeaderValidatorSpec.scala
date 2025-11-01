@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.validators
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalacheck.Gen
