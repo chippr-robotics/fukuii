@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        scala-version: ['2.13', '3.3']
+        scala-version: ['3.3']
       fail-fast: false
     
     steps:
@@ -68,12 +68,14 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Check code formatting
+      - name: Check code formatting (diagnostic)
         run: |
-          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
-            sbt "++3.3.4" formatCheck
-          else
-            sbt formatCheck
+          sbt "++3.3.4" scalafmtCheckAll 2>&1 | tee format-check.log
+          echo "--- Last 200 lines of format check output ---"
+          tail -n 200 format-check.log
+          if grep -E "(error|failed|Failed to format|Unexpected formatting diff|does not match the file on disk)" format-check.log; then
+            echo "ERROR: Code formatting issues detected. See output above."
+            exit 1
           fi
         env:
           FUKUII_DEV: true
@@ -117,16 +119,12 @@ jobs:
           if-no-files-found: warn
       
       - name: Build assembly
-        # Only build assembly for Scala 2.13 (primary version)
-        if: matrix.scala-version == '2.13'
-        run: sbt assembly
+        run: sbt "++3.3.4" assembly
         env:
           FUKUII_DEV: true
       
       - name: Build distribution
-        # Only build distribution for Scala 2.13 (primary version)
-        if: matrix.scala-version == '2.13'
-        run: sbt dist
+        run: sbt "++3.3.4" dist
         env:
           FUKUII_DEV: true
       
@@ -141,7 +139,6 @@ jobs:
           if-no-files-found: warn
       
       - name: Upload build artifacts
-        if: matrix.scala-version == '2.13'
         uses: actions/upload-artifact@v4
         with:
           name: fukuii-distribution-jdk17-scala-${{ matrix.scala-version }}
