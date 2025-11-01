@@ -490,7 +490,7 @@ class FilterManagerSpec
     }
 
     val keyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
-    
+
     def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val blockchainReader: BlockchainReader = mock[BlockchainReader]

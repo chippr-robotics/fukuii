@@ -159,8 +159,7 @@ class EthInfoService(
   } yield f(stx, block.block.header, block.pendingState)
 
   private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
-    if (req.tx.gas.isDefined) Right[JsonRpcError, BigInt](req.tx.gas.get)
-    else resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit)
+    req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit))
 
   private def prepareTransaction(req: CallRequest): Either[JsonRpcError, SignedTransactionWithSender] =
     getGasLimit(req).map { gasLimit =>

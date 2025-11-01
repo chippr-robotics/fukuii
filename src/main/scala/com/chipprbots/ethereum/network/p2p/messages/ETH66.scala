@@ -14,8 +14,8 @@ import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
-/** ETH66 protocol messages - adds request-id to all request/response pairs
-  * See https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth66
+/** ETH66 protocol messages - adds request-id to all request/response pairs See
+  * https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth66
   */
 object ETH66 {
 
@@ -38,12 +38,29 @@ object ETH66 {
 
     implicit class GetBlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetBlockHeaders: GetBlockHeaders = rawDecode(bytes) match {
-        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes)))
-            if block.bytes.length < 32 =>
-          GetBlockHeaders(BigInt(1, requestIdBytes), Left(BigInt(1, block.bytes)), BigInt(1, maxHeadersBytes), BigInt(1, skipBytes), BigInt(1, reverseBytes).toInt == 1)
+        case RLPList(
+              RLPValue(requestIdBytes),
+              RLPList((block: RLPValue), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))
+            ) if block.bytes.length < 32 =>
+          GetBlockHeaders(
+            BigInt(1, requestIdBytes),
+            Left(BigInt(1, block.bytes)),
+            BigInt(1, maxHeadersBytes),
+            BigInt(1, skipBytes),
+            BigInt(1, reverseBytes).toInt == 1
+          )
 
-        case RLPList(RLPValue(requestIdBytes), RLPList((block: RLPValue), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))) =>
-          GetBlockHeaders(BigInt(1, requestIdBytes), Right(ByteString(block.bytes)), BigInt(1, maxHeadersBytes), BigInt(1, skipBytes), BigInt(1, reverseBytes).toInt == 1)
+        case RLPList(
+              RLPValue(requestIdBytes),
+              RLPList((block: RLPValue), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))
+            ) =>
+          GetBlockHeaders(
+            BigInt(1, requestIdBytes),
+            Right(ByteString(block.bytes)),
+            BigInt(1, maxHeadersBytes),
+            BigInt(1, skipBytes),
+            BigInt(1, reverseBytes).toInt == 1
+          )
 
         case _ => throw new RuntimeException("Cannot decode GetBlockHeaders")
       }
@@ -228,7 +245,8 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.GetNodeDataCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.mptElementsHashes))
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.mptElementsHashes))
     }
 
     implicit class GetNodeDataDec(val bytes: Array[Byte]) extends AnyVal {
@@ -283,7 +301,8 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.GetReceiptsCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.blockHashes))
+      override def toRLPEncodable: RLPEncodeable =
+        RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.blockHashes))
     }
 
     implicit class GetReceiptsDec(val bytes: Array[Byte]) extends AnyVal {

@@ -40,14 +40,15 @@ import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.FilterConfig
 
-/** Factory for creating JsonRpcControllerFixture instances with mocks.
-  * This is needed because in Scala 3, MockFactory requires TestSuite self-type,
-  * which anonymous classes created by 'new' don't satisfy.
+/** Factory for creating JsonRpcControllerFixture instances with mocks. This is needed because in Scala 3, MockFactory
+  * requires TestSuite self-type, which anonymous classes created by 'new' don't satisfy.
   */
 object JsonRpcControllerFixture {
-  def apply()(implicit system: ActorSystem, mockFactory: org.scalamock.scalatest.MockFactory): JsonRpcControllerFixture = {
+  def apply()(implicit
+      system: ActorSystem,
+      mockFactory: org.scalamock.scalatest.MockFactory
+  ): JsonRpcControllerFixture =
     new JsonRpcControllerFixture()(system, mockFactory)
-  }
 }
 
 class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.scalamock.scalatest.MockFactory)
@@ -106,11 +107,13 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
   val web3Service = new Web3Service
   // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
   val netService: NetService = new NetService(
-    new java.util.concurrent.atomic.AtomicReference(com.chipprbots.ethereum.utils.NodeStatus(
-      com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
-      com.chipprbots.ethereum.utils.ServerStatus.NotListening, 
-      com.chipprbots.ethereum.utils.ServerStatus.NotListening
-    )),
+    new java.util.concurrent.atomic.AtomicReference(
+      com.chipprbots.ethereum.utils.NodeStatus(
+        com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening,
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening
+      )
+    ),
     org.apache.pekko.testkit.TestProbe()(system).ref,
     com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
   )

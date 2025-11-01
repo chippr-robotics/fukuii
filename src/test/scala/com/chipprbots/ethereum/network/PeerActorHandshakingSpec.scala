@@ -152,7 +152,7 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
 
   trait TestSetup extends EphemBlockchainTestSetup {
     implicit override lazy val system: ActorSystem = ActorSystem("PeerActorSpec_System")
-    
+
     def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val uri = new URI(

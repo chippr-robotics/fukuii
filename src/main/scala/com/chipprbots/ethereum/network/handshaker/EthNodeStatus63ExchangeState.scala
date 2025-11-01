@@ -20,7 +20,11 @@ case class EthNodeStatus63ExchangeState(
 
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
-    val chainWeight = blockchainReader.getChainWeightByHash(bestBlockHeader.hash).get
+    val chainWeight = blockchainReader
+      .getChainWeightByHash(bestBlockHeader.hash)
+      .getOrElse(
+        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
+      )
 
     val status = BaseETH6XMessages.Status(
       protocolVersion = Capability.ETH63.version,

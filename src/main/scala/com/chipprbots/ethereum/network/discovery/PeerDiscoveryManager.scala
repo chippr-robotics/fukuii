@@ -210,7 +210,8 @@ class PeerDiscoveryManager(
     implicit val ec = context.dispatcher
     task
       .onError(ex => IO(log.error(ex, "Failed to relay result to recipient.")))
-      .unsafeToFuture().pipeTo(recipient)
+      .unsafeToFuture()
+      .pipeTo(recipient)
   }
 
   def toNode(enode: ENode): Node =

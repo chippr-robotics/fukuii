@@ -12,8 +12,8 @@ import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
-/** ETH65 protocol messages - adds transaction pool support
-  * See https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth65
+/** ETH65 protocol messages - adds transaction pool support See
+  * https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth65
   */
 object ETH65 {
 

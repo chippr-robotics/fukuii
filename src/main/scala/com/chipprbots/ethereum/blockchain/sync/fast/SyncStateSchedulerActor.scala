@@ -88,22 +88,25 @@ class SyncStateSchedulerActor(
       self ! RequestFailed(peer, "Peer disconnected in the middle of request")
   }
 
-  private val loadingCancelable = sync.loadFilterFromBlockchain.attempt.flatMap { result =>
-    IO {
-      result match {
-        case Left(value) =>
-          log.error(
-            "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
-              "which may result with degraded performance",
-            value
-          )
-          self ! BloomFilterResult(BloomFilterLoadingResult())
-        case Right(value) =>
-          log.info("Bloom filter loading finished")
-          self ! BloomFilterResult(value)
+  private val loadingCancelable = sync.loadFilterFromBlockchain.attempt
+    .flatMap { result =>
+      IO {
+        result match {
+          case Left(value) =>
+            log.error(
+              "Unexpected error while loading bloom filter. Starting state sync with empty bloom filter" +
+                "which may result with degraded performance",
+              value
+            )
+            self ! BloomFilterResult(BloomFilterLoadingResult())
+          case Right(value) =>
+            log.info("Bloom filter loading finished")
+            self ! BloomFilterResult(value)
+        }
       }
     }
-  }.start.unsafeRunSync()(monixScheduler)
+    .start
+    .unsafeRunSync()(monixScheduler)
 
   def waitingForBloomFilterToLoad(lastReceivedCommand: Option[(SyncStateSchedulerActorCommand, ActorRef)]): Receive =
     handlePeerListMessages.orElse {
@@ -138,7 +141,9 @@ class SyncStateSchedulerActor(
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
     // TODO handle case when we already have root i.e state is synced up to this point
-    val initState = sync.initState(root).get
+    val initState = sync.initState(root).getOrElse {
+      throw new IllegalStateException(s"Failed to initialize state sync for root ${ByteStringUtils.hash2string(root)}")
+    }
     context.become(
       syncing(
         SyncSchedulerActorState.initial(initState, initialStats, bn, initiator)
@@ -263,12 +268,14 @@ class SyncStateSchedulerActor(
         }
 
       case Sync if currentState.hasRemainingPendingRequests && currentState.restartHasBeenRequested =>
-        handleRestart(
-          currentState.currentSchedulerState,
-          currentState.currentStats,
-          currentState.targetBlock,
-          currentState.restartRequested.get
-        )
+        currentState.restartRequested.foreach { restartRequester =>
+          handleRestart(
+            currentState.currentSchedulerState,
+            currentState.currentStats,
+            currentState.targetBlock,
+            restartRequester
+          )
+        }
 
       case Sync if !currentState.hasRemainingPendingRequests =>
         finalizeSync(currentState)

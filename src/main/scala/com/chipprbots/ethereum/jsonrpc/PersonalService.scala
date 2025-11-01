@@ -134,8 +134,9 @@ class PersonalService(
     import request._
 
     val accountWallet =
-      if (passphrase.isDefined) keyStore.unlockAccount(address, passphrase.get).left.map(handleError)
-      else unlockedWallets.get(request.address).toRight(AccountLocked)
+      passphrase.fold(unlockedWallets.get(request.address).toRight(AccountLocked)) { pass =>
+        keyStore.unlockAccount(address, pass).left.map(handleError)
+      }
 
     accountWallet
       .map { wallet =>

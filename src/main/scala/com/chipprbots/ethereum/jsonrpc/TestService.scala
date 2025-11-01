@@ -264,7 +264,9 @@ class TestService(
       request: MineBlocksRequest
   ): ServiceResponse[MineBlocksResponse] = {
     def mineBlock(): IO[Unit] =
-      getBlockForMining(blockchainReader.getBestBlock().get)
+      getBlockForMining(
+        blockchainReader.getBestBlock().getOrElse(throw new IllegalStateException("No best block found"))
+      )
         .flatMap { blockForMining =>
           testModeComponentsProvider
             .getConsensus(preimageCache)
@@ -294,7 +296,9 @@ class TestService(
   def rewindToBlock(request: RewindToBlockRequest): ServiceResponse[RewindToBlockResponse] = {
     pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
     (blockchainReader.getBestBlockNumber() until request.blockNum by -1).foreach { n =>
-      blockchain.removeBlock(blockchainReader.getBlockHeaderByNumber(n).get.hash)
+      blockchainReader.getBlockHeaderByNumber(n).foreach { header =>
+        blockchain.removeBlock(header.hash)
+      }
     }
     RewindToBlockResponse().rightNow
   }
@@ -385,11 +389,12 @@ class TestService(
     if (blockOpt.isEmpty) {
       AccountsInRangeResponse(Map(), ByteString(0)).rightNow
     } else {
+      val blockNumber: BigInt = blockOpt.map(_.header.number).getOrElse(BigInt(0))
       val accountBatch: Seq[(ByteString, Address)] = accountHashWithAdresses.view
         .dropWhile { case (hash, _) => UInt256(hash) < UInt256(request.parameters.addressHash) }
         .filter { case (_, address) =>
           blockchainReader
-            .getAccount(blockchainReader.getBestBranch(), address, blockOpt.get.header.number)
+            .getAccount(blockchainReader.getBestBranch(), address, blockNumber)
             .isDefined
         }
         .take(request.parameters.maxResults + 1)

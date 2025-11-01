@@ -69,13 +69,12 @@ trait ContentCodecs {
         RLPEncoder.encode(tcpPort)
       )
     },
-    {
-      case RLPList(ipBytes, udpPort, tcpPort) =>
-        Node.Address(
-          InetAddress.getByAddress(ipBytes.decodeAs[Array[Byte]]("ip")),
-          udpPort.decodeAs[Int]("udpPort"),
-          tcpPort.decodeAs[Int]("tcpPort")
-        )
+    { case RLPList(ipBytes, udpPort, tcpPort) =>
+      Node.Address(
+        InetAddress.getByAddress(ipBytes.decodeAs[Array[Byte]]("ip")),
+        udpPort.decodeAs[Int]("udpPort"),
+        tcpPort.decodeAs[Int]("tcpPort")
+      )
     }
   )
 

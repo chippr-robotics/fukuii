@@ -87,12 +87,18 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
 
   private def awaitHello(): Unit = {
     val helloMsg = messageHandler.awaitMessage[msg.Hello]
-    require(
-      helloMsg.version == ApiVersionProvider.version,
-      s"Wrong Hello message version. Expected ${ApiVersionProvider.version} but was ${helloMsg.version}"
+    if (helloMsg.version != ApiVersionProvider.version)
+      throw new IllegalArgumentException(
+        s"Wrong Hello message version. Expected ${ApiVersionProvider.version} but was ${helloMsg.version}"
+      )
+    if (!helloMsg.config.isEthereumConfig)
+      throw new IllegalArgumentException("Hello message ethereum config must be true")
+
+    defaultBlockchainConfig = constructBlockchainConfig(
+      helloMsg.config.ethereumConfig.getOrElse(
+        throw new IllegalArgumentException("Ethereum config is required")
+      )
     )
-    require(helloMsg.config.isEthereumConfig, "Hello message ethereum config must be true")
-    defaultBlockchainConfig = constructBlockchainConfig(helloMsg.config.ethereumConfig.get)
   }
 
   def run(): Unit = {
@@ -112,19 +118,23 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
   private def constructContextFromMsg(contextMsg: msg.CallContext): ProgramContext[World, Storage] = {
     import ByteString.{empty => irrelevant} // used for irrelevant BlockHeader fields
 
+    val blockHeaderMsg = contextMsg.blockHeader.getOrElse(
+      throw new IllegalArgumentException("Block header is required in call context")
+    )
+
     val blockHeader = BlockHeader(
       irrelevant,
       irrelevant,
-      contextMsg.blockHeader.get.beneficiary,
+      blockHeaderMsg.beneficiary,
       irrelevant,
       irrelevant,
       irrelevant,
       irrelevant,
-      contextMsg.blockHeader.get.difficulty,
-      contextMsg.blockHeader.get.number,
-      contextMsg.blockHeader.get.gasLimit,
+      blockHeaderMsg.difficulty,
+      blockHeaderMsg.number,
+      blockHeaderMsg.gasLimit,
       0, // irrelevant
-      contextMsg.blockHeader.get.unixTimestamp,
+      blockHeaderMsg.unixTimestamp,
       irrelevant,
       irrelevant,
       irrelevant

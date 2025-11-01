@@ -294,14 +294,18 @@ object SignedTransaction {
     */
   private def generalTransactionBytes(tx: Transaction): Array[Byte] = {
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.emptyByteArray)
-    crypto.kec256(rlpEncode(RLPList(
-      toEncodeable(tx.nonce), 
-      toEncodeable(tx.gasPrice), 
-      toEncodeable(tx.gasLimit), 
-      toEncodeable(receivingAddressAsArray), 
-      toEncodeable(tx.value), 
-      toEncodeable(tx.payload)
-    )))
+    crypto.kec256(
+      rlpEncode(
+        RLPList(
+          toEncodeable(tx.nonce),
+          toEncodeable(tx.gasPrice),
+          toEncodeable(tx.gasLimit),
+          toEncodeable(receivingAddressAsArray),
+          toEncodeable(tx.value),
+          toEncodeable(tx.payload)
+        )
+      )
+    )
   }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.

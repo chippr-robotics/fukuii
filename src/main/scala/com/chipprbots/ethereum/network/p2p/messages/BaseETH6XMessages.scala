@@ -125,7 +125,10 @@ object BaseETH6XMessages {
       import TypedTransaction._
 
       def toNewBlock: NewBlock = rawDecode(bytes) match {
-        case RLPList(RLPList(blockHeader, transactionList: RLPList, uncleNodesList: RLPList), RLPValue(totalDifficultyBytes)) =>
+        case RLPList(
+              RLPList(blockHeader, transactionList: RLPList, uncleNodesList: RLPList),
+              RLPValue(totalDifficultyBytes)
+            ) =>
           NewBlock(
             Block(
               blockHeader.toBlockHeader,
@@ -315,7 +318,14 @@ object BaseETH6XMessages {
             ) =>
           val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
           SignedTransaction(
-            LegacyTransaction(BigInt(1, nonceBytes), BigInt(1, gasPriceBytes), BigInt(1, gasLimitBytes), receivingAddressOpt, BigInt(1, valueBytes), ByteString(payloadBytes)),
+            LegacyTransaction(
+              BigInt(1, nonceBytes),
+              BigInt(1, gasPriceBytes),
+              BigInt(1, gasLimitBytes),
+              receivingAddressOpt,
+              BigInt(1, valueBytes),
+              ByteString(payloadBytes)
+            ),
             BigInt(1, pointSignBytes).toInt.toByte,
             ByteString(signatureRandomBytes),
             ByteString(signatureBytes)

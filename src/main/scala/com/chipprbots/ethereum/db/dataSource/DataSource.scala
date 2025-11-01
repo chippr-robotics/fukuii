@@ -17,7 +17,9 @@ trait DataSource {
     * @return
     *   the value associated with the passed key.
     */
-  def apply(namespace: Namespace, key: Key): Value = get(namespace, key).get
+  def apply(namespace: Namespace, key: Key): Value = get(namespace, key).getOrElse(
+    throw new NoSuchElementException(s"Key not found in namespace $namespace")
+  )
 
   /** This function obtains the associated value to a key, if there exists one.
     *

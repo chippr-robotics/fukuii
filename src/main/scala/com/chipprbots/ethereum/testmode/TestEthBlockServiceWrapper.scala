@@ -59,8 +59,9 @@ class TestEthBlockServiceWrapper(
 
           ethResponseOpt match {
             case None =>
+              val hashHex = baseBlockResponse.hash.map(_.toHex).getOrElse("unknown")
               Left(
-                JsonRpcError.LogicError(s"Ledger: unable to find block for hash=${baseBlockResponse.hash.get.toHex}")
+                JsonRpcError.LogicError(s"Ledger: unable to find block for hash=$hashHex")
               )
             case Some(_) =>
               Right(BlockByBlockHashResponse(ethResponseOpt))
@@ -82,8 +83,11 @@ class TestEthBlockServiceWrapper(
     .map(
       _.map { blockByBlockResponse =>
         val bestBranch = blockchainReader.getBestBranch()
-        val fullBlock = blockchainReader.getBlockByNumber(bestBranch, blockByBlockResponse.blockResponse.get.number).get
-        BlockByNumberResponse(blockByBlockResponse.blockResponse.map(response => toEthResponse(fullBlock, response)))
+        val response = for {
+          blockResp <- blockByBlockResponse.blockResponse
+          fullBlock <- blockchainReader.getBlockByNumber(bestBranch, blockResp.number)
+        } yield toEthResponse(fullBlock, blockResp)
+        BlockByNumberResponse(response)
       }
     )
 

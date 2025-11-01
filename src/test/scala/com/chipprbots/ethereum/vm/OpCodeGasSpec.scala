@@ -500,7 +500,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
     forAll(stateGen) { stateIn =>
       val stateOut = op.execute(stateIn)
 
-      val (Seq(offset, size, _*), _) = (stateIn.stack.pop(op.delta): @unchecked)
+      val (Seq(offset, size, _*), _) = stateIn.stack.pop(op.delta): @unchecked
       val memCost = config.calcMemCost(stateIn.memory.size, offset, size)
       val logCost = G_logdata * size + op.i * G_logtopic
       val expectedGas: BigInt = G_log + memCost + logCost

@@ -138,7 +138,11 @@ class PendingTransactionsManager(
       pendingTransactions.cleanUp()
       log.debug("Overriding transaction: {}", newStx.hash.toHex)
       // Only validated transactions are added this way, it is safe to call get
-      val newStxSender = SignedTransaction.getSender(newStx).get
+      val newStxSender = SignedTransaction
+        .getSender(newStx)
+        .getOrElse(
+          throw new IllegalStateException("Unable to get sender from validated transaction")
+        )
       val obsoleteTxs = pendingTransactions
         .asMap()
         .asScala

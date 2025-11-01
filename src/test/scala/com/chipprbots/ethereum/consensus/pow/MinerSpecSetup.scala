@@ -56,7 +56,7 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
   val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
   val ethMiningService: EthMiningService = mock[EthMiningService]
   val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
-  
+
   private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
     // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
     val stubEvmCodeStorage = mock[EvmCodeStorage]

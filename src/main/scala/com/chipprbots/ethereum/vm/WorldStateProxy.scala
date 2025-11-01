@@ -48,7 +48,9 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     * and throwing an exception is an appropriate response.
     */
   protected def getGuaranteedAccount(address: Address): Account =
-    getAccount(address).get
+    getAccount(address).getOrElse(
+      throw new IllegalStateException(s"Account not found for address $address")
+    )
 
   def getCode(address: Address): ByteString
   def getStorage(address: Address): S

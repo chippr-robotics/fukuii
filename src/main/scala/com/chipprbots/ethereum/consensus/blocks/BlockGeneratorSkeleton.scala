@@ -135,7 +135,10 @@ abstract class BlockGeneratorSkeleton(
 
     val sortedTransactions: Seq[SignedTransaction] = transactions
       // should be safe to call get as we do not insert improper transactions to pool.
-      .groupBy(tx => SignedTransaction.getSender(tx).get)
+      .flatMap(tx => SignedTransaction.getSender(tx).map(sender => (sender, tx)))
+      .groupBy(_._1)
+      .view
+      .mapValues(_.map(_._2))
       .values
       .toList
       .flatMap { txsFromSender =>

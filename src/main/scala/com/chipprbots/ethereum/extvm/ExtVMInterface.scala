@@ -56,7 +56,8 @@ class ExtVMInterface(externaVmConfig: VmConfig.ExternalConfig, blockchainConfig:
   final override def run(context: PC): PR = {
     if (vmClient.isEmpty) initConnection()
 
-    Try(vmClient.get.run(context)) match {
+    val client = vmClient.getOrElse(throw new IllegalStateException("VM client not initialized"))
+    Try(client.run(context)) match {
       case Success(res) => res
       case Failure(ex) =>
         ex.printStackTrace()

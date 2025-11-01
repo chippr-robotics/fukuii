@@ -693,7 +693,7 @@ class OpCodeFunSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
       val stateOut = executeOp(op, stateIn)
 
       withStackVerification(op, stateIn, stateOut) {
-        val (Seq(offset, size, topics @ _*), stack1) = (stateIn.stack.pop(op.delta): @unchecked)
+        val (Seq(offset, size, topics @ _*), stack1) = stateIn.stack.pop(op.delta): @unchecked
         val (data, mem1) = stateIn.memory.load(offset, size)
         val logEntry = TxLogEntry(stateIn.env.ownerAddr, topics.map(_.bytes), data)
         val expectedState = stateIn.withStack(stack1).withMemory(mem1).withLog(logEntry).step()

@@ -104,7 +104,8 @@ class AuthHandshakerSpec extends AnyFlatSpec with Matchers with SecureRandomBuil
       encodedResponse.toArray
     )
 
-    val AuthHandshakeSuccess(secrets: Secrets, _) = (authHandshaker.handleResponseMessage(ByteString(encryptedResponse)): @unchecked)
+    val AuthHandshakeSuccess(secrets: Secrets, _) =
+      authHandshaker.handleResponseMessage(ByteString(encryptedResponse)): @unchecked
 
     val expectedMacSecret = Hex.decode("50a782c6fedf88b829a6e5798da721dcbf5b46c117704e2ada985d5235ac192c")
     val expectedSharedToken = Hex.decode("b1960fa5d529ee89f8032c8aeb0e4fda2bbf4d7eff0c5695173e27f382d8f5bb")
@@ -121,8 +122,9 @@ class AuthHandshakerSpec extends AnyFlatSpec with Matchers with SecureRandomBuil
 
     val (initPacket, thisHandshakerInitiated) = thisHandshaker.initiate(remoteUri)
     val (responsePacket, AuthHandshakeSuccess(remoteSecrets: Secrets, _)) =
-      (remoteHandshaker.handleInitialMessageV4(initPacket): @unchecked)
-    val AuthHandshakeSuccess(thisSecrets: Secrets, _) = (thisHandshakerInitiated.handleResponseMessageV4(responsePacket): @unchecked)
+      remoteHandshaker.handleInitialMessageV4(initPacket): @unchecked
+    val AuthHandshakeSuccess(thisSecrets: Secrets, _) =
+      thisHandshakerInitiated.handleResponseMessageV4(responsePacket): @unchecked
 
     remoteSecrets.token shouldBe thisSecrets.token
     remoteSecrets.aes shouldBe thisSecrets.aes

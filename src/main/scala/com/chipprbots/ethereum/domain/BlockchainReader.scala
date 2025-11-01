@@ -111,10 +111,10 @@ class BlockchainReader(
   }
 
   def genesisHeader: BlockHeader =
-    getBlockHeaderByNumber(0).get
+    getBlockHeaderByNumber(0).getOrElse(throw new IllegalStateException("Genesis header not found"))
 
   def genesisBlock: Block =
-    getBlockByNumber(0).get
+    getBlockByNumber(0).getOrElse(throw new IllegalStateException("Genesis block not found"))
 
   /** Returns a block inside this branch based on its number */
   def getBlockByNumber(branch: Branch, number: BigInt): Option[Block] = branch match {

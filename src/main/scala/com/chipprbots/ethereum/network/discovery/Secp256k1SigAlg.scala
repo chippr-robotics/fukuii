@@ -54,7 +54,8 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
 
   override def sign(privateKey: PrivateKey, data: BitVector): Signature = {
     val message = crypto.kec256(data.toByteArray)
-    val keyPair = signingKeyPairCache.getOrElseUpdate(privateKey, crypto.keyPairFromPrvKey(privateKey.value.toByteArray))
+    val keyPair =
+      signingKeyPairCache.getOrElseUpdate(privateKey, crypto.keyPairFromPrvKey(privateKey.value.toByteArray))
     val sig = ECDSASignature.sign(message, keyPair)
     toSignature(sig)
   }
@@ -76,7 +77,8 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
       case PublicKeyBytesSize =>
         // This is a public key without the prefix, it consists of an x and y bigint.
         // To compress we drop y, and the first byte becomes 02 for even values of y and 03 for odd values.
-        val point = crypto.curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKey.value.toByteArray)
+        val point =
+          crypto.curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKey.value.toByteArray)
         val key = new ECPublicKeyParameters(point, crypto.curve)
         val bytes = key.getQ.getEncoded(true) // compressed encoding
         val compressed = PublicKey(BitVector(bytes))
@@ -135,13 +137,19 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
   private def toPublicKey(publicKeyBytes: Array[Byte]): PublicKey = {
     // Discovery uses 64 byte keys, without the prefix.
     val publicKey = PublicKey(BitVector(publicKeyBytes))
-    assert(publicKey.value.size == PublicKeyBytesSize * 8, s"Unexpected public key size: ${publicKey.value.size / 8} bytes")
+    assert(
+      publicKey.value.size == PublicKeyBytesSize * 8,
+      s"Unexpected public key size: ${publicKey.value.size / 8} bytes"
+    )
     publicKey
   }
 
   private def toPrivateKey(privateKeyBytes: Array[Byte]): PrivateKey = {
     val privateKey = PrivateKey(BitVector(privateKeyBytes))
-    assert(privateKey.value.size == PrivateKeyBytesSize * 8, s"Unexpected private key size: ${privateKey.value.size / 8} bytes")
+    assert(
+      privateKey.value.size == PrivateKeyBytesSize * 8,
+      s"Unexpected private key size: ${privateKey.value.size / 8} bytes"
+    )
     privateKey
   }
 

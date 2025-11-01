@@ -45,16 +45,18 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
     if (!isValidCall(context))
       invalidCallResult(context, Set.empty, Set.empty)
     else {
-      require(context.recipientAddr.isDefined, "Recipient address must be defined for message call")
+      val recipientAddr = context.recipientAddr.getOrElse(
+        throw new IllegalArgumentException("Recipient address must be defined for message call")
+      )
 
-      def makeTransfer = context.world.transfer(context.callerAddr, context.recipientAddr.get, context.endowment)
+      def makeTransfer = context.world.transfer(context.callerAddr, recipientAddr, context.endowment)
       val world1 = if (context.doTransfer) makeTransfer else context.world
       val context1: PC = context.copy(world = world1)
 
       if (PrecompiledContracts.isDefinedAt(context1))
         PrecompiledContracts.run(context1)
       else {
-        val code = world1.getCode(context.recipientAddr.get)
+        val code = world1.getCode(recipientAddr)
         val env = ExecEnv(context1, code, ownerAddr)
 
         val initialState: PS = ProgramState(this, context1, env)
