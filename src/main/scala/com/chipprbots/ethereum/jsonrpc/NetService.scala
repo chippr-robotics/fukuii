@@ -38,13 +38,14 @@ object NetService {
 
 trait NetServiceAPI {
   import NetService._
-  
+
   def version(req: VersionRequest): ServiceResponse[VersionResponse]
   def listening(req: ListeningRequest): ServiceResponse[ListeningResponse]
   def peerCount(req: PeerCountRequest): ServiceResponse[PeerCountResponse]
 }
 
-class NetService(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, config: NetServiceConfig) extends NetServiceAPI {
+class NetService(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, config: NetServiceConfig)
+    extends NetServiceAPI {
   import NetService._
 
   def version(req: VersionRequest): ServiceResponse[VersionResponse] =
