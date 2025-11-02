@@ -151,6 +151,32 @@ For example, to generate a new private key:
 
 ./bin/fukuii cli generate-private-key
 
+### Troubleshooting Build Issues
+
+If you encounter issues running the distribution, try the following:
+
+1. **Clean Build**: Remove stale artifacts with `sbt clean` before building
+   ```bash
+   sbt clean dist
+   ```
+
+2. **Verify Java Version**: Fukuii requires JDK 21
+   ```bash
+   java -version  # Should show version 21.x.x
+   ```
+
+3. **Check Distribution Contents**: Verify the main class is set correctly
+   ```bash
+   unzip -p target/universal/fukuii-*.zip fukuii-*/lib/com.chipprbots.fukuii-*.jar META-INF/MANIFEST.MF | grep Main-Class
+   # Should show: Main-Class: com.chipprbots.ethereum.App
+   ```
+
+4. **Test the Distribution**: Extract and test the archive
+   ```bash
+   cd target/universal && unzip fukuii-*.zip
+   cd fukuii-* && ./bin/fukuii cli --help
+   ```
+
 Configuration and Environment
 
 Many configuration properties begin with the prefix fukuii instead of mantis. For example, the RPC settings are controlled by keys like fukuii.network.rpc.http.mode. Similarly, the environment variable FUKUII_DEV=true enables developer‑friendly settings during the build.
