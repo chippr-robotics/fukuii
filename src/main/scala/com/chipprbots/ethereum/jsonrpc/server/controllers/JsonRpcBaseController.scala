@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.jsonrpc.server.controllers
 import java.time.Duration
 
 import cats.effect.IO
-import cats.syntax.all._
 
 import scala.collection.immutable.ArraySeq
 import scala.concurrent.ExecutionContext

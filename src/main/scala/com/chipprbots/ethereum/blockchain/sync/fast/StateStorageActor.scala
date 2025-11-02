@@ -8,7 +8,6 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext
-
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try

@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.network.discovery
 
-import java.net.InetSocketAddress
 import java.net._
 
 import org.apache.pekko.util.ByteString

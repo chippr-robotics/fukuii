@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.consensus
 
 import cats.data.NonEmptyList
-
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
@@ -27,7 +26,6 @@ import com.chipprbots.ethereum.ledger.BlockExecutionSuccess
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.FunctorOps._
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
 

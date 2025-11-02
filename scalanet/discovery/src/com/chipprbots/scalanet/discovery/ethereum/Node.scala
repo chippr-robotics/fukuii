@@ -1,12 +1,15 @@
 package com.chipprbots.scalanet.discovery.ethereum
 
-import com.chipprbots.scalanet.discovery.crypto.PublicKey
-import com.chipprbots.scalanet.discovery.hash.{Hash, Keccak256}
-import com.chipprbots.scalanet.peergroup.InetAddressOps._
 import java.net.InetAddress
-import scodec.bits.ByteVector
+
 import scala.util.Try
+
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.discovery.hash.Keccak256
 import com.chipprbots.scalanet.peergroup.Addressable
+import com.chipprbots.scalanet.peergroup.InetAddressOps._
+import scodec.bits.ByteVector
 
 case class Node(id: Node.Id, address: Node.Address) {
   protected[discovery] lazy val kademliaId: Hash = Node.kademliaId(id)

@@ -1,7 +1,8 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import com.chipprbots.scalanet.discovery.ethereum.Node
 import scala.concurrent.duration._
+
+import com.chipprbots.scalanet.discovery.ethereum.Node
 
 case class DiscoveryConfig(
     // How long in the future to set message expiration.
@@ -33,7 +34,7 @@ case class DiscoveryConfig(
 )
 
 object DiscoveryConfig {
-  val default = DiscoveryConfig(
+  val default: DiscoveryConfig = DiscoveryConfig(
     messageExpiration = 60.seconds,
     maxClockDrift = Duration.Zero,
     requestTimeout = 3.seconds,

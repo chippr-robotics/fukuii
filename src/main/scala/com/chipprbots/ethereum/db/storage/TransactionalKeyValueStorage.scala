@@ -1,9 +1,10 @@
 package com.chipprbots.ethereum.db.storage
 
 import cats.effect.IO
-import fs2.Stream
 
 import scala.collection.immutable.ArraySeq
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate

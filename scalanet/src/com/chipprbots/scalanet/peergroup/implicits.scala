@@ -1,9 +1,11 @@
 package com.chipprbots.scalanet.peergroup
 
-import cats.effect.{Deferred, IO}
-import fs2.Stream
-import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
+import cats.effect.Deferred
+import cats.effect.IO
+
 import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
+import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
+import fs2.Stream
 
 package object implicits {
   // Functions to be applied on the `.nextChannelEvent()` or `.nextServerEvent()` results.

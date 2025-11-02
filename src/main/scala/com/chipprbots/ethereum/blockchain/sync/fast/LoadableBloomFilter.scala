@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
 import cats.effect.IO
-import fs2.Stream
 
 import com.google.common.hash.BloomFilter
 import com.google.common.hash.Funnel
+import fs2.Stream
 
 import com.chipprbots.ethereum.blockchain.sync.fast.LoadableBloomFilter.BloomFilterLoadingResult
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError

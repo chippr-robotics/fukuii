@@ -1,11 +1,12 @@
 package com.chipprbots.scalanet.peergroup.dynamictls
 
+import java.net.InetAddress
+import java.net.InetSocketAddress
+
 import com.github.benmanes.caffeine.cache.Caffeine
 import io.netty.channel.ChannelHandler.Sharable
 import io.netty.channel.ChannelHandlerContext
 import io.netty.handler.ipfilter.AbstractRemoteAddressFilter
-
-import java.net.{InetAddress, InetSocketAddress}
 
 private[scalanet] object CustomHandlers {
 

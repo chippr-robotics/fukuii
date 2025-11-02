@@ -1,12 +1,18 @@
 package com.chipprbots.scalanet.discovery.ethereum
 
-import scodec.bits.ByteVector
+import java.net.Inet6Address
+import java.nio.charset.StandardCharsets.UTF_8
+
 import scala.collection.SortedMap
 import scala.math.Ordering.Implicits._
-import java.nio.charset.StandardCharsets.UTF_8
-import com.chipprbots.scalanet.discovery.crypto.{Signature, PrivateKey, PublicKey, SigAlg}
-import scodec.{Codec, Attempt}
-import java.net.Inet6Address
+
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.crypto.Signature
+import scodec.Attempt
+import scodec.Codec
+import scodec.bits.ByteVector
 
 /** ENR corresponding to https://github.com/ethereum/devp2p/blob/master/enr.md */
 case class EthereumNodeRecord(
@@ -36,28 +42,28 @@ object EthereumNodeRecord {
       ByteVector(k.getBytes(UTF_8))
 
     /** name of identity scheme, e.g. "v4" */
-    val id = key("id")
+    val id: ByteVector = key("id")
 
     /** compressed secp256k1 public key, 33 bytes */
-    val secp256k1 = key("secp256k1")
+    val secp256k1: ByteVector = key("secp256k1")
 
     /** IPv4 address, 4 bytes */
-    val ip = key("ip")
+    val ip: ByteVector = key("ip")
 
     /** TCP port, big endian integer */
-    val tcp = key("tcp")
+    val tcp: ByteVector = key("tcp")
 
     /** UDP port, big endian integer */
-    val udp = key("udp")
+    val udp: ByteVector = key("udp")
 
     /** IPv6 address, 16 bytes */
-    val ip6 = key("ip6")
+    val ip6: ByteVector = key("ip6")
 
     /** IPv6-specific TCP port, big endian integer */
-    val tcp6 = key("tcp6")
+    val tcp6: ByteVector = key("tcp6")
 
     /** IPv6-specific UDP port, big endian integer */
-    val udp6 = key("udp6")
+    val udp6: ByteVector = key("udp6")
 
     /** The keys above have pre-defined meaning, but there can be arbitrary entries in the map. */
     val Predefined: Set[ByteVector] = Set(id, secp256k1, ip, tcp, udp, ip6, tcp6, udp6)

@@ -1,9 +1,16 @@
 package com.chipprbots.scalanet.peergroup
 
-import com.github.jgonian.ipmath.{Ipv6Range, Ipv4Range, Ipv4, Ipv6}
-import java.net.{InetAddress, Inet4Address, Inet6Address}
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
+
 import scala.language.implicitConversions
+
 import com.github.jgonian.ipmath.AbstractIp
+import com.github.jgonian.ipmath.Ipv4
+import com.github.jgonian.ipmath.Ipv4Range
+import com.github.jgonian.ipmath.Ipv6
+import com.github.jgonian.ipmath.Ipv6Range
 
 class InetAddressOps(val address: InetAddress) extends AnyVal {
   import InetAddressOps._

@@ -4,7 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.language.implicitConversions
 
-import com.chipprbots.ethereum.rlp.RLPImplicits.{given, *}
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
 object RLPImplicitConversions {
 

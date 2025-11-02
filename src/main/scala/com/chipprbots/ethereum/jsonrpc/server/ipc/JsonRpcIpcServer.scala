@@ -8,16 +8,15 @@ import java.net.Socket
 
 import org.apache.pekko.actor.ActorSystem
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.util.Try
 
-import org.json4s._
 import org.json4s.Formats
 import org.json4s.JsonAST.JValue
+import org.json4s._
 import org.json4s.native
 import org.json4s.native.JsonMethods._
 import org.json4s.native.Serialization

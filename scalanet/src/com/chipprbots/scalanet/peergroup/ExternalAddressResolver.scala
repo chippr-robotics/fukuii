@@ -1,9 +1,12 @@
 package com.chipprbots.scalanet.peergroup
 
-import java.io.{BufferedReader, InputStreamReader}
-import java.net.{InetAddress, URL}
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.InetAddress
+import java.net.URL
 
 import cats.effect.IO
+
 import scala.util.control.NonFatal
 
 /** Resolve the external address based on a list of URLs that each return the IP of the caller. */

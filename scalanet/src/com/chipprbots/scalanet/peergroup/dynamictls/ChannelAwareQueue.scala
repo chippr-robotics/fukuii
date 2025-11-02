@@ -1,11 +1,12 @@
 package com.chipprbots.scalanet.peergroup.dynamictls
 
+import java.util.concurrent.atomic.AtomicLong
+
+import cats.effect.IO
+
 import com.chipprbots.scalanet.peergroup.CloseableQueue
 import com.chipprbots.scalanet.peergroup.CloseableQueue.Closed
 import io.netty.channel.ChannelConfig
-import cats.effect.IO
-
-import java.util.concurrent.atomic.AtomicLong
 
 /**
   * Wraps an underlying unbounded CloseableQueue queue and bounds it based on netty auto-read feature.

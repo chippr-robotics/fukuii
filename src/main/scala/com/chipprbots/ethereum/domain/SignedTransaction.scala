@@ -19,7 +19,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.{given, _}
+import com.chipprbots.ethereum.rlp.RLPImplicits.{_, given}
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 

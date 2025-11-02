@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.db.dataSource
 
 import cats.effect.IO
+
 import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError

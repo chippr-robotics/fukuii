@@ -3,9 +3,9 @@ package com.chipprbots.ethereum.consensus.pow.miners
 import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
 import org.apache.pekko.util.ByteString
 
-import scala.concurrent.Future
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.Future
 import scala.util.Random
 
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock

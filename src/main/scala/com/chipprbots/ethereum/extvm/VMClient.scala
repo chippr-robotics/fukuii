@@ -11,7 +11,6 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.VmConfig
 import com.chipprbots.ethereum.vm
-import com.chipprbots.ethereum.vm.WorldStateProxy
 import com.chipprbots.ethereum.vm._
 
 import Implicits._

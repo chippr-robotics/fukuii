@@ -4,9 +4,8 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 
-import cats.effect.Resource
-
 import cats.effect.IO
+import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.scalanet.discovery.crypto.PrivateKey
@@ -26,6 +25,8 @@ import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.network.discovery.codecs.RLPCodecs
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
+import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord.Content
 
 trait DiscoveryServiceBuilder {
 
@@ -41,9 +42,9 @@ trait DiscoveryServiceBuilder {
     val (privateKeyBytes, _) = crypto.keyPairToByteArrays(keyPair)
     val privateKey = PrivateKey(BitVector(privateKeyBytes))
 
-    implicit val packetCodec = v4.Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
+    implicit val packetCodec: Codec[Packet] = v4.Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
     implicit val payloadCodec = RLPCodecs.payloadCodec
-    implicit val enrContentCodec = RLPCodecs.codecFromRLPCodec(RLPCodecs.enrContentRLPCodec)
+    implicit val enrContentCodec: Codec[Content] = RLPCodecs.codecFromRLPCodec(RLPCodecs.enrContentRLPCodec)
 
     val resource = for {
       host <- Resource.eval {

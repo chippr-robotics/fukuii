@@ -1,11 +1,15 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
-import org.apache.pekko.http.scaladsl.marshalling.{Marshaller, ToEntityMarshaller}
-import org.apache.pekko.http.scaladsl.model.{ContentTypeRange, HttpEntity, MediaTypes}
-import org.apache.pekko.http.scaladsl.unmarshalling.{FromEntityUnmarshaller, Unmarshaller}
-import org.json4s.{Formats, Serialization}
+import org.apache.pekko.http.scaladsl.marshalling.Marshaller
+import org.apache.pekko.http.scaladsl.marshalling.ToEntityMarshaller
+import org.apache.pekko.http.scaladsl.model.ContentTypeRange
+import org.apache.pekko.http.scaladsl.model.HttpEntity
+import org.apache.pekko.http.scaladsl.model.MediaTypes
+import org.apache.pekko.http.scaladsl.unmarshalling.FromEntityUnmarshaller
+import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshaller
 
-import scala.collection.immutable.Seq
+import org.json4s.Formats
+import org.json4s.Serialization
 
 /** Pekko HTTP support for json4s serialization Compatibility layer replacing
   * de.heikoseeberger.akkahttpjson4s.Json4sSupport

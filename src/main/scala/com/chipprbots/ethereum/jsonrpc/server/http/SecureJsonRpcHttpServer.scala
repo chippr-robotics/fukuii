@@ -4,14 +4,13 @@ import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 
 import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.apache.pekko.http.scaladsl.ConnectionContext
 import org.apache.pekko.http.scaladsl.Http
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.Failure
 import scala.util.Success
-
-import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcHealthChecker
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController

@@ -2,14 +2,14 @@ package com.chipprbots.ethereum.db.dataSource
 
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
-import cats.effect.Resource
 import cats.effect.IO
-import fs2.Stream
+import cats.effect.Resource
 
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
+import fs2.Stream
 import org.rocksdb._
 
 import com.chipprbots.ethereum.db.dataSource.DataSource._

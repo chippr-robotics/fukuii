@@ -1,13 +1,16 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
+import java.net.InetAddress
+
 import cats._
 import cats.implicits._
-import com.chipprbots.scalanet.discovery.hash.Hash
+
 import com.chipprbots.scalanet.discovery.ethereum.Node
-import com.chipprbots.scalanet.kademlia.{KBuckets, TimeSet}
+import com.chipprbots.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.kademlia.KBuckets
+import com.chipprbots.scalanet.kademlia.TimeSet
 import com.chipprbots.scalanet.peergroup.Addressable
 import com.chipprbots.scalanet.peergroup.InetAddressOps._
-import java.net.InetAddress
 import scodec.bits.BitVector
 
 case class KBucketsWithSubnetLimits[A: Addressable](
@@ -136,7 +139,7 @@ object KBucketsWithSubnetLimits {
   }
 
   object SubnetLimits {
-    val Unlimited = SubnetLimits(0, 0, 0)
+    val Unlimited: SubnetLimits = SubnetLimits(0, 0, 0)
 
     def fromConfig(config: DiscoveryConfig): SubnetLimits =
       SubnetLimits(

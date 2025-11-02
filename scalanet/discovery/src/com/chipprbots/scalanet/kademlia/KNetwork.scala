@@ -1,16 +1,21 @@
 package com.chipprbots.scalanet.kademlia
 
-import com.chipprbots.scalanet.kademlia.KMessage.{KRequest, KResponse}
-import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
-import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
-import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
-import com.chipprbots.scalanet.peergroup.implicits._
-import com.chipprbots.scalanet.peergroup.{Channel, PeerGroup}
-import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
 import cats.effect.IO
-import fs2.Stream
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+
 import scala.util.control.NonFatal
+
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest.FindNodes
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest.Ping
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse.Nodes
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse.Pong
+import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
+import com.chipprbots.scalanet.peergroup.Channel
+import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
+import com.chipprbots.scalanet.peergroup.PeerGroup
+import com.chipprbots.scalanet.peergroup.implicits._
+import fs2.Stream
 
 trait KNetwork[A] {
 

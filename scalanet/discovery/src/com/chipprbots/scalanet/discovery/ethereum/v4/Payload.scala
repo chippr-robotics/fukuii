@@ -1,8 +1,9 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
-import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
+import com.chipprbots.scalanet.discovery.hash.Hash
 
 /** Discovery protocol messages from https://github.com/ethereum/devp2p/blob/master/discv4.md
   *
@@ -33,7 +34,7 @@ object Payload {
       enrSeq: Option[Long]
   ) extends Request
       with HasExpiration[Ping] {
-    def withExpiration(e: Long) = copy(expiration = e)
+    def withExpiration(e: Long): Ping = copy(expiration = e)
   }
 
   case class Pong(
@@ -46,7 +47,7 @@ object Payload {
       enrSeq: Option[Long]
   ) extends Response
       with HasExpiration[Pong] {
-    def withExpiration(e: Long) = copy(expiration = e)
+    def withExpiration(e: Long): Pong = copy(expiration = e)
   }
 
   case class FindNode(
@@ -55,7 +56,7 @@ object Payload {
       expiration: Long
   ) extends Request
       with HasExpiration[FindNode] {
-    def withExpiration(e: Long) = copy(expiration = e)
+    def withExpiration(e: Long): FindNode = copy(expiration = e)
   }
 
   case class Neighbors(
@@ -63,14 +64,14 @@ object Payload {
       expiration: Long
   ) extends Response
       with HasExpiration[Neighbors] {
-    def withExpiration(e: Long) = copy(expiration = e)
+    def withExpiration(e: Long): Neighbors = copy(expiration = e)
   }
 
   case class ENRRequest(
       expiration: Long
   ) extends Request
       with HasExpiration[ENRRequest] {
-    def withExpiration(e: Long) = copy(expiration = e)
+    def withExpiration(e: Long): ENRRequest = copy(expiration = e)
   }
 
   case class ENRResponse(

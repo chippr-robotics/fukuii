@@ -2,15 +2,11 @@ package com.chipprbots.ethereum.db.storage
 
 import org.apache.pekko.util.ByteString
 
-import boopickle.Default.Pickle
-import boopickle.Default.Unpickle
 import boopickle.DefaultBasic._
 import boopickle.Pickler
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
-import com.chipprbots.ethereum.db.storage.ReceiptStorage._
-import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.SuccessOutcome
+import com.chipprbots.ethereum.db.storage.ReceiptStorage.BlockHash
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.ByteUtils.byteSequenceToBuffer
 import com.chipprbots.ethereum.utils.ByteUtils.compactPickledBytes

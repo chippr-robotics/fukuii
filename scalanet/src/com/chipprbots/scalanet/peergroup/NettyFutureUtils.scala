@@ -1,10 +1,12 @@
 package com.chipprbots.scalanet.peergroup
 
-import io.netty
-import io.netty.util.concurrent.{Future, GenericFutureListener}
+import java.util.concurrent.CancellationException
+
 import cats.effect.IO
 
-import java.util.concurrent.CancellationException
+import io.netty
+import io.netty.util.concurrent.Future
+import io.netty.util.concurrent.GenericFutureListener
 
 private[scalanet] object NettyFutureUtils {
   def toTask(f: => netty.util.concurrent.Future[_]): IO[Unit] = {

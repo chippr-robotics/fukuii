@@ -6,7 +6,6 @@ import org.apache.pekko.util.ByteString
 
 import cats.Monad
 import cats.data.EitherT._
-import cats.effect.IO
 import cats.implicits._
 
 import org.typelevel.log4cats.Logger

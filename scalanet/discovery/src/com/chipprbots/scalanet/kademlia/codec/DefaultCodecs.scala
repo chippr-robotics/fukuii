@@ -1,13 +1,19 @@
 package com.chipprbots.scalanet.kademlia.codec
 
 import java.util.UUID
+
 import com.chipprbots.scalanet.kademlia.KMessage
-import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
-import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest.FindNodes
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest.Ping
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse.Nodes
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse.Pong
 import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
-import scodec.codecs.{discriminated, uint4, bits, uuid}
 import scodec.Codec
 import scodec.bits.BitVector
+import scodec.codecs.bits
+import scodec.codecs.discriminated
+import scodec.codecs.uint4
+import scodec.codecs.uuid
 
 /** Encodings for scodec. */
 object DefaultCodecs extends DefaultCodecDerivations {

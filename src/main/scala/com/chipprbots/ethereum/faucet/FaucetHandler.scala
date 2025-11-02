@@ -5,7 +5,6 @@ import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.domain.Address

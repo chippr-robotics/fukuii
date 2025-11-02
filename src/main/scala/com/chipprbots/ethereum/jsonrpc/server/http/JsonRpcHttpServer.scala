@@ -4,6 +4,10 @@ import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 
 import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.cors.javadsl.CorsRejection
+import org.apache.pekko.http.cors.scaladsl.CorsDirectives._
+import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
+import org.apache.pekko.http.cors.scaladsl.settings.CorsSettings
 import org.apache.pekko.http.scaladsl.model._
 import org.apache.pekko.http.scaladsl.server.Directives._
 import org.apache.pekko.http.scaladsl.server._
@@ -12,13 +16,8 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.syntax.all._
 
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
-import org.apache.pekko.http.cors.javadsl.CorsRejection
-import org.apache.pekko.http.cors.scaladsl.CorsDirectives._
-import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
-import org.apache.pekko.http.cors.scaladsl.settings.CorsSettings
 import com.typesafe.config.{Config => TypesafeConfig}
 import org.json4s.DefaultFormats
 import org.json4s.Formats
@@ -239,9 +238,9 @@ object JsonRpcHttpServer extends Logger {
         override val interface: String = rpcHttpConfig.getString("interface")
         override val port: Int = rpcHttpConfig.getInt("port")
 
-        override val corsAllowedOrigins = ConfigUtils.parseCorsAllowedOrigins(rpcHttpConfig, "cors-allowed-origins")
+        override val corsAllowedOrigins: HttpOriginMatcher = ConfigUtils.parseCorsAllowedOrigins(rpcHttpConfig, "cors-allowed-origins")
 
-        override val rateLimit = RateLimitConfig(rpcHttpConfig.getConfig("rate-limit"))
+        override val rateLimit: RateLimitConfig = RateLimitConfig(rpcHttpConfig.getConfig("rate-limit"))
       }
     }
   }
