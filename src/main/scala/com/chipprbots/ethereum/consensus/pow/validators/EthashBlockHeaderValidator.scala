@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.consensus.pow
 package validators
 
-import org.apache.pekko.util.ByteString
-
 import java.util.concurrent.atomic.AtomicReference
+
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderPoWError

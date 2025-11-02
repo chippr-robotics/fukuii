@@ -2,13 +2,11 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
-import org.json4s._
 import org.json4s.Extraction
 import org.json4s.JsonAST._
+import org.json4s._
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
-import com.chipprbots.ethereum.jsonrpc.QAService.MineBlocksRequest
-import com.chipprbots.ethereum.jsonrpc.QAService.MineBlocksResponse
 import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec

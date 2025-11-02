@@ -3,8 +3,10 @@ package com.chipprbots.scalanet.kademlia
 import java.time.Clock
 import java.time.Clock.systemUTC
 
-import scala.collection.{Set, AbstractSet}
-import scala.collection.immutable.{HashMap, ListSet}
+import scala.collection.AbstractSet
+import scala.collection.Set
+import scala.collection.immutable.HashMap
+import scala.collection.immutable.ListSet
 
 class TimeSet[T] private (val clock: Clock, val timestamps: HashMap[T, Long], val underlying: ListSet[T])
     extends AbstractSet[T] {

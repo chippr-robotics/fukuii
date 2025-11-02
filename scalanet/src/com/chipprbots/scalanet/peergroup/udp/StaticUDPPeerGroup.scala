@@ -1,38 +1,45 @@
 package com.chipprbots.scalanet.peergroup.udp
 
-import cats.effect.{Ref, IO, Resource}
+import java.io.IOException
+import java.net.InetSocketAddress
+
+import cats.effect.IO
+import cats.effect.Ref
+import cats.effect.Resource
 import cats.effect.std.Semaphore
-import cats.effect.unsafe.implicits.global // For unsafeRunAndForget
+import cats.effect.unsafe.implicits.global
 import cats.implicits._
-import com.typesafe.scalalogging.StrictLogging
-import com.chipprbots.scalanet.peergroup.{Channel, Release, InetMultiAddress, CloseableQueue}
-import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, MessageReceived, DecodingError, UnexpectedError}
-import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
+
+import scala.util.control.NonFatal
+
+import com.chipprbots.scalanet.peergroup.Channel
+import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
+import com.chipprbots.scalanet.peergroup.Channel.DecodingError
+import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
+import com.chipprbots.scalanet.peergroup.Channel.UnexpectedError
+import com.chipprbots.scalanet.peergroup.CloseableQueue
 import com.chipprbots.scalanet.peergroup.ControlEvent.InitializationError
+import com.chipprbots.scalanet.peergroup.InetMultiAddress
 import com.chipprbots.scalanet.peergroup.NettyFutureUtils.toTask
-import com.chipprbots.scalanet.peergroup.PeerGroup.{
-  ServerEvent,
-  TerminalPeerGroup,
-  MessageMTUException,
-  ChannelAlreadyClosedException
-}
+import com.chipprbots.scalanet.peergroup.PeerGroup.ChannelAlreadyClosedException
+import com.chipprbots.scalanet.peergroup.PeerGroup.MessageMTUException
+import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
+import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
+import com.chipprbots.scalanet.peergroup.PeerGroup.TerminalPeerGroup
+import com.chipprbots.scalanet.peergroup.Release
+import com.typesafe.scalalogging.StrictLogging
 import io.netty.bootstrap.Bootstrap
 import io.netty.buffer.Unpooled
-import io.netty.channel.{
-  RecvByteBufAllocator,
-  ChannelOption,
-  ChannelInitializer,
-  ChannelHandlerContext,
-  ChannelInboundHandlerAdapter
-}
+import io.netty.channel.ChannelHandlerContext
+import io.netty.channel.ChannelInboundHandlerAdapter
+import io.netty.channel.ChannelInitializer
+import io.netty.channel.ChannelOption
+import io.netty.channel.RecvByteBufAllocator
 import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.DatagramPacket
 import io.netty.channel.socket.nio.NioDatagramChannel
-import java.io.IOException
-import java.net.InetSocketAddress
-import cats.effect.IO
-import scala.util.control.NonFatal
-import scodec.{Codec, Attempt}
+import scodec.Attempt
+import scodec.Codec
 import scodec.bits.BitVector
 
 /**
@@ -267,7 +274,7 @@ class StaticUDPPeerGroup[M] private (
               }
 
               override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-                val channelId = ctx.channel().id()
+                ctx.channel().id()
                 val remoteAddress = ctx.channel.remoteAddress().asInstanceOf[InetSocketAddress]
                 cause match {
                   case NonFatal(ex) =>
@@ -368,7 +375,7 @@ object StaticUDPPeerGroup extends StrictLogging {
       extends Channel[InetMultiAddress, M]
       with StrictLogging {
 
-    override val to =
+    override val to: InetMultiAddress =
       InetMultiAddress(remoteAddress)
 
     override def from: InetMultiAddress =
@@ -385,7 +392,7 @@ object StaticUDPPeerGroup extends StrictLogging {
         IO.unit
       )
 
-    override def sendMessage(message: M) =
+    override def sendMessage(message: M): IO[Unit] =
       for {
         _ <- raiseIfClosed
         _ <- IO(

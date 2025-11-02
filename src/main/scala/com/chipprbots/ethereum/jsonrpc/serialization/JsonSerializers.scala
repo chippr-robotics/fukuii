@@ -72,7 +72,7 @@ object JsonSerializers {
         (
           PartialFunction.empty,
           { case tx: EthTransactionResponse =>
-            implicit val formats =
+            implicit val formats: Formats =
               DefaultFormats.preservingEmptyValues + UnformattedDataJsonSerializer + QuantitiesSerializer + AddressJsonSerializer
             Extraction.decompose(tx)
           }

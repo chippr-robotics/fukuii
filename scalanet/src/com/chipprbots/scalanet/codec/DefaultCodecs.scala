@@ -1,12 +1,13 @@
 package com.chipprbots.scalanet.codec
 
-import java.net.{InetAddress, InetSocketAddress}
+import java.net.InetAddress
+import java.net.InetSocketAddress
 
 import com.chipprbots.scalanet.peergroup.InetMultiAddress
-import scodec.bits.{BitVector, ByteVector}
-import scodec.{Codec, DecodeResult}
-import scodec.codecs._
+import scodec.Codec
+import scodec.DecodeResult
 import scodec.bits._
+import scodec.codecs._
 
 /**
   *
@@ -16,7 +17,7 @@ import scodec.bits._
   */
 object DefaultCodecs {
 
-  val ipv4Pad = hex"00 00 00 00 00 00 00 00 00 00 FF FF"
+  val ipv4Pad: ByteVector = hex"00 00 00 00 00 00 00 00 00 00 FF FF"
 
   implicit val inetAddress: Codec[InetAddress] = Codec[InetAddress](
     (ia: InetAddress) => {

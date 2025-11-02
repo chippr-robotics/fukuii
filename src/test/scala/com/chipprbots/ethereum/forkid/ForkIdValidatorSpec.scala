@@ -5,8 +5,6 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
-import scala.concurrent.duration._
-
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.matchers.should._
 import org.scalatest.wordspec.AnyWordSpec

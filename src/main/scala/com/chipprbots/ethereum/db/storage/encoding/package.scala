@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.db.storage
 import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.StoredNode
 import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage.StoredNodeSnapshot
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.{given, _}
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 
 package object encoding {

@@ -1,11 +1,20 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
 import cats.Show
-import com.chipprbots.scalanet.discovery.hash.{Hash, Keccak256}
-import com.chipprbots.scalanet.discovery.crypto.{SigAlg, PrivateKey, PublicKey, Signature}
-import scodec.bits.BitVector
-import scodec.{Codec, Attempt, Decoder, Err, Encoder}
+
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.crypto.Signature
+import com.chipprbots.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.discovery.hash.Keccak256
+import scodec.Attempt
+import scodec.Codec
 import scodec.DecodeResult
+import scodec.Decoder
+import scodec.Encoder
+import scodec.Err
+import scodec.bits.BitVector
 
 /** Wire format from https://github.com/ethereum/devp2p/blob/master/discv4.md
   *
@@ -18,9 +27,9 @@ case class Packet(
 )
 
 object Packet {
-  val MacBitsSize = 32 * 8 // Keccak256
-  val SigBitsSize = 65 * 8 // Secp256k1
-  val MaxPacketBitsSize = 1280 * 8
+  val MacBitsSize: Int = 32 * 8 // Keccak256
+  val SigBitsSize: Int = 65 * 8 // Secp256k1
+  val MaxPacketBitsSize: Int = 1280 * 8
 
   private def consumeNBits(context: String, size: Int) =
     Decoder[BitVector] { (bits: BitVector) =>

@@ -1,9 +1,14 @@
 package com.chipprbots.scalanet.discovery.ethereum
 
-import cats.implicits._
 import java.nio.charset.StandardCharsets.UTF_8
+
+import cats.implicits._
+
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
+
 import scodec.bits.ByteVector
-import scala.util.{Try, Success, Failure}
 
 /** Key value pairs that get added to the local ENR record as well as used
   * as a critera for accepting remote ENRs.
@@ -36,10 +41,10 @@ object KeyValueTag {
     private val valueBytes =
       ByteVector(value.getBytes(UTF_8))
 
-    override val toAttr =
+    override val toAttr: Option[(ByteVector, ByteVector)] =
       Some(keyBytes -> valueBytes)
 
-    override val toFilter = enr =>
+    override val toFilter: EnrFilter = enr =>
       enr.content.attrs.get(keyBytes) match {
         case Some(otherBytes) if otherBytes != valueBytes =>
           Try(new String(otherBytes.toArray, UTF_8)) match {

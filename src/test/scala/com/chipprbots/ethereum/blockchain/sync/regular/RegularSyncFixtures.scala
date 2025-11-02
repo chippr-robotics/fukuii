@@ -18,15 +18,14 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits._
 
-import fs2.Stream
-import fs2.concurrent.Topic
-
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.duration.FiniteDuration
 import scala.math.BigInt
 import scala.reflect.ClassTag
 
+import fs2.Stream
+import fs2.concurrent.Topic
 import org.scalamock.scalatest.AsyncMockFactory
 import org.scalatest.matchers.should.Matchers
 

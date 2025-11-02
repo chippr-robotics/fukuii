@@ -2,7 +2,6 @@ package com.chipprbots.ethereum
 package consensus
 package pow
 
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
 import com.typesafe.config.{Config => TypesafeConfig}

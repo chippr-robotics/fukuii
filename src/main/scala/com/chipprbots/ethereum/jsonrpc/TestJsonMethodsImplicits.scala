@@ -6,10 +6,10 @@ import cats.implicits._
 
 import scala.util.Try
 
-import org.json4s._
 import org.json4s.Extraction
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
+import org.json4s._
 
 import com.chipprbots.ethereum.blockchain.data.GenesisAccount
 import com.chipprbots.ethereum.domain.UInt256

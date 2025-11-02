@@ -3,12 +3,13 @@ package com.chipprbots.ethereum.transactions
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.util.Timeout
 
-import cats.implicits._
 import cats.effect.IO
-import fs2.Stream
+import cats.implicits._
 
 import scala.collection.immutable.NumericRange
 import scala.concurrent.duration.FiniteDuration
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.TaskActorOps

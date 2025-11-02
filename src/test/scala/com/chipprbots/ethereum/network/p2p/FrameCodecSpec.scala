@@ -10,7 +10,6 @@ import com.chipprbots.ethereum.network.rlpx.FrameCodec
 import com.chipprbots.ethereum.network.rlpx.Header
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable
@@ -24,16 +23,16 @@ class FrameCodecSpec extends AnyFlatSpec with Matchers {
     val frameCodec = new FrameCodec(secrets)
     val remoteFrameCodec = new FrameCodec(remoteSecrets)
 
-    val sampleMessage = DummyMsg(2310, ByteString("Sample Message"))
+    val sampleMessage: DummyMsg = DummyMsg(2310, ByteString("Sample Message"))
     val sampleMessageEncoded: ByteString = sampleMessage.toBytes
-    val sampleMessageFrame = Frame(
+    val sampleMessageFrame: Frame = Frame(
       Header(sampleMessageEncoded.length, 0, None, Some(sampleMessageEncoded.length)),
       sampleMessage.code,
       sampleMessageEncoded
     )
-    val sampleMessageData = remoteFrameCodec.writeFrames(Seq(sampleMessageFrame))
-    val sampleMessageReadFrames = frameCodec.readFrames(sampleMessageData)
-    val sampleMessageReadMessage = sampleMessageReadFrames.head.payload.toArray[Byte].toSample
+    val sampleMessageData: ByteString = remoteFrameCodec.writeFrames(Seq(sampleMessageFrame))
+    val sampleMessageReadFrames: Seq[Frame] = frameCodec.readFrames(sampleMessageData)
+    val sampleMessageReadMessage: DummyMsg = sampleMessageReadFrames.head.payload.toArray[Byte].toSample
 
     sampleMessageReadMessage shouldBe sampleMessage
   }

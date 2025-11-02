@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.rlp
 
-import scala.compiletime.{*, given}
+import scala.compiletime._
 import scala.deriving.Mirror
 import scala.reflect.ClassTag
 
@@ -41,7 +41,7 @@ object RLPDerivation {
   object RLPListEncoder {
     def apply[T](f: T => (RLPList, List[FieldInfo])): RLPListEncoder[T] =
       new RLPListEncoder[T] {
-        override def encodeList(obj: T) = f(obj)
+        override def encodeList(obj: T): (RLPList, List[FieldInfo]) = f(obj)
       }
   }
 
@@ -61,8 +61,8 @@ object RLPDerivation {
   object RLPListDecoder {
     def apply[T: ClassTag](f: List[RLPEncodeable] => (T, List[FieldInfo])): RLPListDecoder[T] =
       new RLPListDecoder[T] {
-        override val ct = implicitly[ClassTag[T]]
-        override def decodeList(items: List[RLPEncodeable]) = f(items)
+        override val ct: ClassTag[T] = implicitly[ClassTag[T]]
+        override def decodeList(items: List[RLPEncodeable]): (T, List[FieldInfo]) = f(items)
       }
   }
 

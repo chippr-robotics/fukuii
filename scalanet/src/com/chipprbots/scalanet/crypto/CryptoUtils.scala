@@ -3,8 +3,13 @@ package com.chipprbots.scalanet.crypto
 import java.math.BigInteger
 import java.security._
 import java.security.cert.X509Certificate
-import java.security.spec.{ECGenParameterSpec, PKCS8EncodedKeySpec, X509EncodedKeySpec}
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
 import java.util.Date
+
+import scala.util.Try
+
 import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSExtension.Extension
 import org.bouncycastle.asn1.sec.SECNamedCurves
 import org.bouncycastle.asn1.x500.X500Name
@@ -14,15 +19,16 @@ import org.bouncycastle.cert.X509v3CertificateBuilder
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.generators.ECKeyPairGenerator
-import org.bouncycastle.crypto.params.{ECDomainParameters, ECKeyGenerationParameters}
-import org.bouncycastle.crypto.util.{PrivateKeyInfoFactory, SubjectPublicKeyInfoFactory}
+import org.bouncycastle.crypto.params.ECDomainParameters
+import org.bouncycastle.crypto.params.ECKeyGenerationParameters
+import org.bouncycastle.crypto.util.PrivateKeyInfoFactory
+import org.bouncycastle.crypto.util.SubjectPublicKeyInfoFactory
 import org.bouncycastle.jce.interfaces.ECPublicKey
 import org.bouncycastle.jce.provider.BouncyCastleProvider
-import org.bouncycastle.jce.spec.{ECParameterSpec, ECPublicKeySpec}
+import org.bouncycastle.jce.spec.ECParameterSpec
+import org.bouncycastle.jce.spec.ECPublicKeySpec
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import scodec.bits.BitVector
-
-import scala.util.Try
 
 private[scalanet] object CryptoUtils {
 

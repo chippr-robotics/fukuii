@@ -1,40 +1,53 @@
 package com.chipprbots.scalanet.peergroup.dynamictls
 
 import java.net.InetSocketAddress
+import java.nio.ByteOrder
 import java.security._
 import java.security.cert.X509Certificate
-import cats.effect.Resource
-import com.typesafe.scalalogging.StrictLogging
-import com.chipprbots.scalanet.crypto.CryptoUtils
-import com.chipprbots.scalanet.crypto.CryptoUtils.{SHA256withECDSA, Secp256r1}
-import com.chipprbots.scalanet.peergroup.ControlEvent.InitializationError
-import com.chipprbots.scalanet.peergroup.NettyFutureUtils.toTask
-import com.chipprbots.scalanet.peergroup.PeerGroup.{ProxySupport, ServerEvent, TerminalPeerGroup}
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSExtension.SignedKeyExtensionNodeData
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{Config, PeerInfo}
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroupInternals.{ClientChannelBuilder, ServerChannelBuilder}
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroupUtils.{SSLContextForClient, SSLContextForServer}
-import com.chipprbots.scalanet.peergroup.{Addressable, Channel, InetMultiAddress}
-import com.chipprbots.scalanet.peergroup.CloseableQueue
-import com.chipprbots.scalanet.peergroup.PeerGroup.ProxySupport.Socks5Config
-import com.chipprbots.scalanet.peergroup.dynamictls.CustomHandlers.ThrottlingIpFilter
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig.ValidLengthFieldLength
-import io.netty.bootstrap.{Bootstrap, ServerBootstrap}
-import io.netty.channel._
-import io.netty.channel.nio.NioEventLoopGroup
-import io.netty.channel.socket.SocketChannel
-import io.netty.channel.socket.nio.{NioServerSocketChannel, NioSocketChannel}
-import io.netty.handler.logging.{LogLevel, LoggingHandler}
-import io.netty.handler.ssl.SslContext
-import cats.effect.IO
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
-import scodec.Codec
-import scodec.bits.BitVector
 
-import java.nio.ByteOrder
+import cats.effect.IO
+import cats.effect.Resource
+
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
 import scala.util.control.NonFatal
+
+import com.chipprbots.scalanet.crypto.CryptoUtils
+import com.chipprbots.scalanet.crypto.CryptoUtils.SHA256withECDSA
+import com.chipprbots.scalanet.crypto.CryptoUtils.Secp256r1
+import com.chipprbots.scalanet.peergroup.Addressable
+import com.chipprbots.scalanet.peergroup.Channel
+import com.chipprbots.scalanet.peergroup.CloseableQueue
+import com.chipprbots.scalanet.peergroup.ControlEvent.InitializationError
+import com.chipprbots.scalanet.peergroup.InetMultiAddress
+import com.chipprbots.scalanet.peergroup.NettyFutureUtils.toTask
+import com.chipprbots.scalanet.peergroup.PeerGroup.ProxySupport
+import com.chipprbots.scalanet.peergroup.PeerGroup.ProxySupport.Socks5Config
+import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
+import com.chipprbots.scalanet.peergroup.PeerGroup.TerminalPeerGroup
+import com.chipprbots.scalanet.peergroup.dynamictls.CustomHandlers.ThrottlingIpFilter
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSExtension.SignedKeyExtensionNodeData
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.Config
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig.ValidLengthFieldLength
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.PeerInfo
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroupInternals.ClientChannelBuilder
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroupInternals.ServerChannelBuilder
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroupUtils.SSLContextForClient
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroupUtils.SSLContextForServer
+import com.typesafe.scalalogging.StrictLogging
+import io.netty.bootstrap.Bootstrap
+import io.netty.bootstrap.ServerBootstrap
+import io.netty.channel._
+import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.socket.SocketChannel
+import io.netty.channel.socket.nio.NioServerSocketChannel
+import io.netty.channel.socket.nio.NioSocketChannel
+import io.netty.handler.logging.LogLevel
+import io.netty.handler.logging.LoggingHandler
+import io.netty.handler.ssl.SslContext
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import scodec.Codec
+import scodec.bits.BitVector
 
 /**
   * PeerGroup implementation on top of TLS.

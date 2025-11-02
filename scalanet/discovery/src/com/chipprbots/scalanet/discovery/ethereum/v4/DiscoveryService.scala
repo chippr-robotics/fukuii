@@ -1,21 +1,31 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import cats.effect.{IO, Resource, Temporal, Ref, Deferred}
+import java.net.InetAddress
+
+import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.Ref
+import cats.effect.Resource
+import cats.effect.Temporal
 import cats.implicits._
-import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, SigAlg}
-import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
+
+import scala.collection.immutable.SortedSet
+import scala.concurrent.duration._
+import scala.util.control.NonFatal
+
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.KeyValueTag
+import com.chipprbots.scalanet.discovery.ethereum.Node
 import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.kademlia.XorOrdering
 import com.chipprbots.scalanet.peergroup.Addressable
-import fs2.Stream
-import java.net.InetAddress
-import scala.concurrent.duration._
-import scala.util.control.NonFatal
-import scodec.{Codec, Attempt}
-import scodec.bits.BitVector
 import com.typesafe.scalalogging.LazyLogging
-import scala.collection.immutable.SortedSet
-import com.chipprbots.scalanet.discovery.ethereum.KeyValueTag
+import fs2.Stream
+import scodec.Attempt
+import scodec.Codec
+import scodec.bits.BitVector
 
 /** Represent the minimal set of operations the rest of the system
   * can expect from the service to be able to talk to other peers.

@@ -16,11 +16,12 @@ import com.chipprbots.ethereum.utils.Config
 class MessageCodecSpec extends AnyFlatSpec with Matchers {
 
   it should "not compress messages when remote side advertises p2p version less than 5" in new TestSetup {
-    val remoteHello = remoteMessageCodec.encodeMessage(helloV4)
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV4)
     messageCodec.readMessages(remoteHello)
 
-    val localNextMessageAfterHello = messageCodec.encodeMessage(status)
-    val remoteReadNotCompressedStatus = remoteMessageCodec.readMessages(localNextMessageAfterHello)
+    val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
+    val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
     // remote peer did not receive local status so it treats all remote messages as uncompressed
     assert(remoteReadNotCompressedStatus.size == 1)
@@ -31,11 +32,12 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     override lazy val negotiatedRemoteP2PVersion: Long = 5L
     override lazy val negotiatedLocalP2PVersion: Long = 4L
 
-    val remoteHello = remoteMessageCodec.encodeMessage(helloV5)
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
 
-    val localNextMessageAfterHello = messageCodec.encodeMessage(status)
-    val remoteReadNotCompressedStatus = remoteMessageCodec.readMessages(localNextMessageAfterHello)
+    val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
+    val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
     // remote peer did not receive local status so it treats all remote messages as uncompressed,
     // but local peer compress messages after V5 Hello message
@@ -44,14 +46,15 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "compress messages when both sides advertises p2p version larger or equal 5" in new TestSetup {
-    val remoteHello = remoteMessageCodec.encodeMessage(helloV5)
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
 
-    val localHello = messageCodec.encodeMessage(helloV5)
+    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
     remoteMessageCodec.readMessages(localHello)
 
-    val localNextMessageAfterHello = messageCodec.encodeMessage(status)
-    val remoteReadNextMessageAfterHello = remoteMessageCodec.readMessages(localNextMessageAfterHello)
+    val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
+    val remoteReadNextMessageAfterHello: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
     // both peers exchanged v5 hellos, so they should send compressed messages
     assert(remoteReadNextMessageAfterHello.size == 1)
@@ -59,15 +62,16 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "compress and decompress first message after hello when receiving 2 frames" in new TestSetup {
-    val remoteHello = remoteMessageCodec.encodeMessage(helloV5)
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
 
     // hello won't be compressed as per spec it never is, and status will be compressed as remote peer advertised proper versions
-    val localHello = messageCodec.encodeMessage(helloV5)
-    val localStatus = messageCodec.encodeMessage(status)
+    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
+    val localStatus: ByteString = messageCodec.encodeMessage(status)
 
     // both messages will be read at one, but after reading hello decompressing will be activated
-    val remoteReadBothMessages = remoteMessageCodec.readMessages(localHello ++ localStatus)
+    val remoteReadBothMessages: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localHello ++ localStatus)
 
     // both peers exchanged v5 hellos, so they should send compressed messages
     assert(remoteReadBothMessages.size == 2)

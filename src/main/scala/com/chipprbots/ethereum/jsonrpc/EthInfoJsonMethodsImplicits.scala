@@ -2,10 +2,6 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
-import org.json4s.Extraction
-import org.json4s.JsonAST.JArray
-import org.json4s.JsonAST.JString
-import org.json4s.JsonAST.JValue
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
 import org.json4s._
@@ -23,7 +19,7 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsM
 object EthJsonMethodsImplicits extends JsonMethodsImplicits {
   implicit val eth_chainId: NoParamsMethodDecoder[ChainIdRequest] with JsonEncoder[ChainIdResponse] =
     new NoParamsMethodDecoder(ChainIdRequest()) with JsonEncoder[ChainIdResponse] {
-      def encodeJson(t: ChainIdResponse) = encodeAsHex(t.value)
+      def encodeJson(t: ChainIdResponse): JValue = encodeAsHex(t.value)
     }
 
   implicit val eth_protocolVersion

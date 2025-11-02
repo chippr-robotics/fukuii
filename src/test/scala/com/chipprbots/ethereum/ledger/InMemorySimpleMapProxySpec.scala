@@ -14,7 +14,8 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 class InMemorySimpleMapProxySpec extends AnyFlatSpec with Matchers {
 
   "InMemoryTrieProxy" should "not write inserts until commit" in new TestSetup {
-    val updatedProxy = InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](mpt).put(1, 1).put(2, 2)
+    val updatedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
+      InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](mpt).put(1, 1).put(2, 2)
 
     assertContains(updatedProxy, 1, 1)
     assertContains(updatedProxy, 2, 2)
@@ -29,48 +30,50 @@ class InMemorySimpleMapProxySpec extends AnyFlatSpec with Matchers {
   }
 
   "InMemoryTrieProxy" should "not perform removals until commit" in new TestSetup {
-    val preloadedMpt = mpt.put(1, 1)
-    val proxy = InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](preloadedMpt)
+    val preloadedMpt: MerklePatriciaTrie[Int, Int] = mpt.put(1, 1)
+    val proxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
+      InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](preloadedMpt)
 
     assertContains(preloadedMpt, 1, 1)
     assertContains(proxy, 1, 1)
 
-    val updatedProxy = proxy.remove(1)
+    val updatedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] = proxy.remove(1)
     assertNotContainsKey(updatedProxy, 1)
     assertContains(updatedProxy.inner, 1, 1)
 
-    val commitedProxy = updatedProxy.persist()
+    val commitedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] = updatedProxy.persist()
     assertNotContainsKey(commitedProxy, 1)
     assertNotContainsKey(commitedProxy.inner, 1)
   }
 
   "InMemoryTrieProxy" should "not write updates until commit" in new TestSetup {
-    val preloadedMpt = mpt.put(1, 1)
-    val proxy = InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](preloadedMpt)
+    val preloadedMpt: MerklePatriciaTrie[Int, Int] = mpt.put(1, 1)
+    val proxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
+      InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](preloadedMpt)
 
     assertContains(preloadedMpt, 1, 1)
     assertContains(proxy, 1, 1)
     assertNotContains(preloadedMpt, 1, 2)
     assertNotContains(proxy, 1, 2)
 
-    val updatedProxy = proxy.put(1, 2)
+    val updatedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] = proxy.put(1, 2)
     assertContains(updatedProxy, 1, 2)
     assertNotContains(updatedProxy.inner, 1, 2)
 
-    val commitedProxy = updatedProxy.persist()
+    val commitedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] = updatedProxy.persist()
     assertContains(commitedProxy, 1, 2)
     assertContains(commitedProxy.inner, 1, 2)
   }
 
   "InMemoryTrieProxy" should "handle sequential operations" in new TestSetup {
-    val updatedProxy =
+    val updatedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
       InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](mpt).put(1, 1).remove(1).put(2, 2).put(2, 3)
     assertNotContainsKey(updatedProxy, 1)
     assertContains(updatedProxy, 2, 3)
   }
 
   "InMemoryTrieProxy" should "handle batch operations" in new TestSetup {
-    val updatedProxy =
+    val updatedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
       InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](mpt).update(Seq(1), Seq((2, 2), (2, 3)))
     assertNotContainsKey(updatedProxy, 1)
     assertContains(updatedProxy, 2, 3)

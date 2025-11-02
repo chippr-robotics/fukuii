@@ -6,7 +6,6 @@ import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.DurationInt

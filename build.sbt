@@ -51,7 +51,7 @@ val baseScalacOptions = Seq(
 // Scala 3 warning and feature options
 val scala3Options = Seq(
   "-Wunused:all", // Enable unused warnings for Scala 3 (required for scalafix)
-  "-Wconf:msg=Compiler synthesis of Manifest:s,cat=unused:s,any:e", // Suppress Manifest and unused warnings, error on others
+  "-Wconf:msg=Compiler synthesis of Manifest:s,cat=deprecation:s", // Suppress Manifest deprecation warnings
   "-Ykind-projector", // Scala 3 replacement for kind-projector plugin
   "-Xmax-inlines:64" // Increase inline depth limit for complex boopickle/circe derivations
 )

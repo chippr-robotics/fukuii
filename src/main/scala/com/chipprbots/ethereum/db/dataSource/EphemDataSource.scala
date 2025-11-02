@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.db.dataSource
 import java.nio.ByteBuffer
 
 import cats.effect.IO
+
 import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.DataSource._

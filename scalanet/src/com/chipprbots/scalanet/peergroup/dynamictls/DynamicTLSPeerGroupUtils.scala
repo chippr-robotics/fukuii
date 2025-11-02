@@ -3,11 +3,14 @@ package com.chipprbots.scalanet.peergroup.dynamictls
 import java.net.Socket
 import java.security.KeyStore
 import java.security.cert.X509Certificate
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.PeerInfo
-import io.netty.handler.ssl.util.SimpleTrustManagerFactory
-import io.netty.handler.ssl.{ClientAuth, SslContext, SslContextBuilder, SslProvider}
-
 import javax.net.ssl._
+
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.PeerInfo
+import io.netty.handler.ssl.ClientAuth
+import io.netty.handler.ssl.SslContext
+import io.netty.handler.ssl.SslContextBuilder
+import io.netty.handler.ssl.SslProvider
+import io.netty.handler.ssl.util.SimpleTrustManagerFactory
 import scodec.bits.BitVector
 
 private[scalanet] object DynamicTLSPeerGroupUtils {

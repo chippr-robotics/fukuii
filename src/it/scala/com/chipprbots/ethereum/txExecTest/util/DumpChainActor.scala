@@ -3,8 +3,6 @@ package com.chipprbots.ethereum.txExecTest.util
 import java.io.FileWriter
 import java.net.URI
 
-import org.apache.pekko.actor.Actor
-import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor._
 import org.apache.pekko.util.ByteString
 

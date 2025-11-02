@@ -1,8 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import org.json4s.JsonAST.JArray
-import org.json4s.JsonAST.JString
-import org.json4s.JsonAST.JValue
 import org.json4s.JsonAST._
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams

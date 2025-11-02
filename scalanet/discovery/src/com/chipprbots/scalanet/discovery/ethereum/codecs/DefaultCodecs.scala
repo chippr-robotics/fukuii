@@ -1,16 +1,28 @@
 package com.chipprbots.scalanet.discovery.ethereum.codecs
 
-import com.chipprbots.scalanet.discovery.hash.Hash
-import com.chipprbots.scalanet.discovery.crypto.{PublicKey, Signature}
-import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
-import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
-import com.chipprbots.scalanet.discovery.ethereum.v4.Payload._
-import scodec.Codec
-import scodec.codecs.{discriminated, uint4, bits, list, uint16, uint64, int32, variableSizeBytes}
-import scodec.bits.{BitVector, ByteVector}
+import java.net.InetAddress
+
 import scala.collection.SortedMap
 import scala.math.Ordering.Implicits._
-import java.net.InetAddress
+
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.Signature
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload._
+import com.chipprbots.scalanet.discovery.hash.Hash
+import scodec.Codec
+import scodec.bits.BitVector
+import scodec.bits.ByteVector
+import scodec.codecs.bits
+import scodec.codecs.discriminated
+import scodec.codecs.int32
+import scodec.codecs.list
+import scodec.codecs.uint16
+import scodec.codecs.uint4
+import scodec.codecs.uint64
+import scodec.codecs.variableSizeBytes
 
 object DefaultCodecs {
 

@@ -23,10 +23,7 @@ import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.jsonrpc.EthInfoService.ProtocolVersionRequest
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
@@ -49,14 +46,15 @@ class EthServiceSpec
   implicit val runtime: IORuntime = IORuntime.global
 
   "EthInfoService" should "return ethereum protocol version" in new TestSetup {
-    val response = ethService.protocolVersion(ProtocolVersionRequest()).unsafeRunSync()
+    val response: Either[JsonRpcError, ProtocolVersionResponse] =
+      ethService.protocolVersion(ProtocolVersionRequest()).unsafeRunSync()
     val protocolVersion = response.toOption.get.value
 
     Integer.parseInt(protocolVersion.drop(2), 16) shouldEqual currentProtocolVersion
   }
 
   it should "return configured chain id" in new TestSetup {
-    val response = ethService.chainId(ChainIdRequest()).unsafeRunSync().toOption.get
+    val response: ChainIdResponse = ethService.chainId(ChainIdRequest()).unsafeRunSync().toOption.get
 
     assert(response === ChainIdResponse(blockchainConfig.chainId))
   }
@@ -66,7 +64,7 @@ class EthServiceSpec
       SyncProtocol.Status.Syncing(999, Progress(200, 10000), Some(Progress(100, 144)))
     })
 
-    val response = ethService.syncing(SyncingRequest()).unsafeRunSync().toOption.get
+    val response: SyncingResponse = ethService.syncing(SyncingRequest()).unsafeRunSync().toOption.get
 
     response shouldEqual SyncingResponse(
       Some(
@@ -87,7 +85,7 @@ class EthServiceSpec
       SyncProtocol.Status.NotSyncing
     })
 
-    val response = ethService.syncing(SyncingRequest()).unsafeRunSync()
+    val response: Either[JsonRpcError, SyncingResponse] = ethService.syncing(SyncingRequest()).unsafeRunSync()
 
     response shouldEqual Right(SyncingResponse(None))
   }
@@ -97,7 +95,7 @@ class EthServiceSpec
       SyncProtocol.Status.SyncDone
     })
 
-    val response = ethService.syncing(SyncingRequest()).unsafeRunSync()
+    val response: Either[JsonRpcError, SyncingResponse] = ethService.syncing(SyncingRequest()).unsafeRunSync()
 
     response shouldEqual Right(SyncingResponse(None))
   }
@@ -106,7 +104,7 @@ class EthServiceSpec
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 
-    val worldStateProxy = InMemoryWorldStateProxy(
+    val worldStateProxy: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       blockchain.getBackingMptStorage(-1),
       (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
@@ -116,10 +114,10 @@ class EthServiceSpec
       ethCompatibleStorage = true
     )
 
-    val txResult = TxResult(worldStateProxy, 123, Nil, ByteString("return_value"), None)
+    val txResult: TxResult = TxResult(worldStateProxy, 123, Nil, ByteString("return_value"), None)
     (stxLedger.simulateTransaction _).expects(*, *, *).returning(txResult)
 
-    val tx = CallTx(
+    val tx: CallTx = CallTx(
       Some(ByteString(Hex.decode("da714fe079751fa7a1ad80b76571ea6ec52a446c"))),
       Some(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477"))),
       Some(1),
@@ -127,7 +125,7 @@ class EthServiceSpec
       3,
       ByteString("")
     )
-    val response = ethService.call(CallRequest(tx, BlockParam.Latest))
+    val response: ServiceResponse[CallResponse] = ethService.call(CallRequest(tx, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
   }
@@ -136,10 +134,10 @@ class EthServiceSpec
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 
-    val estimatedGas = BigInt(123)
+    val estimatedGas: BigInt = BigInt(123)
     (stxLedger.binarySearchGasEstimation _).expects(*, *, *).returning(estimatedGas)
 
-    val tx = CallTx(
+    val tx: CallTx = CallTx(
       Some(ByteString(Hex.decode("da714fe079751fa7a1ad80b76571ea6ec52a446c"))),
       Some(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477"))),
       Some(1),
@@ -147,7 +145,7 @@ class EthServiceSpec
       3,
       ByteString("")
     )
-    val response = ethService.estimateGas(CallRequest(tx, BlockParam.Latest))
+    val response: ServiceResponse[EstimateGasResponse] = ethService.estimateGas(CallRequest(tx, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Right(EstimateGasResponse(123))
   }

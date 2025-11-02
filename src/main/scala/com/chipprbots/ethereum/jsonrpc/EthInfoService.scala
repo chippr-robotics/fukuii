@@ -14,7 +14,6 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto._
-import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.keystore.KeyStore

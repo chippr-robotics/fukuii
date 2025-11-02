@@ -1,52 +1,68 @@
 package com.chipprbots.scalanet.peergroup.dynamictls
 
 import java.io.IOException
-import java.net.{ConnectException, InetSocketAddress}
+import java.net.ConnectException
+import java.net.InetSocketAddress
 import java.nio.channels.ClosedChannelException
-import cats.effect.unsafe.implicits.global // For unsafeRunSync
-import com.typesafe.scalalogging.StrictLogging
-import com.chipprbots.scalanet.peergroup.Channel.{
-  AllIdle,
-  ChannelEvent,
-  ChannelIdle,
-  DecodingError,
-  MessageReceived,
-  ReaderIdle,
-  UnexpectedError,
-  WriterIdle
-}
-import com.chipprbots.scalanet.peergroup.NettyFutureUtils.toTask
-import com.chipprbots.scalanet.peergroup.PeerGroup.ProxySupport.Socks5Config
-import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
-import com.chipprbots.scalanet.peergroup.PeerGroup.{ChannelBrokenException, HandshakeException, ServerEvent}
-import com.chipprbots.scalanet.peergroup.dynamictls.CustomHandlers.ThrottlingIpFilter
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{FramingConfig, PeerInfo, StalePeerDetectionConfig}
-import com.chipprbots.scalanet.peergroup.{Channel, CloseableQueue, InetMultiAddress, PeerGroup}
-import io.netty.bootstrap.Bootstrap
-import io.netty.buffer.{ByteBuf, Unpooled}
-import io.netty.channel.socket.SocketChannel
-import io.netty.channel.{
-  ChannelConfig,
-  ChannelHandlerContext,
-  ChannelInboundHandlerAdapter,
-  ChannelInitializer,
-  EventLoop
-}
-import io.netty.handler.ssl.{SslContext, SslHandshakeCompletionEvent}
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLEngine
+import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLKeyException
 
-import javax.net.ssl.{SSLException, SSLHandshakeException, SSLKeyException}
 import cats.effect.IO
-import scodec.bits.BitVector
+import cats.effect.unsafe.implicits.global
 
 import scala.concurrent.Promise
 import scala.util.control.NonFatal
-import io.netty.handler.codec.{LengthFieldBasedFrameDecoder, LengthFieldPrepender, TooLongFrameException}
-import io.netty.handler.proxy.Socks5ProxyHandler
-import io.netty.handler.timeout.{IdleState, IdleStateEvent, IdleStateHandler}
-import scodec.Attempt.{Failure, Successful}
-import scodec.Codec
 
-import java.util.concurrent.TimeUnit
+import com.chipprbots.scalanet.peergroup.Channel
+import com.chipprbots.scalanet.peergroup.Channel.AllIdle
+import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
+import com.chipprbots.scalanet.peergroup.Channel.ChannelIdle
+import com.chipprbots.scalanet.peergroup.Channel.DecodingError
+import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
+import com.chipprbots.scalanet.peergroup.Channel.ReaderIdle
+import com.chipprbots.scalanet.peergroup.Channel.UnexpectedError
+import com.chipprbots.scalanet.peergroup.Channel.WriterIdle
+import com.chipprbots.scalanet.peergroup.CloseableQueue
+import com.chipprbots.scalanet.peergroup.InetMultiAddress
+import com.chipprbots.scalanet.peergroup.NettyFutureUtils.toTask
+import com.chipprbots.scalanet.peergroup.PeerGroup
+import com.chipprbots.scalanet.peergroup.PeerGroup.ChannelBrokenException
+import com.chipprbots.scalanet.peergroup.PeerGroup.HandshakeException
+import com.chipprbots.scalanet.peergroup.PeerGroup.ProxySupport.Socks5Config
+import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
+import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
+import com.chipprbots.scalanet.peergroup.dynamictls.CustomHandlers.ThrottlingIpFilter
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.PeerInfo
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.StalePeerDetectionConfig
+import com.typesafe.scalalogging.StrictLogging
+import io.netty.bootstrap.Bootstrap
+import io.netty.buffer.ByteBuf
+import io.netty.buffer.Unpooled
+import io.netty.channel.ChannelConfig
+import io.netty.channel.ChannelHandlerContext
+import io.netty.channel.ChannelInboundHandlerAdapter
+import io.netty.channel.ChannelInitializer
+import io.netty.channel.ChannelPipeline
+import io.netty.channel.EventLoop
+import io.netty.channel.socket.SocketChannel
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder
+import io.netty.handler.codec.LengthFieldPrepender
+import io.netty.handler.codec.TooLongFrameException
+import io.netty.handler.proxy.Socks5ProxyHandler
+import io.netty.handler.ssl.SslContext
+import io.netty.handler.ssl.SslHandler
+import io.netty.handler.ssl.SslHandshakeCompletionEvent
+import io.netty.handler.timeout.IdleState
+import io.netty.handler.timeout.IdleStateEvent
+import io.netty.handler.timeout.IdleStateHandler
+import scodec.Attempt.Failure
+import scodec.Attempt.Successful
+import scodec.Codec
+import scodec.bits.BitVector
 
 private[peergroup] object DynamicTLSPeerGroupInternals {
   def buildFramingCodecs(config: FramingConfig): (LengthFieldBasedFrameDecoder, LengthFieldPrepender) = {
@@ -90,7 +106,7 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
   class MessageNotifier[M](
       messageQueue: ChannelAwareQueue[ChannelEvent[M]],
       codec: Codec[M],
-      eventLoop: EventLoop
+      @annotation.unused eventLoop: EventLoop
   ) extends ChannelInboundHandlerAdapter
       with StrictLogging {
 
@@ -291,12 +307,12 @@ private[peergroup] object DynamicTLSPeerGroupInternals {
       idlePeerConfig: Option[StalePeerDetectionConfig]
   )(implicit codec: Codec[M])
       extends StrictLogging {
-    val sslHandler = sslServerCtx.newHandler(nettyChannel.alloc())
+    val sslHandler: SslHandler = sslServerCtx.newHandler(nettyChannel.alloc())
 
-    val messageQueue = makeMessageQueue[M](maxIncomingQueueSize, nettyChannel.config())
-    val sslEngine = sslHandler.engine()
+    val messageQueue: ChannelAwareQueue[ChannelEvent[M]] = makeMessageQueue[M](maxIncomingQueueSize, nettyChannel.config())
+    val sslEngine: SSLEngine = sslHandler.engine()
 
-    val pipeline = nettyChannel.pipeline()
+    val pipeline: ChannelPipeline = nettyChannel.pipeline()
 
     val (decoder, encoder) = buildFramingCodecs(framingConfig)
 

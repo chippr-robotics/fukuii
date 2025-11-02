@@ -1,9 +1,12 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import scala.language.unsafeNulls
-import com.chipprbots.scalanet.discovery.crypto.{PublicKey}
-import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
 import cats.effect.IO
+
+import scala.language.unsafeNulls
+
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
 
 /** The RPC method comprising the Discovery protocol between peers. */
 trait DiscoveryRPC[A] {

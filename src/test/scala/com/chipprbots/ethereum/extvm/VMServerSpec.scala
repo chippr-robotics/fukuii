@@ -14,6 +14,9 @@ import com.chipprbots.ethereum.extvm.msg.CallContext
 import com.chipprbots.ethereum.extvm.msg.EthereumConfig
 import com.chipprbots.ethereum.extvm.msg.Hello
 import com.chipprbots.ethereum.extvm.msg.VMQuery
+import com.chipprbots.ethereum.extvm.msg.BlockHeader
+import com.chipprbots.ethereum.extvm.msg.ModifiedAccount
+import com.chipprbots.ethereum.extvm.msg.ModifiedAccount
 
 /** HIBERNATED: External VM features are currently in hibernation. These features are experimental and not core to
   * fukuii's functioning. Tests are ignored to prevent blocking development until the feature is fully developed.
@@ -39,7 +42,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   it should "handle incoming call context msg and respond with a call result" in new TestSetup {
     val blockHeader = Block3125369.header
-    val blockHeaderMsg = msg.BlockHeader(
+    val blockHeaderMsg: BlockHeader = msg.BlockHeader(
       beneficiary = blockHeader.beneficiary,
       difficulty = blockHeader.difficulty,
       number = blockHeader.number,
@@ -47,7 +50,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
       unixTimestamp = blockHeader.unixTimestamp
     )
 
-    val callContextMsg = msg.CallContext(
+    val callContextMsg: CallContext = msg.CallContext(
       callerAddr = Address("0x1001").bytes,
       recipientAddr = Address("0x1002").bytes,
       inputData = ByteString(),
@@ -58,7 +61,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
       config = CallContext.Config.Empty
     )
 
-    val expectedModifiedAccount1 = msg.ModifiedAccount(
+    val expectedModifiedAccount1: ModifiedAccount = msg.ModifiedAccount(
       address = Address("0x1001").bytes,
       nonce = ByteString(BigInt(0).toByteArray),
       balance = ByteString(BigInt(90).toByteArray),
@@ -66,7 +69,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
       code = ByteString()
     )
 
-    val expectedModifiedAccount2 = msg.ModifiedAccount(
+    val expectedModifiedAccount2: ModifiedAccount = msg.ModifiedAccount(
       address = Address("0x1002").bytes,
       nonce = ByteString(BigInt(0).toByteArray),
       balance = ByteString(BigInt(210).toByteArray),
@@ -74,7 +77,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
       code = ByteString()
     )
 
-    val expectedCallResultMsg = msg.VMQuery(query =
+    val expectedCallResultMsg: VMQuery = msg.VMQuery(query =
       msg.VMQuery.Query.CallResult(
         msg.CallResult(
           returnData = ByteString(),

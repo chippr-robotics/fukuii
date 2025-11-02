@@ -4,9 +4,11 @@ import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
-import com.chipprbots.ethereum.domain.{BlockBody, BlockHeader, SignedTransaction}
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockBody._
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
+import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._

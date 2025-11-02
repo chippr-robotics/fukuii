@@ -8,9 +8,10 @@ import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
-import fs2.Stream
 
 import scala.concurrent.duration.DurationInt
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.FreeSpecBase
@@ -167,7 +168,7 @@ class FastSyncSpec
       }
 
       "returns Syncing with state nodes progress" in customTestCaseM(new Fixture {
-        override lazy val syncConfig =
+        override lazy val syncConfig: SyncConfig =
           defaultSyncConfig.copy(
             peersScanInterval = 1.second,
             pivotBlockOffset = 5,

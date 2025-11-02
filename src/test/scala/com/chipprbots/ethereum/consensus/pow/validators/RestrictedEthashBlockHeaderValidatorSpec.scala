@@ -19,6 +19,13 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 
 class RestrictedEthashBlockHeaderValidatorSpec
     extends AnyFlatSpec
@@ -27,44 +34,45 @@ class RestrictedEthashBlockHeaderValidatorSpec
     with SecureRandomBuilder {
 
   "RestrictedEthashBlockHeaderValidatorSpec" should "correctly validate header if allowed list is empty" in new TestSetup {
-    val validationResult =
+    val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(createBlockchainConfig(Set()))
     assert(validationResult == Right(BlockHeaderValid))
   }
 
   it should "fail validation of header with too long extra data field" in new TestSetup {
-    val tooLongExtraData = validHeader.copy(extraData =
+    val tooLongExtraData: BlockHeader = validHeader.copy(extraData =
       ByteString.fromArrayUnsafe(new Array[Byte](RestrictedEthashBlockHeaderValidator.ExtraDataMaxSize + 1))
     )
-    val validationResult =
+    val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       RestrictedEthashBlockHeaderValidator.validate(tooLongExtraData, validParent)(createBlockchainConfig(Set()))
     assert(validationResult == Left(RestrictedPoWHeaderExtraDataError))
   }
 
   it should "correctly validate header with valid key" in new TestSetup {
-    val validationResult =
+    val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(createBlockchainConfig(Set(validKey)))
     assert(validationResult == Right(BlockHeaderValid))
   }
 
   it should "fail to validate header with invalid key" in new TestSetup {
-    val allowedKey = crypto.generateKeyPair(secureRandom)
-    val keyBytes = crypto.keyPairToByteStrings(allowedKey)._2
+    val allowedKey: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
+    val keyBytes: ByteString = crypto.keyPairToByteStrings(allowedKey)._2
 
     // correct header is signed by different key that the one generated here
-    val validationResult =
+    val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(createBlockchainConfig(Set(keyBytes)))
     assert(validationResult == Left(RestrictedPoWHeaderExtraDataError))
   }
 
   it should "fail to validate header re-signed by valid signer" in new TestSetup {
-    val allowedKey = crypto.generateKeyPair(secureRandom)
-    val keyBytes = crypto.keyPairToByteStrings(allowedKey)._2
+    val allowedKey: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
+    val keyBytes: ByteString = crypto.keyPairToByteStrings(allowedKey)._2
 
-    val headerWithoutSig = validHeader.copy(extraData = validHeader.extraData.dropRight(ECDSASignature.EncodedLength))
-    val reSignedHeader = RestrictedPoWSigner.signHeader(headerWithoutSig, allowedKey)
+    val headerWithoutSig: BlockHeader =
+      validHeader.copy(extraData = validHeader.extraData.dropRight(ECDSASignature.EncodedLength))
+    val reSignedHeader: BlockHeader = RestrictedPoWSigner.signHeader(headerWithoutSig, allowedKey)
 
-    val validationResult =
+    val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       RestrictedEthashBlockHeaderValidator.validate(reSignedHeader, validParent)(
         createBlockchainConfig(Set(keyBytes, validKey))
       )

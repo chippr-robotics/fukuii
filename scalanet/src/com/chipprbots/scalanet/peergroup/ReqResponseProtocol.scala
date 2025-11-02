@@ -3,20 +3,27 @@ package com.chipprbots.scalanet.peergroup
 import java.net.InetSocketAddress
 import java.security.SecureRandom
 import java.util.UUID
-import cats.implicits._
-import cats.effect.{Fiber, Resource, Ref, IO}
-import cats.effect.std.{Semaphore, Queue}
-import com.chipprbots.scalanet.crypto.CryptoUtils
-import com.chipprbots.scalanet.peergroup.implicits._
-import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, MessageReceived}
-import com.chipprbots.scalanet.peergroup.ReqResponseProtocol._
-import com.chipprbots.scalanet.peergroup.dynamictls.{DynamicTLSPeerGroup, Secp256k1}
-import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{FramingConfig, PeerInfo}
-import com.chipprbots.scalanet.peergroup.udp.DynamicUDPPeerGroup
-import fs2.Stream
-import scodec.Codec
 
-import scala.concurrent.duration.{FiniteDuration, _}
+import cats.effect.Fiber
+import cats.effect.IO
+import cats.effect.Ref
+import cats.effect.Resource
+import cats.effect.std.Semaphore
+import cats.implicits._
+
+import scala.concurrent.duration._
+
+import com.chipprbots.scalanet.crypto.CryptoUtils
+import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
+import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
+import com.chipprbots.scalanet.peergroup.ReqResponseProtocol._
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
+import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.PeerInfo
+import com.chipprbots.scalanet.peergroup.dynamictls.Secp256k1
+import com.chipprbots.scalanet.peergroup.implicits._
+import com.chipprbots.scalanet.peergroup.udp.DynamicUDPPeerGroup
+import scodec.Codec
 
 /**
   * Simple higher level protocol on top of generic peer group. User is shielded from differnt implementation details like:
@@ -154,7 +161,7 @@ object ReqResponseProtocol {
   class ReqResponseChannel[A, M](
       channel: Channel[A, MessageEnvelope[M]],
       topic: fs2.concurrent.Topic[IO, ChannelEvent[MessageEnvelope[M]]],
-      producerFiber: cats.effect.Fiber[IO, Throwable, Unit],
+      @annotation.unused producerFiber: cats.effect.Fiber[IO, Throwable, Unit],
       val release: Release
   ) {
 

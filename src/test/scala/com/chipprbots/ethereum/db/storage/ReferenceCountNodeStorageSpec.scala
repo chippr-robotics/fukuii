@@ -137,7 +137,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(nodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
 
@@ -160,7 +160,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(nodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
 
@@ -197,7 +197,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
 
@@ -265,7 +265,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
     storage2.get(key3).get shouldEqual val3
@@ -275,7 +275,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     dataSource.storage.size shouldEqual 15
 
     val storage3 = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 3)
-    val key4 = ByteString("aanotherKey")
+    val key4: ByteString = ByteString("aanotherKey")
     val val4: Array[Byte] = ByteString("aanotherValue").toArray[Byte]
     storage3.put(key4, val4)
     storage3.get(key4).get shouldEqual val4

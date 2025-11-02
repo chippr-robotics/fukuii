@@ -46,7 +46,6 @@ object ForkId {
   }
 
   implicit class ForkIdEnc(forkId: ForkId) extends RLPSerializable {
-    import RLPImplicits._
 
     import com.chipprbots.ethereum.utils.ByteUtils._
     override def toRLPEncodable: RLPEncodeable = {

@@ -11,7 +11,6 @@ import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
-import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages._
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 

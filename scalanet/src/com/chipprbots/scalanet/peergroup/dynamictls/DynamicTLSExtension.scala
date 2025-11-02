@@ -1,18 +1,31 @@
 package com.chipprbots.scalanet.peergroup.dynamictls
 
+import java.security.KeyPair
+import java.security.PublicKey
+import java.security.SecureRandom
 import java.security.cert.X509Certificate
-import java.security.{KeyPair, PublicKey, SecureRandom}
+
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
+
 import com.chipprbots.scalanet.crypto.CryptoUtils
-import com.chipprbots.scalanet.crypto.CryptoUtils.{SignatureScheme, SupportedCurves}
+import com.chipprbots.scalanet.crypto.CryptoUtils.SignatureScheme
+import com.chipprbots.scalanet.crypto.CryptoUtils.SupportedCurves
 import org.bouncycastle.asn1._
 import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils
 import org.bouncycastle.math.ec.custom.sec.SecP256K1Curve
-import org.joda.time.{DateTime, Interval}
+import org.joda.time.DateTime
+import org.joda.time.Interval
+import scodec.Attempt
+import scodec.Codec
+import scodec.DecodeResult
+import scodec.SizeBound
 import scodec.bits.BitVector
-import scodec.codecs.{ascii, bits, uint8, discriminated, discriminatorFallback, constant as constCodec}
-import scodec.{Attempt, Codec, DecodeResult, SizeBound}
-
-import scala.util.{Failure, Success, Try}
+import scodec.codecs.ascii
+import scodec.codecs.bits
+import scodec.codecs.discriminated
+import scodec.codecs.uint8
 
 sealed trait KeyType {
   def n: Int
@@ -46,7 +59,7 @@ private[scalanet] object DynamicTLSExtension {
     */
   val prefix = "libp2p-tls-handshake:"
 
-  val prefixAsBytes = ascii.encode(prefix).require
+  val prefixAsBytes: BitVector = ascii.encode(prefix).require
 
   /**
     * In specs extension is defined as protobuf:
@@ -61,7 +74,7 @@ private[scalanet] object DynamicTLSExtension {
   object ExtensionPublicKey {
     private val keyCodec = summon[Codec[KeyType]]
 
-    val extensionPublicKeyCodec = new Codec[ExtensionPublicKey] {
+    val extensionPublicKeyCodec: Codec[ExtensionPublicKey] = new Codec[ExtensionPublicKey] {
       override def encode(value: ExtensionPublicKey): Attempt[BitVector] = {
         for {
           key <- keyCodec.encode(value.keyType)

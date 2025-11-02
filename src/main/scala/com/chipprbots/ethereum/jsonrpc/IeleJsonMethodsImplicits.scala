@@ -6,7 +6,6 @@ import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
-import org.json4s.JsonDSL._
 import org.json4s._
 
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._

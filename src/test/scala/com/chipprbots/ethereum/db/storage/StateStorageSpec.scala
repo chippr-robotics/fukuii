@@ -68,7 +68,7 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
   }
 
   it should "provide function to act on block save" in new TestSetup {
-    var ints = List.empty[Int]
+    var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>
       val storage = archiveStateStorage.getBackingStorage(0)
@@ -86,7 +86,7 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
   }
 
   it should "provide function to act on block rollback" in new TestSetup {
-    var ints = List.empty[Int]
+    var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>
       val storage = archiveStateStorage.getBackingStorage(0)
@@ -116,7 +116,7 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
   }
 
   it should "provide function to act on block save" in new TestSetup {
-    var ints = List.empty[Int]
+    var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>
       val storage = referenceCounteStateStorage.getBackingStorage(0)
@@ -134,7 +134,7 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
   }
 
   it should "provide function to act on block rollback" in new TestSetup {
-    var ints = List.empty[Int]
+    var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>
       val storage = referenceCounteStateStorage.getBackingStorage(0)

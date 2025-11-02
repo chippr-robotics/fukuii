@@ -1,13 +1,15 @@
 package com.chipprbots.scalanet.peergroup
 
-import cats.effect.{IO, Resource}
-import fs2.Stream
+import java.net.InetSocketAddress
+
+import cats.effect.IO
+import cats.effect.Resource
+
 import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
 import com.chipprbots.scalanet.peergroup.PeerGroup.ProxySupport.Socks5Config
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
+import fs2.Stream
 import scodec.Codec
-
-import java.net.InetSocketAddress
 
 /**
   * A Channel represents a route between two peers on the network for the purposes
@@ -135,7 +137,7 @@ trait PeerGroup[A, M] {
 
 object PeerGroup {
 
-  abstract class TerminalPeerGroup[A, M](implicit codec: Codec[M]) extends PeerGroup[A, M]
+  abstract class TerminalPeerGroup[A, M](implicit @annotation.unused codec: Codec[M]) extends PeerGroup[A, M]
 
   trait ProxySupport[A, M] {
 
@@ -202,8 +204,7 @@ object PeerGroup {
     }
   }
 
-  private def initializationErrorMsg(config: Any) =
-    s"Failed initialization of peer group member with config $config. Cause follows."
+  
 
   class ChannelSetupException[A](val to: A, val cause: Throwable)
       extends RuntimeException(s"Error establishing channel to $to.", cause)

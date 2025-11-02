@@ -15,7 +15,6 @@ import org.apache.pekko.stream.StreamTcpException
 import org.apache.pekko.stream.scaladsl.TcpIdleTimeoutException
 
 import cats.effect.IO
-import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._

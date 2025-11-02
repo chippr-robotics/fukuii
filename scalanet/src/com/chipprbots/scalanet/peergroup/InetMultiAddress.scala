@@ -1,6 +1,7 @@
 package com.chipprbots.scalanet.peergroup
 
-import java.net.{InetAddress, InetSocketAddress}
+import java.net.InetAddress
+import java.net.InetSocketAddress
 
 trait Addressable[A] {
   def getAddress(a: A): InetSocketAddress

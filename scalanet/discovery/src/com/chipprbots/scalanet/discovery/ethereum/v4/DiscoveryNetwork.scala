@@ -1,30 +1,39 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
-import cats.Show
-import cats.implicits._
-import cats.effect.{IO, Temporal, Deferred}
-import com.typesafe.scalalogging.LazyLogging
-import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, PublicKey, SigAlg}
-import com.chipprbots.scalanet.discovery.ethereum.Node
-import com.chipprbots.scalanet.discovery.hash.Hash
-import com.chipprbots.scalanet.peergroup.implicits.NextOps
-import com.chipprbots.scalanet.peergroup.{Addressable, Channel, PeerGroup}
-import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
-import com.chipprbots.scalanet.peergroup.Channel.{ChannelIdle, DecodingError, MessageReceived, UnexpectedError}
-
-import java.util.concurrent.TimeoutException
 import java.net.InetAddress
-import fs2.Stream
+import java.net.InetSocketAddress
+import java.util.concurrent.TimeoutException
+
+import cats.Show
+import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.Temporal
+import cats.implicits._
 
 import scala.concurrent.duration._
-import scodec.{Attempt, Codec}
+import scala.util.control.NoStackTrace
+import scala.util.control.NonFatal
 
-import scala.util.control.{NoStackTrace, NonFatal}
-import scodec.bits.BitVector
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Neighbors
-
-import java.net.InetSocketAddress
+import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.discovery.hash.Keccak256
+import com.chipprbots.scalanet.peergroup.Addressable
+import com.chipprbots.scalanet.peergroup.Channel
+import com.chipprbots.scalanet.peergroup.Channel.ChannelIdle
+import com.chipprbots.scalanet.peergroup.Channel.DecodingError
+import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
+import com.chipprbots.scalanet.peergroup.Channel.UnexpectedError
+import com.chipprbots.scalanet.peergroup.PeerGroup
+import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
+import com.typesafe.scalalogging.LazyLogging
+import fs2.Stream
+import scodec.Codec
+import scodec.bits.BitVector
 
 /** Present a stateless facade implementing the RPC methods
   * that correspond to the discovery protocol messages on top
@@ -236,7 +245,7 @@ object DiscoveryNetwork {
         payload.expiration < now - maxClockDriftSeconds
 
       /** Ping a peer. */
-      override val ping = (peer: Peer[A]) =>
+      override val ping: Peer[A] => Option[ENRSeq] => IO[Option[Option[ENRSeq]]] = (peer: Peer[A]) =>
         (localEnrSeq: Option[ENRSeq]) =>
           peerGroup.client(peer.address).use { channel =>
             channel
@@ -267,7 +276,7 @@ object DiscoveryNetwork {
         * However that would serialize all requests, might result in some of them taking much
         * longer than expected.
         */
-      override val findNode = (peer: Peer[A]) =>
+      override val findNode: Peer[A] => PublicKey => IO[Option[Seq[Node]]] = (peer: Peer[A]) =>
         (target: PublicKey) =>
           peerGroup.client(peer.address).use { channel =>
             channel.send(FindNode(target, 0)).flatMap { _ =>
@@ -281,7 +290,7 @@ object DiscoveryNetwork {
           }
 
       /** Fetch the ENR of a peer. */
-      override val enrRequest = (peer: Peer[A]) =>
+      override val enrRequest: Peer[A] => Unit => IO[Option[EthereumNodeRecord]] = (peer: Peer[A]) =>
         (_: Unit) =>
           peerGroup.client(peer.address).use { channel =>
             channel

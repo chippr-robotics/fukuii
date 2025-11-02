@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.txExecTest.util.FixtureProvider
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.domain.BlockchainStorages
 
 class ContractTest extends AnyFlatSpec with Matchers {
   val blockchainConfig = Config.blockchains.blockchainConfig
@@ -18,7 +19,7 @@ class ContractTest extends AnyFlatSpec with Matchers {
 
   "Ledger" should "execute and validate" in new ScenarioSetup {
     val fixtures: FixtureProvider.Fixture = FixtureProvider.loadFixtures("/txExecTest/purchaseContract")
-    override val testBlockchainStorages = FixtureProvider.prepareStorages(2, fixtures)
+    override val testBlockchainStorages: BlockchainStorages = FixtureProvider.prepareStorages(2, fixtures)
 
     // block only with ether transfers
     override lazy val blockValidation =

@@ -43,6 +43,6 @@ object AES_CBC extends SymmetricCipher {
 }
 
 object AES_CTR extends SymmetricCipher {
-  protected def getCipher =
+  protected def getCipher: BufferedBlockCipher =
     new BufferedBlockCipher(SICBlockCipher.newInstance(AESEngine.newInstance())): @annotation.nowarn("cat=deprecation")
 }

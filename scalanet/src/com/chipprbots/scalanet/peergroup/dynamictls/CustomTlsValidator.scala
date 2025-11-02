@@ -1,6 +1,13 @@
 package com.chipprbots.scalanet.peergroup.dynamictls
 
-import java.security.cert.{CertificateException, X509Certificate}
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
+import java.security.interfaces.ECPublicKey
+
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
+
 import com.chipprbots.scalanet.crypto.CryptoUtils
 import com.chipprbots.scalanet.peergroup.dynamictls.DynamicTLSExtension.SignedKey
 import org.bouncycastle.asn1.ASN1Primitive
@@ -8,8 +15,6 @@ import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
 import org.bouncycastle.asn1.x9.X962Parameters
 import org.joda.time.DateTime
 import scodec.bits.BitVector
-import java.security.interfaces.ECPublicKey
-import scala.util.{Failure, Success, Try}
 
 private[scalanet] object CustomTlsValidator {
   sealed abstract class CertificateError(msg: String) extends CertificateException(msg)

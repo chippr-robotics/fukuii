@@ -13,7 +13,6 @@ import org.scalamock.handlers.CallHandler0
 import org.scalamock.handlers.CallHandler1
 import org.scalamock.handlers.CallHandler2
 import org.scalamock.handlers.CallHandler4
-import org.scalamock.scalatest.MockFactory
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks

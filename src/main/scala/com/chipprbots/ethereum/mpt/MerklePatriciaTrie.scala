@@ -245,27 +245,6 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     toUpsert.foldLeft(afterRemoval)((acc, item) => acc + item)
   }
 
-  @tailrec
-  private def get(node: MptNode, searchKey: Array[Byte]): Option[Array[Byte]] = node match {
-    case LeafNode(key, value, _, _, _) =>
-      if (key.toArray[Byte].sameElements(searchKey)) Some(value.toArray[Byte]) else None
-    case extNode @ ExtensionNode(sharedKey, _, _, _, _) =>
-      val (commonKey, remainingKey) = searchKey.splitAt(sharedKey.length)
-      if (searchKey.length >= sharedKey.length && (sharedKey.sameElements(commonKey))) {
-        get(extNode.next, remainingKey)
-      } else None
-    case branch @ BranchNode(_, terminator, _, _, _) =>
-      if (searchKey.isEmpty) terminator.map(_.toArray[Byte])
-      else {
-        get(branch.children(searchKey(0)), searchKey.slice(1, searchKey.length))
-      }
-    case HashNode(bytes) =>
-      get(nodeStorage.get(bytes), searchKey)
-
-    case NullNode =>
-      None
-  }
-
   private def put(node: MptNode, searchKey: Array[Byte], value: Array[Byte]): NodeInsertResult = node match {
     case leafNode: LeafNode           => putInLeafNode(leafNode, searchKey, value)
     case extensionNode: ExtensionNode => putInExtensionNode(extensionNode, searchKey, value)

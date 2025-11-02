@@ -24,7 +24,7 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     }
 
     "insert and get fast sync done properly" in new Fixtures {
-      val storage = newAppStateStorage()
+      val storage: AppStateStorage = newAppStateStorage()
       storage.fastSyncDone().commit()
 
       assert(storage.isFastSyncDone())

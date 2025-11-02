@@ -1,9 +1,12 @@
 package com.chipprbots.scalanet.peergroup
 
-import cats.implicits._
-import cats.effect.{Deferred, IO}
+import cats.effect.Deferred
+import cats.effect.IO
 import cats.effect.std.Queue
-import scala.util.{Left, Right}
+import cats.implicits._
+
+import scala.util.Left
+import scala.util.Right
 
 /** Wraps an underlying concurrent queue so that polling can return None when
   * the producer side is finished, or vice versa the producer can tell when

@@ -3,9 +3,8 @@ package com.chipprbots.ethereum.sync.util
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.util.ByteString
 
-import cats.effect.Resource
-
 import cats.effect.IO
+import cats.effect.Resource
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._

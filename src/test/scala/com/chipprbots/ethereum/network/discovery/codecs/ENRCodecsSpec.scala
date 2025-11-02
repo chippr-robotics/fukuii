@@ -22,14 +22,12 @@ import com.chipprbots.ethereum.rlp.RLPDecoder
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPEncoder
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 
 class ENRCodecsSpec extends AnyFlatSpec with Matchers {
 
-  import RLPCodecs._
   import RLPCodecs.given
 
   implicit val sigalg: SigAlg = new Secp256k1SigAlg

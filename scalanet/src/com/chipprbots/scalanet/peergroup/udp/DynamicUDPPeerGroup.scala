@@ -1,17 +1,28 @@
 package com.chipprbots.scalanet.peergroup.udp
 
 import java.io.IOException
-import java.net.{InetSocketAddress, PortUnreachableException}
+import java.net.InetSocketAddress
+import java.net.PortUnreachableException
 import java.util.concurrent.ConcurrentHashMap
-import cats.effect.{Resource, IO}
-import cats.effect.unsafe.implicits.global // For unsafeRunSync and unsafeRunAndForget
-import com.typesafe.scalalogging.StrictLogging
-import com.chipprbots.scalanet.peergroup.{Channel, InetMultiAddress, CloseableQueue}
-import com.chipprbots.scalanet.peergroup.Channel.{ChannelEvent, DecodingError, MessageReceived, UnexpectedError}
+
+import cats.effect.IO
+import cats.effect.Resource
+import cats.effect.unsafe.implicits.global
+
+import scala.util.control.NonFatal
+
+import com.chipprbots.scalanet.peergroup.Channel
+import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
+import com.chipprbots.scalanet.peergroup.Channel.DecodingError
+import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
+import com.chipprbots.scalanet.peergroup.Channel.UnexpectedError
+import com.chipprbots.scalanet.peergroup.CloseableQueue
 import com.chipprbots.scalanet.peergroup.ControlEvent.InitializationError
+import com.chipprbots.scalanet.peergroup.InetMultiAddress
 import com.chipprbots.scalanet.peergroup.NettyFutureUtils.toTask
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
 import com.chipprbots.scalanet.peergroup.PeerGroup._
+import com.typesafe.scalalogging.StrictLogging
 import io.netty.bootstrap.Bootstrap
 import io.netty.buffer.Unpooled
 import io.netty.channel
@@ -19,11 +30,12 @@ import io.netty.channel._
 import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.DatagramPacket
 import io.netty.channel.socket.nio.NioDatagramChannel
-import io.netty.util.concurrent.{Future, GenericFutureListener, Promise}
-import cats.effect.IO
+import io.netty.util.concurrent.Future
+import io.netty.util.concurrent.GenericFutureListener
+import io.netty.util.concurrent.Promise
+import scodec.Attempt
+import scodec.Codec
 import scodec.bits.BitVector
-import scodec.{Attempt, Codec}
-import scala.util.control.NonFatal
 
 /**
   * PeerGroup implementation on top of UDP that always opens a new channel
@@ -206,7 +218,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
 
     val closePromise: Promise[ChannelImpl] = nettyChannel.eventLoop().newPromise[ChannelImpl]()
 
-    val channelId = UDPChannelId(nettyChannel.id(), remoteAddress, localAddress)
+    val channelId: UDPChannelId = UDPChannelId(nettyChannel.id(), remoteAddress, localAddress)
 
     logger.debug(
       s"Setting up new channel from local address $localAddress " +

@@ -9,9 +9,7 @@ import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.UInt256._
 import com.chipprbots.ethereum.utils.ByteStringUtils.Padding
-import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.EtcFork
-import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.EthFork
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm._
 

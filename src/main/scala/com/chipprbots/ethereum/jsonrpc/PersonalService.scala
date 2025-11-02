@@ -23,7 +23,7 @@ import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.{given, _}
+import com.chipprbots.ethereum.rlp.RLPImplicits.{_, given}
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddOrOverrideTransaction
@@ -201,7 +201,7 @@ class PersonalService(
   }
 
   private def sendTransaction(request: TransactionRequest, wallet: Wallet): IO[ByteString] = {
-    implicit val timeout = Timeout(txPoolConfig.pendingTxManagerQueryTimeout)
+    implicit val timeout: Timeout = Timeout(txPoolConfig.pendingTxManagerQueryTimeout)
 
     val pendingTxsFuture =
       txPool.askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)

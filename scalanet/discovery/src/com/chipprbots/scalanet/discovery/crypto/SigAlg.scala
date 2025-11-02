@@ -1,7 +1,7 @@
 package com.chipprbots.scalanet.discovery.crypto
 
-import scodec.bits.BitVector
 import scodec.Attempt
+import scodec.bits.BitVector
 
 trait SigAlg {
   def name: String

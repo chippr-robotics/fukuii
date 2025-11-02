@@ -6,8 +6,6 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
-import fs2.Stream
-
 import scala.annotation.tailrec
 import scala.collection.immutable.ArraySeq
 import scala.util.Try
@@ -15,6 +13,7 @@ import scala.util.Try
 import com.google.common.hash.BloomFilter
 import com.google.common.hash.Funnel
 import com.google.common.hash.PrimitiveSink
+import fs2.Stream
 import io.vavr.collection.PriorityQueue
 
 import com.chipprbots.ethereum.blockchain.sync.fast.LoadableBloomFilter.BloomFilterLoadingResult

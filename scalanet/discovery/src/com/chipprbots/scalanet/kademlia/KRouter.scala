@@ -2,28 +2,35 @@ package com.chipprbots.scalanet.kademlia
 
 import java.security.SecureRandom
 import java.time.Clock
-import java.util.{Random, UUID}
+import java.util.Random
+import java.util.UUID
 
-import cats.syntax.all._
-import cats.effect.std.Semaphore
 import cats.data.NonEmptySet
-import cats.effect.Ref
-import com.typesafe.scalalogging.{CanLog, Logger}
-import com.chipprbots.scalanet.kademlia.KMessage.KRequest.{FindNodes, Ping}
-import com.chipprbots.scalanet.kademlia.KMessage.KResponse.{Nodes, Pong}
-import com.chipprbots.scalanet.kademlia.KMessage.{KRequest, KResponse}
-import com.chipprbots.scalanet.kademlia.KRouter.KRouterInternals._
-import com.chipprbots.scalanet.kademlia.KRouter.{Config, NodeRecord}
 import cats.effect.IO
-import scodec.bits.BitVector
+import cats.effect.Ref
+import cats.syntax.all._
+
 import scala.collection.immutable.SortedSet
+
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest.FindNodes
+import com.chipprbots.scalanet.kademlia.KMessage.KRequest.Ping
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse.Nodes
+import com.chipprbots.scalanet.kademlia.KMessage.KResponse.Pong
+import com.chipprbots.scalanet.kademlia.KRouter.Config
+import com.chipprbots.scalanet.kademlia.KRouter.KRouterInternals._
+import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
+import com.typesafe.scalalogging.CanLog
+import com.typesafe.scalalogging.Logger
+import scodec.bits.BitVector
 
 // KRouter is the component that implements the protocol, does the recursive lookups, keeps the state.
 class KRouter[A](
     val config: Config[A],
     network: KNetwork[A],
     routerState: Ref[IO, NodeRecordIndex[A]],
-    clock: Clock = Clock.systemUTC(),
+    @annotation.unused clock: Clock = Clock.systemUTC(),
     uuidSource: () => UUID = () => UUID.randomUUID(),
     rnd: Random = new SecureRandom()
 ) {

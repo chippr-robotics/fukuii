@@ -11,7 +11,6 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError
-import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.TransactionSignatureError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError._
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValid
 import com.chipprbots.ethereum.crypto

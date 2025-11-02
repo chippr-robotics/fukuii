@@ -11,8 +11,6 @@ import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
-import fs2.Stream
-
 import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
@@ -20,6 +18,7 @@ import scala.util.Success
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
 import com.chipprbots.scalanet.discovery.ethereum.v4
 import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
+import fs2.Stream
 import scodec.bits.BitVector
 
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
