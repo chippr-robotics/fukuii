@@ -27,7 +27,7 @@ scrape_configs:
     - fukuii:13798
     labels:
       alias: fukuii-node
-- job_name: akka
+- job_name: pekko
   honor_timestamps: true
   scrape_interval: 10s
   scrape_timeout: 10s
@@ -36,5 +36,5 @@ scrape_configs:
     - targets:
         - fukuii:9095
       labels:
-        alias: fukuii-akka-node
+        alias: fukuii-pekko-node
 

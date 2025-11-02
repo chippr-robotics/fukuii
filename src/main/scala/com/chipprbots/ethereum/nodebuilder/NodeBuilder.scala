@@ -102,7 +102,7 @@ trait AsyncConfigBuilder {
 }
 
 trait ActorSystemBuilder {
-  implicit lazy val system: ActorSystem = ActorSystem("mantis_system")
+  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system")
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {

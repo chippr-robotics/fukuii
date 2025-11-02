@@ -18,11 +18,29 @@
 
     <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-            <customFields>{"hostname":"${HOSTNAME}"}</customFields>
+            <!-- Stable JSON fields for structured logging -->
+            <customFields>{"service":"fukuii","hostname":"${HOSTNAME}","environment":"${FUKUII_ENV:-production}"}</customFields>
             <fieldNames>
                 <timestamp>timestamp</timestamp>
                 <version>[ignore]</version>
+                <logger>logger</logger>
+                <thread>thread</thread>
+                <level>level</level>
+                <levelValue>level_value</levelValue>
+                <message>message</message>
+                <stackTrace>stack_trace</stackTrace>
             </fieldNames>
+            <!-- Include MDC (Mapped Diagnostic Context) fields -->
+            <includeMdcKeyNames>
+                <includeMdcKeyName>peer</includeMdcKeyName>
+                <includeMdcKeyName>block</includeMdcKeyName>
+                <includeMdcKeyName>transaction</includeMdcKeyName>
+                <includeMdcKeyName>actor</includeMdcKeyName>
+            </includeMdcKeyNames>
+            <!-- Include caller info for debugging (disable in production for performance) -->
+            <includeCallerData>false</includeCallerData>
+            <!-- Include context name -->
+            <includeContext>true</includeContext>
         </encoder>
     </appender>
 
