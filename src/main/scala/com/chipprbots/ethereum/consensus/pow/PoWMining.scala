@@ -72,7 +72,7 @@ class PoWMining private (
   @volatile private[pow] var mockedMinerRef: Option[org.apache.pekko.actor.ActorRef] = None
 
   final val BlockForgerDispatcherId = "mantis.async.dispatchers.block-forger"
-  implicit private val timeout: Timeout = 5.seconds
+  implicit private val timeout: Timeout = 20.seconds
 
   override def sendMiner(msg: MinerProtocol): Unit =
     msg match {
