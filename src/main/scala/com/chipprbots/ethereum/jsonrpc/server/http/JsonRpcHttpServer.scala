@@ -28,6 +28,7 @@ import org.json4s.native.Serialization
 
 import com.chipprbots.ethereum.faucet.jsonrpc.FaucetJsonRpcController
 import com.chipprbots.ethereum.healthcheck.HealthcheckResponse
+import com.chipprbots.ethereum.healthcheck.HealthcheckResult
 import com.chipprbots.ethereum.jsonrpc._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
@@ -121,7 +122,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
     // Simple liveness check - if server responds, it's alive
     val healthResponse = HealthcheckResponse(
       List(
-        com.chipprbots.ethereum.healthcheck.HealthcheckResult.ok("server", Some("running"))
+        HealthcheckResult.ok("server", Some("running"))
       )
     )
     complete(
