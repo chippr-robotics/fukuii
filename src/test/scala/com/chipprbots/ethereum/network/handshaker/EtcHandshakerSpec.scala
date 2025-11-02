@@ -43,7 +43,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
     assert(handshakerAfterHelloOpt.isDefined)
     handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend) shouldBe Right(localStatusMsg: StatusEnc)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
 
     handshakerAfterStatusOpt.get.nextMessage match {
@@ -82,7 +83,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     assert(handshakerAfterHelloOpt.isDefined)
     handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend.underlyingMsg) shouldBe Right(newLocalStatusMsg)
 
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
     handshakerAfterStatusOpt.get.nextMessage match {
       case Left(HandshakeSuccess(peerInfo)) =>
@@ -113,7 +115,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     assert(handshakerAfterHelloOpt.isDefined)
     handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend.underlyingMsg) shouldBe Right(newLocalStatusMsg)
 
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
     handshakerAfterStatusOpt.get.nextMessage match {
       case Left(HandshakeSuccess(peerInfo)) =>
@@ -128,12 +131,14 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     with RemotePeerETH63Setup {
 
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
     handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Right(
       localGetBlockHeadersRequest: GetBlockHeadersEnc
     )
-    val handshakerAfterForkOpt: Option[Handshaker[PeerInfo]] = handshakerAfterStatusOpt.get.applyMessage(BlockHeaders(Seq(forkBlockHeader)))
+    val handshakerAfterForkOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterStatusOpt.get.applyMessage(BlockHeaders(Seq(forkBlockHeader)))
     assert(handshakerAfterForkOpt.isDefined)
 
     handshakerAfterForkOpt.get.nextMessage match {
@@ -161,7 +166,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     with RemotePeerETH63Setup {
 
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
     handshakerAfterStatusOpt.get.nextMessage.map(_.messageToSend) shouldBe Right(
       localGetBlockHeadersRequest: GetBlockHeadersEnc
@@ -212,7 +218,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
 
     handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend.underlyingMsg) shouldBe Right(newLocalStatusMsg)
 
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
 
     handshakerAfterStatusOpt.get.nextMessage match {
@@ -252,7 +259,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
 
     handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend.underlyingMsg) shouldBe Right(newLocalStatusMsg)
 
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(newRemoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(newRemoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
 
     handshakerAfterStatusOpt.get.nextMessage match {
@@ -280,7 +288,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
 
   it should "fail if a timeout happened during fork block exchange" in new RemotePeerETH63Setup {
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     val handshakerAfterTimeout = handshakerAfterStatusOpt.get.processTimeout
     handshakerAfterTimeout.nextMessage.map(_.messageToSend) shouldBe Left(
       HandshakeFailure(Disconnect.Reasons.TimeoutOnReceivingAMessage)
@@ -301,7 +310,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
 
   it should "fail if a status msg is received with invalid genesisHash" in new LocalPeerETH63Setup
     with RemotePeerETH63Setup {
-    val wrongGenesisHash: ByteString = concatByteStrings((localStatus.genesisHash.head + 1).toByte, localStatus.genesisHash.tail)
+    val wrongGenesisHash: ByteString =
+      concatByteStrings((localStatus.genesisHash.head + 1).toByte, localStatus.genesisHash.tail)
 
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
     val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
@@ -322,7 +332,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
 
   it should "fail if a fork resolver is used and the block from the remote peer isn't accepted" in new RemotePeerETH63Setup {
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] = handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     val handshakerAfterForkBlockOpt: Option[Handshaker[PeerInfo]] = handshakerAfterStatusOpt.get.applyMessage(
       BlockHeaders(Seq(genesisBlock.header.copy(number = forkBlockHeader.number)))
     )

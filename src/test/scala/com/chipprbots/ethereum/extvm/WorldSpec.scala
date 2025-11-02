@@ -54,7 +54,8 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
     val offset = 10
     val blockhash: UInt256 = UInt256(123123123)
 
-    val expectedBlockchashQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.GetBlockhash(msg.GetBlockhash(offset)))
+    val expectedBlockchashQueryMsg: VMQuery =
+      msg.VMQuery(query = msg.VMQuery.Query.GetBlockhash(msg.GetBlockhash(offset)))
     (messageHandler.sendMessage _).expects(expectedBlockchashQueryMsg).once()
     (messageHandler
       .awaitMessage(_: GeneratedMessageCompanion[msg.Blockhash]))

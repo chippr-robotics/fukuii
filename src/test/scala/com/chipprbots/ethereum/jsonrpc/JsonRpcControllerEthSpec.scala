@@ -432,7 +432,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_call" in new JsonRpcControllerFixture {
     val mockEthInfoService: EthInfoService & scala.reflect.Selectable = mock[EthInfoService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
 
     (mockEthInfoService.call _).expects(*).returning(IO.pure(Right(CallResponse(ByteString("asd")))))
 
@@ -455,7 +456,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_estimateGas" in new JsonRpcControllerFixture {
     val mockEthInfoService: EthInfoService & scala.reflect.Selectable = mock[EthInfoService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
 
     (mockEthInfoService.estimateGas _)
       .expects(*)
@@ -490,7 +492,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getCode" in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethUserService = mockEthUserService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
     (mockEthUserService.getCode _)
       .expects(*)
@@ -510,7 +513,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getUncleCountByBlockNumber" in new JsonRpcControllerFixture {
     val mockEthBlocksService: EthBlocksService & scala.reflect.Selectable = mock[EthBlocksService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
 
     (mockEthBlocksService.getUncleCountByBlockNumber _)
       .expects(*)
@@ -529,7 +533,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getUncleCountByBlockHash " in new JsonRpcControllerFixture {
     val mockEthBlocksService: EthBlocksService & scala.reflect.Selectable = mock[EthBlocksService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
 
     (mockEthBlocksService.getUncleCountByBlockHash _)
       .expects(*)
@@ -556,7 +561,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getBalance" in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethUserService = mockEthUserService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
     (mockEthUserService.getBalance _)
       .expects(*)
@@ -576,7 +582,8 @@ class JsonRpcControllerEthSpec
 
   it should "return error with custom error in data in eth_balance" in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethUserService = mockEthUserService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
     (mockEthUserService.getBalance _)
       .expects(*)
@@ -596,7 +603,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getStorageAt" in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethUserService = mockEthUserService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
     (mockEthUserService.getStorageAt _)
       .expects(*)
@@ -643,7 +651,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_newFilter" in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
     (mockEthFilterService.newFilter _)
       .expects(*)
@@ -667,7 +676,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_newBlockFilter" in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
     (mockEthFilterService.newBlockFilter _)
       .expects(*)
@@ -686,7 +696,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_newPendingTransactionFilter" in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
     (mockEthFilterService.newPendingTransactionFilter _)
       .expects(*)
@@ -703,7 +714,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_uninstallFilter" in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
     (mockEthFilterService.uninstallFilter _)
       .expects(*)
@@ -720,7 +732,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getFilterChanges" in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
     (mockEthFilterService.getFilterChanges _)
       .expects(*)
@@ -876,7 +889,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getFilterLogs" in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
     (mockEthFilterService.getFilterLogs _)
       .expects(*)
@@ -905,7 +919,8 @@ class JsonRpcControllerEthSpec
 
   it should "eth_getLogs" in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
     (mockEthFilterService.getLogs _)
       .expects(*)

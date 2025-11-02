@@ -187,7 +187,8 @@ class EthashBlockHeaderValidatorSpec
   it should "properly validate a block after difficulty bomb pause" in new EphemBlockchainTestSetup {
     val parent: Block = Block(pausedDifficultyBombBlockParent, parentBody)
 
-    val res: Either[BlockHeaderError, BlockHeaderValid] = PoWBlockHeaderValidator.validate(pausedDifficultyBombBlock, parent.header)
+    val res: Either[BlockHeaderError, BlockHeaderValid] =
+      PoWBlockHeaderValidator.validate(pausedDifficultyBombBlock, parent.header)
     res shouldBe Right(BlockHeaderValid)
   }
 

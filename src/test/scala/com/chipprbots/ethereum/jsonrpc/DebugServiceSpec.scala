@@ -55,7 +55,8 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there are no peers available" in new TestSetup {
-    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
+      debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map.empty))
@@ -64,7 +65,8 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there is no peer info" in new TestSetup {
-    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
+      debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))

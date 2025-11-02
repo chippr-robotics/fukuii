@@ -119,7 +119,8 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
 
   it should "correctly distribute block reward according to ECIP1098" in new TestSetup {
     val blockNoPostTreasury: BigInt = blockchainConfig.forkBlockNumbers.ecip1098BlockNumber + 1
-    val blockReward: BigInt = mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(sampleBlockNumber)
+    val blockReward: BigInt =
+      mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(sampleBlockNumber)
     val blockRewardPostTreasury: BigInt =
       mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(blockNoPostTreasury)
 

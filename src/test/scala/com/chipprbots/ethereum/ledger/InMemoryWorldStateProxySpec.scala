@@ -53,7 +53,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
   it should "not store within contract store if value is zero" in new TestSetup {
     val account: Account = Account(0, 100)
     val worldStateWithAnAccount: InMemoryWorldStateProxy = worldState.saveAccount(address1, account)
-    val persistedWorldStateWithAnAccount: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(worldStateWithAnAccount)
+    val persistedWorldStateWithAnAccount: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(worldStateWithAnAccount)
 
     val persistedWithContractStorageValue: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
       persistedWorldStateWithAnAccount.saveStorage(
@@ -69,7 +70,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
   it should "storing a zero on a contract store position should remove it from the underlying tree" in new TestSetup {
     val account: Account = Account(0, 100)
     val worldStateWithAnAccount: InMemoryWorldStateProxy = worldState.saveAccount(address1, account)
-    val persistedWorldStateWithAnAccount: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(worldStateWithAnAccount)
+    val persistedWorldStateWithAnAccount: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(worldStateWithAnAccount)
 
     val persistedWithContractStorageValue: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
       persistedWorldStateWithAnAccount.saveStorage(
@@ -144,7 +146,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
     validateInitialWorld(newWorldState)
 
     // Update this new WS check everything is ok
-    val updatedNewWorldState: InMemoryWorldStateProxy = newWorldState.transfer(address2, address1, UInt256(account.balance))
+    val updatedNewWorldState: InMemoryWorldStateProxy =
+      newWorldState.transfer(address2, address1, UInt256(account.balance))
     updatedNewWorldState.getGuaranteedAccount(address1).balance shouldEqual account.balance
     updatedNewWorldState.getGuaranteedAccount(address2).balance shouldEqual 0
     updatedNewWorldState.getStorage(address1).load(addr) shouldEqual value
@@ -180,7 +183,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
     worldStateAfterEmptyTransfer.getGuaranteedAccount(address1).balance shouldEqual account.balance
     worldStateAfterEmptyTransfer.getAccount(address2) shouldBe None
 
-    val finalWorldState: InMemoryWorldStateProxy = worldStateAfterEmptyTransfer.transfer(address1, address2, nonZeroTransfer)
+    val finalWorldState: InMemoryWorldStateProxy =
+      worldStateAfterEmptyTransfer.transfer(address1, address2, nonZeroTransfer)
 
     finalWorldState.getGuaranteedAccount(address1).balance shouldEqual account.balance - nonZeroTransfer
 
@@ -225,7 +229,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
     val worldStateAfterSecondTransfer: InMemoryWorldStateProxy = worldStateAfterFirstTransfer
       .transfer(address1, address3, nonZeroTransfer)
 
-    val postEip161UpdatedWorld: InMemoryWorldStateProxy = postEIP161WorldState.keepPrecompileTouched(worldStateAfterSecondTransfer)
+    val postEip161UpdatedWorld: InMemoryWorldStateProxy =
+      postEIP161WorldState.keepPrecompileTouched(worldStateAfterSecondTransfer)
 
     postEip161UpdatedWorld.touchedAccounts should contain theSameElementsAs Set(precompiledAddress)
   }
@@ -246,7 +251,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
     val account: Account = Account(UInt256.One, startValue)
     ByteString(Hex.decode("deadbeefdeadbeefdeadbeef"))
 
-    val initialWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(worldState.saveAccount(address1, account))
+    val initialWorld: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(worldState.saveAccount(address1, account))
 
     val worldAfterEtherRemoval: InMemoryWorldStateProxy = initialWorld.removeAllEther(address1)
 
@@ -261,7 +267,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
 
     val worldStateWithAnAccount: InMemoryWorldStateProxy = worldState.saveAccount(address1, account)
 
-    val persistedWorldStateWithAnAccount: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(worldStateWithAnAccount)
+    val persistedWorldStateWithAnAccount: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(worldStateWithAnAccount)
 
     val readWorldState: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
@@ -330,7 +337,8 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
 
     collidingAddress shouldEqual alreadyExistingAddress
 
-    val world3: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(world2.initialiseAccount(collidingAddress))
+    val world3: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(world2.initialiseAccount(collidingAddress))
 
     world3.getGuaranteedAccount(collidingAddress).balance shouldEqual accountBalance
     world3.getGuaranteedAccount(collidingAddress).nonce shouldEqual blockchainConfig.accountStartNonce

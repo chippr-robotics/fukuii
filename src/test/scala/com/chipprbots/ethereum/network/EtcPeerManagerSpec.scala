@@ -87,10 +87,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // given
     val newBlockWeight: ChainWeight = ChainWeight.totalDifficultyOnly(300)
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = peer1Info.maxBlockNumber + 4)
-    val firstBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock = ETC64.NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight)
+    val firstBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock =
+      ETC64.NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight)
 
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = peer2Info.maxBlockNumber + 2)
-    val secondBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock = ETC64.NewBlock(Block(secondHeader, BlockBody(Nil, Nil)), newBlockWeight)
+    val secondBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock =
+      ETC64.NewBlock(Block(secondHeader, BlockBody(Nil, Nil)), newBlockWeight)
 
     // when
     peersInfoHolder ! MessageFromPeer(firstBlock, peer1.id)
@@ -200,7 +202,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
-    val blockHeaders: BlockHeaders = BlockHeaders(Seq(Genesis.header.copy(number = Fixtures.Blocks.DaoForkBlock.header.number)))
+    val blockHeaders: BlockHeaders =
+      BlockHeaders(Seq(Genesis.header.copy(number = Fixtures.Blocks.DaoForkBlock.header.number)))
 
     // when
     peersInfoHolder ! MessageFromPeer(blockHeaders, peer1.id)

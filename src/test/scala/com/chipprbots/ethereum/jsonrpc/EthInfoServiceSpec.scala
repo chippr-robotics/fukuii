@@ -46,7 +46,8 @@ class EthServiceSpec
   implicit val runtime: IORuntime = IORuntime.global
 
   "EthInfoService" should "return ethereum protocol version" in new TestSetup {
-    val response: Either[JsonRpcError, ProtocolVersionResponse] = ethService.protocolVersion(ProtocolVersionRequest()).unsafeRunSync()
+    val response: Either[JsonRpcError, ProtocolVersionResponse] =
+      ethService.protocolVersion(ProtocolVersionRequest()).unsafeRunSync()
     val protocolVersion = response.toOption.get.value
 
     Integer.parseInt(protocolVersion.drop(2), 16) shouldEqual currentProtocolVersion

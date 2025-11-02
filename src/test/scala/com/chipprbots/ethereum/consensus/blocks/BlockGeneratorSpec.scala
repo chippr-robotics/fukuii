@@ -42,7 +42,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("eb49a2da108d63de"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("a91c44e62d17005c4b22f6ed116f485ea30d8b63f2429745816093b304eb4f73"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("a91c44e62d17005c4b22f6ed116f485ea30d8b63f2429745816093b304eb4f73"))
     val miningTimestamp = 1508751768
 
     val fullBlock: Block = pendingBlock.block.copy(
@@ -69,7 +70,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("4139b957dae0488d"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("dc25764fb562d778e5d1320f4c3ba4b09021a2603a0816235e16071e11f342ea"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("dc25764fb562d778e5d1320f4c3ba4b09021a2603a0816235e16071e11f342ea"))
     val miningTimestamp = 1508752265
 
     val fullBlock: Block = pendingBlock.block.copy(
@@ -96,7 +98,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("4139b957dae0488d"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("dc25764fb562d778e5d1320f4c3ba4b09021a2603a0816235e16071e11f342ea"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("dc25764fb562d778e5d1320f4c3ba4b09021a2603a0816235e16071e11f342ea"))
     val miningTimestamp = 1508752265
 
     val fullBlock: Block = pendingBlock.block.copy(
@@ -150,7 +153,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("12cb47f9208d1e81"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("908471b57f2d3e70649f9ce0c9c318d61146d3ce19f70d2f94309f135b87b64a"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("908471b57f2d3e70649f9ce0c9c318d61146d3ce19f70d2f94309f135b87b64a"))
     val miningTimestamp = 1508752389
 
     val fullBlock: Block = pendingBlock.block.copy(
@@ -179,7 +183,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         Some(0x3d.toByte)
       )
 
-    val transactions: Seq[SignedTransaction] = Seq(txWitGasTooBigGasLimit, signedTransaction, duplicatedSignedTransaction)
+    val transactions: Seq[SignedTransaction] =
+      Seq(txWitGasTooBigGasLimit, signedTransaction, duplicatedSignedTransaction)
     val pendingBlock: PendingBlock =
       blockGenerator
         .generateBlock(bestBlock.get, transactions, Address(testAddress), blockGenerator.emptyX, None)
@@ -187,7 +192,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("38026e10fb18b458"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("806f26f0efb12a0c0c16e587984227186c46f25fc4e76698a68996183edf2cf1"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("806f26f0efb12a0c0c16e587984227186c46f25fc4e76698a68996183edf2cf1"))
     val miningTimestamp = 1508752492
 
     val fullBlock: Block = pendingBlock.block.copy(
@@ -244,7 +250,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       )
 
     val generalTx: SignedTransaction = SignedTransaction.sign(transaction, keyPair, None)
-    val specificTx: SignedTransaction = SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, Some(0x3d.toByte))
+    val specificTx: SignedTransaction =
+      SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, Some(0x3d.toByte))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -253,7 +260,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("48381cb0cd40936a"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("dacd96cf5dbc662fa113c73319fcdc7d6e7053571432345b936fd221c1e18d42"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("dacd96cf5dbc662fa113c73319fcdc7d6e7053571432345b936fd221c1e18d42"))
     val miningTimestamp = 1499952002
 
     val fullBlock: Block =
@@ -329,7 +337,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
   }
 
   it should "generate block after eip155 and allow both chain specific and general transactions" in new TestSetup {
-    val generalTx: SignedTransaction = SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, None)
+    val generalTx: SignedTransaction =
+      SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, None)
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -344,7 +353,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("39bd50fcbde30b18"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("c77dae7cef6c685896ed6b8026466a2e6338b8bc5f182e2dd7a64cf7da9c7d1b"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("c77dae7cef6c685896ed6b8026466a2e6338b8bc5f182e2dd7a64cf7da9c7d1b"))
     val miningTimestamp = 1499951223
 
     val fullBlock: Block =
@@ -381,7 +391,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("8f88ec20f1be482f"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("247a206abc088487edc1697fcaceb33ad87b55666e438129b7048bb08c8ed88f"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("247a206abc088487edc1697fcaceb33ad87b55666e438129b7048bb08c8ed88f"))
     val miningTimestamp = 1499721182
 
     val fullBlock: Block =
@@ -432,7 +443,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("8f88ec20f1be482f"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("247a206abc088487edc1697fcaceb33ad87b55666e438129b7048bb08c8ed88f"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("247a206abc088487edc1697fcaceb33ad87b55666e438129b7048bb08c8ed88f"))
     val miningTimestamp = 1499721182
 
     val fullBlock: Block = pendingBlock.block.copy(
@@ -468,7 +480,8 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     // mined with mantis + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("14d7000ac544b38e"))
-    val minedMixHash: ByteString = ByteString(Hex.decode("270f6b2618c5bef6a188397927129c803e5fd41c85492835486832f6825a8d78"))
+    val minedMixHash: ByteString =
+      ByteString(Hex.decode("270f6b2618c5bef6a188397927129c803e5fd41c85492835486832f6825a8d78"))
     val miningTimestamp = 1508752698
 
     val fullBlock: Block = pendingBlock.block.copy(

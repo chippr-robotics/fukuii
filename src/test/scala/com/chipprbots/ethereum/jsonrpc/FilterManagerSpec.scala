@@ -423,7 +423,8 @@ class FilterManagerSpec
       payload = ByteString()
     )
 
-    val stx: SignedTransactionWithSender = SignedTransactionWithSender(SignedTransaction.sign(tx, keyPair, None), Address(keyPair))
+    val stx: SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction.sign(tx, keyPair, None), Address(keyPair))
     val pendingTxs: Seq[SignedTransactionWithSender] = Seq(
       stx
     )
@@ -464,7 +465,8 @@ class FilterManagerSpec
       payload = ByteString()
     )
 
-    val stx: SignedTransactionWithSender = SignedTransactionWithSender(SignedTransaction.sign(tx, keyPair, None), Address(keyPair))
+    val stx: SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction.sign(tx, keyPair, None), Address(keyPair))
     val pendingTxs: Seq[SignedTransactionWithSender] = Seq(stx)
 
     (keyStore.listAccounts _).expects().returning(Right(List(stx.senderAddress)))

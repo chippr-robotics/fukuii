@@ -20,7 +20,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     messageCodec.readMessages(remoteHello)
 
     val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
-    val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] = remoteMessageCodec.readMessages(localNextMessageAfterHello)
+    val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
     // remote peer did not receive local status so it treats all remote messages as uncompressed
     assert(remoteReadNotCompressedStatus.size == 1)
@@ -35,7 +36,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     messageCodec.readMessages(remoteHello)
 
     val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
-    val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] = remoteMessageCodec.readMessages(localNextMessageAfterHello)
+    val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
     // remote peer did not receive local status so it treats all remote messages as uncompressed,
     // but local peer compress messages after V5 Hello message
@@ -51,7 +53,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     remoteMessageCodec.readMessages(localHello)
 
     val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
-    val remoteReadNextMessageAfterHello: Seq[Either[Throwable, Message]] = remoteMessageCodec.readMessages(localNextMessageAfterHello)
+    val remoteReadNextMessageAfterHello: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
     // both peers exchanged v5 hellos, so they should send compressed messages
     assert(remoteReadNextMessageAfterHello.size == 1)
@@ -67,7 +70,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val localStatus: ByteString = messageCodec.encodeMessage(status)
 
     // both messages will be read at one, but after reading hello decompressing will be activated
-    val remoteReadBothMessages: Seq[Either[Throwable, Message]] = remoteMessageCodec.readMessages(localHello ++ localStatus)
+    val remoteReadBothMessages: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localHello ++ localStatus)
 
     // both peers exchanged v5 hellos, so they should send compressed messages
     assert(remoteReadBothMessages.size == 2)

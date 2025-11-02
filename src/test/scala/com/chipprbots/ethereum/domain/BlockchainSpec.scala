@@ -52,7 +52,8 @@ class BlockchainSpec
     val validBlock = Fixtures.Blocks.ValidBlock.block
     blockchainWriter.storeBlock(validBlock).commit()
     blockchainWriter.saveBestKnownBlocks(validBlock.hash, validBlock.number)
-    val block: Option[Block] = blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), validBlock.header.number)
+    val block: Option[Block] =
+      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), validBlock.header.number)
     block.isDefined should ===(true)
     validBlock should ===(block.get)
   }
@@ -160,7 +161,8 @@ class BlockchainSpec
     blockchainWriter.storeBlockHeader(headerWithAcc).commit()
     blockchainWriter.saveBestKnownBlocks(headerWithAcc.hash, headerWithAcc.number)
 
-    val retrievedAccount: Option[Account] = blockchainReader.getAccount(blockchainReader.getBestBranch(), address, headerWithAcc.number)
+    val retrievedAccount: Option[Account] =
+      blockchainReader.getAccount(blockchainReader.getBestBranch(), address, headerWithAcc.number)
     retrievedAccount shouldEqual Some(account)
   }
 
@@ -204,7 +206,8 @@ class BlockchainSpec
     )
     val mptWithAcc: MerklePatriciaTrie[Address, Account] = emptyMpt.put(Address(42), Account.empty(UInt256(7)))
 
-    val headerWithAcc: BlockHeader = Fixtures.Blocks.ValidBlock.header.copy(stateRoot = ByteString(mptWithAcc.getRootHash))
+    val headerWithAcc: BlockHeader =
+      Fixtures.Blocks.ValidBlock.header.copy(stateRoot = ByteString(mptWithAcc.getRootHash))
 
     blockchainWriter.storeBlockHeader(headerWithAcc).commit()
     blockchainWriter.saveBestKnownBlocks(headerWithAcc.hash, headerWithAcc.number)

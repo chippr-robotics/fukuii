@@ -60,7 +60,8 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
   it should "correctly estimate gasLimit for value transfer transaction" in new ScenarioSetup {
     val transferValue = 2
 
-    val tx: LegacyTransaction = LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
+    val tx: LegacyTransaction =
+      LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
     val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
     val stx: SignedTransaction = SignedTransaction(tx, fakeSignature)
 
@@ -75,9 +76,11 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
   it should "correctly simulate transaction on pending block when supplied prepared world" in new ScenarioSetup {
     val transferValue = 2
 
-    val tx: LegacyTransaction = LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
+    val tx: LegacyTransaction =
+      LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
     val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
-    val stxFromAddress: SignedTransactionWithSender = SignedTransactionWithSender(SignedTransaction(tx, fakeSignature), fromAddress)
+    val stxFromAddress: SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction(tx, fakeSignature), fromAddress)
 
     val newBlock: Block = genesisBlock.copy(header = block.header.copy(number = 1, parentHash = genesisHash))
 

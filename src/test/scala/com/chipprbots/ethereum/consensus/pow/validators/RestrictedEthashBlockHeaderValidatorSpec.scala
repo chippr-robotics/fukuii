@@ -68,7 +68,8 @@ class RestrictedEthashBlockHeaderValidatorSpec
     val allowedKey: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
     val keyBytes: ByteString = crypto.keyPairToByteStrings(allowedKey)._2
 
-    val headerWithoutSig: BlockHeader = validHeader.copy(extraData = validHeader.extraData.dropRight(ECDSASignature.EncodedLength))
+    val headerWithoutSig: BlockHeader =
+      validHeader.copy(extraData = validHeader.extraData.dropRight(ECDSASignature.EncodedLength))
     val reSignedHeader: BlockHeader = RestrictedPoWSigner.signHeader(headerWithoutSig, allowedKey)
 
     val validationResult: Either[BlockHeaderError, BlockHeaderValid] =

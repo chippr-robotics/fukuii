@@ -101,11 +101,13 @@ class PersonalServiceSpec
     res1 shouldEqual Left(LogicError("boom!"))
 
     (keyStore.unlockAccount _).expects(*, *).returning(Left(KeyStore.KeyNotFound))
-    val res2: Either[JsonRpcError, UnlockAccountResponse] = personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
+    val res2: Either[JsonRpcError, UnlockAccountResponse] =
+      personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
     res2 shouldEqual Left(KeyNotFound)
 
     (keyStore.unlockAccount _).expects(*, *).returning(Left(KeyStore.DecryptionFailed))
-    val res3: Either[JsonRpcError, UnlockAccountResponse] = personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
+    val res3: Either[JsonRpcError, UnlockAccountResponse] =
+      personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
     res3 shouldEqual Left(InvalidPassphrase)
   }
 
@@ -135,7 +137,8 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -156,7 +159,8 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Seq(PendingTransaction(stxWithSender, 0))))
@@ -213,8 +217,10 @@ class PersonalServiceSpec
 
     personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
 
-    val lockRes: Either[JsonRpcError, LockAccountResponse] = personal.lockAccount(LockAccountRequest(address)).unsafeRunSync()
-    val txRes: Either[JsonRpcError, SendTransactionResponse] = personal.sendTransaction(SendTransactionRequest(tx)).unsafeRunSync()
+    val lockRes: Either[JsonRpcError, LockAccountResponse] =
+      personal.lockAccount(LockAccountRequest(address)).unsafeRunSync()
+    val txRes: Either[JsonRpcError, SendTransactionResponse] =
+      personal.sendTransaction(SendTransactionRequest(tx)).unsafeRunSync()
 
     lockRes shouldEqual Right(LockAccountResponse(true))
     txRes shouldEqual Left(AccountLocked)
@@ -348,7 +354,8 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -368,7 +375,8 @@ class PersonalServiceSpec
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber)
 
     val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))

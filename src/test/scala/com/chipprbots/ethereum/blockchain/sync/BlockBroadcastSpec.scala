@@ -148,7 +148,8 @@ class BlockBroadcastSpec
     // when
     val peers: Seq[Peer] = Seq(peer, peer2, peer3, peer4)
     val peersIds: Seq[PeerId] = peers.map(_.id)
-    val peersWithInfo: Map[PeerId, PeerWithInfo] = peers.map(peer => peer.id -> PeerWithInfo(peer, initialPeerInfo)).toMap
+    val peersWithInfo: Map[PeerId, PeerWithInfo] =
+      peers.map(peer => peer.id -> PeerWithInfo(peer, initialPeerInfo)).toMap
     blockBroadcast.broadcastBlock(BlockToBroadcast(firstBlock.block, firstBlock.chainWeight), peersWithInfo)
 
     // then

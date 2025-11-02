@@ -73,7 +73,8 @@ class EthUserServiceSpec
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
-    val response: ServiceResponse[GetBalanceResponse] = ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
+    val response: ServiceResponse[GetBalanceResponse] =
+      ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Right(GetBalanceResponse(123))
   }
@@ -86,7 +87,8 @@ class EthUserServiceSpec
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.header.number)
 
-    val response: ServiceResponse[GetBalanceResponse] = ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
+    val response: ServiceResponse[GetBalanceResponse] =
+      ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Left(JsonRpcError.NodeNotFound)
   }
@@ -116,7 +118,8 @@ class EthUserServiceSpec
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
-    val response: ServiceResponse[GetStorageAtResponse] = ethUserService.getStorageAt(GetStorageAtRequest(address, 333, BlockParam.Latest))
+    val response: ServiceResponse[GetStorageAtResponse] =
+      ethUserService.getStorageAt(GetStorageAtRequest(address, 333, BlockParam.Latest))
     response.unsafeRunSync().map(v => UInt256(v.value)) shouldEqual Right(UInt256(123))
   }
 
@@ -134,7 +137,8 @@ class EthUserServiceSpec
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
-    val response: ServiceResponse[GetTransactionCountResponse] = ethUserService.getTransactionCount(GetTransactionCountRequest(address, BlockParam.Latest))
+    val response: ServiceResponse[GetTransactionCountResponse] =
+      ethUserService.getTransactionCount(GetTransactionCountRequest(address, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Right(GetTransactionCountResponse(BigInt(999)))
   }

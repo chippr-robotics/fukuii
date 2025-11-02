@@ -299,7 +299,8 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
   it should "eth_getTransactionCount" in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethUserService = mockEthUserService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
     (mockEthUserService.getTransactionCount _)
       .expects(*)
@@ -319,7 +320,8 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
   it should "eth_getBlockTransactionCountByNumber " in new JsonRpcControllerFixture {
     val mockEthBlocksService: EthBlocksService & scala.reflect.Selectable = mock[EthBlocksService]
-    override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
+    override val jsonRpcController: JsonRpcController =
+      super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
 
     (mockEthBlocksService.getBlockTransactionCountByNumber _)
       .expects(*)

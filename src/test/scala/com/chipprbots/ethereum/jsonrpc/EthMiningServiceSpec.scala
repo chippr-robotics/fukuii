@@ -78,7 +78,8 @@ class EthMiningServiceSpec
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
 
     // Start the getWork call asynchronously
-    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] =
+      ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
 
     // Handle the actor messages
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
@@ -137,7 +138,8 @@ class EthMiningServiceSpec
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
 
     // Start the getWork call asynchronously
-    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] =
+      ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
 
     // Handle the actor messages
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)

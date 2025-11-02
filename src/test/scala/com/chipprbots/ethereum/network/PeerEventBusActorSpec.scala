@@ -79,8 +79,10 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
       .recoverWithRetries(1, { case _: WatchedActorTerminatedException => Source.empty })
       .toMat(Sink.seq)(Keep.right)
 
-    val stream1: Future[Seq[MessageFromPeer]] = PeerEventBusActor.messageSource(peerEventBusProbe.ref, classifier1).runWith(seqOnTermination)
-    val stream2: Future[Seq[MessageFromPeer]] = PeerEventBusActor.messageSource(peerEventBusProbe.ref, classifier2).runWith(seqOnTermination)
+    val stream1: Future[Seq[MessageFromPeer]] =
+      PeerEventBusActor.messageSource(peerEventBusProbe.ref, classifier1).runWith(seqOnTermination)
+    val stream2: Future[Seq[MessageFromPeer]] =
+      PeerEventBusActor.messageSource(peerEventBusProbe.ref, classifier2).runWith(seqOnTermination)
 
     // wait for subscriptions to be done
     peerEventBusProbe.expectMsgType[PeerEventBusActor.Subscribe]

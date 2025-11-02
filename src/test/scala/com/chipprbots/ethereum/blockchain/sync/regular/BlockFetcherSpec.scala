@@ -72,7 +72,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with SecureRandomBu
       peersClient.expectNoMessage()
 
       // Respond to the second request should make the fetcher resume with his requests
-      val secondBlocksBatch: List[Block] = BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, firstBlocksBatch.last)
+      val secondBlocksBatch: List[Block] =
+        BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, firstBlocksBatch.last)
       val secondGetBlockHeadersResponse: BlockHeaders = BlockHeaders(secondBlocksBatch.map(_.header))
       peersClient.send(refExpectingReply, PeersClient.Response(fakePeer, secondGetBlockHeadersResponse))
 
@@ -203,7 +204,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with SecureRandomBu
 
       triggerFetching()
 
-      val secondBlocksBatch: List[Block] = BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, firstBlocksBatch.last)
+      val secondBlocksBatch: List[Block] =
+        BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, firstBlocksBatch.last)
       val alternativeSecondBlocksBatch: List[Block] =
         BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, firstBlocksBatch.last)
 
@@ -250,8 +252,9 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with SecureRandomBu
       }
 
       // Second bodies request
-      val refForAnswerSecondBodiesReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() { case PeersClient.Request(GetBlockBodies(_), _, _) =>
-        peersClient.lastSender
+      val refForAnswerSecondBodiesReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() {
+        case PeersClient.Request(GetBlockBodies(_), _, _) =>
+          peersClient.lastSender
       }
       peersClient.send(
         refForAnswerSecondBodiesReq,

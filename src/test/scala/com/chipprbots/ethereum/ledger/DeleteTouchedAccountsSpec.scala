@@ -30,7 +30,8 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "delete no accounts when there are no empty touched accounts" in new TestSetup {
-    val worldAfterTransfer: InMemoryWorldStateProxy = worldStatePostEIP161.transfer(validAccountAddress, validAccountAddress2, transferBalance)
+    val worldAfterTransfer: InMemoryWorldStateProxy =
+      worldStatePostEIP161.transfer(validAccountAddress, validAccountAddress2, transferBalance)
     worldAfterTransfer.touchedAccounts.size shouldEqual 2
 
     val newWorld: InMemoryWorldStateProxy =

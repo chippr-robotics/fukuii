@@ -47,7 +47,8 @@ class SyncStateSchedulerSpec
     val initialState: SchedulerState = syncStateScheduler.initState(worldHash).get
     val (missingNodes, newState) = syncStateScheduler.getMissingNodes(initialState, 1)
     val responses: List[SyncResponse] = prov.getNodes(missingNodes)
-    val result: Either[CriticalError, (SchedulerState, ProcessingStatistics)] = syncStateScheduler.processResponses(newState, responses)
+    val result: Either[CriticalError, (SchedulerState, ProcessingStatistics)] =
+      syncStateScheduler.processResponses(newState, responses)
     val (newRequests, state) = syncStateScheduler.getMissingNodes(result.value._1, 1)
     syncStateScheduler.persistBatch(state, 1)
 
@@ -198,7 +199,8 @@ class SyncStateSchedulerSpec
     val (syncStateScheduler, _, _, _, _) = buildScheduler()
     val initState: SchedulerState = syncStateScheduler.initState(worldHash).get
     val (_, state1) = syncStateScheduler.getMissingNodes(initState, 1)
-    val result1: Either[ResponseProcessingError, SchedulerState] = syncStateScheduler.processResponse(state1, SyncResponse(ByteString(1), ByteString(2)))
+    val result1: Either[ResponseProcessingError, SchedulerState] =
+      syncStateScheduler.processResponse(state1, SyncResponse(ByteString(1), ByteString(2)))
     assert(result1.isLeft)
     assert(result1.left.value == NotRequestedItem)
   }
@@ -216,9 +218,11 @@ class SyncStateSchedulerSpec
     val initState: SchedulerState = syncStateScheduler.initState(worldHash).get
     val (firstMissing, state1) = syncStateScheduler.getMissingNodes(initState, 1)
     val firstMissingResponse: List[SyncResponse] = prov.getNodes(firstMissing)
-    val result1: Either[ResponseProcessingError, SchedulerState] = syncStateScheduler.processResponse(state1, firstMissingResponse.head)
+    val result1: Either[ResponseProcessingError, SchedulerState] =
+      syncStateScheduler.processResponse(state1, firstMissingResponse.head)
     val stateAfterReceived = result1.value
-    val result2: Either[ResponseProcessingError, SchedulerState] = syncStateScheduler.processResponse(stateAfterReceived, firstMissingResponse.head)
+    val result2: Either[ResponseProcessingError, SchedulerState] =
+      syncStateScheduler.processResponse(stateAfterReceived, firstMissingResponse.head)
 
     assert(result1.isRight)
     assert(result2.isLeft)
@@ -238,7 +242,8 @@ class SyncStateSchedulerSpec
     val initState: SchedulerState = syncStateScheduler.initState(worldHash).get
     val (firstMissing, state1) = syncStateScheduler.getMissingNodes(initState, 1)
     val firstMissingResponse: List[SyncResponse] = prov.getNodes(firstMissing)
-    val result1: Either[ResponseProcessingError, SchedulerState] = syncStateScheduler.processResponse(state1, firstMissingResponse.head.copy(data = ByteString(1, 2, 3)))
+    val result1: Either[ResponseProcessingError, SchedulerState] =
+      syncStateScheduler.processResponse(state1, firstMissingResponse.head.copy(data = ByteString(1, 2, 3)))
     assert(result1.isLeft)
     assert(result1.left.value == CannotDecodeMptNode)
   }

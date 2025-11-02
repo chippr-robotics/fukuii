@@ -60,7 +60,8 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
 
     import DefaultValues._
 
-    val peerActorHandshakeFails: TestActorRef[PeerActor[PeerInfo]] = peerActor(MockHandshakerAlwaysFails(defaultReasonDisconnect))
+    val peerActorHandshakeFails: TestActorRef[PeerActor[PeerInfo]] =
+      peerActor(MockHandshakerAlwaysFails(defaultReasonDisconnect))
 
     // Establish probe rlpxconnection
     peerActorHandshakeFails ! ConnectTo(uri)

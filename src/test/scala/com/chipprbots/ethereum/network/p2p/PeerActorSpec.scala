@@ -221,7 +221,8 @@ class PeerActorSpec
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
     // Hello exchange
-    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETC64, Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello =
+      Hello(4, "test-client", Seq(Capability.ETC64, Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
