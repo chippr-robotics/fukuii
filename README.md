@@ -366,6 +366,6 @@ fukuii.network.rpc {
 }
 ```
 
-Contact
+## Contact
 
 For questions or support, reach out to Chippr Robotics LLC via our GitHub repository.
