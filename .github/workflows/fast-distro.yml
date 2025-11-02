@@ -1,0 +1,176 @@
+name: Fast Distro
+
+on:
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release'
+        required: false
+        default: 'nightly'
+        type: choice
+        options:
+          - nightly
+          - snapshot
+
+jobs:
+  fast-build:
+    name: Fast Build (No Tests)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'sbt'
+      
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-21-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-21-
+            ${{ runner.os }}-sbt-
+      
+      - name: Set up SBT
+        run: |
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          sudo apt-get update
+          sudo apt-get install sbt
+      
+      - name: Compile production code only (no tests)
+        run: |
+          sbt "bytes / compile"
+          sbt "crypto / compile"
+          sbt "rlp / compile"
+          sbt compile
+        env:
+          FUKUII_DEV: true
+      
+      - name: Build assembly JAR
+        run: sbt assembly
+        env:
+          FUKUII_DEV: true
+      
+      - name: Build distribution package
+        run: sbt dist
+        env:
+          FUKUII_DEV: true
+      
+      - name: Extract version and prepare artifacts
+        id: prepare
+        run: |
+          # Extract version from version.sbt - handles format: (ThisBuild / version) := "x.y.z"
+          # Supports version strings with pre-release identifiers (e.g., 0.1.0-SNAPSHOT)
+          VERSION=$(grep -oP '(?<=:= ")[^\"]+(?=")' version.sbt)
+          TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
+          
+          # Create nightly version identifier
+          NIGHTLY_VERSION="${VERSION}-nightly-${TIMESTAMP}"
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "nightly_version=${NIGHTLY_VERSION}" >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          
+          echo "Version: ${VERSION}"
+          echo "Nightly Version: ${NIGHTLY_VERSION}"
+          
+          # Prepare artifacts directory
+          mkdir -p fast-distro-artifacts
+          
+          # Copy distribution zip
+          if ls target/universal/*.zip 1> /dev/null 2>&1; then
+            cp target/universal/*.zip fast-distro-artifacts/fukuii-${NIGHTLY_VERSION}.zip
+            echo "Copied distribution package"
+          else
+            echo "Warning: No distribution zip found"
+          fi
+          
+          # Copy assembly JAR (there should only be one)
+          ASSEMBLY_JAR=$(find target -name "*-assembly-*.jar" | head -n 1)
+          if [ -n "$ASSEMBLY_JAR" ]; then
+            cp "$ASSEMBLY_JAR" fast-distro-artifacts/fukuii-assembly-${NIGHTLY_VERSION}.jar
+            echo "Copied assembly JAR: $ASSEMBLY_JAR"
+          else
+            echo "Warning: No assembly JAR found"
+          fi
+          
+          # List artifacts
+          echo "Fast distro artifacts:"
+          ls -lh fast-distro-artifacts/
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fukuii-fast-distro-${{ steps.prepare.outputs.timestamp }}
+          path: fast-distro-artifacts/*
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: Create nightly release
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'nightly')
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: nightly-${{ steps.prepare.outputs.timestamp }}
+          name: Nightly Build ${{ steps.prepare.outputs.timestamp }}
+          body: |
+            ## Nightly Build - ${{ steps.prepare.outputs.timestamp }}
+            
+            This is an automated nightly build of Fukuii.
+            
+            **Base Version:** ${{ steps.prepare.outputs.version }}
+            **Build Time:** ${{ steps.prepare.outputs.timestamp }}
+            
+            ⚠️ **Note:** This build was created without running the full test suite. Use for testing and development purposes only.
+            
+            ### What's Included
+            - Distribution package (`fukuii-${{ steps.prepare.outputs.nightly_version }}.zip`)
+            - Assembly JAR (`fukuii-assembly-${{ steps.prepare.outputs.nightly_version }}.jar`)
+            
+            ### How to Use
+            1. Download the distribution package or assembly JAR
+            2. Extract (if using distribution package)
+            3. Run the application
+            
+            For more information, see the [main repository](https://github.com/chippr-robotics/fukuii).
+          draft: false
+          prerelease: true
+          files: fast-distro-artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Summary
+        run: |
+          echo "## Fast Distro Build Complete 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Nightly Version:** ${{ steps.prepare.outputs.nightly_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Time:** ${{ steps.prepare.outputs.timestamp }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Steps Completed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Compiled all modules" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Built assembly JAR" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Built distribution package" >> $GITHUB_STEP_SUMMARY
+          echo "- ⏭️ Skipped full test suite (fast build)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts have been uploaded and are available in the workflow run." >> $GITHUB_STEP_SUMMARY
