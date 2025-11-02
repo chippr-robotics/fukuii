@@ -480,9 +480,8 @@ class FastSync(
           // we blacklist peer just in case we got malicious peer which would send us bad blocks, forcing us to rollback
           // to genesis
           log.warning(
-            "Parent chain weight not found for block {} (number: {}, parent: {}). Will retry sync with alternate peer.",
+            "Parent chain weight not found for block {} (parent: {}). Will retry sync with alternate peer.",
             header.idTag,
-            header.number,
             header.parentHash
           )
           handleRewind(header, peer, syncConfig.fastSyncBlockValidationN, syncConfig.blacklistDuration)
