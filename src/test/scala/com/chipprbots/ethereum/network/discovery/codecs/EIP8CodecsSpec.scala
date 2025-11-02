@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.network.discovery.Secp256k1SigAlg
 class EIP8CodecsSpec extends AnyFlatSpec with Matchers {
 
   import RLPCodecs._
-  import DefaultCodecs.given
+  import RLPCodecs.given
 
   implicit val packetCodec: Codec[Packet] =
     Packet.packetCodec(allowDecodeOverMaxPacketSize = false)

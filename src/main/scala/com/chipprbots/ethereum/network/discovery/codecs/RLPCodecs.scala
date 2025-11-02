@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
 import com.chipprbots.ethereum.rlp.RLPImplicitDerivations.{given, *}
 import com.chipprbots.ethereum.rlp.RLPImplicits.{given, *}
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 
 /** RLP codecs based on https://github.com/ethereum/devp2p/blob/master/discv4.md */
 object RLPCodecs extends ContentCodecs with PayloadCodecs {
@@ -170,22 +171,16 @@ trait PayloadCodecs { self: ContentCodecs =>
       RLPList(items: _*)
     },
     {
-      case RLPList(version, from, to, expiration) =>
-        Payload.Ping(
-          version.decodeAs[Int]("version"),
-          from.decodeAs[Node.Address]("from"),
-          to.decodeAs[Node.Address]("to"),
-          expiration.decodeAs[Long]("expiration"),
-          None
-        )
-      case RLPList(version, from, to, expiration, enrSeq) =>
-        Payload.Ping(
-          version.decodeAs[Int]("version"),
-          from.decodeAs[Node.Address]("from"),
-          to.decodeAs[Node.Address]("to"),
-          expiration.decodeAs[Long]("expiration"),
-          Some(enrSeq.decodeAs[Long]("enrSeq"))
-        )
+      case RLPList(items @ _*) if items.length >= 4 =>
+        val version = items(0).decodeAs[Int]("version")
+        val from = items(1).decodeAs[Node.Address]("from")
+        val to = items(2).decodeAs[Node.Address]("to")
+        val expiration = items(3).decodeAs[Long]("expiration")
+        // Only try to decode enrSeq if it's an RLPValue (not a list), for EIP-8 forward compatibility
+        val enrSeq = if (items.length >= 5 && items(4).isInstanceOf[RLPValue]) {
+          Some(items(4).decodeAs[Long]("enrSeq"))
+        } else None
+        Payload.Ping(version, from, to, expiration, enrSeq)
     }
   )
 
@@ -199,20 +194,15 @@ trait PayloadCodecs { self: ContentCodecs =>
       RLPList(items: _*)
     },
     {
-      case RLPList(to, pingHash, expiration) =>
-        Payload.Pong(
-          to.decodeAs[Node.Address]("to"),
-          pingHash.decodeAs[Hash]("pingHash"),
-          expiration.decodeAs[Long]("expiration"),
-          None
-        )
-      case RLPList(to, pingHash, expiration, enrSeq) =>
-        Payload.Pong(
-          to.decodeAs[Node.Address]("to"),
-          pingHash.decodeAs[Hash]("pingHash"),
-          expiration.decodeAs[Long]("expiration"),
-          Some(enrSeq.decodeAs[Long]("enrSeq"))
-        )
+      case RLPList(items @ _*) if items.length >= 3 =>
+        val to = items(0).decodeAs[Node.Address]("to")
+        val pingHash = items(1).decodeAs[Hash]("pingHash")
+        val expiration = items(2).decodeAs[Long]("expiration")
+        // Only try to decode enrSeq if it's an RLPValue (not a list), for EIP-8 forward compatibility
+        val enrSeq = if (items.length >= 4 && items(3).isInstanceOf[RLPValue]) {
+          Some(items(3).decodeAs[Long]("enrSeq"))
+        } else None
+        Payload.Pong(to, pingHash, expiration, enrSeq)
     }
   )
 
@@ -223,11 +213,12 @@ trait PayloadCodecs { self: ContentCodecs =>
         RLPEncoder.encode(expiration)
       )
     },
-    { case RLPList(target, expiration) =>
-      Payload.FindNode(
-        target.decodeAs[PublicKey]("target"),
-        expiration.decodeAs[Long]("expiration")
-      )
+    {
+      case RLPList(items @ _*) if items.length >= 2 =>
+        Payload.FindNode(
+          items(0).decodeAs[PublicKey]("target"),
+          items(1).decodeAs[Long]("expiration")
+        )
     }
   )
 
@@ -238,11 +229,12 @@ trait PayloadCodecs { self: ContentCodecs =>
         RLPEncoder.encode(expiration)
       )
     },
-    { case RLPList(nodes, expiration) =>
-      Payload.Neighbors(
-        nodes.decodeAs[List[Node]]("nodes"),
-        expiration.decodeAs[Long]("expiration")
-      )
+    {
+      case RLPList(items @ _*) if items.length >= 2 =>
+        Payload.Neighbors(
+          items(0).decodeAs[List[Node]]("nodes"),
+          items(1).decodeAs[Long]("expiration")
+        )
     }
   )
 
