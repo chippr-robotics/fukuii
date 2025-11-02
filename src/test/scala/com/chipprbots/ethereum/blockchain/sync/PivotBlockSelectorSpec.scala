@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import java.net.InetSocketAddress
 
+import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
@@ -42,7 +43,9 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class PivotBlockSelectorSpec
-    extends TestKit(ActorSystem("FastSyncPivotBlockSelectorSpec_System"))
+    extends TestKit(
+      ActorSystem("FastSyncPivotBlockSelectorSpec_System", ConfigFactory.load("explicit-scheduler"))
+    )
     with AnyFlatSpecLike
     with Matchers
     with BeforeAndAfter

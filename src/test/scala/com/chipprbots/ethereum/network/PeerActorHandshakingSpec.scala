@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.network
 import java.net.InetSocketAddress
 import java.net.URI
 
+import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
 import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
@@ -151,7 +152,8 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
   }
 
   trait TestSetup extends EphemBlockchainTestSetup {
-    implicit override lazy val system: ActorSystem = ActorSystem("PeerActorSpec_System")
+    implicit override lazy val system: ActorSystem = 
+      ActorSystem("PeerActorSpec_System", ConfigFactory.load("explicit-scheduler"))
 
     def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
