@@ -9,8 +9,6 @@ import com.chipprbots.ethereum.network.rlpx.Frame
 import com.chipprbots.ethereum.network.rlpx.FrameCodec
 import com.chipprbots.ethereum.network.rlpx.Header
 import com.chipprbots.ethereum.rlp.RLPEncodeable
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable
 import com.chipprbots.ethereum.rlp.rawDecode
@@ -43,15 +41,24 @@ class FrameCodecSpec extends AnyFlatSpec with Matchers {
     implicit class DummyMsgEnc(val underlyingMsg: DummyMsg) extends MessageSerializable with RLPSerializable {
       override def code: Int = DummyMsg.code
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(underlyingMsg.aField, underlyingMsg.anotherField)
+      override def toRLPEncodable: RLPEncodeable = {
+        import com.chipprbots.ethereum.rlp.RLPImplicits.{intEncDec, byteStringEncDec}
+        RLPList(
+          intEncDec.encode(underlyingMsg.aField),
+          byteStringEncDec.encode(underlyingMsg.anotherField)
+        )
+      }
       override def toShortString: String = underlyingMsg.toShortString
     }
 
     implicit class DummyMsgDec(val bytes: Array[Byte]) {
-      def toSample: DummyMsg = rawDecode(bytes) match {
-        case RLPList(aField, anotherField) =>
-          DummyMsg(aField.decodeAs[Int]("aField"), ByteString(anotherField.decodeAs[Array[Byte]]("anotherField")))
-        case _ => throw new RuntimeException("Cannot decode Status")
+      def toSample: DummyMsg = {
+        import com.chipprbots.ethereum.rlp.RLPImplicits.{intEncDec, byteArrayEncDec}
+        rawDecode(bytes) match {
+          case RLPList(aField, anotherField) =>
+            DummyMsg(aField.decodeAs[Int]("aField"), ByteString(anotherField.decodeAs[Array[Byte]]("anotherField")))
+          case _ => throw new RuntimeException("Cannot decode Status")
+        }
       }
     }
   }

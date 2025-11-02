@@ -598,6 +598,9 @@ class PeerActorSpec
   trait TestSetup extends NodeStatusSetup with BlockUtils with HandshakerSetup {
     override def protocol: Capability = Capability.ETH63
 
+    // Override system to use the explicit scheduler from TestKit
+    implicit override lazy val system: ActorSystem = PeerActorSpec.this.system
+
     val genesisHash = genesisBlock.hash
 
     val daoForkBlockChainTotalDifficulty: BigInt = BigInt("39490964433395682584")
