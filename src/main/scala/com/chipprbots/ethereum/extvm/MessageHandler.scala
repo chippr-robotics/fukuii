@@ -16,7 +16,14 @@ import org.bouncycastle.util.BigIntegers
 import scalapb.GeneratedMessage
 import scalapb.GeneratedMessageCompanion
 
-class MessageHandler(in: SinkQueueWithCancel[ByteString], out: SourceQueueWithComplete[ByteString]) {
+trait MessageHandlerApi {
+  def sendMessage[M <: GeneratedMessage](msg: M): Unit
+  def awaitMessage[M <: GeneratedMessage](implicit companion: GeneratedMessageCompanion[M]): M
+  def close(): Unit
+}
+
+class MessageHandler(in: SinkQueueWithCancel[ByteString], out: SourceQueueWithComplete[ByteString])
+    extends MessageHandlerApi {
 
   private val AwaitTimeout = 5.minutes
 
