@@ -18,8 +18,9 @@
 
     <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-            <!-- Stable JSON fields for structured logging -->
-            <customFields>{"service":"fukuii","hostname":"${HOSTNAME}","environment":"${FUKUII_ENV:-production}"}</customFields>
+            <!-- Stable JSON fields for structured logging 
+                 Use FUKUII_NODE_ID to set a custom node identifier instead of hostname for production -->
+            <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
             <fieldNames>
                 <timestamp>timestamp</timestamp>
                 <version>[ignore]</version>
@@ -37,7 +38,9 @@
                 <includeMdcKeyName>transaction</includeMdcKeyName>
                 <includeMdcKeyName>actor</includeMdcKeyName>
             </includeMdcKeyNames>
-            <!-- Include caller info for debugging (disable in production for performance) -->
+            <!-- Include caller info for debugging 
+                 Set to true via -Dlogback.includeCallerData=true for detailed debugging
+                 Disabled by default in production for performance -->
             <includeCallerData>false</includeCallerData>
             <!-- Include context name -->
             <includeContext>true</includeContext>

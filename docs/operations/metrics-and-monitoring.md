@@ -58,8 +58,8 @@ When JSON logging is enabled, each log entry contains the following stable field
 | `message` | Log message | `Block synchronization started` |
 | `stack_trace` | Exception stack trace (if present) | Full stack trace string |
 | `service` | Service name | `fukuii` |
-| `hostname` | Hostname | System hostname |
-| `environment` | Deployment environment | `production`, `staging`, `dev` |
+| `node` | Node identifier | System hostname (default) or `FUKUII_NODE_ID` |
+| `environment` | Deployment environment | `production` (default), `staging`, `dev` |
 
 ### MDC (Mapped Diagnostic Context) Fields
 
@@ -81,11 +81,16 @@ The following MDC fields are included when available:
   "thread": "fukuii-system-pekko.actor.default-dispatcher-5",
   "message": "Starting blockchain synchronization",
   "service": "fukuii",
-  "hostname": "fukuii-node-1",
+  "node": "fukuii-node-1",
   "environment": "production",
   "block": "12345678"
 }
 ```
+
+### Environment Variables for Logging
+
+- `FUKUII_NODE_ID`: Set a custom node identifier (defaults to hostname)
+- `FUKUII_ENV`: Set the deployment environment (defaults to "production")
 
 ## Prometheus Metrics
 
@@ -321,8 +326,9 @@ For Docker deployments, see `docker/fukuii/prometheus/prometheus.yml` for the re
 1. **Enable Metrics:** Always enable metrics in production
 2. **Use JSON Logging:** Enable structured logging for log aggregation
 3. **Set Environment:** Use `FUKUII_ENV` to tag logs by environment
-4. **Monitor Disk:** Alert on log file growth and metrics retention
-5. **Secure Endpoints:** Use firewall rules to restrict metrics access
+4. **Set Node Identifier:** Use `FUKUII_NODE_ID` instead of hostname for security (e.g., `node-1`, `node-2`)
+5. **Monitor Disk:** Alert on log file growth and metrics retention
+6. **Secure Endpoints:** Use firewall rules to restrict metrics access
 
 ### Performance Considerations
 
