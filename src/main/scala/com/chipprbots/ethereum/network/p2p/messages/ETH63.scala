@@ -225,7 +225,8 @@ object ETH63 {
 
       def toReceipts: Seq[Receipt] = rawDecode(bytes) match {
         case RLPList(items @ _*) => items.toTypedRLPEncodables.map(_.toReceipt)
-        case other               => throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
       }
     }
 
@@ -282,7 +283,8 @@ object ETH63 {
       def toReceipts: Receipts = rawDecode(bytes) match {
         case rlpList: RLPList =>
           Receipts(rlpList.items.collect { case r: RLPList => r.items.toTypedRLPEncodables.map(_.toReceipt) })
-        case other => throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
       }
     }
   }
