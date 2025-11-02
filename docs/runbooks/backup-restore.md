@@ -21,16 +21,17 @@ This runbook covers backup strategies, restoration procedures, and disaster reco
 
 ### Strategy Comparison
 
-| Strategy | RTO* | RPO** | Storage Cost | Complexity | Use Case |
-|----------|------|-------|--------------|------------|----------|
+**Legend:**
+- RTO = Recovery Time Objective (how long to restore)
+- RPO = Recovery Point Objective (how much data loss)
+
+| Strategy | RTO | RPO | Storage Cost | Complexity | Use Case |
+|----------|-----|-----|--------------|------------|----------|
 | Full Backup | Hours | 24h | High | Low | Development |
 | Incremental | 1-2h | 1h | Medium | Medium | Production |
 | Snapshot | Minutes | Minutes | Medium | Medium | Cloud/VM |
 | Live Replication | Seconds | Seconds | High | High | Critical |
 | Hybrid | 30m-1h | 30m | Medium-High | Medium | Recommended |
-
-*RTO = Recovery Time Objective (how long to restore)  
-**RPO = Recovery Point Objective (how much data loss)
 
 ### Recommended Strategy
 

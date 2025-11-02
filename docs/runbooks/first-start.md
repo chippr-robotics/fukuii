@@ -86,12 +86,14 @@ docker volume create fukuii-conf
 docker run -d \
   --name fukuii \
   --restart unless-stopped \
-  -p 8546:8546 \
   -p 9076:9076 \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
   ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  # ⚠️ SECURITY WARNING: Do NOT expose RPC port 8546 to public internet
+  # For internal RPC access, use: -p 127.0.0.1:8546:8546
+  # See docs/runbooks/security.md for details
 ```
 
 #### Step 4: View Logs

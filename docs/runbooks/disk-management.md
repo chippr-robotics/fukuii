@@ -303,14 +303,17 @@ Create/edit `.jvmopts` in your installation directory:
 ```bash
 # NOTE: RocksDB tuning in Fukuii is typically done through internal configuration,
 # not JVM properties. The examples below are HYPOTHETICAL and for illustration only.
-# Consult Fukuii documentation for actual RocksDB tuning options.
+
+# For actual RocksDB tuning options, consult:
+# - Configuration files: ~/.fukuii/etc/*.conf or src/main/resources/conf/base.conf
+# - Fukuii source: src/main/scala/com/chipprbots/ethereum/db/dataSource/RocksDbDataSource.scala
+# - RocksDB documentation: https://github.com/facebook/rocksdb/wiki/RocksDB-Tuning-Guide
 
 # Example (may not be supported):
 # -Drocksdb.write_buffer_size=67108864  # 64 MB
 # -Drocksdb.max_background_jobs=4
 
 # Actual RocksDB tuning depends on Fukuii's implementation.
-# Check Fukuii's configuration files or documentation for supported options.
 ```
 
 **Warning**: Improper tuning can degrade performance. Test in non-production first.
