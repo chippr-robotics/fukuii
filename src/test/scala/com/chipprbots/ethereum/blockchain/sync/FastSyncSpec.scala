@@ -155,7 +155,7 @@ class FastSyncSpec
           _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
           blocksBatch <- etcPeerManager.fetchedBlocks.head.compile.lastOrError
           status <- getSyncStatus
-          lastBlockFromBatch = blocksBatch.last.number
+          lastBlockFromBatch = blocksBatch.lastOption.map(_.number).getOrElse(BigInt(0))
         } yield status match {
           case Status.Syncing(startingBlockNumber, blocksProgress, stateNodesProgress) =>
             assert(startingBlockNumber === BigInt(0))
