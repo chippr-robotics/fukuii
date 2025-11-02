@@ -51,8 +51,8 @@ object ETH64 {
           RLPValue(BigInt(protocolVersion).toByteArray),
           RLPValue(BigInt(networkId).toByteArray),
           RLPValue(totalDifficulty.toByteArray),
-          bestHash,
-          genesisHash,
+          RLPValue(bestHash.toArray[Byte]),
+          RLPValue(genesisHash.toArray[Byte]),
           forkId.toRLPEncodable
         )
       }

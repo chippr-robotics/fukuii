@@ -30,7 +30,7 @@ object ETH66 {
         import msg._
         val blockQuery = block match {
           case Left(blockNumber) => RLPList(blockNumber, maxHeaders, skip, if (reverse) 1 else 0)
-          case Right(blockHash)  => RLPList(blockHash, maxHeaders, skip, if (reverse) 1 else 0)
+          case Right(blockHash)  => RLPList(RLPValue(blockHash.toArray[Byte]), maxHeaders, skip, if (reverse) 1 else 0)
         }
         RLPList(RLPValue(requestId.toByteArray), blockQuery)
       }

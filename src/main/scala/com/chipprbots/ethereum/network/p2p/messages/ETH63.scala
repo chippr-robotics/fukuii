@@ -110,7 +110,7 @@ object ETH63 {
       import MptNodeEncoders._
 
       override def code: Int = Codes.NodeDataCode
-      override def toRLPEncodable: RLPEncodeable = toRlpList(msg.values)
+      override def toRLPEncodable: RLPEncodeable = RLPList(msg.values.map(v => RLPValue(v.toArray[Byte])): _*)
 
       @throws[RLPException]
       def getMptNode(index: Int): MptNode = msg.values(index).toArray[Byte].toMptNode
