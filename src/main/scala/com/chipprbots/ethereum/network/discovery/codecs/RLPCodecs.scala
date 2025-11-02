@@ -213,11 +213,12 @@ trait PayloadCodecs { self: ContentCodecs =>
         RLPEncoder.encode(expiration)
       )
     },
-    { case RLPList(items @ _*) if items.length >= 2 =>
-      Payload.FindNode(
-        items(0).decodeAs[PublicKey]("target"),
-        items(1).decodeAs[Long]("expiration")
-      )
+    {
+      case RLPList(items @ _*) if items.length >= 2 =>
+        Payload.FindNode(
+          items(0).decodeAs[PublicKey]("target"),
+          items(1).decodeAs[Long]("expiration")
+        )
     }
   )
 
@@ -228,11 +229,12 @@ trait PayloadCodecs { self: ContentCodecs =>
         RLPEncoder.encode(expiration)
       )
     },
-    { case RLPList(items @ _*) if items.length >= 2 =>
-      Payload.Neighbors(
-        items(0).decodeAs[List[Node]]("nodes"),
-        items(1).decodeAs[Long]("expiration")
-      )
+    {
+      case RLPList(items @ _*) if items.length >= 2 =>
+        Payload.Neighbors(
+          items(0).decodeAs[List[Node]]("nodes"),
+          items(1).decodeAs[Long]("expiration")
+        )
     }
   )
 
