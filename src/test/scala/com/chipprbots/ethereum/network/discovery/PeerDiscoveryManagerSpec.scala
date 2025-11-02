@@ -30,7 +30,8 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import scodec.bits.BitVector
 
-import com.chipprbots.ethereum.NormalPatience
+import com.chipprbots.ethereum.LongPatience
+import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.network.discovery.Node
@@ -42,10 +43,10 @@ class PeerDiscoveryManagerSpec
     with Eventually
     with MockFactory
     with ScalaFutures
-    with NormalPatience {
+    with LongPatience {
 
   implicit val runtime: IORuntime = IORuntime.global
-  implicit val timeout: Timeout = 1.second
+  implicit val timeout: Timeout = Timeouts.normalTimeout
 
   val defaultConfig: DiscoveryConfig = DiscoveryConfig(Config.config, bootstrapNodes = Set.empty)
 

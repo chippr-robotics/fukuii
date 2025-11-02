@@ -34,7 +34,7 @@ class DebugService(peerManager: ActorRef, etcPeerManager: ActorRef) {
     } yield Right(ListPeersInfoResponse(peers.flatten))
 
   private def getPeerIds: IO[List[PeerId]] = {
-    implicit val timeout: Timeout = Timeout(5.seconds)
+    implicit val timeout: Timeout = Timeout(20.seconds)
 
     peerManager
       .askFor[Peers](PeerManagerActor.GetPeers)
@@ -43,7 +43,7 @@ class DebugService(peerManager: ActorRef, etcPeerManager: ActorRef) {
   }
 
   private def getPeerInfo(peer: PeerId): IO[Option[PeerInfo]] = {
-    implicit val timeout: Timeout = Timeout(5.seconds)
+    implicit val timeout: Timeout = Timeout(20.seconds)
 
     etcPeerManager
       .askFor[PeerInfoResponse](EtcPeerManagerActor.PeerInfoRequest(peer))
