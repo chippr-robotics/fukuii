@@ -20,4 +20,8 @@ class FaucetJsonRpcHealthCheck(faucetRpcService: FaucetRpcService) extends JsonR
 
     handleResponse(responseF)
   }
+
+  override def readinessCheck(): IO[HealthcheckResponse] =
+    // For faucet, readiness is the same as health
+    healthCheck()
 }
