@@ -237,7 +237,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val resultQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.CallResult(callResultMsg))
 
-    val messageHandler: MessageHandlerApi & scala.reflect.Selectable = mock[MessageHandlerApi]
+    val messageHandler: MessageHandlerApi = mock[MessageHandlerApi]
 
     val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("mantis", None, "127.0.0.1", 0)
     val vmClient = new VMClient(externalVmConfig, messageHandler, testMode = false)

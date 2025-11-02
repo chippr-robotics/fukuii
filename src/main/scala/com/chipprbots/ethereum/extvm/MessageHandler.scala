@@ -22,7 +22,8 @@ trait MessageHandlerApi {
   def close(): Unit
 }
 
-class MessageHandler(in: SinkQueueWithCancel[ByteString], out: SourceQueueWithComplete[ByteString]) extends MessageHandlerApi {
+class MessageHandler(in: SinkQueueWithCancel[ByteString], out: SourceQueueWithComplete[ByteString])
+    extends MessageHandlerApi {
 
   private val AwaitTimeout = 5.minutes
 
