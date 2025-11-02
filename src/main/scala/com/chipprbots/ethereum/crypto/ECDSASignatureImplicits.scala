@@ -13,10 +13,9 @@ object ECDSASignatureImplicits {
     override def decode(rlp: RLPEncodeable): ECDSASignature = rlp match {
       case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) if v.nonEmpty =>
         ECDSASignature(ByteString(r), ByteString(s), v.head)
-      case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) =>
-        throw new RuntimeException(
-          s"Cannot decode ECDSASignature: v component is empty (r=${r.length} bytes, s=${s.length} bytes)"
-        )
+      case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) if v.isEmpty =>
+        // Empty v is encoded as 0 in RLP (for EIP-2930 transactions with yParity=0)
+        ECDSASignature(ByteString(r), ByteString(s), 0.toByte)
       case RLPList(items @ _*) =>
         throw new RuntimeException(
           s"Cannot decode ECDSASignature: expected 3 RLPValue items (r, s, v), got ${items.length} items"
