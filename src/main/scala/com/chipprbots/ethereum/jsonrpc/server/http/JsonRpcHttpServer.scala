@@ -27,6 +27,8 @@ import org.json4s.native
 import org.json4s.native.Serialization
 
 import com.chipprbots.ethereum.faucet.jsonrpc.FaucetJsonRpcController
+import com.chipprbots.ethereum.healthcheck.HealthcheckResponse
+import com.chipprbots.ethereum.healthcheck.HealthcheckResult
 import com.chipprbots.ethereum.jsonrpc._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
@@ -69,7 +71,11 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
   protected val rateLimit = new RateLimit(config.rateLimit)
 
   val route: Route = cors(corsSettings) {
-    (path("healthcheck") & pathEndOrSingleSlash & get) {
+    (path("health") & pathEndOrSingleSlash & get) {
+      handleHealth()
+    } ~ (path("readiness") & pathEndOrSingleSlash & get) {
+      handleReadiness()
+    } ~ (path("healthcheck") & pathEndOrSingleSlash & get) {
       handleHealthcheck()
     } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
       handleBuildInfo()
@@ -111,6 +117,39 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
   /** Try to start JSON RPC server
     */
   def run(): Unit
+
+  private def handleHealth(): StandardRoute = {
+    // Simple liveness check - if server responds, it's alive
+    val healthResponse = HealthcheckResponse(
+      List(
+        HealthcheckResult.ok("server", Some("running"))
+      )
+    )
+    complete(
+      HttpResponse(
+        status = StatusCodes.OK,
+        entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(healthResponse))
+      )
+    )
+  }
+
+  private def handleReadiness(): StandardRoute = {
+    val responseF = jsonRpcHealthChecker.readinessCheck()
+    val httpResponseF =
+      responseF.map {
+        case response if response.isOK =>
+          HttpResponse(
+            status = StatusCodes.OK,
+            entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
+          )
+        case response =>
+          HttpResponse(
+            status = StatusCodes.ServiceUnavailable,
+            entity = HttpEntity(ContentTypes.`application/json`, serialization.writePretty(response))
+          )
+      }
+    complete(httpResponseF.unsafeToFuture()(runtime))
+  }
 
   private def handleHealthcheck(): StandardRoute = {
     val responseF = jsonRpcHealthChecker.healthCheck()

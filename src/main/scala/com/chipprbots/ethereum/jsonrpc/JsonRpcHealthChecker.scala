@@ -7,6 +7,8 @@ import com.chipprbots.ethereum.healthcheck.HealthcheckResponse
 trait JsonRpcHealthChecker {
   def healthCheck(): IO[HealthcheckResponse]
 
+  def readinessCheck(): IO[HealthcheckResponse]
+
   def handleResponse(responseF: IO[HealthcheckResponse]): IO[HealthcheckResponse] =
     responseF
       .map {
