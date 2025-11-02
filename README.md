@@ -48,6 +48,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
 - [Docker Documentation](docker/README.md)
+- [Operations Runbooks](docs/runbooks/README.md) - Production operation guides
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
 
@@ -187,6 +188,19 @@ When modifying code derived from Mantis, include a notice in the header of chang
 For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
 
 **Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
+
+## Operations and Maintenance
+
+For production deployments, comprehensive operational runbooks are available covering:
+
+- **[First Start](docs/runbooks/first-start.md)** - Initial node setup and configuration
+- **[Peering](docs/runbooks/peering.md)** - Network connectivity and peer management  
+- **[Disk Management](docs/runbooks/disk-management.md)** - Storage, pruning, and optimization
+- **[Backup & Restore](docs/runbooks/backup-restore.md)** - Data protection and disaster recovery
+- **[Log Triage](docs/runbooks/log-triage.md)** - Log analysis and troubleshooting
+- **[Known Issues](docs/runbooks/known-issues.md)** - Common problems and solutions (RocksDB, JVM, temp directories)
+
+See the [Operations Runbooks](docs/runbooks/README.md) for complete operational documentation.
 
 Contact
 
