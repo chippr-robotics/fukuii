@@ -46,6 +46,12 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
   val type01Receipts: Receipts = Receipts(Seq(Seq(type01Receipt)))
 
+  val encodedLogEntry: RLPList = RLPList(
+    RLPValue(loggerAddress.bytes.toArray[Byte]),
+    RLPList(logTopics.map(t => RLPValue(t.toArray[Byte])): _*),
+    RLPValue(logData.toArray[Byte])
+  )
+
   val encodedLegacyReceipts: RLPList =
     RLPList(
       RLPList(
@@ -53,7 +59,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
           RLPValue(exampleHash.toArray[Byte]),
           cumulativeGas,
           RLPValue(exampleLogsBloom.toArray[Byte]),
-          RLPList(RLPList(RLPValue(loggerAddress.bytes.toArray[Byte]), RLPList(logTopics.map(t => RLPValue(t.toArray[Byte])): _*), RLPValue(logData.toArray[Byte])))
+          RLPList(encodedLogEntry)
         )
       )
     )
@@ -67,7 +73,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
             RLPValue(exampleHash.toArray[Byte]),
             cumulativeGas,
             RLPValue(exampleLogsBloom.toArray[Byte]),
-            RLPList(RLPList(RLPValue(loggerAddress.bytes.toArray[Byte]), RLPList(logTopics.map(t => RLPValue(t.toArray[Byte])): _*), RLPValue(logData.toArray[Byte])))
+            RLPList(encodedLogEntry)
           )
         )
       )

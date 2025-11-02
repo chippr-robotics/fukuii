@@ -101,7 +101,7 @@ class PeerActorSpec
   }
 
   it should "try to reconnect on broken rlpx connection" in new NodeStatusSetup with HandshakerSetup {
-    implicit override lazy val system = 
+    implicit override lazy val system =
       ActorSystem("PeerActorSpec_System", ConfigFactory.load("explicit-scheduler"))
     override def protocol: Capability = Capability.ETH63
 

@@ -170,7 +170,12 @@ object ETH63 {
     implicit class TxLogEntryEnc(logEntry: TxLogEntry) extends RLPSerializable {
       override def toRLPEncodable: RLPEncodeable = {
         import logEntry._
-        RLPList(RLPValue(loggerAddress.bytes.toArray[Byte]), RLPList(logTopics.map(t => RLPValue(t.toArray[Byte])): _*), RLPValue(data.toArray[Byte]))
+        val topicsRLP = logTopics.map(t => RLPValue(t.toArray[Byte]))
+        RLPList(
+          RLPValue(loggerAddress.bytes.toArray[Byte]),
+          RLPList(topicsRLP: _*),
+          RLPValue(data.toArray[Byte])
+        )
       }
     }
 
@@ -196,7 +201,12 @@ object ETH63 {
           case _                 => 0.toByte
         }
         val legacyRLPReceipt =
-          RLPList(stateHash, cumulativeGasUsed, RLPValue(logsBloomFilter.toArray[Byte]), RLPList(logs.map(_.toRLPEncodable): _*))
+          RLPList(
+            stateHash,
+            cumulativeGasUsed,
+            RLPValue(logsBloomFilter.toArray[Byte]),
+            RLPList(logs.map(_.toRLPEncodable): _*)
+          )
         receipt match {
           case _: LegacyReceipt      => legacyRLPReceipt
           case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
