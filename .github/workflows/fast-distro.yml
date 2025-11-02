@@ -15,10 +15,6 @@ on:
           - nightly
           - snapshot
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: chippr-robotics/chordodes_fukuii
-
 jobs:
   fast-build:
     name: Fast Build (No Tests)
@@ -79,8 +75,8 @@ jobs:
       - name: Extract version and prepare artifacts
         id: prepare
         run: |
-          # Extract version from version.sbt
-          VERSION=$(grep -oP '(?<=version.*:= ")[\d.]+' version.sbt)
+          # Extract version from version.sbt - handles format: (ThisBuild / version) := "x.y.z"
+          VERSION=$(grep -oP '(?<=:= ")[\d.]+(?=")' version.sbt)
           TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
           
           # Create nightly version identifier
@@ -104,10 +100,11 @@ jobs:
             echo "Warning: No distribution zip found"
           fi
           
-          # Copy assembly JAR
-          if find target -name "*-assembly-*.jar" | grep -q .; then
-            find target -name "*-assembly-*.jar" -exec cp {} fast-distro-artifacts/fukuii-assembly-${NIGHTLY_VERSION}.jar \;
-            echo "Copied assembly JAR"
+          # Copy assembly JAR (there should only be one)
+          ASSEMBLY_JAR=$(find target -name "*-assembly-*.jar" | head -n 1)
+          if [ -n "$ASSEMBLY_JAR" ]; then
+            cp "$ASSEMBLY_JAR" fast-distro-artifacts/fukuii-assembly-${NIGHTLY_VERSION}.jar
+            echo "Copied assembly JAR: $ASSEMBLY_JAR"
           else
             echo "Warning: No assembly JAR found"
           fi
