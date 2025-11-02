@@ -149,10 +149,15 @@ class PeerDiscoveryManagerSpec
         .returning(sampleKnownUris)
         .once()
 
+      (() => discoveryService.getRandomNodes)
+        .expects()
+        .returning(IO(sampleNodes.map(toENode).toSet))
+        .atLeastOnce()
+
       (() => discoveryService.getNodes)
         .expects()
         .returning(IO(sampleNodes.map(toENode)))
-        .once()
+        .atLeastOnce()
 
       val expected: Set[URI] = sampleKnownUris ++ sampleNodes.map(_.toUri)
 
@@ -203,10 +208,15 @@ class PeerDiscoveryManagerSpec
         .returning(sampleKnownUris)
         .once()
 
+      (() => discoveryService.getRandomNodes)
+        .expects()
+        .returning(IO(sampleNodes.map(toENode).toSet))
+        .atLeastOnce()
+
       (() => discoveryService.getNodes)
         .expects()
         .returning(IO(sampleNodes.map(toENode)))
-        .once()
+        .atLeastOnce()
 
       override def test(): Unit = {
         peerDiscoveryManager ! PeerDiscoveryManager.Start
@@ -226,7 +236,7 @@ class PeerDiscoveryManagerSpec
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = false)
 
-      (() => discoveryService.getNodes)
+      (() => discoveryService.getRandomNodes)
         .expects()
         .returning(IO.raiseError(new RuntimeException("Oh no!") with NoStackTrace))
         .atLeastOnce()
