@@ -412,8 +412,6 @@ class FilterManagerSpec
         .mapTo[FilterManager.NewFilterResponse]
         .futureValue
 
-    (blockchainReader.getBestBlockNumber _).expects().returning(3)
-
     val tx: LegacyTransaction = LegacyTransaction(
       nonce = 0,
       gasPrice = 123,
@@ -453,8 +451,6 @@ class FilterManagerSpec
       (filterManager ? FilterManager.NewPendingTransactionFilter)
         .mapTo[FilterManager.NewFilterResponse]
         .futureValue
-
-    (blockchainReader.getBestBlockNumber _).expects().returning(3)
 
     val tx: LegacyTransaction = LegacyTransaction(
       nonce = 0,

@@ -71,6 +71,12 @@ class DeleteAccountsSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val accountAddresses: Set[Address] = Set(validAccountAddress, validAccountAddress2, validAccountAddress3)
 
+    // Mock the getBackingMptStorage call
+    (DeleteAccountsSpec.this.blockchain.getBackingMptStorage _)
+      .expects(BigInt(-1))
+      .returning(storagesInstance.storages.stateStorage.getBackingStorage(0))
+      .anyNumberOfTimes()
+
     val worldStateWithoutPersist: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       DeleteAccountsSpec.this.blockchain.getBackingMptStorage(-1),
