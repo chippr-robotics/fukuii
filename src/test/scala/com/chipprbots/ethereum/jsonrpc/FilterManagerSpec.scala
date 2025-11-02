@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
 import org.apache.pekko.pattern.ask
@@ -36,7 +37,14 @@ import com.chipprbots.ethereum.utils.FilterConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
 
 class FilterManagerSpec
-    extends TestKit(ActorSystem("FilterManagerSpec_System"))
+    extends TestKit(
+      ActorSystem(
+        "FilterManagerSpec_System",
+        ConfigFactory.parseString("""
+        pekko.scheduler.implementation = "org.apache.pekko.testkit.ExplicitlyTriggeredScheduler"
+      """)
+      )
+    )
     with AnyFlatSpecLike
     with WithActorSystemShutDown
     with Matchers

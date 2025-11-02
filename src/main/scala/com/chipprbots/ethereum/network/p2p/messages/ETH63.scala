@@ -213,6 +213,9 @@ object ETH63 {
       import BaseETH6XMessages.TypedTransaction._
 
       def toReceipt: Receipt = {
+        if (bytes.isEmpty) {
+          throw new RuntimeException("Cannot decode Receipt: empty byte array")
+        }
         val first = bytes(0)
         (first match {
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
@@ -222,7 +225,8 @@ object ETH63 {
 
       def toReceipts: Seq[Receipt] = rawDecode(bytes) match {
         case RLPList(items @ _*) => items.toTypedRLPEncodables.map(_.toReceipt)
-        case _                   => throw new RuntimeException("Cannot decode Receipts")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
       }
     }
 
@@ -246,7 +250,10 @@ object ETH63 {
             ByteString(logsBloomFilterBytes),
             logs.items.map(_.toTxLogEntry)
           )
-        case _ => throw new RuntimeException("Cannot decode Receipt")
+        case RLPList(items @ _*) =>
+          throw new RuntimeException(s"Cannot decode Receipt: expected 4 items in RLPList, got ${items.length}")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipt: expected RLPList, got ${other.getClass.getSimpleName}")
       }
 
       def toReceipt: Receipt = rlpEncodeable match {
@@ -276,7 +283,8 @@ object ETH63 {
       def toReceipts: Receipts = rawDecode(bytes) match {
         case rlpList: RLPList =>
           Receipts(rlpList.items.collect { case r: RLPList => r.items.toTypedRLPEncodables.map(_.toReceipt) })
-        case _ => throw new RuntimeException("Cannot decode Receipts")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
       }
     }
   }
