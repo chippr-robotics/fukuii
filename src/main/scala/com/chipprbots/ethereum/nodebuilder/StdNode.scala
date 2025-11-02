@@ -60,7 +60,9 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def startMetricsClient(): Unit = {
-    val metricsConfig = MetricsConfig(Config.config)
+    val rootConfig = com.typesafe.config.ConfigFactory.load()
+    val fukuiiConfig = rootConfig.getConfig("fukuii")
+    val metricsConfig = MetricsConfig(fukuiiConfig)
     Metrics.configure(metricsConfig) match {
       case Success(_) =>
         log.info("Metrics started")
