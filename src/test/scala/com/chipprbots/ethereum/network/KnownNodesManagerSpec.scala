@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.network
 
 import java.net.URI
 
+import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
@@ -63,7 +64,8 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
   }
 
   trait TestSetup extends EphemBlockchainTestSetup {
-    implicit override lazy val system: ActorSystem = ActorSystem("KnownNodesManagerSpec_System")
+    implicit override lazy val system: ActorSystem = 
+      ActorSystem("KnownNodesManagerSpec_System", ConfigFactory.load("explicit-scheduler"))
 
     def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
     val config: KnownNodesManagerConfig = KnownNodesManagerConfig(persistInterval = 5.seconds, maxPersistedNodes = 5)

@@ -4,6 +4,7 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.util.concurrent.TimeUnit
 
+import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor._
 import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
 import org.apache.pekko.testkit.TestActorRef
@@ -61,7 +62,9 @@ import Arbitrary.arbitrary
 
 // scalastyle:off magic.number
 class PeerManagerSpec
-    extends TestKit(ActorSystem("PeerManagerSpec_System"))
+    extends TestKit(
+      ActorSystem("PeerManagerSpec_System", ConfigFactory.load("explicit-scheduler"))
+    )
     with AnyFlatSpecLike
     with WithActorSystemShutDown
     with Matchers

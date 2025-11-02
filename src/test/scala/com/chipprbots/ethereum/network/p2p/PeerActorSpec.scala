@@ -5,6 +5,7 @@ import java.net.URI
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicReference
 
+import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.PoisonPill
@@ -62,7 +63,9 @@ import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 
 class PeerActorSpec
-    extends TestKit(ActorSystem("PeerActorSpec_System"))
+    extends TestKit(
+      ActorSystem("PeerActorSpec_System", ConfigFactory.load("explicit-scheduler"))
+    )
     with AnyFlatSpecLike
     with WithActorSystemShutDown
     with Matchers {
@@ -98,7 +101,8 @@ class PeerActorSpec
   }
 
   it should "try to reconnect on broken rlpx connection" in new NodeStatusSetup with HandshakerSetup {
-    implicit override lazy val system = ActorSystem("PeerActorSpec_System")
+    implicit override lazy val system = 
+      ActorSystem("PeerActorSpec_System", ConfigFactory.load("explicit-scheduler"))
     override def protocol: Capability = Capability.ETH63
 
     def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
