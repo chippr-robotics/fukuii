@@ -250,7 +250,8 @@ class PeerManagerSpec
     val requestSender: TestProbe = TestProbe()
 
     requestSender.send(peerManager, GetPeers)
-    testScheduler.timePasses(3000.millis) // Allow time for peer status requests to timeout
+    // Advance scheduler to allow peer status requests to timeout (getPeerStatus uses 2s timeout)
+    testScheduler.timePasses((2.seconds + 1.second).toMillis.millis)
     requestSender.expectMsgClass(classOf[Peers])
   }
 
