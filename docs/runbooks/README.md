@@ -6,6 +6,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 
 ### Getting Started
 - **[First Start](first-start.md)** - Initial node setup, configuration, and first-time startup procedures
+- **[Security](security.md)** - Node security, firewall configuration, and security best practices
 
 ### Operations
 - **[Peering](peering.md)** - Peer discovery, network connectivity, and peering troubleshooting

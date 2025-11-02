@@ -194,6 +194,7 @@ For historical information about the migration, see [Migration History](docs/MIG
 For production deployments, comprehensive operational runbooks are available covering:
 
 - **[First Start](docs/runbooks/first-start.md)** - Initial node setup and configuration
+- **[Security](docs/runbooks/security.md)** - Node security, firewall configuration, and best practices
 - **[Peering](docs/runbooks/peering.md)** - Network connectivity and peer management  
 - **[Disk Management](docs/runbooks/disk-management.md)** - Storage, pruning, and optimization
 - **[Backup & Restore](docs/runbooks/backup-restore.md)** - Data protection and disaster recovery
