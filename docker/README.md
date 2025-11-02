@@ -392,7 +392,7 @@ volumes:
 
 ## CI/CD Integration
 
-Fukuii uses two automated workflows for container image publishing to both Docker Hub and GitHub Container Registry:
+Fukuii uses automated workflows for container image publishing to both Docker Hub and GitHub Container Registry:
 
 ### Release Workflow (`.github/workflows/release.yml`)
 
@@ -439,12 +439,15 @@ git push origin v1.0.0
 - `chipprbots/fukuii` (Docker Hub)
 
 **Images:**
-- **Main Images:** 
-  - `ghcr.io/chippr-robotics/fukuii:latest` / `chipprbots/fukuii:latest`
-- **Dev Images:** 
-  - `ghcr.io/chippr-robotics/fukuii-dev:latest` / `chipprbots/fukuii-dev:latest`
-- **Base Images:** 
-  - `ghcr.io/chippr-robotics/fukuii-base:latest` / `chipprbots/fukuii-base:latest`
+- **Main Image:** 
+  - `ghcr.io/chippr-robotics/fukuii:latest`
+  - `chipprbots/fukuii:latest`
+- **Dev Image:** 
+  - `ghcr.io/chippr-robotics/fukuii-dev:latest`
+  - `chipprbots/fukuii-dev:latest`
+- **Base Image:** 
+  - `ghcr.io/chippr-robotics/fukuii-base:latest`
+  - `chipprbots/fukuii-base:latest`
 
 **Tags Generated:**
 - Branch names (e.g., `main`, `develop`)

@@ -319,7 +319,7 @@ jobs:
       
       - name: Output image information
         run: |
-          echo "## Container Images Published 🐳" >> $GITHUB_STEP_SUMMARY
+          echo "## Container Image Published to Multiple Registries 🐳" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### GitHub Container Registry (Signed)" >> $GITHUB_STEP_SUMMARY
           echo "**Registry:** \`${{ env.REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
