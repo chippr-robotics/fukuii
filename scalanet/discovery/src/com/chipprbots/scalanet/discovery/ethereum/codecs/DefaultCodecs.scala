@@ -59,13 +59,13 @@ object DefaultCodecs {
 
   // ENR Content codec
   given enrContentCodec: Codec[EthereumNodeRecord.Content] = {
-    val byteVectorCodec = variableSizeBytes(uint16, bits).xmap(
+    given byteVectorCodec: Codec[ByteVector] = variableSizeBytes(uint16, bits).xmap(
       (bv: BitVector) => ByteVector(bv.toByteArray),
       (bv: ByteVector) => BitVector(bv.toArray)
     )
-    (uint64 :: sortedMapCodec[ByteVector, ByteVector](byteVectorCodec, byteVectorCodec, byteVectorOrdering)).xmap(
-      { case (seq, attrs) => EthereumNodeRecord.Content(seq, attrs.toSeq: _*) },
-      (content: EthereumNodeRecord.Content) => (content.seq, SortedMap(content.attrs: _*))
+    (uint64 :: sortedMapCodec[ByteVector, ByteVector]).xmap(
+      { case (seq, attrs) => EthereumNodeRecord.Content(seq.toLong, attrs) },
+      (content: EthereumNodeRecord.Content) => (BigInt(content.seq), content.attrs)
     )
   }
 
@@ -81,8 +81,11 @@ object DefaultCodecs {
   given pingCodec: Codec[Ping] = {
     val optionalLong = scodec.codecs.optional(scodec.codecs.provide(true), uint64)
     (int32 :: addressCodec :: addressCodec :: uint64 :: optionalLong).xmap(
-      { case (version, from, to, expiration, enrSeq) => Ping(version, from, to, expiration, enrSeq) },
-      (ping: Ping) => (ping.version, ping.from, ping.to, ping.expiration, ping.enrSeq)
+      { case (version, from, to, expiration, enrSeq) => 
+        Ping(version, from, to, expiration.toLong, enrSeq.map(_.toLong)) 
+      },
+      (ping: Ping) => 
+        (ping.version, ping.from, ping.to, BigInt(ping.expiration), ping.enrSeq.map(BigInt(_)))
     )
   }
 
@@ -90,32 +93,35 @@ object DefaultCodecs {
   given pongCodec: Codec[Pong] = {
     val optionalLong = scodec.codecs.optional(scodec.codecs.provide(true), uint64)
     (addressCodec :: hashCodec :: uint64 :: optionalLong).xmap(
-      { case (to, pingHash, expiration, enrSeq) => Pong(to, pingHash, expiration, enrSeq) },
-      (pong: Pong) => (pong.to, pong.pingHash, pong.expiration, pong.enrSeq)
+      { case (to, pingHash, expiration, enrSeq) => 
+        Pong(to, pingHash, expiration.toLong, enrSeq.map(_.toLong)) 
+      },
+      (pong: Pong) => 
+        (pong.to, pong.pingHash, BigInt(pong.expiration), pong.enrSeq.map(BigInt(_)))
     )
   }
 
   // FindNode codec
   given findNodeCodec: Codec[FindNode] = {
     (publicKeyCodec :: uint64).xmap(
-      { case (target, expiration) => FindNode(target, expiration) },
-      (fn: FindNode) => (fn.target, fn.expiration)
+      { case (target, expiration) => FindNode(target, expiration.toLong) },
+      (fn: FindNode) => (fn.target, BigInt(fn.expiration))
     )
   }
 
   // Neighbors codec
   given neighborsCodec: Codec[Neighbors] = {
     (list(nodeCodec) :: uint64).xmap(
-      { case (nodes, expiration) => Neighbors(nodes, expiration) },
-      (n: Neighbors) => (n.nodes, n.expiration)
+      { case (nodes, expiration) => Neighbors(nodes, expiration.toLong) },
+      (n: Neighbors) => (n.nodes, BigInt(n.expiration))
     )
   }
 
   // ENRRequest codec
   given enrRequestCodec: Codec[ENRRequest] = {
     uint64.xmap(
-      (expiration: Long) => ENRRequest(expiration),
-      (req: ENRRequest) => req.expiration
+      (expiration: BigInt) => ENRRequest(expiration.toLong),
+      (req: ENRRequest) => BigInt(req.expiration)
     )
   }
 
