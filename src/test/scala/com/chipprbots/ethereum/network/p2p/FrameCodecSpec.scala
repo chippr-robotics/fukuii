@@ -52,10 +52,13 @@ class FrameCodecSpec extends AnyFlatSpec with Matchers {
     }
 
     implicit class DummyMsgDec(val bytes: Array[Byte]) {
-      def toSample: DummyMsg = rawDecode(bytes) match {
-        case RLPList(aField, anotherField) =>
-          DummyMsg(aField.decodeAs[Int]("aField"), ByteString(anotherField.decodeAs[Array[Byte]]("anotherField")))
-        case _ => throw new RuntimeException("Cannot decode Status")
+      def toSample: DummyMsg = {
+        import com.chipprbots.ethereum.rlp.RLPImplicits.{intEncDec, byteArrayEncDec}
+        rawDecode(bytes) match {
+          case RLPList(aField, anotherField) =>
+            DummyMsg(aField.decodeAs[Int]("aField"), ByteString(anotherField.decodeAs[Array[Byte]]("anotherField")))
+          case _ => throw new RuntimeException("Cannot decode Status")
+        }
       }
     }
   }
