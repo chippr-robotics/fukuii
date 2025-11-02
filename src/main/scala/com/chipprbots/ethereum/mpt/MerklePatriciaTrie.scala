@@ -245,8 +245,6 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     toUpsert.foldLeft(afterRemoval)((acc, item) => acc + item)
   }
 
-  
-
   private def put(node: MptNode, searchKey: Array[Byte], value: Array[Byte]): NodeInsertResult = node match {
     case leafNode: LeafNode           => putInLeafNode(leafNode, searchKey, value)
     case extensionNode: ExtensionNode => putInExtensionNode(extensionNode, searchKey, value)

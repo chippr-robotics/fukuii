@@ -238,7 +238,8 @@ object JsonRpcHttpServer extends Logger {
         override val interface: String = rpcHttpConfig.getString("interface")
         override val port: Int = rpcHttpConfig.getInt("port")
 
-        override val corsAllowedOrigins: HttpOriginMatcher = ConfigUtils.parseCorsAllowedOrigins(rpcHttpConfig, "cors-allowed-origins")
+        override val corsAllowedOrigins: HttpOriginMatcher =
+          ConfigUtils.parseCorsAllowedOrigins(rpcHttpConfig, "cors-allowed-origins")
 
         override val rateLimit: RateLimitConfig = RateLimitConfig(rpcHttpConfig.getConfig("rate-limit"))
       }
