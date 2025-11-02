@@ -44,7 +44,7 @@ This directory contains the GitHub Actions workflows for continuous integration,
 **Purpose:** Creates distribution packages quickly without running the full test suite, suitable for nightly releases
 
 **Steps:**
-1. Compiles all modules (bytes, crypto, rlp, node)
+1. Compiles production code only (bytes, crypto, rlp, node) - skips test compilation
 2. Builds assembly JAR (standalone executable)
 3. Builds distribution package (ZIP)
 4. Creates timestamped artifacts
@@ -60,7 +60,7 @@ This directory contains the GitHub Actions workflows for continuous integration,
 - Quick distribution builds without waiting for full test suite
 - Intermediate builds for stakeholders
 
-**Note:** This workflow intentionally skips the full test suite. The full test suite has some tests that are excluded in `build.sbt`. This workflow is suitable for development and testing purposes only. For production releases, use the standard release workflow (`release.yml`).
+**Note:** This workflow intentionally skips the full test suite and test compilation for faster builds. Uses `FUKUII_DEV: true` to speed up compilation by disabling production optimizations and fatal warnings. The full test suite has some tests that are excluded in `build.sbt`. This workflow is suitable for development and testing purposes only. For production releases, use the standard release workflow (`release.yml`).
 
 **Manual Trigger:**
 ```bash

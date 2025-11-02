@@ -57,26 +57,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install sbt
       
-      - name: Compile all modules (no tests)
-        run: sbt compile-all
+      - name: Compile production code only (no tests)
+        run: |
+          sbt "bytes / compile"
+          sbt "crypto / compile"
+          sbt "rlp / compile"
+          sbt compile
         env:
-          FUKUII_DEV: false
+          FUKUII_DEV: true
       
       - name: Build assembly JAR
         run: sbt assembly
         env:
-          FUKUII_DEV: false
+          FUKUII_DEV: true
       
       - name: Build distribution package
         run: sbt dist
         env:
-          FUKUII_DEV: false
+          FUKUII_DEV: true
       
       - name: Extract version and prepare artifacts
         id: prepare
         run: |
           # Extract version from version.sbt - handles format: (ThisBuild / version) := "x.y.z"
-          VERSION=$(grep -oP '(?<=:= ")[\d.]+(?=")' version.sbt)
+          # Supports version strings with pre-release identifiers (e.g., 0.1.0-SNAPSHOT)
+          VERSION=$(grep -oP '(?<=:= ")[^\"]+(?=")' version.sbt)
           TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
           
           # Create nightly version identifier
