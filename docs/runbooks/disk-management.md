@@ -301,14 +301,16 @@ For advanced users, RocksDB can be tuned via JVM options.
 Create/edit `.jvmopts` in your installation directory:
 
 ```bash
-# Increase write buffer (improves write performance)
--Drocksdb.write_buffer_size=67108864  # 64 MB (default: varies)
+# NOTE: RocksDB tuning in Fukuii is typically done through internal configuration,
+# not JVM properties. The examples below are HYPOTHETICAL and for illustration only.
+# Consult Fukuii documentation for actual RocksDB tuning options.
 
-# Adjust max background jobs (use more CPU for compaction)
--Drocksdb.max_background_jobs=4  # default: 2
+# Example (may not be supported):
+# -Drocksdb.write_buffer_size=67108864  # 64 MB
+# -Drocksdb.max_background_jobs=4
 
-# Note: These are example properties - actual RocksDB tuning
-# depends on Fukuii's implementation
+# Actual RocksDB tuning depends on Fukuii's implementation.
+# Check Fukuii's configuration files or documentation for supported options.
 ```
 
 **Warning**: Improper tuning can degrade performance. Test in non-production first.

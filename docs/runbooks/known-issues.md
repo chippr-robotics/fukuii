@@ -440,6 +440,7 @@ If `/tmp` has `noexec`, use dedicated temp directory (see Issue 4).
 getenforce
 
 # If enforcing, may need context change
+# WARNING: Adjust path to match your actual temp directory
 sudo semanage fcontext -a -t tmp_t "/var/tmp/fukuii(/.*)?"
 sudo restorecon -R /var/tmp/fukuii
 ```
