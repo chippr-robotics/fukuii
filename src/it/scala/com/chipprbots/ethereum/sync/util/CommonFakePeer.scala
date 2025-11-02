@@ -322,7 +322,12 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     val newBlockNumber = parent.header.number + 1
     val newWorld = updateWorldForBlock(newBlockNumber, parentWorld)
     val newBlock = parent.copy(header =
-      parent.header.copy(parentHash = parent.header.hash, number = newBlockNumber, stateRoot = newWorld.stateRootHash)
+      parent.header.copy(
+        parentHash = parent.header.hash,
+        number = newBlockNumber,
+        stateRoot = newWorld.stateRootHash,
+        unixTimestamp = parent.header.unixTimestamp + 1
+      )
     )
     val newWeight = parentWeight.increase(newBlock.header)
     (newBlock, newWeight, parentWorld)
