@@ -50,10 +50,10 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
     RLPList(
       RLPList(
         RLPList(
-          exampleHash,
+          RLPValue(exampleHash.toArray[Byte]),
           cumulativeGas,
-          exampleLogsBloom,
-          RLPList(RLPList(loggerAddress.bytes, logTopics, logData))
+          RLPValue(exampleLogsBloom.toArray[Byte]),
+          RLPList(RLPList(RLPValue(loggerAddress.bytes.toArray[Byte]), RLPList(logTopics.map(t => RLPValue(t.toArray[Byte])): _*), RLPValue(logData.toArray[Byte])))
         )
       )
     )
@@ -64,10 +64,10 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
         PrefixedRLPEncodable(
           Transaction.Type01,
           RLPList(
-            exampleHash,
+            RLPValue(exampleHash.toArray[Byte]),
             cumulativeGas,
-            exampleLogsBloom,
-            RLPList(RLPList(loggerAddress.bytes, logTopics, logData))
+            RLPValue(exampleLogsBloom.toArray[Byte]),
+            RLPList(RLPList(RLPValue(loggerAddress.bytes.toArray[Byte]), RLPList(logTopics.map(t => RLPValue(t.toArray[Byte])): _*), RLPValue(logData.toArray[Byte])))
           )
         )
       )
