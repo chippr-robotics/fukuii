@@ -95,6 +95,19 @@ class NodeJsonRpcHealthChecker(
     handleResponse(responseTask)
   }
 
+  override def readinessCheck(): IO[HealthcheckResponse] = {
+    // Readiness checks: DB opened (storedBlock exists), peers > 0, tip advancing (updateStatus)
+    val responseTask = List(
+      peerCountHC,
+      storedBlockHC,
+      updateStatusHC
+    ).parSequence
+      .map(_.map(_.toResult))
+      .map(HealthcheckResponse.apply)
+
+    handleResponse(responseTask)
+  }
+
   private def blockNumberHasChanged(newBestFetchingBlock: BigInt) =
     previousBestFetchingBlock match {
       case Some((firstSeenAt, value)) if value == newBestFetchingBlock =>

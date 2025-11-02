@@ -204,6 +204,168 @@ For production deployments, comprehensive operational runbooks are available cov
 
 See the [Operations Runbooks](docs/runbooks/README.md) for complete operational documentation.
 
+## Health & Readiness Endpoints
+
+Fukuii provides HTTP endpoints for monitoring node health and readiness, enabling integration with modern orchestration platforms like Kubernetes, Docker Swarm, and monitoring systems.
+
+### Available Endpoints
+
+#### `/health` - Liveness Probe
+Simple HTTP endpoint that returns `200 OK` if the server is running and responding to requests.
+
+**Use case:** Liveness probes in Kubernetes/Docker to determine if the container should be restarted.
+
+**Example:**
+```bash
+curl http://localhost:8546/health
+```
+
+**Response (200 OK):**
+```json
+{
+  "checks": [
+    {
+      "name": "server",
+      "status": "OK",
+      "info": "running"
+    }
+  ]
+}
+```
+
+#### `/readiness` - Readiness Probe
+Checks if the node is ready to serve traffic. Returns `200 OK` when:
+- Database is opened and accessible (stored block exists)
+- Node has at least one peer connection
+- Blockchain tip is advancing (block numbers are updating)
+
+**Use case:** Readiness probes in Kubernetes/Docker to determine if the container should receive traffic.
+
+**Example:**
+```bash
+curl http://localhost:8546/readiness
+```
+
+**Response (200 OK when ready):**
+```json
+{
+  "checks": [
+    {
+      "name": "peerCount",
+      "status": "OK",
+      "info": "5"
+    },
+    {
+      "name": "bestStoredBlock",
+      "status": "OK",
+      "info": "12345678"
+    },
+    {
+      "name": "bestFetchingBlock",
+      "status": "OK"
+    }
+  ]
+}
+```
+
+**Response (503 Service Unavailable when not ready):**
+```json
+{
+  "checks": [
+    {
+      "name": "peerCount",
+      "status": "ERROR",
+      "info": "peer count is 0"
+    },
+    ...
+  ]
+}
+```
+
+#### `/healthcheck` - Detailed Health Status
+Comprehensive health check including all node subsystems:
+- Peer count
+- Best stored block
+- Best known block
+- Best fetching block
+- Update status (tip advancing)
+- Sync status
+
+**Use case:** Detailed monitoring and diagnostics.
+
+**Example:**
+```bash
+curl http://localhost:8546/healthcheck
+```
+
+### Kubernetes Configuration Example
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fukuii-node
+spec:
+  containers:
+  - name: fukuii
+    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    ports:
+    - containerPort: 8546
+      name: rpc
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8546
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /readiness
+        port: 8546
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+```
+
+### Docker Compose Configuration Example
+
+```yaml
+version: '3.8'
+services:
+  fukuii:
+    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    ports:
+      - "8546:8546"
+      - "30303:30303"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+```
+
+### Configuration
+
+Health check behavior can be configured in `conf/base.conf`:
+
+```hocon
+fukuii.network.rpc {
+  health {
+    # If the best known block number stays the same for more time than this,
+    # the healthcheck will consider the client to be stuck and return an error
+    no-update-duration-threshold = 30.minutes
+    
+    # If the difference between the best stored block number and the best known block number
+    # is less than this value, the healthcheck will report that the client is synced.
+    syncing-status-threshold = 10
+  }
+}
+```
+
 Contact
 
 For questions or support, reach out to Chippr Robotics LLC via our GitHub repository.
