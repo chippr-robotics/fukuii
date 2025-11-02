@@ -63,8 +63,8 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
 
   val encodedBranchNode: RLPList = {
     val encodeableList: Array[RLPEncodeable] =
-      (Array.fill[RLPValue](3)(RLPValue(Array.emptyByteArray)) :+ (exampleHash: RLPEncodeable)) ++
-        (Array.fill[RLPValue](6)(RLPValue(Array.emptyByteArray)) :+ (exampleHash: RLPEncodeable)) ++
+      (Array.fill[RLPValue](3)(RLPValue(Array.emptyByteArray)) :+ RLPValue(exampleHash.toArray[Byte])) ++
+        (Array.fill[RLPValue](6)(RLPValue(Array.emptyByteArray)) :+ RLPValue(exampleHash.toArray[Byte])) ++
         (Array.fill[RLPValue](5)(RLPValue(Array.emptyByteArray)) :+ (Array.emptyByteArray: RLPEncodeable))
     RLPList(ArraySeq.unsafeWrapArray(encodeableList): _*)
   }
@@ -81,8 +81,8 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
     encode(encodedLeafNode),
     encode(encodedBranchNode),
     encode(encodedExtensionNode),
-    emptyEvmHash,
-    emptyStorageRoot
+    RLPValue(emptyEvmHash.toArray[Byte]),
+    RLPValue(emptyStorageRoot.toArray[Byte])
   )
 
   "NodeData" should "be encoded properly" in {

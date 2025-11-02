@@ -30,8 +30,8 @@ object ETC64 {
           networkId,
           chainWeight.totalDifficulty,
           chainWeight.lastCheckpointNumber,
-          bestHash,
-          genesisHash
+          RLPValue(bestHash.toArray[Byte]),
+          RLPValue(genesisHash.toArray[Byte])
         )
       }
     }

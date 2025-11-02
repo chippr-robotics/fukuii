@@ -20,7 +20,7 @@ object ETH62 {
   object BlockHash {
 
     implicit class BlockHashEnc(blockHash: BlockHash) extends RLPSerializable {
-      override def toRLPEncodable: RLPEncodeable = RLPList(blockHash.hash, blockHash.number)
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(blockHash.hash.toArray[Byte]), blockHash.number)
     }
 
     implicit class BlockHashDec(val bytes: Array[Byte]) extends AnyVal {
@@ -85,7 +85,7 @@ object ETH62 {
         import msg._
         block match {
           case Left(blockNumber) => RLPList(blockNumber, maxHeaders, skip, if (reverse) 1 else 0)
-          case Right(blockHash)  => RLPList(blockHash, maxHeaders, skip, if (reverse) 1 else 0)
+          case Right(blockHash)  => RLPList(RLPValue(blockHash.toArray[Byte]), maxHeaders, skip, if (reverse) 1 else 0)
         }
       }
     }

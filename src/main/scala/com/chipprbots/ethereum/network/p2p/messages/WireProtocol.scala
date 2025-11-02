@@ -26,7 +26,13 @@ object WireProtocol {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        RLPList(p2pVersion, clientId, RLPList(capabilities.map(_.toRLPEncodable): _*), listenPort, nodeId)
+        RLPList(
+          p2pVersion,
+          clientId,
+          RLPList(capabilities.map(_.toRLPEncodable): _*),
+          listenPort,
+          RLPValue(nodeId.toArray[Byte])
+        )
       }
     }
 
