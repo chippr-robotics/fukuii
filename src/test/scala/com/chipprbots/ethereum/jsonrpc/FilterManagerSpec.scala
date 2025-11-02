@@ -481,7 +481,7 @@ class FilterManagerSpec
     // the filter should work
     getLogsRes.txHashes shouldBe pendingTxs.map(_.tx.hash)
 
-    testScheduler.timePasses(15.seconds)
+    testScheduler.timePasses(26.seconds) // Increased to exceed longTimeout (25s)
 
     // the filter should no longer exist
     val getLogsRes2: FilterLogs =
