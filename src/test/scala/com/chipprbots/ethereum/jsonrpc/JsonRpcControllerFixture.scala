@@ -105,18 +105,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
 
   val appStateStorage: AppStateStorage = mock[AppStateStorage]
   val web3Service = new Web3Service
-  // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
-  val netService: NetService = new NetService(
-    new java.util.concurrent.atomic.AtomicReference(
-      com.chipprbots.ethereum.utils.NodeStatus(
-        com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
-        com.chipprbots.ethereum.utils.ServerStatus.NotListening,
-        com.chipprbots.ethereum.utils.ServerStatus.NotListening
-      )
-    ),
-    org.apache.pekko.testkit.TestProbe()(system).ref,
-    com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
-  )
+  val netService: NetServiceAPI = mock[NetServiceAPI]
 
   val ethInfoService = new EthInfoService(
     blockchain,

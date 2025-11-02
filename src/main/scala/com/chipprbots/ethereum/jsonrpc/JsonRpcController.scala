@@ -32,7 +32,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 case class JsonRpcController(
     web3Service: Web3Service,
-    netService: NetService,
+    netService: NetServiceAPI,
     ethInfoService: EthInfoService,
     ethMiningService: EthMiningService,
     ethBlocksService: EthBlocksService,
