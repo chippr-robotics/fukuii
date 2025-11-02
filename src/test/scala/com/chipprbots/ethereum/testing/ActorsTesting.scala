@@ -5,7 +5,7 @@ import org.apache.pekko.testkit.TestActor.AutoPilot
 object ActorsTesting {
   def simpleAutoPilot(makeResponse: PartialFunction[Any, Any]): AutoPilot =
     new AutoPilot {
-      def run(sender: ActorRef, msg: Any) = {
+      def run(sender: ActorRef, msg: Any): AutoPilot = {
         val response = makeResponse.lift(msg)
         response match {
           case Some(value) => sender ! value

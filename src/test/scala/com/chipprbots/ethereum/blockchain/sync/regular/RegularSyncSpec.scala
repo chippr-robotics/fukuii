@@ -9,8 +9,8 @@ import org.apache.pekko.testkit.TestKit
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
-import cats.effect.Resource
 import cats.effect.IO
+import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 import cats.syntax.traverse._
 
@@ -62,6 +62,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import org.apache.pekko.actor.ActorRef
 
 class RegularSyncSpec
     extends WordSpecBase
@@ -190,7 +191,7 @@ class RegularSyncSpec
       "blacklist peer which sends headers that were not requested" in sync(new Fixture(testSystem) {
         import org.apache.pekko.actor.typed.scaladsl.adapter._
 
-        val blockImporter = TestProbe()
+        val blockImporter: TestProbe = TestProbe()
         val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
           system.spawn(
             BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
@@ -221,7 +222,7 @@ class RegularSyncSpec
         import org.apache.pekko.actor.typed.scaladsl.adapter._
 
         var blockFetcherAdapter: TypedActorRef[MessageFromPeer] = _
-        val blockImporter = TestProbe()
+        val blockImporter: TestProbe = TestProbe()
         val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
           system.spawn(
             BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
@@ -301,7 +302,7 @@ class RegularSyncSpec
             .when(*, *, *)
             .onCall((block, _, _) => fakeEvaluateBlock(block))
           override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
-          override lazy val syncConfig = defaultSyncConfig.copy(
+          override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
             blockHeadersPerRequest = 5,
             blockBodiesPerRequest = 5,
             blocksBatchSize = 5,
@@ -362,7 +363,7 @@ class RegularSyncSpec
           .when(*, *, *)
           .onCall((block, _, _) => fakeEvaluateBlock(block))
         override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
-        override lazy val syncConfig = defaultSyncConfig.copy(
+        override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
           syncRetryInterval = 1.second,
           printStatusInterval = 0.5.seconds,
           branchResolutionRequestSize = 12, // Over the original branch size
@@ -373,8 +374,8 @@ class RegularSyncSpec
           blocksBatchSize = 50
         )
 
-        val originalBranch = BlockHelpers.generateChain(10, BlockHelpers.genesis)
-        val betterBranch = BlockHelpers.generateChain(originalBranch.size * 2, BlockHelpers.genesis)
+        val originalBranch: List[Block] = BlockHelpers.generateChain(10, BlockHelpers.genesis)
+        val betterBranch: List[Block] = BlockHelpers.generateChain(originalBranch.size * 2, BlockHelpers.genesis)
 
         class ForkingAutoPilot(blocksToRespond: List[Block], forkedBlocks: Option[List[Block]])
             extends PeersClientAutoPilot(blocksToRespond) {
@@ -395,7 +396,7 @@ class RegularSyncSpec
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
-        val blockFetcher = peerEventBus.sender()
+        val blockFetcher: ActorRef = peerEventBus.sender()
         peerEventBus.reply(
           MessageFromPeer(NewBlock(originalBranch.last, ChainWeight(0, originalBranch.last.number)), defaultPeer.id)
         )
@@ -495,7 +496,7 @@ class RegularSyncSpec
           .returns(IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash))))
 
         var saveNodeWasCalled: Boolean = false
-        val nodeData = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
+        val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
         (blockchainReader.getBestBlockNumber _).when().returns(0)
         (blockchainReader.getBlockHeaderByNumber _).when(*).returns(Some(BlockHelpers.genesis.header))
         (stateStorage.saveNode _)
@@ -661,8 +662,8 @@ class RegularSyncSpec
 
         setImportResult(testBlocks(1), IO.pure(BlockImportedToTop(Nil)))
 
-        val checkpointBlock = checkpointBlockGenerator.generate(block, checkpoint)
-        val newCheckpointMsg = NewCheckpoint(checkpointBlock)
+        val checkpointBlock: Block = checkpointBlockGenerator.generate(block, checkpoint)
+        val newCheckpointMsg: NewCheckpoint = NewCheckpoint(checkpointBlock)
         setImportResult(checkpointBlock, IO(BlockImportedToTop(Nil)))
 
         regularSync ! SyncProtocol.Start
@@ -687,8 +688,8 @@ class RegularSyncSpec
         setImportResult(parentBlock, IO(BlockImportedToTop(Nil)))
         consensusAdapter.evaluateBranchBlock(parentBlock)(implicitly[IORuntime], implicitly[BlockchainConfig])
 
-        val checkpointBlock = checkpointBlockGenerator.generate(parentBlock, checkpoint)
-        val newCheckpointMsg = NewCheckpoint(checkpointBlock)
+        val checkpointBlock: Block = checkpointBlockGenerator.generate(parentBlock, checkpoint)
+        val newCheckpointMsg: NewCheckpoint = NewCheckpoint(checkpointBlock)
         setImportResult(
           checkpointBlock,
           // FIXME: lastCheckpointNumber == 0, refactor RegularSyncFixture?

@@ -40,7 +40,7 @@ class CheckpointingServiceSpec
   implicit val runtime: IORuntime = IORuntime.global
 
   "CheckpointService" should "get latest block (at a correct checkpointing interval) from Blockchain" in new TestSetup {
-    val nums = for {
+    val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
       n <- Gen.choose(0, k - 1) // distance from best block to checkpointed block
@@ -64,7 +64,7 @@ class CheckpointingServiceSpec
   }
 
   it should "get latest block that is a descendant of the passed parent checkpoint block" in new TestSetup {
-    val nums = for {
+    val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
       n <- Gen.choose(0, k - 1) // distance from best block to checkpointed block
@@ -94,7 +94,7 @@ class CheckpointingServiceSpec
   }
 
   it should "not return a block that is at the same height as the passed parent checkpoint block" in new TestSetup {
-    val nums = for {
+    val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
       n <- Gen.choose(0, k - 1) // distance from best block to checkpointed block
@@ -122,7 +122,7 @@ class CheckpointingServiceSpec
   }
 
   it should "return an empty response if the descendant is not a part of a local blockchain" in new TestSetup {
-    val nums = for {
+    val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
       n <- Gen.choose(0, k - 1) // distance from best block to checkpointed block
@@ -153,20 +153,20 @@ class CheckpointingServiceSpec
     val parentBlock = Fixtures.Blocks.ValidBlock.block
     val hash = parentBlock.hash
     val signatures = Nil
-    val request = PushCheckpointRequest(hash, signatures)
-    val expectedResponse = PushCheckpointResponse()
+    val request: PushCheckpointRequest = PushCheckpointRequest(hash, signatures)
+    val expectedResponse: PushCheckpointResponse = PushCheckpointResponse()
 
     (blockchainReader.getBlockByHash _).expects(hash).returning(Some(parentBlock)).once()
 
-    val result = service.pushCheckpoint(request).unsafeRunSync()
-    val checkpointBlock = checkpointBlockGenerator.generate(parentBlock, Checkpoint(signatures))
+    val result: Either[JsonRpcError, PushCheckpointResponse] = service.pushCheckpoint(request).unsafeRunSync()
+    val checkpointBlock: Block = checkpointBlockGenerator.generate(parentBlock, Checkpoint(signatures))
     syncController.expectMsg(NewCheckpoint(checkpointBlock))
     result shouldEqual Right(expectedResponse)
   }
 
   it should "get latest block in case of blockchain re-org" in new TestSetup {
     val block = Fixtures.Blocks.ValidBlock.block
-    val expectedResponse = GetLatestBlockResponse(Some(BlockInfo(block.hash, block.number)))
+    val expectedResponse: GetLatestBlockResponse = GetLatestBlockResponse(Some(BlockInfo(block.hash, block.number)))
     (blockchainReader.getBestBlockNumber _)
       .expects()
       .returning(7)
@@ -180,7 +180,7 @@ class CheckpointingServiceSpec
       .expects(*, BigInt(4))
       .returning(Some(block))
 
-    val result = service.getLatestBlock(GetLatestBlockRequest(4, None))
+    val result: ServiceResponse[GetLatestBlockResponse] = service.getLatestBlock(GetLatestBlockRequest(4, None))
 
     result.unsafeRunSync() shouldEqual Right(expectedResponse)
   }

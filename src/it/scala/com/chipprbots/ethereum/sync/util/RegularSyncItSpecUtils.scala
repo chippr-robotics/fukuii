@@ -5,9 +5,8 @@ import org.apache.pekko.actor.typed
 import org.apache.pekko.actor.typed.scaladsl.adapter._
 import org.apache.pekko.util.ByteString
 
-import cats.effect.Resource
-
 import cats.effect.IO
+import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._

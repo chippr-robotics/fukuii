@@ -6,7 +6,6 @@ import org.apache.pekko.testkit.TestActorRef
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
@@ -51,7 +50,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     )
 
     // given
-    val receiptsHashes = Seq(
+    val receiptsHashes: Seq[ByteString] = Seq(
       ByteString(Hex.decode("a218e2c611f21232d857e3c8cecdcdf1f65f25a4477f98f6f47e4063807f2308")),
       ByteString(Hex.decode("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"))
     )
@@ -72,12 +71,12 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
 
   it should "return BlockBodies for block hashes" in new TestSetup {
     // given
-    val blockBodiesHashes = Seq(
+    val blockBodiesHashes: Seq[ByteString] = Seq(
       ByteString(Hex.decode("a218e2c611f21232d857e3c8cecdcdf1f65f25a4477f98f6f47e4063807f2308")),
       ByteString(Hex.decode("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"))
     )
 
-    val blockBodies = Seq(baseBlockBody, baseBlockBody)
+    val blockBodies: Seq[BlockBody] = Seq(baseBlockBody, baseBlockBody)
 
     blockchainWriter
       .storeBlockBody(blockBodiesHashes(0), blockBodies(0))
@@ -245,7 +244,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
 
   it should "return evm code for hash" in new TestSetup {
     // given
-    val fakeEvmCode = ByteString(Hex.decode("ffddaaffddaaffddaaffddaaffddaa"))
+    val fakeEvmCode: ByteString = ByteString(Hex.decode("ffddaaffddaaffddaaffddaaffddaa"))
     val evmCodeHash: ByteString = ByteString(crypto.kec256(fakeEvmCode.toArray[Byte]))
 
     storagesInstance.storages.evmCodeStorage.put(evmCodeHash, fakeEvmCode).commit()
@@ -259,8 +258,8 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
 
   it should "return mptNode for hash" in new TestSetup {
     // given
-    val exampleNibbles = ByteString(HexPrefix.bytesToNibbles(Hex.decode("ffddaa")))
-    val exampleHash = ByteString(Hex.decode("ab" * 32))
+    val exampleNibbles: ByteString = ByteString(HexPrefix.bytesToNibbles(Hex.decode("ffddaa")))
+    val exampleHash: ByteString = ByteString(Hex.decode("ab" * 32))
     val extensionNode: MptNode = ExtensionNode(exampleNibbles, HashNode(exampleHash.toArray[Byte]))
 
     storagesInstance.storages.stateStorage.saveNode(
@@ -303,7 +302,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       override val maxIncomingPeers = 5
       override val maxPendingPeers = 5
       override val pruneIncomingPeers = 0
-      override val minPruneAge = 1.minute
+      override val minPruneAge: FiniteDuration = 1.minute
       override val networkId: Int = 1
 
       override val updateNodesInitialDelay: FiniteDuration = 5.seconds

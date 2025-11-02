@@ -26,7 +26,6 @@ import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.crypto.ECDSASignature
-import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError._
@@ -41,6 +40,11 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
+import scala.concurrent.Future
+import scala.concurrent.Future
+import scala.concurrent.Future
+import scala.concurrent.Future
+import scala.concurrent.Future
 
 class PersonalServiceSpec
     extends TestKit(ActorSystem("JsonRpcControllerEthSpec_System"))
@@ -58,8 +62,8 @@ class PersonalServiceSpec
   "PersonalService" should "import private keys" in new TestSetup {
     (keyStore.importPrivateKey _).expects(prvKey, passphrase).returning(Right(address))
 
-    val req = ImportRawKeyRequest(prvKey, passphrase)
-    val res = personal.importRawKey(req).unsafeRunSync()
+    val req: ImportRawKeyRequest = ImportRawKeyRequest(prvKey, passphrase)
+    val res: Either[JsonRpcError, ImportRawKeyResponse] = personal.importRawKey(req).unsafeRunSync()
 
     res shouldEqual Right(ImportRawKeyResponse(address))
   }
@@ -67,8 +71,8 @@ class PersonalServiceSpec
   it should "create new accounts" in new TestSetup {
     (keyStore.newAccount _).expects(passphrase).returning(Right(address))
 
-    val req = NewAccountRequest(passphrase)
-    val res = personal.newAccount(req).unsafeRunSync()
+    val req: NewAccountRequest = NewAccountRequest(passphrase)
+    val res: Either[JsonRpcError, NewAccountResponse] = personal.newAccount(req).unsafeRunSync()
 
     res shouldEqual Right(NewAccountResponse(address))
   }
@@ -76,47 +80,47 @@ class PersonalServiceSpec
   it should "handle too short passphrase error" in new TestSetup {
     (keyStore.newAccount _).expects(passphrase).returning(Left(KeyStore.PassPhraseTooShort(7)))
 
-    val req = NewAccountRequest(passphrase)
-    val res = personal.newAccount(req).unsafeRunSync()
+    val req: NewAccountRequest = NewAccountRequest(passphrase)
+    val res: Either[JsonRpcError, NewAccountResponse] = personal.newAccount(req).unsafeRunSync()
 
     res shouldEqual Left(PersonalService.PassPhraseTooShort(7))
   }
 
   it should "list accounts" in new TestSetup {
-    val addresses = List(123, 42, 1).map(Address(_))
+    val addresses: List[Address] = List(123, 42, 1).map(Address(_))
     (keyStore.listAccounts _).expects().returning(Right(addresses))
 
-    val res = personal.listAccounts(ListAccountsRequest()).unsafeRunSync()
+    val res: Either[JsonRpcError, ListAccountsResponse] = personal.listAccounts(ListAccountsRequest()).unsafeRunSync()
 
     res shouldEqual Right(ListAccountsResponse(addresses))
   }
 
   it should "translate KeyStore errors to JsonRpc errors" in new TestSetup {
     (keyStore.listAccounts _).expects().returning(Left(IOError("boom!")))
-    val res1 = personal.listAccounts(ListAccountsRequest()).unsafeRunSync()
+    val res1: Either[JsonRpcError, ListAccountsResponse] = personal.listAccounts(ListAccountsRequest()).unsafeRunSync()
     res1 shouldEqual Left(LogicError("boom!"))
 
     (keyStore.unlockAccount _).expects(*, *).returning(Left(KeyStore.KeyNotFound))
-    val res2 = personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
+    val res2: Either[JsonRpcError, UnlockAccountResponse] = personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
     res2 shouldEqual Left(KeyNotFound)
 
     (keyStore.unlockAccount _).expects(*, *).returning(Left(KeyStore.DecryptionFailed))
-    val res3 = personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
+    val res3: Either[JsonRpcError, UnlockAccountResponse] = personal.unlockAccount(UnlockAccountRequest(Address(42), "passphrase", None)).unsafeRunSync()
     res3 shouldEqual Left(InvalidPassphrase)
   }
 
   it should "return an error when trying to import an invalid key" in new TestSetup {
     val invalidKey = prvKey.tail
-    val req = ImportRawKeyRequest(invalidKey, passphrase)
-    val res = personal.importRawKey(req).unsafeRunSync()
+    val req: ImportRawKeyRequest = ImportRawKeyRequest(invalidKey, passphrase)
+    val res: Either[JsonRpcError, ImportRawKeyResponse] = personal.importRawKey(req).unsafeRunSync()
     res shouldEqual Left(InvalidKey)
   }
 
   it should "unlock an account given a correct passphrase" in new TestSetup {
     (keyStore.unlockAccount _).expects(address, passphrase).returning(Right(wallet))
 
-    val req = UnlockAccountRequest(address, passphrase, None)
-    val res = personal.unlockAccount(req).unsafeRunSync()
+    val req: UnlockAccountRequest = UnlockAccountRequest(address, passphrase, None)
+    val res: Either[JsonRpcError, UnlockAccountResponse] = personal.unlockAccount(req).unsafeRunSync()
 
     res shouldEqual Right(UnlockAccountResponse(true))
   }
@@ -130,8 +134,8 @@ class PersonalServiceSpec
     (blockchainReader.getAccount _).expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
-    val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).unsafeToFuture()
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -141,7 +145,7 @@ class PersonalServiceSpec
   }
 
   it should "send a transaction when having pending txs from the same sender" in new TestSetup {
-    val newTx = wallet.signTx(tx.toTransaction(nonce + 1), None).tx
+    val newTx: SignedTransaction = wallet.signTx(tx.toTransaction(nonce + 1), None).tx
 
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
@@ -151,8 +155,8 @@ class PersonalServiceSpec
     (blockchainReader.getAccount _).expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
-    val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).unsafeToFuture()
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Seq(PendingTransaction(stxWithSender, 0))))
@@ -166,8 +170,8 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Left(KeyStore.DecryptionFailed))
 
-    val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).unsafeRunSync()
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Either[JsonRpcError, SendTransactionWithPassphraseResponse] = personal.sendTransaction(req).unsafeRunSync()
 
     res shouldEqual Left(InvalidPassphrase)
     txPool.expectNoMessage()
@@ -184,8 +188,8 @@ class PersonalServiceSpec
     (blockchainReader.getAccount _).expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
-    val req = SendTransactionRequest(tx)
-    val res = personal.sendTransaction(req).unsafeToFuture()
+    val req: SendTransactionRequest = SendTransactionRequest(tx)
+    val res: Future[Either[JsonRpcError, SendTransactionResponse]] = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -195,8 +199,8 @@ class PersonalServiceSpec
   }
 
   it should "fail to send a transaction when account is locked" in new TestSetup {
-    val req = SendTransactionRequest(tx)
-    val res = personal.sendTransaction(req).unsafeRunSync()
+    val req: SendTransactionRequest = SendTransactionRequest(tx)
+    val res: Either[JsonRpcError, SendTransactionResponse] = personal.sendTransaction(req).unsafeRunSync()
 
     res shouldEqual Left(AccountLocked)
     txPool.expectNoMessage()
@@ -209,8 +213,8 @@ class PersonalServiceSpec
 
     personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
 
-    val lockRes = personal.lockAccount(LockAccountRequest(address)).unsafeRunSync()
-    val txRes = personal.sendTransaction(SendTransactionRequest(tx)).unsafeRunSync()
+    val lockRes: Either[JsonRpcError, LockAccountResponse] = personal.lockAccount(LockAccountRequest(address)).unsafeRunSync()
+    val txRes: Either[JsonRpcError, SendTransactionResponse] = personal.sendTransaction(SendTransactionRequest(tx)).unsafeRunSync()
 
     lockRes shouldEqual Right(LockAccountResponse(true))
     txRes shouldEqual Left(AccountLocked)
@@ -222,20 +226,20 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
-    val r = ByteString(Hex.decode("d237344891a90a389b7747df6fbd0091da20d1c61adb961b4491a4c82f58dcd2"))
-    val s = ByteString(Hex.decode("5425852614593caf3a922f48a6fe5204066dcefbf6c776c4820d3e7522058d00"))
-    val v = ByteString(Hex.decode("1b")).last
+    val r: ByteString = ByteString(Hex.decode("d237344891a90a389b7747df6fbd0091da20d1c61adb961b4491a4c82f58dcd2"))
+    val s: ByteString = ByteString(Hex.decode("5425852614593caf3a922f48a6fe5204066dcefbf6c776c4820d3e7522058d00"))
+    val v: Byte = ByteString(Hex.decode("1b")).last
 
-    val req = SignRequest(message, address, Some(passphrase))
+    val req: SignRequest = SignRequest(message, address, Some(passphrase))
 
-    val res = personal.sign(req).unsafeRunSync()
+    val res: Either[JsonRpcError, SignResponse] = personal.sign(req).unsafeRunSync()
     res shouldEqual Right(SignResponse(ECDSASignature(r, s, v)))
 
     // Account should still be locked after calling sign with passphrase
-    val txReq = SendTransactionRequest(tx)
-    val txRes = personal.sendTransaction(txReq).unsafeRunSync()
+    val txReq: SendTransactionRequest = SendTransactionRequest(tx)
+    val txRes: Either[JsonRpcError, SendTransactionResponse] = personal.sendTransaction(txReq).unsafeRunSync()
     txRes shouldEqual Left(AccountLocked)
 
   }
@@ -246,26 +250,26 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
-    val r = ByteString(Hex.decode("d237344891a90a389b7747df6fbd0091da20d1c61adb961b4491a4c82f58dcd2"))
-    val s = ByteString(Hex.decode("5425852614593caf3a922f48a6fe5204066dcefbf6c776c4820d3e7522058d00"))
-    val v = ByteString(Hex.decode("1b")).last
+    val r: ByteString = ByteString(Hex.decode("d237344891a90a389b7747df6fbd0091da20d1c61adb961b4491a4c82f58dcd2"))
+    val s: ByteString = ByteString(Hex.decode("5425852614593caf3a922f48a6fe5204066dcefbf6c776c4820d3e7522058d00"))
+    val v: Byte = ByteString(Hex.decode("1b")).last
 
-    val req = SignRequest(message, address, None)
+    val req: SignRequest = SignRequest(message, address, None)
 
     personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
-    val res = personal.sign(req).unsafeRunSync()
+    val res: Either[JsonRpcError, SignResponse] = personal.sign(req).unsafeRunSync()
     res shouldEqual Right(SignResponse(ECDSASignature(r, s, v)))
   }
 
   it should "return an error if signing a message using a locked account" in new TestSetup {
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
-    val req = SignRequest(message, address, None)
+    val req: SignRequest = SignRequest(message, address, None)
 
-    val res = personal.sign(req).unsafeRunSync()
+    val res: Either[JsonRpcError, SignResponse] = personal.sign(req).unsafeRunSync()
     res shouldEqual Left(AccountLocked)
   }
 
@@ -277,11 +281,11 @@ class PersonalServiceSpec
       .expects(address, wrongPassphase)
       .returning(Left(DecryptionFailed))
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
-    val req = SignRequest(message, address, Some(wrongPassphase))
+    val req: SignRequest = SignRequest(message, address, Some(wrongPassphase))
 
-    val res = personal.sign(req).unsafeRunSync()
+    val res: Either[JsonRpcError, SignResponse] = personal.sign(req).unsafeRunSync()
     res shouldEqual Left(InvalidPassphrase)
   }
 
@@ -291,26 +295,26 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Left(KeyStore.KeyNotFound))
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
-    val req = SignRequest(message, address, Some(passphrase))
+    val req: SignRequest = SignRequest(message, address, Some(passphrase))
 
-    val res = personal.sign(req).unsafeRunSync()
+    val res: Either[JsonRpcError, SignResponse] = personal.sign(req).unsafeRunSync()
     res shouldEqual Left(KeyNotFound)
   }
 
   it should "recover address form signed message" in new TestSetup {
-    val sigAddress = Address(ByteString(Hex.decode("12c2a3b877289050FBcfADC1D252842CA742BE81")))
+    val sigAddress: Address = Address(ByteString(Hex.decode("12c2a3b877289050FBcfADC1D252842CA742BE81")))
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
     val r: ByteString = ByteString(Hex.decode("117b8d5b518dc428d97e5e0c6f870ad90e561c97de8fe6cad6382a7e82134e61"))
     val s: ByteString = ByteString(Hex.decode("396d881ef1f8bc606ef94b74b83d76953b61f1bcf55c002ef12dd0348edff24b"))
     val v: Byte = ByteString(Hex.decode("1b")).last
 
-    val req = EcRecoverRequest(message, ECDSASignature(r, s, v))
+    val req: EcRecoverRequest = EcRecoverRequest(message, ECDSASignature(r, s, v))
 
-    val res = personal.ecRecover(req).unsafeRunSync()
+    val res: Either[JsonRpcError, EcRecoverResponse] = personal.ecRecover(req).unsafeRunSync()
     res shouldEqual Right(EcRecoverResponse(sigAddress))
   }
 
@@ -320,7 +324,7 @@ class PersonalServiceSpec
       .expects(address, passphrase)
       .returning(Right(wallet))
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
     personal
       .sign(SignRequest(message, address, Some(passphrase)))
@@ -343,8 +347,8 @@ class PersonalServiceSpec
     (blockchainReader.getAccount _).expects(*, address, BigInt(1234)).returning(Some(Account(nonce, 2 * txValue)))
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber - 1)
 
-    val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).unsafeToFuture()
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -363,8 +367,8 @@ class PersonalServiceSpec
     new Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     (blockchainReader.getBestBlockNumber _).expects().returning(forkBlockNumbers.eip155BlockNumber)
 
-    val req = SendTransactionWithPassphraseRequest(tx, passphrase)
-    val res = personal.sendTransaction(req).unsafeToFuture()
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] = personal.sendTransaction(req).unsafeToFuture()
 
     txPool.expectMsg(GetPendingTransactions)
     txPool.reply(PendingTransactionsResponse(Nil))
@@ -376,27 +380,27 @@ class PersonalServiceSpec
   it should "return an error when importing a duplicated key" in new TestSetup {
     (keyStore.importPrivateKey _).expects(prvKey, passphrase).returning(Left(KeyStore.DuplicateKeySaved))
 
-    val req = ImportRawKeyRequest(prvKey, passphrase)
-    val res = personal.importRawKey(req).unsafeRunSync()
+    val req: ImportRawKeyRequest = ImportRawKeyRequest(prvKey, passphrase)
+    val res: Either[JsonRpcError, ImportRawKeyResponse] = personal.importRawKey(req).unsafeRunSync()
     res shouldEqual Left(LogicError("account already exists"))
   }
 
   it should "unlock an account given a correct passphrase for specified duration" in new TestSetup {
     (keyStore.unlockAccount _).expects(address, passphrase).returning(Right(wallet))
 
-    val message = ByteString(Hex.decode("deadbeaf"))
+    val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
-    val r = ByteString(Hex.decode("d237344891a90a389b7747df6fbd0091da20d1c61adb961b4491a4c82f58dcd2"))
-    val s = ByteString(Hex.decode("5425852614593caf3a922f48a6fe5204066dcefbf6c776c4820d3e7522058d00"))
-    val v = ByteString(Hex.decode("1b")).last
+    val r: ByteString = ByteString(Hex.decode("d237344891a90a389b7747df6fbd0091da20d1c61adb961b4491a4c82f58dcd2"))
+    val s: ByteString = ByteString(Hex.decode("5425852614593caf3a922f48a6fe5204066dcefbf6c776c4820d3e7522058d00"))
+    val v: Byte = ByteString(Hex.decode("1b")).last
 
-    val reqSign = SignRequest(message, address, None)
+    val reqSign: SignRequest = SignRequest(message, address, None)
 
-    val req = UnlockAccountRequest(address, passphrase, Some(Duration.ofSeconds(2)))
-    val res = personal.unlockAccount(req).unsafeRunSync()
+    val req: UnlockAccountRequest = UnlockAccountRequest(address, passphrase, Some(Duration.ofSeconds(2)))
+    val res: Either[JsonRpcError, UnlockAccountResponse] = personal.unlockAccount(req).unsafeRunSync()
     res shouldEqual Right(UnlockAccountResponse(true))
 
-    val res2 = personal.sign(reqSign).unsafeRunSync()
+    val res2: Either[JsonRpcError, SignResponse] = personal.sign(reqSign).unsafeRunSync()
     res2 shouldEqual Right(SignResponse(ECDSASignature(r, s, v)))
 
     eventually {
@@ -460,7 +464,7 @@ class PersonalServiceSpec
         txPool.ref,
         txPoolConfig,
         new BlockchainConfigBuilder {
-          override def blockchainConfig = BlockchainConfig(
+          override def blockchainConfig: BlockchainConfig = BlockchainConfig(
             chainId = chainId,
             // unused
             networkId = 1,

@@ -25,13 +25,14 @@ import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
+import scala.concurrent.Future
 
 class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience with SecureRandomBuilder {
 
   implicit val runtime: IORuntime = IORuntime.global
 
   "NetService" should "return handshaked peer count" in new TestSetup {
-    val resF = netService
+    val resF: Future[Either[JsonRpcError, PeerCountResponse]] = netService
       .peerCount(PeerCountRequest())
       .unsafeToFuture()
 

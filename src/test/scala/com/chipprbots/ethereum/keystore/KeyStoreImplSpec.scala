@@ -24,78 +24,90 @@ import com.chipprbots.ethereum.keystore.KeyStore.PassPhraseTooShort
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.KeyStoreConfig
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 
 class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder {
 
   before(clearKeyStore())
 
   "KeyStoreImpl" should "import and list accounts" in new TestSetup {
-    val listBeforeImport = keyStore.listAccounts().toOption.get
+    val listBeforeImport: List[Address] = keyStore.listAccounts().toOption.get
     listBeforeImport shouldEqual Nil
 
     // We sleep between imports so that dates of keyfiles' names are different
-    val res1 = keyStore.importPrivateKey(key1, "aaaaaaaa").toOption.get
+    val res1: Address = keyStore.importPrivateKey(key1, "aaaaaaaa").toOption.get
     Thread.sleep(1005)
-    val res2 = keyStore.importPrivateKey(key2, "bbbbbbbb").toOption.get
+    val res2: Address = keyStore.importPrivateKey(key2, "bbbbbbbb").toOption.get
     Thread.sleep(1005)
-    val res3 = keyStore.importPrivateKey(key3, "cccccccc").toOption.get
+    val res3: Address = keyStore.importPrivateKey(key3, "cccccccc").toOption.get
 
     res1 shouldEqual addr1
     res2 shouldEqual addr2
     res3 shouldEqual addr3
 
-    val listAfterImport = keyStore.listAccounts().toOption.get
+    val listAfterImport: List[Address] = keyStore.listAccounts().toOption.get
     // result should be ordered by creation date
     listAfterImport shouldEqual List(addr1, addr2, addr3)
   }
 
   it should "fail to import a key twice" in new TestSetup {
-    val resAfterFirstImport = keyStore.importPrivateKey(key1, "aaaaaaaa")
-    val resAfterDupImport = keyStore.importPrivateKey(key1, "aaaaaaaa")
+    val resAfterFirstImport: Either[KeyStoreError, Address] = keyStore.importPrivateKey(key1, "aaaaaaaa")
+    val resAfterDupImport: Either[KeyStoreError, Address] = keyStore.importPrivateKey(key1, "aaaaaaaa")
 
     resAfterFirstImport shouldEqual Right(addr1)
     resAfterDupImport shouldBe Left(KeyStore.DuplicateKeySaved)
 
     // Only the first import succeeded
-    val listAfterImport = keyStore.listAccounts().toOption.get
+    val listAfterImport: List[Address] = keyStore.listAccounts().toOption.get
     listAfterImport.toSet shouldEqual Set(addr1)
     listAfterImport.length shouldEqual 1
   }
 
   it should "create new accounts" in new TestSetup {
-    val newAddr1 = keyStore.newAccount("aaaaaaaa").toOption.get
-    val newAddr2 = keyStore.newAccount("bbbbbbbb").toOption.get
+    val newAddr1: Address = keyStore.newAccount("aaaaaaaa").toOption.get
+    val newAddr2: Address = keyStore.newAccount("bbbbbbbb").toOption.get
 
-    val listOfNewAccounts = keyStore.listAccounts().toOption.get
+    val listOfNewAccounts: List[Address] = keyStore.listAccounts().toOption.get
     listOfNewAccounts.toSet shouldEqual Set(newAddr1, newAddr2)
     listOfNewAccounts.length shouldEqual 2
   }
 
   it should "fail to create account with too short passphrase" in new TestSetup {
-    val res1 = keyStore.newAccount("aaaaaaa")
+    val res1: Either[KeyStoreError, Address] = keyStore.newAccount("aaaaaaa")
     res1 shouldEqual Left(PassPhraseTooShort(keyStoreConfig.minimalPassphraseLength))
   }
 
   it should "allow 0 length passphrase when configured" in new TestSetup {
-    val res1 = keyStore.newAccount("")
+    val res1: Either[KeyStoreError, Address] = keyStore.newAccount("")
     assert(res1.isRight)
   }
 
   it should "not allow 0 length passphrase when configured" in new TestSetup {
-    val newKeyStore = getKeyStore(noEmptyAllowedConfig)
-    val res1 = newKeyStore.newAccount("")
+    val newKeyStore: KeyStoreImpl = getKeyStore(noEmptyAllowedConfig)
+    val res1: Either[KeyStoreError, Address] = newKeyStore.newAccount("")
     res1 shouldBe Left(PassPhraseTooShort(noEmptyAllowedConfig.minimalPassphraseLength))
   }
 
   it should "not allow too short password, when empty is allowed" in new TestSetup {
-    val newKeyStore = getKeyStore(noEmptyAllowedConfig)
-    val res1 = newKeyStore.newAccount("asdf")
+    val newKeyStore: KeyStoreImpl = getKeyStore(noEmptyAllowedConfig)
+    val res1: Either[KeyStoreError, Address] = newKeyStore.newAccount("asdf")
     res1 shouldBe Left(PassPhraseTooShort(noEmptyAllowedConfig.minimalPassphraseLength))
   }
 
   it should "allow to create account with proper length passphrase, when empty is allowed" in new TestSetup {
-    val newKeyStore = getKeyStore(noEmptyAllowedConfig)
-    val res1 = newKeyStore.newAccount("aaaaaaaa")
+    val newKeyStore: KeyStoreImpl = getKeyStore(noEmptyAllowedConfig)
+    val res1: Either[KeyStoreError, Address] = newKeyStore.newAccount("aaaaaaaa")
     assert(res1.isRight)
   }
 
@@ -108,32 +120,32 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
   it should "return an error when the keystore dir cannot be read or written" in new TestSetup {
     clearKeyStore()
 
-    val key = ByteString(Hex.decode("7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"))
-    val res1 = keyStore.importPrivateKey(key, "aaaaaaaa")
+    val key: ByteString = ByteString(Hex.decode("7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"))
+    val res1: Either[KeyStoreError, Address] = keyStore.importPrivateKey(key, "aaaaaaaa")
     res1 should matchPattern { case Left(IOError(_)) => }
 
-    val res2 = keyStore.newAccount("aaaaaaaa")
+    val res2: Either[KeyStoreError, Address] = keyStore.newAccount("aaaaaaaa")
     res2 should matchPattern { case Left(IOError(_)) => }
 
-    val res3 = keyStore.listAccounts()
+    val res3: Either[KeyStoreError, List[Address]] = keyStore.listAccounts()
     res3 should matchPattern { case Left(IOError(_)) => }
   }
 
   it should "unlock an account provided a correct passphrase" in new TestSetup {
     val passphrase = "aaaaaaaa"
     keyStore.importPrivateKey(key1, passphrase)
-    val wallet = keyStore.unlockAccount(addr1, passphrase).toOption.get
+    val wallet: Wallet = keyStore.unlockAccount(addr1, passphrase).toOption.get
     wallet shouldEqual Wallet(addr1, key1)
   }
 
   it should "return an error when unlocking an account with a wrong passphrase" in new TestSetup {
     keyStore.importPrivateKey(key1, "aaaaaaaa")
-    val res = keyStore.unlockAccount(addr1, "bbb")
+    val res: Either[KeyStoreError, Wallet] = keyStore.unlockAccount(addr1, "bbb")
     res shouldEqual Left(DecryptionFailed)
   }
 
   it should "return an error when trying to unlock an unknown account" in new TestSetup {
-    val res = keyStore.unlockAccount(addr1, "bbb")
+    val res: Either[KeyStoreError, Wallet] = keyStore.unlockAccount(addr1, "bbb")
     res shouldEqual Left(KeyNotFound)
   }
 

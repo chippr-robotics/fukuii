@@ -11,13 +11,13 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.StateNode
 
 class SchedulerStateSpec extends AnyFlatSpec with Matchers {
   "SchedulerState" should "schedule node hashes for retrieval" in new TestSetup {
-    val stateWithRequest = schedulerState.schedule(request1)
+    val stateWithRequest: SchedulerState = schedulerState.schedule(request1)
     assert(stateWithRequest != schedulerState)
     assert(stateWithRequest.getPendingRequestByHash(request1.nodeHash).contains(request1))
   }
 
   it should "return enqueued elements in depth order" in new TestSetup {
-    val stateWithRequests = schedulerState.schedule(request2).schedule(request3).schedule(request1).schedule(request4)
+    val stateWithRequests: SchedulerState = schedulerState.schedule(request2).schedule(request3).schedule(request1).schedule(request4)
     assert(stateWithRequests != schedulerState)
     val (allMissingElements, newState) = stateWithRequests.getAllMissingHashes
     assert(allMissingElements == reqestsInDepthOrder.map(_.nodeHash))
@@ -26,7 +26,7 @@ class SchedulerStateSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "return at most n enqueued elements in depth order" in new TestSetup {
-    val stateWithRequests = schedulerState.schedule(request2).schedule(request3).schedule(request1).schedule(request4)
+    val stateWithRequests: SchedulerState = schedulerState.schedule(request2).schedule(request3).schedule(request1).schedule(request4)
     assert(stateWithRequests != schedulerState)
     val (twoMissingElements, newState) = stateWithRequests.getMissingHashes(2)
     assert(twoMissingElements == reqestsInDepthOrder.take(2).map(_.nodeHash))

@@ -15,6 +15,14 @@ import org.scalamock.scalatest.MockFactory
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLContext
 
 class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory with BeforeAndAfterAll {
 
@@ -41,7 +49,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Right(Array.empty)
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
@@ -61,12 +69,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Right(Array.empty)
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError("Certificate keystore path and password file configured but files are missing"))
   }
 
@@ -78,12 +86,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Right(Array.empty)
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError("Certificate keystore path configured but file is missing"))
   }
 
@@ -95,12 +103,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Right(Array.empty)
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError("Certificate password file configured but file is missing"))
   }
 
@@ -113,12 +121,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
   ) {
 
     val invalidKeyStoreType = "invalidkeyStoreType"
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = invalidKeyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError(s"Certificate keystore invalid type set: $invalidKeyStoreType"))
   }
 
@@ -130,12 +138,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Right(Array.empty)
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError("Certificate keystore file creation failed"))
   }
 
@@ -147,12 +155,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Right(Array.empty)
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError("Failed to load keyStore"))
   }
 
@@ -164,12 +172,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Right(Array.empty)
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError("Invalid Certificate keystore"))
   }
 
@@ -181,12 +189,12 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     fGetTrustManager = () => Left(new RuntimeException("Failed to get TrustManager"))
   ) {
 
-    val sslConfig = SSLConfig(
+    val sslConfig: SSLConfig = SSLConfig(
       keyStorePath = keyStorePath,
       keyStoreType = keyStoreType,
       passwordFile = passwordFile
     )
-    val response = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
+    val response: Either[SSLError, SSLContext] = sSLContextFactory.createSSLContext(sslConfig, new SecureRandom())
     response shouldBe Left(SSLError("Invalid Certificate keystore"))
   }
 

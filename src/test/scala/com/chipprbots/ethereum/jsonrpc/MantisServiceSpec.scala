@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.transactions.TransactionHistoryService
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.domain.Block
 
 class MantisServiceSpec
     extends TestKit(ActorSystem("MantisServiceSpec"))
@@ -54,7 +55,7 @@ class MantisServiceSpec
   "Mantis Service" - {
     "should get account's transaction history" in {
       class TxHistoryFixture extends Fixture {
-        val fakeTransaction = SignedTransactionWithSender(
+        val fakeTransaction: SignedTransactionWithSender = SignedTransactionWithSender(
           LegacyTransaction(
             nonce = 0,
             gasPrice = 123,
@@ -67,10 +68,10 @@ class MantisServiceSpec
           sender = Address("0x1234")
         )
 
-        val block =
+        val block: Block =
           BlockHelpers.generateBlock(BlockHelpers.genesis).copy(body = BlockBody(List(fakeTransaction.tx), Nil))
 
-        val expectedResponse = List(
+        val expectedResponse: List[ExtendedTransactionData] = List(
           ExtendedTransactionData(
             fakeTransaction.tx,
             isOutgoing = true,
@@ -86,7 +87,7 @@ class MantisServiceSpec
           ) {
             override def getAccountTransactions(account: Address, fromBlocks: NumericRange[BigInt])(implicit
                 blockchainConfig: BlockchainConfig
-            ) =
+            ): IO[List[ExtendedTransactionData]] =
               IO.pure(expectedResponse)
           }
       }

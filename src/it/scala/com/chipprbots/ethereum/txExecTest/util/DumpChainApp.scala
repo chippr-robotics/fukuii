@@ -12,7 +12,6 @@ import scala.concurrent.duration._
 import com.typesafe.config
 import com.typesafe.config.ConfigFactory
 import org.bouncycastle.util.encoders.Hex
-import org.scalamock.scalatest.MockFactory
 
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.db.components.RocksDbDataSourceComponent
@@ -24,7 +23,6 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
-import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.ProofService.EmptyStorageValueProof
 import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProof
@@ -112,10 +110,8 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
       override val nodeStatusHolder: AtomicReference[NodeStatus] = DumpChainApp.nodeStatusHolder
       override val peerConfiguration: PeerConfiguration = peerConfig
       // FIXME: Selecting value blockchain from object DumpChainApp, which extends scala.DelayedInit, is likely to yield an uninitialized value
-      @annotation.nowarn
       override val blockchain: Blockchain = DumpChainApp.blockchain
       // FIXME: Selecting value blockchainReader from object DumpChainApp, which extends scala.DelayedInit, is likely to yield an uninitialized value
-      @annotation.nowarn
       override val blockchainReader: BlockchainReader = DumpChainApp.blockchainReader
       override val appStateStorage: AppStateStorage = storagesInstance.storages.appStateStorage
       override val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig

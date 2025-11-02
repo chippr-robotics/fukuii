@@ -38,7 +38,7 @@ class PeerStatisticsSpec
   }
 
   it should "initially return default stats for unknown peers" in new Fixture {
-    val peerId = PeerId("Alice")
+    val peerId: PeerId = PeerId("Alice")
     peerStatistics ! GetStatsForPeer(1.minute, peerId)
     sender.expectMsg(StatsForPeer(peerId, PeerStat.empty))
   }
@@ -49,25 +49,25 @@ class PeerStatisticsSpec
   }
 
   it should "count received messages" in new Fixture {
-    val alice = PeerId("Alice")
-    val bob = PeerId("Bob")
+    val alice: PeerId = PeerId("Alice")
+    val bob: PeerId = PeerId("Bob")
     peerStatistics ! PeerEvent.MessageFromPeer(NewBlockHashes(Seq.empty), alice)
     peerStatistics ! PeerEvent.MessageFromPeer(NewBlockHashes(Seq.empty), bob)
     peerStatistics ! PeerEvent.MessageFromPeer(NewBlockHashes(Seq.empty), alice)
     peerStatistics ! GetStatsForAll(1.minute)
 
-    val stats = sender.expectMsgType[StatsForAll]
+    val stats: StatsForAll = sender.expectMsgType[StatsForAll]
     stats.stats should not be empty
 
-    val statA = stats.stats(alice)
+    val statA: PeerStat = stats.stats(alice)
     statA.responsesReceived shouldBe 2
-    val difference = for {
+    val difference: Option[Long] = for {
       first <- statA.firstSeenTimeMillis
       last <- statA.lastSeenTimeMillis
     } yield last - first
     assert(difference.exists(_ >= TICK))
 
-    val statB = stats.stats(bob)
+    val statB: PeerStat = stats.stats(bob)
     statB.responsesReceived shouldBe 1
     statB.lastSeenTimeMillis shouldBe statB.firstSeenTimeMillis
   }

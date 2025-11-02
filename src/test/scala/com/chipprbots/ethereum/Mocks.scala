@@ -49,8 +49,8 @@ object Mocks {
   class MockValidatorsFailingOnBlockBodies extends MockValidatorsAlwaysSucceed {
 
     override val blockValidator: BlockValidator = new BlockValidator {
-      override def validateBlockAndReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]) = Right(BlockValid)
-      override def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody) = Left(
+      override def validateBlockAndReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]): Either[BlockError, BlockValid] = Right(BlockValid)
+      override def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody): Either[BlockError, BlockValid] = Left(
         BlockTransactionsHashError
       )
     }
@@ -59,8 +59,8 @@ object Mocks {
   class MockValidatorsAlwaysSucceed extends ValidatorsExecutor {
 
     override val blockValidator: BlockValidator = new BlockValidator {
-      override def validateBlockAndReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]) = Right(BlockValid)
-      override def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody) = Right(BlockValid)
+      override def validateBlockAndReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]): Either[BlockError, BlockValid] = Right(BlockValid)
+      override def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody): Either[BlockError, BlockValid] = Right(BlockValid)
     }
 
     override val blockHeaderValidator: BlockHeaderValidator = new BlockHeaderValidator {
@@ -126,7 +126,7 @@ object Mocks {
         HeaderNumberError
       )
 
-      override def validateHeaderOnly(blockHeader: BlockHeader)(implicit blockchainConfig: BlockchainConfig) = Left(
+      override def validateHeaderOnly(blockHeader: BlockHeader)(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] = Left(
         HeaderNumberError
       )
     }
@@ -143,10 +143,10 @@ object Mocks {
     }
 
     override val blockValidator: BlockValidator = new BlockValidator {
-      override def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody) = Left(
+      override def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody): Either[BlockError, BlockValid] = Left(
         BlockTransactionsHashError
       )
-      override def validateBlockAndReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]) = Left(
+      override def validateBlockAndReceipts(blockHeader: BlockHeader, receipts: Seq[Receipt]): Either[BlockError, BlockValid] = Left(
         BlockTransactionsHashError
       )
     }

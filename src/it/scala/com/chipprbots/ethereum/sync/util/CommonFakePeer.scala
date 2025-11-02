@@ -14,7 +14,6 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
@@ -174,7 +173,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val maxIncomingPeers = 5
     override val maxPendingPeers = 5
     override val pruneIncomingPeers = 0
-    override val minPruneAge = 1.minute
+    override val minPruneAge: FiniteDuration = 1.minute
     override val networkId: Int = 1
 
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds

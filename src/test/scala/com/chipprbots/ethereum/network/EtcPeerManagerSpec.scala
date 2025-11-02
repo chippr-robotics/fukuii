@@ -61,12 +61,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
-    val newBlockWeight = ChainWeight.totalDifficultyOnly(300)
+    val newBlockWeight: ChainWeight = ChainWeight.totalDifficultyOnly(300)
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = peer1Info.maxBlockNumber + 4)
-    val firstBlock = NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight.totalDifficulty)
+    val firstBlock: NewBlock = NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight.totalDifficulty)
 
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = peer2Info.maxBlockNumber + 2)
-    val secondBlock = NewBlock(Block(secondHeader, BlockBody(Nil, Nil)), newBlockWeight.totalDifficulty)
+    val secondBlock: NewBlock = NewBlock(Block(secondHeader, BlockBody(Nil, Nil)), newBlockWeight.totalDifficulty)
 
     // when
     peersInfoHolder ! MessageFromPeer(firstBlock, peer1.id)
@@ -74,7 +74,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     // then
     requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
-    val expectedPeerInfo = initialPeerInfo
+    val expectedPeerInfo: PeerInfo = initialPeerInfo
       .withBestBlockData(initialPeerInfo.maxBlockNumber + 4, firstHeader.hash)
       .withChainWeight(newBlockWeight)
     requestSender.expectMsg(PeerInfoResponse(Some(expectedPeerInfo)))
@@ -85,12 +85,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1InfoETC64)
 
     // given
-    val newBlockWeight = ChainWeight.totalDifficultyOnly(300)
+    val newBlockWeight: ChainWeight = ChainWeight.totalDifficultyOnly(300)
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = peer1Info.maxBlockNumber + 4)
-    val firstBlock = ETC64.NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight)
+    val firstBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock = ETC64.NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight)
 
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = peer2Info.maxBlockNumber + 2)
-    val secondBlock = ETC64.NewBlock(Block(secondHeader, BlockBody(Nil, Nil)), newBlockWeight)
+    val secondBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock = ETC64.NewBlock(Block(secondHeader, BlockBody(Nil, Nil)), newBlockWeight)
 
     // when
     peersInfoHolder ! MessageFromPeer(firstBlock, peer1.id)
@@ -98,7 +98,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     // then
     requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
-    val expectedPeerInfo = initialPeerInfoETC64
+    val expectedPeerInfo: PeerInfo = initialPeerInfoETC64
       .withBestBlockData(initialPeerInfo.maxBlockNumber + 4, firstHeader.hash)
       .withChainWeight(newBlockWeight)
     requestSender.expectMsg(PeerInfoResponse(Some(expectedPeerInfo)))
@@ -148,7 +148,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
-    val newBlock = NewBlock(baseBlock, initialPeerInfo.chainWeight.totalDifficulty + 1)
+    val newBlock: NewBlock = NewBlock(baseBlock, initialPeerInfo.chainWeight.totalDifficulty + 1)
 
     // when
     peersInfoHolder ! MessageFromPeer(newBlock, peer1.id)
@@ -165,7 +165,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1InfoETC64)
 
     // given
-    val newBlock = ETC64.NewBlock(
+    val newBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock = ETC64.NewBlock(
       baseBlock,
       initialPeerInfoETC64.chainWeight
         .increaseTotalDifficulty(1)
@@ -185,7 +185,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
-    val blockHeaders = BlockHeaders(Seq(DaoForkBlock.header))
+    val blockHeaders: BlockHeaders = BlockHeaders(Seq(DaoForkBlock.header))
 
     // when
     peersInfoHolder ! MessageFromPeer(blockHeaders, peer1.id)
@@ -200,7 +200,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
-    val blockHeaders = BlockHeaders(Seq(Genesis.header.copy(number = Fixtures.Blocks.DaoForkBlock.header.number)))
+    val blockHeaders: BlockHeaders = BlockHeaders(Seq(Genesis.header.copy(number = Fixtures.Blocks.DaoForkBlock.header.number)))
 
     // when
     peersInfoHolder ! MessageFromPeer(blockHeaders, peer1.id)
@@ -254,7 +254,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
     requestSender.expectMsg(HandshakedPeers(Map.empty))
 
-    val newMaxBlock = freshPeerInfo.maxBlockNumber + 1
+    val newMaxBlock: BigInt = freshPeerInfo.maxBlockNumber + 1
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = newMaxBlock)
 
     // Fresh peer received best block
@@ -270,8 +270,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   it should "provide handshaked peers only with best block number determined even if peers best block is its genesis" in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
 
-    val genesisStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
-    val genesisInfo = initialPeerInfo.copy(
+    val genesisStatus: RemoteStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
+    val genesisInfo: PeerInfo = initialPeerInfo.copy(
       remoteStatus = genesisStatus,
       maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
       bestBlockHash = Fixtures.Blocks.Genesis.header.hash

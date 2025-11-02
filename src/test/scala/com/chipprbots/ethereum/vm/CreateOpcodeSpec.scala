@@ -202,7 +202,7 @@ class CreateOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProperty
     val stateOut: PS = opcode.execute(stateIn)
 
     val world = stateOut.world
-    val returnValue = stateOut.stack.pop()._1
+    val returnValue: UInt256 = stateOut.stack.pop()._1
   }
 
   def commonBehaviour(opcode: CreateOp): Unit = {

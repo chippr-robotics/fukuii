@@ -48,145 +48,145 @@ class JsonRpcControllerPersonalSpec
 
   it should "personal_importRawKey" in new JsonRpcControllerFixture {
     val key = "7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"
-    val keyBytes = ByteString(Hex.decode(key))
-    val addr = Address("0x00000000000000000000000000000000000000ff")
+    val keyBytes: ByteString = ByteString(Hex.decode(key))
+    val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 
     (personalService.importRawKey _)
       .expects(ImportRawKeyRequest(keyBytes, pass))
       .returning(IO.pure(Right(ImportRawKeyResponse(addr))))
 
-    val params = JString(key) :: JString(pass) :: Nil
-    val rpcRequest = newJsonRpcRequest("personal_importRawKey", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val params: List[JString] = JString(key) :: JString(pass) :: Nil
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_importRawKey", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult(addr.toString)
   }
 
   it should "personal_newAccount" in new JsonRpcControllerFixture {
-    val addr = Address("0x00000000000000000000000000000000000000ff")
+    val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 
     (personalService.newAccount _)
       .expects(NewAccountRequest(pass))
       .returning(IO.pure(Right(NewAccountResponse(addr))))
 
-    val params = JString(pass) :: Nil
-    val rpcRequest = newJsonRpcRequest("personal_newAccount", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val params: List[JString] = JString(pass) :: Nil
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_newAccount", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult(addr.toString)
   }
 
   it should "personal_listAccounts" in new JsonRpcControllerFixture {
-    val addresses = List(34, 12391, 123).map(Address(_))
+    val addresses: List[Address] = List(34, 12391, 123).map(Address(_))
 
     (personalService.listAccounts _)
       .expects(ListAccountsRequest())
       .returning(IO.pure(Right(ListAccountsResponse(addresses))))
 
-    val rpcRequest = newJsonRpcRequest("personal_listAccounts")
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_listAccounts")
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveResult(JArray(addresses.map(a => JString(a.toString))))
   }
 
   it should "personal_unlockAccount" in new JsonRpcControllerFixture {
-    val address = Address(42)
+    val address: Address = Address(42)
     val pass = "aaa"
-    val params = JString(address.toString) :: JString(pass) :: Nil
+    val params: List[JString] = JString(address.toString) :: JString(pass) :: Nil
 
     (personalService.unlockAccount _)
       .expects(UnlockAccountRequest(address, pass, None))
       .returning(IO.pure(Right(UnlockAccountResponse(true))))
 
-    val rpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveBooleanResult(true)
   }
 
   it should "personal_unlockAccount for specified duration" in new JsonRpcControllerFixture {
-    val address = Address(42)
+    val address: Address = Address(42)
     val pass = "aaa"
     val dur = "1"
-    val params = JString(address.toString) :: JString(pass) :: JString(dur) :: Nil
+    val params: List[JString] = JString(address.toString) :: JString(pass) :: JString(dur) :: Nil
 
     (personalService.unlockAccount _)
       .expects(UnlockAccountRequest(address, pass, Some(Duration.ofSeconds(1))))
       .returning(IO.pure(Right(UnlockAccountResponse(true))))
 
-    val rpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveBooleanResult(true)
   }
 
   it should "personal_unlockAccount should handle possible duration errors" in new JsonRpcControllerFixture {
-    val address = Address(42)
+    val address: Address = Address(42)
     val pass = "aaa"
     val dur = "alksjdfh"
 
-    val params = JString(address.toString) :: JString(pass) :: JString(dur) :: Nil
-    val rpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val params: List[JString] = JString(address.toString) :: JString(pass) :: JString(dur) :: Nil
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveError(JsonRpcError(-32602, "Invalid method parameters", None))
 
     val dur2 = Long.MaxValue
-    val params2 = JString(address.toString) :: JString(pass) :: JInt(dur2) :: Nil
-    val rpcRequest2 = newJsonRpcRequest("personal_unlockAccount", params2)
-    val response2 = jsonRpcController.handleRequest(rpcRequest2).unsafeRunSync()
+    val params2: List[JValue] = JString(address.toString) :: JString(pass) :: JInt(dur2) :: Nil
+    val rpcRequest2: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params2)
+    val response2: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest2).unsafeRunSync()
     response2 should haveError(
       JsonRpcError(-32602, "Duration should be an number of seconds, less than 2^31 - 1", None)
     )
   }
 
   it should "personal_unlockAccount should handle null passed as a duration for compatibility with Parity and web3j" in new JsonRpcControllerFixture {
-    val address = Address(42)
+    val address: Address = Address(42)
     val pass = "aaa"
-    val params = JString(address.toString) :: JString(pass) :: JNull :: Nil
+    val params: List[JValue] = JString(address.toString) :: JString(pass) :: JNull :: Nil
 
     (personalService.unlockAccount _)
       .expects(UnlockAccountRequest(address, pass, None))
       .returning(IO.pure(Right(UnlockAccountResponse(true))))
 
-    val rpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveBooleanResult(true)
   }
 
   it should "personal_lockAccount" in new JsonRpcControllerFixture {
-    val address = Address(42)
-    val params = JString(address.toString) :: Nil
+    val address: Address = Address(42)
+    val params: List[JString] = JString(address.toString) :: Nil
 
     (personalService.lockAccount _)
       .expects(LockAccountRequest(address))
       .returning(IO.pure(Right(LockAccountResponse(true))))
 
-    val rpcRequest = newJsonRpcRequest("personal_lockAccount", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_lockAccount", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveBooleanResult(true)
   }
 
   it should "personal_sendTransaction" in new JsonRpcControllerFixture {
-    val params = JObject(
+    val params: List[JValue] = JObject(
       "from" -> Address(42).toString,
       "to" -> Address(123).toString,
       "value" -> 1000
     ) :: JString("passphrase") :: Nil
 
-    val txHash = ByteString(1, 2, 3, 4)
+    val txHash: ByteString = ByteString(1, 2, 3, 4)
 
     (personalService
       .sendTransaction(_: SendTransactionWithPassphraseRequest))
       .expects(*)
       .returning(IO.pure(Right(SendTransactionWithPassphraseResponse(txHash))))
 
-    val rpcRequest = newJsonRpcRequest("personal_sendTransaction", params)
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_sendTransaction", params)
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveResult(JString(s"0x${Hex.toHexString(txHash.toArray)}"))
   }
@@ -212,7 +212,7 @@ class JsonRpcControllerPersonalSpec
       )
     )
 
-    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveStringResult(
       "0xa3f20717a250c2b0b729b7e5becbff67fdaef7e0699da4de7ca5895b02a170a12d887fd3b17bfdce3481f10bea41f45ba9f709d39ce8325427b57afcfc994cee1b"
     )
@@ -238,7 +238,7 @@ class JsonRpcControllerPersonalSpec
       )
     )
 
-    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveStringResult("0x9b2055d370f73ec7d8a03e965129118dc8f5bf83")
   }
 }

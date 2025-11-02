@@ -57,25 +57,25 @@ class JsonRpcControllerSpec
     QuantitiesSerializer + UnformattedDataJsonSerializer
 
   "JsonRpcController" should "handle valid sha3 request" in new JsonRpcControllerFixture {
-    val rpcRequest = newJsonRpcRequest("web3_sha3", JString("0x1234") :: Nil)
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_sha3", JString("0x1234") :: Nil)
 
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult("0x56570de287d73cd1cb6092bb8fdee6173974955fdef345ae579ee9f475ea7432")
   }
 
   it should "fail when invalid request is received" in new JsonRpcControllerFixture {
-    val rpcRequest = newJsonRpcRequest("web3_sha3", JString("asdasd") :: Nil)
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_sha3", JString("asdasd") :: Nil)
 
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveError(JsonRpcError.InvalidParams("Invalid method parameters"))
   }
 
   it should "handle clientVersion request" in new JsonRpcControllerFixture {
-    val rpcRequest = newJsonRpcRequest("web3_clientVersion")
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_clientVersion")
 
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult(version)
   }
@@ -83,9 +83,9 @@ class JsonRpcControllerSpec
   it should "Handle net_peerCount request" in new JsonRpcControllerFixture {
     (netService.peerCount _).expects(*).returning(IO.pure(Right(PeerCountResponse(123))))
 
-    val rpcRequest = newJsonRpcRequest("net_peerCount")
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_peerCount")
 
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult("0x7b")
   }
@@ -93,8 +93,8 @@ class JsonRpcControllerSpec
   it should "Handle net_listening request" in new JsonRpcControllerFixture {
     (netService.listening _).expects(*).returning(IO.pure(Right(ListeningResponse(false))))
 
-    val rpcRequest = newJsonRpcRequest("net_listening")
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_listening")
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveBooleanResult(false)
   }
@@ -104,15 +104,15 @@ class JsonRpcControllerSpec
 
     (netService.version _).expects(*).returning(IO.pure(Right(VersionResponse(netVersion))))
 
-    val rpcRequest = newJsonRpcRequest("net_version")
-    val response = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_version")
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult(netVersion)
   }
 
   it should "only allow to call methods of enabled apis" in new JsonRpcControllerFixture {
     override def config: JsonRpcConfig = new JsonRpcConfig {
-      override val apis = Seq("web3")
+      override val apis: Seq[String] = Seq("web3")
       override val accountTransactionsMaxBlocks = 50000
       override def minerActiveTimeout: FiniteDuration = ???
       override def httpServerConfig: JsonRpcHttpServer.JsonRpcHttpServerConfig = ???
@@ -120,39 +120,39 @@ class JsonRpcControllerSpec
       override def healthConfig: NodeJsonRpcHealthChecker.JsonRpcHealthConfig = ???
     }
 
-    val ethRpcRequest = newJsonRpcRequest("eth_protocolVersion")
-    val ethResponse = jsonRpcController.handleRequest(ethRpcRequest).unsafeRunSync()
+    val ethRpcRequest: JsonRpcRequest = newJsonRpcRequest("eth_protocolVersion")
+    val ethResponse: JsonRpcResponse = jsonRpcController.handleRequest(ethRpcRequest).unsafeRunSync()
 
     ethResponse should haveError(JsonRpcError.MethodNotFound)
 
-    val web3RpcRequest = newJsonRpcRequest("web3_clientVersion")
-    val web3Response = jsonRpcController.handleRequest(web3RpcRequest).unsafeRunSync()
+    val web3RpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_clientVersion")
+    val web3Response: JsonRpcResponse = jsonRpcController.handleRequest(web3RpcRequest).unsafeRunSync()
 
     web3Response should haveStringResult(version)
   }
 
   it should "debug_listPeersInfo" in new JsonRpcControllerFixture {
-    val peerStatus = RemoteStatus(
+    val peerStatus: RemoteStatus = RemoteStatus(
       capability = Capability.ETH63,
       networkId = 1,
       chainWeight = ChainWeight.totalDifficultyOnly(10000),
       bestHash = Fixtures.Blocks.Block3125369.header.hash,
       genesisHash = Fixtures.Blocks.Genesis.header.hash
     )
-    val initialPeerInfo = PeerInfo(
+    val initialPeerInfo: PeerInfo = PeerInfo(
       remoteStatus = peerStatus,
       chainWeight = peerStatus.chainWeight,
       forkAccepted = true,
       maxBlockNumber = Fixtures.Blocks.Block3125369.header.number,
       bestBlockHash = peerStatus.bestHash
     )
-    val peers = List(initialPeerInfo)
+    val peers: List[PeerInfo] = List(initialPeerInfo)
 
     (debugService.listPeersInfo _)
       .expects(ListPeersInfoRequest())
       .returning(IO.pure(Right(ListPeersInfoResponse(peers))))
 
-    val rpcRequest = newJsonRpcRequest("debug_listPeersInfo")
+    val rpcRequest: JsonRpcRequest = newJsonRpcRequest("debug_listPeersInfo")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveResult(JArray(peers.map(info => JString(info.toString))))
@@ -161,7 +161,7 @@ class JsonRpcControllerSpec
   it should "rpc_modules" in new JsonRpcControllerFixture {
     val request: JsonRpcRequest = newJsonRpcRequest("rpc_modules")
 
-    val response = jsonRpcController.handleRequest(request).unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
     response should haveResult(
       JObject(

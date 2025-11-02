@@ -14,7 +14,6 @@ import scala.concurrent.duration.FiniteDuration
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.handlers.CallHandler4
-import org.scalamock.scalatest.MockFactory
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol

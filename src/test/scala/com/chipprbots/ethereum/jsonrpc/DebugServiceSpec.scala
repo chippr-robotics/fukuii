@@ -27,6 +27,9 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import scala.concurrent.Future
+import scala.concurrent.Future
+import scala.concurrent.Future
 
 class DebugServiceSpec
     extends TestKit(ActorSystem("ActorSystem_DebugServiceSpec"))
@@ -39,7 +42,7 @@ class DebugServiceSpec
   implicit val runtime: IORuntime = IORuntime.global
 
   "DebugService" should "return list of peers info" in new TestSetup {
-    val result =
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
       debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
@@ -52,7 +55,7 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there are no peers available" in new TestSetup {
-    val result = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map.empty))
@@ -61,7 +64,7 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there is no peer info" in new TestSetup {
-    val result = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] = debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))

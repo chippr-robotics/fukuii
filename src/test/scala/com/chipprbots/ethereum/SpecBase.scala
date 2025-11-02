@@ -1,10 +1,8 @@
 package com.chipprbots.ethereum
 
-import cats.~>
 import cats.effect.Async
 import cats.effect.IO
 import cats.effect.Resource
-import cats.effect.Sync
 import cats.effect.implicits._
 import cats.effect.unsafe.IORuntime
 

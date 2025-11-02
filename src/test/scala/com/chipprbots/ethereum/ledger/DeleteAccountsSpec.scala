@@ -25,19 +25,19 @@ class DeleteAccountsSpec extends AnyFlatSpec with Matchers with MockFactory {
   val blockchain: BlockchainImpl = mock[BlockchainImpl]
 
   it should "delete no accounts when none of them should be deleted" in new TestSetup {
-    val newWorld = InMemoryWorldStateProxy.persistState(mining.blockPreparator.deleteAccounts(Set.empty)(worldState))
+    val newWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(mining.blockPreparator.deleteAccounts(Set.empty)(worldState))
     accountAddresses.foreach(a => assert(newWorld.getAccount(a).isDefined))
     newWorld.stateRootHash shouldBe worldState.stateRootHash
   }
 
   it should "delete the accounts listed for deletion" in new TestSetup {
-    val newWorld = mining.blockPreparator.deleteAccounts(accountAddresses.tail)(worldState)
+    val newWorld: InMemoryWorldStateProxy = mining.blockPreparator.deleteAccounts(accountAddresses.tail)(worldState)
     accountAddresses.tail.foreach(a => assert(newWorld.getAccount(a).isEmpty))
     assert(newWorld.getAccount(accountAddresses.head).isDefined)
   }
 
   it should "delete all the accounts if they are all listed for deletion" in new TestSetup {
-    val newWorld =
+    val newWorld: InMemoryWorldStateProxy =
       InMemoryWorldStateProxy.persistState(mining.blockPreparator.deleteAccounts(accountAddresses)(worldState))
     accountAddresses.foreach(a => assert(newWorld.getAccount(a).isEmpty))
     newWorld.stateRootHash shouldBe Account.EmptyStorageRootHash
@@ -45,14 +45,14 @@ class DeleteAccountsSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   // scalastyle:off magic.number
   it should "delete account that had storage updated before" in new TestSetup {
-    val worldStateWithStorage = worldState.saveStorage(
+    val worldStateWithStorage: InMemoryWorldStateProxy = worldState.saveStorage(
       validAccountAddress,
       worldState.getStorage(validAccountAddress).store(UInt256(1), UInt256(123))
     )
 
-    val updatedWorldState = mining.blockPreparator.deleteAccounts(accountAddresses)(worldStateWithStorage)
+    val updatedWorldState: InMemoryWorldStateProxy = mining.blockPreparator.deleteAccounts(accountAddresses)(worldStateWithStorage)
 
-    val newWorld = InMemoryWorldStateProxy.persistState(updatedWorldState)
+    val newWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(updatedWorldState)
     assert(newWorld.getAccount(validAccountAddress).isEmpty)
   }
 

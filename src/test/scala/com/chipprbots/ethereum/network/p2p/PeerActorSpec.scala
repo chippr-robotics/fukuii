@@ -5,7 +5,6 @@ import java.net.URI
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicReference
 
-import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.PoisonPill
@@ -20,6 +19,7 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
+import com.typesafe.config.ConfigFactory
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.util.encoders.Hex
@@ -32,12 +32,9 @@ import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
-import com.chipprbots.ethereum.network.ForkResolver
-import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerActor.GetStatus
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerActor.StatusResponse
-import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network._
@@ -61,6 +58,8 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.Actor
 
 class PeerActorSpec
     extends TestKit(
@@ -101,17 +100,17 @@ class PeerActorSpec
   }
 
   it should "try to reconnect on broken rlpx connection" in new NodeStatusSetup with HandshakerSetup {
-    implicit override lazy val system =
+    implicit override lazy val system: ActorSystem =
       ActorSystem("PeerActorSpec_System", ConfigFactory.load("explicit-scheduler"))
     override def protocol: Capability = Capability.ETH63
 
-    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler: ExplicitlyTriggeredScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
-    val peerMessageBus = system.actorOf(PeerEventBusActor.props)
-    var rlpxConnection = TestProbe() // var as we actually need new instances
-    val knownNodesManager = TestProbe()
+    val peerMessageBus: ActorRef = system.actorOf(PeerEventBusActor.props)
+    var rlpxConnection: TestProbe = TestProbe() // var as we actually need new instances
+    val knownNodesManager: TestProbe = TestProbe()
 
-    val peer = TestActorRef(
+    val peer: TestActorRef[Actor] = TestActorRef(
       Props(
         new PeerActor(
           new InetSocketAddress("127.0.0.1", 0),
@@ -154,11 +153,11 @@ class PeerActorSpec
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
     // Hello exchange
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -192,11 +191,11 @@ class PeerActorSpec
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
     // Hello exchange
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -222,11 +221,11 @@ class PeerActorSpec
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
     // Hello exchange
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETC64, Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETC64, Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = ETC64.Status(
+    val remoteStatus: com.chipprbots.ethereum.network.p2p.messages.ETC64.Status = ETC64.Status(
       protocolVersion = Capability.ETC64.version,
       networkId = peerConf.networkId,
       chainWeight =
@@ -261,11 +260,11 @@ class PeerActorSpec
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
     // Hello exchange
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -295,11 +294,11 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val header =
+    val header: BlockHeader =
       Fixtures.Blocks.ValidBlock.header
         .copy(difficulty = daoForkBlockChainTotalDifficulty + 100000, number = 3000000)
     storagesInstance.storages.appStateStorage
@@ -308,7 +307,7 @@ class PeerActorSpec
       .and(storagesInstance.storages.blockNumberMappingStorage.put(3000000, header.hash))
       .commit()
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -330,11 +329,11 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -352,7 +351,7 @@ class PeerActorSpec
   }
 
   it should "disconnect on Hello timeout" in new TestSetup {
-    val connection = TestProbe()
+    val connection: TestProbe = TestProbe()
 
     peer ! PeerActor.HandleConnection(connection.ref, new InetSocketAddress("localhost", 9000))
 
@@ -377,11 +376,11 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -409,11 +408,11 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -432,7 +431,7 @@ class PeerActorSpec
 
   it should "stay connected to pre fork peer" in new TestSetup {
 
-    val remoteStatus = RemoteStatus(
+    val remoteStatus: RemoteStatus = RemoteStatus(
       capability = Capability.ETH63,
       networkId = peerConf.networkId,
       chainWeight =
@@ -441,7 +440,7 @@ class PeerActorSpec
       genesisHash = Fixtures.Blocks.Genesis.header.hash
     )
 
-    val peerActor = TestActorRef(
+    val peerActor: TestActorRef[Actor] = TestActorRef(
       Props(
         new PeerActor(
           new InetSocketAddress("127.0.0.1", 0),
@@ -471,11 +470,11 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    val remoteHello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
+    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus = Status(
+    val remoteStatus: Status = Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConf.networkId,
       totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
@@ -490,12 +489,12 @@ class PeerActorSpec
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
 
     // Test that the handshake succeeded
-    val sender = TestProbe()(system)
+    val sender: TestProbe = TestProbe()(system)
     sender.send(peer, GetStatus)
     sender.expectMsg(StatusResponse(Handshaked))
 
     // Test peer terminated after peerConf.disconnectPoisonPillTimeout
-    val manager = TestProbe()(system)
+    val manager: TestProbe = TestProbe()(system)
     manager.watch(peer)
 
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Disconnect(Reasons.Other)))
@@ -564,7 +563,7 @@ class PeerActorSpec
       override val maxIncomingPeers = 5
       override val maxPendingPeers = 5
       override val pruneIncomingPeers = 0
-      override val minPruneAge = 1.minute
+      override val minPruneAge: FiniteDuration = 1.minute
       override val networkId: Int = 1
 
       override val updateNodesInitialDelay: FiniteDuration = 5.seconds
@@ -604,7 +603,7 @@ class PeerActorSpec
 
     val rlpxConnection: TestProbe = TestProbe()
 
-    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler: ExplicitlyTriggeredScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     val peerMessageBus: ActorRef = system.actorOf(PeerEventBusActor.props)
 

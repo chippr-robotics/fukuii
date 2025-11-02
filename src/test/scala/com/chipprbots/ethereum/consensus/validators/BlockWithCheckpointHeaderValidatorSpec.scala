@@ -160,8 +160,8 @@ class BlockWithCheckpointHeaderValidatorSpec
   }
 
   it should "return failure when checkpoint signatures aren't sorted lexicographically" in new TestSetup {
-    val invalidBlockHeaderExtraFields = HefPostEcip1097(Some(Checkpoint(validCheckpoint.signatures.reverse)))
-    val invalidBlockHeader =
+    val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(Checkpoint(validCheckpoint.signatures.reverse)))
+    val invalidBlockHeader: BlockHeader =
       validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
     blockHeaderValidator.validate(invalidBlockHeader, validBlockParentHeader) shouldBe Left(
       HeaderInvalidOrderOfCheckpointSignatures
@@ -169,8 +169,8 @@ class BlockWithCheckpointHeaderValidatorSpec
   }
 
   it should "return failure when checkpoint has not enough valid signatures" in new TestSetup {
-    val invalidBlockHeaderExtraFields = HefPostEcip1097(Some(Checkpoint(Seq(validCheckpoint.signatures.head))))
-    val invalidBlockHeader =
+    val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(Checkpoint(Seq(validCheckpoint.signatures.head))))
+    val invalidBlockHeader: BlockHeader =
       validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
     blockHeaderValidator.validate(invalidBlockHeader, validBlockParentHeader) shouldBe Left(
       HeaderWrongNumberOfCheckpointSignatures(1)
@@ -178,12 +178,12 @@ class BlockWithCheckpointHeaderValidatorSpec
   }
 
   it should "return failure when checkpoint has enough valid signatures, but also an invalid one" in new TestSetup {
-    val invalidKeys = crypto.generateKeyPair(secureRandom)
-    val invalidSignatures =
+    val invalidKeys: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
+    val invalidSignatures: Seq[ECDSASignature] =
       CheckpointingTestHelpers.createCheckpointSignatures(Seq(invalidKeys), validBlockParent.hash)
-    val signatures = invalidSignatures ++ validCheckpoint.signatures
-    val invalidBlockHeaderExtraFields = HefPostEcip1097(Some(Checkpoint(signatures.sorted)))
-    val invalidBlockHeader = validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
+    val signatures: Seq[ECDSASignature] = invalidSignatures ++ validCheckpoint.signatures
+    val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(Checkpoint(signatures.sorted)))
+    val invalidBlockHeader: BlockHeader = validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
     blockHeaderValidator.validate(invalidBlockHeader, validBlockParentHeader) shouldBe Left(
       HeaderInvalidCheckpointSignatures(
         invalidSignatures
@@ -195,8 +195,8 @@ class BlockWithCheckpointHeaderValidatorSpec
   }
 
   it should "return failure when checkpoint has no signatures" in new TestSetup {
-    val invalidBlockHeaderExtraFields = HefPostEcip1097(Some(Checkpoint(Nil)))
-    val invalidBlockHeader = validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
+    val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(Checkpoint(Nil)))
+    val invalidBlockHeader: BlockHeader = validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
     blockHeaderValidator.validate(invalidBlockHeader, validBlockParentHeader) shouldBe Left(
       HeaderWrongNumberOfCheckpointSignatures(0)
     )
@@ -209,24 +209,24 @@ class BlockWithCheckpointHeaderValidatorSpec
     // programmatically.
     val sameSignerSigHex =
       "7e1573bc593f289793304c50fa8068d35f8611e5c558337c72b6bcfef1dbfc884226ad305a97659fc172d347b70ea7bfca011859118efcee33f3b5e02d31c3cd1b"
-    val sameSignerSig = ECDSASignature.fromBytes(ByteStringUtils.string2hash(sameSignerSigHex)).get
+    val sameSignerSig: ECDSASignature = ECDSASignature.fromBytes(ByteStringUtils.string2hash(sameSignerSigHex)).get
 
-    val invalidCheckpoint = Checkpoint((sameSignerSig +: validCheckpoint.signatures).sorted)
+    val invalidCheckpoint: Checkpoint = Checkpoint((sameSignerSig +: validCheckpoint.signatures).sorted)
 
     // verify that we have 2 signatures from the same signer
-    val actualSigners = invalidCheckpoint.signatures.flatMap(_.publicKey(validBlockParent.hash)).sortBy(_.toSeq)
-    val duplicatedSigner = ByteString(crypto.pubKeyFromKeyPair(keys.head))
-    val expectedSigners = (keys.map(kp => ByteString(crypto.pubKeyFromKeyPair(kp))) :+ duplicatedSigner).sorted
+    val actualSigners: Seq[ByteString] = invalidCheckpoint.signatures.flatMap(_.publicKey(validBlockParent.hash)).sortBy(_.toSeq)
+    val duplicatedSigner: ByteString = ByteString(crypto.pubKeyFromKeyPair(keys.head))
+    val expectedSigners: Seq[ByteString] = (keys.map(kp => ByteString(crypto.pubKeyFromKeyPair(kp))) :+ duplicatedSigner).sorted
     actualSigners shouldEqual expectedSigners
 
-    val headerWithInvalidCheckpoint = checkpointBlockGenerator
+    val headerWithInvalidCheckpoint: BlockHeader = checkpointBlockGenerator
       .generate(
         validBlockParent,
         invalidCheckpoint
       )
       .header
 
-    val expectedError = {
+    val expectedError: Left[HeaderInvalidCheckpointSignatures, Nothing] = {
       val invalidSigs =
         invalidCheckpoint.signatures
           .filter(_.publicKey(validBlockParent.hash).contains(duplicatedSigner))
@@ -238,10 +238,10 @@ class BlockWithCheckpointHeaderValidatorSpec
   }
 
   it should "return when failure when checkpoint has too many signatures" in new TestSetup {
-    val invalidCheckpoint =
+    val invalidCheckpoint: Checkpoint =
       validCheckpoint.copy(signatures = (validCheckpoint.signatures ++ validCheckpoint.signatures).sorted)
-    val invalidBlockHeaderExtraFields = HefPostEcip1097(Some(invalidCheckpoint))
-    val invalidBlockHeader = validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
+    val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(invalidCheckpoint))
+    val invalidBlockHeader: BlockHeader = validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
 
     blockHeaderValidator.validate(invalidBlockHeader, validBlockParentHeader) shouldBe Left(
       HeaderWrongNumberOfCheckpointSignatures(4)

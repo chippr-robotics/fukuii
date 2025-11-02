@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.network.discovery
 
 import java.net.URI
+import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.pattern.AskTimeoutException
@@ -10,13 +11,10 @@ import org.apache.pekko.testkit.TestKit
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
-import cats.effect.Resource
 import cats.effect.IO
+import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
-import java.util.concurrent.atomic.AtomicInteger
-
-import scala.collection.immutable.SortedSet
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.math.Ordering.Implicits._
@@ -35,6 +33,8 @@ import scodec.bits.BitVector
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.network.discovery.Node
+import scala.collection.immutable.Range.Inclusive
 
 class PeerDiscoveryManagerSpec
     extends AnyFlatSpecLike
@@ -106,7 +106,7 @@ class PeerDiscoveryManagerSpec
 
   it should "serve no peers if discovery is disabled and known peers are disabled and the manager isn't started" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = false)
 
       override def test(): Unit =
@@ -116,7 +116,7 @@ class PeerDiscoveryManagerSpec
 
   it should "serve the bootstrap nodes if known peers are reused even discovery isn't enabled and the manager isn't started" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = true, bootstrapNodes = sampleNodes)
 
       override def test(): Unit =
@@ -126,7 +126,7 @@ class PeerDiscoveryManagerSpec
 
   it should "serve the known peers if discovery is enabled and the manager isn't started" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
 
       (knownNodesStorage.getKnownNodes _)
@@ -141,7 +141,7 @@ class PeerDiscoveryManagerSpec
 
   it should "merge the known peers with the service if it's started" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
 
       (knownNodesStorage.getKnownNodes _)
@@ -154,7 +154,7 @@ class PeerDiscoveryManagerSpec
         .returning(IO(sampleNodes.map(toENode)))
         .once()
 
-      val expected = sampleKnownUris ++ sampleNodes.map(_.toUri)
+      val expected: Set[URI] = sampleKnownUris ++ sampleNodes.map(_.toUri)
 
       override def test(): Unit = {
         peerDiscoveryManager ! PeerDiscoveryManager.Start
@@ -167,7 +167,7 @@ class PeerDiscoveryManagerSpec
 
   it should "keep serving the known peers if the service fails to start" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
 
       @volatile var started = false
@@ -195,7 +195,7 @@ class PeerDiscoveryManagerSpec
 
   it should "stop using the service after it is stopped" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
 
       (() => knownNodesStorage.getKnownNodes())
@@ -223,7 +223,7 @@ class PeerDiscoveryManagerSpec
 
   it should "propagate any error from the service to the caller" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = false)
 
       (() => discoveryService.getNodes)
@@ -243,11 +243,11 @@ class PeerDiscoveryManagerSpec
   it should "do lookups in the background as it's asked for random nodes" in test {
     new Fixture {
       val bufferCapacity = 3
-      val randomNodes = sampleNodes.take(2)
+      val randomNodes: Set[Node] = sampleNodes.take(2)
       // 2 to fill the buffer initially
       // 1 to replace consumed items
       // 1 finished waiting to push items in the full buffer (this may or may not finish by the end of the test)
-      val expectedLookups = Range.inclusive(3, 4)
+      val expectedLookups: Inclusive = Range.inclusive(3, 4)
       val lookupCount = new AtomicInteger(0)
 
       implicit val nodeOrd: Ordering[ENode] =
@@ -258,7 +258,7 @@ class PeerDiscoveryManagerSpec
         .returning(IO { lookupCount.incrementAndGet(); randomNodes.map(toENode).toSet })
         .repeat(expectedLookups)
 
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = false, kademliaBucketSize = bufferCapacity)
 
       override def test(): Unit = {
@@ -280,7 +280,7 @@ class PeerDiscoveryManagerSpec
 
   it should "not send any random node if discovery isn't started" in test {
     new Fixture {
-      override lazy val discoveryConfig =
+      override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(reuseKnownNodes = true)
 
       (knownNodesStorage.getKnownNodes _)

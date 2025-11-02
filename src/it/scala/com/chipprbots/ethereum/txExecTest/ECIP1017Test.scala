@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.txExecTest.util.FixtureProvider
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
+import com.chipprbots.ethereum.domain.BlockchainStorages
 
 class ECIP1017Test extends AnyFlatSpec with Matchers {
 
@@ -59,7 +60,7 @@ class ECIP1017Test extends AnyFlatSpec with Matchers {
     val startBlock = 1
     val endBlock = 602
 
-    protected val testBlockchainStorages = FixtureProvider.prepareStorages(endBlock, fixtures)
+    protected val testBlockchainStorages: BlockchainStorages = FixtureProvider.prepareStorages(endBlock, fixtures)
 
     (startBlock to endBlock).foreach { blockToExecute =>
       val storages = FixtureProvider.prepareStorages(blockToExecute - 1, fixtures)

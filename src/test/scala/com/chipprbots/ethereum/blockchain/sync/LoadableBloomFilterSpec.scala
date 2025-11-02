@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync
 
 import cats.effect.IO
-import fs2.Stream
 
 import com.google.common.hash.Funnel
 import com.google.common.hash.Funnels
 import com.google.common.hash.PrimitiveSink
+import fs2.Stream
 
 import com.chipprbots.ethereum.FlatSpecBase
 import com.chipprbots.ethereum.blockchain.sync.fast.LoadableBloomFilter

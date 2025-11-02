@@ -4,15 +4,15 @@ import java.nio.file.Files
 
 import org.apache.pekko.util.ByteString
 
-import cats.effect.Resource
 import cats.effect.Deferred
-import cats.effect.Ref
 import cats.effect.IO
+import cats.effect.Ref
+import cats.effect.Resource
 import cats.syntax.parallel._
-import fs2.Stream
 
 import scala.util.Random
 
+import fs2.Stream
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.FlatSpecBase

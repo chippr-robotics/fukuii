@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import java.net.InetSocketAddress
 
-import com.typesafe.config.ConfigFactory
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
@@ -12,6 +11,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
+import com.typesafe.config.ConfigFactory
 import org.scalatest.BeforeAndAfter
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -84,7 +84,7 @@ class PivotBlockSelectorSpec
   }
 
   it should "ask for the block number 0 if [bestPeerBestBlockNumber < syncConfig.pivotBlockOffset]" in new TestSetup {
-    val highestNumber = syncConfig.pivotBlockOffset - 1
+    val highestNumber: Int = syncConfig.pivotBlockOffset - 1
 
     updateHandshakedPeers(
       HandshakedPeers(
@@ -526,7 +526,7 @@ class PivotBlockSelectorSpec
 
     val fastSync: TestProbe = TestProbe()
 
-    def testScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
+    def testScheduler: ExplicitlyTriggeredScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     lazy val pivotBlockSelector: ActorRef = system.actorOf(
       PivotBlockSelector.props(

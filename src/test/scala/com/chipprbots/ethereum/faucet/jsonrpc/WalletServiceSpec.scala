@@ -28,6 +28,11 @@ import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
 import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.domain.SignedTransactionWithSender
+import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError
+import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for WalletRpcClient
 class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
@@ -36,10 +41,10 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   "Wallet Service" should "send a transaction successfully when getNonce and sendTransaction successfully" in new TestSetup {
 
-    val receivingAddress = Address("0x99")
+    val receivingAddress: Address = Address("0x99")
     val currentNonce = 2
 
-    val tx = wallet.signTx(
+    val tx: SignedTransactionWithSender = wallet.signTx(
       LegacyTransaction(
         currentNonce,
         config.txGasPrice,
@@ -51,14 +56,14 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
       None
     )
 
-    val expectedTx = rlp.encode(tx.tx.toRLPEncodable)
+    val expectedTx: Array[Byte] = rlp.encode(tx.tx.toRLPEncodable)
 
-    val retTxId = ByteString(Hex.decode("112233"))
+    val retTxId: ByteString = ByteString(Hex.decode("112233"))
 
     (walletRpcClient.getNonce _).expects(config.walletAddress).returning(IO.pure(Right(currentNonce)))
     (walletRpcClient.sendTransaction _).expects(ByteString(expectedTx)).returning(IO.pure(Right(retTxId)))
 
-    val res = walletService.sendFunds(wallet, Address("0x99")).unsafeRunSync()
+    val res: Either[RpcError, ByteString] = walletService.sendFunds(wallet, Address("0x99")).unsafeRunSync()
 
     res shouldEqual Right(retTxId)
 
@@ -66,10 +71,10 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   it should "failure the transaction when get timeout of getNonce" in new TestSetup {
 
-    val timeout = ConnectionError("timeout")
+    val timeout: ConnectionError = ConnectionError("timeout")
     (walletRpcClient.getNonce _).expects(config.walletAddress).returning(IO.pure(Left(timeout)))
 
-    val res = walletService.sendFunds(wallet, Address("0x99")).unsafeRunSync()
+    val res: Either[RpcError, ByteString] = walletService.sendFunds(wallet, Address("0x99")).unsafeRunSync()
 
     res shouldEqual Left(timeout)
 
@@ -78,7 +83,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
   it should "get wallet successful" in new TestSetup {
     (mockKeyStore.unlockAccount _).expects(config.walletAddress, config.walletPassword).returning(Right(wallet))
 
-    val res = walletService.getWallet.unsafeRunSync()
+    val res: Either[KeyStoreError, Wallet] = walletService.getWallet.unsafeRunSync()
 
     res shouldEqual Right(wallet)
   }
@@ -88,7 +93,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
       .expects(config.walletAddress, config.walletPassword)
       .returning(Left(DecryptionFailed))
 
-    val res = walletService.getWallet.unsafeRunSync()
+    val res: Either[KeyStoreError, Wallet] = walletService.getWallet.unsafeRunSync()
 
     res shouldEqual Left(DecryptionFailed)
   }
