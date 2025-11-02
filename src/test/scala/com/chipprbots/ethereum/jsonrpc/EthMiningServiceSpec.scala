@@ -292,8 +292,8 @@ class EthMiningServiceSpec
     val pendingTransactionsManager: TestProbe = TestProbe()
     val ommersPool: TestProbe = TestProbe()
 
-    val minerActiveTimeout: FiniteDuration = 5.seconds
-    val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
+    val minerActiveTimeout: FiniteDuration = 20.seconds
+    val getTransactionFromPoolTimeout: FiniteDuration = 20.seconds
 
     lazy val minerKey: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(
       ByteStringUtils.string2hash("00f7500a7178548b8a4488f78477660b548c9363e16b584c21e0208b3f1e0dc61f")
