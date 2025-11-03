@@ -163,7 +163,7 @@ sbt pp
 
 ### Scala 3 Development
 
-Fukuii uses **Scala 3.3.4 (LTS)** exclusively. The migration from Scala 2.13 was completed in October 2025.
+Fukuii uses **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** exclusively. The migration from Scala 2.13 and JDK 17 was completed in October 2025.
 
 **Key Scala 3 Features in Use:**
 - Native `given`/`using` syntax for implicit parameters
@@ -181,7 +181,8 @@ sbt testAll      # Run all tests
 **Notes:**
 - The project is Scala 3 only (no cross-compilation)
 - All dependencies are Scala 3 compatible
-- CI pipeline tests on Scala 3.3.4
+- CI pipeline tests on Scala 3.3.4 with JDK 21
+- See [ADR-001: Scala 3 Migration](docs/adr/001-scala-3-migration.md) for the architectural decision
 - See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed migration
 
 ## Pre-commit Hooks
@@ -544,6 +545,7 @@ Before submitting a PR, verify:
 - [GitHub Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
+- [Architectural Decision Records](docs/adr/README.md)
 - [Migration History](docs/MIGRATION_HISTORY.md)
 - [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)
 - [Scalafmt Documentation](https://scalameta.org/scalafmt/)
