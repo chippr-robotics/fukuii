@@ -2,10 +2,9 @@ package com.chipprbots.ethereum.db.storage
 
 import java.util.concurrent.TimeUnit
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
 import org.scalatest.flatspec.AnyFlatSpec
@@ -50,8 +49,8 @@ class CachedNodeStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
   }
 
   it should "persist elements to underlying data source when not cleared for long time" in new TestSetup {
-    val key = ByteString(1)
-    val value = Array(1.toByte)
+    val key: ByteString = ByteString(1)
+    val value: Array[Byte] = Array(1.toByte)
     val cachedNodeStorageTiming = new CachedNodeStorage(nodeStorage, mapCacheTime)
     cachedNodeStorageTiming.update(Nil, Seq((key, value)))
     Thread.sleep(1.second.toMillis)

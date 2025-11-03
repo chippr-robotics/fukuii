@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.nodebuilder
 
-import akka.actor.typed.ActorSystem
-import akka.util.ByteString
+import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -60,7 +60,9 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def startMetricsClient(): Unit = {
-    val metricsConfig = MetricsConfig(Config.config)
+    val rootConfig = com.typesafe.config.ConfigFactory.load()
+    val fukuiiConfig = rootConfig.getConfig("fukuii")
+    val metricsConfig = MetricsConfig(fukuiiConfig)
     Metrics.configure(metricsConfig) match {
       case Success(_) =>
         log.info("Metrics started")

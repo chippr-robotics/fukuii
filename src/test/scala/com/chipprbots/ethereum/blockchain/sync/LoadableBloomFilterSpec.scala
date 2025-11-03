@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import monix.eval.Task
-import monix.reactive.Observable
+import cats.effect.IO
 
 import com.google.common.hash.Funnel
 import com.google.common.hash.Funnels
 import com.google.common.hash.PrimitiveSink
+import fs2.Stream
 
 import com.chipprbots.ethereum.FlatSpecBase
 import com.chipprbots.ethereum.blockchain.sync.fast.LoadableBloomFilter
@@ -19,7 +19,7 @@ class LoadableBloomFilterSpec extends FlatSpecBase {
 
   "LoadableBloomFilter" should "load all correct elements " in testCaseM {
     for {
-      source <- Task(Observable.fromIterable(Seq(Right(1L), Right(2L), Right(3L))))
+      source <- IO(Stream.emits(Seq(Right(1L), Right(2L), Right(3L))))
       filter = LoadableBloomFilter[Long](1000, source)
       result <- filter.loadFromSource
     } yield {
@@ -29,9 +29,9 @@ class LoadableBloomFilterSpec extends FlatSpecBase {
     }
   }
 
-  it should "load filter only once" in testCaseM[Task] {
+  it should "load filter only once" in testCaseM[IO] {
     for {
-      source <- Task(Observable.fromIterable(Seq(Right(1L), Right(2L), Right(3L))))
+      source <- IO(Stream.emits(Seq(Right(1L), Right(2L), Right(3L))))
       filter = LoadableBloomFilter[Long](1000, source)
       result <- filter.loadFromSource
       result1 <- filter.loadFromSource
@@ -43,10 +43,10 @@ class LoadableBloomFilterSpec extends FlatSpecBase {
     }
   }
 
-  it should "report last error if encountered" in testCaseM[Task] {
+  it should "report last error if encountered" in testCaseM[IO] {
     for {
-      error <- Task(IterationError(new RuntimeException("test")))
-      source = Observable.fromIterable(Seq(Right(1L), Right(2L), Right(3L), Left(error)))
+      error <- IO(IterationError(new RuntimeException("test")))
+      source = Stream.emits(Seq(Right(1L), Right(2L), Right(3L), Left(error)))
       filter = LoadableBloomFilter[Long](1000, source)
       result <- filter.loadFromSource
     } yield {

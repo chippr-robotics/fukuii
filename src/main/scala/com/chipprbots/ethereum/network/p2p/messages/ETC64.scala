@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 /** This is temporary ETC64 version, the real one will be implemented by ETCM-355 This one will be probably ETC67 in the
@@ -29,8 +30,8 @@ object ETC64 {
           networkId,
           chainWeight.totalDifficulty,
           chainWeight.lastCheckpointNumber,
-          bestHash,
-          genesisHash
+          RLPValue(bestHash.toArray[Byte]),
+          RLPValue(genesisHash.toArray[Byte])
         )
       }
     }
@@ -38,19 +39,19 @@ object ETC64 {
     implicit class StatusDec(val bytes: Array[Byte]) extends AnyVal {
       def toStatus: Status = rawDecode(bytes) match {
         case RLPList(
-              protocolVersion,
-              networkId,
-              totalDifficulty,
-              lastCheckpointNumber,
-              bestHash,
-              genesisHash
+              RLPValue(protocolVersionBytes),
+              RLPValue(networkIdBytes),
+              RLPValue(totalDifficultyBytes),
+              RLPValue(lastCheckpointNumberBytes),
+              RLPValue(bestHashBytes),
+              RLPValue(genesisHashBytes)
             ) =>
           Status(
-            protocolVersion,
-            networkId,
-            ChainWeight(lastCheckpointNumber, totalDifficulty),
-            bestHash,
-            genesisHash
+            BigInt(1, protocolVersionBytes).toInt,
+            BigInt(1, networkIdBytes).toInt,
+            ChainWeight(BigInt(1, lastCheckpointNumberBytes), BigInt(1, totalDifficultyBytes)),
+            ByteString(bestHashBytes),
+            ByteString(genesisHashBytes)
           )
 
         case _ => throw new RuntimeException("Cannot decode Status ETC64 version")
@@ -110,8 +111,8 @@ object ETC64 {
       def toNewBlock: NewBlock = rawDecode(bytes) match {
         case RLPList(
               RLPList(blockHeader, transactionList: RLPList, (uncleNodesList: RLPList)),
-              totalDifficulty,
-              lastCheckpointNumber
+              RLPValue(totalDifficultyBytes),
+              RLPValue(lastCheckpointNumberBytes)
             ) =>
           NewBlock(
             Block(
@@ -121,7 +122,7 @@ object ETC64 {
                 uncleNodesList.items.map(_.toBlockHeader)
               )
             ),
-            ChainWeight(lastCheckpointNumber, totalDifficulty)
+            ChainWeight(BigInt(1, lastCheckpointNumberBytes), BigInt(1, totalDifficultyBytes))
           )
         case _ => throw new RuntimeException("Cannot decode NewBlock ETC64 version")
       }

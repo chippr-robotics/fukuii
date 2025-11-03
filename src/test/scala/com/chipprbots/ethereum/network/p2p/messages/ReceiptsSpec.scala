@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.domain.Type01Receipt
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 class ReceiptsSpec extends AnyFlatSpec with Matchers {
@@ -45,14 +45,20 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
   val type01Receipts: Receipts = Receipts(Seq(Seq(type01Receipt)))
 
+  val encodedLogEntry: RLPList = RLPList(
+    RLPValue(loggerAddress.bytes.toArray[Byte]),
+    RLPList(logTopics.map(t => RLPValue(t.toArray[Byte])): _*),
+    RLPValue(logData.toArray[Byte])
+  )
+
   val encodedLegacyReceipts: RLPList =
     RLPList(
       RLPList(
         RLPList(
-          exampleHash,
+          RLPValue(exampleHash.toArray[Byte]),
           cumulativeGas,
-          exampleLogsBloom,
-          RLPList(RLPList(loggerAddress.bytes, logTopics, logData))
+          RLPValue(exampleLogsBloom.toArray[Byte]),
+          RLPList(encodedLogEntry)
         )
       )
     )
@@ -63,10 +69,10 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
         PrefixedRLPEncodable(
           Transaction.Type01,
           RLPList(
-            exampleHash,
+            RLPValue(exampleHash.toArray[Byte]),
             cumulativeGas,
-            exampleLogsBloom,
-            RLPList(RLPList(loggerAddress.bytes, logTopics, logData))
+            RLPValue(exampleLogsBloom.toArray[Byte]),
+            RLPList(encodedLogEntry)
           )
         )
       )

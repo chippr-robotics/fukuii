@@ -2,24 +2,21 @@ package com.chipprbots.ethereum.blockchain.sync.regular
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.PoisonPill
-import akka.pattern.ask
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestKitBase
-import akka.testkit.TestProbe
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.PoisonPill
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestKitBase
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.Eq
 import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 import cats.implicits._
-
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.reactive.Observable
-import monix.reactive.subjects.ReplaySubject
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -27,6 +24,8 @@ import scala.concurrent.duration.FiniteDuration
 import scala.math.BigInt
 import scala.reflect.ClassTag
 
+import fs2.Stream
+import fs2.concurrent.Topic
 import org.scalamock.scalatest.AsyncMockFactory
 import org.scalatest.matchers.should.Matchers
 
@@ -63,6 +62,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       with SecureRandomBuilder {
     implicit lazy val timeout: Timeout = remainingOrDefault
     implicit override lazy val system: ActorSystem = _system
+    implicit override lazy val ioRuntime: IORuntime = IORuntime.global
     override lazy val syncConfig: SyncConfig =
       defaultSyncConfig.copy(blockHeadersPerRequest = 2, blockBodiesPerRequest = 2)
     val handshakedPeers: Map[Peer, PeerInfo] =
@@ -98,7 +98,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           system.scheduler,
           this
         )
-        .withDispatcher("akka.actor.default-dispatcher")
+        .withDispatcher("pekko.actor.default-dispatcher")
     )
 
     val defaultTd = 12345
@@ -109,11 +109,11 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     override lazy val consensusAdapter: ConsensusAdapter = {
       val adapter = stub[ConsensusAdapter]
       (adapter
-        .evaluateBranchBlock(_: Block)(_: Scheduler, _: BlockchainConfig))
+        .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
         .when(*, *, *)
         .onCall { case (block: Block, _, _) =>
           importedBlocksSet.add(block)
-          results(block.header.hash).flatTap(_ => Task.fromFuture(importedBlocksSubject.onNext(block)))
+          results(block.header.hash).flatTap(_ => importedBlocksSubject.publish1(block).void)
         }
       adapter
     }
@@ -177,26 +177,34 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         case msg @ PeersClient.BlacklistPeer(id, _) if id == peer.id => msg
       }
 
-    val getSyncStatus: Task[SyncProtocol.Status] =
-      Task.deferFuture((regularSync ? SyncProtocol.GetStatus).mapTo[SyncProtocol.Status])
+    val getSyncStatus: IO[SyncProtocol.Status] =
+      IO.fromFuture(IO((regularSync ? SyncProtocol.GetStatus).mapTo[SyncProtocol.Status]))
 
-    def pollForStatus(predicate: SyncProtocol.Status => Boolean): Task[SyncProtocol.Status] = Observable
-      .repeatEvalF(getSyncStatus.delayExecution(10.millis))
-      .takeWhileInclusive(predicate.andThen(!_))
-      .lastL
+    def pollForStatus(predicate: SyncProtocol.Status => Boolean): IO[SyncProtocol.Status] = Stream
+      .repeatEval(getSyncStatus.delayBy(10.millis))
+      .takeThrough(predicate.andThen(!_))
+      .compile
+      .last
+      .flatMap {
+        case Some(status) => IO.pure(status)
+        case None         => IO.raiseError(new RuntimeException("No status found"))
+      }
       .timeout(remainingOrDefault)
 
-    def fishForStatus[B](picker: PartialFunction[SyncProtocol.Status, B]): Task[B] = Observable
-      .repeatEvalF(getSyncStatus.delayExecution(10.millis))
+    def fishForStatus[B](picker: PartialFunction[SyncProtocol.Status, B]): IO[B] = Stream
+      .repeatEval(getSyncStatus.delayBy(10.millis))
       .collect(picker)
-      .firstL
+      .head
+      .compile
+      .lastOrError
       .timeout(remainingOrDefault)
 
-    protected val results: mutable.Map[ByteString, Task[BlockImportResult]] =
-      mutable.Map[ByteString, Task[BlockImportResult]]()
+    protected val results: mutable.Map[ByteString, IO[BlockImportResult]] =
+      mutable.Map[ByteString, IO[BlockImportResult]]()
     protected val importedBlocksSet: mutable.Set[Block] = mutable.Set[Block]()
-    private val importedBlocksSubject = ReplaySubject[Block]()
-    val importedBlocks: Observable[Block] = importedBlocksSubject
+    private val importedBlocksTopicIO = Topic[IO, Block]
+    private lazy val importedBlocksSubject = importedBlocksTopicIO.unsafeRunSync()
+    val importedBlocks: Stream[IO, Block] = importedBlocksSubject.subscribe(100)
 
     def didTryToImportBlock(predicate: Block => Boolean): Boolean =
       importedBlocksSet.exists(predicate)
@@ -206,7 +214,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def bestBlock: Block = importedBlocksSet.maxBy(_.number)
 
-    def setImportResult(block: Block, result: Task[BlockImportResult]): Unit =
+    def setImportResult(block: Block, result: IO[BlockImportResult]): Unit =
       results(block.header.hash) = result
 
     class PeersClientAutoPilot(blocks: List[Block] = testBlocks) extends AutoPilot {
@@ -309,7 +317,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def fakeEvaluateBlock(
         block: Block
-    ): Task[BlockImportResult] = {
+    ): IO[BlockImportResult] = {
       val result: BlockImportResult = if (didTryToImportBlock(block)) {
         DuplicateBlock
       } else {
@@ -324,7 +332,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         }
       }
 
-      Task.now(result)
+      IO.pure(result)
     }
 
     class FakeBranchResolution extends BranchResolution(stub[BlockchainReader]) {
@@ -358,19 +366,19 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     (branchResolution.resolveBranch _).when(*).returns(NewBetterBranch(Nil))
 
     (consensusAdapter
-      .evaluateBranchBlock(_: Block)(_: Scheduler, _: BlockchainConfig))
+      .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
       .when(*, *, *)
       .onCall { (block, _, _) =>
         if (block == newBlock) {
           importedNewBlock = true
-          Task.now(
+          IO.pure(
             BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight(0, newBlock.number))))
           )
         } else {
           if (block == testBlocks.last) {
             importedLastTestBlock = true
           }
-          Task.now(BlockImportedToTop(Nil))
+          IO.pure(BlockImportedToTop(Nil))
         }
       }
 

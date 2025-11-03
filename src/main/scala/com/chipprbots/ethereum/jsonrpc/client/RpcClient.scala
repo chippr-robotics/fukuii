@@ -3,18 +3,18 @@ package com.chipprbots.ethereum.jsonrpc.client
 import java.util.UUID
 import javax.net.ssl.SSLContext
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.ConnectionContext
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.HttpsConnectionContext
-import akka.http.scaladsl.model._
-import akka.http.scaladsl.settings.ClientConnectionSettings
-import akka.http.scaladsl.settings.ConnectionPoolSettings
-import akka.http.scaladsl.unmarshalling.Unmarshal
-import akka.stream.StreamTcpException
-import akka.stream.scaladsl.TcpIdleTimeoutException
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.scaladsl.ConnectionContext
+import org.apache.pekko.http.scaladsl.Http
+import org.apache.pekko.http.scaladsl.HttpsConnectionContext
+import org.apache.pekko.http.scaladsl.model._
+import org.apache.pekko.http.scaladsl.settings.ClientConnectionSettings
+import org.apache.pekko.http.scaladsl.settings.ConnectionPoolSettings
+import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
+import org.apache.pekko.stream.StreamTcpException
+import org.apache.pekko.stream.scaladsl.TcpIdleTimeoutException
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -35,6 +35,15 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
 ) extends Logger {
 
   import RpcClient._
+
+  // Manual decoder for JsonRpcError to handle json4s JValue field
+  implicit private val jsonRpcErrorDecoder: Decoder[JsonRpcError] = c =>
+    for {
+      code <- c.downField("code").as[Int]
+      message <- c.downField("message").as[String]
+      // Skip decoding the 'data' field since it's json4s JValue which circe can't decode
+      // We only need code and message for error handling
+    } yield JsonRpcError(code, message, None)
 
   lazy val connectionContext: HttpsConnectionContext = if (node.scheme.startsWith("https")) {
     getSSLContext().toOption.fold(Http().defaultClientHttpsContext)(ConnectionContext.httpsClient)
@@ -68,16 +77,16 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
         jsonResponse.hcursor.downField("result").as[T].left.map(f => RpcClientError(f.message))
     }
 
-  private def makeRpcCall(jsonRequest: Json): Task[Either[RpcError, Json]] = {
+  private def makeRpcCall(jsonRequest: Json): IO[Either[RpcError, Json]] = {
     val entity = HttpEntity(ContentTypes.`application/json`, jsonRequest.noSpaces)
     val request = HttpRequest(method = HttpMethods.POST, uri = node, entity = entity)
 
-    Task
-      .deferFuture(for {
+    IO
+      .fromFuture(IO(for {
         response <- Http().singleRequest(request, connectionContext, connectionPoolSettings)
         data <- Unmarshal(response.entity).to[String]
-      } yield parse(data).left.map(e => ParserError(e.message)))
-      .onErrorHandle { (ex: Throwable) =>
+      } yield parse(data).left.map(e => ParserError(e.message))))
+      .handleError { (ex: Throwable) =>
         ex match {
           case _: TcpIdleTimeoutException =>
             log.error("RPC request", ex)
@@ -103,7 +112,7 @@ abstract class RpcClient(node: Uri, timeout: Duration, getSSLContext: () => Eith
 }
 
 object RpcClient {
-  type RpcResponse[T] = Task[Either[RpcError, T]]
+  type RpcResponse[T] = IO[Either[RpcError, T]]
 
   type Secrets = Map[String, Json]
 

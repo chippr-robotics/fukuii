@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.pattern.RetrySupport
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.pattern.RetrySupport
+import org.apache.pekko.util.Timeout
 
 import com.chipprbots.ethereum.faucet.FaucetConfig
 import com.chipprbots.ethereum.faucet.FaucetConfigBuilder
@@ -32,13 +32,13 @@ class FaucetRpcService(config: FaucetConfig)(implicit system: ActorSystem)
           .askFor[Any](FaucetHandlerMsg.SendFunds(sendFundsRequest.address))
           .map(handleSendFundsResponse.orElse(handleErrors))
       )
-      .onErrorRecover(handleErrors)
+      .recover(handleErrors)
 
   def status(statusRequest: StatusRequest): ServiceResponse[StatusResponse] =
     selectFaucetHandler()
       .flatMap(handler => handler.askFor[Any](FaucetHandlerMsg.Status))
       .map(handleStatusResponse.orElse(handleErrors))
-      .onErrorRecover(handleErrors)
+      .recover(handleErrors)
 
   private def handleSendFundsResponse: PartialFunction[Any, Either[JsonRpcError, SendFundsResponse]] = {
     case FaucetHandlerResponse.TransactionSent(txHash) =>

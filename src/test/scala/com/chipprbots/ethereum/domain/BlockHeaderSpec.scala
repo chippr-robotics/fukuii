@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.domain
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.freespec.AnyFreeSpec
@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 
 class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators {
@@ -21,12 +22,12 @@ class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyC
   "Block header encoding" - {
     "without nonce should be compatible with EthereumJ blocks" in new TestSetup {
       // Expected values obtained using EthereumJ
-      val obtainedBlock1EncodedWithoutNonce = Hex.toHexString(BlockHeader.getEncodedWithoutNonce(block1))
+      val obtainedBlock1EncodedWithoutNonce: String = Hex.toHexString(BlockHeader.getEncodedWithoutNonce(block1))
       val expectedBlock1EncodedWithoutNonce =
         "f901e6a0d882d5c210bab4cb7ef0b9f3dc2130cb680959afcd9a8f9bf83ee6f13e2f9da3a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d493479495f484419881c6e9b6de7fb3f8ad03763bd49a89a0634a2b20c9e02afdda7157afe384306c5acc4fb9c09b45dc0203c0fbb2fed0e6a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000830f1a4c148407d85e8f8084589e0ab998d783010507846765746887676f312e372e33856c696e7578"
       assert(obtainedBlock1EncodedWithoutNonce == expectedBlock1EncodedWithoutNonce)
 
-      val obtainedBlock2EncodedWithoutNonce = Hex.toHexString(BlockHeader.getEncodedWithoutNonce(block2))
+      val obtainedBlock2EncodedWithoutNonce: String = Hex.toHexString(BlockHeader.getEncodedWithoutNonce(block2))
       val expectedBlock2EncodedWithoutNonce =
         "f901e6a0677a5fb51d52321b03552e3c667f602cc489d15fc1d7824445aee6d94a9db2e7a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d493479495f484419881c6e9b6de7fb3f8ad03763bd49a89a0cddeeb071e2f69ad765406fb7c96c0cd42ddfc6ec54535822b564906f9e38e44a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000830f1869138407da55238084589e0ab898d783010507846765746887676f312e372e33856c696e7578"
       assert(obtainedBlock2EncodedWithoutNonce == expectedBlock2EncodedWithoutNonce)
@@ -43,77 +44,86 @@ class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyC
     }
 
     "should generate the expected RLP object for pre ECIP1098 headers" in {
+      import com.chipprbots.ethereum.rlp.RLPValue
+      import com.chipprbots.ethereum.utils.ByteUtils
+
       val preECIP1098Header = Fixtures.Blocks.ValidBlock.header.copy(extraFields = HefEmpty)
 
       val expectedRLPEncoded = RLPList(
-        preECIP1098Header.parentHash,
-        preECIP1098Header.ommersHash,
-        preECIP1098Header.beneficiary,
-        preECIP1098Header.stateRoot,
-        preECIP1098Header.transactionsRoot,
-        preECIP1098Header.receiptsRoot,
-        preECIP1098Header.logsBloom,
-        preECIP1098Header.difficulty,
-        preECIP1098Header.number,
-        preECIP1098Header.gasLimit,
-        preECIP1098Header.gasUsed,
-        preECIP1098Header.unixTimestamp,
-        preECIP1098Header.extraData,
-        preECIP1098Header.mixHash,
-        preECIP1098Header.nonce
+        preECIP1098Header.parentHash.toArray,
+        preECIP1098Header.ommersHash.toArray,
+        preECIP1098Header.beneficiary.toArray,
+        preECIP1098Header.stateRoot.toArray,
+        preECIP1098Header.transactionsRoot.toArray,
+        preECIP1098Header.receiptsRoot.toArray,
+        preECIP1098Header.logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.unixTimestamp)),
+        preECIP1098Header.extraData.toArray,
+        preECIP1098Header.mixHash.toArray,
+        preECIP1098Header.nonce.toArray
       )
 
       rlp.encode(expectedRLPEncoded) shouldBe (preECIP1098Header.toBytes: Array[Byte])
     }
 
     "should generate the expected RLP object for post ECIP1098 headers" in {
+      import com.chipprbots.ethereum.rlp.RLPValue
+      import com.chipprbots.ethereum.utils.ByteUtils
+
       val postECIP1098Header = Fixtures.Blocks.ValidBlock.header.copy(
         extraFields = HefEmpty
       )
 
       val expectedRLPEncoded = RLPList(
-        postECIP1098Header.parentHash,
-        postECIP1098Header.ommersHash,
-        postECIP1098Header.beneficiary,
-        postECIP1098Header.stateRoot,
-        postECIP1098Header.transactionsRoot,
-        postECIP1098Header.receiptsRoot,
-        postECIP1098Header.logsBloom,
-        postECIP1098Header.difficulty,
-        postECIP1098Header.number,
-        postECIP1098Header.gasLimit,
-        postECIP1098Header.gasUsed,
-        postECIP1098Header.unixTimestamp,
-        postECIP1098Header.extraData,
-        postECIP1098Header.mixHash,
-        postECIP1098Header.nonce
+        postECIP1098Header.parentHash.toArray,
+        postECIP1098Header.ommersHash.toArray,
+        postECIP1098Header.beneficiary.toArray,
+        postECIP1098Header.stateRoot.toArray,
+        postECIP1098Header.transactionsRoot.toArray,
+        postECIP1098Header.receiptsRoot.toArray,
+        postECIP1098Header.logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.unixTimestamp)),
+        postECIP1098Header.extraData.toArray,
+        postECIP1098Header.mixHash.toArray,
+        postECIP1098Header.nonce.toArray
       )
 
       rlp.encode(expectedRLPEncoded) shouldBe (postECIP1098Header.toBytes: Array[Byte])
     }
 
     "should generate the expected RLP object for post ECIP1097 headers with checkpoint" in {
+      import com.chipprbots.ethereum.rlp.RLPValue
+      import com.chipprbots.ethereum.utils.ByteUtils
+
       val checkpoint = Checkpoint(Nil)
       val postECIP1097Header = Fixtures.Blocks.ValidBlock.header.copy(
         extraFields = HefPostEcip1097(Some(checkpoint))
       )
 
       val expectedRLPEncoded = RLPList(
-        postECIP1097Header.parentHash,
-        postECIP1097Header.ommersHash,
-        postECIP1097Header.beneficiary,
-        postECIP1097Header.stateRoot,
-        postECIP1097Header.transactionsRoot,
-        postECIP1097Header.receiptsRoot,
-        postECIP1097Header.logsBloom,
-        postECIP1097Header.difficulty,
-        postECIP1097Header.number,
-        postECIP1097Header.gasLimit,
-        postECIP1097Header.gasUsed,
-        postECIP1097Header.unixTimestamp,
-        postECIP1097Header.extraData,
-        postECIP1097Header.mixHash,
-        postECIP1097Header.nonce,
+        postECIP1097Header.parentHash.toArray,
+        postECIP1097Header.ommersHash.toArray,
+        postECIP1097Header.beneficiary.toArray,
+        postECIP1097Header.stateRoot.toArray,
+        postECIP1097Header.transactionsRoot.toArray,
+        postECIP1097Header.receiptsRoot.toArray,
+        postECIP1097Header.logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.unixTimestamp)),
+        postECIP1097Header.extraData.toArray,
+        postECIP1097Header.mixHash.toArray,
+        postECIP1097Header.nonce.toArray,
         Some(checkpoint): Option[Checkpoint]
       )
 
@@ -121,26 +131,29 @@ class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyC
     }
 
     "should generate the expected RLP object for post ECIP1097 headers without checkpoint" in {
+      import com.chipprbots.ethereum.rlp.RLPValue
+      import com.chipprbots.ethereum.utils.ByteUtils
+
       val postECIP1097Header = Fixtures.Blocks.ValidBlock.header.copy(
         extraFields = HefPostEcip1097(None)
       )
 
       val expectedRLPEncoded = RLPList(
-        postECIP1097Header.parentHash,
-        postECIP1097Header.ommersHash,
-        postECIP1097Header.beneficiary,
-        postECIP1097Header.stateRoot,
-        postECIP1097Header.transactionsRoot,
-        postECIP1097Header.receiptsRoot,
-        postECIP1097Header.logsBloom,
-        postECIP1097Header.difficulty,
-        postECIP1097Header.number,
-        postECIP1097Header.gasLimit,
-        postECIP1097Header.gasUsed,
-        postECIP1097Header.unixTimestamp,
-        postECIP1097Header.extraData,
-        postECIP1097Header.mixHash,
-        postECIP1097Header.nonce,
+        postECIP1097Header.parentHash.toArray,
+        postECIP1097Header.ommersHash.toArray,
+        postECIP1097Header.beneficiary.toArray,
+        postECIP1097Header.stateRoot.toArray,
+        postECIP1097Header.transactionsRoot.toArray,
+        postECIP1097Header.receiptsRoot.toArray,
+        postECIP1097Header.logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.unixTimestamp)),
+        postECIP1097Header.extraData.toArray,
+        postECIP1097Header.mixHash.toArray,
+        postECIP1097Header.nonce.toArray,
         None: Option[Checkpoint]
       )
 

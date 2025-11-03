@@ -10,7 +10,7 @@ import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 trait EphemBlockchainTestSetup extends ScenarioSetup {
 
   trait LocalPruningConfigBuilder extends PruningConfigBuilder {
-    override lazy val pruningMode: PruningMode = ArchivePruning
+    override val pruningMode: PruningMode = ArchivePruning
   }
 
   // + cake overrides

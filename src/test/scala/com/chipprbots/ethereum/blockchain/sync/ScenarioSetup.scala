@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import java.util.concurrent.Executors
 
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.ExecutionContextExecutor
@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.nodebuilder._
 trait ScenarioSetup extends StdTestMiningBuilder with StxLedgerBuilder {
   protected lazy val executionContextExecutor: ExecutionContextExecutor =
     ExecutionContext.fromExecutor(Executors.newFixedThreadPool(4))
-  protected lazy val monixScheduler: Scheduler = Scheduler(executionContextExecutor)
+  implicit protected lazy val ioRuntime: IORuntime = IORuntime.global
   protected lazy val successValidators: Validators = Mocks.MockValidatorsAlwaysSucceed
   protected lazy val failureValidators: Validators = Mocks.MockValidatorsAlwaysFail
   protected lazy val powValidators: ValidatorsExecutor = ValidatorsExecutor(Protocol.PoW)
@@ -104,7 +104,7 @@ trait ScenarioSetup extends StdTestMiningBuilder with StxLedgerBuilder {
       blockchainReader,
       blockQueue,
       blockValidation,
-      Scheduler(system.dispatchers.lookup("validation-context"))
+      ioRuntime
     )
   }
 

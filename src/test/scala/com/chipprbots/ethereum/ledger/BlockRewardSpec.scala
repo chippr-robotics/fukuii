@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.flatspec.AnyFlatSpec
@@ -19,11 +19,12 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
+import org.scalatest.prop.TableFor4
 
 class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with MockFactory {
 
   it should "pay to the miner if no ommers included" in new TestSetup {
-    val block = sampleBlock(validAccountAddress, Seq(validAccountAddress2, validAccountAddress3))
+    val block: Block = sampleBlock(validAccountAddress, Seq(validAccountAddress2, validAccountAddress3))
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
     val beforeExecutionBalance: BigInt = worldState.getGuaranteedAccount(Address(block.header.beneficiary)).balance
     afterRewardWorldState
@@ -33,16 +34,16 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
 
   // scalastyle:off magic.number
   it should "be paid to the miner even if the account doesn't exist" in new TestSetup {
-    val block = sampleBlock(Address(0xdeadbeef))
+    val block: Block = sampleBlock(Address(0xdeadbeef))
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
-    val expectedRewardAsBigInt =
+    val expectedRewardAsBigInt: BigInt =
       mining.blockPreparator.blockRewardCalculator.calculateMiningReward(block.header.number, 0)
-    val expectedReward = UInt256(expectedRewardAsBigInt)
+    val expectedReward: UInt256 = UInt256(expectedRewardAsBigInt)
     afterRewardWorldState.getGuaranteedAccount(Address(block.header.beneficiary)).balance shouldEqual expectedReward
   }
 
   it should "be paid if ommers are included in block" in new TestSetup {
-    val block = sampleBlock(validAccountAddress, Seq(validAccountAddress2, validAccountAddress3))
+    val block: Block = sampleBlock(validAccountAddress, Seq(validAccountAddress2, validAccountAddress3))
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
 
     val beforeExecutionBalance1: BigInt = worldState.getGuaranteedAccount(Address(block.header.beneficiary)).balance
@@ -64,7 +65,7 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
   }
 
   it should "be paid if ommers are included in block even if accounts don't exist" in new TestSetup {
-    val block = sampleBlock(Address(0xdeadbeef), Seq(Address(0x1111), Address(0x2222)))
+    val block: Block = sampleBlock(Address(0xdeadbeef), Seq(Address(0x1111), Address(0x2222)))
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
     afterRewardWorldState
       .getGuaranteedAccount(Address(block.header.beneficiary))
@@ -80,7 +81,7 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
   it should "be calculated correctly after byzantium fork" in new TestSetup {
     val block: Block = sampleBlockAfterByzantium(validAccountAddress)
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
-    val address = Address(block.header.beneficiary)
+    val address: Address = Address(block.header.beneficiary)
     val beforeExecutionBalance: BigInt = worldState.getGuaranteedAccount(address).balance
     afterRewardWorldState
       .getGuaranteedAccount(address)
@@ -90,9 +91,9 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
   it should "be calculated correctly if ommers are included in block after byzantium fork " in new TestSetup {
     val block: Block = sampleBlockAfterByzantium(validAccountAddress4, Seq(validAccountAddress5, validAccountAddress6))
 
-    val minerAddress = Address(block.header.beneficiary)
-    val ommer1Address = Address(block.body.uncleNodesList.head.beneficiary)
-    val ommer2Address = Address(block.body.uncleNodesList(1).beneficiary)
+    val minerAddress: Address = Address(block.header.beneficiary)
+    val ommer1Address: Address = Address(block.body.uncleNodesList.head.beneficiary)
+    val ommer2Address: Address = Address(block.body.uncleNodesList(1).beneficiary)
 
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
 
@@ -117,12 +118,13 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
   }
 
   it should "correctly distribute block reward according to ECIP1098" in new TestSetup {
-    val blockNoPostTreasury = blockchainConfig.forkBlockNumbers.ecip1098BlockNumber + 1
-    val blockReward = mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(sampleBlockNumber)
-    val blockRewardPostTreasury =
+    val blockNoPostTreasury: BigInt = blockchainConfig.forkBlockNumbers.ecip1098BlockNumber + 1
+    val blockReward: BigInt =
+      mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(sampleBlockNumber)
+    val blockRewardPostTreasury: BigInt =
       mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(blockNoPostTreasury)
 
-    val table = Table[Boolean, BigInt, BigInt, BigInt](
+    val table: TableFor4[Boolean, BigInt, BigInt, BigInt] = Table[Boolean, BigInt, BigInt, BigInt](
       ("contract deployed", "miner reward", "treasury reward", "block no"),
       // ECIP1098 not activated
       (true, blockReward, 0, sampleBlockNumber),

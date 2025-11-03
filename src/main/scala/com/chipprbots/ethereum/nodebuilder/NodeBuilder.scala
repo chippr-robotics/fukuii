@@ -3,14 +3,13 @@ package com.chipprbots.ethereum.nodebuilder
 import java.time.Clock
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 import cats.implicits._
-
-import monix.eval.Task
-import monix.execution.Scheduler
 
 import scala.concurrent.Future
 import scala.concurrent.duration._
@@ -46,9 +45,7 @@ import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.KeyStoreImpl
 import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
-import com.chipprbots.ethereum.network.ServerActor
 import com.chipprbots.ethereum.network._
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder
@@ -102,11 +99,11 @@ trait AsyncConfigBuilder {
 }
 
 trait ActorSystemBuilder {
-  implicit lazy val system: ActorSystem = ActorSystem("mantis_system")
+  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system")
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {
-  lazy val pruningMode: PruningMode = PruningConfig(Config.config).mode
+  override val pruningMode: PruningMode = PruningConfig(Config.config).mode
 }
 
 trait StorageBuilder {
@@ -139,7 +136,7 @@ trait PeerDiscoveryManagerBuilder {
     with DiscoveryServiceBuilder
     with StorageBuilder =>
 
-  import Scheduler.Implicits.global
+  implicit val ioRuntime: IORuntime = IORuntime.global
 
   lazy val peerDiscoveryManager: ActorRef = system.actorOf(
     PeerDiscoveryManager.props(
@@ -214,7 +211,7 @@ trait ConsensusBuilder {
       blockchainReader,
       blockQueue,
       blockValidation,
-      Scheduler(system.dispatchers.lookup("validation-context"))
+      IORuntime.global
     )
 }
 
@@ -779,7 +776,7 @@ trait SyncControllerBuilder {
 trait PortForwardingBuilder {
   self: DiscoveryConfigBuilder =>
 
-  import Scheduler.Implicits.global
+  implicit val ioRuntime: IORuntime = IORuntime.global
 
   private val portForwarding = PortForwarder
     .openPorts(
@@ -790,17 +787,17 @@ trait PortForwardingBuilder {
     .allocated
     .map(_._2)
 
-  // reference to a task that produces the release task,
+  // reference to an IO that produces the release IO,
   // memoized to prevent running multiple port forwarders at once
-  private val portForwardingRelease = new AtomicReference(Option.empty[Task[Task[Unit]]])
+  private val portForwardingRelease = new AtomicReference(Option.empty[IO[IO[Unit]]])
 
   def startPortForwarding(): Future[Unit] = {
-    portForwardingRelease.compareAndSet(None, Some(portForwarding.memoize))
-    portForwardingRelease.get().fold(Future.unit)(_.runToFuture.void)
+    portForwardingRelease.compareAndSet(None, Some(portForwarding))
+    portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
   }
 
   def stopPortForwarding(): Future[Unit] =
-    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.flatten.runToFuture)
+    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.flatten.unsafeToFuture()(ioRuntime))
 }
 
 trait ShutdownHookBuilder {
@@ -912,4 +909,7 @@ trait Node
     with CheckpointBlockGeneratorBuilder
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
-    with BlacklistBuilder
+    with BlacklistBuilder {
+  // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
+  implicit override val ioRuntime: IORuntime = IORuntime.global
+}

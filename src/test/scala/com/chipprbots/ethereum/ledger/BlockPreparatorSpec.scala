@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
-import akka.util.ByteString.{empty => bEmpty}
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.ByteString.{empty => bEmpty}
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.consensus.validators.SignedTransactionValidator
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.ledger.BlockResult
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.vm.InvalidJump
@@ -61,7 +60,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
             .executeTransaction(stx.tx, stx.senderAddress, header, worldWithMinerAndOriginAccounts)
             .worldState
 
-        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe (initialOriginNonce + 1)
+        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe UInt256(initialOriginNonce + 1)
       }
 
       "executing a tx that results in a message call" in new TestSetup {
@@ -85,7 +84,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
             .executeTransaction(stx.tx, stx.senderAddress, header, worldWithMinerAndOriginAccounts)
             .worldState
 
-        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe (initialOriginNonce + 1)
+        postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe UInt256(initialOriginNonce + 1)
       }
     }
 
@@ -138,7 +137,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
       "after byzantium block (inclusive) if operation is a failure" in new TestSetup {
 
-        val defaultsLogs = Seq(defaultLog)
+        val defaultsLogs: Seq[TxLogEntry] = Seq(defaultLog)
 
         lazy val mockVM =
           new MockVM(createResult(_, defaultGasLimit, defaultGasLimit, 0, Some(RevertOccurs), bEmpty, defaultsLogs))
@@ -219,7 +218,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
   "clear logs only if vm execution results in an error" in new TestSetup {
 
-    val defaultsLogs = Seq(defaultLog)
+    val defaultsLogs: Seq[TxLogEntry] = Seq(defaultLog)
 
     val table: TableFor2[Option[ProgramError], Int] = Table[Option[ProgramError], Int](
       ("Execution Error", "Logs size"),
@@ -257,10 +256,10 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
   "create sender account if it does not exists" in new TestSetup {
 
-    val inputData = ByteString("the payload")
+    val inputData: ByteString = ByteString("the payload")
 
     val newAccountKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
-    val newAccountAddress =
+    val newAccountAddress: Address =
       Address(kec256(newAccountKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail))
 
     override lazy val vm: VMImpl = new MockVM((pc: PC) =>
@@ -268,7 +267,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     )
 
     val tx: LegacyTransaction = defaultTx.copy(gasPrice = 0, receivingAddress = None, payload = inputData)
-    val stx = SignedTransaction.sign(tx, newAccountKeyPair, Some(blockchainConfig.chainId))
+    val stx: SignedTransaction = SignedTransaction.sign(tx, newAccountKeyPair, Some(blockchainConfig.chainId))
 
     val result: Either[BlockExecutionError.TxsExecutionError, BlockResult] =
       mining.blockPreparator.executeTransactions(
@@ -310,10 +309,10 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     val tx2: LegacyTransaction = defaultTx.copy(gasPrice = 43, receivingAddress = Some(Address(43)))
     val tx3: LegacyTransaction = defaultTx.copy(gasPrice = 43, receivingAddress = Some(Address(43)))
     val tx4: LegacyTransaction = defaultTx.copy(gasPrice = 42, receivingAddress = Some(Address(42)))
-    val stx1 = SignedTransaction.sign(tx1, newAccountKeyPair, Some(blockchainConfig.chainId))
-    val stx2 = SignedTransaction.sign(tx2, newAccountKeyPair, Some(blockchainConfig.chainId))
-    val stx3 = SignedTransaction.sign(tx3, newAccountKeyPair, Some(blockchainConfig.chainId))
-    val stx4 = SignedTransaction.sign(tx4, newAccountKeyPair, Some(blockchainConfig.chainId))
+    val stx1: SignedTransaction = SignedTransaction.sign(tx1, newAccountKeyPair, Some(blockchainConfig.chainId))
+    val stx2: SignedTransaction = SignedTransaction.sign(tx2, newAccountKeyPair, Some(blockchainConfig.chainId))
+    val stx3: SignedTransaction = SignedTransaction.sign(tx3, newAccountKeyPair, Some(blockchainConfig.chainId))
+    val stx4: SignedTransaction = SignedTransaction.sign(tx4, newAccountKeyPair, Some(blockchainConfig.chainId))
 
     val result: (BlockResult, Seq[SignedTransaction]) = mining.blockPreparator.executePreparedTransactions(
       Seq(stx1, stx2, stx3, stx4),
@@ -347,8 +346,8 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
     val tx1: LegacyTransaction = defaultTx.copy(gasPrice = 42, receivingAddress = Some(Address(42)))
     val tx2: LegacyTransaction = defaultTx.copy(gasPrice = 42, receivingAddress = Some(Address(42)))
-    val stx1 = SignedTransaction.sign(tx1, newAccountKeyPair, Some(blockchainConfig.chainId))
-    val stx2 = SignedTransaction.sign(tx2, newAccountKeyPair, Some(blockchainConfig.chainId))
+    val stx1: SignedTransaction = SignedTransaction.sign(tx1, newAccountKeyPair, Some(blockchainConfig.chainId))
+    val stx2: SignedTransaction = SignedTransaction.sign(tx2, newAccountKeyPair, Some(blockchainConfig.chainId))
 
     val result: (BlockResult, Seq[SignedTransaction]) =
       mining.blockPreparator.executePreparedTransactions(Seq(stx1, stx2), initialWorld, defaultBlockHeader)
@@ -365,7 +364,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
       receivingAddress = None,
       payload = ByteString.empty
     )
-    val stx = SignedTransaction.sign(tx, originKeyPair, Some(blockchainConfig.chainId))
+    val stx: SignedTransaction = SignedTransaction.sign(tx, originKeyPair, Some(blockchainConfig.chainId))
     val header: BlockHeader =
       defaultBlockHeader.copy(number = blockchainConfig.forkBlockNumbers.byzantiumBlockNumber - 1)
 
@@ -402,7 +401,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
   "properly assign stateRootHash after byzantium block (inclusive) if operation is a failure" in new TestSetup {
 
-    val defaultsLogs = Seq(defaultLog)
+    val defaultsLogs: Seq[TxLogEntry] = Seq(defaultLog)
 
     lazy val mockVM =
       new MockVM(createResult(_, defaultGasLimit, defaultGasLimit, 0, Some(RevertOccurs), bEmpty, defaultsLogs))
@@ -415,7 +414,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
       receivingAddress = None,
       payload = ByteString.empty
     )
-    val stx = SignedTransaction.sign(tx, originKeyPair, Some(blockchainConfig.chainId))
+    val stx: SignedTransaction = SignedTransaction.sign(tx, originKeyPair, Some(blockchainConfig.chainId))
     val header: BlockHeader =
       defaultBlockHeader.copy(
         beneficiary = minerAddress.bytes,

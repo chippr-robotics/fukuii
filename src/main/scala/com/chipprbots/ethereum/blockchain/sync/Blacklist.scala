@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
 import scala.jdk.DurationConverters._

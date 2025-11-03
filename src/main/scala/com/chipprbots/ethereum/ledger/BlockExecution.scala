@@ -201,7 +201,7 @@ sealed trait BlockExecutionError {
 
 sealed trait BlockExecutionSuccess
 
-final case object BlockExecutionSuccess extends BlockExecutionSuccess
+case object BlockExecutionSuccess extends BlockExecutionSuccess
 
 object BlockExecutionError {
   final case class ValidationBeforeExecError(reason: Any) extends BlockExecutionError
@@ -213,7 +213,7 @@ object BlockExecutionError {
 
   final case class ValidationAfterExecError(reason: String) extends BlockExecutionError
 
-  final case object MissingParentError extends BlockExecutionError {
+  case object MissingParentError extends BlockExecutionError {
     override val reason: Any = "Cannot find parent"
   }
 

@@ -6,9 +6,9 @@ import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
 
-import akka.actor.ActorSystem
+import org.apache.pekko.actor.ActorSystem
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
@@ -16,13 +16,16 @@ import scala.util.Try
 
 import org.json4s.Formats
 import org.json4s.JsonAST.JValue
+import org.json4s._
 import org.json4s.native
 import org.json4s.native.JsonMethods._
 import org.json4s.native.Serialization
 import org.scalasbt.ipcsocket.UnixDomainServerSocket
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcController
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
+import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -30,6 +33,8 @@ import com.chipprbots.ethereum.utils.Logger
 class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcServerConfig)(implicit
     system: ActorSystem
 ) extends Logger {
+
+  implicit val runtime: IORuntime = IORuntime.global
 
   var serverSocket: ServerSocket = _
 
@@ -97,9 +102,21 @@ class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcS
         case Some(nextMsgJson) =>
           val request = nextMsgJson.extract[JsonRpcRequest]
           val responseF = jsonRpcController.handleRequest(request)
-          val response = responseF.runSyncUnsafe(awaitTimeout)
-          out.write((Serialization.write(response) + '\n').getBytes())
-          out.flush()
+          responseF.unsafeRunTimed(awaitTimeout) match {
+            case Some(response) =>
+              out.write((Serialization.write(response) + '\n').getBytes())
+              out.flush()
+            case None =>
+              // Send JSON-RPC error response for timeout
+              val errorResponse = JsonRpcResponse(
+                "2.0",
+                None,
+                Some(JsonRpcError(-32000, "Request timed out", None)),
+                request.id.getOrElse(JNull)
+              )
+              out.write((Serialization.write(errorResponse) + '\n').getBytes())
+              out.flush()
+          }
         case None =>
           running = false
       }

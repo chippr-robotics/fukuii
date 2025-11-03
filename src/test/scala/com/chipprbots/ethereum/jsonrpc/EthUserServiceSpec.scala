@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import org.scalactic.TypeCheckedTripleEquals
 import org.scalamock.scalatest.MockFactory
@@ -13,8 +13,6 @@ import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.NormalPatience
-import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum._
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain._
@@ -33,70 +31,74 @@ class EthUserServiceSpec
     with NormalPatience
     with TypeCheckedTripleEquals {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   it should "handle getCode request" in new TestSetup {
-    val address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
     storagesInstance.storages.evmCodeStorage.put(ByteString("code hash"), ByteString("code code code")).commit()
 
     import MerklePatriciaTrie.defaultByteArraySerializable
 
-    val mpt =
+    val mpt: MerklePatriciaTrie[Array[Byte], Account] =
       MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
         .put(
           crypto.kec256(address.bytes.toArray[Byte]),
           Account(0, UInt256(0), ByteString(""), ByteString("code hash"))
         )
 
-    val newBlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
-    val newblock = blockToRequest.copy(header = newBlockHeader)
+    val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
+    val newblock: Block = blockToRequest.copy(header = newBlockHeader)
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
-    val response = ethUserService.getCode(GetCodeRequest(address, BlockParam.Latest))
+    val response: ServiceResponse[GetCodeResponse] = ethUserService.getCode(GetCodeRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(GetCodeResponse(ByteString("code code code")))
+    response.unsafeRunSync() shouldEqual Right(GetCodeResponse(ByteString("code code code")))
   }
 
   it should "handle getBalance request" in new TestSetup {
-    val address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
     import MerklePatriciaTrie.defaultByteArraySerializable
 
-    val mpt =
+    val mpt: MerklePatriciaTrie[Array[Byte], Account] =
       MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
         .put(
           crypto.kec256(address.bytes.toArray[Byte]),
           Account(0, UInt256(123), ByteString(""), ByteString("code hash"))
         )
 
-    val newBlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
-    val newblock = blockToRequest.copy(header = newBlockHeader)
+    val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
+    val newblock: Block = blockToRequest.copy(header = newBlockHeader)
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
-    val response = ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
+    val response: ServiceResponse[GetBalanceResponse] =
+      ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(GetBalanceResponse(123))
+    response.unsafeRunSync() shouldEqual Right(GetBalanceResponse(123))
   }
 
   it should "handle MissingNodeException when getting balance" in new TestSetup {
-    val address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
     val newBlockHeader = blockToRequest.header
-    val newblock = blockToRequest.copy(header = newBlockHeader)
+    val newblock: Block = blockToRequest.copy(header = newBlockHeader)
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.header.number)
 
-    val response = ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
+    val response: ServiceResponse[GetBalanceResponse] =
+      ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Left(JsonRpcError.NodeNotFound)
+    response.unsafeRunSync() shouldEqual Left(JsonRpcError.NodeNotFound)
   }
   it should "handle getStorageAt request" in new TestSetup {
 
-    val address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
     import MerklePatriciaTrie.defaultByteArraySerializable
 
-    val storageMpt =
+    val storageMpt: MerklePatriciaTrie[BigInt, BigInt] =
       com.chipprbots.ethereum.domain.EthereumUInt256Mpt
         .storageMpt(
           ByteString(MerklePatriciaTrie.EmptyRootHash),
@@ -104,42 +106,44 @@ class EthUserServiceSpec
         )
         .put(UInt256(333), UInt256(123))
 
-    val mpt =
+    val mpt: MerklePatriciaTrie[Array[Byte], Account] =
       MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
         .put(
           crypto.kec256(address.bytes.toArray[Byte]),
           Account(0, UInt256(0), ByteString(storageMpt.getRootHash), ByteString(""))
         )
 
-    val newBlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
-    val newblock = blockToRequest.copy(header = newBlockHeader)
+    val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
+    val newblock: Block = blockToRequest.copy(header = newBlockHeader)
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
-    val response = ethUserService.getStorageAt(GetStorageAtRequest(address, 333, BlockParam.Latest))
-    response.runSyncUnsafe().map(v => UInt256(v.value)) shouldEqual Right(UInt256(123))
+    val response: ServiceResponse[GetStorageAtResponse] =
+      ethUserService.getStorageAt(GetStorageAtRequest(address, 333, BlockParam.Latest))
+    response.unsafeRunSync().map(v => UInt256(v.value)) shouldEqual Right(UInt256(123))
   }
 
   it should "handle get transaction count request" in new TestSetup {
-    val address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
     import MerklePatriciaTrie.defaultByteArraySerializable
 
-    val mpt =
+    val mpt: MerklePatriciaTrie[Array[Byte], Account] =
       MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
         .put(crypto.kec256(address.bytes.toArray[Byte]), Account(999, UInt256(0), ByteString(""), ByteString("")))
 
-    val newBlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
-    val newblock = blockToRequest.copy(header = newBlockHeader)
+    val newBlockHeader: BlockHeader = blockToRequest.header.copy(stateRoot = ByteString(mpt.getRootHash))
+    val newblock: Block = blockToRequest.copy(header = newBlockHeader)
     blockchainWriter.storeBlock(newblock).commit()
     blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number)
 
-    val response = ethUserService.getTransactionCount(GetTransactionCountRequest(address, BlockParam.Latest))
+    val response: ServiceResponse[GetTransactionCountResponse] =
+      ethUserService.getTransactionCount(GetTransactionCountRequest(address, BlockParam.Latest))
 
-    response.runSyncUnsafe() shouldEqual Right(GetTransactionCountResponse(BigInt(999)))
+    response.unsafeRunSync() shouldEqual Right(GetTransactionCountResponse(BigInt(999)))
   }
 
-  class TestSetup() extends MockFactory with EphemBlockchainTestSetup {
+  class TestSetup() extends EphemBlockchainTestSetup {
     lazy val ethUserService = new EthUserService(
       blockchain,
       blockchainReader,

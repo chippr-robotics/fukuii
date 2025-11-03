@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -74,7 +74,7 @@ class PendingTransactionsManager(
     with ActorLogging {
 
   import PendingTransactionsManager._
-  import akka.pattern.ask
+  import org.apache.pekko.pattern.ask
 
   metrics.gauge(
     "transactions.pool.size.gauge",
@@ -91,12 +91,13 @@ class PendingTransactionsManager(
     .newBuilder()
     .expireAfterWrite(txPoolConfig.transactionTimeout._1, txPoolConfig.transactionTimeout._2)
     .maximumSize(txPoolConfig.txPoolSize)
-    .removalListener((notification: RemovalNotification[ByteString, PendingTransaction]) =>
-      if (notification.wasEvicted()) {
-        log.debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
-        knownTransactions = knownTransactions.filterNot(_._1 == notification.getKey)
-      }
-    )
+    .removalListener(new com.google.common.cache.RemovalListener[ByteString, PendingTransaction] {
+      def onRemoval(notification: RemovalNotification[ByteString, PendingTransaction]): Unit =
+        if (notification.wasEvicted()) {
+          log.debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
+          knownTransactions = knownTransactions.filterNot(_._1 == notification.getKey)
+        }
+    })
     .build()
 
   implicit val timeout: Timeout = Timeout(3.seconds)
@@ -137,7 +138,11 @@ class PendingTransactionsManager(
       pendingTransactions.cleanUp()
       log.debug("Overriding transaction: {}", newStx.hash.toHex)
       // Only validated transactions are added this way, it is safe to call get
-      val newStxSender = SignedTransaction.getSender(newStx).get
+      val newStxSender = SignedTransaction
+        .getSender(newStx)
+        .getOrElse(
+          throw new IllegalStateException("Unable to get sender from validated transaction")
+        )
       val obsoleteTxs = pendingTransactions
         .asMap()
         .asScala

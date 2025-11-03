@@ -1,8 +1,10 @@
 package com.chipprbots.ethereum.db.storage
 
-import monix.reactive.Observable
+import cats.effect.IO
 
 import scala.collection.immutable.ArraySeq
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
@@ -56,7 +58,7 @@ trait TransactionalKeyValueStorage[K, V] {
   def emptyBatchUpdate: DataSourceBatchUpdate =
     DataSourceBatchUpdate(dataSource, Array.empty)
 
-  def storageContent: Observable[Either[IterationError, (K, V)]] =
+  def storageContent: Stream[IO, Either[IterationError, (K, V)]] =
     dataSource.iterate(namespace).map { result =>
       result.map { case (key, value) =>
         val kseq = keyDeserializer(ArraySeq.unsafeWrapArray(key))

@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.db.storage
 
 import java.util.concurrent.TimeUnit
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -103,7 +103,7 @@ class CachedReferenceCountedStorageSpec
     updateStorage(1) { stor =>
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }
-    val storage1 = updateStorage(2) { stor =>
+    val storage1: NodesKeyValueStorage = updateStorage(2) { stor =>
       stor.update(Nil, generateKeys(to = 20, from = 11))
     }
 
@@ -113,7 +113,7 @@ class CachedReferenceCountedStorageSpec
     assert(testLruCache.getValues.size == 20)
     // No updates in db, only meta data: Changelog and DeathRow
     assert(dataSource.storage.size == 4)
-    val deathrow = changeLog.getDeathRowFromStorage(1).get
+    val deathrow: List[ByteString] = changeLog.getDeathRowFromStorage(1).get
     CachedReferenceCountedStorage.prune(deathrow, testLruCache, 1)
 
     assertKeysExists(storage1, generateKeys(20, 6))
@@ -126,7 +126,7 @@ class CachedReferenceCountedStorageSpec
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }
 
-    val reAllocatedKey = generateKeys(1).head._1
+    val reAllocatedKey: ByteString = generateKeys(1).head._1
     updateStorage(2) { stor =>
       // One of potentialy deltable keys is allocated from other block
       stor.update(Nil, generateKeys(1))
@@ -137,13 +137,13 @@ class CachedReferenceCountedStorageSpec
     assert(testLruCache.getValues.size == 20)
     // No updates in db, only meta data: Changelog and DeathRow
     assert(dataSource.storage.size == 4)
-    val deathrow = changeLog.getDeathRowFromStorage(1).get
+    val deathrow: List[ByteString] = changeLog.getDeathRowFromStorage(1).get
     CachedReferenceCountedStorage.prune(deathrow, testLruCache, 1)
 
     // Pruned 4 nodes marked for delete, left one which became re-allocated
     assert(testLruCache.getValues.size == 16)
 
-    val reAllocatedValue = testLruCache.get(reAllocatedKey)
+    val reAllocatedValue: Option[HeapEntry] = testLruCache.get(reAllocatedKey)
     assert(reAllocatedValue.isDefined)
     val value = reAllocatedValue.get
     assert(value.numOfParents == 1 && value.bn == 2)
@@ -164,7 +164,7 @@ class CachedReferenceCountedStorageSpec
 
     assert(testLruCache.getValues.size == 15)
 
-    val changes = changeLog.getChangeLogFromStorage(2).get
+    val changes: List[Update] = changeLog.getChangeLogFromStorage(2).get
 
     // meta data from 2 block (2 death row + 2 change logs)
     assert(dataSource.storage.size == 4)
@@ -182,13 +182,13 @@ class CachedReferenceCountedStorageSpec
     updateStorage(1) { stor =>
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }
-    val storage1 = updateStorage(2) { stor =>
+    val storage1: NodesKeyValueStorage = updateStorage(2) { stor =>
       stor.update(Nil, generateKeys(to = 20, from = 11))
     }
 
     assertKeysExists(storage1, generateKeys(20))
 
-    val result = CachedReferenceCountedStorage.persistCache(testLruCache, nodeStorage)
+    val result: Boolean = CachedReferenceCountedStorage.persistCache(testLruCache, nodeStorage)
 
     if (result) {
       assert(testLruCache.getValues.isEmpty)

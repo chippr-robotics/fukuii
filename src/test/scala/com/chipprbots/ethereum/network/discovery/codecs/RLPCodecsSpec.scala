@@ -6,12 +6,12 @@ import scala.reflect.ClassTag
 import scala.util.Random
 
 import _root_.com.chipprbots.ethereum.rlp.RLPException
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
-import io.iohk.scalanet.discovery.ethereum.Node
-import io.iohk.scalanet.discovery.ethereum.v4.Packet
-import io.iohk.scalanet.discovery.ethereum.v4.Payload
-import io.iohk.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
+import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
+import com.chipprbots.scalanet.discovery.hash.Hash
 import org.scalactic.Equality
 import org.scalatest.Assertion
 import org.scalatest.flatspec.AnyFlatSpec
@@ -25,11 +25,17 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPEncoder
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Ping
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Pong
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.FindNode
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Neighbors
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.ENRRequest
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.ENRResponse
 
 class RLPCodecsSpec extends AnyFlatSpec with Matchers {
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-  import com.chipprbots.ethereum.rlp.RLPImplicits._
-  import RLPCodecs._
+  import com.chipprbots.ethereum.rlp.RLPImplicits.given
+  import RLPCodecs.given
 
   implicit val sigalg: Secp256k1SigAlg = new Secp256k1SigAlg()
 
@@ -131,7 +137,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
               areEqual(a, b)
             }
           case (a: RLPValue, b: RLPValue) =>
-            a.sameElements(b)
+            a.bytes.sameElements(b.bytes)
           case _ =>
             false
         }
@@ -148,7 +154,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
 
   val examples: List[RLPFixture[_ <: Payload]] = List(
     new RLPFixture[Payload.Ping] {
-      override val p = Payload.Ping(
+      override val p: Ping = Payload.Ping(
         version = 4,
         from = Node.Address(localhost, 30000, 40000),
         to = Node.Address(localhost, 30001, 0),
@@ -156,7 +162,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
         enrSeq = Some(1)
       )
 
-      override val e = RLPList(
+      override val e: RLPEncodeable = RLPList(
         p.version,
         RLPList(p.from.ip, p.from.udpPort, p.from.tcpPort),
         RLPList(p.to.ip, p.to.udpPort, p.to.tcpPort),
@@ -165,14 +171,14 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
       )
     },
     new RLPFixture[Payload.Pong] {
-      override val p = Payload.Pong(
+      override val p: Pong = Payload.Pong(
         to = Node.Address(localhost, 30001, 0),
         pingHash = Hash(randomBytes(32)),
         expiration = System.currentTimeMillis,
         enrSeq = Some(1)
       )
 
-      override val e = RLPList(
+      override val e: RLPEncodeable = RLPList(
         RLPList(
           p.to.ip,
           p.to.udpPort,
@@ -184,15 +190,15 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
       )
     },
     new RLPFixture[Payload.FindNode] {
-      override val p = Payload.FindNode(
+      override val p: FindNode = Payload.FindNode(
         target = PublicKey(randomBytes(64)),
         expiration = System.currentTimeMillis
       )
 
-      override val e = RLPList(p.target, p.expiration)
+      override val e: RLPEncodeable = RLPList(p.target, p.expiration)
     },
     new RLPFixture[Payload.Neighbors] {
-      override val p = Payload.Neighbors(
+      override val p: Neighbors = Payload.Neighbors(
         nodes = List(
           Node(id = PublicKey(randomBytes(64)), address = Node.Address(localhost, 30001, 40001)),
           Node(id = PublicKey(randomBytes(64)), address = Node.Address(localhost, 30002, 40002))
@@ -200,7 +206,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
         expiration = System.currentTimeMillis
       )
 
-      override val e = RLPList(
+      override val e: RLPEncodeable = RLPList(
         RLPList(
           RLPList(p.nodes(0).address.ip, p.nodes(0).address.udpPort, p.nodes(0).address.tcpPort, p.nodes(0).id),
           RLPList(p.nodes(1).address.ip, p.nodes(1).address.udpPort, p.nodes(1).address.tcpPort, p.nodes(1).id)
@@ -209,30 +215,30 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
       )
     },
     new RLPFixture[Payload.ENRRequest] {
-      override val p = Payload.ENRRequest(
+      override val p: ENRRequest = Payload.ENRRequest(
         expiration = System.currentTimeMillis
       )
 
-      override val e = RLPList(
+      override val e: RLPEncodeable = RLPList(
         p.expiration
       )
     },
     new RLPFixture[Payload.ENRResponse] {
       val (publicKey, privateKey) = sigalg.newKeyPair
-      val node = Node(
+      val node: Node = Node(
         id = publicKey,
         address = Node.Address(localhost, 30000, 40000)
       )
-      val enr = EthereumNodeRecord.fromNode(node, privateKey, seq = 1).require
+      val enr: EthereumNodeRecord = EthereumNodeRecord.fromNode(node, privateKey, seq = 1).require
 
-      override val p = Payload.ENRResponse(
+      override val p: ENRResponse = Payload.ENRResponse(
         requestHash = Hash(randomBytes(32)),
         enr = enr
       )
 
       import EthereumNodeRecord.Keys
 
-      override val e = RLPList(
+      override val e: RLPEncodeable = RLPList(
         p.requestHash,
         RLPList(
           p.enr.signature,

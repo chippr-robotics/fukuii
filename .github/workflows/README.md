@@ -11,13 +11,13 @@ This directory contains the GitHub Actions workflows for continuous integration,
 **Purpose:** Ensures code quality and tests pass before merging
 
 **Matrix Build:**
-- **JDK Version:** 17
+- **JDK Version:** 21
 - **Operating System:** ubuntu-latest
 - **Caching:** Coursier, Ivy, and SBT for faster builds
 
 **Steps:**
 1. Checks out code with submodules
-2. Sets up Java (17) with Temurin distribution
+2. Sets up Java (21) with Temurin distribution
 3. Configures Coursier and Ivy caching
 4. Installs SBT
 5. Compiles all modules (bytes, crypto, rlp, node)
@@ -34,6 +34,40 @@ This directory contains the GitHub Actions workflows for continuous integration,
 - Assembly JARs
 
 **Required Status Check:** Yes - Must pass before merging to protected branches
+
+---
+
+### ⚡ Fast Distro Workflow (`fast-distro.yml`)
+
+**Triggers:** Nightly schedule (2 AM UTC), Manual dispatch
+
+**Purpose:** Creates distribution packages quickly without running the full test suite, suitable for nightly releases
+
+**Steps:**
+1. Compiles production code only (bytes, crypto, rlp, node) - skips test compilation
+2. Builds assembly JAR (standalone executable)
+3. Builds distribution package (ZIP)
+4. Creates timestamped artifacts
+5. Uploads artifacts with 30-day retention
+6. Creates nightly pre-release on GitHub (for scheduled runs)
+
+**Artifacts Published:**
+- Distribution ZIP with nightly version timestamp
+- Assembly JAR with nightly version timestamp
+
+**Use Cases:**
+- Nightly builds for testing and development
+- Quick distribution builds without waiting for full test suite
+- Intermediate builds for stakeholders
+
+**Note:** This workflow intentionally skips the full test suite and test compilation for faster builds. Uses `FUKUII_DEV: true` to speed up compilation by disabling production optimizations and fatal warnings. The full test suite has some tests that are excluded in `build.sbt`. This workflow is suitable for development and testing purposes only. For production releases, use the standard release workflow (`release.yml`).
+
+**Manual Trigger:**
+```bash
+# Via GitHub UI: Actions → Fast Distro → Run workflow
+# Or use GitHub CLI:
+gh workflow run fast-distro.yml
+```
 
 ---
 
@@ -163,6 +197,15 @@ git push origin v1.0.0
 3. **Issue linking:** Reminds to link issues in PR description
 
 **Labels Applied:**
+
+**Agent Labels:** (see [AGENT_LABELS.md](../AGENT_LABELS.md) for details)
+- `agent: wraith 👻` - Compilation errors and Scala 3 migration
+- `agent: mithril ✨` - Code modernization and Scala 3 features
+- `agent: ICE 🧊` - Large-scale migrations and strategic planning
+- `agent: eye 👁️` - Testing, validation, and quality assurance
+- `agent: forge 🔨` - Consensus-critical code (EVM, mining, crypto)
+
+**Standard Labels:**
 - `documentation` - Markdown and doc changes
 - `dependencies` - Dependency updates
 - `docker` - Docker-related changes

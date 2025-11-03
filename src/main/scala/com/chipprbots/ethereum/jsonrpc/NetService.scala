@@ -2,10 +2,10 @@ package com.chipprbots.ethereum.jsonrpc
 
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration._
 
@@ -36,14 +36,23 @@ object NetService {
   }
 }
 
-class NetService(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, config: NetServiceConfig) {
+trait NetServiceAPI {
+  import NetService._
+
+  def version(req: VersionRequest): ServiceResponse[VersionResponse]
+  def listening(req: ListeningRequest): ServiceResponse[ListeningResponse]
+  def peerCount(req: PeerCountRequest): ServiceResponse[PeerCountResponse]
+}
+
+class NetService(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, config: NetServiceConfig)
+    extends NetServiceAPI {
   import NetService._
 
   def version(req: VersionRequest): ServiceResponse[VersionResponse] =
-    Task.now(Right(VersionResponse(Config.Network.peer.networkId.toString)))
+    IO.pure(Right(VersionResponse(Config.Network.peer.networkId.toString)))
 
   def listening(req: ListeningRequest): ServiceResponse[ListeningResponse] =
-    Task.now {
+    IO.pure {
       Right(
         nodeStatusHolder.get().serverStatus match {
           case _: Listening => ListeningResponse(true)

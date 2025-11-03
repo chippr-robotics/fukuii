@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.db.storage
 
 import java.nio.ByteBuffer
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 
@@ -49,12 +49,9 @@ class CachedReferenceCountedStorage(
   def update(toRemove: Seq[ByteString], toUpsert: Seq[(ByteString, NodeEncoded)]): NodesKeyValueStorage = {
     changeLog.withChangeLog(bn) { blockChangeLog =>
       toUpsert.foreach { case (nodeKey, nodeValue) =>
-        val (updatedValue, change) = {
-          val fromCache = cache.get(nodeKey)
-          if (fromCache.isDefined)
-            (fromCache.get.incrementParents(bn), Increase(nodeKey))
-          else
-            (HeapEntry(nodeValue, 1, bn), New(nodeKey))
+        val (updatedValue, change) = cache.get(nodeKey) match {
+          case Some(fromCache) => (fromCache.incrementParents(bn), Increase(nodeKey))
+          case None            => (HeapEntry(nodeValue, 1, bn), New(nodeKey))
         }
 
         cache.put(nodeKey, updatedValue)

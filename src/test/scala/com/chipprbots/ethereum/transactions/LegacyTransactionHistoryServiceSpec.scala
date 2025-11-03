@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.softwaremill.diffx.scalatest.DiffMatcher
 import mouse.all._
@@ -80,7 +80,7 @@ class LegacyTransactionHistoryServiceSpec
     )
 
     for {
-      _ <- Task {
+      _ <- IO {
         blockchainWriter
           .storeBlock(blockWithTx1)
           .and(blockchainWriter.storeReceipts(blockWithTx1.hash, blockTx1Receipts))
@@ -109,8 +109,8 @@ class LegacyTransactionHistoryServiceSpec
         Seq(ExtendedTransactionData(signedTx, isOutgoing = true, None))
 
       for {
-        _ <- Task(blockchainWriter.storeBlock(blockWithTx).commit())
-        _ <- Task(pendingTransactionManager.ref ! PendingTransactionsManager.AddTransactions(txWithSender))
+        _ <- IO(blockchainWriter.storeBlock(blockWithTx).commit())
+        _ <- IO(pendingTransactionManager.ref ! PendingTransactionsManager.AddTransactions(txWithSender))
         response <- transactionHistoryService.getAccountTransactions(
           txWithSender.senderAddress,
           BigInt(3125371) to BigInt(3125381)
@@ -165,14 +165,14 @@ class LegacyTransactionHistoryServiceSpec
         )
 
       for {
-        _ <- Task {
+        _ <- IO {
           blockchainWriter.save(block1, makeReceipts(block1), ChainWeight(0, block1.header.difficulty), true)
         }
-        _ <- Task(blockchainWriter.save(block2, Nil, ChainWeight(2, block1.header.difficulty), true))
-        _ <- Task {
+        _ <- IO(blockchainWriter.save(block2, Nil, ChainWeight(2, block1.header.difficulty), true))
+        _ <- IO {
           blockchainWriter.save(block3, makeReceipts(block3), ChainWeight(2, block1.header.difficulty * 2), true)
         }
-        lastCheckpoint <- Task(blockchainReader.getLatestCheckpointBlockNumber())
+        lastCheckpoint <- IO(blockchainReader.getLatestCheckpointBlockNumber())
         response <- transactionHistoryService.getAccountTransactions(
           senderAddress,
           BigInt.apply(0) to BigInt(10)
@@ -181,7 +181,7 @@ class LegacyTransactionHistoryServiceSpec
         assert(!block3.hasCheckpoint)
         assert(lastCheckpoint === block2.number)
         assert(block2.hasCheckpoint)
-        response should matchTo(List(expectedNonCheckpointedTxData, expectedCheckpointedTxData))
+        response shouldBe List(expectedNonCheckpointedTxData, expectedCheckpointedTxData)
       }
   }
 }

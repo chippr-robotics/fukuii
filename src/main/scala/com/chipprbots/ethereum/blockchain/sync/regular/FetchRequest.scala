@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.ActorRef
-import akka.pattern.ask
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.pattern.ask
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration._
 import scala.util.Failure
@@ -30,12 +30,12 @@ trait FetchRequest[A] {
 
   implicit val timeout: Timeout = syncConfig.peerResponseTimeout + 2.second // some margin for actor communication
 
-  def makeRequest(request: Request[_], responseFallback: A): Task[A] =
-    Task
-      .deferFuture(peersClient ? request)
+  def makeRequest(request: Request[_], responseFallback: A): IO[A] =
+    IO
+      .fromFuture(IO(peersClient ? request))
       .tap(blacklistPeerOnFailedRequest)
       .flatMap(handleRequestResult(responseFallback))
-      .onErrorHandle { error =>
+      .handleError { error =>
         log.error("Unexpected error while doing a request", error)
         responseFallback
       }
@@ -45,17 +45,17 @@ trait FetchRequest[A] {
     case _                           => ()
   }
 
-  def handleRequestResult(fallback: A)(msg: Any): Task[A] =
+  def handleRequestResult(fallback: A)(msg: Any): IO[A] =
     msg match {
       case failed: RequestFailed =>
         log.debug("Request failed due to {}", failed)
-        Task.now(fallback)
+        IO.pure(fallback)
       case NoSuitablePeer =>
-        Task.now(fallback).delayExecution(syncConfig.syncRetryInterval)
+        IO.pure(fallback).delayBy(syncConfig.syncRetryInterval)
       case Failure(cause) =>
         log.error("Unexpected error on the request result", cause)
-        Task.now(fallback)
+        IO.pure(fallback)
       case PeersClient.Response(peer, msg) =>
-        Task.now(makeAdaptedMessage(peer, msg))
+        IO.pure(makeAdaptedMessage(peer, msg))
     }
 }

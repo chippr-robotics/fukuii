@@ -1,9 +1,8 @@
 package com.chipprbots.ethereum.consensus
 
 import cats.data.NonEmptyList
-
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
@@ -27,7 +26,6 @@ import com.chipprbots.ethereum.ledger.BlockExecutionSuccess
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.FunctorOps._
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
 
@@ -39,16 +37,16 @@ class ConsensusAdapter(
     blockchainReader: BlockchainReader,
     blockQueue: BlockQueue,
     blockValidation: BlockValidation,
-    validationScheduler: Scheduler
+    validationScheduler: IORuntime
 ) extends Logger {
   def evaluateBranchBlock(
       block: Block
-  )(implicit blockExecutionScheduler: Scheduler, blockchainConfig: BlockchainConfig): Task[BlockImportResult] =
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] =
     blockchainReader.getBestBlock() match {
       case Some(bestBlock) =>
         if (isBlockADuplicate(block.header, bestBlock.header.number)) {
           log.debug("Ignoring duplicated block: {}", block.idTag)
-          Task.now(DuplicateBlock)
+          IO.pure(DuplicateBlock)
         } else if (blockchainReader.getChainWeightByHash(bestBlock.header.hash).isEmpty) {
           // This part is not really needed except for compatibility as a missing chain weight
           // would indicate an inconsistent database
@@ -56,21 +54,21 @@ class ConsensusAdapter(
         } else {
           doBlockPreValidation(block).flatMap {
             case Left(error) =>
-              Task.now(BlockImportFailed(error.reason.toString))
+              IO.pure(BlockImportFailed(error.reason.toString))
             case Right(BlockExecutionSuccess) =>
               enqueueAndGetBranch(block, bestBlock.number)
                 .map(forwardAndTranslateConsensusResult) // a new branch was created so we give it to consensus
-                .getOrElse(Task.now(BlockEnqueued)) // the block was not rooted so it was simply enqueued
+                .getOrElse(IO.pure(BlockEnqueued)) // the block was not rooted so it was simply enqueued
           }
         }
       case None =>
         log.error("Couldn't find the current best block")
-        Task.now(BlockImportFailed("Couldn't find the current best block"))
+        IO.pure(BlockImportFailed("Couldn't find the current best block"))
     }
 
   private def forwardAndTranslateConsensusResult(
       newBranch: NonEmptyList[Block]
-  )(implicit blockExecutionScheduler: Scheduler, blockchainConfig: BlockchainConfig) =
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig) =
     consensus
       .evaluateBranch(newBranch)
       .map {
@@ -104,19 +102,21 @@ class ConsensusAdapter(
 
   private def doBlockPreValidation(block: Block)(implicit
       blockchainConfig: BlockchainConfig
-  ): Task[Either[ValidationBeforeExecError, BlockExecutionSuccess]] =
-    Task
-      .evalOnce(blockValidation.validateBlockBeforeExecution(block))
-      .tap {
+  ): IO[Either[ValidationBeforeExecError, BlockExecutionSuccess]] =
+    IO
+      .delay(blockValidation.validateBlockBeforeExecution(block))
+      .flatTap {
         case Left(error) =>
-          log.error(
-            "Error while validating block with hash {} before execution: {}",
-            Hex.toHexString(block.hash.toArray),
-            error.reason.toString
+          IO(
+            log.error(
+              "Error while validating block with hash {} before execution: {}",
+              Hex.toHexString(block.hash.toArray),
+              error.reason.toString
+            )
           )
-        case Right(_) => log.debug("Block with hash {} validated successfully", Hex.toHexString(block.hash.toArray))
+        case Right(_) => IO(log.debug("Block with hash {} validated successfully", Hex.toHexString(block.hash.toArray)))
       }
-      .executeOn(validationScheduler)
+      .evalOn(validationScheduler.compute)
 
   private def isBlockADuplicate(block: BlockHeader, currentBestBlockNumber: BigInt): Boolean = {
     val hash = block.hash
@@ -131,12 +131,12 @@ class ConsensusAdapter(
       .map(topBlock => blockQueue.getBranch(topBlock.hash, dequeue = true))
       .flatMap(NonEmptyList.fromList)
 
-  private def returnNoTotalDifficulty(bestBlock: Block): Task[BlockImportFailed] = {
+  private def returnNoTotalDifficulty(bestBlock: Block): IO[BlockImportFailed] = {
     log.error(
       "Getting total difficulty for current best block with hash: {} failed",
       bestBlock.header.hashAsHexString
     )
-    Task.now(
+    IO.pure(
       BlockImportFailed(
         s"Couldn't get total difficulty for current best block with hash: ${bestBlock.header.hashAsHexString}"
       )

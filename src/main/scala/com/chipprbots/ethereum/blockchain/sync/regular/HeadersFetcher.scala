@@ -1,14 +1,14 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
-import akka.actor.typed.ActorRef
-import akka.actor.typed.Behavior
-import akka.actor.typed.scaladsl.AbstractBehavior
-import akka.actor.typed.scaladsl.ActorContext
-import akka.actor.typed.scaladsl.Behaviors
-import akka.actor.{ActorRef => ClassicActorRef}
-import akka.util.ByteString
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Failure
 import scala.util.Success
@@ -34,7 +34,7 @@ class HeadersFetcher(
     with FetchRequest[HeadersFetcherCommand] {
 
   val log: Logger = context.log
-  implicit val ec: Scheduler = Scheduler(context.executionContext)
+  implicit val ec: IORuntime = IORuntime.global
 
   import HeadersFetcher._
 
@@ -68,11 +68,11 @@ class HeadersFetcher(
       .flatMap {
         case AdaptedMessage(_, BlockHeaders(headers)) if headers.isEmpty =>
           log.debug("Empty BlockHeaders response. Retry in {}", syncConfig.syncRetryInterval)
-          Task.now(HeadersFetcher.RetryHeadersRequest).delayResult(syncConfig.syncRetryInterval)
-        case res => Task.now(res)
+          IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(syncConfig.syncRetryInterval)
+        case res => IO.pure(res)
       }
 
-    context.pipeToSelf(resp.runToFuture) {
+    context.pipeToSelf(resp.unsafeToFuture()) {
       case Success(res) => res
       case Failure(_)   => HeadersFetcher.RetryHeadersRequest
     }
@@ -91,6 +91,6 @@ object HeadersFetcher {
   sealed trait HeadersFetcherCommand
   final case class FetchHeadersByNumber(block: BigInt, amount: BigInt) extends HeadersFetcherCommand
   final case class FetchHeadersByHash(block: ByteString, amount: BigInt) extends HeadersFetcherCommand
-  final case object RetryHeadersRequest extends HeadersFetcherCommand
+  case object RetryHeadersRequest extends HeadersFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends HeadersFetcherCommand
 }

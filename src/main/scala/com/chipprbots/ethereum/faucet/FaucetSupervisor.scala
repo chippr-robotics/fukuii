@@ -1,12 +1,14 @@
 package com.chipprbots.ethereum.faucet
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.OneForOneStrategy
-import akka.actor.Props
-import akka.actor.SupervisorStrategy
-import akka.pattern.BackoffOpts
-import akka.pattern.BackoffSupervisor
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.OneForOneStrategy
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.SupervisorStrategy
+import org.apache.pekko.pattern.BackoffOpts
+import org.apache.pekko.pattern.BackoffSupervisor
+
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -19,7 +21,8 @@ object FaucetSupervisor {
 }
 
 class FaucetSupervisor(walletService: WalletService, config: FaucetConfig, shutdown: () => Unit)(implicit
-    system: ActorSystem
+    system: ActorSystem,
+    runtime: IORuntime
 ) extends Logger {
 
   val childProps: Props = FaucetHandler.props(walletService, config)

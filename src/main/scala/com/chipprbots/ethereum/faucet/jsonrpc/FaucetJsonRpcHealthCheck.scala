@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.faucet.jsonrpc.FaucetDomain.StatusRequest
 import com.chipprbots.ethereum.healthcheck.HealthcheckResponse
@@ -11,13 +11,17 @@ class FaucetJsonRpcHealthCheck(faucetRpcService: FaucetRpcService) extends JsonR
 
   protected def mainService: String = "faucet health"
 
-  final val statusHC: Task[JsonRpcHealthcheck[FaucetDomain.StatusResponse]] =
+  final val statusHC: IO[JsonRpcHealthcheck[FaucetDomain.StatusResponse]] =
     JsonRpcHealthcheck.fromServiceResponse("status", faucetRpcService.status(StatusRequest()))
 
-  override def healthCheck(): Task[HealthcheckResponse] = {
+  override def healthCheck(): IO[HealthcheckResponse] = {
     val statusF = statusHC.map(_.toResult)
     val responseF = statusF.map(check => HealthcheckResponse(List(check)))
 
     handleResponse(responseF)
   }
+
+  override def readinessCheck(): IO[HealthcheckResponse] =
+    // For faucet, readiness is the same as health
+    healthCheck()
 }

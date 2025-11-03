@@ -1,10 +1,9 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.data.EitherT
-
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.LegacyTransaction
@@ -20,7 +19,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 class WalletService(walletRpcClient: WalletRpcClient, keyStore: KeyStore, config: FaucetConfig) extends Logger {
 
-  def sendFunds(wallet: Wallet, addressTo: Address): Task[Either[RpcError, ByteString]] =
+  def sendFunds(wallet: Wallet, addressTo: Address): IO[Either[RpcError, ByteString]] =
     (for {
       nonce <- EitherT(walletRpcClient.getNonce(wallet.address))
       txId <- EitherT(walletRpcClient.sendTransaction(prepareTx(wallet, addressTo, nonce)))
@@ -42,7 +41,7 @@ class WalletService(walletRpcClient: WalletRpcClient, keyStore: KeyStore, config
     ByteString(rlp.encode(stx.tx.toRLPEncodable))
   }
 
-  def getWallet: Task[Either[KeyStoreError, Wallet]] = Task {
+  def getWallet: IO[Either[KeyStoreError, Wallet]] = IO {
     keyStore.unlockAccount(config.walletAddress, config.walletPassword) match {
       case Right(w) =>
         log.info(s"unlock wallet for use in faucet (${config.walletAddress})")

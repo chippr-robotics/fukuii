@@ -1,10 +1,9 @@
 package com.chipprbots.ethereum.consensus.pow
 package validators
 
-import akka.util.ByteString
+import java.util.concurrent.atomic.AtomicReference
 
-import monix.execution.atomic.Atomic
-import monix.execution.atomic.AtomicAny
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderPoWError
@@ -22,7 +21,7 @@ object EthashBlockHeaderValidator {
 
   // NOTE the below comment is from before PoW decoupling
   // we need atomic since validators can be used from multiple places
-  protected val powCaches: AtomicAny[List[PowCacheData]] = Atomic(List.empty[PowCacheData])
+  protected val powCaches: AtomicReference[List[PowCacheData]] = new AtomicReference(List.empty[PowCacheData])
 
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.nonce]] and
     * [[com.chipprbots.ethereum.domain.BlockHeader.mixHash]] are correct based on validations stated in section 4.4.4 of
@@ -38,16 +37,22 @@ object EthashBlockHeaderValidator {
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] = {
     import EthashUtils._
 
-    def getPowCacheData(epoch: Long, seed: ByteString): PowCacheData =
-      powCaches.transformAndExtract { cache =>
+    def getPowCacheData(epoch: Long, seed: ByteString): PowCacheData = {
+      var result: PowCacheData = null
+      powCaches.updateAndGet { cache =>
         cache.find(_.epoch == epoch) match {
-          case Some(pcd) => (pcd, cache)
+          case Some(pcd) =>
+            result = pcd
+            cache
           case None =>
             val data =
               PowCacheData(epoch, cache = EthashUtils.makeCache(epoch, seed), dagSize = EthashUtils.dagSize(epoch))
-            (data, (data :: cache).take(MaxPowCaches))
+            result = data
+            (data :: cache).take(MaxPowCaches)
         }
       }
+      result
+    }
 
     val epoch =
       EthashUtils.epoch(blockHeader.number.toLong, blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong)

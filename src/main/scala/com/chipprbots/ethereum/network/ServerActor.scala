@@ -3,16 +3,16 @@ package com.chipprbots.ethereum.network
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.io.IO
-import akka.io.Tcp
-import akka.io.Tcp.Bind
-import akka.io.Tcp.Bound
-import akka.io.Tcp.CommandFailed
-import akka.io.Tcp.Connected
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.io.IO
+import org.apache.pekko.io.Tcp
+import org.apache.pekko.io.Tcp.Bind
+import org.apache.pekko.io.Tcp.Bound
+import org.apache.pekko.io.Tcp.CommandFailed
+import org.apache.pekko.io.Tcp.Connected
 
 import org.bouncycastle.util.encoders.Hex
 

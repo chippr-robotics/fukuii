@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.db.storage
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
@@ -36,10 +36,8 @@ class SerializingMptStorage(storage: NodesKeyValueStorage) extends MptStorage {
 
 object MptStorage {
   def collapseNode(node: Option[MptNode]): (Option[MptNode], List[(ByteString, Array[Byte])]) =
-    if (node.isEmpty)
-      (None, List.empty[(ByteString, Array[Byte])])
-    else {
-      val (hashNode, newNodes) = MptTraversals.collapseTrie(node.get)
+    node.fold[(Option[MptNode], List[(ByteString, Array[Byte])])]((None, List.empty)) { n =>
+      val (hashNode, newNodes) = MptTraversals.collapseTrie(n)
       (Some(hashNode), newNodes)
     }
 

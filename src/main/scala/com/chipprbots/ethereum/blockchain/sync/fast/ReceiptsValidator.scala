@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError

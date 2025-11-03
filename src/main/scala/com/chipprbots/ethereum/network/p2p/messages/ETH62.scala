@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -12,14 +12,14 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
-import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 object ETH62 {
   object BlockHash {
 
     implicit class BlockHashEnc(blockHash: BlockHash) extends RLPSerializable {
-      override def toRLPEncodable: RLPEncodeable = RLPList(blockHash.hash, blockHash.number)
+      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(blockHash.hash.toArray[Byte]), blockHash.number)
     }
 
     implicit class BlockHashDec(val bytes: Array[Byte]) extends AnyVal {
@@ -28,8 +28,9 @@ object ETH62 {
 
     implicit class BlockHashRLPEncodableDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
       def toBlockHash: BlockHash = rlpEncodeable match {
-        case RLPList(hash, number) => BlockHash(hash, number)
-        case _                     => throw new RuntimeException("Cannot decode BlockHash")
+        case RLPList(RLPValue(hashBytes), RLPValue(numberBytes)) =>
+          BlockHash(ByteString(hashBytes), BigInt(1, numberBytes))
+        case _ => throw new RuntimeException("Cannot decode BlockHash")
       }
     }
   }
@@ -83,18 +84,29 @@ object ETH62 {
         import msg._
         block match {
           case Left(blockNumber) => RLPList(blockNumber, maxHeaders, skip, if (reverse) 1 else 0)
-          case Right(blockHash)  => RLPList(blockHash, maxHeaders, skip, if (reverse) 1 else 0)
+          case Right(blockHash)  => RLPList(RLPValue(blockHash.toArray[Byte]), maxHeaders, skip, if (reverse) 1 else 0)
         }
       }
     }
 
     implicit class GetBlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetBlockHeaders: GetBlockHeaders = rawDecode(bytes) match {
-        case RLPList((block: RLPValue), maxHeaders, skip, reverse) if block.bytes.length < 32 =>
-          GetBlockHeaders(Left(block), maxHeaders, skip, (reverse: Int) == 1)
+        case RLPList(RLPValue(blockBytes), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))
+            if blockBytes.length < 32 =>
+          GetBlockHeaders(
+            Left(BigInt(1, blockBytes)),
+            BigInt(1, maxHeadersBytes),
+            BigInt(1, skipBytes),
+            BigInt(1, reverseBytes) == 1
+          )
 
-        case RLPList((block: RLPValue), maxHeaders, skip, reverse) =>
-          GetBlockHeaders(Right(block), maxHeaders, skip, (reverse: Int) == 1)
+        case RLPList(RLPValue(blockBytes), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes)) =>
+          GetBlockHeaders(
+            Right(ByteString(blockBytes)),
+            BigInt(1, maxHeadersBytes),
+            BigInt(1, skipBytes),
+            BigInt(1, reverseBytes) == 1
+          )
 
         case _ => throw new RuntimeException("Cannot decode GetBlockHeaders")
       }

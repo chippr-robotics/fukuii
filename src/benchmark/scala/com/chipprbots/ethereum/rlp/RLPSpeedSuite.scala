@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.rlp
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.domain.Block._
 import com.chipprbots.ethereum.domain._
@@ -32,7 +32,7 @@ class RLPSpeedSuite
     log.info(s"Block serializations / sec: (${rounds.toFloat / elapsedBlockSerialization})")
 
     val blockDeserializationStart: Long = System.currentTimeMillis
-    val deserializedBlock: Block = doTestDeserialize(serializedBlock, (b: Array[Byte]) => b.toBlock, rounds)
+    doTestDeserialize(serializedBlock, (b: Array[Byte]) => b.toBlock, rounds)
     val elapsedBlockDeserialization = (System.currentTimeMillis() - blockDeserializationStart) / 1000f
     log.info(s"Block deserializations / sec: (${rounds.toFloat / elapsedBlockDeserialization})")
 
@@ -43,8 +43,7 @@ class RLPSpeedSuite
     log.info(s"TX serializations / sec: (${rounds.toFloat / elapsedTxSerialization})")
 
     val txDeserializationStart: Long = System.currentTimeMillis
-    val deserializedTx: SignedTransaction =
-      doTestDeserialize(serializedTx, (b: Array[Byte]) => b.toSignedTransaction, rounds)
+    doTestDeserialize(serializedTx, (b: Array[Byte]) => b.toSignedTransaction, rounds)
     val elapsedTxDeserialization = (System.currentTimeMillis() - txDeserializationStart) / 1000f
     log.info(s"TX deserializations / sec: (${rounds.toFloat / elapsedTxDeserialization})")
   }

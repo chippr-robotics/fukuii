@@ -1,19 +1,18 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.typed
-import akka.actor.typed.{ActorRef => TypedActorRef}
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.typed
+import org.apache.pekko.actor.typed.{ActorRef => TypedActorRef}
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.unsafe.IORuntime
 import cats.syntax.traverse._
-
-import monix.eval.Task
-import monix.execution.Scheduler
 
 import scala.concurrent.Await
 import scala.concurrent.Future
@@ -63,6 +62,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import org.apache.pekko.actor.ActorRef
 
 class RegularSyncSpec
     extends WordSpecBase
@@ -74,9 +74,9 @@ class RegularSyncSpec
     with RegularSyncFixtures {
   type Fixture = RegularSyncFixture
 
-  val actorSystemResource: Resource[Task, ActorSystem] =
-    Resource.make(Task(ActorSystem()))(system => Task(TestKit.shutdownActorSystem(system)))
-  val fixtureResource: Resource[Task, Fixture] = actorSystemResource.map(new Fixture(_))
+  val actorSystemResource: Resource[IO, ActorSystem] =
+    Resource.make(IO(ActorSystem()))(system => IO(TestKit.shutdownActorSystem(system)))
+  val fixtureResource: Resource[IO, Fixture] = actorSystemResource.map(new Fixture(_))
 
   // Used only in sync tests
   var testSystem: ActorSystem = _
@@ -85,13 +85,15 @@ class RegularSyncSpec
   override def afterEach(): Unit =
     TestKit.shutdownActorSystem(testSystem)
 
-  def sync[T <: Fixture](test: => T): Future[Assertion] =
+  def sync[T <: Fixture](test: => T): Future[Assertion] = {
+    import scala.concurrent.ExecutionContext.Implicits.global
     Future {
       test
       // this makes sure that actors are all done after the test (believe me, afterEach does not work with mocks)
       TestKit.shutdownActorSystem(testSystem)
       succeed
     }
+  }
 
   "Regular Sync" when {
     "initializing" should {
@@ -187,9 +189,9 @@ class RegularSyncSpec
       })
 
       "blacklist peer which sends headers that were not requested" in sync(new Fixture(testSystem) {
-        import akka.actor.typed.scaladsl.adapter._
+        import org.apache.pekko.actor.typed.scaladsl.adapter._
 
-        val blockImporter = TestProbe()
+        val blockImporter: TestProbe = TestProbe()
         val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
           system.spawn(
             BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
@@ -217,10 +219,10 @@ class RegularSyncSpec
       })
 
       "blacklist peer which sends bodies that were not requested" in sync(new Fixture(testSystem) {
-        import akka.actor.typed.scaladsl.adapter._
+        import org.apache.pekko.actor.typed.scaladsl.adapter._
 
         var blockFetcherAdapter: TypedActorRef[MessageFromPeer] = _
-        val blockImporter = TestProbe()
+        val blockImporter: TestProbe = TestProbe()
         val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
           system.spawn(
             BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
@@ -296,11 +298,11 @@ class RegularSyncSpec
           (blockchainReader.getBestBlockNumber _).when().onCall(() => bestBlock.number)
           override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
           (consensusAdapter
-            .evaluateBranchBlock(_: Block)(_: Scheduler, _: BlockchainConfig))
+            .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
             .when(*, *, *)
             .onCall((block, _, _) => fakeEvaluateBlock(block))
           override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
-          override lazy val syncConfig = defaultSyncConfig.copy(
+          override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
             blockHeadersPerRequest = 5,
             blockBodiesPerRequest = 5,
             blocksBatchSize = 5,
@@ -333,7 +335,7 @@ class RegularSyncSpec
 
           peersClient.setAutoPilot(new BranchResolutionAutoPilot(didResponseWithNewBranch = false, testBlocks))
 
-          Await.result(consensusAdapter.evaluateBranchBlock(BlockHelpers.genesis).runToFuture, remainingOrDefault)
+          Await.result(consensusAdapter.evaluateBranchBlock(BlockHelpers.genesis).unsafeToFuture(), remainingOrDefault)
 
           regularSync ! SyncProtocol.Start
 
@@ -357,11 +359,11 @@ class RegularSyncSpec
         (blockchainReader.getBestBlockNumber _).when().onCall(() => bestBlock.number)
         override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
         (consensusAdapter
-          .evaluateBranchBlock(_: Block)(_: Scheduler, _: BlockchainConfig))
+          .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
           .when(*, *, *)
           .onCall((block, _, _) => fakeEvaluateBlock(block))
         override lazy val branchResolution: BranchResolution = new FakeBranchResolution()
-        override lazy val syncConfig = defaultSyncConfig.copy(
+        override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
           syncRetryInterval = 1.second,
           printStatusInterval = 0.5.seconds,
           branchResolutionRequestSize = 12, // Over the original branch size
@@ -372,8 +374,8 @@ class RegularSyncSpec
           blocksBatchSize = 50
         )
 
-        val originalBranch = BlockHelpers.generateChain(10, BlockHelpers.genesis)
-        val betterBranch = BlockHelpers.generateChain(originalBranch.size * 2, BlockHelpers.genesis)
+        val originalBranch: List[Block] = BlockHelpers.generateChain(10, BlockHelpers.genesis)
+        val betterBranch: List[Block] = BlockHelpers.generateChain(originalBranch.size * 2, BlockHelpers.genesis)
 
         class ForkingAutoPilot(blocksToRespond: List[Block], forkedBlocks: Option[List[Block]])
             extends PeersClientAutoPilot(blocksToRespond) {
@@ -389,12 +391,12 @@ class RegularSyncSpec
 
         peersClient.setAutoPilot(new ForkingAutoPilot(originalBranch, Some(betterBranch)))
 
-        Await.result(consensusAdapter.evaluateBranchBlock(BlockHelpers.genesis).runToFuture, remainingOrDefault)
+        Await.result(consensusAdapter.evaluateBranchBlock(BlockHelpers.genesis).unsafeToFuture(), remainingOrDefault)
 
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
-        val blockFetcher = peerEventBus.sender()
+        val blockFetcher: ActorRef = peerEventBus.sender()
         peerEventBus.reply(
           MessageFromPeer(NewBlock(originalBranch.last, ChainWeight(0, originalBranch.last.number)), defaultPeer.id)
         )
@@ -415,7 +417,7 @@ class RegularSyncSpec
         val failingBlock: Block = testBlocksChunked.head.head
         setImportResult(
           failingBlock,
-          Task.now(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash)))
+          IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash)))
         )
       }
 
@@ -489,12 +491,12 @@ class RegularSyncSpec
         (blockchainReader.getBestBlockNumber _).when().returns(0)
         (branchResolution.resolveBranch _).when(*).returns(NewBetterBranch(Nil)).atLeastOnce()
         (consensusAdapter
-          .evaluateBranchBlock(_: Block)(_: Scheduler, _: BlockchainConfig))
+          .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
           .when(*, *, *)
-          .returns(Task.now(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash))))
+          .returns(IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash))))
 
         var saveNodeWasCalled: Boolean = false
-        val nodeData = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
+        val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
         (blockchainReader.getBestBlockNumber _).when().returns(0)
         (blockchainReader.getBlockHeaderByNumber _).when(*).returns(Some(BlockHelpers.genesis.header))
         (stateStorage.saveNode _)
@@ -528,14 +530,14 @@ class RegularSyncSpec
 
         Thread.sleep(remainingOrDefault.toMillis)
 
-        (consensusAdapter.evaluateBranchBlock(_: Block)(_: Scheduler, _: BlockchainConfig)).verify(*, *, *).never()
+        (consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never()
       })
 
       "retry fetch of block that failed to import" in sync(new Fixture(testSystem) {
         val failingBlock: Block = testBlocksChunked(1).head
 
-        testBlocksChunked.head.foreach(setImportResult(_, Task.now(BlockImportedToTop(Nil))))
-        setImportResult(failingBlock, Task.now(BlockImportFailed("test error")))
+        testBlocksChunked.head.foreach(setImportResult(_, IO.pure(BlockImportedToTop(Nil))))
+        setImportResult(failingBlock, IO.pure(BlockImportFailed("test error")))
 
         peersClient.setAutoPilot(new PeersClientAutoPilot())
 
@@ -594,7 +596,7 @@ class RegularSyncSpec
     "handling mined blocks" should {
       "not import when importing other blocks" in sync(new Fixture(testSystem) {
         val headPromise: Promise[BlockImportResult] = Promise()
-        setImportResult(testBlocks.head, Task.fromFuture(headPromise.future))
+        setImportResult(testBlocks.head, IO.fromFuture(IO.pure(headPromise.future)))
         val minedBlock: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
         peersClient.setAutoPilot(new PeersClientAutoPilot())
 
@@ -622,7 +624,7 @@ class RegularSyncSpec
 
       "import when not on top and not importing other blocks" in sync(new Fixture(testSystem) {
         val minedBlock: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
-        setImportResult(minedBlock, Task.now(BlockImportedToTop(Nil)))
+        setImportResult(minedBlock, IO.pure(BlockImportedToTop(Nil)))
 
         regularSync ! SyncProtocol.Start
 
@@ -656,13 +658,13 @@ class RegularSyncSpec
       "wait while importing other blocks and then import" in sync(new Fixture(testSystem) {
         val block = testBlocks.head
         val blockPromise: Promise[BlockImportResult] = Promise()
-        setImportResult(block, Task.fromFuture(blockPromise.future))
+        setImportResult(block, IO.fromFuture(IO.pure(blockPromise.future)))
 
-        setImportResult(testBlocks(1), Task.now(BlockImportedToTop(Nil)))
+        setImportResult(testBlocks(1), IO.pure(BlockImportedToTop(Nil)))
 
-        val checkpointBlock = checkpointBlockGenerator.generate(block, checkpoint)
-        val newCheckpointMsg = NewCheckpoint(checkpointBlock)
-        setImportResult(checkpointBlock, Task.eval(BlockImportedToTop(Nil)))
+        val checkpointBlock: Block = checkpointBlockGenerator.generate(block, checkpoint)
+        val newCheckpointMsg: NewCheckpoint = NewCheckpoint(checkpointBlock)
+        setImportResult(checkpointBlock, IO(BlockImportedToTop(Nil)))
 
         regularSync ! SyncProtocol.Start
 
@@ -683,15 +685,15 @@ class RegularSyncSpec
         regularSync ! SyncProtocol.Start
 
         val parentBlock = testBlocks.last
-        setImportResult(parentBlock, Task.eval(BlockImportedToTop(Nil)))
-        consensusAdapter.evaluateBranchBlock(parentBlock)(Scheduler.global, implicitly[BlockchainConfig])
+        setImportResult(parentBlock, IO(BlockImportedToTop(Nil)))
+        consensusAdapter.evaluateBranchBlock(parentBlock)(implicitly[IORuntime], implicitly[BlockchainConfig])
 
-        val checkpointBlock = checkpointBlockGenerator.generate(parentBlock, checkpoint)
-        val newCheckpointMsg = NewCheckpoint(checkpointBlock)
+        val checkpointBlock: Block = checkpointBlockGenerator.generate(parentBlock, checkpoint)
+        val newCheckpointMsg: NewCheckpoint = NewCheckpoint(checkpointBlock)
         setImportResult(
           checkpointBlock,
           // FIXME: lastCheckpointNumber == 0, refactor RegularSyncFixture?
-          Task.eval(
+          IO(
             BlockImportedToTop(List(BlockData(checkpointBlock, Nil, ChainWeight(parentBlock.number + 1, 42))))
           )
         )
@@ -770,9 +772,9 @@ class RegularSyncSpec
         import fixture._
 
         for {
-          _ <- Task(regularSync ! SyncProtocol.Start)
+          _ <- IO(regularSync ! SyncProtocol.Start)
           before <- getSyncStatus
-          _ <- Task {
+          _ <- IO {
             peerEventBus.expectMsgClass(classOf[Subscribe])
             peerEventBus.reply(
               MessageFromPeer(
@@ -795,9 +797,9 @@ class RegularSyncSpec
           _ <- testBlocks
             .take(5)
             .traverse(block =>
-              Task(blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(10000), saveAsBestBlock = true))
+              IO(blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(10000), saveAsBestBlock = true))
             )
-          _ <- Task {
+          _ <- IO {
             regularSync ! SyncProtocol.Start
 
             peerEventBus.expectMsgClass(classOf[Subscribe])
@@ -822,7 +824,7 @@ class RegularSyncSpec
         import fixture._
 
         for {
-          _ <- Task {
+          _ <- IO {
             regularSync ! SyncProtocol.Start
 
             peerEventBus.expectMsgClass(classOf[Subscribe])
@@ -845,8 +847,8 @@ class RegularSyncSpec
         import fixture._
 
         for {
-          _ <- Task {
-            testBlocks.take(6).foreach(setImportResult(_, Task.eval(BlockImportedToTop(Nil))))
+          _ <- IO {
+            testBlocks.take(6).foreach(setImportResult(_, IO(BlockImportedToTop(Nil))))
 
             peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks.take(6)))
 
@@ -860,7 +862,7 @@ class RegularSyncSpec
               )
             )
           }
-          _ <- importedBlocks.take(5).lastL
+          _ <- importedBlocks.take(5).compile.last
           _ <- fishForStatus {
             case s: Status.Syncing if s.blocksProgress == Progress(5, 20) && s.startingBlockNumber == 0 =>
               s
@@ -873,7 +875,7 @@ class RegularSyncSpec
           import fixture._
 
           for {
-            _ <- Task(goToTop())
+            _ <- IO(goToTop())
             status <- getSyncStatus
           } yield assert(status === Status.SyncDone)
       }

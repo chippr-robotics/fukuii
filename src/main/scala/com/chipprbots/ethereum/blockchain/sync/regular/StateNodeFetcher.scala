@@ -1,16 +1,15 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.typed.ActorRef
-import akka.actor.typed.Behavior
-import akka.actor.typed.scaladsl.AbstractBehavior
-import akka.actor.typed.scaladsl.ActorContext
-import akka.actor.typed.scaladsl.Behaviors
-import akka.actor.{ActorRef => ClassicActorRef}
-import akka.util.ByteString
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
+import org.apache.pekko.util.ByteString
 
+import cats.effect.unsafe.IORuntime
 import cats.syntax.either._
-
-import monix.execution.Scheduler
 
 import scala.util.Failure
 import scala.util.Success
@@ -35,7 +34,7 @@ class StateNodeFetcher(
     with FetchRequest[StateNodeFetcher.StateNodeFetcherCommand] {
 
   val log = context.log
-  implicit val ec: Scheduler = Scheduler(context.executionContext)
+  implicit val runtime: IORuntime = IORuntime.global
 
   import StateNodeFetcher._
 
@@ -86,7 +85,7 @@ class StateNodeFetcher(
 
   private def requestStateNode(hash: ByteString): Unit = {
     val resp = makeRequest(Request.create(GetNodeData(List(hash)), BestPeer), StateNodeFetcher.RetryStateNodeRequest)
-    context.pipeToSelf(resp.runToFuture) {
+    context.pipeToSelf(resp.unsafeToFuture()) {
       case Success(res) => res
       case Failure(_)   => StateNodeFetcher.RetryStateNodeRequest
     }
@@ -104,7 +103,7 @@ object StateNodeFetcher {
 
   sealed trait StateNodeFetcherCommand
   final case class FetchStateNode(hash: ByteString, originalSender: ClassicActorRef) extends StateNodeFetcherCommand
-  final case object RetryStateNodeRequest extends StateNodeFetcherCommand
+  case object RetryStateNodeRequest extends StateNodeFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends StateNodeFetcherCommand
 
   final case class StateNodeRequester(hash: ByteString, replyTo: ClassicActorRef)

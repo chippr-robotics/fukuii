@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.mining
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
 import com.chipprbots.ethereum.consensus.blocks.TestBlockGenerator
@@ -56,7 +56,7 @@ trait Mining {
 
   /** Sends msg to the internal miner and waits for the response
     */
-  def askMiner(msg: MockedMinerProtocol): Task[MockedMinerResponse]
+  def askMiner(msg: MockedMinerProtocol): IO[MockedMinerResponse]
 
   /** Sends msg to the internal miner
     */

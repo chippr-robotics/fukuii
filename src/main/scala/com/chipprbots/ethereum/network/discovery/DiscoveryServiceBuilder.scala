@@ -4,20 +4,19 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 
+import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.unsafe.IORuntime
 
-import monix.eval.Task
-import monix.execution.Scheduler
-
-import io.iohk.scalanet.discovery.crypto.PrivateKey
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.crypto.SigAlg
-import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
-import io.iohk.scalanet.discovery.ethereum.v4
-import io.iohk.scalanet.discovery.ethereum.{Node => ENode}
-import io.iohk.scalanet.peergroup.ExternalAddressResolver
-import io.iohk.scalanet.peergroup.InetMultiAddress
-import io.iohk.scalanet.peergroup.udp.StaticUDPPeerGroup
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.v4
+import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
+import com.chipprbots.scalanet.peergroup.ExternalAddressResolver
+import com.chipprbots.scalanet.peergroup.InetMultiAddress
+import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import scodec.Codec
 import scodec.bits.BitVector
 
@@ -26,6 +25,8 @@ import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.network.discovery.codecs.RLPCodecs
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
+import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord.Content
 
 trait DiscoveryServiceBuilder {
 
@@ -34,16 +35,16 @@ trait DiscoveryServiceBuilder {
       tcpPort: Int,
       nodeStatusHolder: AtomicReference[NodeStatus],
       knownNodesStorage: KnownNodesStorage
-  )(implicit scheduler: Scheduler): Resource[Task, v4.DiscoveryService] = {
+  )(implicit scheduler: IORuntime): Resource[IO, v4.DiscoveryService] = {
 
     implicit val sigalg = new Secp256k1SigAlg()
     val keyPair = nodeStatusHolder.get.key
     val (privateKeyBytes, _) = crypto.keyPairToByteArrays(keyPair)
     val privateKey = PrivateKey(BitVector(privateKeyBytes))
 
-    implicit val packetCodec = v4.Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
+    implicit val packetCodec: Codec[Packet] = v4.Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
     implicit val payloadCodec = RLPCodecs.payloadCodec
-    implicit val enrContentCodec = RLPCodecs.codecFromRLPCodec(RLPCodecs.enrContentRLPCodec)
+    implicit val enrContentCodec: Codec[Content] = RLPCodecs.codecFromRLPCodec(RLPCodecs.enrContentRLPCodec)
 
     val resource = for {
       host <- Resource.eval {
@@ -77,13 +78,13 @@ trait DiscoveryServiceBuilder {
   private def makeDiscoveryConfig(
       discoveryConfig: DiscoveryConfig,
       knownNodesStorage: KnownNodesStorage
-  ): Task[v4.DiscoveryConfig] =
+  ): IO[v4.DiscoveryConfig] =
     for {
       reusedKnownNodes <-
         if (discoveryConfig.reuseKnownNodes)
-          Task(knownNodesStorage.getKnownNodes().map(Node.fromUri))
+          IO(knownNodesStorage.getKnownNodes().map(Node.fromUri))
         else
-          Task.pure(Set.empty[Node])
+          IO.pure(Set.empty[Node])
       // Discovery is going to enroll with all the bootstrap nodes passed to it.
       // Since we're running the enrollment in the background, it won't hold up
       // anything even if we have to enroll with hundreds of previously known nodes.
@@ -109,17 +110,17 @@ trait DiscoveryServiceBuilder {
       )
     } yield config
 
-  private def getExternalAddress(discoveryConfig: DiscoveryConfig): Task[InetAddress] =
+  private def getExternalAddress(discoveryConfig: DiscoveryConfig): IO[InetAddress] =
     discoveryConfig.host match {
       case Some(host) =>
-        Task(InetAddress.getByName(host))
+        IO(InetAddress.getByName(host))
 
       case None =>
         ExternalAddressResolver.default.resolve.flatMap {
           case Some(address) =>
-            Task.pure(address)
+            IO.pure(address)
           case None =>
-            Task.raiseError(
+            IO.raiseError(
               new IllegalStateException(
                 s"Failed to resolve the external address. Please configure it via -Dmantis.network.discovery.host"
               )
@@ -135,8 +136,8 @@ trait DiscoveryServiceBuilder {
       receiveBufferSizeBytes = v4.Packet.MaxPacketBitsSize / 8 * 2
     )
 
-  private def setDiscoveryStatus(nodeStatusHolder: AtomicReference[NodeStatus], status: ServerStatus): Task[Unit] =
-    Task(nodeStatusHolder.updateAndGet(_.copy(discoveryStatus = status)))
+  private def setDiscoveryStatus(nodeStatusHolder: AtomicReference[NodeStatus], status: ServerStatus): IO[Unit] =
+    IO(nodeStatusHolder.updateAndGet(_.copy(discoveryStatus = status)))
 
   private def makeDiscoveryNetwork(
       privateKey: PrivateKey,
@@ -147,8 +148,8 @@ trait DiscoveryServiceBuilder {
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
       sigalg: SigAlg,
-      scheduler: Scheduler
-  ): Resource[Task, v4.DiscoveryNetwork[InetMultiAddress]] =
+      runtime: IORuntime
+  ): Resource[IO, v4.DiscoveryNetwork[InetMultiAddress]] =
     for {
       peerGroup <- StaticUDPPeerGroup[v4.Packet](udpConfig)
       network <- Resource.eval {
@@ -172,7 +173,7 @@ trait DiscoveryServiceBuilder {
       localNode: ENode,
       v4Config: v4.DiscoveryConfig,
       network: v4.DiscoveryNetwork[InetMultiAddress]
-  )(implicit sigalg: SigAlg, enrContentCodec: Codec[EthereumNodeRecord.Content]): Resource[Task, v4.DiscoveryService] =
+  )(implicit sigalg: SigAlg, enrContentCodec: Codec[EthereumNodeRecord.Content]): Resource[IO, v4.DiscoveryService] =
     v4.DiscoveryService[InetMultiAddress](
       privateKey = privateKey,
       node = localNode,

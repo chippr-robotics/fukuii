@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.BigIntegers
 
@@ -9,7 +9,7 @@ import com.chipprbots.ethereum.mpt.ByteArrayEncoder
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.mpt.HashByteArraySerializable
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.utils.ByteUtils
 
 package object domain {

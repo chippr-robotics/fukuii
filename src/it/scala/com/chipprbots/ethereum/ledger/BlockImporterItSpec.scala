@@ -1,15 +1,11 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.actor.ActorRef
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
-
-import monix.execution.Scheduler
-import monix.execution.schedulers.SchedulerService
-
-import scala.concurrent.duration._
+import cats.effect.unsafe.IORuntime
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.BeforeAndAfterAll
@@ -37,25 +33,25 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.crypto.ECDSASignature
 
 class BlockImporterItSpec
-    extends MockFactory
-    with AnyFlatSpecLike
+    extends AnyFlatSpecLike
     with Matchers
     with BeforeAndAfterAll
     with Eventually
-    with NormalPatience {
+    with NormalPatience
+    with MockFactory {
 
-  implicit val testScheduler: SchedulerService = Scheduler.fixedPool("test", 32)
+  implicit val testRuntime: IORuntime = IORuntime.global
 
   override def afterAll(): Unit = {
-    testScheduler.shutdown()
-    testScheduler.awaitTermination(60.second)
+    // No need to shutdown IORuntime.global
   }
 
   "BlockImporter" should "not discard blocks of the main chain if the reorganisation failed" in new TestFixture() {
 
-    override val blockImporter = system.actorOf(
+    override val blockImporter: ActorRef = system.actorOf(
       BlockImporter.props(
         fetcherProbe.ref,
         mkConsensus(validators = successValidators),
@@ -92,7 +88,7 @@ class BlockImporterItSpec
   it should "return Unknown branch, in case of PickedBlocks with block that has a parent that's not in the chain" in new StartedImportFixture() {
     val newBlock4ParentOldBlock3: Block =
       getBlock(genesisBlock.number + 4, difficulty = 104, parent = oldBlock3.header.hash)
-    val newBlock4WeightParentOldBlock3 = oldWeight3.increase(newBlock4ParentOldBlock3.header)
+    val newBlock4WeightParentOldBlock3: ChainWeight = oldWeight3.increase(newBlock4ParentOldBlock3.header)
 
     // Block n5 with oldBlock4 as parent
     val newBlock5ParentOldBlock4: Block =
@@ -118,11 +114,11 @@ class BlockImporterItSpec
 
   it should "switch to a branch with a checkpoint" in new StartedImportFixture() {
 
-    val checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
+    val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
     val oldBlock5WithCheckpoint: Block = checkpointBlockGenerator.generate(oldBlock4, checkpoint)
     blockchainWriter.save(oldBlock5WithCheckpoint, Nil, oldWeight4, saveAsBestBlock = true)
 
-    override val newBranch = List(newBlock2, newBlock3)
+    override val newBranch: List[Block] = List(newBlock2, newBlock3)
 
     blockImporter ! BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(newBranch))
 
@@ -132,11 +128,11 @@ class BlockImporterItSpec
 
   it should "switch to a branch with a newer checkpoint" in new StartedImportFixture() {
 
-    val checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
+    val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
     val newBlock4WithCheckpoint: Block = checkpointBlockGenerator.generate(newBlock3, checkpoint)
     blockchainWriter.save(newBlock4WithCheckpoint, Nil, newWeight3, saveAsBestBlock = true)
 
-    override val newBranch = List(newBlock4WithCheckpoint)
+    override val newBranch: List[Block] = List(newBlock4WithCheckpoint)
 
     blockImporter ! BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(newBranch))
 
@@ -146,17 +142,17 @@ class BlockImporterItSpec
 
   it should "return a correct checkpointed block after receiving a request for generating a new checkpoint" in new StartedImportFixture() {
 
-    val parent = blockchainReader.getBestBlock().get
+    val parent: Block = blockchainReader.getBestBlock().get
     val newBlock5: Block = getBlock(genesisBlock.number + 5, difficulty = 104, parent = parent.header.hash)
-    val newWeight5 = newWeight3.increase(newBlock5.header)
+    val newWeight5: ChainWeight = newWeight3.increase(newBlock5.header)
 
     blockchainWriter.save(newBlock5, Nil, newWeight5, saveAsBestBlock = true)
 
-    val signatures = CheckpointingTestHelpers.createCheckpointSignatures(
+    val signatures: Seq[ECDSASignature] = CheckpointingTestHelpers.createCheckpointSignatures(
       Seq(crypto.generateKeyPair(secureRandom)),
       newBlock5.hash
     )
-    val checkpointBlock = checkpointBlockGenerator.generate(newBlock5, Checkpoint(signatures))
+    val checkpointBlock: Block = checkpointBlockGenerator.generate(newBlock5, Checkpoint(signatures))
     blockImporter ! NewCheckpoint(checkpointBlock)
 
     eventually(blockchainReader.getBestBlock().get shouldEqual checkpointBlock)
@@ -164,11 +160,11 @@ class BlockImporterItSpec
   }
 
   it should "ask BlockFetcher to resolve missing node" in new TestFixture() {
-    val parent = blockchainReader.getBestBlock().get
+    val parent: Block = blockchainReader.getBestBlock().get
     val newBlock: Block = getBlock(genesisBlock.number + 5, difficulty = 104, parent = parent.header.hash)
-    val invalidBlock = newBlock.copy(header = newBlock.header.copy(beneficiary = Address(111).bytes))
+    val invalidBlock: Block = newBlock.copy(header = newBlock.header.copy(beneficiary = Address(111).bytes))
 
-    override val blockImporter = system.actorOf(
+    override val blockImporter: ActorRef = system.actorOf(
       BlockImporter.props(
         fetcherProbe.ref,
         mkConsensus(validators = successValidators),

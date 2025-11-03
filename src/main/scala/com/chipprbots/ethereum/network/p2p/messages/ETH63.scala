@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
 object ETH63 {
@@ -44,18 +45,34 @@ object ETH63 {
 
   object AccountImplicits {
     import UInt256RLPImplicits._
+    import RLPImplicits.byteStringEncDec
 
     implicit class AccountEnc(val account: Account) extends RLPSerializable {
       override def toRLPEncodable: RLPEncodeable = {
         import account._
-        RLPList(nonce.toRLPEncodable, balance.toRLPEncodable, storageRoot, codeHash)
+        RLPList(
+          nonce.toRLPEncodable,
+          balance.toRLPEncodable,
+          byteStringEncDec.encode(storageRoot),
+          byteStringEncDec.encode(codeHash)
+        )
       }
     }
 
     implicit class AccountDec(val bytes: Array[Byte]) extends AnyVal {
       def toAccount: Account = rawDecode(bytes) match {
-        case RLPList(nonce, balance, storageRoot, codeHash) =>
-          Account(nonce.toUInt256, balance.toUInt256, storageRoot, codeHash)
+        case RLPList(
+              RLPValue(nonceBytes),
+              RLPValue(balanceBytes),
+              RLPValue(storageRootBytes),
+              RLPValue(codeHashBytes)
+            ) =>
+          Account(
+            UInt256(BigInt(1, nonceBytes)),
+            UInt256(BigInt(1, balanceBytes)),
+            ByteString(storageRootBytes),
+            ByteString(codeHashBytes)
+          )
         case _ => throw new RuntimeException("Cannot decode Account")
       }
     }
@@ -78,7 +95,10 @@ object ETH63 {
     }
 
     implicit class MptNodeRLPEncodableDec(val rlp: RLPEncodeable) extends AnyVal {
-      def toMptNode: MptNode = MptTraversals.decodeNode(rlp)
+      def toMptNode: MptNode = rlp match {
+        case RLPValue(bytes) => MptTraversals.decodeNode(bytes)
+        case _               => throw new RuntimeException("Cannot decode MptNode from non-RLPValue")
+      }
     }
   }
 
@@ -90,7 +110,7 @@ object ETH63 {
       import MptNodeEncoders._
 
       override def code: Int = Codes.NodeDataCode
-      override def toRLPEncodable: RLPEncodeable = msg.values
+      override def toRLPEncodable: RLPEncodeable = RLPList(msg.values.map(v => RLPValue(v.toArray[Byte])): _*)
 
       @throws[RLPException]
       def getMptNode(index: Int): MptNode = msg.values(index).toArray[Byte].toMptNode
@@ -98,8 +118,12 @@ object ETH63 {
 
     implicit class NodeDataDec(val bytes: Array[Byte]) extends AnyVal {
       def toNodeData: NodeData = rawDecode(bytes) match {
-        case rlpList: RLPList => NodeData(rlpList.items.map(e => e: ByteString))
-        case _                => throw new RuntimeException("Cannot decode NodeData")
+        case rlpList: RLPList =>
+          NodeData(rlpList.items.map {
+            case RLPValue(bytes) => ByteString(bytes)
+            case _               => throw new RuntimeException("Cannot decode NodeData item")
+          })
+        case _ => throw new RuntimeException("Cannot decode NodeData")
       }
     }
   }
@@ -146,14 +170,19 @@ object ETH63 {
     implicit class TxLogEntryEnc(logEntry: TxLogEntry) extends RLPSerializable {
       override def toRLPEncodable: RLPEncodeable = {
         import logEntry._
-        RLPList(loggerAddress.bytes, logTopics, data)
+        val topicsRLP = logTopics.map(t => RLPValue(t.toArray[Byte]))
+        RLPList(
+          RLPValue(loggerAddress.bytes.toArray[Byte]),
+          RLPList(topicsRLP: _*),
+          RLPValue(data.toArray[Byte])
+        )
       }
     }
 
     implicit class TxLogEntryDec(rlp: RLPEncodeable) {
       def toTxLogEntry: TxLogEntry = rlp match {
-        case RLPList(loggerAddress, logTopics: RLPList, data) =>
-          TxLogEntry(Address(loggerAddress: ByteString), fromRlpList[ByteString](logTopics), data)
+        case RLPList(RLPValue(loggerAddressBytes), logTopics: RLPList, RLPValue(dataBytes)) =>
+          TxLogEntry(Address(ByteString(loggerAddressBytes)), fromRlpList[ByteString](logTopics), ByteString(dataBytes))
 
         case _ => throw new RuntimeException("Cannot decode TransactionLog")
       }
@@ -167,15 +196,21 @@ object ETH63 {
       override def toRLPEncodable: RLPEncodeable = {
         import receipt._
         val stateHash: RLPEncodeable = postTransactionStateHash match {
-          case HashOutcome(hash) => hash
+          case HashOutcome(hash) => RLPValue(hash.toArray[Byte])
           case SuccessOutcome    => 1.toByte
           case _                 => 0.toByte
         }
         val legacyRLPReceipt =
-          RLPList(stateHash, cumulativeGasUsed, logsBloomFilter, RLPList(logs.map(_.toRLPEncodable): _*))
+          RLPList(
+            stateHash,
+            cumulativeGasUsed,
+            RLPValue(logsBloomFilter.toArray[Byte]),
+            RLPList(logs.map(_.toRLPEncodable): _*)
+          )
         receipt match {
-          case _: LegacyReceipt => legacyRLPReceipt
-          case _: Type01Receipt => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
+          case _: LegacyReceipt      => legacyRLPReceipt
+          case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
+          case _: TypedLegacyReceipt => legacyRLPReceipt // Handle typed legacy receipts
         }
       }
     }
@@ -188,6 +223,9 @@ object ETH63 {
       import BaseETH6XMessages.TypedTransaction._
 
       def toReceipt: Receipt = {
+        if (bytes.isEmpty) {
+          throw new RuntimeException("Cannot decode Receipt: empty byte array")
+        }
         val first = bytes(0)
         (first match {
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
@@ -197,21 +235,35 @@ object ETH63 {
 
       def toReceipts: Seq[Receipt] = rawDecode(bytes) match {
         case RLPList(items @ _*) => items.toTypedRLPEncodables.map(_.toReceipt)
-        case _                   => throw new RuntimeException("Cannot decode Receipts")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
       }
     }
 
     implicit class ReceiptRLPEncodableDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
 
       def toLegacyReceipt: LegacyReceipt = rlpEncodeable match {
-        case RLPList(postTransactionStateHash, cumulativeGasUsed, logsBloomFilter, logs: RLPList) =>
+        case RLPList(
+              postTransactionStateHash,
+              RLPValue(cumulativeGasUsedBytes),
+              RLPValue(logsBloomFilterBytes),
+              logs: RLPList
+            ) =>
           val stateHash = postTransactionStateHash match {
             case RLPValue(bytes) if bytes.length > 1                     => HashOutcome(ByteString(bytes))
             case RLPValue(bytes) if bytes.length == 1 && bytes.head == 1 => SuccessOutcome
             case _                                                       => FailureOutcome
           }
-          LegacyReceipt(stateHash, cumulativeGasUsed, logsBloomFilter, logs.items.map(_.toTxLogEntry))
-        case _ => throw new RuntimeException("Cannot decode Receipt")
+          LegacyReceipt(
+            stateHash,
+            BigInt(1, cumulativeGasUsedBytes),
+            ByteString(logsBloomFilterBytes),
+            logs.items.map(_.toTxLogEntry)
+          )
+        case RLPList(items @ _*) =>
+          throw new RuntimeException(s"Cannot decode Receipt: expected 4 items in RLPList, got ${items.length}")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipt: expected RLPList, got ${other.getClass.getSimpleName}")
       }
 
       def toReceipt: Receipt = rlpEncodeable match {
@@ -241,7 +293,8 @@ object ETH63 {
       def toReceipts: Receipts = rawDecode(bytes) match {
         case rlpList: RLPList =>
           Receipts(rlpList.items.collect { case r: RLPList => r.items.toTypedRLPEncodables.map(_.toReceipt) })
-        case _ => throw new RuntimeException("Cannot decode Receipts")
+        case other =>
+          throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
       }
     }
   }

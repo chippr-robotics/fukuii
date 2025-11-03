@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.faucet.jsonrpc
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -47,6 +47,8 @@ class FaucetRpcServiceSpec
     with NormalPatience
     with TypeCheckedTripleEquals {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "FaucetRpcService" should "answer txHash correctly when the wallet is available and the requested send funds be successfully" in new TestSetup {
     val address: Address = Address("0x00")
     val request: SendFundsRequest = SendFundsRequest(address)
@@ -55,7 +57,7 @@ class FaucetRpcServiceSpec
     faucetHandler.setAutoPilot(simpleAutoPilot { case FaucetHandlerMsg.SendFunds(`address`) =>
       TransactionSent(txHash)
     })
-    faucetRpcService.sendFunds(request).runSyncUnsafe(Duration.Inf) match {
+    faucetRpcService.sendFunds(request).unsafeRunSync() match {
       case Left(error)     => fail(s"failure with error: $error")
       case Right(response) => response.txId shouldBe txHash
     }
@@ -69,7 +71,7 @@ class FaucetRpcServiceSpec
     faucetHandler.setAutoPilot(simpleAutoPilot { case FaucetHandlerMsg.SendFunds(`address`) =>
       WalletRpcClientError(clientError)
     })
-    faucetRpcService.sendFunds(request).runSyncUnsafe(Duration.Inf) match {
+    faucetRpcService.sendFunds(request).unsafeRunSync() match {
       case Right(_)    => fail()
       case Left(error) => error shouldBe JsonRpcError.LogicError(s"Faucet error: $clientError")
     }
@@ -82,7 +84,7 @@ class FaucetRpcServiceSpec
     faucetHandler.setAutoPilot(simpleAutoPilot { case FaucetHandlerMsg.SendFunds(`address`) =>
       FaucetIsUnavailable
     })
-    faucetRpcService.sendFunds(request).runSyncUnsafe(Duration.Inf) match {
+    faucetRpcService.sendFunds(request).unsafeRunSync() match {
       case Right(_) => fail()
       case Left(error) =>
         error shouldBe JsonRpcError.LogicError("Faucet is unavailable: Please try again in a few more seconds")
@@ -93,7 +95,7 @@ class FaucetRpcServiceSpec
     faucetHandler.setAutoPilot(simpleAutoPilot { case FaucetHandlerMsg.Status =>
       FaucetIsUnavailable
     })
-    faucetRpcService.status(StatusRequest()).runSyncUnsafe(Duration.Inf) match {
+    faucetRpcService.status(StatusRequest()).unsafeRunSync() match {
       case Right(_) => fail()
       case Left(error) =>
         error shouldBe JsonRpcError.LogicError("Faucet is unavailable: Please try again in a few more seconds")
@@ -104,7 +106,7 @@ class FaucetRpcServiceSpec
     faucetHandler.setAutoPilot(simpleAutoPilot { case FaucetHandlerMsg.Status =>
       StatusResponse(WalletAvailable)
     })
-    faucetRpcService.status(StatusRequest()).runSyncUnsafe(Duration.Inf) match {
+    faucetRpcService.status(StatusRequest()).unsafeRunSync() match {
       case Left(error)     => fail(s"failure with error: $error")
       case Right(response) => response shouldBe FaucetDomain.StatusResponse(WalletAvailable)
     }
@@ -114,7 +116,7 @@ class FaucetRpcServiceSpec
     val address: Address = Address("0x00")
     val request: SendFundsRequest = SendFundsRequest(address)
 
-    faucetRpcServiceWithoutFaucetHandler.sendFunds(request).runSyncUnsafe(Duration.Inf) match {
+    faucetRpcServiceWithoutFaucetHandler.sendFunds(request).unsafeRunSync() match {
       case Right(_) => fail()
       case Left(error) =>
         error shouldBe JsonRpcError.InternalError
@@ -125,7 +127,7 @@ class FaucetRpcServiceSpec
     val address: Address = Address("0x00")
     SendFundsRequest(address)
 
-    faucetRpcServiceWithoutFaucetHandler.status(StatusRequest()).runSyncUnsafe(Duration.Inf) match {
+    faucetRpcServiceWithoutFaucetHandler.status(StatusRequest()).unsafeRunSync() match {
       case Right(_) => fail()
       case Left(error) =>
         error shouldBe JsonRpcError.InternalError
@@ -151,13 +153,13 @@ class FaucetRpcServiceSpec
     val faucetHandler: TestProbe = TestProbe()
 
     val faucetRpcService: FaucetRpcService = new FaucetRpcService(config) {
-      override def selectFaucetHandler()(implicit system: ActorSystem): Task[ActorRef] =
-        Task(faucetHandler.ref)
+      override def selectFaucetHandler()(implicit system: ActorSystem): IO[ActorRef] =
+        IO(faucetHandler.ref)
     }
 
     val faucetRpcServiceWithoutFaucetHandler: FaucetRpcService = new FaucetRpcService(config) {
-      override def selectFaucetHandler()(implicit system: ActorSystem): Task[ActorRef] =
-        Task.raiseError(new RuntimeException("time out"))
+      override def selectFaucetHandler()(implicit system: ActorSystem): IO[ActorRef] =
+        IO.raiseError(new RuntimeException("time out"))
     }
   }
 

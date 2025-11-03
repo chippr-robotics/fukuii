@@ -1,5 +1,5 @@
 package com.chipprbots.ethereum.domain.appstate
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 case class BlockInfo(hash: ByteString, number: BigInt)

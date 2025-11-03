@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.extvm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
@@ -19,6 +19,17 @@ import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.VmConfig
 import com.chipprbots.ethereum.vm._
 import com.chipprbots.ethereum.vm.utils.MockVmInput
+import com.chipprbots.ethereum.extvm.msg.BlockHeader
+import com.chipprbots.ethereum.extvm.msg.CallContext
+import com.chipprbots.ethereum.extvm.msg.GetAccount
+import com.chipprbots.ethereum.extvm.msg.GetStorageData
+import com.chipprbots.ethereum.extvm.msg.StorageData
+import com.chipprbots.ethereum.extvm.msg.GetCode
+import com.chipprbots.ethereum.extvm.msg.Code
+import com.chipprbots.ethereum.extvm.msg.GetBlockhash
+import com.chipprbots.ethereum.extvm.msg.Blockhash
+import com.chipprbots.ethereum.extvm.msg.Hello
+import com.chipprbots.ethereum.extvm.msg.{EthereumConfig => MsgEthereumConfig}
 
 class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
@@ -26,10 +37,10 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
   import Implicits._
 
   "VMClient" should "handle call context and result" in new TestSetup {
-    val programContext =
+    val programContext: ProgramContext[MockWorldState, MockStorage] =
       ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, emptyWorld, evmConfig)
 
-    val expectedBlockHeader = msg.BlockHeader(
+    val expectedBlockHeader: BlockHeader = msg.BlockHeader(
       beneficiary = blockHeader.beneficiary,
       difficulty = blockHeader.difficulty,
       number = blockHeader.number,
@@ -37,7 +48,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       unixTimestamp = blockHeader.unixTimestamp
     )
 
-    val expectedCallContextMsg = msg.CallContext(
+    val expectedCallContextMsg: CallContext = msg.CallContext(
       callerAddr = programContext.callerAddr,
       recipientAddr = programContext.recipientAddr.map(_.bytes).getOrElse(ByteString.empty): ByteString,
       inputData = programContext.inputData,
@@ -53,7 +64,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       (messageHandler.awaitMessage(_: GeneratedMessageCompanion[msg.VMQuery])).expects(*).returns(resultQueryMsg)
     }
 
-    val result = vmClient.run(programContext)
+    val result: ProgramResult[MockWorldState, MockStorage] = vmClient.run(programContext)
 
     result.error shouldBe None
     result.returnData shouldBe ByteString("0011")
@@ -62,16 +73,17 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "handle account query" in new TestSetup {
-    val testQueryAccountAddr = Address("0x129982FF")
-    val testQueryAccount = Account(nonce = 11, balance = 99999999)
+    val testQueryAccountAddr: Address = Address("0x129982FF")
+    val testQueryAccount: Account = Account(nonce = 11, balance = 99999999)
 
-    val world = emptyWorld.saveAccount(testQueryAccountAddr, testQueryAccount)
-    val programContext = ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
+    val world: MockWorldState = emptyWorld.saveAccount(testQueryAccountAddr, testQueryAccount)
+    val programContext: ProgramContext[MockWorldState, MockStorage] =
+      ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
 
-    val getAccountMsg = msg.GetAccount(testQueryAccountAddr.bytes)
-    val accountQueryMsg = msg.VMQuery(query = msg.VMQuery.Query.GetAccount(getAccountMsg))
+    val getAccountMsg: GetAccount = msg.GetAccount(testQueryAccountAddr.bytes)
+    val accountQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.GetAccount(getAccountMsg))
 
-    val expectedAccountResponseMsg = msg.Account(
+    val expectedAccountResponseMsg: com.chipprbots.ethereum.extvm.msg.Account = msg.Account(
       nonce = ByteString(testQueryAccount.nonce.toBigInt.toByteArray),
       balance = ByteString(testQueryAccount.balance.toBigInt.toByteArray),
       codeEmpty = true
@@ -84,22 +96,24 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       (messageHandler.awaitMessage(_: GeneratedMessageCompanion[msg.VMQuery])).expects(*).returns(resultQueryMsg)
     }
 
-    val result = vmClient.run(programContext)
+    val result: ProgramResult[MockWorldState, MockStorage] = vmClient.run(programContext)
     result.error shouldBe None
   }
 
   it should "handle storage query" in new TestSetup {
-    val testStorageAddr = Address("0x99999999444444ffcc")
-    val testStorageOffset = BigInt(123)
-    val testStorageValue = BigInt(5918918239L)
+    val testStorageAddr: Address = Address("0x99999999444444ffcc")
+    val testStorageOffset: BigInt = BigInt(123)
+    val testStorageValue: BigInt = BigInt(5918918239L)
 
-    val world = emptyWorld.saveStorage(testStorageAddr, MockStorage().store(testStorageOffset, testStorageValue))
-    val programContext = ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
+    val world: MockWorldState =
+      emptyWorld.saveStorage(testStorageAddr, MockStorage().store(testStorageOffset, testStorageValue))
+    val programContext: ProgramContext[MockWorldState, MockStorage] =
+      ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
 
-    val getStorageDataMsg = msg.GetStorageData(testStorageAddr, testStorageOffset)
-    val storageQueryMsg = msg.VMQuery(query = msg.VMQuery.Query.GetStorageData(getStorageDataMsg))
+    val getStorageDataMsg: GetStorageData = msg.GetStorageData(testStorageAddr, testStorageOffset)
+    val storageQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.GetStorageData(getStorageDataMsg))
 
-    val expectedStorageDataResponseMsg = msg.StorageData(ByteString(testStorageValue.toByteArray))
+    val expectedStorageDataResponseMsg: StorageData = msg.StorageData(ByteString(testStorageValue.toByteArray))
 
     inSequence {
       (messageHandler.sendMessage(_: msg.CallContext)).expects(*)
@@ -108,21 +122,22 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       (messageHandler.awaitMessage(_: GeneratedMessageCompanion[msg.VMQuery])).expects(*).returns(resultQueryMsg)
     }
 
-    val result = vmClient.run(programContext)
+    val result: ProgramResult[MockWorldState, MockStorage] = vmClient.run(programContext)
     result.error shouldBe None
   }
 
   it should "handle code query" in new TestSetup {
-    val testCodeAddr = Address("0x1234")
-    val testCodeValue = ByteString(Hex.decode("11223344991191919191919129129facefc122"))
+    val testCodeAddr: Address = Address("0x1234")
+    val testCodeValue: ByteString = ByteString(Hex.decode("11223344991191919191919129129facefc122"))
 
-    val world = emptyWorld.saveCode(testCodeAddr, testCodeValue)
-    val programContext = ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
+    val world: MockWorldState = emptyWorld.saveCode(testCodeAddr, testCodeValue)
+    val programContext: ProgramContext[MockWorldState, MockStorage] =
+      ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
 
-    val getCodeMsg = msg.GetCode(testCodeAddr)
-    val getCodeQueryMsg = msg.VMQuery(query = msg.VMQuery.Query.GetCode(getCodeMsg))
+    val getCodeMsg: GetCode = msg.GetCode(testCodeAddr)
+    val getCodeQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.GetCode(getCodeMsg))
 
-    val expectedCodeResponseMsg = msg.Code(testCodeValue)
+    val expectedCodeResponseMsg: Code = msg.Code(testCodeValue)
 
     inSequence {
       (messageHandler.sendMessage(_: msg.CallContext)).expects(*)
@@ -131,20 +146,21 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       (messageHandler.awaitMessage(_: GeneratedMessageCompanion[msg.VMQuery])).expects(*).returns(resultQueryMsg)
     }
 
-    val result = vmClient.run(programContext)
+    val result: ProgramResult[MockWorldState, MockStorage] = vmClient.run(programContext)
     result.error shouldBe None
   }
 
   it should "handle blockhash query" in new TestSetup {
     val testNumber = 87
 
-    val world = emptyWorld.copy(numberOfHashes = 100)
-    val programContext = ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
+    val world: MockWorldState = emptyWorld.copy(numberOfHashes = 100)
+    val programContext: ProgramContext[MockWorldState, MockStorage] =
+      ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, world, evmConfig)
 
-    val getBlockhashMsg = msg.GetBlockhash(testNumber)
-    val getBlockhashQueryMsg = msg.VMQuery(query = msg.VMQuery.Query.GetBlockhash(getBlockhashMsg))
+    val getBlockhashMsg: GetBlockhash = msg.GetBlockhash(testNumber)
+    val getBlockhashQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.GetBlockhash(getBlockhashMsg))
 
-    val expectedBlockhashResponseMsg = msg.Blockhash(world.getBlockHash(UInt256(testNumber)).get)
+    val expectedBlockhashResponseMsg: Blockhash = msg.Blockhash(world.getBlockHash(UInt256(testNumber)).get)
 
     inSequence {
       (messageHandler.sendMessage(_: msg.CallContext)).expects(*)
@@ -153,7 +169,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       (messageHandler.awaitMessage(_: GeneratedMessageCompanion[msg.VMQuery])).expects(*).returns(resultQueryMsg)
     }
 
-    val result = vmClient.run(programContext)
+    val result: ProgramResult[MockWorldState, MockStorage] = vmClient.run(programContext)
     result.error shouldBe None
   }
 
@@ -221,7 +237,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val resultQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.CallResult(callResultMsg))
 
-    val messageHandler: MessageHandler = mock[MessageHandler]
+    val messageHandler: MessageHandlerApi = mock[MessageHandlerApi]
 
     val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("mantis", None, "127.0.0.1", 0)
     val vmClient = new VMClient(externalVmConfig, messageHandler, testMode = false)

@@ -2,9 +2,9 @@ package com.chipprbots.ethereum.extvm
 
 import java.math.BigInteger
 
-import akka.stream.scaladsl.SinkQueueWithCancel
-import akka.stream.scaladsl.SourceQueueWithComplete
-import akka.util.ByteString
+import org.apache.pekko.stream.scaladsl.SinkQueueWithCancel
+import org.apache.pekko.stream.scaladsl.SourceQueueWithComplete
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -16,7 +16,14 @@ import org.bouncycastle.util.BigIntegers
 import scalapb.GeneratedMessage
 import scalapb.GeneratedMessageCompanion
 
-class MessageHandler(in: SinkQueueWithCancel[ByteString], out: SourceQueueWithComplete[ByteString]) {
+trait MessageHandlerApi {
+  def sendMessage[M <: GeneratedMessage](msg: M): Unit
+  def awaitMessage[M <: GeneratedMessage](implicit companion: GeneratedMessageCompanion[M]): M
+  def close(): Unit
+}
+
+class MessageHandler(in: SinkQueueWithCancel[ByteString], out: SourceQueueWithComplete[ByteString])
+    extends MessageHandlerApi {
 
   private val AwaitTimeout = 5.minutes
 

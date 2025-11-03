@@ -1,12 +1,12 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.collection.immutable.NumericRange
 
@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.transactions.TransactionHistoryService
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.domain.Block
 
 class MantisServiceSpec
     extends TestKit(ActorSystem("MantisServiceSpec"))
@@ -54,7 +55,7 @@ class MantisServiceSpec
   "Mantis Service" - {
     "should get account's transaction history" in {
       class TxHistoryFixture extends Fixture {
-        val fakeTransaction = SignedTransactionWithSender(
+        val fakeTransaction: SignedTransactionWithSender = SignedTransactionWithSender(
           LegacyTransaction(
             nonce = 0,
             gasPrice = 123,
@@ -67,10 +68,10 @@ class MantisServiceSpec
           sender = Address("0x1234")
         )
 
-        val block =
+        val block: Block =
           BlockHelpers.generateBlock(BlockHelpers.genesis).copy(body = BlockBody(List(fakeTransaction.tx), Nil))
 
-        val expectedResponse = List(
+        val expectedResponse: List[ExtendedTransactionData] = List(
           ExtendedTransactionData(
             fakeTransaction.tx,
             isOutgoing = true,
@@ -86,8 +87,8 @@ class MantisServiceSpec
           ) {
             override def getAccountTransactions(account: Address, fromBlocks: NumericRange[BigInt])(implicit
                 blockchainConfig: BlockchainConfig
-            ) =
-              Task.pure(expectedResponse)
+            ): IO[List[ExtendedTransactionData]] =
+              IO.pure(expectedResponse)
           }
       }
 

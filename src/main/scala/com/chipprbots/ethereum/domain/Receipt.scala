@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.domain
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -25,7 +25,7 @@ object Receipt {
 
   val byteArraySerializable: ByteArraySerializable[Receipt] = new ByteArraySerializable[Receipt] {
 
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
+    import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits.given
 
     override def fromBytes(bytes: Array[Byte]): Receipt = bytes.toReceipt
 

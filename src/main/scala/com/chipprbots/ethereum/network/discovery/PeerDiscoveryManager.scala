@@ -1,27 +1,24 @@
 package com.chipprbots.ethereum.network.discovery
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.pattern.pipe
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.pattern.pipe
+import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
 import cats.effect.Resource
-
-import monix.catnap.ConsumerF
-import monix.eval.Task
-import monix.execution.BufferCapacity
-import monix.execution.Scheduler
-import monix.tail.Iterant
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
 
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.ethereum.v4
-import io.iohk.scalanet.discovery.ethereum.{Node => ENode}
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.ethereum.v4
+import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
+import fs2.Stream
 import scodec.bits.BitVector
 
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
@@ -31,42 +28,28 @@ class PeerDiscoveryManager(
     discoveryConfig: DiscoveryConfig,
     knownNodesStorage: KnownNodesStorage,
     // The manager only starts the DiscoveryService if discovery is enabled.
-    discoveryServiceResource: Resource[Task, v4.DiscoveryService],
+    discoveryServiceResource: Resource[IO, v4.DiscoveryService],
     randomNodeBufferSize: Int
-)(implicit scheduler: Scheduler)
+)(implicit runtime: IORuntime)
     extends Actor
     with ActorLogging {
 
-  // Derive a random nodes iterator on top of the service so the node can quickly ramp up its peers
+  // Derive a random nodes stream on top of the service so the node can quickly ramp up its peers
   // while it has demand to connect to more, rather than wait on the periodic lookups performed in
   // the background by the DiscoveryService.
-  val discoveryResources: Resource[Task, (v4.DiscoveryService, Iterant.Consumer[Task, Node])] = for {
+  val discoveryResources: Resource[IO, (v4.DiscoveryService, Stream[IO, Node])] = for {
     service <- discoveryServiceResource
 
-    // Create an Iterant (like a pull-based Observable) that repeatedly performs a random lookup
-    // (grabbing kademlia-bucket-size items at a time) and flattens the results. It will automatically
-    // perform further lookups as the items are pulled from it.
-    randomNodes = Iterant
-      .repeatEvalF {
-        Task.defer(service.lookup(randomNodeId))
+    // Create a Stream that repeatedly gets random nodes from the discovery service.
+    // It will automatically perform further lookups as the items are pulled from it.
+    randomNodes = Stream
+      .repeatEval {
+        service.getRandomNodes
       }
-      .flatMap(ns => Iterant.fromList(ns.toList))
+      .flatMap(ns => Stream.emits(ns.toList))
       .map(toNode)
       .filter(!isLocalNode(_))
-
-    // Create a consumer on top of the iterant with a limited buffer capacity, so that the Iterant
-    // blocks trying to push items into it when it gets full, and thus stops making more random lookups.
-    // For example with buffer-size=45 and kademlia-bucket-size=16 the iterant would make 3 requests
-    // to fill the queue underlying the consumer, then be blocked trying to push the last 3 items.
-    // The first 2 items pulled from the consumer would not result in further lookups. After the 3rd
-    // pull the iterant would look up the next 16 items and try to add them to the queue, etc.
-    // Note that every `pull` from the consumer takes items from the same queue. To multicast one
-    // would have to instantiate a `ConcurrentChannel`, create multiple consumers, and use
-    // `Iterant.pushToChannel`. But here this is the only consumer of the underlying channel.
-    randomNodeConsumer <- randomNodes.consumeWithConfig(
-      ConsumerF.Config(capacity = Some(BufferCapacity.Bounded(randomNodeBufferSize)))
-    )
-  } yield (service, randomNodeConsumer)
+  } yield (service, randomNodes)
 
   import PeerDiscoveryManager._
 
@@ -132,7 +115,7 @@ class PeerDiscoveryManager(
   }
 
   // DiscoveryService started, we can ask it for nodes now.
-  def started(discovery: Discovery, release: Task[Unit]): Receive =
+  def started(discovery: Discovery, release: IO[Unit]): Receive =
     handleNodeInfoRequests(Some(discovery)).orElse {
       case Start =>
 
@@ -169,29 +152,32 @@ class PeerDiscoveryManager(
   }
 
   def startDiscoveryService(): Unit =
-    discoveryResources.allocated.runToFuture
+    discoveryResources.allocated
+      .unsafeToFuture()
       .onComplete {
         case Failure(ex) =>
           self ! StartAttempt(Left(ex))
         case Success(result) =>
           self ! StartAttempt(Right(result))
-      }
+      }(runtime.compute)
 
-  def stopDiscoveryService(release: Task[Unit]): Unit =
-    release.runToFuture.onComplete {
-      case Failure(ex) =>
-        self ! StopAttempt(Left(ex))
-      case Success(result) =>
-        self ! StopAttempt(Right(result))
-    }
+  def stopDiscoveryService(release: IO[Unit]): Unit =
+    release
+      .unsafeToFuture()
+      .onComplete {
+        case Failure(ex) =>
+          self ! StopAttempt(Left(ex))
+        case Success(result) =>
+          self ! StopAttempt(Right(result))
+      }(runtime.compute)
 
   def sendDiscoveredNodesInfo(
       maybeDiscoveryService: Option[v4.DiscoveryService],
       recipient: ActorRef
   ): Unit = pipeToRecipient(recipient) {
 
-    val maybeDiscoveredNodes: Task[Set[Node]] =
-      maybeDiscoveryService.fold(Task.pure(Set.empty[Node])) {
+    val maybeDiscoveredNodes: IO[Set[Node]] =
+      maybeDiscoveryService.fold(IO.pure(Set.empty[Node])) {
         _.getNodes.map { nodes =>
           nodes.map(toNode)
         }
@@ -213,30 +199,23 @@ class PeerDiscoveryManager(
       recipient: ActorRef
   ): Unit = maybeRandomNodes.foreach { consumer =>
     pipeToRecipient[RandomNodeInfo](recipient) {
-      consumer.pull
-        .flatMap {
-          case Left(None) =>
-            Task.raiseError(new IllegalStateException("The random node source is finished."))
-          case Left(Some(ex)) =>
-            Task.raiseError(ex)
-          case Right(node) =>
-            Task.pure(node)
-        }
-        .map(RandomNodeInfo(_))
+      consumer.take(1).compile.lastOrError.flatMap { node =>
+        IO.pure(RandomNodeInfo(node))
+      }
     }
   }
 
-  def pipeToRecipient[T](recipient: ActorRef)(task: Task[T]): Unit =
+  def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit = {
+    implicit val ec = context.dispatcher
     task
-      .doOnFinish {
-        _.fold(Task.unit)(ex => Task(log.error(ex, "Failed to relay result to recipient.")))
-      }
-      .runToFuture
+      .onError(ex => IO(log.error(ex, "Failed to relay result to recipient.")))
+      .unsafeToFuture()
       .pipeTo(recipient)
+  }
 
   def toNode(enode: ENode): Node =
     Node(
-      id = ByteString(enode.id.toByteArray),
+      id = ByteString(enode.id.value.toByteArray),
       addr = enode.address.ip,
       tcpPort = enode.address.tcpPort,
       udpPort = enode.address.udpPort
@@ -259,9 +238,9 @@ object PeerDiscoveryManager {
       localNodeId: ByteString,
       discoveryConfig: DiscoveryConfig,
       knownNodesStorage: KnownNodesStorage,
-      discoveryServiceResource: Resource[Task, v4.DiscoveryService],
+      discoveryServiceResource: Resource[IO, v4.DiscoveryService],
       randomNodeBufferSize: Int = 0
-  )(implicit scheduler: Scheduler): Props =
+  )(implicit runtime: IORuntime): Props =
     Props(
       new PeerDiscoveryManager(
         localNodeId,
@@ -276,11 +255,11 @@ object PeerDiscoveryManager {
   case object Stop
 
   // Iterate over random lookups.
-  private type RandomNodes = Iterant.Consumer[Task, Node]
+  private type RandomNodes = Stream[IO, Node]
   private type Discovery = (v4.DiscoveryService, RandomNodes)
 
   private case class StartAttempt(
-      result: Either[Throwable, (Discovery, Task[Unit])]
+      result: Either[Throwable, (Discovery, IO[Unit])]
   )
   private case class StopAttempt(result: Either[Throwable, Unit])
 

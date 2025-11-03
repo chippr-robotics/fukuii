@@ -1,6 +1,8 @@
 package com.chipprbots.ethereum.db.dataSource
 
-import monix.reactive.Observable
+import cats.effect.IO
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 
@@ -16,7 +18,9 @@ trait DataSource {
     * @return
     *   the value associated with the passed key.
     */
-  def apply(namespace: Namespace, key: Key): Value = get(namespace, key).get
+  def apply(namespace: Namespace, key: Key): Value = get(namespace, key).getOrElse(
+    throw new NoSuchElementException(s"Key not found in namespace $namespace")
+  )
 
   /** This function obtains the associated value to a key, if there exists one.
     *
@@ -58,11 +62,11 @@ trait DataSource {
 
   /** Return key-value pairs until first error or until whole db has been iterated
     */
-  def iterate(): Observable[Either[IterationError, (Array[Byte], Array[Byte])]]
+  def iterate(): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]]
 
   /** Return key-value pairs until first error or until whole namespace has been iterated
     */
-  def iterate(namespace: Namespace): Observable[Either[IterationError, (Array[Byte], Array[Byte])]]
+  def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]]
 
 }
 

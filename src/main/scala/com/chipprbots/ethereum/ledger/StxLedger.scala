@@ -9,7 +9,6 @@ import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
-import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.vm.EvmConfig
 

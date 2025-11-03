@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.crypto
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.Digest
 import org.bouncycastle.util.Pack
@@ -22,7 +22,8 @@ class ConcatKDFBytesGenerator(digest: Digest) {
     */
   @throws[IllegalArgumentException]
   def generateBytes(outputLength: Int, seed: Array[Byte]): ByteString = {
-    require(outputLength <= (digestSize * 8) * ((2L << 32) - 1), "Output length too large")
+    if (outputLength > (digestSize * 8) * ((2L << 32) - 1))
+      throw new IllegalArgumentException("Output length too large")
 
     val counterStart: Long = 1
     val hashBuf = new Array[Byte](digestSize)

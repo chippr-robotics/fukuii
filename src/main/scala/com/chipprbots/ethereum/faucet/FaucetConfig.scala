@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.faucet
 
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
 import com.typesafe.config.Config

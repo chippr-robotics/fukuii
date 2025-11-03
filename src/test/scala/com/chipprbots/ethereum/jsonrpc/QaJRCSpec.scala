@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.json4s.Extraction
@@ -37,14 +37,17 @@ class QaJRCSpec
     with Matchers
     with PatienceConfiguration
     with NormalPatience
-    with JsonMethodsImplicits {
+    with JsonMethodsImplicits
+    with org.scalamock.scalatest.MockFactory {
+
+  implicit val runtime: IORuntime = IORuntime.global
 
   "QaJRC" should {
     "request block mining and return valid response with correct message" when {
       "mining ordered" in new TestSetup {
         mockSuccessfulMineBlocksBehaviour(MockedMinerResponses.MiningOrdered)
 
-        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).runSyncUnsafe()
+        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).unsafeRunSync()
 
         response should haveObjectResult(responseType(MiningOrdered), nullMessage)
       }
@@ -52,7 +55,7 @@ class QaJRCSpec
       "miner is working" in new TestSetup {
         mockSuccessfulMineBlocksBehaviour(MockedMinerResponses.MinerIsWorking)
 
-        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).runSyncUnsafe()
+        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).unsafeRunSync()
 
         response should haveObjectResult(responseType(MinerIsWorking), nullMessage)
       }
@@ -60,7 +63,7 @@ class QaJRCSpec
       "miner doesn't exist" in new TestSetup {
         mockSuccessfulMineBlocksBehaviour(MockedMinerResponses.MinerNotExist)
 
-        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).runSyncUnsafe()
+        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).unsafeRunSync()
 
         response should haveObjectResult(responseType(MinerNotExist), nullMessage)
       }
@@ -68,7 +71,7 @@ class QaJRCSpec
       "miner not support current msg" in new TestSetup {
         mockSuccessfulMineBlocksBehaviour(MockedMinerResponses.MinerNotSupported(MineBlocks(1, true)))
 
-        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).runSyncUnsafe()
+        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).unsafeRunSync()
 
         response should haveObjectResult(responseType(MinerNotSupport), msg("MineBlocks(1,true,None)"))
       }
@@ -76,7 +79,7 @@ class QaJRCSpec
       "miner return error" in new TestSetup {
         mockSuccessfulMineBlocksBehaviour(MockedMinerResponses.MiningError("error"))
 
-        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).runSyncUnsafe()
+        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).unsafeRunSync()
 
         response should haveObjectResult(responseType(MiningError), msg("error"))
       }
@@ -86,9 +89,9 @@ class QaJRCSpec
       "communication with miner failed" in new TestSetup {
         (qaService.mineBlocks _)
           .expects(mineBlocksReq)
-          .returning(Task.raiseError(new ClassCastException("error")))
+          .returning(IO.raiseError(new ClassCastException("error")))
 
-        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).runSyncUnsafe()
+        val response: JsonRpcResponse = jsonRpcController.handleRequest(mineBlocksRpcRequest).unsafeRunSync()
 
         response should haveError(JsonRpcError.InternalError)
       }
@@ -98,10 +101,10 @@ class QaJRCSpec
       "given block to be checkpointed exists and checkpoint is generated correctly" in new TestSetup {
         (qaService.generateCheckpoint _)
           .expects(generateCheckpointReq)
-          .returning(Task.now(Right(GenerateCheckpointResponse(checkpoint))))
+          .returning(IO.pure(Right(GenerateCheckpointResponse(checkpoint))))
 
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(generateCheckpointRpcRequest).runSyncUnsafe()
+          jsonRpcController.handleRequest(generateCheckpointRpcRequest).unsafeRunSync()
 
         response should haveResult(Extraction.decompose(checkpoint))
       }
@@ -123,10 +126,10 @@ class QaJRCSpec
         val expectedServiceReq = generateCheckpointReq.copy(blockHash = None)
         (qaService.generateCheckpoint _)
           .expects(expectedServiceReq)
-          .returning(Task.now(Right(GenerateCheckpointResponse(checkpoint))))
+          .returning(IO.pure(Right(GenerateCheckpointResponse(checkpoint))))
 
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).runSyncUnsafe()
+          jsonRpcController.handleRequest(req).unsafeRunSync()
 
         response should haveResult(Extraction.decompose(checkpoint))
       }
@@ -147,7 +150,7 @@ class QaJRCSpec
           )
         )
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).runSyncUnsafe()
+          jsonRpcController.handleRequest(req).unsafeRunSync()
 
         response should haveError(JsonRpcError.InvalidParams())
       }
@@ -166,7 +169,7 @@ class QaJRCSpec
           )
         )
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).runSyncUnsafe()
+          jsonRpcController.handleRequest(req).unsafeRunSync()
 
         response should haveError(
           JsonRpcError.InvalidParams("Unable to parse private key, expected byte data but got: JInt(1)")
@@ -187,7 +190,7 @@ class QaJRCSpec
           )
         )
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).runSyncUnsafe()
+          jsonRpcController.handleRequest(req).unsafeRunSync()
 
         response should haveError(JsonRpcError.InvalidParams())
       }
@@ -197,10 +200,10 @@ class QaJRCSpec
       "generating failed" in new TestSetup {
         (qaService.generateCheckpoint _)
           .expects(generateCheckpointReq)
-          .returning(Task.raiseError(new RuntimeException("error")))
+          .returning(IO.raiseError(new RuntimeException("error")))
 
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(generateCheckpointRpcRequest).runSyncUnsafe()
+          jsonRpcController.handleRequest(generateCheckpointRpcRequest).unsafeRunSync()
 
         response should haveError(JsonRpcError.InternalError)
       }
@@ -211,10 +214,10 @@ class QaJRCSpec
         val checkpointPubKeys: Seq[ByteString] = blockchainConfig.checkpointPubKeys.toList
         (qaService.getFederationMembersInfo _)
           .expects(GetFederationMembersInfoRequest())
-          .returning(Task.now(Right(GetFederationMembersInfoResponse(checkpointPubKeys))))
+          .returning(IO.pure(Right(GetFederationMembersInfoResponse(checkpointPubKeys))))
 
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(getFederationMembersInfoRpcRequest).runSyncUnsafe()
+          jsonRpcController.handleRequest(getFederationMembersInfoRpcRequest).unsafeRunSync()
 
         val result = JObject(
           "membersPublicKeys" -> JArray(
@@ -230,27 +233,33 @@ class QaJRCSpec
       "getting federation members info failed" in new TestSetup {
         (qaService.getFederationMembersInfo _)
           .expects(GetFederationMembersInfoRequest())
-          .returning(Task.raiseError(new RuntimeException("error")))
+          .returning(IO.raiseError(new RuntimeException("error")))
 
         val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(getFederationMembersInfoRpcRequest).runSyncUnsafe()
+          jsonRpcController.handleRequest(getFederationMembersInfoRpcRequest).unsafeRunSync()
 
         response should haveError(JsonRpcError.InternalError)
       }
     }
   }
 
-  trait TestSetup
-      extends MockFactory
-      with JRCMatchers
-      with ByteGenerators
-      with BlockchainConfigBuilder
-      with ApisBuilder {
+  trait TestSetup extends JRCMatchers with ByteGenerators with BlockchainConfigBuilder with ApisBuilder {
+    this: org.scalamock.scalatest.MockFactory =>
     def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
     val web3Service: Web3Service = mock[Web3Service]
-    val netService: NetService = mock[NetService]
+    // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
+    implicit val testSystem: org.apache.pekko.actor.ActorSystem = org.apache.pekko.actor.ActorSystem("QaJRCSpec-test")
+    val netService: NetService = new NetService(
+      new java.util.concurrent.atomic.AtomicReference(com.chipprbots.ethereum.utils.NodeStatus(
+        com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening, 
+        com.chipprbots.ethereum.utils.ServerStatus.NotListening
+      )),
+      org.apache.pekko.testkit.TestProbe().ref,
+      com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
+    )
     val personalService: PersonalService = mock[PersonalService]
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
@@ -348,10 +357,10 @@ class QaJRCSpec
 
     def mockSuccessfulMineBlocksBehaviour(
         resp: MockedMinerResponse
-    ): CallHandler1[MineBlocksRequest, Task[Either[JsonRpcError, MineBlocksResponse]]] =
+    ): CallHandler1[MineBlocksRequest, IO[Either[JsonRpcError, MineBlocksResponse]]] =
       (qaService.mineBlocks _)
         .expects(mineBlocksReq)
-        .returning(Task.now(Right(MineBlocksResponse(resp))))
+        .returning(IO.pure(Right(MineBlocksResponse(resp))))
 
     val fakeChainId: Byte = 42.toByte
   }

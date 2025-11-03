@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.consensus.blocks
 
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
@@ -135,7 +135,10 @@ abstract class BlockGeneratorSkeleton(
 
     val sortedTransactions: Seq[SignedTransaction] = transactions
       // should be safe to call get as we do not insert improper transactions to pool.
-      .groupBy(tx => SignedTransaction.getSender(tx).get)
+      .flatMap(tx => SignedTransaction.getSender(tx).map(sender => (sender, tx)))
+      .groupBy(_._1)
+      .view
+      .mapValues(_.map(_._2))
       .values
       .toList
       .flatMap { txsFromSender =>

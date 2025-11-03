@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.domain
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTran
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.vm.Generators
+import com.chipprbots.ethereum.utils.BlockchainConfig
 
 class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBehavior with ScalaCheckPropertyChecks {
 
@@ -22,7 +23,7 @@ class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBeha
 
   "Legacy transaction sender" should "be properly recoverable from rlp encoded values" in {
 
-    implicit val blockchainConfig = Config.blockchains.blockchainConfig.copy(chainId = 1)
+    implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig.copy(chainId = 1)
 
     // values are taken from https://github.com/ethereum/go-ethereum/blob/90987db7334c1d10eb866ca550efedb66dea8a20/core/types/transaction_signing_test.go#L79-L94
     val testValues = Table(

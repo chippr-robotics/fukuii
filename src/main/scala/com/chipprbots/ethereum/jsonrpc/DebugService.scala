@@ -1,9 +1,10 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
+import cats.syntax.traverse._
 
 import scala.concurrent.duration._
 
@@ -29,20 +30,20 @@ class DebugService(peerManager: ActorRef, etcPeerManager: ActorRef) {
   def listPeersInfo(getPeersInfoRequest: ListPeersInfoRequest): ServiceResponse[ListPeersInfoResponse] =
     for {
       ids <- getPeerIds
-      peers <- Task.traverse(ids)(getPeerInfo)
+      peers <- ids.traverse(getPeerInfo)
     } yield Right(ListPeersInfoResponse(peers.flatten))
 
-  private def getPeerIds: Task[List[PeerId]] = {
-    implicit val timeout: Timeout = Timeout(5.seconds)
+  private def getPeerIds: IO[List[PeerId]] = {
+    implicit val timeout: Timeout = Timeout(20.seconds)
 
     peerManager
       .askFor[Peers](PeerManagerActor.GetPeers)
-      .onErrorRecover { case _ => Peers(Map.empty[Peer, PeerActor.Status]) }
+      .handleError(_ => Peers(Map.empty[Peer, PeerActor.Status]))
       .map(_.peers.keySet.map(_.id).toList)
   }
 
-  private def getPeerInfo(peer: PeerId): Task[Option[PeerInfo]] = {
-    implicit val timeout: Timeout = Timeout(5.seconds)
+  private def getPeerInfo(peer: PeerId): IO[Option[PeerInfo]] = {
+    implicit val timeout: Timeout = Timeout(20.seconds)
 
     etcPeerManager
       .askFor[PeerInfoResponse](EtcPeerManagerActor.PeerInfoRequest(peer))

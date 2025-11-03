@@ -4,18 +4,19 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.util.concurrent.TimeUnit
 
-import akka.actor._
-import akka.testkit.TestActorRef
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor._
+import org.apache.pekko.testkit.ExplicitlyTriggeredScheduler
+import org.apache.pekko.testkit.TestActorRef
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
 import com.github.blemale.scaffeine.Cache
 import com.github.blemale.scaffeine.Scaffeine
 import com.google.common.testing.FakeTicker
-import com.miguno.akka.testing.VirtualTime
+import com.typesafe.config.ConfigFactory
 import org.bouncycastle.util.encoders.Hex
 import org.scalacheck.Arbitrary
 import org.scalacheck.Gen
@@ -61,7 +62,9 @@ import Arbitrary.arbitrary
 
 // scalastyle:off magic.number
 class PeerManagerSpec
-    extends TestKit(ActorSystem("PeerManagerSpec_System"))
+    extends TestKit(
+      ActorSystem("PeerManagerSpec_System", ConfigFactory.load("explicit-scheduler"))
+    )
     with AnyFlatSpecLike
     with WithActorSystemShutDown
     with Matchers
@@ -87,7 +90,7 @@ class PeerManagerSpec
     peerManager ! PeerManagerActor.HandlePeerConnection(incomingConnection1.ref, incomingPeerAddress1)
 
     val probe2: TestProbe = createdPeers(2).probe
-    val peer = Peer(PeerId("peerid"), incomingPeerAddress1, probe2.ref, incomingConnection = true)
+    val peer: Peer = Peer(PeerId("peerid"), incomingPeerAddress1, probe2.ref, incomingConnection = true)
 
     peerManager ! PeerClosedConnection(peer.remoteAddress.getHostString, Disconnect.Reasons.DisconnectRequested)
 
@@ -108,7 +111,7 @@ class PeerManagerSpec
     peerManager ! PeerManagerActor.HandlePeerConnection(incomingConnection1.ref, incomingPeerAddress1)
 
     val probe2: TestProbe = createdPeers(2).probe
-    val peer = Peer(PeerId("peer"), incomingPeerAddress1, probe2.ref, incomingConnection = true)
+    val peer: Peer = Peer(PeerId("peer"), incomingPeerAddress1, probe2.ref, incomingConnection = true)
 
     peerManager ! PeerClosedConnection(peer.remoteAddress.getHostString, Disconnect.Reasons.Other)
 
@@ -127,7 +130,7 @@ class PeerManagerSpec
 
     probe.ref ! PoisonPill
 
-    time.advance(21000) // wait for next scan
+    testScheduler.timePasses(21000.millis) // wait for next scan
 
     eventually {
       peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetDiscoveredNodesInfo)
@@ -157,7 +160,7 @@ class PeerManagerSpec
 
     probe.ref ! PoisonPill
 
-    time.advance(21000) // connect to 2 bootstrap peers
+    testScheduler.timePasses(21000.millis) // connect to 2 bootstrap peers
 
     peerEventBus.expectMsg(Publish(PeerDisconnected(PeerId(probe.ref.path.name))))
   }
@@ -166,9 +169,9 @@ class PeerManagerSpec
     start()
     handleInitialNodesDiscovery()
 
-    val connection = TestProbe()
+    val connection: TestProbe = TestProbe()
 
-    val watcher = TestProbe()
+    val watcher: TestProbe = TestProbe()
     watcher.watch(connection.ref)
 
     peerManager ! PeerManagerActor.HandlePeerConnection(connection.ref, new InetSocketAddress("127.0.0.1", 30340))
@@ -184,7 +187,7 @@ class PeerManagerSpec
     createdPeers.head.probe.expectMsgClass(classOf[PeerActor.ConnectTo])
     createdPeers(1).probe.expectMsgClass(classOf[PeerActor.ConnectTo])
 
-    time.advance(21000) // wait for next scan
+    testScheduler.timePasses(21000.millis) // wait for next scan
 
     eventually {
       peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetDiscoveredNodesInfo)
@@ -195,12 +198,12 @@ class PeerManagerSpec
 
     // It should have created the next peer for the first incoming connection (probably using a synchronous test scheduler).
     val probe2: TestProbe = createdPeers(2).probe
-    val peer =
+    val peer: Peer =
       Peer(PeerId("peer"), incomingPeerAddress1, probe2.ref, incomingConnection = true, nodeId = Some(incomingNodeId1))
     probe2.expectMsg(PeerActor.HandleConnection(incomingConnection1.ref, incomingPeerAddress1))
     probe2.reply(PeerEvent.PeerHandshakeSuccessful(peer, initialPeerInfo))
 
-    val watcher = TestProbe()
+    val watcher: TestProbe = TestProbe()
     watcher.watch(incomingConnection3.ref)
 
     // Try to connect with 2 more.
@@ -213,7 +216,7 @@ class PeerManagerSpec
     // Simulate the successful handshake with the 2nd incoming. It should be disconnected because max-incoming is 1.
     val probe3: TestProbe = createdPeers(3).probe
 
-    val secondPeer =
+    val secondPeer: Peer =
       Peer(
         PeerId("secondPeer"),
         incomingPeerAddress2,
@@ -244,9 +247,11 @@ class PeerManagerSpec
     start()
     handleInitialNodesDiscovery()
 
-    val requestSender = TestProbe()
+    val requestSender: TestProbe = TestProbe()
 
     requestSender.send(peerManager, GetPeers)
+    // Advance scheduler to allow peer status requests to timeout (getPeerStatus uses 2s timeout)
+    testScheduler.timePasses((2.seconds + 1.second).toMillis.millis)
     requestSender.expectMsgClass(classOf[Peers])
   }
 
@@ -260,7 +265,7 @@ class PeerManagerSpec
 
     val baseBlockHeader: BlockHeader = Fixtures.Blocks.Block3125369.header
     val header: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber + 4)
-    val block = NewBlock(Block(header, BlockBody(Nil, Nil)), 300)
+    val block: NewBlock = NewBlock(Block(header, BlockBody(Nil, Nil)), 300)
 
     peerManager ! SendMessage(block, PeerId(probe.ref.path.name))
     probe.expectMsg(PeerActor.SendMessage(block))
@@ -274,7 +279,7 @@ class PeerManagerSpec
     val TestPeer(peerAsOutgoing, peerAsOutgoingProbe) = createdPeers.head
 
     val ConnectTo(uriConnectedTo) = peerAsOutgoingProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
-    val nodeId = ByteString(Hex.decode(uriConnectedTo.getUserInfo))
+    val nodeId: ByteString = ByteString(Hex.decode(uriConnectedTo.getUserInfo))
 
     peerAsOutgoingProbe.reply(
       PeerEvent.PeerHandshakeSuccessful(peerAsOutgoing.copy(nodeId = Some(nodeId)), initialPeerInfo)
@@ -289,7 +294,7 @@ class PeerManagerSpec
     peerManager ! PeerManagerActor.HandlePeerConnection(peerAsIncomingTcpConnection.ref, peerAsIncomingAddress)
 
     val peerAsIncomingProbe = createdPeers.last.probe
-    val peerAsIncoming = Peer(
+    val peerAsIncoming: Peer = Peer(
       PeerId("peerAsIncoming"),
       peerAsIncomingAddress,
       peerAsIncomingProbe.ref,
@@ -313,7 +318,7 @@ class PeerManagerSpec
     val TestPeer(peerAsOutgoing, peerAsOutgoingProbe) = createdPeers.head
 
     val ConnectTo(uriConnectedTo) = peerAsOutgoingProbe.expectMsgClass(classOf[PeerActor.ConnectTo])
-    val nodeId = ByteString(Hex.decode(uriConnectedTo.getUserInfo))
+    val nodeId: ByteString = ByteString(Hex.decode(uriConnectedTo.getUserInfo))
 
     createdPeers(1).probe.expectMsgClass(classOf[PeerActor.ConnectTo])
 
@@ -324,7 +329,7 @@ class PeerManagerSpec
     peerManager ! PeerManagerActor.HandlePeerConnection(peerAsIncomingTcpConnection.ref, peerAsIncomingAddress)
 
     val peerAsIncomingProbe = createdPeers.last.probe
-    val peerAsIncoming = Peer(
+    val peerAsIncoming: Peer = Peer(
       PeerId("peerAsIncoming"),
       peerAsIncomingAddress,
       peerAsIncomingProbe.ref,
@@ -382,7 +387,7 @@ class PeerManagerSpec
 
     ticker.advance(6, TimeUnit.MINUTES)
 
-    val newRoundDiscoveredNodes = discoveredNodes + Node.fromUri(
+    val newRoundDiscoveredNodes: Set[Node] = discoveredNodes + Node.fromUri(
       new java.net.URI(
         "enode://a59e33ccd2b3e52d578f1fbd70c6f9babda2650f0760d6ff3b37742fdcdfdb3defba5d56d315b40c46b70198c7621e63ffa3f987389c7118634b0fefbbdfa7fd@51.158.191.43:38556?discport=38556"
       )
@@ -508,7 +513,7 @@ class PeerManagerSpec
   }
 
   it should "not prune again until the pruned peers are disconnected and new ones connect" in new ConnectedPeersFixture {
-    val data = for {
+    val data: Gen[(ConnectedPeers, List[Peer])] = for {
       connectedPeers <- arbitrary[ConnectedPeers]
       numIncoming <- Gen.choose(0, peerConfiguration.pruneIncomingPeers)
       // Top up to max with new connections
@@ -588,7 +593,7 @@ class PeerManagerSpec
   }
 
   trait TestSetup {
-    val time = new VirtualTime
+    def testScheduler: ExplicitlyTriggeredScheduler = system.scheduler.asInstanceOf[ExplicitlyTriggeredScheduler]
 
     case class TestPeer(peer: Peer, probe: TestProbe)
     var createdPeers: Seq[TestPeer] = Seq.empty
@@ -663,7 +668,7 @@ class PeerManagerSpec
           peerFactory,
           discoveryConfig,
           blacklist,
-          Some(time.scheduler)
+          Some(testScheduler)
         )
       )
     )(system)
@@ -675,7 +680,7 @@ class PeerManagerSpec
     }
 
     def handleInitialNodesDiscovery(): Unit = {
-      time.advance(6000) // wait for bootstrap nodes scan
+      testScheduler.timePasses(6000.millis) // wait for bootstrap nodes scan
 
       peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetDiscoveredNodesInfo)
       peerDiscoveryManager.reply(PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes))

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.vm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 object Assembly {
 

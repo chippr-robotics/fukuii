@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.crypto.zksnark
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.zksnark.FiniteField.Ops._
 import com.chipprbots.ethereum.utils.ByteUtils
@@ -52,7 +52,7 @@ object Fp {
     }
 
     override def neg(a: Fp): Fp = Fp {
-      -a.inner.mod(P)
+      (-a.inner).mod(P)
     }
 
     override def isValid(a: Fp): Boolean =

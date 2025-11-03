@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorRef
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
@@ -96,8 +96,8 @@ class EthTxService(
     eventualMaybeData.map(txResponse => Right(GetTransactionByHashResponse(txResponse.map(TransactionResponse(_)))))
   }
 
-  private def getTransactionDataByHash(txHash: ByteString): Task[Option[TransactionData]] = {
-    val maybeTxPendingResponse: Task[Option[TransactionData]] = getTransactionsFromPool.map {
+  private def getTransactionDataByHash(txHash: ByteString): IO[Option[TransactionData]] = {
+    val maybeTxPendingResponse: IO[Option[TransactionData]] = getTransactionsFromPool.map {
       _.pendingTransactions.map(_.stx.tx).find(_.hash == txHash).map(TransactionData(_))
     }
 
@@ -113,7 +113,7 @@ class EthTxService(
   }
 
   def getTransactionReceipt(req: GetTransactionReceiptRequest): ServiceResponse[GetTransactionReceiptResponse] =
-    Task {
+    IO {
       val result: Option[TransactionReceiptResponse] = for {
         TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(req.txHash)
         Block(header, body) <- blockchainReader.getBlockByHash(blockHash)
@@ -155,7 +155,7 @@ class EthTxService(
       .map(td => Right(GetTransactionByBlockHashAndIndexResponse(td.map(TransactionResponse(_)))))
 
   private def getTransactionByBlockHashAndIndex(blockHash: ByteString, transactionIndex: BigInt) =
-    Task {
+    IO {
       for {
         blockWithTx <- blockchainReader.getBlockByHash(blockHash)
         blockTxs = blockWithTx.body.transactionList if transactionIndex >= 0 && transactionIndex < blockTxs.size
@@ -167,7 +167,7 @@ class EthTxService(
     val blockDifference = 30
     val bestBlock = blockchainReader.getBestBlockNumber()
 
-    Task {
+    IO {
       val bestBranch = blockchainReader.getBestBranch()
       val gasPrice = ((bestBlock - blockDifference) to bestBlock)
         .flatMap(nb => blockchainReader.getBlockByNumber(bestBranch, nb))
@@ -189,12 +189,12 @@ class EthTxService(
       case Success(signedTransaction) =>
         if (SignedTransaction.getSender(signedTransaction).isDefined) {
           pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(signedTransaction)
-          Task.now(Right(SendRawTransactionResponse(signedTransaction.hash)))
+          IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
         } else {
-          Task.now(Left(JsonRpcError.InvalidRequest))
+          IO.pure(Left(JsonRpcError.InvalidRequest))
         }
       case Failure(_) =>
-        Task.now(Left(JsonRpcError.InvalidRequest))
+        IO.pure(Left(JsonRpcError.InvalidRequest))
     }
   }
 
@@ -208,10 +208,10 @@ class EthTxService(
     */
   def getTransactionByBlockNumberAndIndex(
       req: GetTransactionByBlockNumberAndIndexRequest
-  ): ServiceResponse[GetTransactionByBlockNumberAndIndexResponse] = Task {
+  ): ServiceResponse[GetTransactionByBlockNumberAndIndexResponse] = IO {
     getTransactionDataByBlockNumberAndIndex(req.block, req.transactionIndex)
       .map(_.map(TransactionResponse(_)))
-      .map(GetTransactionByBlockNumberAndIndexResponse)
+      .map(GetTransactionByBlockNumberAndIndexResponse.apply)
   }
 
   /** eth_getRawTransactionByBlockNumberAndIndex Returns raw transaction data of a transaction with the block number and
@@ -224,10 +224,10 @@ class EthTxService(
     */
   def getRawTransactionByBlockNumberAndIndex(
       req: GetTransactionByBlockNumberAndIndexRequest
-  ): ServiceResponse[RawTransactionResponse] = Task {
+  ): ServiceResponse[RawTransactionResponse] = IO {
     getTransactionDataByBlockNumberAndIndex(req.block, req.transactionIndex)
       .map(x => x.map(_.stx))
-      .map(RawTransactionResponse)
+      .map(RawTransactionResponse.apply)
   }
 
   private def getTransactionDataByBlockNumberAndIndex(block: BlockParam, transactionIndex: BigInt) =

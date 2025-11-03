@@ -2,10 +2,10 @@ package com.chipprbots.ethereum.network
 
 import java.net.URI
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.Props
-import akka.actor.Scheduler
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Scheduler
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._

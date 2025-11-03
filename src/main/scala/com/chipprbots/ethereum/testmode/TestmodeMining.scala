@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.testmode
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.consensus.blocks.BlockTimestampProvider
 import com.chipprbots.ethereum.consensus.blocks.NoOmmersBlockGenerator
@@ -134,7 +134,7 @@ class TestmodeMining(
 
   /** Sends msg to the internal miner and waits for the response
     */
-  override def askMiner(msg: MockedMinerProtocol): Task[MockedMinerResponse] = Task.now(MinerNotExist)
+  override def askMiner(msg: MockedMinerProtocol): IO[MockedMinerResponse] = IO.pure(MinerNotExist)
 
   /** Sends msg to the internal miner
     */

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.blocks
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -16,11 +16,11 @@ class CheckpointBlockGeneratorSpec extends AnyFlatSpec with Matchers {
 
     val fakeCheckpoint = Checkpoint.empty
 
-    val timestamp = parentBlock.header.unixTimestamp + 1
+    val timestamp: Long = parentBlock.header.unixTimestamp + 1
 
-    val generatedBlock = checkpointBlockGenerator.generate(parentBlock, fakeCheckpoint)
+    val generatedBlock: Block = checkpointBlockGenerator.generate(parentBlock, fakeCheckpoint)
 
-    val expectedBlock = Block(
+    val expectedBlock: Block = Block(
       BlockHeader(
         parentHash = parentBlock.hash,
         ommersHash = BlockHeader.EmptyOmmers,

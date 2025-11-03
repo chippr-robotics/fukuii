@@ -2,23 +2,22 @@ package com.chipprbots.ethereum.blockchain.sync.fast
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.pattern.gracefulStop
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.pattern.gracefulStop
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 import cats.implicits._
 
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.reactive.Observable
-import monix.reactive.subjects.ReplaySubject
-import monix.reactive.subjects.Subject
+import fs2.Stream
+import fs2.concurrent.Topic
 
 import scala.concurrent.duration.DurationInt
 import scala.util.Random
@@ -61,7 +60,7 @@ class FastSyncBranchResolverActorSpec
     "fetch headers from the new master peer" - {
       "the chain is repaired from the first request to the new master pair and then the last two blocks are removed" in new TestSetup {
         implicit override lazy val system = self.system
-        implicit val scheduler = Scheduler(system.dispatcher)
+        implicit val ioRuntime: IORuntime = IORuntime.global
 
         val sender = TestProbe("sender")
 
@@ -98,17 +97,17 @@ class FastSyncBranchResolverActorSpec
         }
 
         val response = (for {
-          _ <- Task(sender.send(fastSyncBranchResolver, StartBranchResolver))
-          response <- Task(sender.expectMsgPF()(expectation))
-          _ <- Task(stopController(fastSyncBranchResolver))
-        } yield response).runSyncUnsafe()
+          _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
+          response <- IO(sender.expectMsgPF()(expectation))
+          _ <- IO(stopController(fastSyncBranchResolver))
+        } yield response).unsafeRunSync()
         assert(getBestPeers.contains(response.masterPeer))
       }
 
       "The chain is repaired doing binary searching with the new master peer and then remove the last invalid blocks" - {
         "highest common block is in the middle" in new TestSetup {
           implicit override lazy val system = self.system
-          implicit val scheduler = Scheduler(system.dispatcher)
+          implicit val ioRuntime: IORuntime = IORuntime.global
 
           val sender = TestProbe("sender")
 
@@ -137,15 +136,15 @@ class FastSyncBranchResolverActorSpec
           }
 
           val response = (for {
-            _ <- Task(sender.send(fastSyncBranchResolver, StartBranchResolver))
-            response <- Task(sender.expectMsgPF()(expectation))
-            _ <- Task(stopController(fastSyncBranchResolver))
-          } yield response).runSyncUnsafe()
+            _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
+            response <- IO(sender.expectMsgPF()(expectation))
+            _ <- IO(stopController(fastSyncBranchResolver))
+          } yield response).unsafeRunSync()
           assert(getBestPeers.contains(response.masterPeer))
         }
         "highest common block is in the first half" in new TestSetup {
           implicit override lazy val system = self.system
-          implicit val scheduler = Scheduler(system.dispatcher)
+          implicit val ioRuntime: IORuntime = IORuntime.global
 
           val sender = TestProbe("sender")
 
@@ -175,16 +174,16 @@ class FastSyncBranchResolverActorSpec
           }
 
           val response = (for {
-            _ <- Task(sender.send(fastSyncBranchResolver, StartBranchResolver))
-            response <- Task(sender.expectMsgPF()(expectation))
-            _ <- Task(stopController(fastSyncBranchResolver))
-          } yield response).runSyncUnsafe()
+            _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
+            response <- IO(sender.expectMsgPF()(expectation))
+            _ <- IO(stopController(fastSyncBranchResolver))
+          } yield response).unsafeRunSync()
           assert(getBestPeers.contains(response.masterPeer))
         }
 
         "highest common block is in the second half" in new TestSetup {
           implicit override lazy val system = self.system
-          implicit val scheduler = Scheduler(system.dispatcher)
+          implicit val ioRuntime: IORuntime = IORuntime.global
 
           val sender = TestProbe("sender")
 
@@ -213,17 +212,17 @@ class FastSyncBranchResolverActorSpec
           }
 
           val response = (for {
-            _ <- Task(sender.send(fastSyncBranchResolver, StartBranchResolver))
-            response <- Task(sender.expectMsgPF()(expectation))
-            _ <- Task(stopController(fastSyncBranchResolver))
-          } yield response).runSyncUnsafe()
+            _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
+            response <- IO(sender.expectMsgPF()(expectation))
+            _ <- IO(stopController(fastSyncBranchResolver))
+          } yield response).unsafeRunSync()
           assert(getBestPeers.contains(response.masterPeer))
         }
       }
 
       "No common block is found" in new TestSetup {
         implicit override lazy val system = self.system
-        implicit val scheduler = Scheduler(system.dispatcher)
+        implicit val ioRuntime: IORuntime = IORuntime.global
 
         val sender = TestProbe("sender")
 
@@ -248,10 +247,10 @@ class FastSyncBranchResolverActorSpec
 
         log.debug(s"*** peers: ${handshakedPeers.map(p => (p._1.id, p._2.maxBlockNumber))}")
         (for {
-          _ <- Task(sender.send(fastSyncBranchResolver, StartBranchResolver))
-          response <- Task(sender.expectMsg(BranchResolutionFailed(NoCommonBlockFound)))
-          _ <- Task(stopController(fastSyncBranchResolver))
-        } yield response).runSyncUnsafe()
+          _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
+          response <- IO(sender.expectMsg(BranchResolutionFailed(NoCommonBlockFound)))
+          _ <- IO(stopController(fastSyncBranchResolver))
+        } yield response).unsafeRunSync()
       }
     }
   }
@@ -288,12 +287,12 @@ class FastSyncBranchResolverActorSpec
       )
 
     def createEtcPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]])(implicit
-        scheduler: Scheduler
+        ioRuntime: IORuntime
     ): ActorRef = {
       val etcPeerManager = TestProbe("etc_peer_manager")
       val autoPilot =
         new EtcPeerManagerAutoPilot(
-          responsesSubject,
+          responsesTopic,
           peersConnectedDeferred,
           peers,
           blocks
@@ -331,23 +330,24 @@ object FastSyncBranchResolverActorSpec extends Logger {
 
   private val BlacklistMaxElements: Int = 100
 
-  private val responsesSubject: Subject[MessageFromPeer, MessageFromPeer] = ReplaySubject()
-  private val peersConnectedDeferred = Deferred.unsafe[Task, Unit]
+  private val responsesTopicIO: IO[Topic[IO, MessageFromPeer]] = Topic[IO, MessageFromPeer]
+  private val responsesTopic: Topic[IO, MessageFromPeer] = responsesTopicIO.unsafeRunSync()(IORuntime.global)
+  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit]
 
-  var responses: Observable[MessageFromPeer] = responsesSubject
+  var responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
 
-  def fetchedHeaders: Observable[Seq[BlockHeader]] =
+  def fetchedHeaders: Stream[IO, Seq[BlockHeader]] =
     responses
       .collect { case MessageFromPeer(BlockHeaders(headers), _) =>
         headers
       }
 
   class EtcPeerManagerAutoPilot(
-      responses: Subject[MessageFromPeer, MessageFromPeer],
-      peersConnected: Deferred[Task, Unit],
+      responses: Topic[IO, MessageFromPeer],
+      peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
       blocks: Map[Int, List[Block]]
-  )(implicit scheduler: Scheduler)
+  )(implicit ioRuntime: IORuntime)
       extends AutoPilot {
 
     var blockIndex = 0
@@ -357,7 +357,7 @@ object FastSyncBranchResolverActorSpec extends Logger {
       msg match {
         case EtcPeerManagerActor.GetHandshakedPeers =>
           sender ! EtcPeerManagerActor.HandshakedPeers(peers)
-          peersConnected.complete(()).onErrorHandle(_ => ()).runSyncUnsafe()
+          peersConnected.complete(()).handleError(_ => ()).unsafeRunSync()
         case EtcPeerManagerActor.SendMessage(rawMsg, peerId) =>
           val response = rawMsg.underlyingMsg match {
             case GetBlockHeaders(_, _, _, false) =>
@@ -367,9 +367,8 @@ object FastSyncBranchResolverActorSpec extends Logger {
           }
           val theResponse = MessageFromPeer(response, peerId)
           sender ! theResponse
-          responses.onNext(theResponse)
-          if (blockIndex == blocksSetSize)
-            responses.onComplete()
+          responses.publish1(theResponse).unsafeRunSync()
+          if (blockIndex == blocksSetSize) ()
       }
       this
     }

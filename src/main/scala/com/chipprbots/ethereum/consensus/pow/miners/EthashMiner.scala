@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.{ActorRef => ClassicActorRef}
-import akka.util.ByteString
+import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
+import org.apache.pekko.util.ByteString
 
-import monix.execution.CancelableFuture
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.Future
 import scala.util.Random
 
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
@@ -32,7 +32,7 @@ class EthashMiner(
     blockCreator: PoWBlockCreator,
     syncController: ClassicActorRef,
     ethMiningService: EthMiningService
-)(implicit scheduler: Scheduler)
+)(implicit scheduler: IORuntime)
     extends Miner
     with Logger {
 
@@ -40,7 +40,7 @@ class EthashMiner(
 
   def processMining(
       bestBlock: Block
-  )(implicit blockchainConfig: BlockchainConfig): CancelableFuture[CoordinatorProtocol] = {
+  )(implicit blockchainConfig: BlockchainConfig): Future[CoordinatorProtocol] = {
     log.debug("Starting mining with parent block {}", bestBlock.number)
     blockCreator
       .getBlockForMining(bestBlock)
@@ -51,11 +51,11 @@ class EthashMiner(
         submitHashRate(ethMiningService, System.nanoTime() - startTime, miningResult)
         handleMiningResult(miningResult, syncController, block)
       }
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Error occurred while mining: ", ex)
         PoWMiningCoordinator.MiningUnsuccessful
       }
-      .runToFuture
+      .unsafeToFuture()
   }
 
   private def doMining(blockNumber: Long, block: Block)(implicit

@@ -1,12 +1,11 @@
 package com.chipprbots.ethereum.domain
 
 import java.math.BigInteger
-import java.util.concurrent.Executors
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.util.Try
 
@@ -20,13 +19,13 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.{_, given}
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 object SignedTransaction {
 
-  implicit private val executionContext: Scheduler = Scheduler(Executors.newWorkStealingPool())
+  implicit private val ioRuntime: IORuntime = IORuntime.global
 
   // txHash size is 32bytes, Address size is 20 bytes, taking into account some overhead key-val pair have
   // around 70bytes then 100k entries have around 7mb. 100k entries is around 300blocks for Ethereum network.
@@ -34,6 +33,9 @@ object SignedTransaction {
 
   // Each background thread gets batch of signed tx to calculate senders
   val batchSize = 5
+
+  // Cache available processors count for parallel execution (constant at runtime)
+  private val availableProcessors: Int = Runtime.getRuntime.availableProcessors
 
   private val txSenders: Cache[ByteString, Address] = CacheBuilder
     .newBuilder()
@@ -110,7 +112,6 @@ object SignedTransaction {
         getLegacyTransactionRawSignature(signedTransaction.signature, chainIdOpt)
       case _: TransactionWithAccessList =>
         getTWALRawSignature(signedTransaction.signature)
-      case _ => throw new IllegalArgumentException(s"Transaction type not supported for $signedTransaction")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -199,7 +200,6 @@ object SignedTransaction {
         getLegacyEthereumSignature(rawSignature, chainIdOpt)
       case _: TransactionWithAccessList =>
         getTWALEthereumSignature(rawSignature)
-      case _ => throw new IllegalArgumentException(s"Transaction type not supported for $tx")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -273,13 +273,13 @@ object SignedTransaction {
       .flatten
       .grouped(batchSize)
 
-    Task.traverse(blocktx.toSeq)(calculateSendersForTxs).runAsyncAndForget
+    IO.parTraverseN(availableProcessors)(blocktx.toSeq)(calculateSendersForTxs).void.unsafeRunAndForget()(ioRuntime)
   }
 
   private def calculateSendersForTxs(txs: Seq[SignedTransaction])(implicit
       blockchainConfig: BlockchainConfig
-  ): Task[Unit] =
-    Task(txs.foreach(calculateAndCacheSender))
+  ): IO[Unit] =
+    IO(txs.foreach(calculateAndCacheSender))
 
   private def calculateAndCacheSender(stx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig) =
     calculateSender(stx).foreach(address => txSenders.put(stx.hash, address))
@@ -294,7 +294,18 @@ object SignedTransaction {
     */
   private def generalTransactionBytes(tx: Transaction): Array[Byte] = {
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.emptyByteArray)
-    crypto.kec256(rlpEncode(RLPList(tx.nonce, tx.gasPrice, tx.gasLimit, receivingAddressAsArray, tx.value, tx.payload)))
+    crypto.kec256(
+      rlpEncode(
+        RLPList(
+          toEncodeable(tx.nonce),
+          toEncodeable(tx.gasPrice),
+          toEncodeable(tx.gasLimit),
+          toEncodeable(receivingAddressAsArray),
+          toEncodeable(tx.value),
+          toEncodeable(tx.payload)
+        )
+      )
+    )
   }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -311,15 +322,15 @@ object SignedTransaction {
     crypto.kec256(
       rlpEncode(
         RLPList(
-          tx.nonce,
-          tx.gasPrice,
-          tx.gasLimit,
-          receivingAddressAsArray,
-          tx.value,
-          tx.payload,
-          chainId,
-          valueForEmptyR,
-          valueForEmptyS
+          toEncodeable(tx.nonce),
+          toEncodeable(tx.gasPrice),
+          toEncodeable(tx.gasLimit),
+          toEncodeable(receivingAddressAsArray),
+          toEncodeable(tx.value),
+          toEncodeable(tx.payload),
+          toEncodeable(chainId),
+          toEncodeable(valueForEmptyR),
+          toEncodeable(valueForEmptyS)
         )
       )
     )
@@ -337,7 +348,7 @@ object SignedTransaction {
       case _: LegacyTransaction
           if stx.signature.v == ECDSASignature.negativePointSign || stx.signature.v == ECDSASignature.positivePointSign =>
         None
-      case _: LegacyTransaction            => Some(blockchainConfig.chainId)
+      case _: LegacyTransaction            => Some(BigInt(blockchainConfig.chainId.toInt))
       case twal: TransactionWithAccessList => Some(twal.chainId)
     }
     chainIdOpt.map(_.toByte)
@@ -356,7 +367,6 @@ object SignedTransaction {
     signedTransaction.tx match {
       case _: LegacyTransaction            => getLegacyBytesToSign(signedTransaction)
       case twal: TransactionWithAccessList => getTWALBytesToSign(twal)
-      case _ => throw new IllegalArgumentException(s"unknown transaction type for $signedTransaction")
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.

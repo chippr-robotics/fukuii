@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.validators.std
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
 import com.chipprbots.ethereum.consensus.validators.BlockValidator

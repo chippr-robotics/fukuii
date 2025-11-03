@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.network
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -43,7 +43,7 @@ class EtcPeerManagerActor(
 ) extends Actor
     with ActorLogging {
 
-  private type PeersWithInfo = Map[PeerId, PeerWithInfo]
+  private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -351,7 +351,7 @@ object EtcPeerManagerActor {
       PeerInfo(remoteStatus, forkAccepted = false)
   }
 
-  private case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
+  private[network] case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
 
   case object GetHandshakedPeers
 

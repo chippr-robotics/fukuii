@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
 
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.Suite

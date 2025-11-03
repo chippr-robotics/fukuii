@@ -4,12 +4,12 @@ import java.net.InetAddress
 
 import scala.util.Try
 
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.crypto.Signature
-import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
-import io.iohk.scalanet.discovery.ethereum.Node
-import io.iohk.scalanet.discovery.ethereum.v4.Payload
-import io.iohk.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.Signature
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
+import com.chipprbots.scalanet.discovery.hash.Hash
 import scodec.Attempt
 import scodec.Codec
 import scodec.DecodeResult
@@ -24,12 +24,13 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPEncoder
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
 import com.chipprbots.ethereum.rlp.RLPImplicitDerivations._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.{_, given}
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 
 /** RLP codecs based on https://github.com/ethereum/devp2p/blob/master/discv4.md */
 object RLPCodecs extends ContentCodecs with PayloadCodecs {
-  implicit def codecFromRLPCodec[T: RLPCodec]: Codec[T] =
+  given codecFromRLPCodec[T: RLPCodec]: Codec[T] =
     Codec[T](
       (value: T) => {
         val bytes = rlp.encode(value)
@@ -43,28 +44,42 @@ object RLPCodecs extends ContentCodecs with PayloadCodecs {
 }
 
 trait ContentCodecs {
-  implicit val inetAddressRLPCodec: RLPCodec[InetAddress] =
-    implicitly[RLPCodec[Array[Byte]]].xmap(InetAddress.getByAddress(_), _.getAddress)
+  given inetAddressRLPCodec: RLPCodec[InetAddress] =
+    summon[RLPCodec[Array[Byte]]].xmap(InetAddress.getByAddress(_), _.getAddress)
 
-  implicit val bitVectorRLPCodec: RLPCodec[BitVector] =
-    implicitly[RLPCodec[Array[Byte]]].xmap(BitVector(_), _.toByteArray)
+  given bitVectorRLPCodec: RLPCodec[BitVector] =
+    summon[RLPCodec[Array[Byte]]].xmap(BitVector(_), _.toByteArray)
 
-  implicit val byteVectorRLPCodec: RLPCodec[ByteVector] =
-    implicitly[RLPCodec[Array[Byte]]].xmap(ByteVector(_), _.toArray)
+  given byteVectorRLPCodec: RLPCodec[ByteVector] =
+    summon[RLPCodec[Array[Byte]]].xmap(ByteVector(_), _.toArray)
 
-  implicit val hashRLPCodec: RLPCodec[Hash] =
-    implicitly[RLPCodec[BitVector]].xmap(Hash(_), identity)
+  given hashRLPCodec: RLPCodec[Hash] =
+    summon[RLPCodec[BitVector]].xmap(Hash(_), _.value)
 
-  implicit val publicKeyRLPCodec: RLPCodec[PublicKey] =
-    implicitly[RLPCodec[BitVector]].xmap(PublicKey(_), identity)
+  given publicKeyRLPCodec: RLPCodec[PublicKey] =
+    summon[RLPCodec[BitVector]].xmap(PublicKey(_), _.value)
 
-  implicit val signatureRLPCodec: RLPCodec[Signature] =
-    implicitly[RLPCodec[BitVector]].xmap(Signature(_), identity)
+  given signatureRLPCodec: RLPCodec[Signature] =
+    summon[RLPCodec[BitVector]].xmap(Signature(_), _.value)
 
-  implicit val nodeAddressRLPCodec: RLPCodec[Node.Address] =
-    deriveLabelledGenericRLPCodec
+  given nodeAddressRLPCodec: RLPCodec[Node.Address] = RLPCodec.instance[Node.Address](
+    { case Node.Address(ip, udpPort, tcpPort) =>
+      RLPList(
+        RLPEncoder.encode(ip.getAddress),
+        RLPEncoder.encode(udpPort),
+        RLPEncoder.encode(tcpPort)
+      )
+    },
+    { case RLPList(ipBytes, udpPort, tcpPort) =>
+      Node.Address(
+        InetAddress.getByAddress(ipBytes.decodeAs[Array[Byte]]("ip")),
+        udpPort.decodeAs[Int]("udpPort"),
+        tcpPort.decodeAs[Int]("tcpPort")
+      )
+    }
+  )
 
-  implicit val nodeRLPCodec: RLPCodec[Node] =
+  given nodeRLPCodec: RLPCodec[Node] =
     RLPCodec.instance[Node](
       { case Node(id, address) =>
         RLPEncoder.encode(address).asInstanceOf[RLPList] :+ id
@@ -142,26 +157,110 @@ trait ContentCodecs {
 
 trait PayloadCodecs { self: ContentCodecs =>
 
-  implicit val payloadDerivationPolicy: DerivationPolicy =
+  given payloadDerivationPolicy: DerivationPolicy =
     DerivationPolicy.default.copy(omitTrailingOptionals = true)
 
-  implicit val pingRLPCodec: RLPCodec[Payload.Ping] =
-    deriveLabelledGenericRLPCodec
+  given pingRLPCodec: RLPCodec[Payload.Ping] = RLPCodec.instance[Payload.Ping](
+    { case Payload.Ping(version, from, to, expiration, enrSeq) =>
+      val items = List(
+        RLPEncoder.encode(version),
+        RLPEncoder.encode(from),
+        RLPEncoder.encode(to),
+        RLPEncoder.encode(expiration)
+      ) ++ enrSeq.toList.map(RLPEncoder.encode(_))
+      RLPList(items: _*)
+    },
+    {
+      case RLPList(items @ _*) if items.length >= 4 =>
+        val version = items(0).decodeAs[Int]("version")
+        val from = items(1).decodeAs[Node.Address]("from")
+        val to = items(2).decodeAs[Node.Address]("to")
+        val expiration = items(3).decodeAs[Long]("expiration")
+        // Only try to decode enrSeq if it's an RLPValue (not a list), for EIP-8 forward compatibility
+        val enrSeq = if (items.length >= 5 && items(4).isInstanceOf[RLPValue]) {
+          Some(items(4).decodeAs[Long]("enrSeq"))
+        } else None
+        Payload.Ping(version, from, to, expiration, enrSeq)
+    }
+  )
 
-  implicit val pongRLPCodec: RLPCodec[Payload.Pong] =
-    deriveLabelledGenericRLPCodec
+  given pongRLPCodec: RLPCodec[Payload.Pong] = RLPCodec.instance[Payload.Pong](
+    { case Payload.Pong(to, pingHash, expiration, enrSeq) =>
+      val items = List(
+        RLPEncoder.encode(to),
+        RLPEncoder.encode(pingHash),
+        RLPEncoder.encode(expiration)
+      ) ++ enrSeq.toList.map(RLPEncoder.encode(_))
+      RLPList(items: _*)
+    },
+    {
+      case RLPList(items @ _*) if items.length >= 3 =>
+        val to = items(0).decodeAs[Node.Address]("to")
+        val pingHash = items(1).decodeAs[Hash]("pingHash")
+        val expiration = items(2).decodeAs[Long]("expiration")
+        // Only try to decode enrSeq if it's an RLPValue (not a list), for EIP-8 forward compatibility
+        val enrSeq = if (items.length >= 4 && items(3).isInstanceOf[RLPValue]) {
+          Some(items(3).decodeAs[Long]("enrSeq"))
+        } else None
+        Payload.Pong(to, pingHash, expiration, enrSeq)
+    }
+  )
 
-  implicit val findNodeRLPCodec: RLPCodec[Payload.FindNode] =
-    deriveLabelledGenericRLPCodec
+  given findNodeRLPCodec: RLPCodec[Payload.FindNode] = RLPCodec.instance[Payload.FindNode](
+    { case Payload.FindNode(target, expiration) =>
+      RLPList(
+        RLPEncoder.encode(target),
+        RLPEncoder.encode(expiration)
+      )
+    },
+    {
+      case RLPList(items @ _*) if items.length >= 2 =>
+        Payload.FindNode(
+          items(0).decodeAs[PublicKey]("target"),
+          items(1).decodeAs[Long]("expiration")
+        )
+    }
+  )
 
-  implicit val neighborsRLPCodec: RLPCodec[Payload.Neighbors] =
-    deriveLabelledGenericRLPCodec
+  given neighborsRLPCodec: RLPCodec[Payload.Neighbors] = RLPCodec.instance[Payload.Neighbors](
+    { case Payload.Neighbors(nodes, expiration) =>
+      RLPList(
+        RLPEncoder.encode(nodes),
+        RLPEncoder.encode(expiration)
+      )
+    },
+    {
+      case RLPList(items @ _*) if items.length >= 2 =>
+        Payload.Neighbors(
+          items(0).decodeAs[List[Node]]("nodes"),
+          items(1).decodeAs[Long]("expiration")
+        )
+    }
+  )
 
-  implicit val enrRequestRLPCodec: RLPCodec[Payload.ENRRequest] =
-    deriveLabelledGenericRLPCodec
+  given enrRequestRLPCodec: RLPCodec[Payload.ENRRequest] = RLPCodec.instance[Payload.ENRRequest](
+    { case Payload.ENRRequest(expiration) =>
+      RLPList(RLPEncoder.encode(expiration))
+    },
+    { case RLPList(expiration) =>
+      Payload.ENRRequest(expiration.decodeAs[Long]("expiration"))
+    }
+  )
 
-  implicit val enrResponseRLPCodec: RLPCodec[Payload.ENRResponse] =
-    deriveLabelledGenericRLPCodec
+  given enrResponseRLPCodec: RLPCodec[Payload.ENRResponse] = RLPCodec.instance[Payload.ENRResponse](
+    { case Payload.ENRResponse(requestHash, enr) =>
+      RLPList(
+        RLPEncoder.encode(requestHash),
+        RLPEncoder.encode(enr)
+      )
+    },
+    { case RLPList(requestHash, enr) =>
+      Payload.ENRResponse(
+        requestHash.decodeAs[Hash]("requestHash"),
+        enr.decodeAs[EthereumNodeRecord]("enr")
+      )
+    }
+  )
 
   private object PacketType {
     val Ping: Byte = 0x01
@@ -172,7 +271,7 @@ trait PayloadCodecs { self: ContentCodecs =>
     val ENRResponse: Byte = 0x06
   }
 
-  implicit def payloadCodec: Codec[Payload] =
+  given payloadCodec: Codec[Payload] =
     Codec[Payload](
       (payload: Payload) => {
         val (packetType, packetData) =

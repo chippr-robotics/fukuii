@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import akka.actor.ActorRef
+import org.apache.pekko.actor.ActorRef
 
 import scala.util.Random
 
@@ -50,7 +50,8 @@ class BlockBroadcast(val etcPeerManager: ActorRef) {
 
       val message: MessageSerializable = remoteStatus.capability match {
         case Capability.ETH63 => blockToBroadcast.as63
-        case Capability.ETH64 => blockToBroadcast.as63
+        case Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68 =>
+          blockToBroadcast.as63
         case Capability.ETC64 => blockToBroadcast.asEtc64
       }
       etcPeerManager ! EtcPeerManagerActor.SendMessage(message, peer.id)

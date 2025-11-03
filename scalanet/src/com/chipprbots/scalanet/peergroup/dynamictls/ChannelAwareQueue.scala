@@ -1,0 +1,68 @@
+package com.chipprbots.scalanet.peergroup.dynamictls
+
+import java.util.concurrent.atomic.AtomicLong
+
+import cats.effect.IO
+
+import com.chipprbots.scalanet.peergroup.CloseableQueue
+import com.chipprbots.scalanet.peergroup.CloseableQueue.Closed
+import io.netty.channel.ChannelConfig
+
+/**
+  * Wraps an underlying unbounded CloseableQueue queue and bounds it based on netty auto-read feature.
+  * While auto-read is disabled received messages start to accumulate in underlying os RCV tcp buffer. When RCV buffer is full
+  * sender SND buffer will start to buffer un-sent bytes. When sender SND buffer is full, the default behaviour is that
+  * write(xxx) will block.  In our case, sendMessage Task will not finish until there will be place in SND buffer
+  *
+  *
+  * WARNING: Actual limit may sometimes go higher, as each netty read can return more than one message.
+  *
+  * @param limit how many items can accumulate in the queue
+  * @param queue is the underlying closeable message queue
+  */
+private[scalanet] final class ChannelAwareQueue[M] private (
+    limit: Int,
+    queue: CloseableQueue[M],
+    channelConfig: ChannelConfig
+) {
+  private val queueSize = new AtomicLong(0)
+
+  private val lowerBound: Int = Math.max(1, limit / 2)
+
+  def size: Long = queueSize.get()
+
+  def offer(a: M): IO[Either[Closed, Unit]] = {
+    IO(enableBackPressureIfNecessary()) >> queue.offer(a)
+  }
+
+  def next: IO[Option[M]] = {
+    queue.next.map {
+      case Some(value) =>
+        disableBackPressureIfNecessary()
+        Some(value)
+      case None =>
+        None
+    }
+  }
+
+  def close(discard: Boolean): IO[Unit] = queue.close(discard)
+
+  private def enableBackPressureIfNecessary(): Unit =
+    if (queueSize.incrementAndGet() >= limit && channelConfig.isAutoRead) {
+      channelConfig.setAutoRead(false)
+      ()
+    }
+
+  private def disableBackPressureIfNecessary(): Unit =
+    if (queueSize.decrementAndGet() <= lowerBound && !channelConfig.isAutoRead) {
+      channelConfig.setAutoRead(true)
+      ()
+    }
+}
+
+object ChannelAwareQueue {
+  def apply[M](limit: Int, channelConfig: ChannelConfig): IO[ChannelAwareQueue[M]] = {
+    CloseableQueue.unbounded[M].map(queue => new ChannelAwareQueue[M](limit, queue, channelConfig))
+  }
+
+}

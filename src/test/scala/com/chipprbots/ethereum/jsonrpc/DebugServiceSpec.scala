@@ -2,11 +2,11 @@ package com.chipprbots.ethereum.jsonrpc
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.concurrent.ScalaFutures
@@ -27,6 +27,9 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import scala.concurrent.Future
+import scala.concurrent.Future
+import scala.concurrent.Future
 
 class DebugServiceSpec
     extends TestKit(ActorSystem("ActorSystem_DebugServiceSpec"))
@@ -36,9 +39,11 @@ class DebugServiceSpec
     with MockFactory
     with ScalaFutures {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "DebugService" should "return list of peers info" in new TestSetup {
-    val result =
-      debugService.listPeersInfo(ListPeersInfoRequest()).runToFuture
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
+      debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))
@@ -50,7 +55,8 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there are no peers available" in new TestSetup {
-    val result = debugService.listPeersInfo(ListPeersInfoRequest()).runToFuture
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
+      debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map.empty))
@@ -59,7 +65,8 @@ class DebugServiceSpec
   }
 
   it should "return empty list if there is no peer info" in new TestSetup {
-    val result = debugService.listPeersInfo(ListPeersInfoRequest()).runToFuture
+    val result: Future[Either[JsonRpcError, ListPeersInfoResponse]] =
+      debugService.listPeersInfo(ListPeersInfoRequest()).unsafeToFuture()
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))

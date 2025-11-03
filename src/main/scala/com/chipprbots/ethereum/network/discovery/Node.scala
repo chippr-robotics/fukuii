@@ -1,9 +1,8 @@
 package com.chipprbots.ethereum.network.discovery
 
-import java.net.InetSocketAddress
 import java.net._
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Failure
 import scala.util.Success

@@ -1,8 +1,10 @@
 package com.chipprbots.ethereum.db.storage
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
-import monix.reactive.Observable
+import cats.effect.IO
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.db.cache.Cache
 import com.chipprbots.ethereum.db.dataSource.DataSource
@@ -11,7 +13,7 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 
-sealed trait NodesStorage extends {
+sealed trait NodesStorage {
   def get(key: NodeHash): Option[NodeEncoded]
   def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesStorage
   def updateCond(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)], inMemory: Boolean): NodesStorage
@@ -56,7 +58,7 @@ class NodeStorage(val dataSource: DataSource)
     apply(dataSource)
   }
 
-  override def storageContent: Observable[Either[IterationError, (NodeHash, NodeEncoded)]] =
+  override def storageContent: Stream[IO, Either[IterationError, (NodeHash, NodeEncoded)]] =
     dataSource.iterate(namespace).map { result =>
       result.map { case (key, value) => (ByteString.fromArrayUnsafe(key), value) }
     }

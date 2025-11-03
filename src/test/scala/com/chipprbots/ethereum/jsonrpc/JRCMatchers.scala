@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.json4s.JsonAST.JBool
 import org.json4s.JsonAST.JDecimal

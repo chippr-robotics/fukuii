@@ -1,13 +1,12 @@
 package com.chipprbots.ethereum.mpt
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MptVisitors._
 import com.chipprbots.ethereum.rlp.RLPEncodeable
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.rawDecode
@@ -48,7 +47,13 @@ object MptTraversals {
         children(i) = parseMpt(items(i))
         i = i + 1
       }
-      val terminatorAsArray: ByteString = items.last
+      val terminatorAsArray: ByteString = items.last match {
+        case RLPValue(bytes) => ByteString(bytes)
+        case other =>
+          throw new MPTException(
+            s"Invalid Branch Node terminator: expected RLPValue but got ${other.getClass.getSimpleName}"
+          )
+      }
       BranchNode(
         children = children,
         terminator = if (terminatorAsArray.isEmpty) None else Some(terminatorAsArray),
@@ -56,9 +61,19 @@ object MptTraversals {
       )
 
     case list @ RLPList(items @ _*) if items.size == MerklePatriciaTrie.PairSize =>
-      val (key, isLeaf) = HexPrefix.decode(items.head)
+      val (key, isLeaf) = HexPrefix.decode(items.head match {
+        case RLPValue(bytes) => bytes
+        case _               => throw new MPTException("Invalid node key: expected RLPValue in Pair node")
+      })
       if (isLeaf)
-        LeafNode(ByteString(key), items.last, parsedRlp = Some(list))
+        LeafNode(
+          ByteString(key),
+          items.last match {
+            case RLPValue(bytes) => ByteString(bytes)
+            case _               => throw new MPTException("Invalid Leaf Node: unexpected RLP structure")
+          },
+          parsedRlp = Some(list)
+        )
       else {
         ExtensionNode(ByteString(key), parseMpt(items.last), parsedRlp = Some(list))
       }

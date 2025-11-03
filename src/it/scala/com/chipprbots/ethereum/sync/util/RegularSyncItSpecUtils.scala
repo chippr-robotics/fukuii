@@ -1,14 +1,13 @@
 package com.chipprbots.ethereum.sync.util
 
-import akka.actor.ActorRef
-import akka.actor.typed
-import akka.actor.typed.scaladsl.adapter._
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.typed
+import org.apache.pekko.actor.typed.scaladsl.adapter._
+import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
 import cats.effect.Resource
-
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -118,7 +117,7 @@ object RegularSyncItSpecUtils {
       blockchainReader,
       blockQueue,
       blockValidation,
-      Scheduler.global
+      IORuntime.global
     )
 
     lazy val ommersPool: ActorRef = system.actorOf(OmmersPool.props(blockchainReader, 1), "ommers-pool")
@@ -184,21 +183,21 @@ object RegularSyncItSpecUtils {
       )
     )
 
-    def startRegularSync(): Task[Unit] = Task {
+    def startRegularSync(): IO[Unit] = IO {
       regularSync ! SyncProtocol.Start
     }
 
     def broadcastBlock(
         blockNumber: Option[Int] = None
-    )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): Task[Unit] =
-      Task(blockNumber match {
+    )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): IO[Unit] =
+      IO(blockNumber match {
         case Some(bNumber) =>
           blockchainReader
             .getBlockByNumber(blockchainReader.getBestBranch(), bNumber)
             .getOrElse(throw new RuntimeException(s"block by number: $bNumber doesn't exist"))
         case None => blockchainReader.getBestBlock().get
       }).flatMap { block =>
-        Task {
+        IO {
           val currentWeight = blockchainReader
             .getChainWeightByHash(block.hash)
             .getOrElse(throw new RuntimeException(s"ChainWeight by hash: ${block.hash} doesn't exist"))
@@ -208,20 +207,20 @@ object RegularSyncItSpecUtils {
         }
       }
 
-    def waitForRegularSyncLoadLastBlock(blockNumber: BigInt): Task[Boolean] = {
+    def waitForRegularSyncLoadLastBlock(blockNumber: BigInt): IO[Boolean] = {
       // Scale timeout based on block number - larger syncs need more time
       // Use minimum 90 retries, but add 1 retry per 20 blocks for large syncs
       val baseRetries = 90
       val additionalRetries = if (blockNumber > 1000) ((blockNumber - 1000) / 20).toInt else 0
       val maxRetries = baseRetries + additionalRetries
-      retryUntilWithDelay(Task(blockchainReader.getBestBlockNumber() == blockNumber), 1.second, maxRetries)(isDone =>
+      retryUntilWithDelay(IO(blockchainReader.getBestBlockNumber() == blockNumber), 1.second, maxRetries)(isDone =>
         isDone
       )
     }
 
     def mineNewBlock(
         plusDifficulty: BigInt = 0
-    )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): Task[Unit] = Task {
+    )(updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy): IO[Unit] = IO {
       val block: Block = blockchainReader.getBestBlock().get
       val currentWeight = blockchainReader
         .getChainWeightByHash(block.hash)
@@ -234,14 +233,14 @@ object RegularSyncItSpecUtils {
 
     def mineNewBlocks(delay: FiniteDuration, nBlocks: Int)(
         updateWorldForBlock: (BigInt, InMemoryWorldStateProxy) => InMemoryWorldStateProxy
-    ): Task[Unit] =
+    ): IO[Unit] =
       if (nBlocks > 0) {
         mineNewBlock()(updateWorldForBlock)
-          .delayExecution(delay)
+          .delayBy(delay)
           .flatMap(_ => mineNewBlocks(delay, nBlocks - 1)(updateWorldForBlock))
-      } else Task(())
+      } else IO(())
 
-    def addCheckpointedBlock(parent: Block): Task[Unit] = Task {
+    def addCheckpointedBlock(parent: Block): IO[Unit] = IO {
       val signatures = CheckpointingTestHelpers.createCheckpointSignatures(
         Seq(crypto.generateKeyPair(secureRandom)),
         parent.hash
@@ -250,7 +249,7 @@ object RegularSyncItSpecUtils {
       regularSync ! NewCheckpoint(checkpoint)
     }
 
-    def getCheckpointFromPeer(checkpoint: Block, peerId: PeerId): Task[Unit] = Task {
+    def getCheckpointFromPeer(checkpoint: Block, peerId: PeerId): IO[Unit] = IO {
       blockImporter ! Start
       fetcher ! AdaptedMessageFromEventBus(NewBlock(checkpoint, checkpoint.header.difficulty), peerId)
     }
@@ -294,16 +293,16 @@ object RegularSyncItSpecUtils {
 
   object FakePeer {
 
-    def startFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCustomConfig): Task[FakePeer] =
+    def startFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCustomConfig): IO[FakePeer] =
       for {
-        peer <- Task(new FakePeer(peerName, fakePeerCustomConfig))
+        peer <- IO(new FakePeer(peerName, fakePeerCustomConfig))
         _ <- peer.startPeer()
       } yield peer
 
     def start1FakePeerRes(
         fakePeerCustomConfig: FakePeerCustomConfig = defaultConfig,
         name: String
-    ): Resource[Task, FakePeer] =
+    ): Resource[IO, FakePeer] =
       Resource.make {
         startFakePeer(name, fakePeerCustomConfig)
       } { peer =>
@@ -313,7 +312,7 @@ object RegularSyncItSpecUtils {
     def start2FakePeersRes(
         fakePeerCustomConfig1: FakePeerCustomConfig = defaultConfig,
         fakePeerCustomConfig2: FakePeerCustomConfig = defaultConfig
-    ): Resource[Task, (FakePeer, FakePeer)] =
+    ): Resource[IO, (FakePeer, FakePeer)] =
       for {
         peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
         peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")

@@ -1,10 +1,9 @@
 package com.chipprbots.ethereum.consensus
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
-
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.concurrent.ScalaFutures
@@ -31,7 +30,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
   "Consensus" should "extend the current best chain" in new ConsensusSetup {
     val chainExtension = BlockHelpers.generateChain(3, initialBestBlock)
 
-    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).runToFuture) {
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) {
       _ shouldBe a[ExtendedCurrentBestBranch]
     }
 
@@ -42,7 +41,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     val chainExtension = BlockHelpers.generateChain(3, initialBestBlock)
     setFailingBlock(chainExtension(1))
 
-    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).runToFuture) {
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) {
       _ shouldBe a[ExtendedCurrentBestBranchPartially]
     }
     blockchainReader.getBestBlock() shouldBe Some(chainExtension.head)
@@ -52,7 +51,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     val chainWithLowWeight =
       BlockHelpers.generateChain(3, initialChain(2), b => b.copy(header = b.header.copy(difficulty = 1)))
 
-    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainWithLowWeight)).runToFuture) {
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainWithLowWeight)).unsafeToFuture()) {
       _ shouldBe KeptCurrentBestBranch
     }
     blockchainReader.getBestBlock() shouldBe Some(initialBestBlock)
@@ -62,7 +61,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     val newBetterBranch =
       BlockHelpers.generateChain(3, initialChain(2), b => b.copy(header = b.header.copy(difficulty = 10000000)))
 
-    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).runToFuture) {
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).unsafeToFuture()) {
       _ shouldBe a[SelectedNewBestBranch]
     }
     blockchainReader.getBestBlock() shouldBe Some(newBetterBranch.last)
@@ -75,7 +74,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     // only first block will execute
     setFailingBlock(newBetterBranch(1))
 
-    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).runToFuture) {
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).unsafeToFuture()) {
       _ shouldBe a[BranchExecutionFailure]
     }
     blockchainReader.getBestBlock() shouldBe Some(initialBestBlock)
@@ -87,7 +86,7 @@ object ConsensusImplSpec {
   val initialBestBlock = initialChain.last
 
   abstract class ConsensusSetup {
-    private val testSetup = new EphemBlockchainTestSetup with MockFactory {
+    private val testSetup = new EphemBlockchainTestSetup with MockFactory with org.scalatest.TestSuite {
       override lazy val blockExecution: BlockExecution = stub[BlockExecution]
       (blockExecution
         .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
@@ -115,7 +114,7 @@ object ConsensusImplSpec {
 
     val consensus = testSetup.consensus
     val blockchainReader = testSetup.blockchainReader
-    implicit val scheduler: Scheduler = Scheduler.global
+    implicit val runtime: IORuntime = IORuntime.global
     implicit val blockchainConfig: BlockchainConfig = testSetup.blockchainConfig
 
     def setFailingBlock(block: Block): Unit = failingBlockHash = Some(block.hash)

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.crypto
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Try
 
@@ -39,10 +39,10 @@ trait SymmetricCipher {
 
 object AES_CBC extends SymmetricCipher {
   protected def getCipher =
-    new PaddedBufferedBlockCipher(new CBCBlockCipher(new AESEngine), new PKCS7Padding)
+    new PaddedBufferedBlockCipher(CBCBlockCipher.newInstance(AESEngine.newInstance()), new PKCS7Padding)
 }
 
 object AES_CTR extends SymmetricCipher {
-  protected def getCipher =
-    new BufferedBlockCipher(new SICBlockCipher(new AESEngine))
+  protected def getCipher: BufferedBlockCipher =
+    new BufferedBlockCipher(SICBlockCipher.newInstance(AESEngine.newInstance())): @annotation.nowarn("cat=deprecation")
 }

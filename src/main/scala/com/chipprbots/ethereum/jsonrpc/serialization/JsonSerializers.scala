@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc.serialization
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.CustomSerializer
@@ -72,7 +72,7 @@ object JsonSerializers {
         (
           PartialFunction.empty,
           { case tx: EthTransactionResponse =>
-            implicit val formats =
+            implicit val formats: Formats =
               DefaultFormats.preservingEmptyValues + UnformattedDataJsonSerializer + QuantitiesSerializer + AddressJsonSerializer
             Extraction.decompose(tx)
           }

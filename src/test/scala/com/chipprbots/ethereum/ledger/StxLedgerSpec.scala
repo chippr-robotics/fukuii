@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
@@ -27,10 +27,10 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
       * geth)
       */
 
-    val tx = LegacyTransaction(0, 0, lastBlockGasLimit, existingAddress, 0, sendData)
-    val fakeSignature = ECDSASignature(0, 0, 0.toByte)
-    val stx = SignedTransaction(tx, fakeSignature)
-    val stxFromAddress = SignedTransactionWithSender(stx, fromAddress)
+    val tx: LegacyTransaction = LegacyTransaction(0, 0, lastBlockGasLimit, existingAddress, 0, sendData)
+    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
+    val stx: SignedTransaction = SignedTransaction(tx, fakeSignature)
+    val stxFromAddress: SignedTransactionWithSender = SignedTransactionWithSender(stx, fromAddress)
 
     val simulationResult: TxResult =
       stxLedger.simulateTransaction(stxFromAddress, genesisHeader, None)
@@ -60,9 +60,10 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
   it should "correctly estimate gasLimit for value transfer transaction" in new ScenarioSetup {
     val transferValue = 2
 
-    val tx = LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
-    val fakeSignature = ECDSASignature(0, 0, 0.toByte)
-    val stx = SignedTransaction(tx, fakeSignature)
+    val tx: LegacyTransaction =
+      LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
+    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
+    val stx: SignedTransaction = SignedTransaction(tx, fakeSignature)
 
     val executionResult: TxResult =
       mining.blockPreparator.executeTransaction(stx, fromAddress, genesisHeader, worldWithAccount)
@@ -75,9 +76,11 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
   it should "correctly simulate transaction on pending block when supplied prepared world" in new ScenarioSetup {
     val transferValue = 2
 
-    val tx = LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
-    val fakeSignature = ECDSASignature(0, 0, 0.toByte)
-    val stxFromAddress = SignedTransactionWithSender(SignedTransaction(tx, fakeSignature), fromAddress)
+    val tx: LegacyTransaction =
+      LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
+    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
+    val stxFromAddress: SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction(tx, fakeSignature), fromAddress)
 
     val newBlock: Block = genesisBlock.copy(header = block.header.copy(number = 1, parentHash = genesisHash))
 

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.testmode
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.domain.Block
@@ -59,8 +59,9 @@ class TestEthBlockServiceWrapper(
 
           ethResponseOpt match {
             case None =>
+              val hashHex = baseBlockResponse.hash.map(_.toHex).getOrElse("unknown")
               Left(
-                JsonRpcError.LogicError(s"Ledger: unable to find block for hash=${baseBlockResponse.hash.get.toHex}")
+                JsonRpcError.LogicError(s"Ledger: unable to find block for hash=$hashHex")
               )
             case Some(_) =>
               Right(BlockByBlockHashResponse(ethResponseOpt))
@@ -82,8 +83,11 @@ class TestEthBlockServiceWrapper(
     .map(
       _.map { blockByBlockResponse =>
         val bestBranch = blockchainReader.getBestBranch()
-        val fullBlock = blockchainReader.getBlockByNumber(bestBranch, blockByBlockResponse.blockResponse.get.number).get
-        BlockByNumberResponse(blockByBlockResponse.blockResponse.map(response => toEthResponse(fullBlock, response)))
+        val response = for {
+          blockResp <- blockByBlockResponse.blockResponse
+          fullBlock <- blockchainReader.getBlockByNumber(bestBranch, blockResp.number)
+        } yield toEthResponse(fullBlock, blockResp)
+        BlockByNumberResponse(response)
       }
     )
 
@@ -186,6 +190,6 @@ object EthTransactionResponse {
       input = stx.tx.payload,
       r = stx.signature.r,
       s = stx.signature.s,
-      v = stx.signature.v
+      v = BigInt(stx.signature.v)
     )
 }

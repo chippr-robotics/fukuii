@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
+import cats.effect.IO
 import cats.implicits._
-
-import monix.eval.Task
 
 import scala.collection.immutable.NumericRange
 
@@ -26,7 +25,7 @@ class MantisService(transactionHistoryService: TransactionHistoryService, jsonRp
       request: GetAccountTransactionsRequest
   ): ServiceResponse[GetAccountTransactionsResponse] =
     if (request.blocksRange.length > jsonRpcConfig.accountTransactionsMaxBlocks) {
-      Task.now(
+      IO.pure(
         Left(
           JsonRpcError.InvalidParams(
             s"""Maximum number of blocks to search is ${jsonRpcConfig.accountTransactionsMaxBlocks}, requested: ${request.blocksRange.length}.

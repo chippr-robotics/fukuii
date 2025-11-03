@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
@@ -34,7 +34,7 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
+class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures with org.scalamock.scalatest.MockFactory {
 
   implicit override val patienceConfig: PatienceConfig =
     PatienceConfig(timeout = scaled(2 seconds), interval = scaled(1 second))
@@ -46,12 +46,12 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
     setBlockExists(block1, inChain = true, inQueue = false)
     setBestBlock(bestBlock)
 
-    whenReady(consensusAdapter.evaluateBranchBlock(block1).runToFuture)(_ shouldEqual DuplicateBlock)
+    whenReady(consensusAdapter.evaluateBranchBlock(block1).unsafeToFuture())(_ shouldEqual DuplicateBlock)
 
     setBlockExists(block2, inChain = false, inQueue = true)
     setBestBlock(bestBlock)
 
-    whenReady(consensusAdapter.evaluateBranchBlock(block2).runToFuture)(_ shouldEqual DuplicateBlock)
+    whenReady(consensusAdapter.evaluateBranchBlock(block2).unsafeToFuture())(_ shouldEqual DuplicateBlock)
   }
 
   it should "import a block to the top of the main chain" in new ImportBlockTestSetup {
@@ -80,7 +80,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning(storagesInstance.storages.stateStorage.getBackingStorage(6))
 
     expectBlockSaved(block, Seq.empty[Receipt], newWeight, saveAsBestBlock = true)
-    whenReady(blockImportNotFailingAfterExecValidation.evaluateBranchBlock(block).runToFuture) {
+    whenReady(blockImportNotFailingAfterExecValidation.evaluateBranchBlock(block).unsafeToFuture()) {
       _ shouldEqual BlockImportedToTop(List(blockData))
     }
   }
@@ -113,7 +113,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
 
     (blockQueue.removeSubtree _).expects(*)
 
-    whenReady(consensusAdapter.evaluateBranchBlock(block).runToFuture)(
+    whenReady(consensusAdapter.evaluateBranchBlock(block).unsafeToFuture())(
       _ shouldBe BlockImportFailed(
         "MPTError(com.chipprbots.ethereum.mpt.MerklePatriciaTrie$MPTException: Invalid Node)"
       )
@@ -127,7 +127,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
     (blockchainReader.getBestBlock _).expects().returning(None)
     setChainWeightForBlock(bestBlock, currentWeight)
 
-    whenReady(consensusAdapter.evaluateBranchBlock(block).runToFuture)(
+    whenReady(consensusAdapter.evaluateBranchBlock(block).unsafeToFuture())(
       _ shouldBe BlockImportFailed("Couldn't find the current best block")
     )
   }
@@ -141,7 +141,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
 
     (blockchainReader.getBlockHeaderByHash _).expects(*).returning(Some(block.header))
 
-    whenReady(consensusAdapter.evaluateBranchBlock(block).runToFuture) { result =>
+    whenReady(consensusAdapter.evaluateBranchBlock(block).unsafeToFuture()) { result =>
       result shouldBe a[BlockImportFailed]
       result
         .asInstanceOf[BlockImportFailed]
@@ -183,10 +183,10 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((List(blockData2, blockData3), None))
 
     val withMockedBlockExecution = blockImportWithMockedBlockExecution(mockExecution)
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3).runToFuture)(
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3).unsafeToFuture())(
       _ shouldEqual BlockEnqueued
     )
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).runToFuture) { result =>
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
       result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3))
     }
 
@@ -231,10 +231,10 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((List(blockData2), Some(execError)))
 
     val withMockedBlockExecution = blockImportWithMockedBlockExecution(mockExecution)
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3).runToFuture)(
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3).unsafeToFuture())(
       _ shouldEqual BlockEnqueued
     )
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).runToFuture) {
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) {
       _ shouldBe a[BlockImportFailed]
     }
 
@@ -260,7 +260,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .expects(newBlock.header, *, *)
       .returning(Left(HeaderParentNotFoundError))
 
-    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).runToFuture)(
+    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture())(
       _ shouldEqual BlockImportFailed("HeaderParentNotFoundError")
     )
   }
@@ -280,7 +280,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .expects(newBlock.header, *, *)
       .returning(Left(HeaderDifficultyError))
 
-    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).runToFuture) {
+    whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture()) {
       _ shouldEqual BlockImportFailed(HeaderDifficultyError.toString)
     }
   }
@@ -291,7 +291,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
     setBestBlock(genesisBlock)
     setBlockExists(genesisBlock, inChain = true, inQueue = true)
 
-    whenReady(failConsensus.evaluateBranchBlock(genesisBlock).runToFuture)(_ shouldEqual DuplicateBlock)
+    whenReady(failConsensus.evaluateBranchBlock(genesisBlock).unsafeToFuture())(_ shouldEqual DuplicateBlock)
   }
 
   it should "correctly import block with ommers and ancestor in block queue " in new OmmersTestSetup {
@@ -335,10 +335,10 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((List(blockData2, blockData3), None))
 
     val withMockedBlockExecution = blockImportWithMockedBlockExecution(mockExecution)
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).runToFuture)(
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).unsafeToFuture())(
       _ shouldEqual BlockEnqueued
     )
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3WithOmmer).runToFuture) { result =>
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3WithOmmer).unsafeToFuture()) { result =>
       result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3))
     }
 
@@ -366,12 +366,12 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution = blockImportWithMockedBlockExecution(mockExecution)
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock2.hash) shouldBe true
     }
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).unsafeToFuture()) { result =>
       result shouldBe a[BlockImportFailed]
       blockQueue.isQueued(newBlock1.hash) shouldBe false
       blockQueue.isQueued(newBlock2.hash) shouldBe false
@@ -395,17 +395,17 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution = blockImportWithMockedBlockExecution(mockExecution)
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock2.hash) shouldBe true
     }
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2bis).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2bis).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock2bis.hash) shouldBe true
     }
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).unsafeToFuture()) { result =>
       result shouldBe a[BlockImportFailed]
       blockQueue.isQueued(newBlock1.hash) shouldBe false
       blockQueue.isQueued(newBlock2.hash) shouldBe false
@@ -431,20 +431,20 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header))), Some(execError)))
     val consensusAdapterWithFailingExecution = blockImportWithMockedBlockExecution(mockExecution)
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock2.hash) shouldBe true
     }
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock3.hash) shouldBe true
     }
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3bis).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3bis).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock3bis.hash) shouldBe true
     }
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).unsafeToFuture()) { result =>
       result shouldBe a[BlockImportedToTop]
       blockQueue.isQueued(newBlock2.hash) shouldBe false
       blockQueue.isQueued(newBlock3.hash) shouldBe false
@@ -472,16 +472,16 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution = blockImportWithMockedBlockExecution(mockExecution)
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock3.hash) shouldBe true
     }
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3bis).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock3bis).unsafeToFuture()) { result =>
       result shouldEqual BlockEnqueued
       blockQueue.isQueued(newBlock3bis.hash) shouldBe true
     }
 
-    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(badBlock).runToFuture) { result =>
+    whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(badBlock).unsafeToFuture()) { result =>
       result shouldBe a[BlockImportFailed]
       blockQueue.isQueued(badBlock.hash) shouldBe false
       blockQueue.isQueued(newBlock3.hash) shouldBe false
@@ -508,7 +508,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
       .returning((List(BlockData(checkpointBlock, Nil, weightCheckpoint)), None))
 
     val withMockedBlockExecution = blockImportWithMockedBlockExecution(mockExecution)
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(checkpointBlock).runToFuture) { result =>
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(checkpointBlock).unsafeToFuture()) { result =>
       result shouldEqual ChainReorganised(
         List(regularBlock),
         List(checkpointBlock),
@@ -537,7 +537,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures {
     blockchainWriter.save(checkpointBlock, Nil, weightCheckpoint, saveAsBestBlock = true)
 
     val withMockedBlockExecution = blockImportWithMockedBlockExecution(mock[BlockExecution])
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(regularBlock).runToFuture)(
+    whenReady(withMockedBlockExecution.evaluateBranchBlock(regularBlock).unsafeToFuture())(
       _ shouldEqual BlockEnqueued
     )
 

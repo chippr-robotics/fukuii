@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.collection.immutable.ArraySeq
 
@@ -19,11 +19,10 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.NullNode
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
-import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63._
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.rlp.encode
 
@@ -62,8 +61,8 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
 
   val encodedBranchNode: RLPList = {
     val encodeableList: Array[RLPEncodeable] =
-      (Array.fill[RLPValue](3)(RLPValue(Array.emptyByteArray)) :+ (exampleHash: RLPEncodeable)) ++
-        (Array.fill[RLPValue](6)(RLPValue(Array.emptyByteArray)) :+ (exampleHash: RLPEncodeable)) ++
+      (Array.fill[RLPValue](3)(RLPValue(Array.emptyByteArray)) :+ RLPValue(exampleHash.toArray[Byte])) ++
+        (Array.fill[RLPValue](6)(RLPValue(Array.emptyByteArray)) :+ RLPValue(exampleHash.toArray[Byte])) ++
         (Array.fill[RLPValue](5)(RLPValue(Array.emptyByteArray)) :+ (Array.emptyByteArray: RLPEncodeable))
     RLPList(ArraySeq.unsafeWrapArray(encodeableList): _*)
   }
@@ -80,8 +79,8 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
     encode(encodedLeafNode),
     encode(encodedBranchNode),
     encode(encodedExtensionNode),
-    emptyEvmHash,
-    emptyStorageRoot
+    RLPValue(emptyEvmHash.toArray[Byte]),
+    RLPValue(emptyStorageRoot.toArray[Byte])
   )
 
   "NodeData" should "be encoded properly" in {

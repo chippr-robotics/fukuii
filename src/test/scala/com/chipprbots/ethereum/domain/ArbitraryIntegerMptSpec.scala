@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.domain
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalacheck.Gen
 import org.scalatest.flatspec.AnyFlatSpec
@@ -43,7 +43,7 @@ class ArbitraryIntegerMptSpec extends AnyFlatSpec with Matchers with ScalaCheckP
 
       keys.zip(values).zipWithIndex.foreach {
         case ((k, _), index) if index % 2 == 0 => afterRemove.get(k) shouldBe None
-        case ((k, v), index) if index % 2 != 0 => afterRemove.get(k) shouldBe Some(v)
+        case ((k, v), _)                       => afterRemove.get(k) shouldBe Some(v)
       }
     }
   }

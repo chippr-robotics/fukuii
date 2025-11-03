@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.forkid
 
 import java.util.zip.CRC32
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.BigIntExtensionMethods._
@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.utils.ByteUtils._
 import com.chipprbots.ethereum.utils.Hex
 
 import RLPImplicitConversions._
+import RLPImplicits.given
 
 case class ForkId(hash: BigInt, next: Option[BigInt]) {
   override def toString(): String = s"ForkId(0x${Hex.toHexString(hash.toUnsignedByteArray)}, $next)"
@@ -45,7 +46,6 @@ object ForkId {
   }
 
   implicit class ForkIdEnc(forkId: ForkId) extends RLPSerializable {
-    import RLPImplicits._
 
     import com.chipprbots.ethereum.utils.ByteUtils._
     override def toRLPEncodable: RLPEncodeable = {

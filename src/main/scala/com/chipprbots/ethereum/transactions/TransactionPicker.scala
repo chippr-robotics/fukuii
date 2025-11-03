@@ -1,14 +1,13 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
 
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.TaskActorOps
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
 import com.chipprbots.ethereum.utils.Logger
 
@@ -19,10 +18,10 @@ trait TransactionPicker extends Logger {
 
   implicit val timeout: Timeout = Timeout(getTransactionFromPoolTimeout)
 
-  def getTransactionsFromPool: Task[PendingTransactionsResponse] =
+  def getTransactionsFromPool: IO[PendingTransactionsResponse] =
     pendingTransactionsManager
       .askFor[PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
-      .onErrorHandle { ex =>
+      .handleError { ex =>
         log.error("Failed to get transactions, mining block with empty transactions list", ex)
         PendingTransactionsResponse(Nil)
       }

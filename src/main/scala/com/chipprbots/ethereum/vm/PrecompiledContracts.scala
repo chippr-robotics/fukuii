@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.vm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Try
 
@@ -58,7 +58,11 @@ object PrecompiledContracts {
     * not point to a precompiled contract - callers should first check with `isDefinedAt`
     */
   def run[W <: WorldStateProxy[W, S], S <: Storage[S]](context: ProgramContext[W, S]): ProgramResult[W, S] =
-    getContract(context).get.run(context)
+    getContract(context)
+      .getOrElse(
+        throw new IllegalStateException("Precompiled contract not found for address")
+      )
+      .run(context)
 
   private def getContract(context: ProgramContext[_, _]): Option[PrecompiledContract] =
     context.recipientAddr.flatMap { addr =>
@@ -89,14 +93,15 @@ object PrecompiledContracts {
 
       val g = gas(context.inputData, etcFork, ethFork)
 
-      val (result, error, gasRemaining): (ByteString, Option[ProgramError], BigInt) =
+      val (result, error, gasRemaining): (ByteString, Option[ProgramError], BigInt) = (
         if (g <= context.startGas)
           exec(context.inputData) match {
             case Some(returnData) => (returnData, None, context.startGas - g)
-            case None             => (ByteString.empty, Some(PreCompiledContractFail), 0)
+            case None             => (ByteString.empty, Some(PreCompiledContractFail), BigInt(0))
           }
         else
-          (ByteString.empty, Some(OutOfGas), 0)
+          (ByteString.empty, Some(OutOfGas), BigInt(0))
+      ): @unchecked
 
       ProgramResult(
         result,
@@ -136,7 +141,7 @@ object PrecompiledContracts {
 
     }
 
-    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = 3000
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(3000)
 
     private def hasOnlyLastByteSet(v: ByteString): Boolean =
       v.dropWhile(_ == 0).size == 1
@@ -147,7 +152,7 @@ object PrecompiledContracts {
       Some(sha256(inputData))
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      60 + 12 * wordsForBytes(inputData.size)
+      BigInt(60) + BigInt(12) * wordsForBytes(inputData.size)
   }
 
   object Ripemp160 extends PrecompiledContract {
@@ -155,7 +160,7 @@ object PrecompiledContracts {
       Some(ByteUtils.padLeft(ripemd160(inputData), 32))
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      600 + 120 * wordsForBytes(inputData.size)
+      BigInt(600) + BigInt(120) * wordsForBytes(inputData.size)
   }
 
   object Identity extends PrecompiledContract {
@@ -163,7 +168,7 @@ object PrecompiledContracts {
       Some(inputData)
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
-      15 + 3 * wordsForBytes(inputData.size)
+      BigInt(15) + BigInt(3) * wordsForBytes(inputData.size)
   }
 
   // Spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-198.md
@@ -344,9 +349,9 @@ object PrecompiledContracts {
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
       if (etcFork >= EtcForks.Phoenix || ethFork >= EthForks.Istanbul)
-        6000 // https://eips.ethereum.org/EIPS/eip-1108
+        BigInt(6000) // https://eips.ethereum.org/EIPS/eip-1108
       else
-        40000
+        BigInt(40000)
 
     private def getCurvePointsBytes(input: ByteString): (ByteString, ByteString, ByteString) =
       (input.slice(0, 32), input.slice(32, 64), input.slice(64, 96))
@@ -376,9 +381,9 @@ object PrecompiledContracts {
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
       val k = inputData.length / inputLength
       if (etcFork >= EtcForks.Phoenix || ethFork >= EthForks.Istanbul) { // https://eips.ethereum.org/EIPS/eip-1108
-        34000 * k + 45000
+        BigInt(34000) * k + BigInt(45000)
       } else {
-        80000 * k + 100000
+        BigInt(80000) * k + BigInt(100000)
       }
     }
 
@@ -421,10 +426,10 @@ object PrecompiledContracts {
       val inputArray = inputData.toArray
       if (Blake2bCompression.isValidInput(inputArray)) {
         // Each round costs 1gas
-        Blake2bCompression.parseNumberOfRounds(inputArray)
+        BigInt(Blake2bCompression.parseNumberOfRounds(inputArray))
       } else {
         // bad input to contract, contract will not execute, set price to zero
-        0
+        BigInt(0)
       }
     }
   }

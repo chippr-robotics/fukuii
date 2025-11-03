@@ -1,13 +1,15 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.healthcheck.HealthcheckResponse
 
 trait JsonRpcHealthChecker {
-  def healthCheck(): Task[HealthcheckResponse]
+  def healthCheck(): IO[HealthcheckResponse]
 
-  def handleResponse(responseF: Task[HealthcheckResponse]): Task[HealthcheckResponse] =
+  def readinessCheck(): IO[HealthcheckResponse]
+
+  def handleResponse(responseF: IO[HealthcheckResponse]): IO[HealthcheckResponse] =
     responseF
       .map {
         case response if !response.isOK =>
@@ -15,8 +17,8 @@ trait JsonRpcHealthChecker {
           response
         case response => response
       }
-      .onErrorHandleWith { t =>
+      .handleErrorWith { t =>
         JsonRpcControllerMetrics.HealhcheckErrorCounter.increment()
-        Task.raiseError(t)
+        IO.raiseError(t)
       }
 }

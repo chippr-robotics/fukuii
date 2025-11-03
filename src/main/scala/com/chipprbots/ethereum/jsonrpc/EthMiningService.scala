@@ -4,11 +4,12 @@ import java.time.Duration
 import java.util.Date
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
+import cats.syntax.parallel._
 
 import scala.collection.concurrent.TrieMap
 import scala.collection.concurrent.{Map => ConcurrentMap}
@@ -18,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
+import com.chipprbots.ethereum.consensus.mining.RichMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
@@ -85,7 +87,7 @@ class EthMiningService(
       reportActive()
       blockchainReader.getBestBlock() match {
         case Some(block) =>
-          Task.parZip2(getOmmersFromPool(block.hash), getTransactionsFromPool).map { case (ommers, pendingTxs) =>
+          (getOmmersFromPool(block.hash), getTransactionsFromPool).parMapN { case (ommers, pendingTxs) =>
             val blockGenerator = ethash.blockGenerator
             val PendingBlockAndState(pb, _) = blockGenerator.generateBlock(
               block,
@@ -108,14 +110,14 @@ class EthMiningService(
           }
         case None =>
           log.error("Getting current best block failed")
-          Task.now(Left(JsonRpcError.InternalError))
+          IO.pure(Left(JsonRpcError.InternalError))
       }
-    }(Task.now(Left(JsonRpcError.MiningIsNotEthash)))
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   def submitWork(req: SubmitWorkRequest): ServiceResponse[SubmitWorkResponse] =
     mining.ifEthash[ServiceResponse[SubmitWorkResponse]] { ethash =>
       reportActive()
-      Task {
+      IO {
         ethash.blockGenerator.getPrepared(req.powHeaderHash) match {
           case Some(pendingBlock) if blockchainReader.getBestBlockNumber() <= pendingBlock.block.header.number =>
             import pendingBlock._
@@ -127,10 +129,10 @@ class EthMiningService(
             Right(SubmitWorkResponse(false))
         }
       }
-    }(Task.now(Left(JsonRpcError.MiningIsNotEthash)))
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   def getCoinbase(req: GetCoinbaseRequest): ServiceResponse[GetCoinbaseResponse] =
-    Task.now(Right(GetCoinbaseResponse(miningConfig.coinbase)))
+    IO.pure(Right(GetCoinbaseResponse(miningConfig.coinbase)))
 
   def submitHashRate(req: SubmitHashRateRequest): ServiceResponse[SubmitHashRateResponse] =
     ifEthash(req) { req =>
@@ -159,21 +161,21 @@ class EthMiningService(
     lastActive.updateAndGet(_ => Some(now))
   }
 
-  private def getOmmersFromPool(parentBlockHash: ByteString): Task[OmmersPool.Ommers] =
+  private def getOmmersFromPool(parentBlockHash: ByteString): IO[OmmersPool.Ommers] =
     mining.ifEthash { ethash =>
       val miningConfig = ethash.config.specific
       implicit val timeout: Timeout = Timeout(miningConfig.ommerPoolQueryTimeout)
 
       ommersPool
         .askFor[OmmersPool.Ommers](OmmersPool.GetOmmers(parentBlockHash))
-        .onErrorHandle { ex =>
+        .handleError { ex =>
           log.error("failed to get ommer, mining block with empty ommers list", ex)
           OmmersPool.Ommers(Nil)
         }
-    }(Task.now(OmmersPool.Ommers(Nil))) // NOTE If not Ethash consensus, ommers do not make sense, so => Nil
+    }(IO.pure(OmmersPool.Ommers(Nil))) // NOTE If not Ethash consensus, ommers do not make sense, so => Nil
 
   private[jsonrpc] def ifEthash[Req, Res](req: Req)(f: Req => Res): ServiceResponse[Res] =
-    mining.ifEthash[ServiceResponse[Res]](_ => Task.now(Right(f(req))))(
-      Task.now(Left(JsonRpcError.MiningIsNotEthash))
+    mining.ifEthash[ServiceResponse[Res]](_ => IO.pure(Right(f(req))))(
+      IO.pure(Left(JsonRpcError.MiningIsNotEthash))
     )
 }

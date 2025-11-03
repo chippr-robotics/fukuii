@@ -1,13 +1,12 @@
 package com.chipprbots.ethereum.consensus.pow
 
-import akka.actor.typed.Behavior
-import akka.actor.typed.scaladsl.AbstractBehavior
-import akka.actor.typed.scaladsl.ActorContext
-import akka.actor.typed.scaladsl.Behaviors
-import akka.actor.{ActorRef => ClassicActorRef}
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
 
-import monix.execution.CancelableFuture
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.DurationInt
 
@@ -85,7 +84,8 @@ class PoWMiningCoordinator private (
   import configBuilder._
   import PoWMiningCoordinator._
 
-  implicit private val scheduler: Scheduler = Scheduler(context.executionContext)
+  // CE3: Using global IORuntime for typed actor operations
+  implicit private val scheduler: IORuntime = IORuntime.global
   5.seconds
   private val log = context.log
   private val dagManager = new EthashDAGManager(blockCreator)
@@ -153,6 +153,8 @@ class PoWMiningCoordinator private (
     mine(keccakMiner, bestBlock)
   }
 
-  private def mine(miner: Miner, bestBlock: Block): CancelableFuture[Unit] =
-    miner.processMining(bestBlock).map(_ => context.self ! MineNext)
+  private def mine(miner: Miner, bestBlock: Block): Unit = {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    miner.processMining(bestBlock).foreach(_ => context.self ! MineNext)
+  }
 }

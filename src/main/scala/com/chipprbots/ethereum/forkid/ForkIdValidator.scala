@@ -2,13 +2,11 @@ package com.chipprbots.ethereum.forkid
 
 import java.util.zip.CRC32
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.Monad
 import cats.data.EitherT._
 import cats.implicits._
-
-import monix.eval.Task
 
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.SelfAwareStructuredLogger
@@ -26,7 +24,7 @@ import cats.effect._
 
 object ForkIdValidator {
 
-  implicit val taskLogger: SelfAwareStructuredLogger[Task] = Slf4jLogger.getLogger[Task]
+  implicit val ioLogger: SelfAwareStructuredLogger[IO] = Slf4jLogger.getLogger[IO]
   implicit val syncIoLogger: SelfAwareStructuredLogger[SyncIO] = Slf4jLogger.getLogger[SyncIO]
 
   val maxUInt64: BigInt = (BigInt(0x7fffffffffffffffL) << 1) + 1 // scalastyle:ignore magic.number

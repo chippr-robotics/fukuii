@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.vm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec

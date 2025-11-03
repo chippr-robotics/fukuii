@@ -1,8 +1,10 @@
 package com.chipprbots.ethereum.db.storage
 
-import monix.reactive.Observable
+import cats.effect.IO
 
 import scala.collection.immutable.ArraySeq
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.common.SimpleMap
 import com.chipprbots.ethereum.db.dataSource.DataSource
@@ -52,7 +54,7 @@ trait KeyValueStorage[K, V, T <: KeyValueStorage[K, V, T]] extends SimpleMap[K, 
     apply(dataSource)
   }
 
-  def storageContent: Observable[Either[IterationError, (K, V)]] =
+  def storageContent: Stream[IO, Either[IterationError, (K, V)]] =
     dataSource.iterate(namespace).map { result =>
       result.map { case (key, value) =>
         val kseq = keyDeserializer(ArraySeq.unsafeWrapArray(key))

@@ -3,7 +3,7 @@ package com.chipprbots.ethereum.keystore
 import java.security.SecureRandom
 import java.util.UUID
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.SymmetricCipher

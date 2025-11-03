@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -35,7 +35,7 @@ class EthUserService(
   import EthUserService._
 
   def getCode(req: GetCodeRequest): ServiceResponse[GetCodeResponse] =
-    Task {
+    IO {
       resolveBlock(req.block).map { case ResolvedBlock(block, _) =>
         val world = InMemoryWorldStateProxy(
           evmCodeStorage,
@@ -73,7 +73,7 @@ class EthUserService(
     }
 
   private def withAccount[T](address: Address, blockParam: BlockParam)(makeResponse: Account => T): ServiceResponse[T] =
-    Task {
+    IO {
       resolveBlock(blockParam)
         .map { case ResolvedBlock(block, _) =>
           blockchainReader
@@ -81,7 +81,7 @@ class EthUserService(
             .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
         }
         .map(makeResponse)
-    }.onErrorRecover { case _: MissingNodeException =>
+    }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
 

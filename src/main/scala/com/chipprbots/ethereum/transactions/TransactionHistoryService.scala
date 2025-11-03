@@ -1,16 +1,15 @@
 package com.chipprbots.ethereum.transactions
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
+import cats.effect.IO
 import cats.implicits._
-
-import monix.eval.Task
-import monix.reactive.Observable
-import monix.reactive.OverflowStrategy
 
 import scala.collection.immutable.NumericRange
 import scala.concurrent.duration.FiniteDuration
+
+import fs2.Stream
 
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.TaskActorOps
@@ -29,51 +28,51 @@ class TransactionHistoryService(
   def getAccountTransactions(
       account: Address,
       fromBlocks: NumericRange[BigInt]
-  )(implicit blockchainConfig: BlockchainConfig): Task[List[ExtendedTransactionData]] = {
-    val getLastCheckpoint = Task(blockchainReader.getLatestCheckpointBlockNumber()).memoizeOnSuccess
-    val txnsFromBlocks = Observable
-      .from(fromBlocks.reverse)
-      .mapParallelOrdered(10)(blockNr =>
-        Task(blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockNr))
-      )(
-        OverflowStrategy.Unbounded
-      )
+  )(implicit blockchainConfig: BlockchainConfig): IO[List[ExtendedTransactionData]] = {
+    val getLastCheckpoint = IO(blockchainReader.getLatestCheckpointBlockNumber()).memoize
+    val txnsFromBlocks = Stream
+      .emits(fromBlocks.reverse.toSeq)
+      .parEvalMap(10)(blockNr => IO(blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockNr)))
       .collect { case Some(block) => block }
-      .concatMap { block =>
-        val getBlockReceipts = Task {
+      .flatMap { block =>
+        val getBlockReceipts = IO {
           blockchainReader.getReceiptsByHash(block.hash).map(_.toVector).getOrElse(Vector.empty)
-        }.memoizeOnSuccess
+        }.memoize
 
-        Observable
-          .from(block.body.transactionList.reverse)
+        Stream
+          .emits(block.body.transactionList.reverse.toSeq)
           .collect(Function.unlift(MinedTxChecker.checkTx(_, account)))
-          .mapEval { case (tx, mkExtendedData) =>
-            (getBlockReceipts, getLastCheckpoint).mapN(
-              MinedTxChecker.getMinedTxData(tx, block, _, _).map(mkExtendedData(_))
-            )
+          .evalMap { case (tx, mkExtendedData) =>
+            for {
+              blockReceiptsIO <- getBlockReceipts
+              lastCheckpointIO <- getLastCheckpoint
+              blockReceipts <- blockReceiptsIO
+              lastCheckpoint <- lastCheckpointIO
+            } yield MinedTxChecker.getMinedTxData(tx, block, blockReceipts, lastCheckpoint).map(mkExtendedData(_))
           }
           .collect { case Some(data) =>
             data
           }
       }
-      .toListL
+      .compile
+      .toList
 
     val txnsFromMempool = getTransactionsFromPool.map { pendingTransactions =>
       pendingTransactions
         .collect(Function.unlift(PendingTxChecker.checkTx(_, account)))
     }
 
-    Task.parMap2(txnsFromBlocks, txnsFromMempool)(_ ++ _)
+    (txnsFromBlocks, txnsFromMempool).parMapN(_ ++ _)
   }
 
-  private val getTransactionsFromPool: Task[List[PendingTransaction]] = {
+  private val getTransactionsFromPool: IO[List[PendingTransaction]] = {
     implicit val timeout: Timeout = getTransactionFromPoolTimeout
     pendingTransactionsManager
       .askFor[PendingTransactionsManager.PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .map(_.pendingTransactions.toList)
-      .onErrorRecoverWith { case ex: Throwable =>
+      .handleErrorWith { case ex: Throwable =>
         log.error("Failed to get pending transactions, passing empty transactions list", ex)
-        Task.now(List.empty)
+        IO.pure(List.empty)
       }
   }
 }
@@ -152,7 +151,7 @@ object TransactionHistoryService {
 
       val isCheckpointed = lastCheckpointBlockNumber >= block.number
 
-      (Some(block.header), maybeIndex, maybeGasUsed, Some(isCheckpointed)).mapN(MinedTransactionData)
+      (Some(block.header), maybeIndex, maybeGasUsed, Some(isCheckpointed)).mapN(MinedTransactionData.apply)
     }
   }
 }

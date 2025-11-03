@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.jsonrpc.FilterManager.TxLog
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
 
@@ -74,7 +75,9 @@ object TransactionReceiptResponse {
   ): TransactionReceiptResponse = {
     val contractAddress = if (stx.tx.isContractInit) {
       // do not subtract 1 from nonce because in transaction we have nonce of account before transaction execution
-      val hash = kec256(rlp.encode(RLPList(signedTransactionSender.bytes, UInt256(stx.tx.nonce).toRLPEncodable)))
+      val hash = kec256(
+        rlp.encode(RLPList(toEncodeable(signedTransactionSender.bytes), UInt256(stx.tx.nonce).toRLPEncodable))
+      )
       Some(Address(hash))
     } else {
       None

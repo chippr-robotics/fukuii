@@ -2,8 +2,8 @@ package com.chipprbots.ethereum.utils
 
 import java.net.InetSocketAddress
 
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
@@ -79,13 +79,13 @@ object Config {
       val minPruneAge: FiniteDuration = peerConfig.getDuration("min-prune-age").toMillis.millis
       val networkId: Int = blockchainConfig.networkId
 
-      val rlpxConfiguration = new RLPxConfiguration {
+      val rlpxConfiguration: RLPxConfiguration = new RLPxConfiguration {
         val waitForHandshakeTimeout: FiniteDuration =
           peerConfig.getDuration("wait-for-handshake-timeout").toMillis.millis
         val waitForTcpAckTimeout: FiniteDuration = peerConfig.getDuration("wait-for-tcp-ack-timeout").toMillis.millis
       }
 
-      val fastSyncHostConfiguration = new FastSyncHostConfiguration {
+      val fastSyncHostConfiguration: FastSyncHostConfiguration = new FastSyncHostConfiguration {
         val maxBlocksHeadersPerMessage: Int = peerConfig.getInt("max-blocks-headers-per-message")
         val maxBlocksBodiesPerMessage: Int = peerConfig.getInt("max-blocks-bodies-per-message")
         val maxReceiptsPerMessage: Int = peerConfig.getInt("max-receipts-per-message")

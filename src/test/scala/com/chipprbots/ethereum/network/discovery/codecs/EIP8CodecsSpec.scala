@@ -2,21 +2,22 @@ package com.chipprbots.ethereum.network.discovery.codecs
 
 import java.net.InetAddress
 
-import io.iohk.scalanet.discovery.crypto.PrivateKey
-import io.iohk.scalanet.discovery.crypto.SigAlg
-import io.iohk.scalanet.discovery.ethereum.v4.Packet
-import io.iohk.scalanet.discovery.ethereum.v4.Payload
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
 import org.scalatest.compatible.Assertion
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.Codec
-import scodec.bits.BitVector
+import scodec.bits._
 
 import com.chipprbots.ethereum.network.discovery.Secp256k1SigAlg
 
 class EIP8CodecsSpec extends AnyFlatSpec with Matchers {
 
   import RLPCodecs._
+  import RLPCodecs.given
 
   implicit val packetCodec: Codec[Packet] =
     Packet.packetCodec(allowDecodeOverMaxPacketSize = false)

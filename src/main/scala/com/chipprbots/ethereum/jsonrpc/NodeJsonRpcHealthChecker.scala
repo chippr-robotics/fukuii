@@ -3,10 +3,11 @@ package com.chipprbots.ethereum.jsonrpc
 import java.time.Duration
 import java.time.Instant
 
-import akka.actor.ActorRef
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
+import cats.effect.IO
+import cats.syntax.parallel._
 
 import com.typesafe.config.{Config => TypesafeConfig}
 
@@ -79,20 +80,30 @@ class NodeJsonRpcHealthChecker(
         case _                                                   => "SYNCED"
       })
 
-  override def healthCheck(): Task[HealthcheckResponse] = {
-    val responseTask = Task
-      .parSequence(
-        List(
-          peerCountHC,
-          storedBlockHC,
-          bestKnownBlockHC,
-          fetchingBlockHC,
-          updateStatusHC,
-          syncStatusHC
-        )
-      )
+  override def healthCheck(): IO[HealthcheckResponse] = {
+    val responseTask = List(
+      peerCountHC,
+      storedBlockHC,
+      bestKnownBlockHC,
+      fetchingBlockHC,
+      updateStatusHC,
+      syncStatusHC
+    ).parSequence
       .map(_.map(_.toResult))
-      .map(HealthcheckResponse)
+      .map(HealthcheckResponse.apply)
+
+    handleResponse(responseTask)
+  }
+
+  override def readinessCheck(): IO[HealthcheckResponse] = {
+    // Readiness checks: DB opened (storedBlock exists), peers > 0, tip advancing (updateStatus)
+    val responseTask = List(
+      peerCountHC,
+      storedBlockHC,
+      updateStatusHC
+    ).parSequence
+      .map(_.map(_.toResult))
+      .map(HealthcheckResponse.apply)
 
     handleResponse(responseTask)
   }
@@ -115,7 +126,7 @@ class NodeJsonRpcHealthChecker(
           ethBlocksService
             .bestBlockNumber(EthBlocksService.BestBlockNumberRequest())
             .map(_.map(_.bestBlockNumber))
-        case Syncing(_, progress, _) => Task.now(Right(progress.target))
+        case Syncing(_, progress, _) => IO.pure(Right(progress.target))
       }
 
   /** Try to fetch best fetching number from the sync controller or fallback to ethBlocksService */
@@ -127,7 +138,7 @@ class NodeJsonRpcHealthChecker(
           ethBlocksService
             .getBlockByNumber(BlockByNumberRequest(BlockParam.Pending, fullTxs = true))
             .map(_.map(_.blockResponse.map(_.number)))
-        case Syncing(_, progress, _) => Task.now(Right(Some(progress.current)))
+        case Syncing(_, progress, _) => IO.pure(Right(Some(progress.current)))
       }
 
   private def isConsideredSyncing(progress: Progress) =

@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Fukuii Ethereum Client
 # Stage 1: Build stage using full JDK
-FROM eclipse-temurin:17-jdk-jammy AS builder
+FROM eclipse-temurin:21-jdk-jammy AS builder
 
 # Install required build tools including SBT
 RUN apt-get update && \
@@ -36,7 +36,7 @@ RUN cd target/universal && \
     mv "$DIST_DIR" /fukuii-dist
 
 # Stage 2: Runtime stage using slim JRE
-FROM eclipse-temurin:17-jre-jammy
+FROM eclipse-temurin:21-jre-jammy
 
 LABEL org.opencontainers.image.title="Fukuii Ethereum Client"
 LABEL org.opencontainers.image.description="Fukuii - A Scala-based Ethereum Classic client"

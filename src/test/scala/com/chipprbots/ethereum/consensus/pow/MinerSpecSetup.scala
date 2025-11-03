@@ -1,20 +1,19 @@
 package com.chipprbots.ethereum.consensus.pow
 
-import akka.actor.ActorRef
-import akka.actor.{ActorSystem => ClassicSystem}
-import akka.testkit.TestActor
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.{ActorSystem => ClassicSystem}
+import org.apache.pekko.testkit.TestActor
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
-import monix.execution.Scheduler
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.handlers.CallHandler4
-import org.scalamock.scalatest.MockFactory
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -38,9 +37,10 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
-trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with BlockchainConfigBuilder {
+trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
+  this: org.scalamock.scalatest.MockFactory =>
   implicit val classicSystem: ClassicSystem = ClassicSystem()
-  implicit val scheduler: Scheduler = Scheduler(classicSystem.dispatcher)
+  implicit val runtime: IORuntime = IORuntime.global
   val parentActor: TestProbe = TestProbe()
   val sync: TestProbe = TestProbe()
   val ommersPool: TestProbe = TestProbe()
@@ -51,10 +51,25 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
   val blockchainReader: BlockchainReader = mock[BlockchainReader]
   val blockchain: BlockchainImpl = mock[BlockchainImpl]
   val blockCreator: PoWBlockCreator = mock[PoWBlockCreator]
-  val fakeWorld: InMemoryWorldStateProxy = mock[InMemoryWorldStateProxy]
+  val fakeWorld: InMemoryWorldStateProxy = createStubWorldStateProxy()
   val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
   val ethMiningService: EthMiningService = mock[EthMiningService]
   val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
+
+  private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
+    // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
+    val stubEvmCodeStorage = mock[EvmCodeStorage]
+    val stubMptStorage = mock[com.chipprbots.ethereum.db.storage.MptStorage]
+    InMemoryWorldStateProxy(
+      stubEvmCodeStorage,
+      stubMptStorage,
+      _ => None,
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+  }
 
   lazy val vm: VMImpl = new VMImpl
 
@@ -150,12 +165,12 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
       parentBlock: Block,
       withTransactions: Boolean,
       resultBlock: Block
-  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, Task[PendingBlockAndState]] =
+  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
     (blockCreator
       .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
       .expects(parentBlock, withTransactions, *, *)
       .returning(
-        Task.now(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
+        IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
       )
       .atLeastOnce()
 
@@ -163,21 +178,21 @@ trait MinerSpecSetup extends MiningConfigBuilder with MockFactory with Blockchai
       parentBlock: Block,
       withTransactions: Boolean,
       resultBlock: Block
-  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, Task[PendingBlockAndState]] =
+  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
     (blockCreator
       .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
       .expects(where { (parent, withTxs, _, _) =>
         parent == parentBlock && withTxs == withTransactions
       })
       .returning(
-        Task.now(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
+        IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
       )
       .atLeastOnce()
 
   protected def prepareMocks(): Unit = {
     (ethMiningService.submitHashRate _)
       .expects(*)
-      .returns(Task.now(Right(SubmitHashRateResponse(true))))
+      .returns(IO.pure(Right(SubmitHashRateResponse(true))))
       .atLeastOnce()
 
     ommersPool.setAutoPilot { (sender: ActorRef, _: Any) =>

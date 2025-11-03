@@ -2,9 +2,9 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import java.net.InetSocketAddress
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -39,8 +39,8 @@ class BlockBroadcastSpec
     // given
     // Block that should be sent as it's total difficulty is higher than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 3)
-    val newBlockNewHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
-    val newBlock =
+    val newBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
+    val newBlock: NewBlock =
       NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(2))
 
     // when
@@ -59,11 +59,11 @@ class BlockBroadcastSpec
     // given
     // Block that should be sent as it's total difficulty is higher than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 3)
-    val newBlockNewHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
-    val peerInfo = initialPeerInfo
+    val newBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
+    val peerInfo: PeerInfo = initialPeerInfo
       .copy(remoteStatus = peerStatus.copy(capability = Capability.ETH63))
       .withChainWeight(ChainWeight.totalDifficultyOnly(initialPeerInfo.chainWeight.totalDifficulty))
-    val newBlock =
+    val newBlock: com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock =
       BaseETH6XMessages.NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), peerInfo.chainWeight.totalDifficulty + 2)
 
     // when
@@ -82,7 +82,7 @@ class BlockBroadcastSpec
     // given
     // Block that shouldn't be sent as it's number and total difficulty is lower than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 2)
-    val newBlock =
+    val newBlock: NewBlock =
       NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
 
     // when
@@ -98,8 +98,8 @@ class BlockBroadcastSpec
   it should "send a new block when it is not known by the peer (known by comparing max block number)" in new TestSetup {
     // given
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber + 4)
-    val newBlockNewHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
-    val newBlock =
+    val newBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
+    val newBlock: NewBlock =
       NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
 
     // when
@@ -118,7 +118,7 @@ class BlockBroadcastSpec
     // given
     // Block should already be known by the peer due to max block known
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 2)
-    val newBlock =
+    val newBlock: NewBlock =
       NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
 
     // when
@@ -134,21 +134,22 @@ class BlockBroadcastSpec
   it should "send block hashes to all peers while the blocks only to sqrt of them" in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber + 4)
-    val firstBlockNewHashes = NewBlockHashes(Seq(ETH62.BlockHash(firstHeader.hash, firstHeader.number)))
-    val firstBlock =
+    val firstBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(firstHeader.hash, firstHeader.number)))
+    val firstBlock: NewBlock =
       NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
 
-    val peer2Probe = TestProbe()
-    val peer2 = Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 0), peer2Probe.ref, false)
-    val peer3Probe = TestProbe()
-    val peer3 = Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.1", 0), peer3Probe.ref, false)
-    val peer4Probe = TestProbe()
-    val peer4 = Peer(PeerId("peer4"), new InetSocketAddress("127.0.0.1", 0), peer4Probe.ref, false)
+    val peer2Probe: TestProbe = TestProbe()
+    val peer2: Peer = Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 0), peer2Probe.ref, false)
+    val peer3Probe: TestProbe = TestProbe()
+    val peer3: Peer = Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.1", 0), peer3Probe.ref, false)
+    val peer4Probe: TestProbe = TestProbe()
+    val peer4: Peer = Peer(PeerId("peer4"), new InetSocketAddress("127.0.0.1", 0), peer4Probe.ref, false)
 
     // when
-    val peers = Seq(peer, peer2, peer3, peer4)
-    val peersIds = peers.map(_.id)
-    val peersWithInfo = peers.map(peer => peer.id -> PeerWithInfo(peer, initialPeerInfo)).toMap
+    val peers: Seq[Peer] = Seq(peer, peer2, peer3, peer4)
+    val peersIds: Seq[PeerId] = peers.map(_.id)
+    val peersWithInfo: Map[PeerId, PeerWithInfo] =
+      peers.map(peer => peer.id -> PeerWithInfo(peer, initialPeerInfo)).toMap
     blockBroadcast.broadcastBlock(BlockToBroadcast(firstBlock.block, firstBlock.chainWeight), peersWithInfo)
 
     // then

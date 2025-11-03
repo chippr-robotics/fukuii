@@ -45,8 +45,9 @@ We acknowledge and appreciate the original development work by IOHK. This code i
 
 ## Modifications
 
-This vendored version may include modifications for:
-- Scala 3 compatibility
+This vendored version includes modifications for:
+- **Package rebranding**: All package names changed from `io.iohk.scalanet` to `com.chipprbots.scalanet` to align with Fukuii's rebranding from IOHK/Mantis to Chippr Robotics/Fukuii
+- Scala 3 compatibility (planned)
 - Integration with Fukuii codebase
 - Bug fixes and improvements
 

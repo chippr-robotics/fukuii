@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.vm
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
 
@@ -47,7 +48,9 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     * and throwing an exception is an appropriate response.
     */
   protected def getGuaranteedAccount(address: Address): Account =
-    getAccount(address).get
+    getAccount(address).getOrElse(
+      throw new IllegalStateException(s"Account not found for address $address")
+    )
 
   def getCode(address: Address): ByteString
   def getStorage(address: Address): S

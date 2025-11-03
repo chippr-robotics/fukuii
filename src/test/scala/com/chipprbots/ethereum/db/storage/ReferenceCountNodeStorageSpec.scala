@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.db.storage
 
 import java.util.concurrent.TimeUnit
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
@@ -36,7 +36,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(1, storage)
-    val (key1, val1) :: Nil = inserted.toList
+    val (key1, val1) :: Nil = inserted.toList: @unchecked
 
     val storage2 = new ReferenceCountNodeStorage(nodeStorage, bn = 2)
     storage2.remove(key1)
@@ -68,7 +68,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(1, storage)
-    val (key1, val1) :: Nil = inserted.toList
+    val (key1, val1) :: Nil = inserted.toList: @unchecked
 
     val storage2 = new ReferenceCountNodeStorage(nodeStorage, bn = 2)
     storage2.put(key1, val1)
@@ -92,7 +92,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
 
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: (key3, val3) :: (key4, val4) :: Nil = inserted.toList
+    val (key1, val1) :: (key2, val2) :: (key3, val3) :: (key4, val4) :: Nil = inserted.toList: @unchecked
 
     storage.remove(key1) // remove key1 at block 1
     storage.remove(key4) // remove key4 at block 1, it should be pruned
@@ -132,12 +132,12 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList
+    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(nodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
 
@@ -155,12 +155,12 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList
+    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(nodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
 
@@ -192,12 +192,12 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList
+    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
 
@@ -260,12 +260,12 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList
+    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 
     val storage2 = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 2)
-    val key3 = ByteString("anotherKey")
+    val key3: ByteString = ByteString("anotherKey")
     val val3: Array[Byte] = ByteString("anotherValue").toArray[Byte]
     storage2.put(key3, val3)
     storage2.get(key3).get shouldEqual val3
@@ -275,7 +275,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     dataSource.storage.size shouldEqual 15
 
     val storage3 = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 3)
-    val key4 = ByteString("aanotherKey")
+    val key4: ByteString = ByteString("aanotherKey")
     val val4: Array[Byte] = ByteString("aanotherValue").toArray[Byte]
     storage3.put(key4, val4)
     storage3.get(key4).get shouldEqual val4

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.consensus.pow.validators
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
@@ -20,7 +20,6 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator._
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidatorSkeleton
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
-import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
@@ -186,20 +185,23 @@ class EthashBlockHeaderValidatorSpec
   }
 
   it should "properly validate a block after difficulty bomb pause" in new EphemBlockchainTestSetup {
-    val parent = Block(pausedDifficultyBombBlockParent, parentBody)
+    val parent: Block = Block(pausedDifficultyBombBlockParent, parentBody)
 
-    val res = PoWBlockHeaderValidator.validate(pausedDifficultyBombBlock, parent.header)
+    val res: Either[BlockHeaderError, BlockHeaderValid] =
+      PoWBlockHeaderValidator.validate(pausedDifficultyBombBlock, parent.header)
     res shouldBe Right(BlockHeaderValid)
   }
 
   it should "mark as valid a post ecip1098 block opt-out with opt out undefined" in new EphemBlockchainTestSetup {
-    val ecip1098BlockNumber = validBlockHeader.number / 2
+    val ecip1098BlockNumber: BigInt = validBlockHeader.number / 2
     val blockchainConfigWithECIP1098Enabled: BlockchainConfig =
-      blockchainConfig.withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = ecip1098BlockNumber))
+      EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
+        _.copy(ecip1098BlockNumber = ecip1098BlockNumber)
+      )
 
-    val validHeader = validBlockHeader.copy(extraFields = HefEmpty)
+    val validHeader: BlockHeader = validBlockHeader.copy(extraFields = HefEmpty)
 
-    val validationResult =
+    val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       BlockValidatorWithPowMocked.validate(validHeader, validParentBlockHeader)(blockchainConfigWithECIP1098Enabled)
     validationResult shouldBe Right(BlockHeaderValid)
   }
@@ -207,13 +209,13 @@ class EthashBlockHeaderValidatorSpec
   it should "properly calculate the difficulty after difficulty bomb resume (with reward reduction)" in new EphemBlockchainTestSetup {
     val parentHeader: BlockHeader =
       validParentBlockHeader.copy(number = 5000101, unixTimestamp = 1513175023, difficulty = BigInt("22627021745803"))
-    val parent = Block(parentHeader, parentBody)
+    val parent: Block = Block(parentHeader, parentBody)
 
     val blockNumber: BigInt = parentHeader.number + 1
     val blockTimestamp: Long = parentHeader.unixTimestamp + 6
 
     val difficulty: BigInt = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
-    val expected = BigInt("22638070358408")
+    val expected: BigInt = BigInt("22638070358408")
 
     difficulty shouldBe expected
   }
@@ -221,19 +223,19 @@ class EthashBlockHeaderValidatorSpec
   it should "properly calculate the difficulty after difficulty defuse" in new EphemBlockchainTestSetup {
     val parentHeader: BlockHeader =
       validParentBlockHeader.copy(number = 5899999, unixTimestamp = 1525176000, difficulty = BigInt("22627021745803"))
-    val parent = Block(parentHeader, parentBody)
+    val parent: Block = Block(parentHeader, parentBody)
 
     val blockNumber: BigInt = parentHeader.number + 1
     val blockTimestamp: Long = parentHeader.unixTimestamp + 6
 
     val difficulty: BigInt = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)
-    val blockDifficultyWihtoutBomb = BigInt("22638070096264")
+    val blockDifficultyWihtoutBomb: BigInt = BigInt("22638070096264")
 
     difficulty shouldBe blockDifficultyWihtoutBomb
   }
 
   it should "properly calculate a block after block reward reduction (without uncles)" in new EphemBlockchainTestSetup {
-    val parent = Block(afterRewardReductionParentBlockHeader, parentBody)
+    val parent: Block = Block(afterRewardReductionParentBlockHeader, parentBody)
 
     val blockNumber: BigInt = afterRewardReductionBlockHeader.number
     val blockTimestamp: Long = afterRewardReductionBlockHeader.unixTimestamp
@@ -251,7 +253,7 @@ class EthashBlockHeaderValidatorSpec
 
   it should "properly calculate the difficulty after muir glacier delay" in new EphemBlockchainTestSetup {
     val blockchainConfigWithoutDifficultyBombRemoval: BlockchainConfig =
-      blockchainConfig.withUpdatedForkBlocks(
+      EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
         _.copy(
           difficultyBombRemovalBlockNumber = BigInt("1000000000000"),
           difficultyBombPauseBlockNumber = 0,
@@ -266,7 +268,7 @@ class EthashBlockHeaderValidatorSpec
         unixTimestamp = 1525176000,
         difficulty = BigInt("22627021745803")
       )
-    val parent = Block(parentHeader, parentBody)
+    val parent: Block = Block(parentHeader, parentBody)
 
     val blockNumber: BigInt = parentHeader.number + 1
     val blockTimestamp: Long = parentHeader.unixTimestamp + 6
@@ -274,7 +276,7 @@ class EthashBlockHeaderValidatorSpec
     val difficulty: BigInt = EthashDifficultyCalculator.calculateDifficulty(blockNumber, blockTimestamp, parent.header)(
       blockchainConfigWithoutDifficultyBombRemoval
     )
-    val blockDifficultyWihtoutBomb = BigInt("22638070096265")
+    val blockDifficultyWihtoutBomb: BigInt = BigInt("22638070096265")
 
     difficulty shouldBe blockDifficultyWihtoutBomb
   }

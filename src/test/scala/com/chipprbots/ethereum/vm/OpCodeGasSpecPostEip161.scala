@@ -25,7 +25,7 @@ class OpCodeGasSpecPostEip161 extends AnyFunSuite with OpCodeTesting with Matche
 
     // Sending refund to a non-existent account
     forAll(stateGen) { stateIn =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       whenever(stateIn.world.getAccount(Address(refund)).isEmpty && stateIn.ownBalance > 0) {
         val stateOut = op.execute(stateIn)
         stateOut.gasRefund shouldEqual R_selfdestruct
@@ -35,7 +35,7 @@ class OpCodeGasSpecPostEip161 extends AnyFunSuite with OpCodeTesting with Matche
 
     // Sending refund to an already existing account not dead account
     forAll(stateGen) { stateIn =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       val world = stateIn.world.saveAccount(Address(refund), Account.empty().increaseNonce())
       val updatedStateIn = stateIn.withWorld(world)
       val stateOut = op.execute(updatedStateIn)
@@ -45,7 +45,7 @@ class OpCodeGasSpecPostEip161 extends AnyFunSuite with OpCodeTesting with Matche
 
     // Owner account was already selfdestructed
     forAll(stateGen) { stateIn =>
-      val (refund, _) = stateIn.stack.pop
+      val (refund, _) = stateIn.stack.pop()
       whenever(stateIn.world.getAccount(Address(refund)).isEmpty && stateIn.ownBalance > 0) {
         val updatedStateIn = stateIn.withAddressToDelete(stateIn.env.ownerAddr)
         val stateOut = op.execute(updatedStateIn)

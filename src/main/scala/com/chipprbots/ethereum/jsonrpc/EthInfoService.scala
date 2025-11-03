@@ -1,12 +1,11 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
+import cats.effect.IO
 import cats.syntax.either._
-
-import monix.eval.Task
 
 import scala.reflect.ClassTag
 
@@ -15,7 +14,6 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto._
-import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.keystore.KeyStore
@@ -25,6 +23,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -87,10 +86,10 @@ class EthInfoService(
   import EthInfoService._
 
   def protocolVersion(req: ProtocolVersionRequest): ServiceResponse[ProtocolVersionResponse] =
-    Task.now(Right(ProtocolVersionResponse(f"0x${capability.version}%x")))
+    IO.pure(Right(ProtocolVersionResponse(f"0x${capability.version}%x")))
 
   def chainId(req: ChainIdRequest): ServiceResponse[ChainIdResponse] =
-    Task.now(Right(ChainIdResponse(blockchainConfig.chainId)))
+    IO.pure(Right(ChainIdResponse(blockchainConfig.chainId)))
 
   /** Implements the eth_syncing method that returns syncing information if the node is syncing.
     *
@@ -120,7 +119,7 @@ class EthInfoService(
       .map(_.asRight)
 
   def call(req: CallRequest): ServiceResponse[CallResponse] =
-    Task {
+    IO {
       doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
     }
 
@@ -139,15 +138,15 @@ class EthInfoService(
         call(CallRequest(CallTx(tx.from, tx.to, tx.gas, tx.gasPrice, tx.value, ByteString(data)), req.block))
           .map(_.map { callResponse =>
             IeleCallResponse(
-              rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])(seqEncDec[ByteString]())
+              rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])
             )
           })
-      case Left(error) => Task.now(Left(error))
+      case Left(error) => IO.pure(Left(error))
     }
   }
 
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
-    Task {
+    IO {
       doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
     }
 
@@ -159,8 +158,7 @@ class EthInfoService(
   } yield f(stx, block.block.header, block.pendingState)
 
   private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
-    if (req.tx.gas.isDefined) Right[JsonRpcError, BigInt](req.tx.gas.get)
-    else resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit)
+    req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit))
 
   private def prepareTransaction(req: CallRequest): Either[JsonRpcError, SignedTransactionWithSender] =
     getGasLimit(req).map { gasLimit =>

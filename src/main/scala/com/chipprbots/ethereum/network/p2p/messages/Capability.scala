@@ -4,6 +4,7 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPException
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable
 import com.chipprbots.ethereum.rlp.RLPValue
@@ -11,8 +12,8 @@ import com.chipprbots.ethereum.rlp.rawDecode
 
 sealed trait ProtocolFamily
 object ProtocolFamily {
-  final case object ETH extends ProtocolFamily
-  final case object ETC extends ProtocolFamily
+  case object ETH extends ProtocolFamily
+  case object ETC extends ProtocolFamily
   implicit class ProtocolFamilyEnc(val msg: ProtocolFamily) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = msg match {
       case ETH => RLPValue("eth".getBytes())
@@ -26,11 +27,19 @@ sealed abstract class Capability(val name: ProtocolFamily, val version: Byte)
 object Capability {
   case object ETH63 extends Capability(ProtocolFamily.ETH, 63) // scalastyle:ignore magic.number
   case object ETH64 extends Capability(ProtocolFamily.ETH, 64) // scalastyle:ignore magic.number
+  case object ETH65 extends Capability(ProtocolFamily.ETH, 65) // scalastyle:ignore magic.number
+  case object ETH66 extends Capability(ProtocolFamily.ETH, 66) // scalastyle:ignore magic.number
+  case object ETH67 extends Capability(ProtocolFamily.ETH, 67) // scalastyle:ignore magic.number
+  case object ETH68 extends Capability(ProtocolFamily.ETH, 68) // scalastyle:ignore magic.number
   case object ETC64 extends Capability(ProtocolFamily.ETC, 64) // scalastyle:ignore magic.number
 
   def parse(s: String): Option[Capability] = s match {
     case "eth/63" => Some(ETH63)
     case "eth/64" => Some(ETH64)
+    case "eth/65" => Some(ETH65)
+    case "eth/66" => Some(ETH66)
+    case "eth/67" => Some(ETH67)
+    case "eth/68" => Some(ETH68)
     case "etc/64" => Some(ETC64)
     case _        => None // TODO: log unknown capability?
   }
@@ -58,8 +67,9 @@ object Capability {
 
   implicit class CapabilityRLPEncodableDec(val rLPEncodeable: RLPEncodeable) extends AnyVal {
     def toCapability: Option[Capability] = rLPEncodeable match {
-      case RLPList(name, version) => parse(s"${stringEncDec.decode(name)}/${byteEncDec.decode(version)}")
-      case _                      => throw new RLPException("Cannot decode Capability")
+      case RLPList(RLPValue(nameBytes), RLPValue(versionBytes)) if versionBytes.nonEmpty =>
+        parse(s"${new String(nameBytes, java.nio.charset.StandardCharsets.UTF_8)}/${versionBytes(0)}")
+      case _ => throw new RLPException("Cannot decode Capability")
     }
   }
 

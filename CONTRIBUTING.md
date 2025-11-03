@@ -23,21 +23,14 @@ We are committed to providing a welcoming and inclusive environment for all cont
 
 To contribute to Fukuii, you'll need:
 
-- **JDK 17** - Required for building and running the project
+- **JDK 21** - Required for building and running the project
 - **sbt** - Scala build tool (version 1.10.7 or higher)
 - **Git** - For version control
 - **Optional**: Python (for auxiliary scripts)
 
 ### Scala Version Support
 
-Fukuii supports cross-compilation for multiple Scala versions:
-
-- **Scala 2.13.14** - Primary version (default - updated for json4s 4.0.7 and Scala 3-ready dependencies)
-- **Scala 3.3.4** - LTS version for forward compatibility
-
-The project is configured for gradual migration to Scala 3 while maintaining backward compatibility with Scala 2.13.
-
-**Note**: SemanticDB/Scalafix are temporarily disabled for Scala 2.13.14 as semanticdb-scalac support is pending.
+Fukuii is built with **Scala 3.3.4 (LTS)**, the latest long-term support version of Scala 3, providing modern language features, improved type inference, and better tooling support.
 
 ### Setting Up Your Development Environment
 
@@ -114,14 +107,12 @@ sbt scalafixAll --check
 
 We use [Scapegoat](https://github.com/scapegoat-scala/scapegoat) for static code analysis to detect common bugs, anti-patterns, and code smells. Configuration is in `build.sbt`.
 
-**⚠️ Currently Disabled**: Scapegoat is temporarily disabled during the Scala 2.13.8 → 3.3.4 transition period. Scapegoat 1.x only supports specific Scala 2.13 patch versions (e.g., 2.13.6), while our dependencies now require Scala 2.13.8. Scapegoat will be re-enabled after the Scala 3 migration when Scapegoat 2.x/3.x can be used.
-
-**Run Scapegoat analysis (when re-enabled):**
+**Run Scapegoat analysis:**
 ```bash
 sbt runScapegoat
 ```
 
-This generates both XML and HTML reports in `target/scala-2.13/scapegoat-report/`. The HTML report is especially useful for reviewing findings in a browser.
+This generates both XML and HTML reports in `target/scala-3.3/scapegoat-report/`. The HTML report is especially useful for reviewing findings in a browser.
 
 **Note**: Scapegoat automatically excludes generated code (protobuf files, BuildInfo, etc.) from analysis.
 
@@ -137,12 +128,12 @@ sbt testCoverage
 This will:
 1. Enable coverage instrumentation
 2. Run all tests across all modules
-3. Generate coverage reports in `target/scala-2.13/scoverage-report/`
+3. Generate coverage reports in `target/scala-3.3.4/scoverage-report/`
 4. Aggregate coverage across all modules
 
 **Coverage reports locations:**
-- HTML report: `target/scala-2.13/scoverage-report/index.html`
-- XML report: `target/scala-2.13/scoverage-report/cobertura.xml`
+- HTML report: `target/scala-3.3.4/scoverage-report/index.html`
+- XML report: `target/scala-3.3.4/scoverage-report/cobertura.xml`
 
 **Coverage thresholds:**
 - Minimum statement coverage: 70%
@@ -170,58 +161,28 @@ sbt formatCheck
 sbt pp
 ```
 
-### Scala 3 Cross-Compilation
+### Scala 3 Development
 
-Fukuii is configured for gradual migration to Scala 3 while maintaining Scala 2.13 compatibility.
+Fukuii uses **Scala 3.3.4 (LTS)** exclusively. The migration from Scala 2.13 was completed in October 2025.
 
-**Compile with Scala 3:**
+**Key Scala 3 Features in Use:**
+- Native `given`/`using` syntax for implicit parameters
+- Union types for flexible type modeling
+- Opaque types for zero-cost abstractions
+- Improved type inference
+- Native derivation (no Shapeless dependency)
+
+**Build and Test:**
 ```bash
-sbt compileScala3
-```
-This runs: `sbt ++3.3.4 compile-all`
-
-**Test with Scala 3:**
-```bash
-sbt testScala3
-```
-This runs: `sbt ++3.3.4 testAll`
-
-**Run Scala 3 migration analysis:**
-```bash
-sbt scala3Migrate
-```
-This uses the scala3-migrate plugin to identify incompatibilities.
-
-**Migrate Scala 3 syntax for a specific module:**
-```bash
-sbt "migrateSyntax bytes"   # Migrate bytes module syntax
-sbt "migrateSyntax rlp"     # Migrate rlp module syntax
-sbt "migrateSyntax crypto"  # Migrate crypto module syntax
-sbt "migrateSyntax node"    # Migrate node module syntax
-```
-**⚠️ Warning**: This command modifies source files in place to fix syntax incompatibilities for Scala 3. Commit your changes before running to easily review the modifications.
-
-This command uses the scala3-migrate plugin to automatically fix syntax incompatibilities for Scala 3 in the specified module.
-
-**Cross-compile a specific module:**
-```bash
-sbt "bytes/+compile"  # Compile bytes module for all Scala versions
-sbt "crypto/+test"    # Test crypto module for all Scala versions
+sbt compile-all  # Compile all modules
+sbt testAll      # Run all tests
 ```
 
 **Notes:**
-- The default Scala version is 2.13.8 (updated for Scala 3-ready dependencies)
-- Scala 3.3.4 (LTS) is available for cross-compilation
-- The project uses sbt-scala3-migrate plugin version 0.6.1 for migration tooling
-- **Phase 0 Migration Complete**: Dependencies updated to Scala 3-compatible versions (Akka 2.6.20, Cats 2.9.0, Circe 0.14.10, etc.)
-- **Phase 2 Migration Complete**: All modules (bytes, rlp, crypto, node) have been migrated using `migrateSyntax` (scala3-migrate 0.6.1) to fix Scala 3 syntax incompatibilities
-- **Phase 3 Migration Complete**: Manual fixes completed - compiler flags updated, linters verified, implicit conversions reviewed
-- **Phase 4 Migration Complete**: Validation & testing completed - codebase confirmed Scala 3-ready, test baselines established, dependency requirements documented
-- The codebase is now fully prepared for Scala 3 migration - dependencies support Scala 3.3.4 and code is syntactically ready
-- CI tests both Scala 2.13 and 3.3 versions
-- Scapegoat analysis temporarily disabled during Scala 2.13.8 → 3.3.4 transition (will use Scapegoat 2.x/3.x after migration)
-- See [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md) for details on updated dependencies
-- See [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md) for comprehensive validation results
+- The project is Scala 3 only (no cross-compilation)
+- All dependencies are Scala 3 compatible
+- CI pipeline tests on Scala 3.3.4
+- See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed migration
 
 ## Pre-commit Hooks
 
@@ -409,19 +370,15 @@ sbt "IntegrationTest / test"
 
 ### Continuous Integration
 
-Our CI pipeline automatically runs on both Scala 2.13 and Scala 3.3 (matrix build):
-- ✅ Compilation (`compile-all`) - both Scala versions
-- ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix) - both Scala versions
-- ✅ Static bug detection (`runScapegoat`) - Scala 2.13 only (not yet Scala 3 compatible)
-- ✅ Test suite with code coverage (`testCoverage`) - both Scala versions
-- ✅ Coverage reports (published as artifacts with Scala version tags)
-- ✅ Build artifacts (`assembly`, `dist`) - Scala 2.13 only (primary version)
+Our CI pipeline automatically runs on Scala 3.3.4:
+- ✅ Compilation (`compile-all`)
+- ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
+- ✅ Static bug detection (`runScapegoat`)
+- ✅ Test suite with code coverage (`testCoverage`)
+- ✅ Coverage reports (published as artifacts)
+- ✅ Build artifacts (`assembly`, `dist`)
 
 All checks must pass before a PR can be merged.
-
-**CI Matrix Strategy:**
-- Scala 2.13.6: Full pipeline (formatting, tests, Scapegoat, coverage, build)
-- Scala 3.3.4: Compilation, formatting, and tests (Scapegoat excluded due to tool limitations)
 
 ### Releases and Supply Chain Security
 
@@ -512,9 +469,8 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 ### Reminders
 
-- **JDK Compatibility**: Code must work on JDK 17
-- **Scala Version Support**: Code should compile on both Scala 2.13.6 and 3.3.4 (LTS)
-- **Cross-Compilation**: Test changes on both Scala versions when possible
+- **JDK Compatibility**: Code must work on JDK 21
+- **Scala Version**: Code must compile on Scala 3.3.4 (LTS)
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
 - **Rebranding**: This is a rebrand from "Mantis" to "Fukuii" - update any remaining "mantis" or "io.iohk" references
@@ -523,13 +479,13 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 ### Prompts for Common Tasks
 
-**When working with Scala 3 migration:**
+**When working with Scala 3 code:**
 ```
-1. Run `sbt scala3MigrateSyntax` to check syntax compatibility
-2. Run `sbt scala3Migrate` for detailed migration analysis
-3. Use `sbt compileScala3` to test compilation with Scala 3
-4. Update code to use Scala 3 compatible syntax where needed
-5. Test with both Scala 2.13 and 3.3 before submitting
+1. Use Scala 3 native features (given/using, union types, opaque types)
+2. Leverage improved type inference
+3. Avoid Scala 2-style implicit conversions
+4. Use native derivation instead of macro-based approaches
+5. Follow Scala 3 best practices and idioms
 ```
 
 **When fixing tests:**
@@ -547,7 +503,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 2. Add comprehensive tests (unit + integration if needed)
 3. Update documentation (README, scaladoc)
 4. Run formatCheck and linters
-5. Ensure JDK 17 compatibility
+5. Ensure JDK 21 compatibility
 ```
 
 **When refactoring:**
@@ -560,21 +516,23 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 **When updating dependencies:**
 ```
-1. Check the GitHub Advisory Database for vulnerabilities
-2. Test thoroughly on JDK 17
-3. Test cross-compilation: `sbt "bytes/+compile"` for affected modules
-4. Update version numbers in build.sbt
-5. Document any breaking changes or migration steps
+1. Always use the latest stable versions to avoid future update cycles
+2. Check the GitHub Advisory Database for known vulnerabilities
+3. Verify compatibility with project requirements:
+   - JDK 21 compatibility
+   - Scala 3.3.4 support (primary version)
+4. Test thoroughly on JDK 21
+5. Update version numbers in project/Dependencies.scala
+6. Document any breaking changes or migration steps
+7. Update security-sensitive dependencies (Netty, BouncyCastle, etc.) to latest patch versions
 ```
 
 ### Quality Checklist
 
 Before submitting a PR, verify:
-- [ ] `sbt formatCheck` passes (both Scala 2.13 and 3.3)
-- [ ] `sbt compile-all` succeeds (Scala 2.13)
-- [ ] `sbt compileScala3` succeeds (Scala 3.3)
-- [ ] `sbt testAll` passes (on JDK 17, Scala 2.13)
-- [ ] `sbt testScala3` passes (on JDK 17, Scala 3.3)
+- [ ] `sbt formatCheck` passes
+- [ ] `sbt compile-all` succeeds
+- [ ] `sbt testAll` passes (on JDK 21)
 - [ ] `sbt "IntegrationTest / test"` passes for integration tests
 - [ ] No new compiler warnings introduced
 - [ ] Documentation updated for user-facing changes
@@ -586,11 +544,7 @@ Before submitting a PR, verify:
 - [GitHub Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
-- [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md)
-- [Scalanet Compatibility Assessment](docs/SCALANET_COMPATIBILITY_ASSESSMENT.md)
-- [Scalanet Fork Action Plan](docs/SCALANET_FORK_ACTION_PLAN.md)
-- [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md)
-- [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md)
+- [Migration History](docs/MIGRATION_HISTORY.md)
 - [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)
 - [Scalafmt Documentation](https://scalameta.org/scalafmt/)
 - [Scalafix Documentation](https://scalacenter.github.io/scalafix/)

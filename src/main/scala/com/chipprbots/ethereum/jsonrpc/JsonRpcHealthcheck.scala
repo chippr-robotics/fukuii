@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import monix.eval.Task
+import cats.effect.IO
 
 import com.chipprbots.ethereum.healthcheck.HealthcheckResult
 
@@ -32,20 +32,20 @@ final case class JsonRpcHealthcheck[Response](
 
 object JsonRpcHealthcheck {
 
-  def fromServiceResponse[Response](name: String, f: ServiceResponse[Response]): Task[JsonRpcHealthcheck[Response]] =
+  def fromServiceResponse[Response](name: String, f: ServiceResponse[Response]): IO[JsonRpcHealthcheck[Response]] =
     f.map(result =>
       JsonRpcHealthcheck(
         name,
         result.left.map[String](_.message)
       )
-    ).onErrorHandle(t => JsonRpcHealthcheck(name, Left(t.getMessage())))
+    ).handleError(t => JsonRpcHealthcheck(name, Left(t.getMessage())))
 
-  def fromTask[Response](name: String, f: Task[Response]): Task[JsonRpcHealthcheck[Response]] =
+  def fromTask[Response](name: String, f: IO[Response]): IO[JsonRpcHealthcheck[Response]] =
     f.map(result =>
       JsonRpcHealthcheck(
         name,
         Right(result)
       )
-    ).onErrorHandle(t => JsonRpcHealthcheck(name, Left(t.getMessage())))
+    ).handleError(t => JsonRpcHealthcheck(name, Left(t.getMessage())))
 
 }

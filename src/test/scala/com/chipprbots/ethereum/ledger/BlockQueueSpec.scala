@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.ledger
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.scalamock.handlers.CallHandler0
 import org.scalamock.handlers.CallHandler1
@@ -23,7 +23,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   "BlockQueue" should "ignore block if it's already in the queue" in new TestConfig {
-    val block = getBlock(1)
+    val block: Block = getBlock(1)
     val parentWeight = ChainWeight.zero
     setBestBlockNumber(1).twice()
     setChainWeightForParent(block, Some(parentWeight))
@@ -34,8 +34,8 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "ignore blocks outside of range" in new TestConfig {
-    val block1 = getBlock(1)
-    val block30 = getBlock(30)
+    val block1: Block = getBlock(1)
+    val block30: Block = getBlock(30)
     setBestBlockNumber(15).twice()
 
     blockQueue.enqueueBlock(block1)
@@ -46,14 +46,14 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "remove the blocks that fall out of range" in new TestConfig {
-    val block1 = getBlock(1)
+    val block1: Block = getBlock(1)
     setBestBlockNumber(1)
     setChainWeightForParent(block1)
 
     blockQueue.enqueueBlock(block1)
     blockQueue.isQueued(block1.header.hash) shouldBe true
 
-    val block20 = getBlock(20)
+    val block20: Block = getBlock(20)
     setBestBlockNumber(20)
     setChainWeightForParent(block20)
 
@@ -63,8 +63,8 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "enqueue a block with parent on the main chain updating its total difficulty" in new TestConfig {
-    val block1 = getBlock(1, 13)
-    val parentWeight = ChainWeight.totalDifficultyOnly(42)
+    val block1: Block = getBlock(1, 13)
+    val parentWeight: ChainWeight = ChainWeight.totalDifficultyOnly(42)
     setBestBlockNumber(1)
     setChainWeightForParent(block1, Some(parentWeight))
 
@@ -72,12 +72,12 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "enqueue a block with queued ancestors rooted to the main chain updating its total difficulty" in new TestConfig {
-    val block1 = getBlock(1, 101)
-    val block2a = getBlock(2, 102, block1.header.hash)
-    val block2b = getBlock(2, 99, block1.header.hash)
-    val block3 = getBlock(3, 103, block2a.header.hash)
+    val block1: Block = getBlock(1, 101)
+    val block2a: Block = getBlock(2, 102, block1.header.hash)
+    val block2b: Block = getBlock(2, 99, block1.header.hash)
+    val block3: Block = getBlock(3, 103, block2a.header.hash)
 
-    val parentWeight = ChainWeight.totalDifficultyOnly(42)
+    val parentWeight: ChainWeight = ChainWeight.totalDifficultyOnly(42)
 
     setBestBlockNumber(1).anyNumberOfTimes()
     setChainWeightForParent(block1, Some(parentWeight))
@@ -89,12 +89,12 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
     blockQueue.enqueueBlock(block2a)
     blockQueue.enqueueBlock(block2b)
 
-    val expectedWeight = List(block1, block2a, block3).map(_.header).foldLeft(parentWeight)(_ increase _)
+    val expectedWeight: ChainWeight = List(block1, block2a, block3).map(_.header).foldLeft(parentWeight)(_ increase _)
     blockQueue.enqueueBlock(block3) shouldEqual Some(Leaf(block3.header.hash, expectedWeight))
   }
 
   it should "enqueue an orphaned block" in new TestConfig {
-    val block1 = getBlock(1)
+    val block1: Block = getBlock(1)
     setBestBlockNumber(1)
     setChainWeightForParent(block1)
 
@@ -103,10 +103,10 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "remove a branch from a leaf up to the first shared ancestor" in new TestConfig {
-    val block1 = getBlock(1)
-    val block2a = getBlock(2, parent = block1.header.hash)
-    val block2b = getBlock(2, parent = block1.header.hash)
-    val block3 = getBlock(3, parent = block2a.header.hash)
+    val block1: Block = getBlock(1)
+    val block2a: Block = getBlock(2, parent = block1.header.hash)
+    val block2b: Block = getBlock(2, parent = block1.header.hash)
+    val block3: Block = getBlock(3, parent = block2a.header.hash)
 
     setBestBlockNumber(1).anyNumberOfTimes()
     setChainWeightForParent(block1)
@@ -128,11 +128,11 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   it should "remove a whole subtree down from an ancestor to all its leaves" in new TestConfig {
-    val block1a = getBlock(1)
-    val block1b = getBlock(1)
-    val block2a = getBlock(2, parent = block1a.header.hash)
-    val block2b = getBlock(2, parent = block1a.header.hash)
-    val block3 = getBlock(3, parent = block2a.header.hash)
+    val block1a: Block = getBlock(1)
+    val block1b: Block = getBlock(1)
+    val block2a: Block = getBlock(2, parent = block1a.header.hash)
+    val block2b: Block = getBlock(2, parent = block1a.header.hash)
+    val block3: Block = getBlock(3, parent = block2a.header.hash)
 
     setBestBlockNumber(1).anyNumberOfTimes()
     setChainWeightForParent(block1a)

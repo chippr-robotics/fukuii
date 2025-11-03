@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.keystore
 
 import java.util.UUID
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.util.Try
 
@@ -16,6 +16,7 @@ import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
 import org.json4s.JsonDSL._
+import org.json4s._
 import org.json4s.native.JsonMethods._
 
 import com.chipprbots.ethereum.domain.Address

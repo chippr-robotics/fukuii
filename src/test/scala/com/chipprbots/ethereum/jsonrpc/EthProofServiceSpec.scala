@@ -1,10 +1,10 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.util.ByteString
 
-import monix.execution.Scheduler.Implicits.global
+import cats.effect.unsafe.IORuntime
 
 import com.softwaremill.diffx.scalatest.DiffMatcher
 import org.bouncycastle.util.encoders.Hex
@@ -42,34 +42,37 @@ class EthProofServiceSpec
     with TypeCheckedTripleEquals
     with DiffMatcher {
 
+  implicit val runtime: IORuntime = IORuntime.global
+
   "EthProofService" should "handle getStorageAt request" in new TestSetup {
     val request = GetProofRequest(address, storageKeys, blockNumber)
     val result = ethGetProof.getProof(request)
 
     val balanceResponse: GetBalanceResponse = ethUserService
       .getBalance(GetBalanceRequest(address, BlockParam.Latest))
-      .runSyncUnsafe()
+      .unsafeRunSync()
       .getOrElse(fail("ethUserService.getBalance did not get valid response"))
 
     val transactionCountResponse = ethUserService
       .getTransactionCount(GetTransactionCountRequest(address, BlockParam.Latest))
-      .runSyncUnsafe()
+      .unsafeRunSync()
       .getOrElse(fail("ethUserService.getTransactionCount did not get valid response"))
 
     val storageValues: Seq[ByteString] = storageKeys.map { position =>
       ethUserService
         .getStorageAt(GetStorageAtRequest(address, position.v, BlockParam.Latest))
-        .runSyncUnsafe()
+        .unsafeRunSync()
         .getOrElse(fail("ethUserService.getStorageAt did not get valid response"))
         .value
     }
 
     val givenResult = result
-      .runSyncUnsafe()
+      .unsafeRunSync()
       .getOrElse(fail())
       .proofAccount
 
-    givenResult.address should matchTo(address)
+    val givenAddress = givenResult.address
+    givenAddress shouldBe address
     givenResult.codeHash shouldBe account.codeHash
     givenResult.storageHash shouldBe account.storageRoot
 
@@ -86,27 +89,27 @@ class EthProofServiceSpec
 
   "EthProofService" should "return an error when the proof is requested for non-existing account" in new TestSetup {
     val wrongAddress = Address(666)
-    val result = fetchProof(wrongAddress, storageKeys, blockNumber).runSyncUnsafe()
+    val result = fetchProof(wrongAddress, storageKeys, blockNumber).unsafeRunSync()
     result.isLeft shouldBe true
     result.fold(l => l.message should include("No account found for Address"), r => r)
   }
 
   "EthProofService" should "return the proof with empty value for non-existing storage key" in new TestSetup {
     val wrongStorageKey = Seq(StorageProofKey(321))
-    val result = fetchProof(address, wrongStorageKey, blockNumber).runSyncUnsafe()
+    val result = fetchProof(address, wrongStorageKey, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
     result.fold(
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.map { v =>
           v.proof.nonEmpty shouldBe true
@@ -118,20 +121,20 @@ class EthProofServiceSpec
 
   "EthProofService" should "return the proof and value for existing storage key" in new TestSetup {
     val storageKey = Seq(StorageProofKey(key))
-    val result = fetchProof(address, storageKey, blockNumber).runSyncUnsafe()
+    val result = fetchProof(address, storageKey, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
     result.fold(
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         r.proofAccount.storageProof.map { v =>
           v.proof.nonEmpty shouldBe true
@@ -144,20 +147,20 @@ class EthProofServiceSpec
   "EthProofService" should "return the proof and value for multiple existing storage keys" in new TestSetup {
     val storageKey = Seq(StorageProofKey(key), StorageProofKey(key2))
     val expectedValueStorageKey = Seq(BigInt(value), BigInt(value2))
-    val result = fetchProof(address, storageKey, blockNumber).runSyncUnsafe()
+    val result = fetchProof(address, storageKey, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
     result.fold(
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.size shouldBe 2
         accountProof.storageProof.map { v =>
@@ -172,20 +175,20 @@ class EthProofServiceSpec
     val wrongStorageKey = StorageProofKey(321)
     val storageKey = Seq(StorageProofKey(key), StorageProofKey(key2)) :+ wrongStorageKey
     val expectedValueStorageKey = Seq(BigInt(value), BigInt(value2), BigInt(0))
-    val result = fetchProof(address, storageKey, blockNumber).runSyncUnsafe()
+    val result = fetchProof(address, storageKey, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
     result.fold(
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.size shouldBe 3
         expectedValueStorageKey.forall(accountProof.storageProof.map(_.value).contains) shouldBe true
@@ -194,28 +197,27 @@ class EthProofServiceSpec
   }
 
   "EthProofService" should "return account proof and account details, with empty storage proof" in new TestSetup {
-    val result = fetchProof(address, Seq.empty, blockNumber).runSyncUnsafe()
+    val result = fetchProof(address, Seq.empty, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
     result.fold(
       l => l,
       r => {
         val accountProof = r.proofAccount
-        accountProof.address should matchTo(address)
+        val accProofAddr = accountProof.address; accProofAddr shouldBe address
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        accountProof.accountProof.head shouldBe rlp.encode(RLPValue(mpt.getRootHash))
+        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
-        accountProof.nonce shouldBe nonce
+        accountProof.nonce shouldBe UInt256(nonce)
         accountProof.storageHash shouldBe account.storageRoot
         accountProof.storageProof.size shouldBe 0
       }
     )
   }
 
-  class TestSetup() extends MockFactory with EphemBlockchainTestSetup with ApisBuilder {
-
+  class TestSetup() extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
     val balance: UInt256 = UInt256(0)

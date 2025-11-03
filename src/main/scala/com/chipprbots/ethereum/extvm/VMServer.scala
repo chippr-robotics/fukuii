@@ -2,16 +2,16 @@ package com.chipprbots.ethereum.extvm
 
 import java.nio.ByteOrder
 
-import akka.NotUsed
-import akka.actor.ActorSystem
-import akka.stream.OverflowStrategy
-import akka.stream.scaladsl.Flow
-import akka.stream.scaladsl.Framing
-import akka.stream.scaladsl.Keep
-import akka.stream.scaladsl.Sink
-import akka.stream.scaladsl.Source
-import akka.stream.scaladsl.Tcp
-import akka.util.ByteString
+import org.apache.pekko.NotUsed
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.stream.OverflowStrategy
+import org.apache.pekko.stream.scaladsl.Flow
+import org.apache.pekko.stream.scaladsl.Framing
+import org.apache.pekko.stream.scaladsl.Keep
+import org.apache.pekko.stream.scaladsl.Sink
+import org.apache.pekko.stream.scaladsl.Source
+import org.apache.pekko.stream.scaladsl.Tcp
+import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 import scala.util.Failure
@@ -87,12 +87,18 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
 
   private def awaitHello(): Unit = {
     val helloMsg = messageHandler.awaitMessage[msg.Hello]
-    require(
-      helloMsg.version == ApiVersionProvider.version,
-      s"Wrong Hello message version. Expected ${ApiVersionProvider.version} but was ${helloMsg.version}"
+    if (helloMsg.version != ApiVersionProvider.version)
+      throw new IllegalArgumentException(
+        s"Wrong Hello message version. Expected ${ApiVersionProvider.version} but was ${helloMsg.version}"
+      )
+    if (!helloMsg.config.isEthereumConfig)
+      throw new IllegalArgumentException("Hello message ethereum config must be true")
+
+    defaultBlockchainConfig = constructBlockchainConfig(
+      helloMsg.config.ethereumConfig.getOrElse(
+        throw new IllegalArgumentException("Ethereum config is required")
+      )
     )
-    require(helloMsg.config.isEthereumConfig, "Hello message ethereum config must be true")
-    defaultBlockchainConfig = constructBlockchainConfig(helloMsg.config.ethereumConfig.get)
   }
 
   def run(): Unit = {
@@ -112,19 +118,23 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
   private def constructContextFromMsg(contextMsg: msg.CallContext): ProgramContext[World, Storage] = {
     import ByteString.{empty => irrelevant} // used for irrelevant BlockHeader fields
 
+    val blockHeaderMsg = contextMsg.blockHeader.getOrElse(
+      throw new IllegalArgumentException("Block header is required in call context")
+    )
+
     val blockHeader = BlockHeader(
       irrelevant,
       irrelevant,
-      contextMsg.blockHeader.get.beneficiary,
+      blockHeaderMsg.beneficiary,
       irrelevant,
       irrelevant,
       irrelevant,
       irrelevant,
-      contextMsg.blockHeader.get.difficulty,
-      contextMsg.blockHeader.get.number,
-      contextMsg.blockHeader.get.gasLimit,
+      blockHeaderMsg.difficulty,
+      blockHeaderMsg.number,
+      blockHeaderMsg.gasLimit,
       0, // irrelevant
-      contextMsg.blockHeader.get.unixTimestamp,
+      blockHeaderMsg.unixTimestamp,
       irrelevant,
       irrelevant,
       irrelevant

@@ -17,12 +17,8 @@ permissions:
 
 jobs:
   test:
-    name: Test and Build (JDK 17, Scala ${{ matrix.scala-version }})
+    name: Test and Build (JDK 21, Scala 3.3.4)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        scala-version: ['2.13', '3.3']
-      fail-fast: false
     
     steps:
       - name: Checkout code
@@ -31,11 +27,11 @@ jobs:
           submodules: recursive
           fetch-depth: 0
       
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
           cache: 'sbt'
       
       - name: Cache Coursier
@@ -45,9 +41,9 @@ jobs:
             ~/.cache/coursier
             ~/.ivy2/cache
             ~/.sbt
-          key: ${{ runner.os }}-sbt-17-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          key: ${{ runner.os }}-sbt-21-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
           restore-keys: |
-            ${{ runner.os }}-sbt-17-
+            ${{ runner.os }}-sbt-21-
             ${{ runner.os }}-sbt-
       
       - name: Set up SBT
@@ -59,49 +55,24 @@ jobs:
           sudo apt-get install sbt
       
       - name: Compile all modules
+        run: sbt compile-all
+        env:
+          FUKUII_DEV: true
+      
+      - name: Check code formatting (diagnostic)
         run: |
-          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
-            sbt "++3.3.4" compile-all
-          else
-            sbt compile-all
+          sbt scalafmtCheckAll 2>&1 | tee format-check.log
+          echo "--- Last 200 lines of format check output ---"
+          tail -n 200 format-check.log
+          if grep -E "(error|failed|Failed to format|Unexpected formatting diff|does not match the file on disk)" format-check.log; then
+            echo "ERROR: Code formatting issues detected. See output above."
+            exit 1
           fi
         env:
           FUKUII_DEV: true
-      
-      - name: Check code formatting
-        run: |
-          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
-            sbt "++3.3.4" formatCheck
-          else
-            sbt formatCheck
-          fi
-        env:
-          FUKUII_DEV: true
-      
-      - name: Run Scapegoat analysis
-        # Only run Scapegoat on Scala 2.13 as it's not yet compatible with Scala 3
-        if: matrix.scala-version == '2.13'
-        run: sbt runScapegoat
-        env:
-          FUKUII_DEV: true
-      
-      - name: Upload Scapegoat reports
-        if: always() && matrix.scala-version == '2.13'
-        uses: actions/upload-artifact@v4
-        with:
-          name: scapegoat-reports-jdk17-scala-${{ matrix.scala-version }}
-          path: |
-            **/target/scala-*/scapegoat-report/**
-          retention-days: 7
-          if-no-files-found: warn
       
       - name: Run tests with coverage
-        run: |
-          if [ "${{ matrix.scala-version }}" = "3.3" ]; then
-            sbt "++3.3.4" testCoverage
-          else
-            sbt testCoverage
-          fi
+        run: sbt testCoverage
         env:
           FUKUII_DEV: true
       
@@ -109,7 +80,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports-jdk17-scala-${{ matrix.scala-version }}
+          name: coverage-reports-jdk21-scala-3.3.4
           path: |
             **/target/scala-*/scoverage-report/**
             **/target/scala-*/scoverage-data/**
@@ -117,15 +88,11 @@ jobs:
           if-no-files-found: warn
       
       - name: Build assembly
-        # Only build assembly for Scala 2.13 (primary version)
-        if: matrix.scala-version == '2.13'
         run: sbt assembly
         env:
           FUKUII_DEV: true
       
       - name: Build distribution
-        # Only build distribution for Scala 2.13 (primary version)
-        if: matrix.scala-version == '2.13'
         run: sbt dist
         env:
           FUKUII_DEV: true
@@ -134,17 +101,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-jdk17-scala-${{ matrix.scala-version }}
+          name: test-results-jdk21-scala-3.3.4
           path: |
             **/target/test-reports/**
           retention-days: 7
           if-no-files-found: warn
       
       - name: Upload build artifacts
-        if: matrix.scala-version == '2.13'
         uses: actions/upload-artifact@v4
         with:
-          name: fukuii-distribution-jdk17-scala-${{ matrix.scala-version }}
+          name: fukuii-distribution-jdk21-scala-3.3.4
           path: |
             target/universal/*.zip
             **/target/scala-*/*-assembly-*.jar

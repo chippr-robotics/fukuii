@@ -2,12 +2,12 @@ package com.chipprbots.ethereum.utils
 
 import java.util.Map.Entry
 
-import akka.http.scaladsl.model.headers.HttpOrigin
+import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
+import org.apache.pekko.http.scaladsl.model.headers.HttpOrigin
 
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 
-import ch.megard.akka.http.cors.scaladsl.model.HttpOriginMatcher
 import com.typesafe.config.ConfigValue
 import com.typesafe.config.{Config => TypesafeConfig}
 

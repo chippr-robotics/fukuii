@@ -22,11 +22,12 @@ class LruCache[K <: AnyRef, V <: AnyRef](
     CacheBuilder
       .newBuilder()
       .maximumSize(config.maxSize)
-      .removalListener((notification: RemovalNotification[K, V]) =>
-        if (notification.wasEvicted()) {
-          notificationHandler.foreach(handler => handler(notification))
-        }
-      )
+      .removalListener(new cache.RemovalListener[K, V] {
+        def onRemoval(notification: RemovalNotification[K, V]): Unit =
+          if (notification.wasEvicted()) {
+            notificationHandler.foreach(handler => handler(notification))
+          }
+      })
       .build()
 
   override def clear(): Unit = {

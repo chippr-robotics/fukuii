@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.nodebuilder
 
 import java.util.concurrent.atomic.AtomicReference
 
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import com.chipprbots.ethereum.jsonrpc.TestService
 import com.chipprbots.ethereum.testmode.SealEngineType
@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 class TestNode extends BaseNode {
 
-  val scheduler: Scheduler = Scheduler(system.dispatchers.lookup("validation-context"))
+  override val ioRuntime: IORuntime = IORuntime.global
 
   lazy val testModeComponentsProvider: TestModeComponentsProvider =
     new TestModeComponentsProvider(
@@ -21,7 +21,7 @@ class TestNode extends BaseNode {
       blockchainReader,
       blockchainWriter,
       storagesInstance.storages.evmCodeStorage,
-      scheduler,
+      ioRuntime,
       miningConfig,
       vm,
       this
@@ -52,7 +52,7 @@ class TestNode extends BaseNode {
         testModeComponentsProvider,
         storagesInstance.storages.transactionMappingStorage,
         this
-      )(scheduler)
+      )(ioRuntime)
     )
 
   lazy val currentBlockchainConfig: AtomicReference[BlockchainConfig] = new AtomicReference(initBlockchainConfig)

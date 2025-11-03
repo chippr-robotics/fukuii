@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.domain
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.kec256
@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPDecoder
 import com.chipprbots.ethereum.rlp.RLPEncodeable
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable
 import com.chipprbots.ethereum.rlp.rawDecode
@@ -145,6 +146,8 @@ object BlockHeaderImplicits {
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
   import com.chipprbots.ethereum.rlp.RLPImplicits._
+  import com.chipprbots.ethereum.rlp.RLPValue
+  import com.chipprbots.ethereum.utils.ByteUtils
 
   implicit class BlockHeaderEnc(blockHeader: BlockHeader) extends RLPSerializable {
     // scalastyle:off method.length
@@ -153,41 +156,41 @@ object BlockHeaderImplicits {
       extraFields match {
         case HefPostEcip1097(maybeCheckpoint) =>
           RLPList(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce,
+            parentHash.toArray,
+            ommersHash.toArray,
+            beneficiary.toArray,
+            stateRoot.toArray,
+            transactionsRoot.toArray,
+            receiptsRoot.toArray,
+            logsBloom.toArray,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+            extraData.toArray,
+            mixHash.toArray,
+            nonce.toArray,
             maybeCheckpoint
           )
 
         case HefEmpty =>
           RLPList(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce
+            parentHash.toArray,
+            ommersHash.toArray,
+            beneficiary.toArray,
+            stateRoot.toArray,
+            transactionsRoot.toArray,
+            receiptsRoot.toArray,
+            logsBloom.toArray,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+            extraData.toArray,
+            mixHash.toArray,
+            nonce.toArray
           )
       }
     }
@@ -225,21 +228,21 @@ object BlockHeaderImplicits {
             checkpointOptionDecoder.decode(encodedCheckpoint)
           )
           BlockHeader(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce,
+            byteStringFromEncodeable(parentHash),
+            byteStringFromEncodeable(ommersHash),
+            byteStringFromEncodeable(beneficiary),
+            byteStringFromEncodeable(stateRoot),
+            byteStringFromEncodeable(transactionsRoot),
+            byteStringFromEncodeable(receiptsRoot),
+            byteStringFromEncodeable(logsBloom),
+            bigIntFromEncodeable(difficulty),
+            bigIntFromEncodeable(number),
+            bigIntFromEncodeable(gasLimit),
+            bigIntFromEncodeable(gasUsed),
+            longFromEncodeable(unixTimestamp),
+            byteStringFromEncodeable(extraData),
+            byteStringFromEncodeable(mixHash),
+            byteStringFromEncodeable(nonce),
             extraFields
           )
 
@@ -261,56 +264,21 @@ object BlockHeaderImplicits {
               nonce
             ) =>
           BlockHeader(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce
-          )
-
-        case RLPList(
-              parentHash,
-              ommersHash,
-              beneficiary,
-              stateRoot,
-              transactionsRoot,
-              receiptsRoot,
-              logsBloom,
-              difficulty,
-              number,
-              gasLimit,
-              gasUsed,
-              unixTimestamp,
-              extraData,
-              mixHash,
-              nonce
-            ) =>
-          BlockHeader(
-            parentHash,
-            ommersHash,
-            beneficiary,
-            stateRoot,
-            transactionsRoot,
-            receiptsRoot,
-            logsBloom,
-            difficulty,
-            number,
-            gasLimit,
-            gasUsed,
-            unixTimestamp,
-            extraData,
-            mixHash,
-            nonce
+            byteStringFromEncodeable(parentHash),
+            byteStringFromEncodeable(ommersHash),
+            byteStringFromEncodeable(beneficiary),
+            byteStringFromEncodeable(stateRoot),
+            byteStringFromEncodeable(transactionsRoot),
+            byteStringFromEncodeable(receiptsRoot),
+            byteStringFromEncodeable(logsBloom),
+            bigIntFromEncodeable(difficulty),
+            bigIntFromEncodeable(number),
+            bigIntFromEncodeable(gasLimit),
+            bigIntFromEncodeable(gasUsed),
+            longFromEncodeable(unixTimestamp),
+            byteStringFromEncodeable(extraData),
+            byteStringFromEncodeable(mixHash),
+            byteStringFromEncodeable(nonce)
           )
 
         case _ =>

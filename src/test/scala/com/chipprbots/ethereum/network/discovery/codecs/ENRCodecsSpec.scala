@@ -4,18 +4,17 @@ import java.net.InetAddress
 
 import scala.language.implicitConversions
 
-import io.iohk.scalanet.discovery.crypto.PrivateKey
-import io.iohk.scalanet.discovery.crypto.PublicKey
-import io.iohk.scalanet.discovery.crypto.SigAlg
-import io.iohk.scalanet.discovery.ethereum.EthereumNodeRecord
-import io.iohk.scalanet.discovery.ethereum.Node
-import io.iohk.scalanet.discovery.ethereum.v4.Payload.ENRResponse
-import io.iohk.scalanet.discovery.hash.Hash
-import io.iohk.scalanet.discovery.hash.Keccak256
+import com.chipprbots.scalanet.discovery.crypto.PrivateKey
+import com.chipprbots.scalanet.discovery.crypto.PublicKey
+import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.Node
+import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.ENRResponse
+import com.chipprbots.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.discovery.hash.Keccak256
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import scodec.bits.ByteVector
-import scodec.bits.HexStringSyntax
+import scodec.bits._
 
 import com.chipprbots.ethereum.network.discovery.Secp256k1SigAlg
 import com.chipprbots.ethereum.rlp
@@ -23,13 +22,13 @@ import com.chipprbots.ethereum.rlp.RLPDecoder
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPEncoder
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 
 class ENRCodecsSpec extends AnyFlatSpec with Matchers {
 
-  import RLPCodecs._
+  import RLPCodecs.given
 
   implicit val sigalg: SigAlg = new Secp256k1SigAlg
 
@@ -42,7 +41,7 @@ class ENRCodecsSpec extends AnyFlatSpec with Matchers {
   val privateKey: PrivateKey.Tagged = PrivateKey(
     hex"b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291".toBitVector
   )
-  val publicKey: io.iohk.scalanet.discovery.crypto.PublicKey = sigalg.toPublicKey(privateKey)
+  val publicKey: PublicKey = sigalg.toPublicKey(privateKey)
   val enrString =
     "enr:-IS4QHCYrYZbAKWCBRlAy5zzaDZXJBGkcnh4MHcBFZntXNFrdvJjX04jRzjzCBOonrkTfj499SZuOh8R33Ls8RRcy5wBgmlkgnY0gmlwhH8AAAGJc2VjcDI1NmsxoQPKY0yuDUmstAHYpMa2_oxVtw0RW_QAdpzBQA8yWM0xOIN1ZHCCdl8"
 
@@ -141,7 +140,7 @@ class ENRCodecsSpec extends AnyFlatSpec with Matchers {
   it should "verify that the node ID in the example is the hash of the public key" in {
     // This is what we use in Kademlia, but the node ID in the wire protocol
     // should be the 64 byte public key, at least I thought so based on the spec.
-    Keccak256(publicKey) shouldBe nodeId
+    Keccak256(publicKey.value) shouldBe nodeId
   }
 
   it should "handle arbitrary key-value pairs" in {

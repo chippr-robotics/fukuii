@@ -2,7 +2,7 @@
   <img src="docs/images/fukuii-logo-cute.png" alt="Fukuii Logo" width="400"/>
 </div>
 
-# Fukuii Ethereum Client
+# 🧠🐛 Fukuii Ethereum Client
 
 [![CI](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml)
 
@@ -48,6 +48,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
 - [Docker Documentation](docker/README.md)
+- [Operations Runbooks](docs/runbooks/README.md) - Production operation guides
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
 
@@ -55,7 +56,31 @@ Getting started
 
 ## Option 1: Docker (Recommended for Production)
 
-The easiest way to run Fukuii is using Docker:
+The easiest way to run Fukuii is using Docker. Images are available on both GitHub Container Registry and Docker Hub:
+
+### Using Docker Hub (Recommended for Quick Start)
+
+```bash
+# Pull the latest release
+docker pull chipprbots/fukuii:latest
+
+# Or pull a specific version
+docker pull chipprbots/fukuii:v1.0.0
+
+# Run Fukuii
+docker run -d \
+  --name fukuii \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-data:/app/data \
+  -v fukuii-conf:/app/conf \
+  chipprbots/fukuii:latest
+```
+
+**Docker Hub:** https://hub.docker.com/r/chipprbots/fukuii
+
+### Using GitHub Container Registry (Recommended for Security-Critical Deployments)
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)
@@ -98,7 +123,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 1. Click the green "Code" button on the repository page
 2. Select "Open with Codespaces"
-3. Wait for the environment to initialize (automatically installs JDK 17, SBT, and Scala)
+3. Wait for the environment to initialize (automatically installs JDK 21, SBT, and Scala)
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
@@ -106,17 +131,13 @@ See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
 To build Fukuii from source locally you will need:
 
-- **JDK 17**
+- **JDK 21**
 - **sbt** (Scala build tool, version 1.10.7+)
 - **Python** (for certain auxiliary scripts)
 
 ### Scala Version Support
 
-Fukuii supports multiple Scala versions:
-- **Scala 2.13.14** (primary/default version - updated for json4s 4.0.7 and Scala 3-ready dependencies)
-- **Scala 3.3.4** (LTS - for cross-compilation and forward compatibility)
-
-The codebase is configured for gradual migration to Scala 3 while maintaining full backward compatibility.
+Fukuii is built with **Scala 3.3.4 (LTS)**, providing modern language features, improved type inference, and better performance.
 
 ### Building the client
 
@@ -133,12 +154,6 @@ sbt dist
 ```
 
 After the build completes, a distribution zip archive will be placed under target/universal/. Unzip it to run the client.
-
-**Building with Scala 3:**
-
-```bash
-sbt "++3.3.4" dist
-```
 
 ### Running the client
 
@@ -187,10 +202,194 @@ When modifying code derived from Mantis, include a notice in the header of chang
 
 ## Development and Future Plans
 
-**Technology Stack**: This project uses Scala 2.13.8 with active migration to Scala 3.3.4 (LTS). **Phase 0 (Dependency Updates), Phase 3 (Manual Fixes), and Phase 4 (Validation & Testing) of the migration are now complete**. The scalanet dependency has been resolved by vendoring it locally in the `scalanet/` directory (see [Scalanet Compatibility Assessment](docs/SCALANET_COMPATIBILITY_ASSESSMENT.md)). For detailed information about the migration strategy, progress, and validation results, see our [Scala 3.0 Migration Report](docs/SCALA_3_MIGRATION_REPORT.md), [Phase 4 Validation Report](docs/PHASE_4_VALIDATION_REPORT.md), and [Dependency Update Report](docs/DEPENDENCY_UPDATE_REPORT.md).
+**Technology Stack**: This project uses **Scala 3.3.4 (LTS)** as the primary and only supported version. The migration from Scala 2.13 to Scala 3 was completed in October 2025, including:
+- ✅ Migration from Akka to Apache Pekko (Scala 3 compatible)
+- ✅ Migration from Monix to Cats Effect 3 IO
+- ✅ Migration from Shapeless to native Scala 3 derivation
+- ✅ Update to json4s 4.0.7 (Scala 3 compatible)
+- ✅ Scalanet vendored locally in the `scalanet/` directory
 
-**Static Analysis**: We maintain a comprehensive static analysis toolchain. **Note**: Scapegoat is temporarily disabled during the Scala 2.13.8 → 3.3.4 transition period due to tooling limitations. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
+For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
 
-Contact
+**Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
+
+## Operations and Maintenance
+
+For production deployments, comprehensive operational runbooks are available covering:
+
+- **[Metrics & Monitoring](docs/operations/metrics-and-monitoring.md)** - Structured logging, Prometheus metrics, JMX export, and Grafana dashboards
+- **[First Start](docs/runbooks/first-start.md)** - Initial node setup and configuration
+- **[Security](docs/runbooks/security.md)** - Node security, firewall configuration, and best practices
+- **[Peering](docs/runbooks/peering.md)** - Network connectivity and peer management  
+- **[Disk Management](docs/runbooks/disk-management.md)** - Storage, pruning, and optimization
+- **[Backup & Restore](docs/runbooks/backup-restore.md)** - Data protection and disaster recovery
+- **[Log Triage](docs/runbooks/log-triage.md)** - Log analysis and troubleshooting
+- **[Known Issues](docs/runbooks/known-issues.md)** - Common problems and solutions (RocksDB, JVM, temp directories)
+
+See the [Operations Runbooks](docs/runbooks/README.md) for complete operational documentation.
+
+## Health & Readiness Endpoints
+
+Fukuii provides HTTP endpoints for monitoring node health and readiness, enabling integration with modern orchestration platforms like Kubernetes, Docker Swarm, and monitoring systems.
+
+### Available Endpoints
+
+#### `/health` - Liveness Probe
+Simple HTTP endpoint that returns `200 OK` if the server is running and responding to requests.
+
+**Use case:** Liveness probes in Kubernetes/Docker to determine if the container should be restarted.
+
+**Example:**
+```bash
+curl http://localhost:8546/health
+```
+
+**Response (200 OK):**
+```json
+{
+  "checks": [
+    {
+      "name": "server",
+      "status": "OK",
+      "info": "running"
+    }
+  ]
+}
+```
+
+#### `/readiness` - Readiness Probe
+Checks if the node is ready to serve traffic. Returns `200 OK` when:
+- Database is opened and accessible (stored block exists)
+- Node has at least one peer connection
+- Blockchain tip is advancing (block numbers are updating)
+
+**Use case:** Readiness probes in Kubernetes/Docker to determine if the container should receive traffic.
+
+**Example:**
+```bash
+curl http://localhost:8546/readiness
+```
+
+**Response (200 OK when ready):**
+```json
+{
+  "checks": [
+    {
+      "name": "peerCount",
+      "status": "OK",
+      "info": "5"
+    },
+    {
+      "name": "bestStoredBlock",
+      "status": "OK",
+      "info": "12345678"
+    },
+    {
+      "name": "bestFetchingBlock",
+      "status": "OK"
+    }
+  ]
+}
+```
+
+**Response (503 Service Unavailable when not ready):**
+```json
+{
+  "checks": [
+    {
+      "name": "peerCount",
+      "status": "ERROR",
+      "info": "peer count is 0"
+    },
+    ...
+  ]
+}
+```
+
+#### `/healthcheck` - Detailed Health Status
+Comprehensive health check including all node subsystems:
+- Peer count
+- Best stored block
+- Best known block
+- Best fetching block
+- Update status (tip advancing)
+- Sync status
+
+**Use case:** Detailed monitoring and diagnostics.
+
+**Example:**
+```bash
+curl http://localhost:8546/healthcheck
+```
+
+### Kubernetes Configuration Example
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fukuii-node
+spec:
+  containers:
+  - name: fukuii
+    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    ports:
+    - containerPort: 8546
+      name: rpc
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8546
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /readiness
+        port: 8546
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+```
+
+### Docker Compose Configuration Example
+
+```yaml
+version: '3.8'
+services:
+  fukuii:
+    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    ports:
+      - "8546:8546"
+      - "30303:30303"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+```
+
+### Configuration
+
+Health check behavior can be configured in `conf/base.conf`:
+
+```hocon
+fukuii.network.rpc {
+  health {
+    # If the best known block number stays the same for more time than this,
+    # the healthcheck will consider the client to be stuck and return an error
+    no-update-duration-threshold = 30.minutes
+    
+    # If the difference between the best stored block number and the best known block number
+    # is less than this value, the healthcheck will report that the client is synced.
+    syncing-status-threshold = 10
+  }
+}
+```
+
+## Contact
 
 For questions or support, reach out to Chippr Robotics LLC via our GitHub repository.

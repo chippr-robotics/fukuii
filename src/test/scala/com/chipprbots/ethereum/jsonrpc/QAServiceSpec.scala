@@ -1,11 +1,11 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorSystem
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
 
 import org.scalamock.scalatest.AsyncMockFactory
 
@@ -29,21 +29,21 @@ class QAServiceSpec
     with ByteGenerators
     with AsyncMockFactory {
 
-  "QAService" should "send msg to miner and return miner's response" in testCaseM { fixture =>
+  "QAService" should "send msg to miner and return miner's response" in testCaseM[IO] { fixture =>
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
-      .returning(Task.now(MiningOrdered))
+      .returning(IO.pure(MiningOrdered))
       .atLeastOnce()
 
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Right(MineBlocksResponse(MiningOrdered)))
   }
 
-  it should "send msg to miner and return InternalError in case of problems" in testCaseM { fixture =>
+  it should "send msg to miner and return InternalError in case of problems" in testCaseM[IO] { fixture =>
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
-      .returning(Task.raiseError(new ClassCastException("error")))
+      .returning(IO.raiseError(new ClassCastException("error")))
       .atLeastOnce()
 
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Left(JsonRpcError.InternalError))
@@ -94,7 +94,7 @@ class QAServiceSpec
     }
   }
 
-  it should "return federation public keys when requesting federation members info" in testCaseM { fixture =>
+  it should "return federation public keys when requesting federation members info" in testCaseM[IO] { fixture =>
     import fixture._
     val result: ServiceResponse[GetFederationMembersInfoResponse] =
       qaService.getFederationMembersInfo(GetFederationMembersInfoRequest())

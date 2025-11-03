@@ -3,12 +3,12 @@ package com.chipprbots.ethereum.blockchain.sync
 import java.net.InetSocketAddress
 import java.util.concurrent.ThreadLocalRandom
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.testkit.TestActor.AutoPilot
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.testkit.TestActor.AutoPilot
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.util.Random
@@ -114,11 +114,11 @@ class StateSyncSpec
       (blockchainReader, BlockchainImpl(storages, blockchainReader))
     }
 
-    val nodeData = (0 until 1000).map(i => MptNodeData(Address(i), None, Seq(), i))
-    val initiator = TestProbe()
+    val nodeData: IndexedSeq[MptNodeData] = (0 until 1000).map(i => MptNodeData(Address(i), None, Seq(), i))
+    val initiator: TestProbe = TestProbe()
     initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
-    val trieProvider1 = TrieProvider()
-    val target = trieProvider1.buildWorld(nodeData)
+    val trieProvider1: TrieProvider = TrieProvider()
+    val target: ByteString = trieProvider1.buildWorld(nodeData)
     setAutoPilotWithProvider(trieProvider1)
     initiator.send(syncStateSchedulerActor, StartSyncingTo(target, 1))
     initiator.expectMsg(20.seconds, StateSyncFinished)

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.rlpx
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.math.ec.ECPoint
 
@@ -10,7 +10,9 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPEncoder
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 
 object AuthResponseMessageV4 {
 
@@ -23,10 +25,11 @@ object AuthResponseMessageV4 {
       }
 
       override def decode(rlp: RLPEncodeable): AuthResponseMessageV4 = rlp match {
-        case RLPList(ephemeralPublicKeyBytes, nonce, version, _*) =>
+        case RLPList(RLPValue(ephemeralPublicKeyBytesArr), RLPValue(nonceArr), RLPValue(versionArr), _*) =>
           val ephemeralPublicKey =
-            curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: (ephemeralPublicKeyBytes: Array[Byte]))
-          AuthResponseMessageV4(ephemeralPublicKey, ByteString(nonce: Array[Byte]), version)
+            curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: ephemeralPublicKeyBytesArr)
+          val version = BigInt(versionArr).toInt
+          AuthResponseMessageV4(ephemeralPublicKey, ByteString(nonceArr), version)
         case _ => throw new RuntimeException("Cannot decode auth response message")
       }
     }

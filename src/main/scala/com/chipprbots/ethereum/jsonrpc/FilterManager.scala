@@ -1,17 +1,18 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.Actor
-import akka.actor.ActorRef
-import akka.actor.Cancellable
-import akka.actor.Props
-import akka.actor.Scheduler
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Cancellable
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
-import monix.execution
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
+import scala.concurrent.ExecutionContext
 import scala.util.Random
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
@@ -35,11 +36,12 @@ class FilterManager(
 ) extends Actor {
 
   import FilterManager._
-  import akka.pattern.pipe
+  import org.apache.pekko.pattern.pipe
   import context.system
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(system.scheduler)
-  implicit private val executionContext: execution.Scheduler = monix.execution.Scheduler(system.dispatcher)
+  implicit private val executionContext: ExecutionContext = system.dispatcher
+  implicit private val ioRuntime: IORuntime = IORuntime.global
 
   val maxBlockHashesChanges = 256
 
@@ -112,7 +114,7 @@ class FilterManager(
           .map { pendingTransactions =>
             PendingTransactionFilterLogs(pendingTransactions.map(_.stx.tx.hash))
           }
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(sender())
 
       case None =>
@@ -136,15 +138,11 @@ class FilterManager(
               ) =>
             blockchainReader.getReceiptsByHash(header.hash) match {
               case Some(receipts) =>
-                recur(
-                  currentBlockNumber + 1,
-                  toBlockNumber,
-                  logsSoFar ++ getLogsFromBlock(
-                    filter,
-                    Block(header, blockchainReader.getBlockBodyByHash(header.hash).get),
-                    receipts
-                  )
-                )
+                val bodyOpt = blockchainReader.getBlockBodyByHash(header.hash)
+                val newLogs = bodyOpt.fold(logsSoFar) { body =>
+                  logsSoFar ++ getLogsFromBlock(filter, Block(header, body), receipts)
+                }
+                recur(currentBlockNumber + 1, toBlockNumber, newLogs)
               case None => logsSoFar
             }
           case Some(_) => recur(currentBlockNumber + 1, toBlockNumber, logsSoFar)
@@ -192,7 +190,7 @@ class FilterManager(
             val filtered = pendingTransactions.filter(_.addTimestamp > lastCheckTimestamp)
             PendingTransactionFilterChanges(filtered.map(_.stx.tx.hash))
           }
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(sender())
 
       case None =>
@@ -251,16 +249,16 @@ class FilterManager(
     recur(blockNumber + 1, Nil)
   }
 
-  private def getPendingTransactions(): Task[Seq[PendingTransaction]] =
+  private def getPendingTransactions(): IO[Seq[PendingTransaction]] =
     pendingTransactionsManager
       .askFor[PendingTransactionsManager.PendingTransactionsResponse](PendingTransactionsManager.GetPendingTransactions)
       .flatMap { response =>
         keyStore.listAccounts() match {
           case Right(accounts) =>
-            Task.now(
+            IO.pure(
               response.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
             )
-          case Left(_) => Task.raiseError(new RuntimeException("Cannot get account list"))
+          case Left(_) => IO.raiseError(new RuntimeException("Cannot get account list"))
         }
       }
 

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.checkpointing
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 

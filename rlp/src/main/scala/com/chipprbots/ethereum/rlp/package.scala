@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
@@ -58,7 +58,8 @@ package object rlp {
     *   the RLPEncodable to prefix with
     */
   case class PrefixedRLPEncodable(prefix: Byte, prefixedRLPEncodeable: RLPEncodeable) extends RLPEncodeable {
-    require(prefix >= 0, "prefix should be in the range [0; 0x7f]")
+    if (prefix < 0)
+      throw new IllegalArgumentException("prefix should be in the range [0; 0x7f]")
   }
 
   trait RLPEncoder[T] {

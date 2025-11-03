@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.network.discovery
 
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.utils.ConfigUtils

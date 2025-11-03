@@ -1,13 +1,12 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.json4s.Extraction
 import org.json4s.JsonAST._
+import org.json4s._
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
-import com.chipprbots.ethereum.jsonrpc.QAService.MineBlocksRequest
-import com.chipprbots.ethereum.jsonrpc.QAService.MineBlocksResponse
 import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
@@ -33,7 +32,7 @@ object QAJsonMethodsImplicits extends JsonMethodsImplicits {
 
       def encodeJson(t: MineBlocksResponse): JValue = JObject(
         "responseType" -> JString(t.responseType.entryName),
-        "message" -> t.message.fold[JValue](JNull)(JString)
+        "message" -> t.message.fold[JValue](JNull)(JString.apply)
       )
     }
 

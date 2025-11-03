@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.network.p2p
 
 import java.net.URI
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
@@ -33,8 +33,9 @@ trait SecureChannelSetup extends SecureRandomBuilder {
 
   val (initPacket, handshakerInitiated) = handshaker.initiate(remoteUri)
   val (responsePacket, AuthHandshakeSuccess(remoteSecrets: Secrets, _)) =
-    remoteHandshaker.handleInitialMessageV4(initPacket)
-  val AuthHandshakeSuccess(secrets: Secrets, _) = handshakerInitiated.handleResponseMessageV4(responsePacket)
+    remoteHandshaker.handleInitialMessageV4(initPacket): @unchecked
+  val AuthHandshakeSuccess(secrets: Secrets, _) =
+    handshakerInitiated.handleResponseMessageV4(responsePacket): @unchecked
 
   def randomNonce(): ByteString = crypto.secureRandomByteString(secureRandom, AuthHandshaker.NonceSize)
 

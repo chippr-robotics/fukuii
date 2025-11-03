@@ -2,16 +2,17 @@ package com.chipprbots.ethereum.faucet
 
 import java.security.SecureRandom
 
-import akka.actor.ActorRef
-import akka.actor.ActorSystem
-import akka.actor.Props
-import akka.pattern.gracefulStop
-import akka.testkit.ImplicitSender
-import akka.testkit.TestKit
-import akka.testkit.TestProbe
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.Props
+import org.apache.pekko.pattern.gracefulStop
+import org.apache.pekko.testkit.ImplicitSender
+import org.apache.pekko.testkit.TestKit
+import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
-import monix.eval.Task
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext
 
@@ -83,7 +84,7 @@ class FaucetHandlerSpec
       "should be able to paid if it was initialized successfully" in new TestSetup {
         withInitializedFaucet {
           val retTxId = ByteString(Hex.decode("112233"))
-          (walletService.sendFunds _).expects(wallet, paymentAddress).returning(Task.pure(Right(retTxId)))
+          (walletService.sendFunds _).expects(wallet, paymentAddress).returning(IO.pure(Right(retTxId)))
 
           sender.send(faucetHandler, FaucetHandlerMsg.SendFunds(paymentAddress))
           sender.expectMsg(FaucetHandlerResponse.TransactionSent(retTxId))
@@ -95,7 +96,7 @@ class FaucetHandlerSpec
           val errorMessage = RpcClientError("parser error")
           (walletService.sendFunds _)
             .expects(wallet, paymentAddress)
-            .returning(Task.pure(Left(errorMessage)))
+            .returning(IO.pure(Left(errorMessage)))
 
           sender.send(faucetHandler, FaucetHandlerMsg.SendFunds(paymentAddress))
           sender.expectMsg(FaucetHandlerResponse.WalletRpcClientError(errorMessage.msg))
@@ -107,7 +108,7 @@ class FaucetHandlerSpec
           val errorMessage = ParserError("error parser")
           (walletService.sendFunds _)
             .expects(wallet, paymentAddress)
-            .returning(Task.pure(Left(errorMessage)))
+            .returning(IO.pure(Left(errorMessage)))
 
           sender.send(faucetHandler, FaucetHandlerMsg.SendFunds(paymentAddress))
           sender.expectMsg(FaucetHandlerResponse.WalletRpcClientError(errorMessage.msg))
@@ -117,9 +118,9 @@ class FaucetHandlerSpec
   }
 
   implicit val ec: ExecutionContext = ExecutionContext.global
+  implicit val runtime: IORuntime = IORuntime.global
 
-  trait TestSetup extends MockFactory with FaucetConfigBuilder {
-
+  trait TestSetup extends FaucetConfigBuilder {
     val walletService: WalletService = mock[WalletService]
     val paymentAddress: Address = Address("0x99")
 
@@ -132,7 +133,7 @@ class FaucetHandlerSpec
     val sender: TestProbe = TestProbe()
 
     def withUnavailableFaucet(behaviour: => Unit): Unit = {
-      (() => walletService.getWallet).expects().returning(Task.pure(Left(DecryptionFailed)))
+      (() => walletService.getWallet).expects().returning(IO.pure(Left(DecryptionFailed)))
 
       sender.send(faucetHandler, FaucetHandlerMsg.Status)
       sender.expectMsg(FaucetHandlerResponse.StatusResponse(FaucetStatus.FaucetUnavailable))
@@ -142,7 +143,7 @@ class FaucetHandlerSpec
     }
 
     def withInitializedFaucet(behaviour: => Unit): Unit = {
-      (() => walletService.getWallet).expects().returning(Task.pure(Right(wallet)))
+      (() => walletService.getWallet).expects().returning(IO.pure(Right(wallet)))
 
       faucetHandler ! FaucetHandlerMsg.Initialization
 
@@ -157,13 +158,13 @@ class FaucetHandlerSpec
   }
 }
 
-class FaucetHandlerFake(walletService: WalletService, config: FaucetConfig)
+class FaucetHandlerFake(walletService: WalletService, config: FaucetConfig)(implicit runtime: IORuntime)
     extends FaucetHandler(walletService, config) {
   override def preStart(): Unit = {}
 }
 
 object FaucetHandlerFake {
-  def props(walletRpcClient: WalletService, config: FaucetConfig): Props = Props(
+  def props(walletRpcClient: WalletService, config: FaucetConfig)(implicit runtime: IORuntime): Props = Props(
     new FaucetHandlerFake(walletRpcClient, config)
   )
 }

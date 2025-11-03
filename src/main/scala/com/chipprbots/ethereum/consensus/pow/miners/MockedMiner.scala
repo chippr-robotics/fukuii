@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.consensus.pow.miners
 
-import akka.actor.Actor
-import akka.actor.ActorLogging
-import akka.actor.ActorRef
-import akka.actor.Props
-import akka.actor.Status.Failure
-import akka.util.ByteString
+import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Status.Failure
+import org.apache.pekko.util.ByteString
 
-import monix.execution.Scheduler
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
 
@@ -40,8 +40,10 @@ class MockedMiner(
 ) extends Actor
     with ActorLogging {
   import configBuilder._
-  import akka.pattern.pipe
-  implicit val scheduler: Scheduler = Scheduler(context.dispatcher)
+  import org.apache.pekko.pattern.pipe
+  // CE3: Using global IORuntime for actor operations
+  implicit val scheduler: IORuntime = IORuntime.global
+  implicit val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
   override def receive: Receive = stopped
 
@@ -61,8 +63,13 @@ class MockedMiner(
               sender() ! MiningError(error)
           }
         case None =>
-          val parentBlock = blockchainReader.getBestBlock()
-          startMiningBlocks(mineBlocks, parentBlock.get)
+          blockchainReader
+            .getBestBlock()
+            .fold {
+              sender() ! MiningError("Unable to get best block for mining")
+            } { parentBlock =>
+              startMiningBlocks(mineBlocks, parentBlock)
+            }
       }
   }
 
@@ -85,7 +92,7 @@ class MockedMiner(
       if (numBlocks > 0) {
         blockCreator
           .getBlockForMining(parentBlock, withTransactions, initialWorldStateBeforeExecution)
-          .runToFuture
+          .unsafeToFuture()
           .pipeTo(self)
       } else {
         log.info(s"Mining all mocked blocks successful")
@@ -101,6 +108,7 @@ class MockedMiner(
       )
       syncEventListener ! SyncProtocol.MinedBlock(minedBlock)
       // because of using seconds to calculate block timestamp, we can't mine blocks faster than one block per second
+      implicit val ec = context.dispatcher
       context.system.scheduler.scheduleOnce(1.second, self, MineBlock)
       context.become(working(numBlocks - 1, withTransactions, minedBlock, Some(state)))
 

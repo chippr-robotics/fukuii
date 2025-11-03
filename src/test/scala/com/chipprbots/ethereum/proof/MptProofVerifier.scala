@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.proof
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import cats.syntax.either._
 

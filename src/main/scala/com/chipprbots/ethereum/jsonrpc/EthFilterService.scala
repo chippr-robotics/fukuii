@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import akka.actor.ActorRef
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._

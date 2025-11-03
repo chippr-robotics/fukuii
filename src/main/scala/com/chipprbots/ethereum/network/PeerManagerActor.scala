@@ -4,13 +4,14 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.util.Collections.newSetFromMap
 
-import akka.actor.SupervisorStrategy.Stop
-import akka.actor._
-import akka.util.ByteString
-import akka.util.Timeout
+import org.apache.pekko.actor.SupervisorStrategy.Stop
+import org.apache.pekko.actor._
+import org.apache.pekko.util.ByteString
+import org.apache.pekko.util.Timeout
 
-import monix.eval.Task
-import monix.execution.{Scheduler => MonixScheduler}
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
+import cats.syntax.parallel._
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -24,10 +25,10 @@ import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.TaskActorOps
 import com.chipprbots.ethereum.network.PeerActor.PeerClosedConnection
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor._
-import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
+import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
@@ -60,7 +61,7 @@ class PeerManagerActor(
   val maxBlacklistedNodes: Int = 32 * 8 * discoveryConfig.kademliaBucketSize
 
   import PeerManagerActor._
-  import akka.pattern.pipe
+  import org.apache.pekko.pattern.pipe
 
   val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
 
@@ -84,7 +85,8 @@ class PeerManagerActor(
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerHandshaked)
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(context.system.scheduler)
-  implicit val monix: MonixScheduler = MonixScheduler(context.dispatcher)
+  // CE3: Using global IORuntime for actor operations
+  implicit val ioRuntime: IORuntime = IORuntime.global
 
   override val supervisorStrategy: OneForOneStrategy =
     OneForOneStrategy() { case _ =>
@@ -101,13 +103,15 @@ class PeerManagerActor(
       stash()
   }
 
-  private def scheduleNodesUpdate(): Unit =
+  private def scheduleNodesUpdate(): Unit = {
+    implicit val ec = context.dispatcher
     scheduler.scheduleWithFixedDelay(
       peerConfiguration.updateNodesInitialDelay,
       peerConfiguration.updateNodesInterval,
       peerDiscoveryManager,
       PeerDiscoveryManager.GetDiscoveredNodesInfo
     )
+  }
 
   private def listening(connectedPeers: ConnectedPeers): Receive =
     handleCommonMessages(connectedPeers)
@@ -266,10 +270,11 @@ class PeerManagerActor(
 
   private def handleCommonMessages(connectedPeers: ConnectedPeers): Receive = {
     case GetPeers =>
-      getPeers(connectedPeers.peers.values.toSet).runToFuture.pipeTo(sender())
+      implicit val ec = context.dispatcher
+      getPeers(connectedPeers.peers.values.toSet).unsafeToFuture().pipeTo(sender())
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
-      connectedPeers.getPeer(peerId).get.ref ! PeerActor.SendMessage(message)
+      connectedPeers.getPeer(peerId).foreach(peer => peer.ref ! PeerActor.SendMessage(message))
 
     case Terminated(ref) =>
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
@@ -334,14 +339,15 @@ class PeerManagerActor(
   private def handlePruning(connectedPeers: ConnectedPeers): Receive = {
     case SchedulePruneIncomingPeers =>
       implicit val timeout: Timeout = Timeout(peerConfiguration.updateNodesInterval)
+      implicit val ec = context.dispatcher
 
       // Ask for the whole statistics duration, we'll use averages to make it fair.
       val window = peerConfiguration.statSlotCount * peerConfiguration.statSlotDuration
 
       peerStatistics
         .askFor[PeerStatisticsActor.StatsForAll](PeerStatisticsActor.GetStatsForAll(window))
-        .map(PruneIncomingPeers)
-        .runToFuture
+        .map(PruneIncomingPeers.apply)
+        .unsafeToFuture()
         .pipeTo(self)
 
     case PruneIncomingPeers(PeerStatisticsActor.StatsForAll(stats)) =>
@@ -373,18 +379,23 @@ class PeerManagerActor(
     prunedConnectedPeers
   }
 
-  private def getPeers(peers: Set[Peer]): Task[Peers] =
-    Task
-      .parSequence(peers.map(getPeerStatus))
+  private def getPeers(peers: Set[Peer]): IO[Peers] =
+    peers.toList
+      .parTraverse(getPeerStatus)
       .map(_.flatten.toMap)
       .map(Peers.apply)
 
-  private def getPeerStatus(peer: Peer): Task[Option[(Peer, PeerActor.Status)]] = {
+  private def getPeerStatus(peer: Peer): IO[Option[(Peer, PeerActor.Status)]] = {
     implicit val timeout: Timeout = Timeout(2.seconds)
     peer.ref
       .askFor[PeerActor.StatusResponse](PeerActor.GetStatus)
       .map(sr => Some((peer, sr.status)))
-      .onErrorHandle(_ => None)
+      .handleErrorWith {
+        case _: java.util.concurrent.TimeoutException =>
+          IO.pure(None) // Expected timeout, no logging needed
+        case err =>
+          IO.delay(log.error(err, s"Failed to get status for peer: ${peer.id}")).as(None)
+      }
   }
 
   private def validateConnection(
