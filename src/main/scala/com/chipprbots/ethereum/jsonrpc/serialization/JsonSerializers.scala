@@ -15,9 +15,51 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.testmode.EthTransactionResponse
 
 object JsonSerializers {
+
+  // Import manual encoders for Scala 3 compatibility
+  import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits.blockResponseEncoder
+  import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.{
+    transactionResponseJsonEncoder,
+    transactionReceiptResponseJsonEncoder
+  }
+
+  // Custom serializer for BlockResponse that uses the manual encoder
+  object BlockResponseSerializer
+      extends CustomSerializer[com.chipprbots.ethereum.jsonrpc.BlockResponse](_ =>
+        (
+          PartialFunction.empty,
+          { case block: com.chipprbots.ethereum.jsonrpc.BlockResponse =>
+            blockResponseEncoder.encodeJson(block)
+          }
+        )
+      )
+
+  // Custom serializer for TransactionResponse that uses the manual encoder
+  object TransactionResponseSerializer
+      extends CustomSerializer[com.chipprbots.ethereum.jsonrpc.TransactionResponse](_ =>
+        (
+          PartialFunction.empty,
+          { case tx: com.chipprbots.ethereum.jsonrpc.TransactionResponse =>
+            transactionResponseJsonEncoder.encodeJson(tx)
+          }
+        )
+      )
+
+  // Custom serializer for TransactionReceiptResponse that uses the manual encoder
+  object TransactionReceiptResponseSerializer
+      extends CustomSerializer[com.chipprbots.ethereum.jsonrpc.TransactionReceiptResponse](_ =>
+        (
+          PartialFunction.empty,
+          { case receipt: com.chipprbots.ethereum.jsonrpc.TransactionReceiptResponse =>
+            transactionReceiptResponseJsonEncoder.encodeJson(receipt)
+          }
+        )
+      )
+
   implicit val formats: Formats =
     DefaultFormats + UnformattedDataJsonSerializer + QuantitiesSerializer +
-      OptionNoneToJNullSerializer + AddressJsonSerializer + EthTransactionResponseSerializer
+      OptionNoneToJNullSerializer + AddressJsonSerializer + EthTransactionResponseSerializer +
+      BlockResponseSerializer + TransactionResponseSerializer + TransactionReceiptResponseSerializer
 
   object UnformattedDataJsonSerializer
       extends CustomSerializer[ByteString](_ =>
