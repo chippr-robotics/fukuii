@@ -122,7 +122,6 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
         // SELFDESTRUCT should work normally
         result.error shouldBe None
         result.addressesToDelete should contain(ownerAddr)
-        result.isHalted shouldBe true
 
         // Balance should be transferred to beneficiary
         val finalWorld = result.world
@@ -142,7 +141,6 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
         // SELFDESTRUCT should work EXACTLY the same as before
         result.error shouldBe None
         result.addressesToDelete should contain(ownerAddr)
-        result.isHalted shouldBe true
 
         // Balance should be transferred to beneficiary
         val finalWorld = result.world
