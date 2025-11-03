@@ -164,6 +164,7 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
       phoenixBlockNumber = Long.MaxValue,
       magnetoBlockNumber = Long.MaxValue,
       berlinBlockNumber = Long.MaxValue,
+      mystiqueBlockNumber = Long.MaxValue,
       chainId = 0x3d.toByte
     )
 
