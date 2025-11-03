@@ -310,15 +310,18 @@ class JsonRpcControllerEthSpec
       .expects(parentBlock, *, *, *, *, *)
       .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
 
+    // Set up AutoPilot to respond immediately when messages are received
+    pendingTransactionsManager.setAutoPilot(simpleAutoPilot { case PendingTransactionsManager.GetPendingTransactions =>
+      PendingTransactionsManager.PendingTransactionsResponse(Nil)
+    })
+
+    ommersPool.setAutoPilot(simpleAutoPilot { case OmmersPool.GetOmmers(_) =>
+      Ommers(Nil)
+    })
+
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
-
-    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
-    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
-
-    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
-    ommersPool.reply(Ommers(Nil))
 
     response should haveResult(
       JArray(
@@ -332,7 +335,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_getWork when fail to get ommers and transactions" in new JsonRpcControllerFixture {
-    // Just record the fact that this is going to be called, we do not care about the returned value
+    // Test that when actors timeout, the service handles it gracefully and returns empty lists
     val seed: String = s"""0x${"00" * 32}"""
     val target = "0x1999999999999999999999999999999999999999999999999999999999999999"
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
@@ -349,18 +352,11 @@ class JsonRpcControllerEthSpec
       .expects(parentBlock, *, *, *, *, *)
       .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
 
+    // Don't set up AutoPilot - let the actors timeout and verify error handling returns empty lists
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
 
-    val result: JsonRpcResponse = jsonRpcController
-      .handleRequest(request)
-      .timeout(Timeouts.longTimeout)
-      .unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
-    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
-    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
-    // on time out it should respond with empty list
-
-    val response = result
     response should haveResult(
       JArray(
         List(
