@@ -154,6 +154,9 @@ object OpCodes {
 
   val PhoenixOpCodes: List[OpCode] =
     List(CHAINID, SELFBALANCE) ++ ConstantinopleOpCodes
+
+  val SpiralOpCodes: List[OpCode] =
+    PUSH0 +: PhoenixOpCodes
 }
 
 object OpCode {
@@ -820,6 +823,13 @@ case object GAS extends ConstOp(0x5a)(state => (state.gas - state.config.feeSche
 case object JUMPDEST extends OpCode(0x5b, 0, 0, _.G_jumpdest) with ConstGas {
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] =
     state.step()
+}
+
+case object PUSH0 extends OpCode(0x5f, 0, 1, _.G_base) with ConstGas {
+  protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
+    val stack1 = state.stack.push(UInt256.Zero)
+    state.withStack(stack1).step()
+  }
 }
 
 sealed abstract class PushOp(code: Int) extends OpCode(code, 0, 1, _.G_verylow) with ConstGas {

@@ -238,6 +238,7 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
       magnetoBlockNumber = BigInt(13189133), // TODO include magneto block number in protobuf
       berlinBlockNumber = BigInt("1000000000000000000"), // TODO include berlin block number in protobuf
       mystiqueBlockNumber = BigInt("1000000000000000000"), // TODO include mystique block number in protobuf
+      spiralBlockNumber = BigInt("1000000000000000000"), // TODO include spiral block number in protobuf
       chainId = conf.chainId.byteAt(0)
     )
 }
