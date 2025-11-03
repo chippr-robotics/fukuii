@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import org.json4s.Extraction
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
 
@@ -12,7 +11,54 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
 
 object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
-  implicit val transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = Extraction.decompose(_)
+
+  // Manual encoder for TxLog to avoid Scala 3 reflection issues
+  private def encodeTxLog(log: FilterManager.TxLog): JValue =
+    JObject(
+      "logIndex" -> encodeAsHex(log.logIndex),
+      "transactionIndex" -> encodeAsHex(log.transactionIndex),
+      "transactionHash" -> encodeAsHex(log.transactionHash),
+      "blockHash" -> encodeAsHex(log.blockHash),
+      "blockNumber" -> encodeAsHex(log.blockNumber),
+      "address" -> encodeAsHex(log.address.bytes),
+      "data" -> encodeAsHex(log.data),
+      "topics" -> JArray(log.topics.toList.map(encodeAsHex))
+    )
+
+  // Manual encoder for TransactionReceiptResponse to avoid Scala 3 reflection issues
+  implicit val transactionReceiptResponseJsonEncoder: JsonEncoder[TransactionReceiptResponse] = { receipt =>
+    JObject(
+      "transactionHash" -> encodeAsHex(receipt.transactionHash),
+      "transactionIndex" -> encodeAsHex(receipt.transactionIndex),
+      "blockNumber" -> encodeAsHex(receipt.blockNumber),
+      "blockHash" -> encodeAsHex(receipt.blockHash),
+      "from" -> encodeAsHex(receipt.from.bytes),
+      "to" -> receipt.to.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull),
+      "cumulativeGasUsed" -> encodeAsHex(receipt.cumulativeGasUsed),
+      "gasUsed" -> encodeAsHex(receipt.gasUsed),
+      "contractAddress" -> receipt.contractAddress.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull),
+      "logs" -> JArray(receipt.logs.toList.map(encodeTxLog)),
+      "logsBloom" -> encodeAsHex(receipt.logsBloom),
+      "root" -> receipt.root.map(encodeAsHex).getOrElse(JNull),
+      "status" -> receipt.status.map(encodeAsHex).getOrElse(JNull)
+    )
+  }
+
+  implicit val transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = { tx =>
+    JObject(
+      "hash" -> encodeAsHex(tx.hash),
+      "nonce" -> encodeAsHex(tx.nonce),
+      "blockHash" -> tx.blockHash.map(encodeAsHex).getOrElse(JNull),
+      "blockNumber" -> tx.blockNumber.map(encodeAsHex).getOrElse(JNull),
+      "transactionIndex" -> tx.transactionIndex.map(encodeAsHex).getOrElse(JNull),
+      "from" -> tx.from.map(encodeAsHex).getOrElse(JNull),
+      "to" -> tx.to.map(encodeAsHex).getOrElse(JNull),
+      "value" -> encodeAsHex(tx.value),
+      "gasPrice" -> encodeAsHex(tx.gasPrice),
+      "gas" -> encodeAsHex(tx.gas),
+      "input" -> encodeAsHex(tx.input)
+    )
+  }
 
   implicit val eth_gasPrice: NoParamsMethodDecoder[GetGasPriceRequest] with JsonEncoder[GetGasPriceResponse] =
     new NoParamsMethodDecoder(GetGasPriceRequest()) with JsonEncoder[GetGasPriceResponse] {
@@ -58,7 +104,7 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: GetTransactionReceiptResponse): JValue =
-        Extraction.decompose(t.txResponse)
+        JsonEncoder.encode(t.txResponse)
     }
 
   implicit val GetTransactionByBlockHashAndIndexResponseEncoder

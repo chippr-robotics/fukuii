@@ -1,24 +1,77 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import org.json4s.Extraction
 import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JBool
 import org.json4s.JsonAST.JField
+import org.json4s.JsonAST.JNull
+import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
 import org.json4s.jvalue2monadic
 
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService._
+import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionResponseJsonEncoder
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
+import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.OptionToNull._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
 
 object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
+
+  // Manual encoder for CheckpointResponse to avoid Scala 3 reflection issues
+  private def encodeCheckpointResponse(checkpoint: CheckpointResponse): JValue =
+    JObject(
+      "signatures" -> JArray(checkpoint.signatures.toList.map(sig => encodeAsHex(sig.toBytes))),
+      "signers" -> JArray(checkpoint.signers.toList.map(encodeAsHex))
+    )
+
+  // Manual encoder for BlockResponse to avoid Scala 3 reflection issues
+  implicit val blockResponseEncoder: JsonEncoder[BlockResponse] = { block =>
+    val transactionsField = block.transactions match {
+      case Left(hashes) =>
+        JArray(hashes.toList.map(encodeAsHex))
+      case Right(txs) =>
+        JArray(txs.toList.map(tx => JsonEncoder.encode(tx)))
+    }
+
+    JObject(
+      "number" -> encodeAsHex(block.number),
+      "hash" -> block.hash.map(encodeAsHex).getOrElse(JNull),
+      "parentHash" -> encodeAsHex(block.parentHash),
+      "nonce" -> block.nonce.map(encodeAsHex).getOrElse(JNull),
+      "sha3Uncles" -> encodeAsHex(block.sha3Uncles),
+      "logsBloom" -> encodeAsHex(block.logsBloom),
+      "transactionsRoot" -> encodeAsHex(block.transactionsRoot),
+      "stateRoot" -> encodeAsHex(block.stateRoot),
+      "receiptsRoot" -> encodeAsHex(block.receiptsRoot),
+      "miner" -> block.miner.map(encodeAsHex).getOrElse(JNull),
+      "difficulty" -> encodeAsHex(block.difficulty),
+      "totalDifficulty" -> block.totalDifficulty.map(encodeAsHex).getOrElse(JNull),
+      "lastCheckpointNumber" -> block.lastCheckpointNumber.map(encodeAsHex).getOrElse(JNull),
+      "extraData" -> encodeAsHex(block.extraData),
+      "size" -> encodeAsHex(block.size),
+      "gasLimit" -> encodeAsHex(block.gasLimit),
+      "gasUsed" -> encodeAsHex(block.gasUsed),
+      "timestamp" -> encodeAsHex(block.timestamp),
+      "checkpoint" -> block.checkpoint.map(encodeCheckpointResponse).getOrElse(JNull),
+      "transactions" -> transactionsField,
+      "uncles" -> JArray(block.uncles.toList.map(encodeAsHex)),
+      "signature" -> JString(block.signature),
+      "signer" -> JString(block.signer)
+    )
+  }
+
+  // Encoder for BaseBlockResponse (which is typically BlockResponse)
+  implicit val baseBlockResponseEncoder: JsonEncoder[BaseBlockResponse] = {
+    case block: BlockResponse => blockResponseEncoder.encodeJson(block)
+    case other => throw new IllegalArgumentException(s"Unknown BaseBlockResponse type: ${other.getClass.getName}")
+  }
+
   implicit val eth_blockNumber
       : NoParamsMethodDecoder[BestBlockNumberRequest] with JsonEncoder[BestBlockNumberResponse] =
     new NoParamsMethodDecoder(BestBlockNumberRequest()) with JsonEncoder[BestBlockNumberResponse] {
-      override def encodeJson(t: BestBlockNumberResponse): JValue = Extraction.decompose(t.bestBlockNumber)
+      override def encodeJson(t: BestBlockNumberResponse): JValue = encodeAsHex(t.bestBlockNumber)
     }
 
   implicit val eth_getBlockTransactionCountByHash
@@ -32,7 +85,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: TxCountByBlockHashResponse): JValue =
-        Extraction.decompose(t.txsQuantity.map(BigInt(_)))
+        t.txsQuantity.map(count => encodeAsHex(BigInt(count))).getOrElse(JNull)
     }
 
   implicit val eth_getBlockByHash
@@ -46,7 +99,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: BlockByBlockHashResponse): JValue =
-        Extraction.decompose(t.blockResponse)
+        JsonEncoder.encode(t.blockResponse)
     }
 
   implicit val eth_getBlockByNumber: JsonMethodDecoder[BlockByNumberRequest] with JsonEncoder[BlockByNumberResponse] =
@@ -59,7 +112,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: BlockByNumberResponse): JValue =
-        Extraction.decompose(t.blockResponse)
+        JsonEncoder.encode(t.blockResponse)
     }
 
   implicit val eth_getUncleByBlockHashAndIndex
@@ -76,7 +129,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: UncleByBlockHashAndIndexResponse): JValue = {
-        val uncleBlockResponse = Extraction.decompose(t.uncleBlockResponse)
+        val uncleBlockResponse = JsonEncoder.encode(t.uncleBlockResponse)
         uncleBlockResponse.removeField {
           case JField("transactions", _) => true
           case _                         => false
@@ -98,7 +151,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: UncleByBlockNumberAndIndexResponse): JValue = {
-        val uncleBlockResponse = Extraction.decompose(t.uncleBlockResponse)
+        val uncleBlockResponse = JsonEncoder.encode(t.uncleBlockResponse)
         uncleBlockResponse.removeField {
           case JField("transactions", _) => true
           case _                         => false
