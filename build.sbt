@@ -77,7 +77,6 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   },
   (Compile / console / scalacOptions) ~= (_.filterNot(
     Set(
-      "-Ywarn-unused-import",
       "-Xfatal-warnings"
     )
   )),
