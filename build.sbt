@@ -136,7 +136,7 @@ lazy val scalanetDiscovery = {
     .settings(publishSettings)
     .settings(
       Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
-      IntegrationTest / unmanagedSourceDirectories += baseDirectory.value / "it" / "src",
+      Integration / unmanagedSourceDirectories += baseDirectory.value / "it" / "src",
       Test / unmanagedSourceDirectories += baseDirectory.value / "ut" / "src",
       libraryDependencies ++=
         Dependencies.pekko ++
@@ -341,8 +341,7 @@ lazy val node = {
   if (!nixBuild)
     node
   else
-    //node.settings(PB.protocExecutable := file("protoc"))
-    node.settings((Compile / PB.runProtoc) := ((args: Seq[String]) => Process("protoc", args) !))
+    node.settings((Compile / PB.protocExecutable) := file("protoc"))
 
 }
 
