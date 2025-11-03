@@ -1,4 +1,4 @@
-# ADR-006: Implementation of EIP-3529 (Reduction in Refunds)
+# ADR-003: Implementation of EIP-3529 (Reduction in Refunds)
 
 **Date:** 2024-10-25  
 **Status:** Accepted  
