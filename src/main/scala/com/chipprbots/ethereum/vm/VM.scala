@@ -174,8 +174,13 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
 
       val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
       val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+      // EIP-3541: Reject new contracts starting with 0xEF byte
+      val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
 
-      if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
+      if (startsWithEF) {
+        // EIP-3541: Code starting with 0xEF byte causes exceptional abort
+        result.copy(error = Some(InvalidCode), gasRemaining = 0)
+      } else if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
         // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
         result.copy(error = Some(OutOfGas), gasRemaining = 0)
       } else if (codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit) {

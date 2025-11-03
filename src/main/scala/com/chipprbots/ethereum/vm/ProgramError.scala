@@ -33,3 +33,5 @@ case object RevertOccurs extends ProgramError {
 }
 
 case object ReturnDataOverflow extends ProgramError
+
+case object InvalidCode extends ProgramError
