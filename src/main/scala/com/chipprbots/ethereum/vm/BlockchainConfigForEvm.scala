@@ -82,6 +82,9 @@ object BlockchainConfigForEvm {
   def isEip3541Enabled(etcFork: EtcFork): Boolean =
     etcFork >= EtcForks.Mystique
 
+  def isEip3651Enabled(etcFork: EtcFork): Boolean =
+    false // EIP-3651 not yet activated on ETC, will be enabled in a future fork
+
   def apply(blockchainConfig: BlockchainConfig): BlockchainConfigForEvm = {
     import blockchainConfig._
     BlockchainConfigForEvm(

@@ -11,7 +11,14 @@ object ProgramState {
       vm: VM[W, S],
       context: ProgramContext[W, S],
       env: ExecEnv
-  ): ProgramState[W, S] =
+  ): ProgramState[W, S] = {
+    // EIP-3651: Mark COINBASE address as warm at transaction start
+    val coinbaseAddress: Set[Address] = if (context.evmConfig.eip3651Enabled) {
+      Set(Address(context.blockHeader.beneficiary))
+    } else {
+      Set.empty[Address]
+    }
+
     ProgramState(
       vm = vm,
       env = env,
@@ -23,9 +30,10 @@ object ProgramState {
       accessedAddresses = PrecompiledContracts.getContracts(context).keySet ++ Set(
         context.originAddr,
         context.recipientAddr.getOrElse(context.callerAddr)
-      ) ++ context.warmAddresses,
+      ) ++ context.warmAddresses ++ coinbaseAddress,
       accessedStorageKeys = context.warmStorage
     )
+  }
 }
 
 /** Intermediate state updated with execution of each opcode in the program

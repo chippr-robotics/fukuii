@@ -167,7 +167,8 @@ case class EvmConfig(
     chargeSelfDestructForNewAccount: Boolean,
     traceInternalTransactions: Boolean,
     noEmptyAccounts: Boolean = false,
-    eip3541Enabled: Boolean = false
+    eip3541Enabled: Boolean = false,
+    eip3651Enabled: Boolean = false
 ) {
 
   import feeSchedule._
