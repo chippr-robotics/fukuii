@@ -58,10 +58,13 @@ class FaucetHandlerSpec
       }
 
       "shouldn't send funds if the Faucet isn't initialized" in new TestSetup {
-        withUnavailableFaucet {
-          sender.send(faucetHandler, FaucetHandlerMsg.SendFunds(paymentAddress))
-          sender.expectMsg(FaucetHandlerResponse.FaucetIsUnavailable)
-        }
+        sender.send(faucetHandler, FaucetHandlerMsg.Status)
+        sender.expectMsg(FaucetHandlerResponse.StatusResponse(FaucetStatus.FaucetUnavailable))
+
+        sender.send(faucetHandler, FaucetHandlerMsg.SendFunds(paymentAddress))
+        sender.expectMsg(FaucetHandlerResponse.FaucetIsUnavailable)
+
+        stopController()
       }
     }
 

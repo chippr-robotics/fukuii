@@ -309,7 +309,9 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
   }
 
   it should "properly handle address collision during initialisation" in new TestSetup {
-    val alreadyExistingAddress: Address = Address("0x6295ee1b4f6dd65047762f924ecd367c17eabf8f")
+    // This is a known test vector from Ethereum/ETC general state tests
+    // The address is computed as keccak256(rlp([calling_address, 0]))
+    val alreadyExistingAddress: Address = Address("0x034d8dd86ca901c8469577758d174ce903da1a7e")
     val accountBalance = 100
 
     val callingAccount: Address = Address("0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b")
