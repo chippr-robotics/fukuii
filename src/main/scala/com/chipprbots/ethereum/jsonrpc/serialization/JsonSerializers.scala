@@ -18,7 +18,8 @@ object JsonSerializers {
 
   implicit lazy val formats: Formats =
     DefaultFormats + UnformattedDataJsonSerializer + QuantitiesSerializer +
-      OptionNoneToJNullSerializer + AddressJsonSerializer + EthTransactionResponseSerializer
+      OptionNoneToJNullSerializer + AddressJsonSerializer + EthTransactionResponseSerializer +
+      makeTransactionResponseSerializer + makeTransactionReceiptResponseSerializer + makeBlockResponseSerializer
 
   object UnformattedDataJsonSerializer
       extends CustomSerializer[ByteString](_ =>
@@ -79,4 +80,40 @@ object JsonSerializers {
           }
         )
       )
+
+  // Serializers for Scala 3 compatibility - delegate to manual encoders defined in JsonMethodsImplicits
+  // These are added to formats after they're defined to avoid circular dependencies
+  private def makeTransactionResponseSerializer: CustomSerializer[com.chipprbots.ethereum.jsonrpc.TransactionResponse] =
+    new CustomSerializer[com.chipprbots.ethereum.jsonrpc.TransactionResponse](_ =>
+      (
+        PartialFunction.empty,
+        { case tx: com.chipprbots.ethereum.jsonrpc.TransactionResponse =>
+          import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionResponseJsonEncoder
+          transactionResponseJsonEncoder.encodeJson(tx)
+        }
+      )
+    )
+
+  private def makeTransactionReceiptResponseSerializer
+      : CustomSerializer[com.chipprbots.ethereum.jsonrpc.TransactionReceiptResponse] =
+    new CustomSerializer[com.chipprbots.ethereum.jsonrpc.TransactionReceiptResponse](_ =>
+      (
+        PartialFunction.empty,
+        { case receipt: com.chipprbots.ethereum.jsonrpc.TransactionReceiptResponse =>
+          import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionReceiptResponseJsonEncoder
+          transactionReceiptResponseJsonEncoder.encodeJson(receipt)
+        }
+      )
+    )
+
+  private def makeBlockResponseSerializer: CustomSerializer[com.chipprbots.ethereum.jsonrpc.BlockResponse] =
+    new CustomSerializer[com.chipprbots.ethereum.jsonrpc.BlockResponse](_ =>
+      (
+        PartialFunction.empty,
+        { case block: com.chipprbots.ethereum.jsonrpc.BlockResponse =>
+          import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits.blockResponseEncoder
+          blockResponseEncoder.encodeJson(block)
+        }
+      )
+    )
 }
