@@ -94,6 +94,9 @@ object BlockchainConfigForEvm {
   def isEip3860Enabled(etcFork: EtcFork): Boolean =
     etcFork >= EtcForks.Spiral
 
+  def isEip6049DeprecationEnabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Spiral
+
   def apply(blockchainConfig: BlockchainConfig): BlockchainConfigForEvm = {
     import blockchainConfig._
     BlockchainConfigForEvm(

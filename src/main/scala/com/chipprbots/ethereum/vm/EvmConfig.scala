@@ -157,7 +157,8 @@ object EvmConfig {
     MystiqueConfigBuilder(config).copy(
       opCodeList = SpiralOpCodes,
       eip3651Enabled = true,
-      eip3860Enabled = true
+      eip3860Enabled = true,
+      eip6049DeprecationEnabled = true
     )
 
   case class OpCodeList(opCodes: List[OpCode]) {
@@ -178,7 +179,8 @@ case class EvmConfig(
     noEmptyAccounts: Boolean = false,
     eip3541Enabled: Boolean = false,
     eip3651Enabled: Boolean = false,
-    eip3860Enabled: Boolean = false
+    eip3860Enabled: Boolean = false,
+    eip6049DeprecationEnabled: Boolean = false
 ) {
 
   import feeSchedule._

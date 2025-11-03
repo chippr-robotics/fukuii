@@ -1303,6 +1303,20 @@ case object INVALID extends OpCode(0xfe, 0, 0, _.G_zero) with ConstGas {
     state.withError(InvalidOpCode(code))
 }
 
+/** SELFDESTRUCT opcode (0xff)
+  *
+  * @deprecated As of EIP-6049 (Spiral fork), SELFDESTRUCT is officially deprecated.
+  *             The behavior remains unchanged for now, but developers should avoid using
+  *             this opcode in new contracts as future EIPs may change or remove its functionality.
+  *
+  *             See: https://eips.ethereum.org/EIPS/eip-6049
+  *             Activated with Spiral fork (ECIP-1109):
+  *             - Block 19,250,000 on Ethereum Classic mainnet
+  *             - Block 9,957,000 on Mordor testnet
+  *
+  *             Note: EIP-3529 (Mystique fork) already removed the gas refund for SELFDESTRUCT,
+  *             setting R_selfdestruct to 0. EIP-6049 does not change behavior further.
+  */
 case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct) {
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (refund, stack1) = state.stack.pop()
