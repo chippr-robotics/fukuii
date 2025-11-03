@@ -147,7 +147,8 @@ object EvmConfig {
 
   val MystiqueConfigBuilder: EvmConfigBuilder = config =>
     MagnetoConfigBuilder(config).copy(
-      feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule
+      feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule,
+      eip3541Enabled = true
     )
 
   case class OpCodeList(opCodes: List[OpCode]) {
@@ -165,7 +166,8 @@ case class EvmConfig(
     subGasCapDivisor: Option[Long],
     chargeSelfDestructForNewAccount: Boolean,
     traceInternalTransactions: Boolean,
-    noEmptyAccounts: Boolean = false
+    noEmptyAccounts: Boolean = false,
+    eip3541Enabled: Boolean = false
 ) {
 
   import feeSchedule._

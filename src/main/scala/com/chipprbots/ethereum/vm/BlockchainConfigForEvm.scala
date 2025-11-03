@@ -79,6 +79,9 @@ object BlockchainConfigForEvm {
   def isEip3529Enabled(etcFork: EtcFork): Boolean =
     etcFork >= EtcForks.Mystique
 
+  def isEip3541Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Mystique
+
   def apply(blockchainConfig: BlockchainConfig): BlockchainConfigForEvm = {
     import blockchainConfig._
     BlockchainConfigForEvm(
