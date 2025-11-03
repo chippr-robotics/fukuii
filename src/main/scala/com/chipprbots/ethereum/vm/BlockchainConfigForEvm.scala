@@ -82,6 +82,10 @@ object BlockchainConfigForEvm {
   def isEip3541Enabled(etcFork: EtcFork): Boolean =
     etcFork >= EtcForks.Mystique
 
+  def isEip3651Enabled(etcFork: EtcFork): Boolean =
+  false // EIP-3651 part of Spiral fork (ECIP-1109), not yet implemented in fork enumeration
+  // Will be enabled when Spiral fork is added: etcFork >= EtcForks.Spiral
+
   def apply(blockchainConfig: BlockchainConfig): BlockchainConfigForEvm = {
     import blockchainConfig._
     BlockchainConfigForEvm(
