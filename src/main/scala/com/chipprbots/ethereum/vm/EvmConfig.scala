@@ -45,7 +45,8 @@ object EvmConfig {
       (blockchainConfig.istanbulBlockNumber, 9, IstanbulConfigBuilder),
       (blockchainConfig.phoenixBlockNumber, 9, PhoenixConfigBuilder),
       (blockchainConfig.magnetoBlockNumber, 10, MagnetoConfigBuilder),
-      (blockchainConfig.berlinBlockNumber, 10, BerlinConfigBuilder)
+      (blockchainConfig.berlinBlockNumber, 10, BerlinConfigBuilder),
+      (blockchainConfig.mystiqueBlockNumber, 11, MystiqueConfigBuilder)
     )
 
     // highest transition block that is less/equal to `blockNumber`
@@ -143,6 +144,11 @@ object EvmConfig {
     )
 
   val BerlinConfigBuilder: EvmConfigBuilder = MagnetoConfigBuilder
+
+  val MystiqueConfigBuilder: EvmConfigBuilder = config =>
+    MagnetoConfigBuilder(config).copy(
+      feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule
+    )
 
   case class OpCodeList(opCodes: List[OpCode]) {
     val byteToOpCode: Map[Byte, OpCode] =
@@ -321,6 +327,14 @@ object FeeSchedule {
     override val G_sreset: BigInt = 5000 - G_cold_sload
     override val G_access_list_address: BigInt = 2400
     override val G_access_list_storage: BigInt = 1900
+  }
+
+  class MystiqueFeeSchedule extends MagnetoFeeSchedule {
+    // EIP-3529: Reduce refunds for SSTORE
+    // R_sclear = SSTORE_RESET_GAS + ACCESS_LIST_STORAGE_KEY_COST = 2900 + 1900 = 4800
+    override val R_sclear: BigInt = 4800
+    // EIP-3529: Remove SELFDESTRUCT refund
+    override val R_selfdestruct: BigInt = 0
   }
 }
 

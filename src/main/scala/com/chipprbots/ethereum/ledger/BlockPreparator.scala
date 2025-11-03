@@ -139,14 +139,23 @@ class BlockPreparator(
   }
 
   /** Calculate total gas to be refunded See YP, eq (72)
+    * 
+    * EIP-3529: Changes max refund from gasUsed / 2 to gasUsed / 5
     */
-  private[ledger] def calcTotalGasToRefund(stx: SignedTransaction, result: PR): BigInt =
+  private[ledger] def calcTotalGasToRefund(
+      stx: SignedTransaction,
+      result: PR,
+      blockNumber: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): BigInt =
     result.error.map(_.useWholeGas) match {
       case Some(true)  => 0
       case Some(false) => result.gasRemaining
       case None =>
         val gasUsed = stx.tx.gasLimit - result.gasRemaining
-        result.gasRemaining + (gasUsed / 2).min(result.gasRefund)
+        val blockchainConfigForEvm = BlockchainConfigForEvm(blockchainConfig)
+        val etcFork = blockchainConfigForEvm.etcForkForBlockNumber(blockNumber)
+        val maxRefundQuotient = if (BlockchainConfigForEvm.isEip3529Enabled(etcFork)) 5 else 2
+        result.gasRemaining + (gasUsed / maxRefundQuotient).min(result.gasRefund)
     }
 
   private[ledger] def increaseAccountBalance(address: Address, value: UInt256)(
@@ -234,7 +243,7 @@ class BlockPreparator(
       } else
         result
 
-    val totalGasToRefund = calcTotalGasToRefund(stx, resultWithErrorHandling)
+    val totalGasToRefund = calcTotalGasToRefund(stx, resultWithErrorHandling, blockHeader.number)
     val executionGasToPayToMiner = gasLimit - totalGasToRefund
 
     val refundGasFn = pay(senderAddress, (totalGasToRefund * gasPrice).toUInt256, withTouch = false) _
