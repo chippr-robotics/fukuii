@@ -81,7 +81,10 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       val maxInitCodeSize = context.evmConfig.maxInitCodeSize
       if (context.evmConfig.eip3860Enabled && maxInitCodeSize.exists(max => context.inputData.size > max)) {
         // Exceptional abort: initcode too large (consumes all gas)
-        return (invalidCallResult(context, Set.empty, Set.empty).copy(error = Some(InitCodeSizeLimit), gasRemaining = 0), Address(0))
+        return (
+          invalidCallResult(context, Set.empty, Set.empty).copy(error = Some(InitCodeSizeLimit), gasRemaining = 0),
+          Address(0)
+        )
       }
 
       val newAddress = salt

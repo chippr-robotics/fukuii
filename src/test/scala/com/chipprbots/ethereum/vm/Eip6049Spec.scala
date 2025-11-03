@@ -13,8 +13,8 @@ import Fixtures.blockchainConfig
 
 /** Tests for EIP-6049: Deprecate SELFDESTRUCT https://eips.ethereum.org/EIPS/eip-6049
   *
-  * EIP-6049 is an informational EIP that deprecates SELFDESTRUCT but does NOT change its behavior.
-  * The opcode continues to work exactly as before - this EIP only marks it as deprecated.
+  * EIP-6049 is an informational EIP that deprecates SELFDESTRUCT but does NOT change its behavior. The opcode continues
+  * to work exactly as before - this EIP only marks it as deprecated.
   */
 class Eip6049Spec extends AnyWordSpec with Matchers {
 

@@ -106,7 +106,6 @@ val SpiralConfigBuilder: EvmConfigBuilder = config =>
   MystiqueConfigBuilder(config).copy(
     opCodeList = SpiralOpCodes,
     eip3651Enabled = true,
-    eip3855Enabled = true,
     eip3860Enabled = true,
     eip6049DeprecationEnabled = true
   )

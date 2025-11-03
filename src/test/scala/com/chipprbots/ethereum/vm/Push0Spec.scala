@@ -49,53 +49,53 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     val fullStack = (1 to 1024).foldLeft(Stack.empty(1024))((stack, _) => stack.push(UInt256.One))
     val stateIn = Generators.getProgramStateGen().sample.get.withStack(fullStack)
     val stateOut = PUSH0.execute(stateIn)
-    
+
     stateOut.error shouldBe Some(StackOverflow)
   }
 
   test("PUSH0 should fail with OutOfGas when not enough gas") {
     val lowGasState = Generators.getProgramStateGen().sample.get.copy(gas = 1)
     val stateOut = PUSH0.execute(lowGasState)
-    
+
     stateOut.error shouldBe Some(OutOfGas)
     stateOut.gas shouldBe 0
   }
 
   test("PUSH0 multiple times should push multiple zeros") {
     val initialState = Generators.getProgramStateGen().sample.get
-    
+
     val state1 = PUSH0.execute(initialState)
     state1.error shouldBe None
     state1.stack.size shouldEqual initialState.stack.size + 1
-    
+
     val state2 = PUSH0.execute(state1)
     state2.error shouldBe None
     state2.stack.size shouldEqual initialState.stack.size + 2
-    
+
     val (top1, stack1) = state2.stack.pop()
     val (top2, _) = stack1.pop()
-    
+
     top1 shouldEqual UInt256.Zero
     top2 shouldEqual UInt256.Zero
   }
 
   test("PUSH0 has correct opcode properties") {
     PUSH0.code shouldBe 0x5f.toByte
-    PUSH0.delta shouldBe 0  // pops 0 items
-    PUSH0.alpha shouldBe 1  // pushes 1 item
+    PUSH0.delta shouldBe 0 // pops 0 items
+    PUSH0.alpha shouldBe 1 // pushes 1 item
   }
 
   test("PUSH0 should be cheaper than PUSH1 with zero") {
     val initialState = Generators.getProgramStateGen().sample.get
-    
+
     // PUSH0 uses G_base (2 gas)
     val push0State = PUSH0.execute(initialState)
     val push0GasUsed = initialState.gas - push0State.gas
-    
+
     // PUSH1 uses G_verylow (3 gas)
     val push1State = PUSH1.execute(initialState)
     val push1GasUsed = initialState.gas - push1State.gas
-    
+
     push0GasUsed shouldBe 2
     push1GasUsed shouldBe 3
     push0GasUsed should be < push1GasUsed
@@ -103,12 +103,15 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
 
   test("EIP-3855 test case: single PUSH0 execution") {
     // Test case from EIP-3855: 5F – successful execution, stack consist of a single item, set to zero
-    val state = Generators.getProgramStateGen().sample.get
+    val state = Generators
+      .getProgramStateGen()
+      .sample
+      .get
       .withStack(Stack.empty())
       .copy(gas = 1000)
-    
+
     val result = PUSH0.execute(state)
-    
+
     result.error shouldBe None
     result.stack.size shouldBe 1
     val (value, _) = result.stack.pop()
@@ -116,20 +119,23 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
   }
 
   test("EIP-3855 test case: 1024 PUSH0 operations") {
-    // Test case from EIP-3855: 5F5F..5F (1024 times) – successful execution, 
+    // Test case from EIP-3855: 5F5F..5F (1024 times) – successful execution,
     // stack consists of 1024 items, all set to zero
-    var state = Generators.getProgramStateGen().sample.get
+    var state = Generators
+      .getProgramStateGen()
+      .sample
+      .get
       .withStack(Stack.empty())
       .copy(gas = 10000)
-    
+
     // Execute PUSH0 1024 times
     (1 to 1024).foreach { _ =>
       state = PUSH0.execute(state)
       state.error shouldBe None
     }
-    
+
     state.stack.size shouldBe 1024
-    
+
     // Verify all items are zero
     var currentStack = state.stack
     (1 to 1024).foreach { _ =>
@@ -141,18 +147,21 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
 
   test("EIP-3855 test case: 1025 PUSH0 operations should fail") {
     // Test case from EIP-3855: 5F5F..5F (1025 times) – execution aborts due to out of stack
-    var state = Generators.getProgramStateGen().sample.get
+    var state = Generators
+      .getProgramStateGen()
+      .sample
+      .get
       .withStack(Stack.empty())
       .copy(gas = 10000)
-    
+
     // Execute PUSH0 1024 times successfully
     (1 to 1024).foreach { _ =>
       state = PUSH0.execute(state)
       state.error shouldBe None
     }
-    
+
     state.stack.size shouldBe 1024
-    
+
     // The 1025th PUSH0 should fail with StackOverflow
     val finalState = PUSH0.execute(state)
     finalState.error shouldBe Some(StackOverflow)
