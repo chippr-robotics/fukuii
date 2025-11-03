@@ -965,6 +965,13 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (Seq(endowment, inOffset, inSize), stack1) = state.stack.pop(3)
 
+    // EIP-3860: Check initcode size limit
+    val maxInitCodeSize = state.config.maxInitCodeSize
+    if (state.config.eip3860Enabled && maxInitCodeSize.exists(max => inSize.toBigInt > max)) {
+      // Exceptional abort: initcode too large
+      return state.withStack(stack1.push(UInt256.Zero)).withError(InitCodeSizeLimit).step()
+    }
+
     // FIXME: to avoid calculating this twice, we could adjust state.gas prior to execution in OpCode#execute
     // not sure how this would affect other opcodes [EC-243]
     val availableGas = state.gas - (baseGasFn(state.config.feeSchedule) + varGas(state))
@@ -1040,7 +1047,14 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
 case object CREATE extends CreateOp(0xf0, 3) {
   protected def varGas[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): BigInt = {
     val (Seq(_, inOffset, inSize), _) = state.stack.pop(3)
-    state.config.calcMemCost(state.memory.size, inOffset, inSize)
+    val memCost = state.config.calcMemCost(state.memory.size, inOffset, inSize)
+    val initCodeGasCost: BigInt = if (state.config.eip3860Enabled) {
+      val words = wordsForBytes(inSize)
+      state.config.feeSchedule.G_initcode_word * words
+    } else {
+      BigInt(0)
+    }
+    memCost + initCodeGasCost
   }
 }
 
@@ -1049,7 +1063,13 @@ case object CREATE2 extends CreateOp(0xf5, 4) {
     val (Seq(_, inOffset, inSize), _) = state.stack.pop(3)
     val memCost = state.config.calcMemCost(state.memory.size, inOffset, inSize)
     val hashCost = state.config.feeSchedule.G_sha3word * wordsForBytes(inSize)
-    memCost + hashCost
+    val initCodeGasCost: BigInt = if (state.config.eip3860Enabled) {
+      val words = wordsForBytes(inSize)
+      state.config.feeSchedule.G_initcode_word * words
+    } else {
+      BigInt(0)
+    }
+    memCost + hashCost + initCodeGasCost
   }
 }
 

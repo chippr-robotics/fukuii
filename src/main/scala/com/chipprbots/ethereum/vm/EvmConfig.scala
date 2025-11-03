@@ -156,7 +156,8 @@ object EvmConfig {
   val SpiralConfigBuilder: EvmConfigBuilder = config =>
     MystiqueConfigBuilder(config).copy(
       opCodeList = SpiralOpCodes,
-      eip3651Enabled = true
+      eip3651Enabled = true,
+      eip3860Enabled = true
     )
 
   case class OpCodeList(opCodes: List[OpCode]) {
@@ -176,7 +177,8 @@ case class EvmConfig(
     traceInternalTransactions: Boolean,
     noEmptyAccounts: Boolean = false,
     eip3541Enabled: Boolean = false,
-    eip3651Enabled: Boolean = false
+    eip3651Enabled: Boolean = false,
+    eip3860Enabled: Boolean = false
 ) {
 
   import feeSchedule._
@@ -230,10 +232,13 @@ case class EvmConfig(
       accessList.size * G_access_list_address +
         accessList.map(_.storageKeys.size).sum * G_access_list_storage
 
+    val initCodeCost: BigInt = if (isContractCreation) calcInitCodeCost(txData) else BigInt(0)
+
     txDataZero * G_txdatazero +
       txDataNonZero * G_txdatanonzero + accessListPrice +
       (if (isContractCreation) G_txcreate else 0) +
-      G_transaction
+      G_transaction +
+      initCodeCost
   }
 
   /** If the initialization code completes successfully, a final contract-creation cost is paid, the code-deposit cost,
@@ -254,6 +259,25 @@ case class EvmConfig(
 
   def maxCodeSize: Option[BigInt] =
     blockchainConfig.maxCodeSize
+
+  /** EIP-3860: Maximum initcode size (2 * MAX_CODE_SIZE)
+    */
+  def maxInitCodeSize: Option[BigInt] =
+    if (eip3860Enabled) maxCodeSize.map(_ * 2) else None
+
+  /** EIP-3860: Calculate gas cost for initcode
+    * @param initCode
+    *   The initialization code
+    * @return
+    *   Gas cost (INITCODE_WORD_COST * ceil(len(initcode) / 32))
+    */
+  def calcInitCodeCost(initCode: ByteString): BigInt =
+    if (eip3860Enabled) {
+      val words = wordsForBytes(initCode.size)
+      feeSchedule.G_initcode_word * words
+    } else {
+      BigInt(0)
+    }
 }
 
 object FeeSchedule {
@@ -301,6 +325,8 @@ object FeeSchedule {
     override val G_warm_storage_read = 100
     override val G_access_list_address = 2400
     override val G_access_list_storage = 1900
+    // note: initcode metering does not exist until spiral hard fork (EIP-3860)
+    override val G_initcode_word = 0
   }
 
   class HomesteadFeeSchedule extends FrontierFeeSchedule {
@@ -346,6 +372,8 @@ object FeeSchedule {
     override val R_sclear: BigInt = 4800
     // EIP-3529: Remove SELFDESTRUCT refund
     override val R_selfdestruct: BigInt = 0
+    // EIP-3860: Initcode metering (activated in Spiral fork)
+    override val G_initcode_word: BigInt = 2
   }
 }
 
@@ -390,4 +418,5 @@ trait FeeSchedule {
   val G_warm_storage_read: BigInt
   val G_access_list_address: BigInt
   val G_access_list_storage: BigInt
+  val G_initcode_word: BigInt
 }

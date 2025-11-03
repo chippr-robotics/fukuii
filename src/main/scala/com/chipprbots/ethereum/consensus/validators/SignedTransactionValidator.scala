@@ -37,6 +37,10 @@ object SignedTransactionError {
     override def toString: String =
       s"${getClass.getSimpleName}(Tx gas limit ($txGasLimit) + gas accum ($accumGasUsed) > block gas limit ($blockGasLimit))"
   }
+  case class TransactionInitCodeSizeError(actualSize: BigInt, maxSize: BigInt) extends SignedTransactionError {
+    override def toString: String =
+      s"${getClass.getSimpleName}(Transaction initcode size ($actualSize) exceeds maximum ($maxSize))"
+  }
 }
 
 sealed trait SignedTransactionValid

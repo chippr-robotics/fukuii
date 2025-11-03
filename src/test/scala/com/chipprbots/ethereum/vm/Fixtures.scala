@@ -21,7 +21,7 @@ object Fixtures {
     byzantiumBlockNumber = 0,
     constantinopleBlockNumber = ConstantinopleBlockNumber,
     istanbulBlockNumber = IstanbulBlockNumber,
-    maxCodeSize = None,
+    maxCodeSize = Some(24576),
     accountStartNonce = 0,
     atlantisBlockNumber = 0,
     aghartaBlockNumber = 0,
