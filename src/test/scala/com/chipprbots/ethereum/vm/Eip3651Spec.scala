@@ -33,6 +33,8 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         beneficiary = coinbaseAddr.bytes
       )
 
+    // Separate variable for semantic clarity - represents same block header used with EIP-3651 enabled config
+    // This makes test intent clearer even though block header itself is identical
     val fakeHeaderWithEip3651: BlockHeader = fakeHeaderPreEip3651.copy()
 
     def createContext(

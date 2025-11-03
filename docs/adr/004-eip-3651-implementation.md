@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-EIP-3651 (https://eips.ethereum.org/EIPS/eip-3651) is an Ethereum Improvement Proposal that was activated as part of the Shanghai hard fork on Ethereum mainnet. For Ethereum Classic, this proposal needs to be evaluated for inclusion in a future hard fork.
+EIP-3651 (https://eips.ethereum.org/EIPS/eip-3651) is an Ethereum Improvement Proposal that was activated as part of the Shanghai hard fork on Ethereum mainnet. For Ethereum Classic, this proposal is included in the Spiral hard fork (ECIP-1109: https://ecips.ethereumclassic.org/ECIPs/ecip-1109) at block 19,250,000 on mainnet and block 9,957,000 on Mordor testnet.
 
 The proposal addresses gas cost optimization by marking the COINBASE address as warm at the start of transaction execution. Specifically:
 
@@ -40,11 +40,11 @@ case class EvmConfig(
 )
 ```
 
-This flag will be set to `true` for the appropriate ETC fork (to be determined):
+This flag will be set to `true` for the Spiral fork (ECIP-1109):
 
 ```scala
-// Example - actual fork to be determined by ETC governance
-val FutureEtcForkConfigBuilder: EvmConfigBuilder = config =>
+// Spiral fork (ECIP-1109): Block 19,250,000 on mainnet, 9,957,000 on Mordor testnet
+val SpiralConfigBuilder: EvmConfigBuilder = config =>
   MystiqueConfigBuilder(config).copy(
     eip3651Enabled = true
   )
@@ -56,21 +56,31 @@ The activation can be tied to the Ethereum Classic fork schedule through the `Bl
 
 ```scala
 def isEip3651Enabled(etcFork: EtcFork): Boolean =
-  etcFork >= EtcForks.FutureFork  // To be determined
+  etcFork >= EtcForks.Spiral  // Activated in Spiral fork (ECIP-1109)
 ```
 
-This ensures that the optimization is only active for blocks at or after the specified fork block number.
+This ensures that the optimization is only active for blocks at or after the Spiral fork block number (19,250,000 on mainnet, 9,957,000 on Mordor testnet).
 
 ### 3. ProgramState Initialization
 
 The actual implementation is in the `ProgramState.apply` method, which initializes the `accessedAddresses` set at the start of transaction execution:
 
 ```scala
-accessedAddresses = PrecompiledContracts.getContracts(context).keySet ++ Set(
-  context.originAddr,
-  context.recipientAddr.getOrElse(context.callerAddr)
-) ++ context.warmAddresses ++ 
-  (if (context.evmConfig.eip3651Enabled) Set(context.blockHeader.beneficiary) else Set.empty)
+// EIP-3651: Mark COINBASE address as warm at transaction start
+val coinbaseAddress: Set[Address] = if (context.evmConfig.eip3651Enabled) {
+  Set(Address(context.blockHeader.beneficiary))
+} else {
+  Set.empty[Address]
+}
+
+ProgramState(
+  // ... other fields ...
+  accessedAddresses = PrecompiledContracts.getContracts(context).keySet ++ Set(
+    context.originAddr,
+    context.recipientAddr.getOrElse(context.callerAddr)
+  ) ++ context.warmAddresses ++ coinbaseAddress,
+  accessedStorageKeys = context.warmStorage
+)
 ```
 
 This adds the COINBASE address (block beneficiary) to the warm addresses if EIP-3651 is enabled.
@@ -120,11 +130,14 @@ This adds the COINBASE address (block beneficiary) to the warm addresses if EIP-
 ## References
 
 - [EIP-3651: Warm COINBASE](https://eips.ethereum.org/EIPS/eip-3651)
+- [ECIP-1109: Spiral Hard Fork](https://ecips.ethereumclassic.org/ECIPs/ecip-1109)
 - [EIP-2929: Gas cost increases for state access opcodes](https://eips.ethereum.org/EIPS/eip-2929)
 - [Ethereum Yellow Paper](https://ethereum.github.io/yellowpaper/paper.pdf)
 
 ## Notes
 
 - This EIP was part of Ethereum's Shanghai hard fork (March 2023)
-- For ETC, the activation fork should be determined by community governance
-- The implementation is designed to be easily configurable for any future ETC fork
+- For ETC, this is part of the Spiral hard fork (ECIP-1109):
+  - Mainnet activation: Block 19,250,000
+  - Mordor testnet activation: Block 9,957,000
+- The implementation is designed to be easily configurable via the `eip3651Enabled` flag
