@@ -157,10 +157,10 @@ docker run -d \
 ```
 
 ### 2. Development Image (`Dockerfile-dev`)
-A development image with JDK 17 and SBT for building and testing.
+A development image with JDK 21 and SBT for building and testing.
 
 **Features:**
-- Based on `eclipse-temurin:17-jdk-jammy` (full JDK)
+- Based on `eclipse-temurin:21-jdk-jammy` (full JDK)
 - Includes SBT build tool
 - Includes Git for source management
 - Runs as non-root user
@@ -204,7 +204,7 @@ docker build -f docker/Dockerfile-base -t fukuii-base:latest .
 Maximum security image using Google's distroless base.
 
 **Features:**
-- Based on `gcr.io/distroless/java17-debian12:nonroot`
+- Based on `gcr.io/distroless/java21-debian12:nonroot`
 - Minimal attack surface - no shell, no package manager
 - Smallest possible image size
 - Best for production deployments with external orchestration
