@@ -24,12 +24,13 @@ Each ADR follows this structure:
 ## Index of ADRs
 
 - [ADR-001: Migration to Scala 3 and JDK 21](001-scala-3-migration.md) - Accepted
+- [ADR-002: EIP-3541 Implementation](002-eip-3541-implementation.md) - Accepted
 
 ## Creating a New ADR
 
 When creating a new ADR:
 
-1. Use the next sequential number (e.g., `002-title.md`)
+1. Use the next sequential number (e.g., `003-title.md`)
 2. Follow the template structure
 3. Link it in the index above
 4. Keep it concise but comprehensive
