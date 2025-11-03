@@ -46,7 +46,8 @@ object EvmConfig {
       (blockchainConfig.phoenixBlockNumber, 9, PhoenixConfigBuilder),
       (blockchainConfig.magnetoBlockNumber, 10, MagnetoConfigBuilder),
       (blockchainConfig.berlinBlockNumber, 10, BerlinConfigBuilder),
-      (blockchainConfig.mystiqueBlockNumber, 11, MystiqueConfigBuilder)
+      (blockchainConfig.mystiqueBlockNumber, 11, MystiqueConfigBuilder),
+      (blockchainConfig.spiralBlockNumber, 12, SpiralConfigBuilder)
     )
 
     // highest transition block that is less/equal to `blockNumber`
@@ -66,6 +67,7 @@ object EvmConfig {
   val AghartaOpCodes = ConstantinopleOpCodes
   val PhoenixOpCodes: OpCodeList = OpCodeList(OpCodes.PhoenixOpCodes)
   val MagnetoOpCodes: OpCodeList = PhoenixOpCodes
+  val SpiralOpCodes: OpCodeList = OpCodeList(OpCodes.SpiralOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
     EvmConfig(
@@ -149,6 +151,12 @@ object EvmConfig {
     MagnetoConfigBuilder(config).copy(
       feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule,
       eip3541Enabled = true
+    )
+
+  val SpiralConfigBuilder: EvmConfigBuilder = config =>
+    MystiqueConfigBuilder(config).copy(
+      opCodeList = SpiralOpCodes,
+      eip3651Enabled = true
     )
 
   case class OpCodeList(opCodes: List[OpCode]) {

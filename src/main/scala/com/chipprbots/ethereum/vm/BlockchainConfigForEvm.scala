@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.EtcFork
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Magneto
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Mystique
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Phoenix
+import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Spiral
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.BeforeByzantium
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.Berlin
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.Byzantium
@@ -40,6 +41,7 @@ case class BlockchainConfigForEvm(
     magnetoBlockNumber: BigInt,
     berlinBlockNumber: BigInt,
     mystiqueBlockNumber: BigInt,
+    spiralBlockNumber: BigInt,
     chainId: Byte
 ) {
   def etcForkForBlockNumber(blockNumber: BigInt): EtcFork = blockNumber match {
@@ -48,7 +50,8 @@ case class BlockchainConfigForEvm(
     case _ if blockNumber < phoenixBlockNumber   => Agharta
     case _ if blockNumber < magnetoBlockNumber   => Phoenix
     case _ if blockNumber < mystiqueBlockNumber  => Magneto
-    case _ if blockNumber >= mystiqueBlockNumber => Mystique
+    case _ if blockNumber < spiralBlockNumber    => Mystique
+    case _ if blockNumber >= spiralBlockNumber   => Spiral
   }
 
   def ethForkForBlockNumber(blockNumber: BigInt): BlockchainConfigForEvm.EthForks.Value = blockNumber match {
@@ -65,7 +68,7 @@ object BlockchainConfigForEvm {
 
   object EtcForks extends Enumeration {
     type EtcFork = Value
-    val BeforeAtlantis, Atlantis, Agharta, Phoenix, Magneto, Mystique = Value
+    val BeforeAtlantis, Atlantis, Agharta, Phoenix, Magneto, Mystique, Spiral = Value
   }
 
   object EthForks extends Enumeration {
@@ -83,8 +86,10 @@ object BlockchainConfigForEvm {
     etcFork >= EtcForks.Mystique
 
   def isEip3651Enabled(etcFork: EtcFork): Boolean =
-  false // EIP-3651 part of Spiral fork (ECIP-1109), not yet implemented in fork enumeration
-  // Will be enabled when Spiral fork is added: etcFork >= EtcForks.Spiral
+    etcFork >= EtcForks.Spiral
+
+  def isEip3855Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Spiral
 
   def apply(blockchainConfig: BlockchainConfig): BlockchainConfigForEvm = {
     import blockchainConfig._
@@ -106,6 +111,7 @@ object BlockchainConfigForEvm {
       magnetoBlockNumber = forkBlockNumbers.magnetoBlockNumber,
       berlinBlockNumber = forkBlockNumbers.berlinBlockNumber,
       mystiqueBlockNumber = forkBlockNumbers.mystiqueBlockNumber,
+      spiralBlockNumber = forkBlockNumbers.spiralBlockNumber,
       chainId = chainId
     )
   }
