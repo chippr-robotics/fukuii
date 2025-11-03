@@ -50,7 +50,7 @@ class StxLedger(
 
     val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, senderAddress, world2)
     val result = blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx)
-    val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result)
+    val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number)
 
     TxResult(result.world, tx.tx.gasLimit - totalGasToRefund, result.logs, result.returnData, result.error)
   }

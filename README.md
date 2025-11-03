@@ -56,7 +56,31 @@ Getting started
 
 ## Option 1: Docker (Recommended for Production)
 
-The easiest way to run Fukuii is using Docker:
+The easiest way to run Fukuii is using Docker. Images are available on both GitHub Container Registry and Docker Hub:
+
+### Using Docker Hub (Recommended for Quick Start)
+
+```bash
+# Pull the latest release
+docker pull chipprbots/fukuii:latest
+
+# Or pull a specific version
+docker pull chipprbots/fukuii:v1.0.0
+
+# Run Fukuii
+docker run -d \
+  --name fukuii \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-data:/app/data \
+  -v fukuii-conf:/app/conf \
+  chipprbots/fukuii:latest
+```
+
+**Docker Hub:** https://hub.docker.com/r/chipprbots/fukuii
+
+### Using GitHub Container Registry (Recommended for Security-Critical Deployments)
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)

@@ -37,6 +37,40 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 ---
 
+### ⚡ Fast Distro Workflow (`fast-distro.yml`)
+
+**Triggers:** Nightly schedule (2 AM UTC), Manual dispatch
+
+**Purpose:** Creates distribution packages quickly without running the full test suite, suitable for nightly releases
+
+**Steps:**
+1. Compiles production code only (bytes, crypto, rlp, node) - skips test compilation
+2. Builds assembly JAR (standalone executable)
+3. Builds distribution package (ZIP)
+4. Creates timestamped artifacts
+5. Uploads artifacts with 30-day retention
+6. Creates nightly pre-release on GitHub (for scheduled runs)
+
+**Artifacts Published:**
+- Distribution ZIP with nightly version timestamp
+- Assembly JAR with nightly version timestamp
+
+**Use Cases:**
+- Nightly builds for testing and development
+- Quick distribution builds without waiting for full test suite
+- Intermediate builds for stakeholders
+
+**Note:** This workflow intentionally skips the full test suite and test compilation for faster builds. Uses `FUKUII_DEV: true` to speed up compilation by disabling production optimizations and fatal warnings. The full test suite has some tests that are excluded in `build.sbt`. This workflow is suitable for development and testing purposes only. For production releases, use the standard release workflow (`release.yml`).
+
+**Manual Trigger:**
+```bash
+# Via GitHub UI: Actions → Fast Distro → Run workflow
+# Or use GitHub CLI:
+gh workflow run fast-distro.yml
+```
+
+---
+
 ### 🐳 Docker Build Workflow (`docker.yml`)
 
 **Triggers:** Push to main branches, version tags, Pull Requests
