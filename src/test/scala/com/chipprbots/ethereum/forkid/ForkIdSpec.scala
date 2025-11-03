@@ -21,7 +21,7 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
     "gatherForks for the etc chain correctly" in {
       val res = config.blockchains.map { case (name, conf) => (name, gatherForks(conf)) }
       res("etc") shouldBe List(1150000, 2500000, 3000000, 5000000, 5900000, 8772000, 9573000, 10500839, 11700000,
-        13189133)
+        13189133, 14525000, 19250000)
     }
 
     "gatherForks for the eth chain correctly" in {
@@ -85,7 +85,11 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(11700000 - 1) shouldBe ForkId(0x9007bfccL, Some(11700000))
       create(11700000) shouldBe ForkId(0xdb63a1caL, Some(13189133))
       create(13189133 - 1) shouldBe ForkId(0xdb63a1caL, Some(13189133))
-      create(13189133) shouldBe ForkId(0x0f6bf187L, None) // First Magneto block
+      create(13189133) shouldBe ForkId(0x0f6bf187L, Some(14525000)) // First Magneto block
+      create(14525000 - 1) shouldBe ForkId(0x0f6bf187L, Some(14525000))
+      create(14525000) shouldBe ForkId(0x7fd1bb25L, Some(19250000)) // First Mystique block
+      create(19250000 - 1) shouldBe ForkId(0x7fd1bb25L, Some(19250000))
+      create(19250000) shouldBe ForkId(0xbe46d57cL, None) // First Spiral block
     }
 
     "create correct ForkId for mordor blocks" in {
@@ -101,7 +105,11 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(2519999) shouldBe ForkId(0xf42f5539L, Some(2520000))
       create(2520000) shouldBe ForkId(0x66b5c286L, Some(3985893))
       create(3985893 - 1) shouldBe ForkId(0x66b5c286L, Some(3985893))
-      create(3985893) shouldBe ForkId(0x92b323e0L, None) // First Magneto block
+      create(3985893) shouldBe ForkId(0x92b323e0L, Some(5520000)) // First Magneto block
+      create(5520000 - 1) shouldBe ForkId(0x92b323e0L, Some(5520000))
+      create(5520000) shouldBe ForkId(0x8c9b1797L, Some(9957000)) // First Mystique block
+      create(9957000 - 1) shouldBe ForkId(0x8c9b1797L, Some(9957000))
+      create(9957000) shouldBe ForkId(0x3a6b00d7L, None) // First Spiral block
     }
 
     // Here’s a couple of tests to verify the proper RLP encoding (since FORK_HASH is a 4 byte binary but FORK_NEXT is an 8 byte quantity):
