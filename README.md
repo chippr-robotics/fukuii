@@ -202,14 +202,14 @@ When modifying code derived from Mantis, include a notice in the header of chang
 
 ## Development and Future Plans
 
-**Technology Stack**: This project uses **Scala 3.3.4 (LTS)** as the primary and only supported version. The migration from Scala 2.13 to Scala 3 was completed in October 2025, including:
+**Technology Stack**: This project uses **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** as the primary and only supported versions. The migration from Scala 2.13 to Scala 3 and JDK 17 to JDK 21 was completed in October 2025, including:
 - ✅ Migration from Akka to Apache Pekko (Scala 3 compatible)
 - ✅ Migration from Monix to Cats Effect 3 IO
 - ✅ Migration from Shapeless to native Scala 3 derivation
 - ✅ Update to json4s 4.0.7 (Scala 3 compatible)
 - ✅ Scalanet vendored locally in the `scalanet/` directory
 
-For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
+For the rationale behind these decisions, see [ADR-001: Scala 3 Migration](docs/adr/001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
 
 **Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 
