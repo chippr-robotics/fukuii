@@ -299,16 +299,11 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
+
+    // Configure stub block generator response
+    stubGenerateBlockResult = Some(
+      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
+    )
 
     // Set up AutoPilot to respond immediately when messages are received
     pendingTransactionsManager.setAutoPilot(simpleAutoPilot { case PendingTransactionsManager.GetPendingTransactions =>
@@ -341,16 +336,11 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
+
+    // Configure stub block generator response
+    stubGenerateBlockResult = Some(
+      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
+    )
 
     // Don't set up AutoPilot - let the actors timeout and verify error handling returns empty lists
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
