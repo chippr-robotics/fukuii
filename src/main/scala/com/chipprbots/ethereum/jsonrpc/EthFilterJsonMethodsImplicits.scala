@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
-import org.json4s.Extraction
 import org.json4s._
 
 import com.chipprbots.ethereum.jsonrpc.EthFilterService._
@@ -12,6 +11,20 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
 
 object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
+
+  // Manual encoder for TxLog to avoid Scala 3 reflection issues
+  private def encodeTxLog(log: FilterManager.TxLog): JValue =
+    JObject(
+      "logIndex" -> encodeAsHex(log.logIndex),
+      "transactionIndex" -> encodeAsHex(log.transactionIndex),
+      "transactionHash" -> encodeAsHex(log.transactionHash),
+      "blockHash" -> encodeAsHex(log.blockHash),
+      "blockNumber" -> encodeAsHex(log.blockNumber),
+      "address" -> encodeAsHex(log.address.bytes),
+      "data" -> encodeAsHex(log.data),
+      "topics" -> JArray(log.topics.toList.map(encodeAsHex))
+    )
+
   implicit val newFilterResponseEnc: JsonEncoder[NewFilterResponse] = new JsonEncoder[NewFilterResponse] {
     def encodeJson(t: NewFilterResponse): JValue = encodeAsHex(t.filterId)
   }
@@ -61,7 +74,7 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
         }
       override def encodeJson(t: GetFilterChangesResponse): JValue =
         t.filterChanges match {
-          case FilterManager.LogFilterChanges(logs)                    => JArray(logs.map(Extraction.decompose).toList)
+          case FilterManager.LogFilterChanges(logs)                    => JArray(logs.map(encodeTxLog).toList)
           case FilterManager.BlockFilterChanges(blockHashes)           => JArray(blockHashes.map(encodeAsHex).toList)
           case FilterManager.PendingTransactionFilterChanges(txHashes) => JArray(txHashes.map(encodeAsHex).toList)
         }
@@ -82,7 +95,7 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
 
       override def encodeJson(t: GetFilterLogsResponse): JValue =
         t.filterLogs match {
-          case LogFilterLogs(logs)                    => JArray(logs.map(Extraction.decompose).toList)
+          case LogFilterLogs(logs)                    => JArray(logs.map(encodeTxLog).toList)
           case BlockFilterLogs(blockHashes)           => JArray(blockHashes.map(encodeAsHex).toList)
           case PendingTransactionFilterLogs(txHashes) => JArray(txHashes.map(encodeAsHex).toList)
         }
@@ -100,7 +113,7 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: GetLogsResponse): JValue =
-        JArray(t.filterLogs.logs.map(Extraction.decompose).toList)
+        JArray(t.filterLogs.logs.map(encodeTxLog).toList)
     }
 
   private def extractFilter(obj: JObject): Either[JsonRpcError, Filter] = {
