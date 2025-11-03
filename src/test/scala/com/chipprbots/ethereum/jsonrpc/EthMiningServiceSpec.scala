@@ -48,7 +48,6 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config
 import scala.concurrent.Future
-import scala.concurrent.Future
 
 class EthMiningServiceSpec
     extends TestKit(ActorSystem("EthMiningServiceSpec_ActorSystem"))
@@ -152,7 +151,9 @@ class EthMiningServiceSpec
     import scala.concurrent.duration._
     Await.result(workFuture, 10.seconds)
 
-    Thread.sleep(minerActiveTimeout.toMillis)
+    // Sleep longer than the actual config timeout (30s) to ensure mining status expires
+    // Note: jsonRpcConfig uses the config value, not the test's minerActiveTimeout variable
+    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis + 1000)
 
     val response: ServiceResponse[GetMiningResponse] = ethMiningService.getMining(GetMiningRequest())
 
@@ -173,12 +174,21 @@ class EthMiningServiceSpec
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
 
-    val response: Either[JsonRpcError, GetWorkResponse] = ethMiningService.getWork(GetWorkRequest()).unsafeRunSync()
+    // Start the getWork call asynchronously
+    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] =
+      ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+
+    // Handle the actor messages
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
 
     ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
     ommersPool.reply(OmmersPool.Ommers(Nil))
+
+    // Wait for the result
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    val response = Await.result(workFuture, 10.seconds)
 
     response shouldEqual Right(GetWorkResponse(powHash, seedHash, target))
   }
@@ -269,7 +279,8 @@ class EthMiningServiceSpec
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id1)).unsafeRunSync() shouldEqual Right(
       SubmitHashRateResponse(true)
     )
-    Thread.sleep(minerActiveTimeout.toMillis / 2)
+    // Note: jsonRpcConfig uses the config value (30s), not the test's minerActiveTimeout variable (20s)
+    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis / 2)
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id2)).unsafeRunSync() shouldEqual Right(
       SubmitHashRateResponse(true)
     )
@@ -277,7 +288,9 @@ class EthMiningServiceSpec
     val response1: ServiceResponse[GetHashRateResponse] = ethMiningService.getHashRate(GetHashRateRequest())
     response1.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate * 2))
 
-    Thread.sleep(minerActiveTimeout.toMillis / 2)
+    // Sleep longer than half timeout to ensure first rate expires
+    // Total time from id1 submission will be > jsonRpcConfig.minerActiveTimeout
+    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis / 2 + 1000)
     val response2: ServiceResponse[GetHashRateResponse] = ethMiningService.getHashRate(GetHashRateRequest())
     response2.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
   }
