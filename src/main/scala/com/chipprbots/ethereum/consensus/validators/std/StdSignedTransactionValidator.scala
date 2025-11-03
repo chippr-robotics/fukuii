@@ -35,9 +35,9 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     for {
       _ <- checkSyntacticValidity(stx)
+      _ <- validateInitCodeSize(stx, blockHeader.number)
       _ <- validateSignature(stx, blockHeader.number)
       _ <- validateNonce(stx, senderAccount.nonce)
-      _ <- validateInitCodeSize(stx, blockHeader.number)
       _ <- validateGasLimitEnoughForIntrinsicGas(stx, blockHeader.number)
       _ <- validateAccountHasEnoughGasToPayUpfrontCost(senderAccount.balance, upfrontGasCost)
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)

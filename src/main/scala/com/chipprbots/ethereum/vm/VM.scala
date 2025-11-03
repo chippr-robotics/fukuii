@@ -77,6 +77,13 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       require(context.recipientAddr.isEmpty, "recipient address must be empty for contract creation")
       require(context.doTransfer, "contract creation will alwyas transfer funds")
 
+      // EIP-3860: Check initcode size limit
+      val maxInitCodeSize = context.evmConfig.maxInitCodeSize
+      if (context.evmConfig.eip3860Enabled && maxInitCodeSize.exists(max => context.inputData.size > max)) {
+        // Exceptional abort: initcode too large (consumes all gas)
+        return (invalidCallResult(context, Set.empty, Set.empty).copy(error = Some(InitCodeSizeLimit), gasRemaining = 0), Address(0))
+      }
+
       val newAddress = salt
         .map(s => context.world.create2Address(context.callerAddr, s, context.inputData))
         .getOrElse(context.world.createAddress(context.callerAddr))
