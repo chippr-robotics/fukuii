@@ -9,8 +9,12 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.OptionToNull._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
+import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 
 object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
+
+  import org.json4s.CustomSerializer
+  import org.json4s.Formats
 
   // Manual encoder for TxLog to avoid Scala 3 reflection issues
   private def encodeTxLog(log: FilterManager.TxLog): JValue =
@@ -25,23 +29,53 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "topics" -> JArray(log.topics.toList.map(encodeAsHex))
     )
 
+  // Custom serializers for json4s Extraction.decompose to work in tests
+  implicit val transactionResponseCustomSerializer: CustomSerializer[TransactionResponse] =
+    new CustomSerializer[TransactionResponse](_ =>
+      (
+        PartialFunction.empty,
+        { case tx: TransactionResponse => transactionResponseJsonEncoder.encodeJson(tx) }
+      )
+    )
+
+  implicit val transactionReceiptResponseCustomSerializer: CustomSerializer[TransactionReceiptResponse] =
+    new CustomSerializer[TransactionReceiptResponse](_ =>
+      (
+        PartialFunction.empty,
+        { case receipt: TransactionReceiptResponse => transactionReceiptResponseJsonEncoder.encodeJson(receipt) }
+      )
+    )
+
   // Manual encoder for TransactionReceiptResponse to avoid Scala 3 reflection issues
   implicit val transactionReceiptResponseJsonEncoder: JsonEncoder[TransactionReceiptResponse] = { receipt =>
-    JObject(
+    // Build base fields
+    val baseFields = List(
       "transactionHash" -> encodeAsHex(receipt.transactionHash),
       "transactionIndex" -> encodeAsHex(receipt.transactionIndex),
       "blockNumber" -> encodeAsHex(receipt.blockNumber),
       "blockHash" -> encodeAsHex(receipt.blockHash),
-      "from" -> encodeAsHex(receipt.from.bytes),
-      "to" -> receipt.to.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull),
+      "from" -> encodeAsHex(receipt.from.bytes)
+    )
+
+    // Add "to" field only if it's defined (omit for contract creation)
+    val toField = receipt.to.map(addr => "to" -> encodeAsHex(addr.bytes)).toList
+
+    // Continue with more fields
+    val middleFields = List(
       "cumulativeGasUsed" -> encodeAsHex(receipt.cumulativeGasUsed),
       "gasUsed" -> encodeAsHex(receipt.gasUsed),
       "contractAddress" -> receipt.contractAddress.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull),
       "logs" -> JArray(receipt.logs.toList.map(encodeTxLog)),
-      "logsBloom" -> encodeAsHex(receipt.logsBloom),
-      "root" -> receipt.root.map(encodeAsHex).getOrElse(JNull),
-      "status" -> receipt.status.map(encodeAsHex).getOrElse(JNull)
+      "logsBloom" -> encodeAsHex(receipt.logsBloom)
     )
+
+    // Add "root" field only if it's defined (pre-Byzantium)
+    val rootField = receipt.root.map(r => "root" -> encodeAsHex(r)).toList
+
+    // Add "status" field only if it's defined (post-Byzantium)
+    val statusField = receipt.status.map(s => "status" -> encodeAsHex(s)).toList
+
+    JObject(baseFields ::: toField ::: middleFields ::: rootField ::: statusField)
   }
 
   implicit val transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = { tx =>

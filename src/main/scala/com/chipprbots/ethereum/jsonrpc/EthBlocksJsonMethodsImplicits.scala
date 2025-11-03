@@ -16,14 +16,26 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.OptionToNull._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
+import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 
 object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
+
+  import org.json4s.CustomSerializer
 
   // Manual encoder for CheckpointResponse to avoid Scala 3 reflection issues
   private def encodeCheckpointResponse(checkpoint: CheckpointResponse): JValue =
     JObject(
       "signatures" -> JArray(checkpoint.signatures.toList.map(sig => encodeAsHex(sig.toBytes))),
       "signers" -> JArray(checkpoint.signers.toList.map(encodeAsHex))
+    )
+
+  // Custom serializer for json4s Extraction.decompose to work with BlockResponse in tests
+  implicit val blockResponseCustomSerializer: CustomSerializer[BlockResponse] =
+    new CustomSerializer[BlockResponse](_ =>
+      (
+        PartialFunction.empty,
+        { case block: BlockResponse => blockResponseEncoder.encodeJson(block) }
+      )
     )
 
   // Manual encoder for BlockResponse to avoid Scala 3 reflection issues
