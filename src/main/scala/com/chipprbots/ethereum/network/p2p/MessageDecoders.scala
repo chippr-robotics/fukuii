@@ -249,12 +249,12 @@ object ETH68MessageDecoder extends MessageDecoder {
 object EthereumMessageDecoder {
   def ethMessageDecoder(protocolVersion: Capability): MessageDecoder =
     protocolVersion match {
-      case Capability.ETC64 => ETC64MessageDecoder.orElse(NetworkMessageDecoder)
-      case Capability.ETH63 => ETH63MessageDecoder.orElse(NetworkMessageDecoder)
-      case Capability.ETH64 => ETH64MessageDecoder.orElse(NetworkMessageDecoder)
-      case Capability.ETH65 => ETH65MessageDecoder.orElse(NetworkMessageDecoder)
-      case Capability.ETH66 => ETH66MessageDecoder.orElse(NetworkMessageDecoder)
-      case Capability.ETH67 => ETH67MessageDecoder.orElse(NetworkMessageDecoder)
-      case Capability.ETH68 => ETH68MessageDecoder.orElse(NetworkMessageDecoder)
+      case Capability.ETC64 => ETC64MessageDecoder
+      case Capability.ETH63 => ETH63MessageDecoder
+      case Capability.ETH64 => ETH64MessageDecoder
+      case Capability.ETH65 => ETH65MessageDecoder
+      case Capability.ETH66 => ETH66MessageDecoder
+      case Capability.ETH67 => ETH67MessageDecoder
+      case Capability.ETH68 => ETH68MessageDecoder
     }
 }
