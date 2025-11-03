@@ -12,8 +12,7 @@ import com.chipprbots.ethereum.domain.UInt256
 
 import Fixtures.blockchainConfig
 
-/** Tests for EIP-3541: Reject new contracts starting with 0xEF byte
-  * https://eips.ethereum.org/EIPS/eip-3541
+/** Tests for EIP-3541: Reject new contracts starting with 0xEF byte https://eips.ethereum.org/EIPS/eip-3541
   */
 class Eip3541Spec extends AnyWordSpec with Matchers {
 
@@ -34,7 +33,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         config: EvmConfig,
         endowment: UInt256 = UInt256(123),
         startGas: BigInt = 1000000
-    ): ProgramContext[MockWorldState, MockStorage] = {
+    ): ProgramContext[MockWorldState, MockStorage] =
       ProgramContext(
         callerAddr = creatorAddr,
         originAddr = creatorAddr,
@@ -54,71 +53,98 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         warmAddresses = Set.empty,
         warmStorage = Set.empty
       )
-    }
 
     // Init code that returns one byte 0xEF
     val initCodeReturningEF: Assembly = Assembly(
-      PUSH1, 0xef,  // value
-      PUSH1, 0,     // offset
-      MSTORE8,      // store byte at offset 0
-      PUSH1, 1,     // size
-      PUSH1, 0,     // offset
+      PUSH1,
+      0xef, // value
+      PUSH1,
+      0, // offset
+      MSTORE8, // store byte at offset 0
+      PUSH1,
+      1, // size
+      PUSH1,
+      0, // offset
       RETURN
     )
 
     // Init code that returns two bytes 0xEF00
     val initCodeReturningEF00: Assembly = Assembly(
-      PUSH1, 0xef,
-      PUSH1, 0,
+      PUSH1,
+      0xef,
+      PUSH1,
+      0,
       MSTORE8,
-      PUSH1, 0x00,
-      PUSH1, 1,
+      PUSH1,
+      0x00,
+      PUSH1,
+      1,
       MSTORE8,
-      PUSH1, 2,
-      PUSH1, 0,
+      PUSH1,
+      2,
+      PUSH1,
+      0,
       RETURN
     )
 
     // Init code that returns three bytes 0xEF0000
     val initCodeReturningEF0000: Assembly = Assembly(
-      PUSH1, 0xef,
-      PUSH1, 0,
+      PUSH1,
+      0xef,
+      PUSH1,
+      0,
       MSTORE8,
-      PUSH1, 0x00,
-      PUSH1, 1,
+      PUSH1,
+      0x00,
+      PUSH1,
+      1,
       MSTORE8,
-      PUSH1, 0x00,
-      PUSH1, 2,
+      PUSH1,
+      0x00,
+      PUSH1,
+      2,
       MSTORE8,
-      PUSH1, 3,
-      PUSH1, 0,
+      PUSH1,
+      3,
+      PUSH1,
+      0,
       RETURN
     )
 
     // Init code that returns 32 bytes starting with 0xEF
     val initCodeReturningEF32Bytes: Assembly = Assembly(
-      PUSH1, 0xef,
-      PUSH1, 0,
+      PUSH1,
+      0xef,
+      PUSH1,
+      0,
       MSTORE8,
-      PUSH1, 32,
-      PUSH1, 0,
+      PUSH1,
+      32,
+      PUSH1,
+      0,
       RETURN
     )
 
     // Init code that returns one byte 0xFE (should succeed)
     val initCodeReturningFE: Assembly = Assembly(
-      PUSH1, 0xfe,
-      PUSH1, 0,
+      PUSH1,
+      0xfe,
+      PUSH1,
+      0,
       MSTORE8,
-      PUSH1, 1,
-      PUSH1, 0,
+      PUSH1,
+      1,
+      PUSH1,
+      0,
       RETURN
     )
 
     // Init code that returns empty code
     val initCodeReturningEmpty: Assembly = Assembly(
-      PUSH1, 0,
-      PUSH1, 0,
+      PUSH1,
+      0,
+      PUSH1,
+      0,
       RETURN
     )
 
@@ -154,7 +180,8 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
   "EIP-3541: Contract creation with CREATE" when {
     "pre-Mystique fork" should {
       "allow deploying contract starting with 0xEF byte" in {
-        val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF.code, fxt.fakeHeaderPreMystique, configPreMystique)
+        val context =
+          fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF.code, fxt.fakeHeaderPreMystique, configPreMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
         result.error shouldBe None
         result.gasRemaining should be > BigInt(0)
@@ -163,7 +190,8 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
 
     "post-Mystique fork (EIP-3541 enabled)" should {
       "reject contract with one byte 0xEF" in {
-        val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF.code, fxt.fakeHeaderMystique, configMystique)
+        val context =
+          fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
         result.error shouldBe Some(InvalidCode)
         result.gasRemaining shouldBe 0
@@ -171,7 +199,8 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
       }
 
       "reject contract with two bytes 0xEF00" in {
-        val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF00.code, fxt.fakeHeaderMystique, configMystique)
+        val context =
+          fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF00.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
         result.error shouldBe Some(InvalidCode)
         result.gasRemaining shouldBe 0
@@ -179,7 +208,8 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
       }
 
       "reject contract with three bytes 0xEF0000" in {
-        val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF0000.code, fxt.fakeHeaderMystique, configMystique)
+        val context =
+          fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF0000.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
         result.error shouldBe Some(InvalidCode)
         result.gasRemaining shouldBe 0
@@ -187,7 +217,8 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
       }
 
       "reject contract with 32 bytes starting with 0xEF" in {
-        val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF32Bytes.code, fxt.fakeHeaderMystique, configMystique)
+        val context =
+          fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF32Bytes.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
         result.error shouldBe Some(InvalidCode)
         result.gasRemaining shouldBe 0
@@ -195,14 +226,16 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
       }
 
       "allow deploying contract starting with 0xFE byte" in {
-        val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningFE.code, fxt.fakeHeaderMystique, configMystique)
+        val context =
+          fxt.createContext(fxt.initWorld, fxt.initCodeReturningFE.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
         result.error shouldBe None
         result.gasRemaining should be > BigInt(0)
       }
 
       "allow deploying contract with empty code" in {
-        val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningEmpty.code, fxt.fakeHeaderMystique, configMystique)
+        val context =
+          fxt.createContext(fxt.initWorld, fxt.initCodeReturningEmpty.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
         result.error shouldBe None
         result.world.getCode(fxt.newAddr) shouldBe ByteString.empty
@@ -217,7 +250,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         // The core validation is already tested via create transaction (recipientAddr=None).
         // This test verifies that the EIP-3541 check applies to CREATE opcode as well.
         // For simplicity, we test that the validation applies at the VM level.
-        
+
         // The validation happens in VM.saveNewContract which is called for all contract creations
         // including those from CREATE/CREATE2 opcodes. The direct transaction tests above
         // already verify the validation logic works correctly.
@@ -233,7 +266,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         // The core validation is already tested via create transaction (recipientAddr=None).
         // This test verifies that the EIP-3541 check applies to CREATE2 opcode as well.
         // For simplicity, we test that the validation applies at the VM level.
-        
+
         // The validation happens in VM.saveNewContract which is called for all contract creations
         // including those from CREATE/CREATE2 opcodes. The direct transaction tests above
         // already verify the validation logic works correctly.
@@ -244,7 +277,13 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
 
   "EIP-3541: Gas consumption" should {
     "consume all gas when rejecting 0xEF contract" in {
-      val context = fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF.code, fxt.fakeHeaderMystique, configMystique, startGas = 100000)
+      val context = fxt.createContext(
+        fxt.initWorld,
+        fxt.initCodeReturningEF.code,
+        fxt.fakeHeaderMystique,
+        configMystique,
+        startGas = 100000
+      )
       val result = new VM[MockWorldState, MockStorage].run(context)
       result.error shouldBe Some(InvalidCode)
       result.gasRemaining shouldBe 0
