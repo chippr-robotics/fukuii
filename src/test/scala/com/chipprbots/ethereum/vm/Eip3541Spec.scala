@@ -10,7 +10,6 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.UInt256
 
-import MockWorldState._
 import Fixtures.blockchainConfig
 
 /** Tests for EIP-3541: Reject new contracts starting with 0xEF byte
@@ -20,8 +19,6 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
 
   val configPreMystique: EvmConfig = EvmConfig.MagnetoConfigBuilder(blockchainConfig)
   val configMystique: EvmConfig = EvmConfig.MystiqueConfigBuilder(blockchainConfig)
-
-  import configMystique.feeSchedule._
 
   object fxt {
     val fakeHeaderPreMystique: BlockHeader =
@@ -138,6 +135,19 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
 
     "be enabled at Mystique fork" in {
       configMystique.eip3541Enabled shouldBe true
+    }
+
+    "isEip3541Enabled should return true for Mystique fork" in {
+      val etcFork = blockchainConfig.etcForkForBlockNumber(Fixtures.MystiqueBlockNumber)
+      BlockchainConfigForEvm.isEip3541Enabled(etcFork) shouldBe true
+    }
+
+    "isEip3541Enabled should return false for pre-Mystique forks" in {
+      val magnetoFork = blockchainConfig.etcForkForBlockNumber(Fixtures.MagnetoBlockNumber)
+      BlockchainConfigForEvm.isEip3541Enabled(magnetoFork) shouldBe false
+
+      val phoenixFork = blockchainConfig.etcForkForBlockNumber(Fixtures.PhoenixBlockNumber)
+      BlockchainConfigForEvm.isEip3541Enabled(phoenixFork) shouldBe false
     }
   }
 
