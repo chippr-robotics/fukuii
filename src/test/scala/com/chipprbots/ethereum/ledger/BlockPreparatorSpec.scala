@@ -214,6 +214,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         postTxWorld.getBalance(minerAddress) shouldEqual (initialMinerBalance + balanceDelta)
       }
     }
+
   }
 
   "clear logs only if vm execution results in an error" in new TestSetup {

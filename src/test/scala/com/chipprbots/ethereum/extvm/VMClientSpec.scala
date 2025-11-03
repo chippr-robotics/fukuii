@@ -219,6 +219,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       phoenixBlockNumber = 0,
       magnetoBlockNumber = 0,
       berlinBlockNumber = 0,
+      mystiqueBlockNumber = 0,
       chainId = 0x3d.toByte
     )
     val evmConfig: EvmConfig = EvmConfig.FrontierConfigBuilder(blockchainConfigForEvm)
