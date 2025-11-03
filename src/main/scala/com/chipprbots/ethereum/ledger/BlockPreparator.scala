@@ -139,7 +139,7 @@ class BlockPreparator(
   }
 
   /** Calculate total gas to be refunded See YP, eq (72)
-    * 
+    *
     * EIP-3529: Changes max refund from gasUsed / 2 to gasUsed / 5
     */
   private[ledger] def calcTotalGasToRefund(

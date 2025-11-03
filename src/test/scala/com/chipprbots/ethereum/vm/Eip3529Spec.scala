@@ -5,8 +5,7 @@ import org.scalatest.matchers.should.Matchers
 
 import Fixtures.blockchainConfig
 
-/** Tests for EIP-3529: Reduction in refunds
-  * https://eips.ethereum.org/EIPS/eip-3529
+/** Tests for EIP-3529: Reduction in refunds https://eips.ethereum.org/EIPS/eip-3529
   */
 class Eip3529SpecPostMystique extends Eip3529Spec {
   override val config: EvmConfig = EvmConfig.MystiqueConfigBuilder(blockchainConfig)
@@ -25,8 +24,6 @@ trait Eip3529Spec extends AnyFunSuite with Matchers {
   test("EIP-3529: R_selfdestruct should be 0") {
     config.feeSchedule.R_selfdestruct shouldBe 0
   }
-
-
 
   test("EIP-3529: isEip3529Enabled should return true for Mystique fork") {
     val etcFork = blockchainConfig.etcForkForBlockNumber(forkBlockHeight)
