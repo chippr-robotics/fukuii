@@ -136,8 +136,6 @@ class EthBlocksServiceSpec
   }
 
   it should "answer eth_getBlockByNumber with the correct block when the pending block is requested" in new TestSetup {
-    (appStateStorage.getBestBlockNumber _: () => BigInt).expects().returns(blockToRequest.header.number)
-
     (() => blockGenerator.getPendingBlockAndState)
       .expects()
       .returns(Some(PendingBlockAndState(PendingBlock(blockToRequest, Nil), fakeWorld)))

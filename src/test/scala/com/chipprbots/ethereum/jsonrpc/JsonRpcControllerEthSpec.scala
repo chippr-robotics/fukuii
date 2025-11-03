@@ -381,7 +381,6 @@ class JsonRpcControllerEthSpec
     (blockGenerator.getPrepared _)
       .expects(ByteString(Hex.decode(headerPowHash)))
       .returns(Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil)))
-    (appStateStorage.getBestBlockNumber _).expects().returns(1)
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitWork",

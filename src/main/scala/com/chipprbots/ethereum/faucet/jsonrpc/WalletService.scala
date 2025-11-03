@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Logger
 
-class WalletService(walletRpcClient: WalletRpcClient, keyStore: KeyStore, config: FaucetConfig) extends Logger {
+class WalletService(walletRpcClient: WalletRpcClientApi, keyStore: KeyStore, config: FaucetConfig) extends Logger {
 
   def sendFunds(wallet: Wallet, addressTo: Address): IO[Either[RpcError, ByteString]] =
     (for {
