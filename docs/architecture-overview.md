@@ -798,6 +798,8 @@ sequenceDiagram
 
 This section documents significant architectural decisions made during the development of Fukuii. Each entry should include the context, decision, and rationale.
 
+**Note:** Detailed ADRs are maintained in the [`docs/adr/`](adr/) directory. This section provides summaries of key decisions.
+
 ### ADL-001: Continuation of Mantis as Fukuii
 
 **Date:** 2024-10-24  
@@ -862,6 +864,20 @@ This section documents significant architectural decisions made during the devel
 - Enables parallel development
 - Reduces coupling between modules
 - Requires discipline to maintain boundaries
+
+### ADR-003: Implementation of EIP-3529 (Reduction in Refunds)
+
+**Date:** 2024-10-25  
+**Status:** Accepted  
+**Context:** EIP-3529 changes gas refund mechanics to reduce state bloat and prevent gas refund gaming.  
+**Decision:** Implement EIP-3529 as part of the Mystique hard fork with reduced `R_sclear` (4,800 gas), zero `R_selfdestruct`, and reduced maximum refund quotient (gasUsed / 5).  
+**Consequences:**
+- Reduced state bloat from "gas tokens"
+- More accurate gas economics
+- Breaking change for contracts relying on refunds
+- Improved network security
+
+**See:** [Full ADR-003 documentation](adr/003-eip-3529-implementation.md)
 
 ---
 
