@@ -1,4 +1,4 @@
-# ADR-0001: EIP-3541 Implementation
+# ADR-002: EIP-3541 Implementation
 
 ## Status
 
