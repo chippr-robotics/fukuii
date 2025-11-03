@@ -26,6 +26,10 @@ Each ADR follows this structure:
 - [ADR-001: Migration to Scala 3 and JDK 21](001-scala-3-migration.md) - Accepted
 - [ADR-002: EIP-3541 Implementation](002-eip-3541-implementation.md) - Accepted
 - [ADR-003: EIP-3529 Implementation](003-eip-3529-implementation.md) - Accepted
+- [ADR-004: EIP-3651 Implementation](004-eip-3651-implementation.md) - Accepted
+- [ADR-005: EIP-3855 Implementation](005-eip-3855-implementation.md) - Accepted
+- [ADR-006: EIP-3860 Implementation](006-eip-3860-implementation.md) - Accepted
+- [ADR-007: EIP-6049 Implementation](007-eip-6049-implementation.md) - Accepted
 
 ## Creating a New ADR
 

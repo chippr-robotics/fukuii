@@ -19,12 +19,10 @@ import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.Config
 
-/** Tests for EIP-3860: Limit and meter initcode
-  * https://eips.ethereum.org/EIPS/eip-3860
+/** Tests for EIP-3860: Limit and meter initcode https://eips.ethereum.org/EIPS/eip-3860
   *
   * EIP-3860 introduces:
-  * 1. Maximum initcode size of 49152 bytes (2 * MAX_CODE_SIZE)
-  * 2. Gas cost of 2 per 32-byte word of initcode
+  *   1. Maximum initcode size of 49152 bytes (2 * MAX_CODE_SIZE) 2. Gas cost of 2 per 32-byte word of initcode
   */
 class Eip3860Spec extends AnyWordSpec with Matchers {
 
@@ -92,7 +90,8 @@ class Eip3860Spec extends AnyWordSpec with Matchers {
       padding ++ returnCode
     }
 
-    val world: MockWorldState = MockWorldState().saveAccount(creatorAddr, Account.empty().increaseBalance(UInt256(1000000)))
+    val world: MockWorldState =
+      MockWorldState().saveAccount(creatorAddr, Account.empty().increaseBalance(UInt256(1000000)))
   }
 
   "EIP-3860" when {
@@ -139,13 +138,14 @@ class Eip3860Spec extends AnyWordSpec with Matchers {
       "include initcode cost for create transactions after Spiral" in {
         val initCode = fxt.initCodeOfSize(1024) // 32 words = 64 gas
         val baseGas = configSpiral.calcTransactionIntrinsicGas(initCode, isContractCreation = true, Seq.empty)
-        
+
         // Base gas = 21000 (G_transaction) + 32000 (G_txcreate) + data cost + initcode cost
         // Note: initCodeOfSize uses JUMPDEST (0x5b) which is non-zero, so most bytes are non-zero
         // But the actual cost depends on the exact byte values in the generated code
         // Initcode cost: 32 words * 2 gas/word = 64
         // We just verify it's higher than without initcode cost
-        val baseGasPreSpiral = configPreSpiral.calcTransactionIntrinsicGas(initCode, isContractCreation = true, Seq.empty)
+        val baseGasPreSpiral =
+          configPreSpiral.calcTransactionIntrinsicGas(initCode, isContractCreation = true, Seq.empty)
         baseGas shouldBe (baseGasPreSpiral + 64)
       }
 
@@ -153,7 +153,7 @@ class Eip3860Spec extends AnyWordSpec with Matchers {
         val data = fxt.initCodeOfSize(1024)
         val baseGas = configSpiral.calcTransactionIntrinsicGas(data, isContractCreation = false, Seq.empty)
         val baseGasPreSpiral = configPreSpiral.calcTransactionIntrinsicGas(data, isContractCreation = false, Seq.empty)
-        
+
         // Non-create transactions don't get initcode cost
         baseGas shouldBe baseGasPreSpiral
       }
@@ -217,7 +217,7 @@ class Eip3860Spec extends AnyWordSpec with Matchers {
         val context = fxt.createContext(fxt.world, boundaryInitCode, fxt.fakeHeaderSpiral, configSpiral)
         val vm = new VM[MockWorldState, MockStorage]
         val result = vm.run(context)
-        
+
         // Should succeed - boundary case should be allowed
         result.error shouldBe None
       }
@@ -228,7 +228,7 @@ class Eip3860Spec extends AnyWordSpec with Matchers {
         val context = fxt.createContext(fxt.world, overBoundaryInitCode, fxt.fakeHeaderSpiral, configSpiral)
         val vm = new VM[MockWorldState, MockStorage]
         val result = vm.run(context)
-        
+
         // Should fail with InitCodeSizeLimit
         result.error shouldBe Some(InitCodeSizeLimit)
       }
@@ -238,26 +238,26 @@ class Eip3860Spec extends AnyWordSpec with Matchers {
       "check calcTransactionIntrinsicGas includes initcode cost with test config" in {
         val initCode = fxt.initCodeOfSize(MaxInitCodeSize)
         // Use configSpiral which has EIP-3860 enabled
-        
+
         // Calculate intrinsic gas with EIP-3860 enabled
         val intrinsicGas = configSpiral.calcTransactionIntrinsicGas(initCode, isContractCreation = true, Seq.empty)
-        
+
         // Should include initcode cost (49152 bytes = 1536 words = 3072 gas)
         val initcodeCost = configSpiral.calcInitCodeCost(initCode)
         initcodeCost shouldBe 3072
-        
+
         // Intrinsic gas should be greater than just data cost
         intrinsicGas should be > BigInt(53000) // Base (21000) + create (32000) minimum
       }
 
       "validateInitCodeSize function works correctly with test config" in {
         val oversizedInitCode = fxt.initCodeOfSize(MaxInitCodeSize + 1)
-        
+
         // Direct check with test config: maxInitCodeSize should be defined and the payload should exceed it
         configSpiral.maxInitCodeSize shouldBe Some(MaxInitCodeSize)
         configSpiral.eip3860Enabled shouldBe true
         oversizedInitCode.size should be > MaxInitCodeSize
-        
+
         // Also check that pre-spiral config doesn't have it enabled
         configPreSpiral.maxInitCodeSize shouldBe None
         configPreSpiral.eip3860Enabled shouldBe false

@@ -45,13 +45,13 @@ case class BlockchainConfigForEvm(
     chainId: Byte
 ) {
   def etcForkForBlockNumber(blockNumber: BigInt): EtcFork = blockNumber match {
-    case _ if blockNumber < atlantisBlockNumber  => BeforeAtlantis
-    case _ if blockNumber < aghartaBlockNumber   => Atlantis
-    case _ if blockNumber < phoenixBlockNumber   => Agharta
-    case _ if blockNumber < magnetoBlockNumber   => Phoenix
-    case _ if blockNumber < mystiqueBlockNumber  => Magneto
-    case _ if blockNumber < spiralBlockNumber    => Mystique
-    case _ if blockNumber >= spiralBlockNumber   => Spiral
+    case _ if blockNumber < atlantisBlockNumber => BeforeAtlantis
+    case _ if blockNumber < aghartaBlockNumber  => Atlantis
+    case _ if blockNumber < phoenixBlockNumber  => Agharta
+    case _ if blockNumber < magnetoBlockNumber  => Phoenix
+    case _ if blockNumber < mystiqueBlockNumber => Magneto
+    case _ if blockNumber < spiralBlockNumber   => Mystique
+    case _ if blockNumber >= spiralBlockNumber  => Spiral
   }
 
   def ethForkForBlockNumber(blockNumber: BigInt): BlockchainConfigForEvm.EthForks.Value = blockNumber match {
@@ -92,6 +92,9 @@ object BlockchainConfigForEvm {
     etcFork >= EtcForks.Spiral
 
   def isEip3860Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Spiral
+
+  def isEip6049DeprecationEnabled(etcFork: EtcFork): Boolean =
     etcFork >= EtcForks.Spiral
 
   def apply(blockchainConfig: BlockchainConfig): BlockchainConfigForEvm = {
