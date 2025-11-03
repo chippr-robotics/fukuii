@@ -204,12 +204,7 @@ object BN128 {
       *   [[scala.None]] if element is invald group element, [[com.chipprbots.ethereum.crypto.zksnark.BN128.BN128G2]]
       */
     def apply(a: ByteString, b: ByteString, c: ByteString, d: ByteString): Option[BN128G2] =
-      createPoint(a, b, c, d).flatMap { point =>
-        if (isGroupElement(point))
-          Some(BN128G2(point))
-        else
-          None
-      }
+      createPoint(a, b, c, d).map(BN128G2(_))
 
     def mulByP(p: Point[Fp2]): Point[Fp2] = {
       val rx = Fp2.TWIST_MUL_BY_P_X * Fp2.frobeniusMap(p.x, 1)
