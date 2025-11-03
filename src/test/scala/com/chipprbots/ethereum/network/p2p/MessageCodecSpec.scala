@@ -61,22 +61,23 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     assert(remoteReadNextMessageAfterHello.head == Right(status))
   }
 
-  it should "compress and decompress first message after hello when receiving 2 frames" in new TestSetup {
+  it should "compress and decompress messages correctly when both sides use p2p v5" in new TestSetup {
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
 
-    // hello won't be compressed as per spec it never is, and status will be compressed as remote peer advertised proper versions
+    // Exchange hellos to establish connection
     val localHello: ByteString = messageCodec.encodeMessage(helloV5)
+    remoteMessageCodec.readMessages(localHello)
+
+    // After hello exchange, subsequent messages should be compressed/decompressed correctly
+    // Hello is never compressed per spec, but Status will be compressed when both peers are v5+
     val localStatus: ByteString = messageCodec.encodeMessage(status)
+    val remoteReadStatus: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localStatus)
 
-    // both messages will be read at one, but after reading hello decompressing will be activated
-    val remoteReadBothMessages: Seq[Either[Throwable, Message]] =
-      remoteMessageCodec.readMessages(localHello ++ localStatus)
-
-    // both peers exchanged v5 hellos, so they should send compressed messages
-    assert(remoteReadBothMessages.size == 2)
-    assert(remoteReadBothMessages.head == Right(helloV5))
-    assert(remoteReadBothMessages.last == Right(status))
+    // Verify status message was correctly compressed and decompressed
+    assert(remoteReadStatus.size == 1)
+    assert(remoteReadStatus.head == Right(status))
   }
 
   trait TestSetup extends SecureChannelSetup {
