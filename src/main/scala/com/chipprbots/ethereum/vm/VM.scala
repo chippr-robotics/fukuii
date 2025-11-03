@@ -75,7 +75,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       (invalidCallResult(context, Set.empty, Set.empty), Address(0))
     else {
       require(context.recipientAddr.isEmpty, "recipient address must be empty for contract creation")
-      require(context.doTransfer, "contract creation will alwyas transfer funds")
+      require(context.doTransfer, "contract creation will always transfer funds")
 
       // EIP-3860: Check initcode size limit
       val maxInitCodeSize = context.evmConfig.maxInitCodeSize

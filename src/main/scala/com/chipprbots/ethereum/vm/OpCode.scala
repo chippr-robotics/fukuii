@@ -967,7 +967,7 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
 
     // EIP-3860: Check initcode size limit
     val maxInitCodeSize = state.config.maxInitCodeSize
-    if (state.config.eip3860Enabled && maxInitCodeSize.exists(max => inSize > max)) {
+    if (state.config.eip3860Enabled && maxInitCodeSize.exists(max => inSize.toBigInt > max)) {
       // Exceptional abort: initcode too large
       return state.withStack(stack1.push(UInt256.Zero)).withError(InitCodeSizeLimit).step()
     }

@@ -325,7 +325,8 @@ object FeeSchedule {
     override val G_warm_storage_read = 100
     override val G_access_list_address = 2400
     override val G_access_list_storage = 1900
-    override val G_initcode_word = 2
+    // note: initcode metering does not exist until spiral hard fork (EIP-3860)
+    override val G_initcode_word = 0
   }
 
   class HomesteadFeeSchedule extends FrontierFeeSchedule {
@@ -371,6 +372,8 @@ object FeeSchedule {
     override val R_sclear: BigInt = 4800
     // EIP-3529: Remove SELFDESTRUCT refund
     override val R_selfdestruct: BigInt = 0
+    // EIP-3860: Initcode metering (activated in Spiral fork)
+    override val G_initcode_word: BigInt = 2
   }
 }
 
