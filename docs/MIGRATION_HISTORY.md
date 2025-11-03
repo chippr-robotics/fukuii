@@ -11,6 +11,7 @@
 The Fukuii project successfully migrated from Scala 2.13.6 to Scala 3.3.4 (LTS) in October 2025. This migration included:
 
 - ✅ Scala 3.3.4 as primary and only supported version
+- ✅ JDK upgrade from 17 to 21 (LTS)
 - ✅ Migration from Akka to Apache Pekko (Scala 3 compatible)
 - ✅ Migration from Monix to Cats Effect 3 IO
 - ✅ Migration from Shapeless to native Scala 3 derivation in RLP module
@@ -77,7 +78,7 @@ The Fukuii project successfully migrated from Scala 2.13.6 to Scala 3.3.4 (LTS) 
 
 ### Build System
 - **SBT**: 1.10.7
-- **JDK**: 17 (Temurin)
+- **JDK**: 21 (Temurin) - upgraded from JDK 17
 - **Scala 3 Features**: Native given/using syntax, union types, opaque types
 
 ### Static Analysis

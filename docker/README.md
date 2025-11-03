@@ -157,7 +157,7 @@ docker run -d \
 ```
 
 ### 2. Development Image (`Dockerfile-dev`)
-A development image with JDK 17 and SBT for building and testing.
+A development image with JDK 21 and SBT for building and testing.
 
 **Features:**
 - Based on `eclipse-temurin:17-jdk-jammy` (full JDK)
