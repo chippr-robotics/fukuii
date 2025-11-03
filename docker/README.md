@@ -4,9 +4,26 @@ This directory contains Dockerfiles for building and running Fukuii Ethereum Cli
 
 ## Container Registries
 
-Fukuii maintains two container registries:
+Fukuii maintains images in multiple container registries:
 
-### Official Release Registry (Recommended for Production)
+### Docker Hub (Recommended for Quick Start)
+- **Registry:** `chipprbots/fukuii`
+- **URL:** https://hub.docker.com/r/chipprbots/fukuii
+- **Publishing:** Automated via `.github/workflows/release.yml` and `.github/workflows/docker.yml`
+- **Images:** 
+  - `chipprbots/fukuii` - Production image
+  - `chipprbots/fukuii-dev` - Development image
+  - `chipprbots/fukuii-base` - Base image
+- **Tags:** Semantic versions (e.g., `v1.0.0`, `1.0`, `1`, `latest`), branch names, Git SHAs
+- **Notes:** Unsigned images, suitable for general use and quick deployment
+
+**Quick Start:**
+```bash
+docker pull chipprbots/fukuii:latest
+docker run -d --name fukuii -p 8545:8545 chipprbots/fukuii:latest
+```
+
+### GitHub Container Registry - Official Release (Recommended for Production)
 - **Registry:** `ghcr.io/chippr-robotics/chordodes_fukuii`
 - **Publishing:** Automated via `.github/workflows/release.yml` on version tags
 - **Security Features:**
@@ -16,7 +33,7 @@ Fukuii maintains two container registries:
   - ✅ Immutable digest references
 - **Tags:** Semantic versions (e.g., `v1.0.0`, `1.0`, `1`, `latest`)
 
-### Development Registry
+### GitHub Container Registry - Development
 - **Registry:** `ghcr.io/chippr-robotics/fukuii`
 - **Publishing:** Automated via `.github/workflows/docker.yml` on branch pushes
 - **Images:** `fukuii`, `fukuii-dev`, `fukuii-base`
@@ -375,15 +392,17 @@ volumes:
 
 ## CI/CD Integration
 
-Fukuii uses two automated workflows for container image publishing:
+Fukuii uses automated workflows for container image publishing to both Docker Hub and GitHub Container Registry:
 
 ### Release Workflow (`.github/workflows/release.yml`)
 
 **Triggered by:** Git tags starting with `v` (e.g., `v1.0.0`)
 
-**Registry:** `ghcr.io/chippr-robotics/chordodes_fukuii` (Official releases)
+**Registries:** 
+- `ghcr.io/chippr-robotics/chordodes_fukuii` (Official releases - signed)
+- `chipprbots/fukuii` (Docker Hub - unsigned)
 
-**Security Features:**
+**Security Features (GHCR only):**
 - ✅ Images signed with Cosign (keyless, GitHub OIDC)
 - ✅ SLSA Level 3 provenance attestations
 - ✅ SBOM (Software Bill of Materials) included
@@ -405,8 +424,8 @@ git push origin v1.0.0
 # Workflow automatically:
 # 1. Builds the application
 # 2. Creates GitHub release with artifacts
-# 3. Builds and pushes Docker image
-# 4. Signs image with Cosign
+# 3. Builds and pushes Docker images to both registries
+# 4. Signs GHCR image with Cosign
 # 5. Generates SLSA provenance
 # 6. Logs immutable digest
 ```
@@ -415,12 +434,20 @@ git push origin v1.0.0
 
 **Triggered by:** Push to main/develop branches, Pull Requests
 
-**Registry:** `ghcr.io/chippr-robotics/fukuii` (Development builds)
+**Registries:**
+- `ghcr.io/chippr-robotics/fukuii` (Development builds)
+- `chipprbots/fukuii` (Docker Hub)
 
 **Images:**
-- **Main Image:** `ghcr.io/chippr-robotics/fukuii:latest`
-- **Dev Image:** `ghcr.io/chippr-robotics/fukuii-dev:latest`
-- **Base Image:** `ghcr.io/chippr-robotics/fukuii-base:latest`
+- **Main Image:** 
+  - `ghcr.io/chippr-robotics/fukuii:latest`
+  - `chipprbots/fukuii:latest`
+- **Dev Image:** 
+  - `ghcr.io/chippr-robotics/fukuii-dev:latest`
+  - `chipprbots/fukuii-dev:latest`
+- **Base Image:** 
+  - `ghcr.io/chippr-robotics/fukuii-base:latest`
+  - `chipprbots/fukuii-base:latest`
 
 **Tags Generated:**
 - Branch names (e.g., `main`, `develop`)
