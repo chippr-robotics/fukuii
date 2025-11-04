@@ -12,6 +12,9 @@ import org.scalatest.matchers.should.Matchers
 
 class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
 
+  // Timeout used for tests that expect operations to hang
+  private val TestTimeout = 500.milliseconds
+
   behavior of "NettyFutureUtils"
 
   it should "handle already completed futures" in {
@@ -122,9 +125,8 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
 
       // Cancelled futures should not invoke the callback (they are ignored)
       // so the IO should hang. We'll use timeout to detect this behavior.
-      // Using 500ms timeout to be reliable across different environments
       val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise))
-        .timeout(500.milliseconds)
+        .timeout(TestTimeout)
         .attempt
         .unsafeRunSync()
       

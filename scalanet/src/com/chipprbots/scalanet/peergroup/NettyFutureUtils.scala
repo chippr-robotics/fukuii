@@ -25,7 +25,7 @@ private[scalanet] object NettyFutureUtils {
     }
   }
 
-  // Helper to handle completed futures - extracted to object level to avoid redefinition
+  // Helper to handle completed futures - extracted to object-level to avoid redefinition
   private def handleCompleted[A](future: netty.util.concurrent.Future[A], cb: Either[Throwable, A] => Unit): Unit = {
     if (future.isSuccess) {
       cb(Right(future.getNow))
