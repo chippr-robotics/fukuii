@@ -80,8 +80,8 @@
 
     <!-- NB. be aware you might want to adjust akka.loglevel if you set any level to DEBUG -->
     <logger name="io.netty" level="WARN"/>
-    <logger name="io.iohk.scalanet" level="INFO" />
-    <logger name="io.iohk.scalanet.discovery.ethereum.v4.DiscoveryService" level="WARN" />
+    <logger name="com.chipprbots.scalanet" level="INFO" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="WARN" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.PeerActor" level="${LOGSLEVEL}" />
     <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="${LOGSLEVEL}" />
