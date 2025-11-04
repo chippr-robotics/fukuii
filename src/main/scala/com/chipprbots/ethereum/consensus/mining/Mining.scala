@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.nodebuilder.Node
   */
 trait Mining {
 
-  /** The type of configuration [[FullMiningConfig#specific specific]] to this mining protocol implementation.
+  /** The type of configuration [[com.chipprbots.ethereum.consensus.mining.FullMiningConfig.specific specific]] to this mining protocol implementation.
     */
   type Config <: AnyRef /*Product*/
 
@@ -36,7 +36,7 @@ trait Mining {
     */
   def validators: Validators
 
-  /** This is used by the [[Mining#blockGenerator blockGenerator]].
+  /** This is used by the [[com.chipprbots.ethereum.consensus.mining.Mining.blockGenerator blockGenerator]].
     */
   def blockPreparator: BlockPreparator
 

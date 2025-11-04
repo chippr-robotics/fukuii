@@ -80,7 +80,9 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
       "-Xfatal-warnings"
     )
   )),
-  (Compile / doc / scalacOptions) := baseScalacOptions,
+  (Compile / doc / scalacOptions) := baseScalacOptions ++ Seq(
+    "-no-link-warnings" // Suppress link resolution warnings for F-bounded polymorphism issues
+  ),
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
   Test / parallelExecution := true,
   (Test / testOptions) += Tests.Argument("-oDG"),
