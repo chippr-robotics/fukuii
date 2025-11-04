@@ -3,11 +3,59 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd $DIR/..
 
-CONFIG_FILE="./conf/$1.conf"
-if [ -f "$CONFIG_FILE" ]; then
-  shift
-  CHAIN_PARAM="-Dconfig.file=$CONFIG_FILE"
-elif [ -z "$1" ]; then
+# Check if first argument is a network name (config file)
+# Skip if it starts with - or -- (it's a flag, not a network name)
+if [ -n "$1" ]; then
+  case "$1" in
+    -*) 
+      # Argument starts with -, it's a flag, not a network name
+      # Use default network
+      CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
+      ;;
+    *)
+      # Argument doesn't start with -, treat it as a network name
+      CONFIG_FILE="./conf/$1.conf"
+      if [ -f "$CONFIG_FILE" ]; then
+        shift
+        CHAIN_PARAM="-Dconfig.file=$CONFIG_FILE"
+      else
+        # Network name provided but config file doesn't exist
+        echo "Error: Unknown network '$1'"
+        echo ""
+        echo "Available networks:"
+        # List of config files to exclude from network list
+        excluded_configs="app.conf base.conf base-testnet.conf metrics.conf faucet.conf testmode.conf"
+        shopt -s nullglob  # Handle case when no .conf files exist
+        for conf in ./conf/*.conf; do
+          basename_conf=$(basename "$conf")
+          # Check if this config file should be excluded
+          is_excluded=false
+          for excluded in $excluded_configs; do
+            if [ "$basename_conf" = "$excluded" ]; then
+              is_excluded=true
+              break
+            fi
+          done
+          # If not excluded, show it as available network
+          if [ "$is_excluded" = false ]; then
+            network=$(basename "$conf" .conf)
+            echo "  - $network"
+          fi
+        done
+        shopt -u nullglob
+        echo ""
+        echo "Usage: fukuii [network] [options]"
+        echo "   or: fukuii [options]  (defaults to 'etc' network)"
+        echo ""
+        echo "Examples:"
+        echo "  fukuii etc         # Start Ethereum Classic node"
+        echo "  fukuii mordor      # Start Mordor testnet node"
+        exit 1
+      fi
+      ;;
+  esac
+else
+  # No arguments provided, use default network
   CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
 fi
 
