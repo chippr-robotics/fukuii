@@ -1,9 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
-import java.security.SecureRandom
 import javax.net.ssl.SSLContext
-
-import scala.annotation.unused
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
@@ -24,7 +21,6 @@ class SecureJsonRpcHttpServer(
     val jsonRpcController: JsonRpcBaseController,
     val jsonRpcHealthChecker: JsonRpcHealthChecker,
     val config: JsonRpcHttpServerConfig,
-    @unused secureRandom: SecureRandom,
     getSSLContext: () => Either[SSLError, SSLContext]
 )(implicit val actorSystem: ActorSystem)
     extends JsonRpcHttpServer

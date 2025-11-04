@@ -682,7 +682,6 @@ trait JSONRpcHttpServerBuilder {
       jsonRpcController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
-      secureRandom,
       () => sslContext("fukuii.network.rpc.http")
     )
 }

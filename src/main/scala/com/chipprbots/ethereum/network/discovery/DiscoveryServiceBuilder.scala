@@ -4,8 +4,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 
-import scala.annotation.unused
-
 import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
@@ -149,8 +147,7 @@ trait DiscoveryServiceBuilder {
   )(implicit
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
-      sigalg: SigAlg,
-      @unused runtime: IORuntime
+      sigalg: SigAlg
   ): Resource[IO, v4.DiscoveryNetwork[InetMultiAddress]] =
     for {
       peerGroup <- StaticUDPPeerGroup[v4.Packet](udpConfig)
