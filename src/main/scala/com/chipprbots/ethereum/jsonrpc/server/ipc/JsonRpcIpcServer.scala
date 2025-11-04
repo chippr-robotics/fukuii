@@ -6,15 +6,12 @@ import java.io.InputStreamReader
 import java.net.ServerSocket
 import java.net.Socket
 
-import org.apache.pekko.actor.ActorSystem
-
 import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.util.Try
 
-import org.json4s.Formats
 import org.json4s.JsonAST.JValue
 import org.json4s._
 import org.json4s.native
@@ -30,9 +27,7 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.utils.Logger
 
-class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcServerConfig)(implicit
-    system: ActorSystem
-) extends Logger {
+class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcServerConfig) extends Logger {
 
   implicit val runtime: IORuntime = IORuntime.global
 

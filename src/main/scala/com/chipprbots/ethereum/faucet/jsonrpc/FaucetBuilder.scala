@@ -95,7 +95,6 @@ trait FaucetJsonRpcHttpServerBuilder {
     faucetJsonRpcController,
     faucetJsonRpcHealthCheck,
     jsonRpcConfig.httpServerConfig,
-    secureRandom,
     () => sslContext("fukuii.network.rpc.http")
   )
 }
