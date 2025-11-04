@@ -442,6 +442,34 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
+  test("BigInt Encoding - Edge Cases with Empty Bytes") {
+    // Test that empty byte array in RLPValue decodes to zero
+    val emptyRlpValue = RLPValue(Array.empty[Byte])
+    val decoded = RLPImplicits.bigIntEncDec.decode(emptyRlpValue)
+    assert(decoded == BigInt(0))
+
+    // Test encoding and decoding of zero specifically
+    val zero = BigInt(0)
+    val encoded = RLPImplicits.bigIntEncDec.encode(zero)
+    val roundTripDecoded = RLPImplicits.bigIntEncDec.decode(encoded)
+    assert(roundTripDecoded == zero)
+
+    // Test multiple zeros in a sequence
+    val zeros = Seq(BigInt(0), BigInt(0), BigInt(0))
+    val zerosEncoded = encode(zeros)
+    val zerosDecoded = decode[Seq[BigInt]](zerosEncoded)
+    assert(zerosDecoded == zeros)
+  }
+
+  test("BigInt Decoding - RLPValue with empty bytes should decode to zero") {
+    // This tests the specific case that was causing network sync errors
+    val emptyBytes = Array.empty[Byte]
+    val rlpValue = RLPValue(emptyBytes)
+    
+    val result = RLPImplicits.bigIntEncDec.decode(rlpValue)
+    assert(result == BigInt(0))
+  }
+
   test("Byte Array Encoding") {
     val byteArr =
       "ce73660a06626c1b3fda7b18ef7ba3ce17b6bf604f9541d3c6c654b7ae88b239407f659c78f419025d785727ed017b6add21952d7e12007373e321dbc31824ba"

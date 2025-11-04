@@ -36,7 +36,8 @@ package object domain {
 
   object ArbitraryIntegerMpt {
     val bigIntSerializer: ByteArraySerializable[BigInt] = new ByteArraySerializable[BigInt] {
-      override def fromBytes(bytes: Array[Byte]): BigInt = BigInt(bytes)
+      override def fromBytes(bytes: Array[Byte]): BigInt = 
+        if (bytes.isEmpty) BigInt(0) else BigInt(bytes)
       override def toBytes(input: BigInt): Array[Byte] = input.toByteArray
     }
 
