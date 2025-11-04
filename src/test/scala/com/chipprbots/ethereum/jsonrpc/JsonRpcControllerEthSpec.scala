@@ -364,9 +364,12 @@ class JsonRpcControllerEthSpec
     val mixHash: String = s"""0x${"01" * 32}"""
     val headerPowHash: String = "02" * 32
 
-    (blockGenerator.getPrepared _)
-      .expects(ByteString(Hex.decode(headerPowHash)))
-      .returns(Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil)))
+    // Configure stub to return a pending block for the expected hash
+    stubGetPreparedResult = { hash =>
+      if (hash == ByteString(Hex.decode(headerPowHash)))
+        Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil))
+      else None
+    }
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitWork",

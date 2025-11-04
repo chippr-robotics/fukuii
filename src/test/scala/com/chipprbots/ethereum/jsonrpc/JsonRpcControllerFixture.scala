@@ -79,6 +79,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
 
   // Stub block generator to avoid Scala 3 reflection issues with scalamock
   var stubGenerateBlockResult: Option[PendingBlockAndState] = None
+  var stubGetPreparedResult: ByteString => Option[PendingBlock] = _ => None
   val blockGenerator: PoWBlockGenerator = new PoWBlockGenerator {
     override type X = Seq[BlockHeader]
     override def blockTimestampProvider: BlockTimestampProvider = ???
@@ -93,7 +94,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       stubGenerateBlockResult.getOrElse(
         throw new NotImplementedError("stubGenerateBlockResult not set for test")
       )
-    override def getPrepared(powHeaderHash: ByteString): Option[PendingBlock] = ???
+    override def getPrepared(powHeaderHash: ByteString): Option[PendingBlock] = stubGetPreparedResult(powHeaderHash)
     override def getPendingBlockAndState: Option[PendingBlockAndState] = ???
     override def getPendingBlock: Option[PendingBlock] = ???
     override def emptyX: Ommers = Nil
