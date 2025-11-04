@@ -212,7 +212,9 @@ class PeerDiscoveryManager(
   def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit = {
     if (runtime == null) {
       log.error("IORuntime is null! Cannot execute IO task. This indicates an initialization issue.")
-      throw new IllegalStateException("IORuntime is null. The PeerDiscoveryManager was not properly initialized with a valid IORuntime.")
+      throw new IllegalStateException(
+        "IORuntime is null. The PeerDiscoveryManager was not properly initialized with a valid IORuntime."
+      )
     }
     given IORuntime = runtime
     implicit val ec = context.dispatcher

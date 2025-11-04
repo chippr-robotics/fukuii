@@ -136,7 +136,7 @@ trait PeerDiscoveryManagerBuilder {
     with DiscoveryServiceBuilder
     with StorageBuilder =>
 
-  given ioRuntime: IORuntime = IORuntime.global
+  implicit val ioRuntime: IORuntime = IORuntime.global
 
   lazy val peerDiscoveryManager: ActorRef = system.actorOf(
     PeerDiscoveryManager.props(
