@@ -20,7 +20,7 @@ object FaucetSupervisor {
   val name = "FaucetSupervisor"
 }
 
-class FaucetSupervisor(walletService: WalletService, config: FaucetConfig, shutdown: () => Unit)(implicit
+class FaucetSupervisor(walletService: WalletService, config: FaucetConfig, shutdown: () => Unit)(using
     system: ActorSystem,
     runtime: IORuntime
 ) extends Logger {
