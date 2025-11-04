@@ -943,7 +943,7 @@ This aligns with:
 #### Prevention & Testing
 
 **Test coverage added**:
-- 7 tests in `ArbitraryIntegerMptSpec` for zero/empty value handling
+- 6 tests in `ArbitraryIntegerMptSpec` for zero/empty value handling
 - 3 tests in `RLPSuite` for BigInt edge cases
 - 21 tests in new `BigIntSerializationSpec` covering:
   - Empty byte array deserialization

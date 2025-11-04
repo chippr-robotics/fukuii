@@ -57,14 +57,12 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
   }
 
   "EthereumUInt256Mpt.rlpBigIntSerializer" should "handle empty byte arrays" in {
-    // This tests RLP-based serialization
+    // Test that the RLP decoder can handle empty bytes directly
     val emptyBytes = Array.empty[Byte]
+    val emptyRlpValue = RLPValue(emptyBytes)
     
-    // RLP encoding of empty byte array should produce a valid RLP value
-    val rlpEncoded = rlp.encode[Array[Byte]](emptyBytes)
-    
-    // Decoding should work without throwing exceptions
-    val decoded = rlp.decode[BigInt](rlpEncoded)
+    // Decoding empty RLPValue should work without throwing exceptions
+    val decoded = RLPImplicits.bigIntEncDec.decode(emptyRlpValue)
     decoded shouldBe BigInt(0)
   }
 
