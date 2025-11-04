@@ -263,9 +263,9 @@ class ConsoleUI extends Logger {
     val labelPart = new AttributedString(s"   $label: ", labelStyle)
     val valuePart = new AttributedString(value, valueStyle)
     
-    val combined = labelPart.concat(valuePart)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+    val combinedLength = labelPart.columnLength() + valuePart.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + valuePart.toAnsi() + padding)
   }
 
   /** Create a progress bar with percentage. */
@@ -283,9 +283,9 @@ class ConsoleUI extends Logger {
     val emptyBar = new AttributedString("░" * empty, emptyStyle)
     val percentText = new AttributedString(f" $percentage%.2f%%", AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold())
     
-    val combined = labelPart.concat(filledBar).concat(emptyBar).concat(percentText)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+    val combinedLength = labelPart.columnLength() + filledBar.columnLength() + emptyBar.columnLength() + percentText.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + filledBar.toAnsi() + emptyBar.toAnsi() + percentText.toAnsi() + padding)
   }
 
   /** Create a status line with color-coded status indicator. */
@@ -305,9 +305,9 @@ class ConsoleUI extends Logger {
     val labelPart = new AttributedString(s"   $label: ", labelStyle)
     val statusPart = new AttributedString(s"● $status", statusStyle)
     
-    val combined = labelPart.concat(statusPart)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+    val combinedLength = labelPart.columnLength() + statusPart.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + statusPart.toAnsi() + padding)
   }
 
   /** Create peer status line with visual indicator. */
@@ -329,9 +329,9 @@ class ConsoleUI extends Logger {
     val indicator = if (count > 0) " ◆" * Math.min(count, 10) else ""
     val indicatorPart = new AttributedString(indicator, peerStyle)
     
-    val combined = labelPart.concat(peerPart).concat(indicatorPart)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+    val combinedLength = labelPart.columnLength() + peerPart.columnLength() + indicatorPart.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + peerPart.toAnsi() + indicatorPart.toAnsi() + padding)
   }
 
   private def createSeparator(width: Int): AttributedString = {

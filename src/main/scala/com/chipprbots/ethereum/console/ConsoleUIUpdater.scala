@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.console
 
-import org.apache.pekko.actor.typed.ActorRef
-import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.actor.ActorSystem
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -13,11 +12,11 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class ConsoleUIUpdater(
     consoleUI: ConsoleUI,
-    peerManager: Option[ActorRef[PeerManagerActor.PeerManagementCommand]],
-    syncController: Option[ActorRef[SyncProtocol.Command]],
+    peerManager: Option[Any],
+    syncController: Option[Any],
     networkName: String,
     shutdownHook: () => Unit
-)(implicit system: ActorSystem[_])
+)(implicit system: ActorSystem)
     extends Logger {
 
   import ConsoleUI._
