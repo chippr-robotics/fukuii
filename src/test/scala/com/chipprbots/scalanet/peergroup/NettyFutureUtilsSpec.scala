@@ -122,8 +122,9 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
 
       // Cancelled futures should not invoke the callback (they are ignored)
       // so the IO should hang. We'll use timeout to detect this behavior.
+      // Using 500ms timeout to be reliable across different environments
       val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise))
-        .timeout(scala.concurrent.duration.Duration(100, "ms"))
+        .timeout(scala.concurrent.duration.Duration(500, "ms"))
         .attempt
         .unsafeRunSync()
       
