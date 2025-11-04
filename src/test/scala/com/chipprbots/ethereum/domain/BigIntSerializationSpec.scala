@@ -152,4 +152,54 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
     val roundTrip = rlp.decode[BigInt](encoded)
     roundTrip shouldBe zero
   }
+
+  it should "handle RLP encoding of zero according to Ethereum spec" in {
+    // According to Ethereum RLP spec, integer 0 is encoded as empty byte string (0x80)
+    val zero = BigInt(0)
+    val encoded = rlp.encode[BigInt](zero)
+    
+    // The encoding should be 0x80 (empty byte string in RLP)
+    encoded shouldBe Array[Byte](0x80.toByte)
+    
+    // Decoding should return zero
+    val decoded = rlp.decode[BigInt](encoded)
+    decoded shouldBe zero
+  }
+
+  it should "handle all integer serialization paths consistently" in {
+    // Test that all serialization paths handle zero consistently
+    val zero = BigInt(0)
+    
+    // Path 1: RLP (network protocol)
+    val rlpEncoded = rlp.encode[BigInt](zero)
+    val rlpDecoded = rlp.decode[BigInt](rlpEncoded)
+    rlpDecoded shouldBe zero
+    
+    // Path 2: ArbitraryIntegerMpt (internal storage)
+    val arbitraryEncoded = ArbitraryIntegerMpt.bigIntSerializer.toBytes(zero)
+    val arbitraryDecoded = ArbitraryIntegerMpt.bigIntSerializer.fromBytes(arbitraryEncoded)
+    arbitraryDecoded shouldBe zero
+    
+    // Path 3: ByteUtils (utility conversions)
+    val emptyByteString = ByteString.empty
+    val byteUtilsDecoded = com.chipprbots.ethereum.utils.ByteUtils.toBigInt(emptyByteString)
+    byteUtilsDecoded shouldBe zero
+  }
+
+  it should "never throw NumberFormatException for any byte array" in {
+    // This is the critical test - ensure we never throw the error that was reported
+    val testCases = Seq(
+      Array.empty[Byte],
+      Array[Byte](0),
+      Array[Byte](0, 0),
+      Array[Byte](0, 0, 0, 0)
+    )
+    
+    testCases.foreach { bytes =>
+      // Should not throw NumberFormatException
+      noException should be thrownBy {
+        ArbitraryIntegerMpt.bigIntSerializer.fromBytes(bytes)
+      }
+    }
+  }
 }
