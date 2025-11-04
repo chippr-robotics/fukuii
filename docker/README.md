@@ -216,6 +216,167 @@ Maximum security image using Google's distroless base.
 docker build -f docker/Dockerfile.distroless -t fukuii:distroless .
 ```
 
+### 5. Network-Specific Images
+
+Pre-configured images for specific Ethereum Classic networks, making it easy to deploy nodes without manual configuration.
+
+#### 5.1. ETC Mainnet Image (`Dockerfile.mainnet`)
+Pre-configured for Ethereum Classic mainnet synchronization.
+
+**Features:**
+- Pre-configured for ETC mainnet
+- Same features as production image
+- Environment variable `FUKUII_NETWORK=etc` pre-set
+
+**Docker Hub:**
+- `chipprbots/fukuii-mainnet:latest` (latest build)
+- `chipprbots/fukuii-mainnet:nightly` (nightly build)
+- `chipprbots/fukuii-mainnet:nightly-YYYYMMDD` (specific nightly)
+
+**GitHub Container Registry:**
+- `ghcr.io/chippr-robotics/fukuii-mainnet:latest`
+
+**Run:**
+```bash
+# From Docker Hub
+docker run -d \
+  --name fukuii-mainnet \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-mainnet-data:/app/data \
+  chipprbots/fukuii-mainnet:latest
+
+# From GitHub Container Registry
+docker run -d \
+  --name fukuii-mainnet \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-mainnet-data:/app/data \
+  ghcr.io/chippr-robotics/fukuii-mainnet:latest
+```
+
+#### 5.2. Mordor Testnet Image (`Dockerfile.mordor`)
+Pre-configured for Ethereum Classic Mordor testnet synchronization.
+
+**Features:**
+- Pre-configured for Mordor testnet
+- Same features as production image
+- Environment variable `FUKUII_NETWORK=mordor` pre-set
+- Perfect for testing and development
+
+**Docker Hub:**
+- `chipprbots/fukuii-mordor:latest` (latest build)
+- `chipprbots/fukuii-mordor:nightly` (nightly build)
+- `chipprbots/fukuii-mordor:nightly-YYYYMMDD` (specific nightly)
+
+**GitHub Container Registry:**
+- `ghcr.io/chippr-robotics/fukuii-mordor:latest`
+
+**Run:**
+```bash
+# From Docker Hub
+docker run -d \
+  --name fukuii-mordor \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-mordor-data:/app/data \
+  chipprbots/fukuii-mordor:latest
+
+# From GitHub Container Registry
+docker run -d \
+  --name fukuii-mordor \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-mordor-data:/app/data \
+  ghcr.io/chippr-robotics/fukuii-mordor:latest
+```
+
+#### 5.3. Mordor Testnet Miner Image (`Dockerfile.mordor-miner`)
+Pre-configured for Ethereum Classic Mordor testnet with mining enabled by default.
+
+**Features:**
+- Pre-configured for Mordor testnet
+- Mining enabled by default
+- Environment variable `FUKUII_MINING_ENABLED=true` pre-set
+- Requires setting a coinbase address to receive mining rewards
+
+**Important:** You must specify a coinbase address to receive mining rewards. The default address is a placeholder and should be changed.
+
+**Docker Hub:**
+- `chipprbots/fukuii-mordor-miner:latest` (latest build)
+- `chipprbots/fukuii-mordor-miner:nightly` (nightly build)
+- `chipprbots/fukuii-mordor-miner:nightly-YYYYMMDD` (specific nightly)
+
+**GitHub Container Registry:**
+- `ghcr.io/chippr-robotics/fukuii-mordor-miner:latest`
+
+**Run with custom coinbase address:**
+```bash
+# From Docker Hub - specify your coinbase address
+docker run -d \
+  --name fukuii-mordor-miner \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-mordor-miner-data:/app/data \
+  chipprbots/fukuii-mordor-miner:latest \
+  -Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE
+
+# Example with a real address
+docker run -d \
+  --name fukuii-mordor-miner \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-mordor-miner-data:/app/data \
+  chipprbots/fukuii-mordor-miner:latest \
+  -Dfukuii.mining.coinbase=0x1234567890123456789012345678901234567890
+
+# From GitHub Container Registry
+docker run -d \
+  --name fukuii-mordor-miner \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -p 30303:30303 \
+  -v fukuii-mordor-miner-data:/app/data \
+  ghcr.io/chippr-robotics/fukuii-mordor-miner:latest \
+  -Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE
+```
+
+**Docker Compose Example for Miner:**
+```yaml
+version: '3.8'
+
+services:
+  fukuii-mordor-miner:
+    image: chipprbots/fukuii-mordor-miner:latest
+    container_name: fukuii-mordor-miner
+    restart: unless-stopped
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+      - "30303:30303"
+    volumes:
+      - fukuii-mordor-miner-data:/app/data
+    command:
+      - "-Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE"
+    environment:
+      - JAVA_OPTS=-Xmx4g -Xms4g
+    healthcheck:
+      test: ["/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  fukuii-mordor-miner-data:
+```
+
 ## Health Checks
 
 The production image includes a built-in healthcheck script that:
@@ -448,6 +609,15 @@ git push origin v1.0.0
 - **Base Image:** 
   - `ghcr.io/chippr-robotics/fukuii-base:latest`
   - `chipprbots/fukuii-base:latest`
+- **Mainnet Image:**
+  - `ghcr.io/chippr-robotics/fukuii-mainnet:latest`
+  - `chipprbots/fukuii-mainnet:latest`
+- **Mordor Image:**
+  - `ghcr.io/chippr-robotics/fukuii-mordor:latest`
+  - `chipprbots/fukuii-mordor:latest`
+- **Mordor Miner Image:**
+  - `ghcr.io/chippr-robotics/fukuii-mordor-miner:latest`
+  - `chipprbots/fukuii-mordor-miner:latest`
 
 **Tags Generated:**
 - Branch names (e.g., `main`, `develop`)
@@ -456,6 +626,48 @@ git push origin v1.0.0
 - `latest` for the default branch
 
 **Note:** Development images are not signed and do not include provenance attestations. Use release images for production deployments.
+
+### Nightly Build Workflow (`.github/workflows/nightly.yml`)
+
+**Triggered by:** Scheduled daily at 00:00 GMT (midnight UTC), or manually via workflow_dispatch
+
+**Purpose:** Provides automated nightly builds of all container images for testing and development purposes.
+
+**Registries:**
+- `ghcr.io/chippr-robotics/fukuii` (Development builds)
+- `chipprbots/fukuii` (Docker Hub)
+
+**Images Built:**
+- Standard images (main, dev, base)
+- Network-specific images (mainnet, mordor, mordor-miner)
+
+**Tags Generated:**
+- `nightly` - Always points to the latest nightly build
+- `nightly-YYYYMMDD` - Specific nightly build date (e.g., `nightly-20231115`)
+
+**Use Cases:**
+- Testing latest changes before a release
+- Automated testing pipelines
+- Development environments requiring cutting-edge features
+- Early access to bug fixes
+
+**Example Usage:**
+```bash
+# Pull latest nightly build of mainnet image
+docker pull chipprbots/fukuii-mainnet:nightly
+
+# Pull specific nightly build
+docker pull chipprbots/fukuii-mordor-miner:nightly-20231115
+
+# Use in Docker Compose for continuous testing
+version: '3.8'
+services:
+  fukuii:
+    image: chipprbots/fukuii-mordor:nightly
+    # ... rest of config
+```
+
+**Note:** Nightly images are intended for development and testing. For production use, prefer versioned release images or the `latest` tag from the release workflow.
 
 ## Migration from Old Images
 
