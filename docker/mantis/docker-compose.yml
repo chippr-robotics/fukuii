@@ -5,7 +5,7 @@ volumes:
     grafana_data: {}
 
 networks:
-  mantis-net:
+  fukuii-net:
 
 services:
 
@@ -22,21 +22,21 @@ services:
     ports:
       - 9090:9090
     links:
-      - mantis:mantis
+      - fukuii:fukuii
     depends_on:
-      - mantis
+      - fukuii
     networks:
-      - mantis-net
+      - fukuii-net
     restart: always
 
-  mantis:
-    image: mantis:latest
+  fukuii:
+    image: fukuii:latest
     ports:
       - 8546:8546
       - 13798:13798
       - 9095:9095
     networks:
-      - mantis-net
+      - fukuii-net
     restart: always
 
   grafana:
@@ -49,6 +49,6 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning/:/etc/grafana/provisioning/
     networks:
-      - mantis-net
+      - fukuii-net
     restart: always
 

@@ -36,7 +36,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
       )
     val hello = WireProtocol.Hello(
       p2pVersion = 4,
-      clientId = "mantis",
+      clientId = "fukuii",
       capabilities = Seq(Capability.ETH63),
       listenPort = 3333,
       nodeId = ByteString(

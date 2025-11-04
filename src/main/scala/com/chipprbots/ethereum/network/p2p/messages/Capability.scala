@@ -45,7 +45,7 @@ object Capability {
   }
 
   def parseUnsafe(s: String): Capability =
-    parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Mantis"))
+    parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Fukuii"))
 
   def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] =
     c1.intersect(c2) match {

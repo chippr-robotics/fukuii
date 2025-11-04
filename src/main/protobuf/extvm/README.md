@@ -1,4 +1,4 @@
-# mantis-extvm-pb
+# fukuii-extvm-pb
 
 This repository exposes a protobuf based API for integrating [Mantis](https://github.com/input-output-hk/mantis) with external VM implementations (KEVM, IELE)
 

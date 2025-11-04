@@ -189,7 +189,7 @@ class TestService(
 
     // remove current genesis (Try because it may not exist)
     Try(blockchain.removeBlock(blockchainReader.genesisHeader.hash))
-    // TODO clear the storage ? When relaunching some tests on the same running test mantis client,
+    // TODO clear the storage ? When relaunching some tests on the same running test fukuii client,
     // we end up with duplicate blocks because they are still present in the storage layer
     // for example: bcMultiChainTest/ChainAtoChainB_BlockHash_Istanbul
 

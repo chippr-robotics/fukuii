@@ -575,10 +575,10 @@ trait CheckpointingServiceBuilder {
     )
 }
 
-trait MantisServiceBuilder {
+trait FukuiiServiceBuilder {
   self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder =>
 
-  lazy val mantisService = new MantisService(transactionHistoryService, jsonRpcConfig)
+  lazy val mantisService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 }
 
 trait KeyStoreBuilder {
@@ -592,7 +592,7 @@ trait ApisBuilder extends ApisBase {
     val Web3 = "web3"
     val Net = "net"
     val Personal = "personal"
-    val Mantis = "mantis"
+    val Fukuii = "fukuii"
     val Debug = "debug"
     val Rpc = "rpc"
     val Test = "test"
@@ -602,7 +602,7 @@ trait ApisBuilder extends ApisBase {
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Mantis, Debug, Test, Iele, Qa, Checkpointing)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Debug, Test, Iele, Qa, Checkpointing)
 }
 
 trait JSONRpcConfigBuilder {
@@ -627,7 +627,7 @@ trait JSONRpcControllerBuilder {
     with JSONRpcConfigBuilder
     with QaServiceBuilder
     with CheckpointingServiceBuilder
-    with MantisServiceBuilder =>
+    with FukuiiServiceBuilder =>
 
   protected def testService: Option[TestService] = None
 
@@ -683,7 +683,7 @@ trait JSONRpcHttpServerBuilder {
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
       secureRandom,
-      () => sslContext("mantis.network.rpc.http")
+      () => sslContext("fukuii.network.rpc.http")
     )
 }
 
@@ -871,7 +871,7 @@ trait Node
     with DebugServiceBuilder
     with QaServiceBuilder
     with CheckpointingServiceBuilder
-    with MantisServiceBuilder
+    with FukuiiServiceBuilder
     with KeyStoreBuilder
     with ApisBuilder
     with JSONRpcConfigBuilder

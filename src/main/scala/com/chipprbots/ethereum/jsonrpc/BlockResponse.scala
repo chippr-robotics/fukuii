@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 case class CheckpointResponse(signatures: Seq[ECDSASignature], signers: Seq[ByteString])
 
 /*
- * this trait has been introduced to deal with ETS requirements and discrepancies between mantis and the spec
+ * this trait has been introduced to deal with ETS requirements and discrepancies between fukuii and the spec
  * it should be considered a band-aid solution and replaced with something robust and non-intrusive
  */
 trait BaseBlockResponse {

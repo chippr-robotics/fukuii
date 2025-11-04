@@ -207,7 +207,7 @@ Create a custom configuration file (e.g., `custom.conf`):
 ```hocon
 include "base.conf"
 
-mantis {
+fukuii {
   datadir = "/custom/path/to/data"
   
   network {
@@ -388,7 +388,7 @@ Fukuii supports Prometheus metrics for monitoring. To enable:
 1. Configure metrics in your config file:
 
 ```hocon
-mantis {
+fukuii {
   metrics {
     enabled = true
     port = 9095

@@ -5,8 +5,8 @@ import org.json4s.Merge
 
 import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionResponseJsonEncoder
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
-import com.chipprbots.ethereum.jsonrpc.MantisService.GetAccountTransactionsRequest
-import com.chipprbots.ethereum.jsonrpc.MantisService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.Ops._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTr
 
 import JsonEncoder.OptionToNull._
 
-object MantisJsonMethodImplicits extends JsonMethodsImplicits {
+object FukuiiJsonMethodImplicits extends JsonMethodsImplicits {
   implicit val extendedTransactionDataJsonEncoder: JsonEncoder[ExtendedTransactionData] = extendedTxData => {
     val asTxResponse = TransactionResponse(
       extendedTxData.stx,
@@ -35,7 +35,7 @@ object MantisJsonMethodImplicits extends JsonMethodsImplicits {
     Merge.merge(encodedTxResponse, encodedExtension)
   }
 
-  implicit val mantis_getAccountTransactions
+  implicit val fukuii_getAccountTransactions
       : JsonMethodCodec[GetAccountTransactionsRequest, GetAccountTransactionsResponse] =
     new JsonMethodDecoder[GetAccountTransactionsRequest] with JsonEncoder[GetAccountTransactionsResponse] {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetAccountTransactionsRequest] =

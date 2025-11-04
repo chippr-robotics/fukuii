@@ -45,8 +45,8 @@ object VmSetup extends Logger {
         log.info(s"Starting external ${externalConfig.vmType} VM process using executable path")
         startStandardVmProcess(externalConfig)
 
-      case "mantis" =>
-        log.info("Starting external Mantis VM process using executable path")
+      case "fukuii" =>
+        log.info("Starting external Fukuii VM process using executable path")
         startMantisVmProcess(externalConfig)
 
       case "none" =>

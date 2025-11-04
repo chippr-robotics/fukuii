@@ -133,8 +133,8 @@ object JsonRpcIpcServer {
   object JsonRpcIpcServerConfig {
     import com.typesafe.config.{Config => TypesafeConfig}
 
-    def apply(mantisConfig: TypesafeConfig): JsonRpcIpcServerConfig = {
-      val rpcIpcConfig = mantisConfig.getConfig("network.rpc.ipc")
+    def apply(fukuiiConfig: TypesafeConfig): JsonRpcIpcServerConfig = {
+      val rpcIpcConfig = fukuiiConfig.getConfig("network.rpc.ipc")
 
       new JsonRpcIpcServerConfig {
         override val enabled: Boolean = rpcIpcConfig.getBoolean("enabled")

@@ -201,29 +201,29 @@ Node configuration files control the operational behavior of the Fukuii client, 
 #### Data Directory
 
 ```hocon
-mantis {
+fukuii {
   # Base directory for all node data
-  datadir = ${user.home}"/.mantis/"${mantis.blockchains.network}
+  datadir = ${user.home}"/.fukuii/"${fukuii.blockchains.network}
   
   # Node private key location
-  node-key-file = ${mantis.datadir}"/node.key"
+  node-key-file = ${fukuii.datadir}"/node.key"
   
   # Keystore directory for account keys
   keyStore {
-    keystore-dir = ${mantis.datadir}"/keystore"
+    keystore-dir = ${fukuii.datadir}"/keystore"
     minimal-passphrase-length = 7
     allow-no-passphrase = true
   }
 }
 ```
 
-For ETC mainnet, the default data directory is `~/.mantis/etc/`.
+For ETC mainnet, the default data directory is `~/.fukuii/etc/`.
 
 #### Network Configuration
 
 **P2P Networking**:
 ```hocon
-mantis {
+fukuii {
   network {
     server-address {
       # Listening interface for P2P connections
@@ -258,7 +258,7 @@ mantis {
 
 **Peer Management**:
 ```hocon
-mantis {
+fukuii {
   network {
     peer {
       # Minimum outgoing peer connections
@@ -286,7 +286,7 @@ mantis {
 
 **HTTP JSON-RPC**:
 ```hocon
-mantis {
+fukuii {
   network {
     rpc {
       http {
@@ -313,7 +313,7 @@ mantis {
       }
       
       # Enabled RPC APIs
-      apis = "eth,web3,net,personal,mantis,debug,qa,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa,checkpointing"
     }
   }
 }
@@ -321,7 +321,7 @@ mantis {
 
 **IPC JSON-RPC**:
 ```hocon
-mantis {
+fukuii {
   network {
     rpc {
       ipc {
@@ -329,7 +329,7 @@ mantis {
         enabled = false
         
         # IPC socket file location
-        socket-file = ${mantis.datadir}"/mantis.ipc"
+        socket-file = ${fukuii.datadir}"/fukuii.ipc"
       }
     }
   }
@@ -339,14 +339,14 @@ mantis {
 #### Database Configuration
 
 ```hocon
-mantis {
+fukuii {
   db {
     # Data source: "rocksdb"
     data-source = "rocksdb"
     
     rocksdb {
       # Database path
-      path = ${mantis.datadir}"/rocksdb"
+      path = ${fukuii.datadir}"/rocksdb"
       
       # Create if missing
       create-if-missing = true
@@ -364,13 +364,13 @@ mantis {
 #### Mining Configuration
 
 ```hocon
-mantis {
+fukuii {
   mining {
     # Miner coinbase address
     coinbase = "0011223344556677889900112233445566778899"
     
     # Extra data in mined blocks
-    header-extra-data = "mantis"
+    header-extra-data = "fukuii"
     
     # Mining protocol: "pow", "mocked", "restricted-pow"
     protocol = pow
@@ -387,7 +387,7 @@ mantis {
 #### Sync and Blockchain
 
 ```hocon
-mantis {
+fukuii {
   sync {
     # Perform state sync as part of fast sync
     do-fast-sync = true
@@ -417,7 +417,7 @@ mantis {
 #### Test Mode
 
 ```hocon
-mantis {
+fukuii {
   # Enable test mode (enables test validators and test_ RPC endpoints)
   testmode = false
 }
@@ -471,24 +471,24 @@ You can override any configuration value using JVM system properties with the `-
 **Override Specific Values**:
 ```bash
 # Change RPC port
-./bin/fukuii -Dmantis.network.rpc.http.port=8545 etc
+./bin/fukuii -Dfukuii.network.rpc.http.port=8545 etc
 
 # Change data directory
-./bin/fukuii -Dmantis.datadir=/data/fukuii-etc etc
+./bin/fukuii -Dfukuii.datadir=/data/fukuii-etc etc
 
 # Enable test mode
-./bin/fukuii -Dmantis.testmode=true testnet-internal
+./bin/fukuii -Dfukuii.testmode=true testnet-internal
 
 # Change P2P port
-./bin/fukuii -Dmantis.network.server-address.port=30303 etc
+./bin/fukuii -Dfukuii.network.server-address.port=30303 etc
 ```
 
 **Multiple Overrides**:
 ```bash
 ./bin/fukuii \
-  -Dmantis.network.rpc.http.interface=0.0.0.0 \
-  -Dmantis.network.rpc.http.port=8545 \
-  -Dmantis.datadir=/custom/data \
+  -Dfukuii.network.rpc.http.interface=0.0.0.0 \
+  -Dfukuii.network.rpc.http.port=8545 \
+  -Dfukuii.datadir=/custom/data \
   etc
 ```
 
@@ -572,19 +572,19 @@ While Fukuii primarily uses configuration files and JVM properties, you can set 
 **Data Directory**:
 ```bash
 export FUKUII_DATADIR=/data/fukuii-etc
-./bin/fukuii -Dmantis.datadir=$FUKUII_DATADIR etc
+./bin/fukuii -Dfukuii.datadir=$FUKUII_DATADIR etc
 ```
 
 **Test Mode**:
 ```bash
 export FUKUII_TESTMODE=true
-./bin/fukuii -Dmantis.testmode=$FUKUII_TESTMODE testnet-internal
+./bin/fukuii -Dfukuii.testmode=$FUKUII_TESTMODE testnet-internal
 ```
 
 **User Home** (automatically used):
 ```bash
 # Fukuii respects ${user.home} in config paths
-# Default datadir: ${user.home}/.mantis/<network>
+# Default datadir: ${user.home}/.fukuii/<network>
 ```
 
 ## Common Configuration Examples
@@ -596,7 +596,7 @@ Create a custom configuration file `custom-datadir.conf`:
 ```hocon
 include "base.conf"
 
-mantis {
+fukuii {
   datadir = "/data/fukuii-etc"
 }
 ```
@@ -613,7 +613,7 @@ Launch:
 ```hocon
 include "base.conf"
 
-mantis {
+fukuii {
   network {
     rpc {
       http {
@@ -639,7 +639,7 @@ mantis {
 ```hocon
 include "base.conf"
 
-mantis {
+fukuii {
   network {
     server-address {
       port = 30304  # P2P port
@@ -663,7 +663,7 @@ mantis {
 ```hocon
 include "base.conf"
 
-mantis {
+fukuii {
   mining {
     # Set your mining address
     coinbase = "0xYOUR_ADDRESS_HERE"
@@ -685,7 +685,7 @@ mantis {
 ```hocon
 include "base.conf"
 
-mantis {
+fukuii {
   # Increase peer limits for better connectivity
   network {
     peer {
@@ -726,7 +726,7 @@ Launch with JVM tuning:
 ```hocon
 include "base.conf"
 
-mantis {
+fukuii {
   # Enable test mode
   testmode = true
   
@@ -739,7 +739,7 @@ mantis {
       }
       
       # Enable all APIs for testing
-      apis = "eth,web3,net,personal,mantis,debug,qa,test,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa,test,checkpointing"
     }
     
     # Minimal peers for faster startup
@@ -757,16 +757,16 @@ mantis {
 
 | Setting | Config Path | Default | Description |
 |---------|-------------|---------|-------------|
-| Data Directory | `mantis.datadir` | `~/.mantis/<network>` | Base data directory |
-| P2P Port | `mantis.network.server-address.port` | `9076` | Ethereum P2P port |
-| Discovery Port | `mantis.network.discovery.port` | `30303` | Peer discovery port |
-| RPC Port | `mantis.network.rpc.http.port` | `8546` | JSON-RPC HTTP port |
-| RPC Interface | `mantis.network.rpc.http.interface` | `localhost` | RPC bind address |
-| Min Peers | `mantis.network.peer.min-outgoing-peers` | `20` | Minimum peer connections |
-| Max Peers | `mantis.network.peer.max-outgoing-peers` | `50` | Maximum peer connections |
-| Test Mode | `mantis.testmode` | `false` | Enable test mode |
-| Mining Enabled | `mantis.mining.mining-enabled` | `false` | Enable mining |
-| Coinbase | `mantis.mining.coinbase` | - | Mining reward address |
+| Data Directory | `fukuii.datadir` | `~/.fukuii/<network>` | Base data directory |
+| P2P Port | `fukuii.network.server-address.port` | `9076` | Ethereum P2P port |
+| Discovery Port | `fukuii.network.discovery.port` | `30303` | Peer discovery port |
+| RPC Port | `fukuii.network.rpc.http.port` | `8546` | JSON-RPC HTTP port |
+| RPC Interface | `fukuii.network.rpc.http.interface` | `localhost` | RPC bind address |
+| Min Peers | `fukuii.network.peer.min-outgoing-peers` | `20` | Minimum peer connections |
+| Max Peers | `fukuii.network.peer.max-outgoing-peers` | `50` | Maximum peer connections |
+| Test Mode | `fukuii.testmode` | `false` | Enable test mode |
+| Mining Enabled | `fukuii.mining.mining-enabled` | `false` | Enable mining |
+| Coinbase | `fukuii.mining.coinbase` | - | Mining reward address |
 
 ### Configuration File Syntax
 
@@ -779,7 +779,7 @@ include "base.conf"
 
 **Nested Objects**:
 ```hocon
-mantis {
+fukuii {
   network {
     peer {
       min-outgoing-peers = 20
@@ -790,14 +790,14 @@ mantis {
 
 **Dot Notation**:
 ```hocon
-mantis.network.peer.min-outgoing-peers = 20
+fukuii.network.peer.min-outgoing-peers = 20
 ```
 
 **Variable Substitution**:
 ```hocon
-mantis {
-  datadir = ${user.home}"/.mantis/"${mantis.blockchains.network}
-  node-key-file = ${mantis.datadir}"/node.key"
+fukuii {
+  datadir = ${user.home}"/.fukuii/"${fukuii.blockchains.network}
+  node-key-file = ${fukuii.datadir}"/node.key"
 }
 ```
 
@@ -830,7 +830,7 @@ bootstrap-nodes = [
 2. Check configuration precedence - JVM properties override config files:
    ```bash
    # This override takes precedence over config file
-   ./bin/fukuii -Dmantis.network.rpc.http.port=8545 etc
+   ./bin/fukuii -Dfukuii.network.rpc.http.port=8545 etc
    ```
 
 3. Verify HOCON syntax is correct (quotes, braces, commas)
@@ -844,8 +844,8 @@ bootstrap-nodes = [
 **Solution**: Change ports in configuration:
 ```bash
 ./bin/fukuii \
-  -Dmantis.network.server-address.port=9077 \
-  -Dmantis.network.discovery.port=30304 \
+  -Dfukuii.network.server-address.port=9077 \
+  -Dfukuii.network.discovery.port=30304 \
   etc
 ```
 
@@ -856,13 +856,13 @@ bootstrap-nodes = [
 **Solutions**:
 1. Check RPC is enabled:
    ```hocon
-   mantis.network.rpc.http.enabled = true
+   fukuii.network.rpc.http.enabled = true
    ```
 
 2. Verify interface binding:
    ```bash
    # For remote access (INSECURE without firewall)
-   -Dmantis.network.rpc.http.interface=0.0.0.0
+   -Dfukuii.network.rpc.http.interface=0.0.0.0
    ```
 
 3. Check firewall allows RPC port (default 8546)

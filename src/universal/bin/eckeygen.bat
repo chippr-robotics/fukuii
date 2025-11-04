@@ -2,4 +2,4 @@
 
 cd "%~dp0\.."
 
-call bin\mantis.bat eckeygen %*
+call bin\fukuii.bat eckeygen %*

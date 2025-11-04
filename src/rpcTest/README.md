@@ -8,30 +8,30 @@ It includes custom genesis block which specifies 3 different pre-funded accounts
 Private keys for pre-funded accounts are located in `mantis/src/rpcTest/resources/privateNetConfig/keystore`.
 
 1. Build `mantis` client via `sbt dist`.
-2. Unzip built client to some directory i.e `~/mantis_build`
-3. Run script `patch-mantis` (it's in resources dir) with path to your mantis instance. Example invocation assuming that mantis is in `~/mantis_build/mantis-X.Y.Z` looks as follows:
+2. Unzip built client to some directory i.e `~/fukuii_build`
+3. Run script `patch-mantis` (it's in resources dir) with path to your fukuii instance. Example invocation assuming that fukuii is in `~/fukuii_build/fukuii-X.Y.Z` looks as follows:
     
-        ./resources/patch-mantis ~/mantis_build/mantis-3.2.1
+        ./resources/patch-mantis ~/fukuii_build/fukuii-3.2.1
 
-4. Go to `~/mantis_build/mantis-3.2.1` directory and run mantis on ETC mainnet with command:
+4. Go to `~/fukuii_build/fukuii-3.2.1` directory and run fukuii on ETC mainnet with command:
 
-        ./bin/mantis-launcher etc -Dmantis.sync.do-fast-sync=false -Dmantis.network.discovery.discovery-enabled=true -Dmantis.network.rpc.http.mode=http
+        ./bin/fukuii-launcher etc -Dmantis.sync.do-fast-sync=false -Dmantis.network.discovery.discovery-enabled=true -Dmantis.network.rpc.http.mode=http
         
 5. Ensure it has at least `150000` blocks.
 6. Go to `mantis` source dir and run 
 
         sbt "RpcTest / testOnly -- -n MainNet"
         
-7. Turn off Mantis client in `~/mantis_build/mantis-3.2.1`
-8. Go to `~/mantis_build/mantis-3.2.1` directory and run mantis using command below (mantis will be run with miner so you need to wait till DAG is loaded):
+7. Turn off Fukuii client in `~/fukuii_build/fukuii-3.2.1`
+8. Go to `~/fukuii_build/fukuii-3.2.1` directory and run fukuii using command below (fukuii will be run with miner so you need to wait till DAG is loaded):
 
         ./bin/mantis -Dmantis.mining.mining-enabled=true
 9. Go to `mantis` source dir and run 
 
         sbt "RpcTest / testOnly -- -n PrivNet"
         
-10. Turn off Mantis client
-11. Go to `~/mantis_build/mantis-3.2.1` directory and run Mantis with mining disabled using command
+10. Turn off Fukuii client
+11. Go to `~/fukuii_build/fukuii-3.2.1` directory and run Fukuii with mining disabled using command
 
         ./bin/mantis
         
@@ -39,7 +39,7 @@ Private keys for pre-funded accounts are located in `mantis/src/rpcTest/resource
 
         sbt "RpcTest / testOnly -- -n PrivNetNoMining"
         
-13. Turn off Mantis client.
+13. Turn off Fukuii client.
 
 
 __TODO__: It seems that simple bash script should be able to run all these tests now.

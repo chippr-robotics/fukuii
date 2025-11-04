@@ -23,8 +23,8 @@ object EthashConfig {
     final val MineRounds = "mine-rounds"
   }
 
-  def apply(mantisConfig: TypesafeConfig): EthashConfig = {
-    val miningConfig = mantisConfig.getConfig(Protocol.Names.PoW)
+  def apply(fukuiiConfig: TypesafeConfig): EthashConfig = {
+    val miningConfig = fukuiiConfig.getConfig(Protocol.Names.PoW)
 
     val ommersPoolSize = miningConfig.getInt(Keys.OmmersPoolSize)
     val ommerPoolQueryTimeout = miningConfig.getDuration(Keys.OmmerPoolQueryTimeout).toMillis.millis

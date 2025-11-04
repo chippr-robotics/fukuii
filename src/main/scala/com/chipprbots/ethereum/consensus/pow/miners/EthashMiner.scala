@@ -93,7 +93,7 @@ class EthashMiner(
 }
 
 object EthashMiner {
-  final val BlockForgerDispatcherId = "mantis.async.dispatchers.block-forger"
+  final val BlockForgerDispatcherId = "fukuii.async.dispatchers.block-forger"
 
   // scalastyle:off magic.number
   final val MaxNounce: BigInt = BigInt(2).pow(64) - 1

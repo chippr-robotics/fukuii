@@ -123,7 +123,7 @@ class MockedMiner(
 }
 
 object MockedMiner {
-  final val BlockForgerDispatcherId = "mantis.async.dispatchers.block-forger"
+  final val BlockForgerDispatcherId = "fukuii.async.dispatchers.block-forger"
 
   case object MineBlock
 

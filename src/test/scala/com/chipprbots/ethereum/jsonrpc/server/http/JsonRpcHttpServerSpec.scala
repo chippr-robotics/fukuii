@@ -497,7 +497,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
         debugService = mock[DebugService],
         qaService = mock[QAService],
         checkpointingService = mock[CheckpointingService],
-        mantisService = mock[MantisService],
+        fukuiiService = mock[FukuiiService],
         proofService = mock[ProofService],
         config = mock[JsonRpcConfig]
       )

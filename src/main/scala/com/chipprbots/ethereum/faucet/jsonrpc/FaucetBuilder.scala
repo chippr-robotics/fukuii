@@ -96,7 +96,7 @@ trait FaucetJsonRpcHttpServerBuilder {
     faucetJsonRpcHealthCheck,
     jsonRpcConfig.httpServerConfig,
     secureRandom,
-    () => sslContext("mantis.network.rpc.http")
+    () => sslContext("fukuii.network.rpc.http")
   )
 }
 
