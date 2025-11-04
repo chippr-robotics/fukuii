@@ -6,22 +6,22 @@
 
 [![CI](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml)
 
-Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Mantis was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
+Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Fukuii was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
 
-Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
+Fukuii retains the robust architecture and ETC compatibility of Fukuii while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
 
-Executable scripts are renamed from mantis to fukuii.
+Executable scripts are renamed from fukuii to fukuii.
 
 Java/Scala packages under io.iohk have been moved to com.chipprbots.
 
-Environment variables and configuration keys prefixed with mantis have been changed to fukuii.
+Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
 
 Important Notes
 
 Licence: This project continues to be distributed under the Apache 2.0 licence. A copy of the licence is included in the LICENSE file. The original NOTICE file from IOHK is preserved as required by the licence, and Chippr Robotics LLC has added its own attribution.
 
 Origin: Fukuii is derived from the Mantis
- client. Mantis is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
+ client. Fukuii is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
 
 Chordoes Fukuii is a worm which controls a zombie mantis.
 
@@ -162,7 +162,7 @@ The distribution’s bin/ directory contains a launcher script named fukuii. To 
 ./bin/fukuii etc
 
 
-The launcher accepts the same network names that Mantis did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+The launcher accepts the same network names that Fukuii did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
 
 Command line interface (CLI)
 

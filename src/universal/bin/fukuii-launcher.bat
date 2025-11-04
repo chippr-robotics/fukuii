@@ -21,4 +21,4 @@ if "%1"=="" goto :launch
     goto :loop
 
 :launch
-call bin\mantis.bat %CHAIN_PARAM% %RESTVAR%
+call bin\fukuii.bat %CHAIN_PARAM% %RESTVAR%

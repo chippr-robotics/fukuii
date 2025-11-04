@@ -83,7 +83,7 @@ object Consensus {
    *  - The distinction between ExtendedCurrentBestBranch and SelectedNewBestBranch won't really be useful
    *  because there will be no need to put back the old branch into the block queue in case of reorganisation
    *  - `ConsensusErrorDueToMissingNode` and  `ConsensusError` would mean that the application is in an
-   *  inconsistent state. Unless there is a reason to think that mantis would self heal when that happens, I
+   *  inconsistent state. Unless there is a reason to think that fukuii would self heal when that happens, I
    *  don't think there is a reason to add them here.
    */
 

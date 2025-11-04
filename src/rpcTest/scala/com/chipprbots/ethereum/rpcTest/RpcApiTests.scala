@@ -1158,14 +1158,14 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 abstract class ScenarioSetup {
   val testConfig: RpcTestConfig = RpcTestConfig("test.conf")
 
-  // Some data from mantis config (this data is not exposed to built version so it is safe to load it here
-  val config: Config = ConfigFactory.load("application.conf").getConfig("mantis")
+  // Some data from fukuii config (this data is not exposed to built version so it is safe to load it here
+  val config: Config = ConfigFactory.load("application.conf").getConfig("fukuii")
   val clientVersion: String = com.chipprbots.ethereum.utils.Config.clientVersion
   val networkName: String = com.chipprbots.ethereum.utils.Config.blockchains.network
   val capabilities: List[Capability] = com.chipprbots.ethereum.utils.Config.blockchains.blockchains(networkName).capabilities
   //
 
-  val service: Admin = Admin.build(new HttpService(testConfig.mantisUrl))
+  val service: Admin = Admin.build(new HttpService(testConfig.fukuiiUrl))
   val unexisitingBlockHash = "0xaaaaaaaaaaa959b3db6469104c59b803162cf37a23293e8df306e559218f5c6f"
   val badHash = "0xm"
   val emptyResponse = "0x"

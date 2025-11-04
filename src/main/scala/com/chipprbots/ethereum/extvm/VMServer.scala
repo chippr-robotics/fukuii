@@ -40,8 +40,8 @@ object VmServerApp extends Logger {
   def main(args: Array[String]): Unit = {
     val config = ConfigFactory.load()
 
-    val port = if (args.length > 0) args(0).toInt else config.getInt("mantis.vm.external.port")
-    val host = if (args.length > 1) args(1) else config.getString("mantis.vm.external.host")
+    val port = if (args.length > 0) args(0).toInt else config.getInt("fukuii.vm.external.port")
+    val host = if (args.length > 1) args(1) else config.getString("fukuii.vm.external.host")
 
     Tcp().bind(host, port).runForeach(connection => handleConnection(connection.flow))
     log.info(s"VM server listening on $host:$port")

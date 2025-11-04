@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Initial Fukuii Ethereum Client codebase (forked from Mantis)
-- Rebranded from Mantis to Fukuii throughout codebase
+- Rebranded from Fukuii to Fukuii throughout codebase
 - Updated package names from io.iohk to com.chipprbots
 - GitHub Actions CI/CD pipeline
 - Docker container support with signed images

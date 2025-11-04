@@ -2,4 +2,4 @@
 
 cd "%~dp0\.."
 
-call bin\mantis.bat faucet %*
+call bin\fukuii.bat faucet %*

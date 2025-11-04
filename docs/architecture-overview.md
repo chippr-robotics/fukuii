@@ -443,7 +443,7 @@ graph TB
             PERSONAL[Personal Service]
             DEBUG[Debug Service]
             TEST[Test Service]
-            MANTIS[Mantis Service]
+            FUKUII[Fukuii Service]
         end
         
         subgraph "Components"
@@ -462,7 +462,7 @@ graph TB
     CTRL --> PERSONAL
     CTRL --> DEBUG
     CTRL --> TEST
-    CTRL --> MANTIS
+    CTRL --> FUKUII
     
     ETH --> FM
     ETH --> RB

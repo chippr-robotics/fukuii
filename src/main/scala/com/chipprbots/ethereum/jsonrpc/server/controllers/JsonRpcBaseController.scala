@@ -129,9 +129,9 @@ object JsonRpcBaseController {
   }
 
   object JsonRpcConfig {
-    def apply(mantisConfig: TypesafeConfig, availableApis: List[String]): JsonRpcConfig = {
+    def apply(fukuiiConfig: TypesafeConfig, availableApis: List[String]): JsonRpcConfig = {
       import scala.concurrent.duration._
-      val rpcConfig = mantisConfig.getConfig("network.rpc")
+      val rpcConfig = fukuiiConfig.getConfig("network.rpc")
 
       new JsonRpcConfig {
         override val apis: Seq[String] = {
@@ -147,8 +147,8 @@ object JsonRpcBaseController {
         override def accountTransactionsMaxBlocks: Int = rpcConfig.getInt("account-transactions-max-blocks")
         override def minerActiveTimeout: FiniteDuration = rpcConfig.getDuration("miner-active-timeout").toMillis.millis
 
-        override val httpServerConfig: JsonRpcHttpServerConfig = JsonRpcHttpServerConfig(mantisConfig)
-        override val ipcServerConfig: JsonRpcIpcServerConfig = JsonRpcIpcServerConfig(mantisConfig)
+        override val httpServerConfig: JsonRpcHttpServerConfig = JsonRpcHttpServerConfig(fukuiiConfig)
+        override val ipcServerConfig: JsonRpcIpcServerConfig = JsonRpcIpcServerConfig(fukuiiConfig)
         override val healthConfig: JsonRpcHealthConfig = JsonRpcHealthConfig(rpcConfig)
       }
     }

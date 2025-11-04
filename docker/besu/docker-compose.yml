@@ -60,6 +60,6 @@ services:
     networks:
       - besu-net
     volumes:
-      - $HOME/.mantis/development/besu:/var/lib/besu
+      - $HOME/.fukuii/development/besu:/var/lib/besu
     command: --rpc-http-cors-origins="all" --rpc-http-enabled --metrics-push-enabled --metrics-push-port=9091 --metrics-push-host=pushgateway
     restart: always

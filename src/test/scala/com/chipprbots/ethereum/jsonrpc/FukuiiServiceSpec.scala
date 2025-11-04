@@ -20,11 +20,11 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
-import com.chipprbots.ethereum.jsonrpc.MantisService.GetAccountTransactionsRequest
-import com.chipprbots.ethereum.jsonrpc.MantisService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.JSONRpcConfigBuilder
-import com.chipprbots.ethereum.nodebuilder.MantisServiceBuilder
+import com.chipprbots.ethereum.nodebuilder.FukuiiServiceBuilder
 import com.chipprbots.ethereum.nodebuilder.PendingTransactionsManagerBuilder
 import com.chipprbots.ethereum.nodebuilder.TransactionHistoryServiceBuilder
 import com.chipprbots.ethereum.nodebuilder.TxPoolConfigBuilder
@@ -34,8 +34,8 @@ import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTrans
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.domain.Block
 
-class MantisServiceSpec
-    extends TestKit(ActorSystem("MantisServiceSpec"))
+class FukuiiServiceSpec
+    extends TestKit(ActorSystem("FukuiiServiceSpec"))
     with FreeSpecBase
     with SpecFixtures
     with WithActorSystemShutDown {
@@ -44,7 +44,7 @@ class MantisServiceSpec
       with EphemBlockchainTestSetup
       with PendingTransactionsManagerBuilder
       with TxPoolConfigBuilder
-      with MantisServiceBuilder
+      with FukuiiServiceBuilder
       with JSONRpcConfigBuilder
       with ApisBuilder {
     lazy val pendingTransactionsManagerProbe: TestProbe = TestProbe()
@@ -52,7 +52,7 @@ class MantisServiceSpec
   }
   def createFixture() = new Fixture
 
-  "Mantis Service" - {
+  "Fukuii Service" - {
     "should get account's transaction history" in {
       class TxHistoryFixture extends Fixture {
         val fakeTransaction: SignedTransactionWithSender = SignedTransactionWithSender(
@@ -95,7 +95,7 @@ class MantisServiceSpec
       customTestCaseM(new TxHistoryFixture) { fixture =>
         import fixture._
 
-        mantisService
+        fukuiiService
           .getAccountTransactions(GetAccountTransactionsRequest(fakeTransaction.senderAddress, BigInt(0) to BigInt(1)))
           .map(result => assert(result === Right(GetAccountTransactionsResponse(expectedResponse))))
       }
@@ -104,7 +104,7 @@ class MantisServiceSpec
     "should validate range size against configuration" in testCaseM { (fixture: Fixture) =>
       import fixture._
 
-      mantisService
+      fukuiiService
         .getAccountTransactions(
           GetAccountTransactionsRequest(Address(1), BigInt(0) to BigInt(jsonRpcConfig.accountTransactionsMaxBlocks + 1))
         )

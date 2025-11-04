@@ -2397,7 +2397,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Block Number Pushed to Mantis",
+          "title": "Block Number Pushed to Fukuii",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -2686,7 +2686,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Latest Checkpoint Candidate fetched from Mantis",
+          "title": "Latest Checkpoint Candidate fetched from Fukuii",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7645,8 +7645,8 @@
         "allValue": null,
         "current": {
           "selected": false,
-          "text": "mantis:13798",
-          "value": "mantis:13798"
+          "text": "fukuii:13798",
+          "value": "fukuii:13798"
         },
         "datasource": "Prometheus",
         "definition": "label_values(jvm_classes_loaded, instance)",
@@ -7672,8 +7672,8 @@
         "allValue": null,
         "current": {
           "selected": false,
-          "text": "mantis:9095",
-          "value": "mantis:9095"
+          "text": "fukuii:9095",
+          "value": "fukuii:9095"
         },
         "datasource": "Prometheus",
         "definition": "label_values(akka_system_active_actors_count,instance)",
@@ -7820,8 +7820,8 @@
         "allValue": null,
         "current": {
           "selected": false,
-          "text": "mantis_system",
-          "value": "mantis_system"
+          "text": "fukuii_system",
+          "value": "fukuii_system"
         },
         "datasource": "Prometheus",
         "definition": "label_values(akka_system_unhandled_messages_total, system)",
@@ -7863,7 +7863,7 @@
     ]
   },
   "timezone": "utc",
-  "title": "Mantis",
+  "title": "Fukuii",
   "uid": "L3y-GTyWk",
   "version": 4
 }

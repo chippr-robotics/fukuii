@@ -22,7 +22,7 @@ import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.nodebuilder._
 
-/** Provides a standard setup for the test suites. The reference to "cake" is about the "Cake Pattern" used in Mantis.
+/** Provides a standard setup for the test suites. The reference to "cake" is about the "Cake Pattern" used in Fukuii.
   * Specifically it relates to the creation and wiring of the several components of a
   * [[com.chipprbots.ethereum.nodebuilder.Node Node]].
   */

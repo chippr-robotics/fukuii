@@ -11,7 +11,7 @@ The External VM features in this package are currently in **hibernation**. These
 - **Experimental**: These features were added as experimental functionality
 - **Not Core**: External VM support is not required for fukuii's primary blockchain operations
 - **Testing Incomplete**: The testing infrastructure for these features needs further development
-- **Maintenance**: The upstream mantis-extvm-pb repository is archived (last updated Sept 2021)
+- **Maintenance**: The upstream fukuii-extvm-pb repository is archived (last updated Sept 2021)
 
 ## Current Status
 
@@ -35,7 +35,7 @@ To use external VM (not recommended):
 vm {
   mode = "external"
   external {
-    vm-type = "mantis"
+    vm-type = "fukuii"
     host = "127.0.0.1"
     port = 8888
   }

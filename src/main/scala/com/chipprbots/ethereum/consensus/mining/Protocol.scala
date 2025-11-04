@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.consensus.mining
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 
-/** Enumerates the known mining protocols that Mantis can use. For the respective implementations, see [[Mining]].
+/** Enumerates the known mining protocols that Fukuii can use. For the respective implementations, see [[Mining]].
   */
 sealed trait Protocol {
 
@@ -44,7 +44,7 @@ object Protocol {
     */
   case object RestrictedPoW extends ProtocolImpl(Names.RestrictedPoW)
 
-  /** All the known protocols. If a protocol is not put here, then it cannot be used to run Mantis. */
+  /** All the known protocols. If a protocol is not put here, then it cannot be used to run Fukuii. */
   final val KnownProtocols: Set[ProtocolImpl] = Set(
     PoW,
     MockedPow,
