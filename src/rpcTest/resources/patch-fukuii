@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+FUKUII_DIR=$1
+SCRIPT_DIR="$( cd "$(dirname "$0")" ; pwd -P )"
+KEYSTORE_PATH=~/.fukuii-rpc-test/rpc-test-private/keystore/
+
+if [[ -z "$FUKUII_DIR" ]]; then
+  echo "Path to Fukuii dir must be passed as the first argument"
+  exit 1
+fi
+
+if [[ ! -d "$FUKUII_DIR" ]]; then
+  echo "$FUKUII_DIR doesn't exist"
+  exit 1
+fi
+
+echo "Patching Fukuii at $FUKUII_DIR with configuration for JSON-RPC tests"
+
+cp -R ${SCRIPT_DIR}/privateNetConfig/conf/* ${FUKUII_DIR}/conf/
+
+mkdir -p ${KEYSTORE_PATH}
+cp -R ${SCRIPT_DIR}/privateNetConfig/keystore/* ${KEYSTORE_PATH}

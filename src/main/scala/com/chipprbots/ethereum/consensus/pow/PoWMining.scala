@@ -71,7 +71,7 @@ class PoWMining private (
   // TODO in ETCM-773 remove MockedMiner
   @volatile private[pow] var mockedMinerRef: Option[org.apache.pekko.actor.ActorRef] = None
 
-  final val BlockForgerDispatcherId = "mantis.async.dispatchers.block-forger"
+  final val BlockForgerDispatcherId = "fukuii.async.dispatchers.block-forger"
   implicit private val timeout: Timeout = 20.seconds
 
   override def sendMiner(msg: MinerProtocol): Unit =

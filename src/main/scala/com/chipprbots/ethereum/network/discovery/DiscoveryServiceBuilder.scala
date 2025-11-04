@@ -122,7 +122,7 @@ trait DiscoveryServiceBuilder {
           case None =>
             IO.raiseError(
               new IllegalStateException(
-                s"Failed to resolve the external address. Please configure it via -Dmantis.network.discovery.host"
+                s"Failed to resolve the external address. Please configure it via -Dfukuii.network.discovery.host"
               )
             )
         }
@@ -183,7 +183,7 @@ trait DiscoveryServiceBuilder {
       // On a network with many bootstrap nodes the enrollment and the initial self-lookup can take considerable
       // amount of time. We can do the enrollment in the background, which means the service is available from the
       // start, and the nodes can be contacted and gradually as they are discovered during the iterative lookup,
-      // rather than at the end of the enrollment. Mantis will also contact its previously persisted peers,
+      // rather than at the end of the enrollment. Fukuii will also contact its previously persisted peers,
       // from that perspective it doesn't care whether enrollment is over or not.
       enrollInBackground = true
     )

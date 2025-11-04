@@ -107,7 +107,7 @@ object CliCommands extends SecureRandomBuilder {
     address.toUnprefixedString
   }
 
-  val api: Command[String] = Command.apply(name = "cli", header = "Mantis CLI") {
+  val api: Command[String] = Command.apply(name = "cli", header = "Fukuii CLI") {
     Opts.subcommands(
       GeneratePrivateKeyCommand,
       DeriveAddressFromPrivateKey,

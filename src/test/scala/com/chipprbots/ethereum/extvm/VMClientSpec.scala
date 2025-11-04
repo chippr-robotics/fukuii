@@ -241,7 +241,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val messageHandler: MessageHandlerApi = mock[MessageHandlerApi]
 
-    val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("mantis", None, "127.0.0.1", 0)
+    val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("fukuii", None, "127.0.0.1", 0)
     val vmClient = new VMClient(externalVmConfig, messageHandler, testMode = false)
   }
 

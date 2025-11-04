@@ -229,8 +229,8 @@ object JsonRpcHttpServer extends Logger {
   }
 
   object JsonRpcHttpServerConfig {
-    def apply(mantisConfig: TypesafeConfig): JsonRpcHttpServerConfig = {
-      val rpcHttpConfig = mantisConfig.getConfig("network.rpc.http")
+    def apply(fukuiiConfig: TypesafeConfig): JsonRpcHttpServerConfig = {
+      val rpcHttpConfig = fukuiiConfig.getConfig("network.rpc.http")
 
       new JsonRpcHttpServerConfig {
         override val mode: String = rpcHttpConfig.getString("mode")

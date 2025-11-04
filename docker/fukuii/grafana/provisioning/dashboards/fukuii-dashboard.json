@@ -7820,8 +7820,8 @@
         "allValue": null,
         "current": {
           "selected": false,
-          "text": "mantis_system",
-          "value": "mantis_system"
+          "text": "fukuii_system",
+          "value": "fukuii_system"
         },
         "datasource": "Prometheus",
         "definition": "label_values(akka_system_unhandled_messages_total, system)",

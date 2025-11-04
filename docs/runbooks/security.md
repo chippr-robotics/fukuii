@@ -475,7 +475,7 @@ ufw allow 8546/tcp  # Firewall
 
 ```hocon
 # Fukuii config
-mantis.network.rpc.http {
+fukuii.network.rpc.http {
   mode = "http"
   interface = "127.0.0.1"  # Localhost only
   port = 8546
@@ -494,7 +494,7 @@ curl http://localhost:8546
 **Pattern 2: Internal network with IP whitelist**
 
 ```hocon
-mantis.network.rpc.http {
+fukuii.network.rpc.http {
   interface = "0.0.0.0"  # Listen on all interfaces
   port = 8546
 }
@@ -582,7 +582,7 @@ If Fukuii supports method filtering, restrict to read-only methods:
 
 ```hocon
 # Hypothetical configuration
-mantis.network.rpc {
+fukuii.network.rpc {
   allowed-methods = [
     "eth_*",
     "net_*",
@@ -626,7 +626,7 @@ server {
 
 **Application-level** (if supported by Fukuii):
 ```hocon
-mantis.network.rpc {
+fukuii.network.rpc {
   rate-limit {
     enabled = true
     requests-per-second = 10

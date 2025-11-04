@@ -38,7 +38,7 @@ Log levels can be set via application configuration:
 **Via application.conf**:
 ```hocon
 logging {
-  logs-dir = ${user.home}"/.fukuii/"${mantis.blockchains.network}"/logs"
+  logs-dir = ${user.home}"/.fukuii/"${fukuii.blockchains.network}"/logs"
   logs-file = "fukuii"
   logs-level = "INFO"  # Options: TRACE, DEBUG, INFO, WARN, ERROR
   json-output = false
@@ -267,7 +267,7 @@ sudo netstat -tulpn | grep 9076
 ```bash
 # Kill conflicting process or change Fukuii port
 # Change port in config:
-# mantis.network.server-address.port = 9077
+# fukuii.network.server-address.port = 9077
 ```
 
 See: [first-start.md](first-start.md#troubleshooting)

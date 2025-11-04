@@ -246,7 +246,7 @@ class CheckpointingJRCSpec
     val ethFilterService: EthFilterService = mock[EthFilterService]
     val qaService: QAService = mock[QAService]
     val checkpointingService: CheckpointingService = mock[CheckpointingService]
-    val mantisService: MantisService = mock[MantisService]
+    val fukuiiService: FukuiiService = mock[FukuiiService]
 
     val jsonRpcController =
       new JsonRpcController(
@@ -263,7 +263,7 @@ class CheckpointingJRCSpec
         debugService,
         qaService,
         checkpointingService,
-        mantisService,
+        fukuiiService,
         ProofServiceDummy,
         config
       )

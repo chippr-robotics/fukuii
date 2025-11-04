@@ -60,8 +60,8 @@ object MiningConfig extends Logger {
     Protocol(protocol)
   }
 
-  def apply(mantisConfig: TypesafeConfig): MiningConfig = {
-    val config = mantisConfig.getConfig(Keys.Mining)
+  def apply(fukuiiConfig: TypesafeConfig): MiningConfig = {
+    val config = fukuiiConfig.getConfig(Keys.Mining)
 
     val protocol = readProtocol(config)
     val coinbase = Address(config.getString(Keys.Coinbase))

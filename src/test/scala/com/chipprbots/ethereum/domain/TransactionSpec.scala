@@ -147,11 +147,11 @@ class TransactionSpec
     val stx = SignedTransaction.apply(
       tx = tx,
       // hacky change to make the test succeed without regressing the general workflow.
-      // Mantis is currently importing *raw* signature values, and doesn't changes them
+      // Fukuii is currently importing *raw* signature values, and doesn't changes them
       // when building a signed transaction from a signature and a transaction.
       // On the other side, core-geth is updating the signature field v depending on the type
       // of transaction and the expected signature rule (homestead, eip155 or eip2930 for example).
-      // Mantis lacks this feature. Until the signers feature is integrated, we'll keep this localised
+      // Fukuii lacks this feature. Until the signers feature is integrated, we'll keep this localised
       // hack to check for legacy transaction regression.
       // The 27 magic number is taken from the yellow paper and eip155, which stipulate that
       // transaction.v = signature.yParity (here ECDSA.v raw field) + 27

@@ -158,7 +158,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
   val debugService: DebugService = mock[DebugService]
   val qaService: QAService = mock[QAService]
   val checkpointingService: CheckpointingService = mock[CheckpointingService]
-  val mantisService: MantisService = mock[MantisService]
+  val fukuiiService: FukuiiService = mock[FukuiiService]
 
   def jsonRpcController: JsonRpcController =
     JsonRpcController(
@@ -175,7 +175,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       debugService,
       qaService,
       checkpointingService,
-      mantisService,
+      fukuiiService,
       ProofServiceDummy,
       config
     )

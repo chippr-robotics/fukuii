@@ -86,7 +86,7 @@ When Fukuii starts, it follows this discovery sequence:
 Key configuration parameters (in `base.conf`):
 
 ```hocon
-mantis.network {
+fukuii.network {
   discovery {
     discovery-enabled = true
     reuse-known-nodes = true
@@ -229,7 +229,7 @@ Online port checkers:
 
 Edit your configuration to ensure:
 ```hocon
-mantis.network.discovery.discovery-enabled = true
+fukuii.network.discovery.discovery-enabled = true
 ```
 
 **B. Open firewall ports**
@@ -254,7 +254,7 @@ If behind NAT/router:
 3. Forward port 9076 (TCP) to your node's internal IP
 4. Or enable UPnP in Fukuii config:
    ```hocon
-   mantis.network.automatic-port-forwarding = true
+   fukuii.network.automatic-port-forwarding = true
    ```
 
 **D. Manually add peers**
@@ -262,7 +262,7 @@ If behind NAT/router:
 If discovery fails, you can manually specify peers in your config:
 
 ```hocon
-mantis.network.bootstrap-nodes = [
+fukuii.network.bootstrap-nodes = [
   "enode://pubkey@ip:port",
   "enode://pubkey@ip:port"
 ]
@@ -349,7 +349,7 @@ Ensure you're running the correct network:
 
 In your configuration:
 ```hocon
-mantis.network.peer {
+fukuii.network.peer {
   wait-for-hello-timeout = 5.seconds  # default: 3
   wait-for-status-timeout = 45.seconds  # default: 30
 }
@@ -399,7 +399,7 @@ This is usually normal behavior as Fukuii filters incompatible peers. However, i
 1. **Update to latest version** - May have better peer filtering
 2. **Adjust peer limits** - Temporarily increase max peers to compensate:
    ```hocon
-   mantis.network.peer.max-outgoing-peers = 60
+   fukuii.network.peer.max-outgoing-peers = 60
    ```
 
 ## Advanced Configuration
@@ -409,7 +409,7 @@ This is usually normal behavior as Fukuii filters incompatible peers. However, i
 For initial synchronization, maximize peers:
 
 ```hocon
-mantis.network.peer {
+fukuii.network.peer {
   min-outgoing-peers = 30
   max-outgoing-peers = 60
 }
@@ -422,7 +422,7 @@ After sync completes, reduce to stable values.
 For limited bandwidth scenarios:
 
 ```hocon
-mantis.network.peer {
+fukuii.network.peer {
   min-outgoing-peers = 10
   max-outgoing-peers = 15
   max-incoming-peers = 10
@@ -434,7 +434,7 @@ mantis.network.peer {
 For private networks or when you have a fixed set of peers:
 
 ```hocon
-mantis.network {
+fukuii.network {
   discovery.discovery-enabled = false
   discovery.reuse-known-nodes = false
   
@@ -452,7 +452,7 @@ mantis.network {
 For specialized network environments:
 
 ```hocon
-mantis.network.discovery {
+fukuii.network.discovery {
   # Increase scan frequency for faster peer discovery
   scan-interval = 30.seconds  # default: 1.minute
   
@@ -471,7 +471,7 @@ mantis.network.discovery {
 If your node has a public IP that differs from its local IP:
 
 ```hocon
-mantis.network {
+fukuii.network {
   discovery {
     host = "your.public.ip.address"
   }

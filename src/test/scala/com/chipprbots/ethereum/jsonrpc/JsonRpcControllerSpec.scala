@@ -170,7 +170,7 @@ class JsonRpcControllerSpec
         "personal" -> JString("1.0"),
         "eth" -> JString("1.0"),
         "web3" -> JString("1.0"),
-        "mantis" -> JString("1.0"),
+        "fukuii" -> JString("1.0"),
         "debug" -> JString("1.0"),
         "qa" -> JString("1.0"),
         "checkpointing" -> JString("1.0")

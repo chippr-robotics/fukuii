@@ -14,14 +14,14 @@ import org.scalamock.scalatest.AsyncMockFactory
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.FreeSpecBase
 import com.chipprbots.ethereum.SpecFixtures
-import com.chipprbots.ethereum.jsonrpc.MantisService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
 import com.chipprbots.ethereum.utils.Config
 
-class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory with JRCMatchers {
+class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory with JRCMatchers {
   import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.formats
 
   class Fixture extends ApisBuilder {
@@ -30,7 +30,7 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     val web3Service: Web3Service = mock[Web3Service]
     // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
     implicit val testSystem: org.apache.pekko.actor.ActorSystem =
-      org.apache.pekko.actor.ActorSystem("MantisJRCSpec-test")
+      org.apache.pekko.actor.ActorSystem("FukuiiJRCSpec-test")
     val netService: NetService = new NetService(
       new java.util.concurrent.atomic.AtomicReference(
         com.chipprbots.ethereum.utils.NodeStatus(
@@ -52,7 +52,7 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     val ethFilterService: EthFilterService = mock[EthFilterService]
     val qaService: QAService = mock[QAService]
     val checkpointingService: CheckpointingService = mock[CheckpointingService]
-    val mantisService: MantisService = mock[MantisService]
+    val fukuiiService: FukuiiService = mock[FukuiiService]
 
     val jsonRpcController =
       new JsonRpcController(
@@ -69,7 +69,7 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
         debugService,
         qaService,
         checkpointingService,
-        mantisService,
+        fukuiiService,
         ProofServiceDummy,
         config
       )
@@ -77,14 +77,14 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
   }
   def createFixture() = new Fixture
 
-  "Mantis JRC" - {
-    "should handle mantis_getAccountTransactions" in testCaseM[IO] { fixture =>
+  "Fukuii JRC" - {
+    "should handle fukuii_getAccountTransactions" in testCaseM[IO] { fixture =>
       import fixture._
       val block = Fixtures.Blocks.Block3125369
       val sentTx = block.body.transactionList.head
       val receivedTx = block.body.transactionList.last
 
-      (mantisService.getAccountTransactions _)
+      (fukuiiService.getAccountTransactions _)
         .expects(*)
         .returning(
           IO.pure(
@@ -109,7 +109,7 @@ class MantisJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
 
       val request: JsonRpcRequest = JsonRpcRequest(
         "2.0",
-        "mantis_getAccountTransactions",
+        "fukuii_getAccountTransactions",
         Some(
           JArray(
             List(

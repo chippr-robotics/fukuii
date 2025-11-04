@@ -32,7 +32,7 @@ private class ClientOnlyUpnpServiceConfiguration extends DefaultUpnpServiceConfi
   final private val THREAD_POOL_SIZE = 4 // seemingly the minimum required to perform port mapping
 
   override def createDefaultExecutorService(): ExecutorService =
-    QueueingThreadPoolExecutor.createInstance("mantis-jupnp", THREAD_POOL_SIZE);
+    QueueingThreadPoolExecutor.createInstance("fukuii-jupnp", THREAD_POOL_SIZE);
 
   override def createStreamClient(): StreamClient[_ <: StreamClientConfiguration] =
     JDKTransportConfiguration.INSTANCE.createStreamClient(getSyncProtocolExecutorService())
@@ -52,7 +52,7 @@ private object NoStreamServer extends StreamServer[StreamServerConfiguration] {
 }
 
 object PortForwarder extends Logger {
-  final private val description = "Mantis"
+  final private val description = "Fukuii"
 
   def openPorts(tcpPorts: Seq[Int], udpPorts: Seq[Int]): Resource[IO, Unit] =
     Resource.make(startForwarding(tcpPorts, udpPorts))(stopForwarding).void

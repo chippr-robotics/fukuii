@@ -12,7 +12,7 @@ When the script is running Prometheus metrics and Grafana will be available at:
 
 
 ### Metrics
-Some metrics are already being displayed in Grafana, using part of the dashboard that can be found in `https://grafana.com/grafana/dashboards/10273` and also replicating some metrics being used by the `mantis-ops` grafana dashboard 
+Some metrics are already being displayed in Grafana, using part of the dashboard that can be found in `https://grafana.com/grafana/dashboards/10273` and also replicating some metrics being used by the `fukuii-ops` grafana dashboard 
 
 
 ### JSON RPC API

@@ -96,8 +96,8 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
     origin.copy(header = origin.header.copy(number = parentBlockNumber))
 
   def buildPoWConsensus(): PoWMining = {
-    val mantisConfig = Config.config
-    val specificConfig = EthashConfig(mantisConfig)
+    val fukuiiConfig = Config.config
+    val specificConfig = EthashConfig(fukuiiConfig)
 
     val fullConfig = FullMiningConfig(miningConfig, specificConfig)
 
