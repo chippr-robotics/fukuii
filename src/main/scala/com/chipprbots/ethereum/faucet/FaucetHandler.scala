@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.faucet.jsonrpc.WalletService
 import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.keystore.Wallet
 
-class FaucetHandler(walletService: WalletService, config: FaucetConfig)(implicit runtime: IORuntime)
+class FaucetHandler(walletService: WalletService, config: FaucetConfig)(using runtime: IORuntime)
     extends Actor
     with ActorLogging {
 
@@ -95,7 +95,7 @@ object FaucetHandler {
 
   class WalletException(keyStoreError: KeyStoreError) extends RuntimeException(keyStoreError.toString)
 
-  def props(walletRpcClient: WalletService, config: FaucetConfig)(implicit runtime: IORuntime): Props = Props(
+  def props(walletRpcClient: WalletService, config: FaucetConfig)(using runtime: IORuntime): Props = Props(
     new FaucetHandler(walletRpcClient, config)
   )
 
