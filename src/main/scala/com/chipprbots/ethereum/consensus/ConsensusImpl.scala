@@ -47,7 +47,8 @@ class ConsensusImpl(
     *   - [[Consensus.SelectedNewBestBranch]] - if the chain was reorganized.
     *   - [[Consensus.KeptCurrentBestBranch]] - if the branch was not considered as better than the current branch
     *   - [[Consensus.ConsensusError]] - block failed to execute (when importing to top or reorganising the chain)
-    *   - [[Consensus.ConsensusErrorDueToMissingNode]] - block failed to execute (when importing to top or reorganising the chain)
+    *   - [[Consensus.ConsensusErrorDueToMissingNode]] - block failed to execute (when importing to top or reorganising
+    *     the chain)
     */
   override def evaluateBranch(
       branch: NonEmptyList[Block]

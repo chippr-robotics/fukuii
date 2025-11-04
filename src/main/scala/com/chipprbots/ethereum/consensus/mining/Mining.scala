@@ -20,7 +20,8 @@ import com.chipprbots.ethereum.nodebuilder.Node
   */
 trait Mining {
 
-  /** The type of configuration [[com.chipprbots.ethereum.consensus.mining.FullMiningConfig.specific specific]] to this mining protocol implementation.
+  /** The type of configuration [[com.chipprbots.ethereum.consensus.mining.FullMiningConfig.specific specific]] to this
+    * mining protocol implementation.
     */
   type Config <: AnyRef /*Product*/
 

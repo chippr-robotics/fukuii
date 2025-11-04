@@ -840,7 +840,8 @@ trait GenesisDataLoaderBuilder {
   * configuration.
   *
   * @see
-  *   [[com.chipprbots.ethereum.consensus.mining.MiningBuilder MiningBuilder]], [[com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder ConsensusConfigBuilder]]
+  *   [[com.chipprbots.ethereum.consensus.mining.MiningBuilder MiningBuilder]],
+  *   [[com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder ConsensusConfigBuilder]]
   */
 trait Node
     extends SecureRandomBuilder

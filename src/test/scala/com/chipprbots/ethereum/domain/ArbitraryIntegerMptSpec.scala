@@ -51,7 +51,7 @@ class ArbitraryIntegerMptSpec extends AnyFlatSpec with Matchers with ScalaCheckP
   it should "handle zero values correctly" in new TestSetup {
     val key = BigInt(1)
     val zeroValue = BigInt(0)
-    
+
     val afterInsert = emptyMpt.put(key, zeroValue)
     afterInsert.get(key) shouldBe Some(zeroValue)
   }
@@ -75,7 +75,7 @@ class ArbitraryIntegerMptSpec extends AnyFlatSpec with Matchers with ScalaCheckP
     // Simulate what happens when MPT returns an empty byte array
     val key = BigInt(1)
     val value = BigInt(0)
-    
+
     val mptWithValue = emptyMpt.put(key, value)
     val retrieved = mptWithValue.get(key)
     retrieved shouldBe Some(value)
@@ -84,9 +84,9 @@ class ArbitraryIntegerMptSpec extends AnyFlatSpec with Matchers with ScalaCheckP
   it should "handle multiple zero values" in new TestSetup {
     val keys = List(BigInt(1), BigInt(2), BigInt(3))
     val values = List(BigInt(0), BigInt(0), BigInt(0))
-    
+
     val afterInsert = emptyMpt.update(Nil, keys.zip(values))
-    
+
     keys.zip(values).foreach { case (k, v) =>
       afterInsert.get(k) shouldBe Some(v)
     }
@@ -95,9 +95,9 @@ class ArbitraryIntegerMptSpec extends AnyFlatSpec with Matchers with ScalaCheckP
   it should "handle mixed zero and non-zero values" in new TestSetup {
     val keys = List(BigInt(1), BigInt(2), BigInt(3), BigInt(4))
     val values = List(BigInt(0), BigInt(100), BigInt(0), BigInt(200))
-    
+
     val afterInsert = emptyMpt.update(Nil, keys.zip(values))
-    
+
     keys.zip(values).foreach { case (k, v) =>
       afterInsert.get(k) shouldBe Some(v)
     }
