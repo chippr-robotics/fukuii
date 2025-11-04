@@ -7,6 +7,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.rlp
 
 class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
 
