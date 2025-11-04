@@ -26,32 +26,29 @@ private[scalanet] object NettyFutureUtils {
   }
 
   private def subscribeToFuture[A](cf: netty.util.concurrent.Future[A], cb: Either[Throwable, A] => Unit): Unit = {
-    // Check if the future is already complete to avoid executor rejection
-    if (cf.isDone) {
-      // Future is already complete, invoke callback immediately
-      if (cf.isSuccess) {
-        cb(Right(cf.getNow))
+    // Helper to handle completed futures
+    def handleCompleted(future: netty.util.concurrent.Future[A]): Unit = {
+      if (future.isSuccess) {
+        cb(Right(future.getNow))
       } else {
-        cf.cause() match {
+        future.cause() match {
           case _: CancellationException =>
             ()
           case ex => cb(Left(ex))
         }
       }
+    }
+
+    // Check if the future is already complete to avoid executor rejection
+    if (cf.isDone) {
+      // Future is already complete, invoke callback immediately
+      handleCompleted(cf)
     } else {
       // Try to add listener, but handle rejection gracefully
       try {
         cf.addListener(new GenericFutureListener[Future[A]] {
           override def operationComplete(future: Future[A]): Unit = {
-            if (future.isSuccess) {
-              cb(Right(future.getNow))
-            } else {
-              future.cause() match {
-                case _: CancellationException =>
-                  ()
-                case ex => cb(Left(ex))
-              }
-            }
+            handleCompleted(future)
           }
         })
       } catch {
@@ -59,15 +56,7 @@ private[scalanet] object NettyFutureUtils {
           // Event loop is shutting down or already shut down.
           // Check if the future has completed in the meantime.
           if (cf.isDone) {
-            if (cf.isSuccess) {
-              cb(Right(cf.getNow))
-            } else {
-              cf.cause() match {
-                case _: CancellationException =>
-                  ()
-                case ex => cb(Left(ex))
-              }
-            }
+            handleCompleted(cf)
           }
           // If not done, we can't do anything. The operation is being cancelled anyway.
       }
