@@ -166,6 +166,28 @@ The distribution’s bin/ directory contains a launcher script named fukuii. To 
 
 The launcher accepts the same network names that Fukuii did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
 
+#### Console UI
+
+Fukuii includes an enhanced Terminal User Interface (TUI) for real-time monitoring:
+
+```bash
+# Start with console UI (default)
+./bin/fukuii etc
+
+# Disable console UI for headless/background mode
+./bin/fukuii etc --no-tui
+```
+
+The console UI provides:
+- Real-time peer connection status
+- Blockchain sync progress with visual indicators
+- Network information and status
+- Keyboard commands (Q=quit, R=refresh, D=disable UI)
+- Color-coded health indicators
+
+See [Console UI Documentation](docs/console-ui.md) for detailed information.
+
+
 Command line interface (CLI)
 
 Fukuii's CLI tool provides utilities for key generation and other cryptographic functions. To see all available commands and options:

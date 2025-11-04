@@ -35,9 +35,11 @@ object App extends Logger {
         |
         |Options:
         |  --help, -h             Show this help message
+        |  --no-tui               Disable the console UI (use standard logging)
         |
         |Examples:
-        |  fukuii etc                      # Start Ethereum Classic node
+        |  fukuii etc                      # Start Ethereum Classic node with console UI
+        |  fukuii etc --no-tui             # Start without console UI
         |  fukuii cli --help               # Show CLI utilities help
         |  fukuii cli generate-private-key # Generate a new private key
         |
