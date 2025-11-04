@@ -9,7 +9,7 @@ import com.chipprbots.ethereum.domain.Address
 
 trait FaucetConfigBuilder {
   lazy val rawConfig: Config = ConfigFactory.load()
-  lazy val rawMantisConfig: Config = rawConfig.getConfig("fukuii")
+  lazy val rawFukuiiConfig: Config = rawConfig.getConfig("fukuii")
   lazy val faucetConfig: FaucetConfig = FaucetConfig(rawConfig)
 }
 

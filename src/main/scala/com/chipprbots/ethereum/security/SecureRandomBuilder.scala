@@ -13,10 +13,10 @@ import com.chipprbots.ethereum.utils.Logger
 
 trait SecureRandomBuilder extends Logger {
 
-  private lazy val rawMantisConfig: Config = ConfigFactory.load().getConfig("fukuii")
+  private lazy val rawFukuiiConfig: Config = ConfigFactory.load().getConfig("fukuii")
 
   private val secureRandomAlgo: Option[String] =
-    if (rawMantisConfig.hasPath("secure-random-algo")) Some(rawMantisConfig.getString("secure-random-algo"))
+    if (rawFukuiiConfig.hasPath("secure-random-algo")) Some(rawFukuiiConfig.getString("secure-random-algo"))
     else None
 
   lazy val secureRandom: SecureRandom =

@@ -44,7 +44,7 @@ case class JsonRpcController(
     debugService: DebugService,
     qaService: QAService,
     checkpointingService: CheckpointingService,
-    mantisService: FukuiiService,
+    fukuiiService: FukuiiService,
     proofService: ProofService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
@@ -71,7 +71,7 @@ case class JsonRpcController(
     Apis.Web3 -> handleWeb3Request,
     Apis.Net -> handleNetRequest,
     Apis.Personal -> handlePersonalRequest,
-    Apis.Mantis -> handleMantisRequest,
+    Apis.Fukuii -> handleFukuiiRequest,
     Apis.Rpc -> handleRpcRequest,
     Apis.Debug -> handleDebugRequest,
     Apis.Test -> handleTestRequest,
@@ -296,7 +296,7 @@ case class JsonRpcController(
       handle[EcRecoverRequest, EcRecoverResponse](personalService.ecRecover, req)
   }
 
-  private def handleMantisRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+  private def handleFukuiiRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "fukuii_getAccountTransactions", _, _) =>
       handle[GetAccountTransactionsRequest, GetAccountTransactionsResponse](fukuiiService.getAccountTransactions, req)
   }

@@ -419,7 +419,7 @@ class TestService(
     * the next key hash if any key left in the state, or 0x00 otherwise.
     *
     * Normally, this RPC method is supposed to also be able to look up the state after after transaction _txIndex is
-    * executed. This is currently not supported in mantis.
+    * executed. This is currently not supported in fukuii.
     * @see
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
     */

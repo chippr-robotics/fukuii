@@ -73,7 +73,7 @@ trait JsonRpcConfigBuilder {
   self: FaucetConfigBuilder with ApisBuilder =>
 
   lazy val availableApis: List[String] = available
-  lazy val jsonRpcConfig: JsonRpcConfig = JsonRpcConfig(rawMantisConfig, availableApis)
+  lazy val jsonRpcConfig: JsonRpcConfig = JsonRpcConfig(rawFukuiiConfig, availableApis)
   lazy val api = Apis
 }
 

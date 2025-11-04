@@ -578,7 +578,7 @@ trait CheckpointingServiceBuilder {
 trait FukuiiServiceBuilder {
   self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder =>
 
-  lazy val mantisService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
+  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 }
 
 trait KeyStoreBuilder {
@@ -646,7 +646,7 @@ trait JSONRpcControllerBuilder {
       debugService,
       qaService,
       checkpointingService,
-      mantisService,
+      fukuiiService,
       ethProofService,
       jsonRpcConfig
     )

@@ -47,10 +47,10 @@ object VmSetup extends Logger {
 
       case "fukuii" =>
         log.info("Starting external Fukuii VM process using executable path")
-        startMantisVmProcess(externalConfig)
+        startFukuiiVmProcess(externalConfig)
 
       case "none" =>
-        log.info("Using external VM process not managed by Mantis")
+        log.info("Using external VM process not managed by Fukuii")
       // expect the vm to be started by external means
     }
 
@@ -66,13 +66,13 @@ object VmSetup extends Logger {
       .start()
   }
 
-  private def startMantisVmProcess(externalConfig: ExternalConfig): Unit =
+  private def startFukuiiVmProcess(externalConfig: ExternalConfig): Unit =
     if (externalConfig.executablePath.isDefined)
       startStandardVmProcess(externalConfig)
     else
-      startMantisVmInThisProcess()
+      startFukuiiVmInThisProcess()
 
-  private def startMantisVmInThisProcess(): Unit =
+  private def startFukuiiVmInThisProcess(): Unit =
     VmServerApp.main(Array())
    */
 
