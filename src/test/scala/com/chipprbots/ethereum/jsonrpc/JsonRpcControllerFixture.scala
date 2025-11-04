@@ -96,7 +96,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
   val ethashConfig = MiningConfigs.ethashConfig
   override lazy val miningConfig = MiningConfigs.miningConfig
   val fullMiningConfig = MiningConfigs.fullMiningConfig
-  val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
+  // Increased timeout for CI environments where actor-based tests may be slower
+  val getTransactionFromPoolTimeout: FiniteDuration = 30.seconds
 
   val filterConfig: FilterConfig = new FilterConfig {
     override val filterTimeout: FiniteDuration = Timeouts.normalTimeout

@@ -103,22 +103,8 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
     val (prvKey, pubKey) = keyPairToByteStrings(walletKeyPair)
     val wallet: Wallet = Wallet(Address(crypto.kec256(pubKey)), prvKey)
 
-    val walletRpcClient: WalletRpcClient = createStubWalletRpcClient()
+    val walletRpcClient: WalletRpcClientApi = mock[WalletRpcClientApi]
     val mockKeyStore: KeyStore = mock[KeyStore]
-
-    private def createStubWalletRpcClient(): WalletRpcClient = {
-      import org.apache.pekko.actor.ActorSystem
-      import org.apache.pekko.http.scaladsl.model.Uri
-      import javax.net.ssl.SSLContext
-      import scala.concurrent.ExecutionContext
-
-      implicit val stubActorSystem: ActorSystem = mock[ActorSystem]
-      implicit val stubEc: ExecutionContext = mock[ExecutionContext]
-      val stubGetSSLContext: () => Either[com.chipprbots.ethereum.security.SSLError, SSLContext] =
-        () => Left(mock[com.chipprbots.ethereum.security.SSLError])
-
-      new WalletRpcClient(Uri("http://localhost"), 10.seconds, stubGetSSLContext)
-    }
     val config: FaucetConfig =
       FaucetConfig(
         walletAddress = wallet.address,

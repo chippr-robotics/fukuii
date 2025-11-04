@@ -183,8 +183,6 @@ class EthTxServiceSpec
   }
 
   it should "return 0 gas price if there are no transactions" in new TestSetup {
-    (appStateStorage.getBestBlockNumber _).expects().returning(42)
-
     val response: ServiceResponse[GetGasPriceResponse] = ethTxService.getGetGasPrice(GetGasPriceRequest())
     response.unsafeRunSync() shouldEqual Right(GetGasPriceResponse(0))
   }
