@@ -11,10 +11,10 @@ import org.apache.pekko.actor.ActorSystem
 import cats.effect.unsafe.IORuntime
 
 import scala.annotation.tailrec
+import scala.annotation.unused
 import scala.concurrent.duration._
 import scala.util.Try
 
-import org.json4s.Formats
 import org.json4s.JsonAST.JValue
 import org.json4s._
 import org.json4s.native
@@ -31,7 +31,7 @@ import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcSer
 import com.chipprbots.ethereum.utils.Logger
 
 class JsonRpcIpcServer(jsonRpcController: JsonRpcController, config: JsonRpcIpcServerConfig)(implicit
-    system: ActorSystem
+    @unused system: ActorSystem
 ) extends Logger {
 
   implicit val runtime: IORuntime = IORuntime.global
