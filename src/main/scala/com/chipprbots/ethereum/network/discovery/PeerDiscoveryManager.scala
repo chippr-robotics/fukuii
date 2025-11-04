@@ -29,9 +29,9 @@ class PeerDiscoveryManager(
     knownNodesStorage: KnownNodesStorage,
     // The manager only starts the DiscoveryService if discovery is enabled.
     discoveryServiceResource: Resource[IO, v4.DiscoveryService],
-    randomNodeBufferSize: Int
-)(implicit runtime: IORuntime)
-    extends Actor
+    randomNodeBufferSize: Int,
+    runtime: IORuntime
+) extends Actor
     with ActorLogging {
 
   // Derive a random nodes stream on top of the service so the node can quickly ramp up its peers
@@ -151,7 +151,8 @@ class PeerDiscoveryManager(
       context.become(init)
   }
 
-  def startDiscoveryService(): Unit =
+  def startDiscoveryService(): Unit = {
+    given IORuntime = runtime
     discoveryResources.allocated
       .unsafeToFuture()
       .onComplete {
@@ -160,8 +161,10 @@ class PeerDiscoveryManager(
         case Success(result) =>
           self ! StartAttempt(Right(result))
       }(runtime.compute)
+  }
 
-  def stopDiscoveryService(release: IO[Unit]): Unit =
+  def stopDiscoveryService(release: IO[Unit]): Unit = {
+    given IORuntime = runtime
     release
       .unsafeToFuture()
       .onComplete {
@@ -170,6 +173,7 @@ class PeerDiscoveryManager(
         case Success(result) =>
           self ! StopAttempt(Right(result))
       }(runtime.compute)
+  }
 
   def sendDiscoveredNodesInfo(
       maybeDiscoveryService: Option[v4.DiscoveryService],
@@ -206,10 +210,11 @@ class PeerDiscoveryManager(
   }
 
   def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit = {
+    given IORuntime = runtime
     implicit val ec = context.dispatcher
     task
       .onError(ex => IO(log.error(ex, "Failed to relay result to recipient.")))
-      .unsafeToFuture()(runtime)
+      .unsafeToFuture()
       .pipeTo(recipient)
   }
 
@@ -247,7 +252,8 @@ object PeerDiscoveryManager {
         discoveryConfig,
         knownNodesStorage,
         discoveryServiceResource,
-        randomNodeBufferSize = math.max(randomNodeBufferSize, discoveryConfig.kademliaBucketSize)
+        randomNodeBufferSize = math.max(randomNodeBufferSize, discoveryConfig.kademliaBucketSize),
+        runtime = runtime
       )
     )
 
