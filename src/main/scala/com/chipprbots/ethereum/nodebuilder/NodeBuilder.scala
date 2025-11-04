@@ -136,7 +136,7 @@ trait PeerDiscoveryManagerBuilder {
     with DiscoveryServiceBuilder
     with StorageBuilder =>
 
-  implicit val ioRuntime: IORuntime = IORuntime.global
+  implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
   lazy val peerDiscoveryManager: ActorRef = system.actorOf(
     PeerDiscoveryManager.props(
@@ -775,7 +775,7 @@ trait SyncControllerBuilder {
 trait PortForwardingBuilder {
   self: DiscoveryConfigBuilder =>
 
-  implicit val ioRuntime: IORuntime = IORuntime.global
+  implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
   private val portForwarding = PortForwarder
     .openPorts(
@@ -910,5 +910,5 @@ trait Node
     with PortForwardingBuilder
     with BlacklistBuilder {
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
-  implicit override val ioRuntime: IORuntime = IORuntime.global
+  implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 }
