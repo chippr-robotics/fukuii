@@ -1,7 +1,7 @@
 # Known Issues
 
 **Audience**: Operators troubleshooting common problems  
-**Last Updated**: 2025-11-02  
+**Last Updated**: 2025-11-04  
 **Status**: Living Document
 
 ## Overview
@@ -14,6 +14,7 @@ This document catalogs known issues, their symptoms, root causes, workarounds, a
 2. [Temporary Directory Issues](#temporary-directory-issues)
 3. [JVM Configuration Issues](#jvm-configuration-issues)
 4. [Other Common Issues](#other-common-issues)
+   - [Issue 13: Network Sync Error - Zero Length BigInteger](#issue-13-network-sync-error---zero-length-biginteger)
 
 ## RocksDB Issues
 
@@ -869,6 +870,140 @@ See [peering.md](peering.md#problem-only-outgoing-peers-no-incoming) and [first-
 
 ---
 
+### Issue 13: Network Sync Error - Zero Length BigInteger
+
+**Severity**: High  
+**Frequency**: Intermittent during network sync  
+**Impact**: Node crashes or fails to sync
+**Status**: Fixed in v1.0.1
+
+#### Symptoms
+
+```
+ERROR [o.a.pekko.actor.OneForOneStrategy] - Zero length BigInteger
+java.lang.NumberFormatException: Zero length BigInteger
+        at java.base/java.math.BigInteger.<init>(BigInteger.java:...)
+```
+
+- Error occurs intermittently during network sync
+- Most common on Mordor testnet but can occur on any network
+- Node may crash or fail to process certain blocks
+- State storage operations may fail
+
+#### Root Cause
+
+The `ArbitraryIntegerMpt.bigIntSerializer` in the domain package was calling Scala's `BigInt(bytes)` constructor, which delegates to Java's `BigInteger` constructor. According to the Ethereum RLP specification, an empty byte array represents the integer zero. However, Java's `BigInteger` constructor throws `NumberFormatException: Zero length BigInteger` when given an empty byte array.
+
+**Technical Details**:
+- **Location**: `src/main/scala/com/chipprbots/ethereum/domain/package.scala`
+- **Affected component**: `ArbitraryIntegerMpt.bigIntSerializer.fromBytes`
+- **Issue**: Did not handle empty byte arrays before calling `BigInt(bytes)`
+- **Spec violation**: Ethereum RLP spec requires empty byte string = integer 0
+
+#### Ethereum Specification Context
+
+According to the [Ethereum RLP specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/):
+- Integer 0 is encoded as an empty byte string (0x80 in RLP)
+- Empty byte arrays must decode to zero
+- This is critical for state storage where zero values are valid
+
+The bug occurred because:
+1. RLP layer correctly handled empty arrays (using `foldLeft`)
+2. ArbitraryIntegerMpt (internal storage) used direct `BigInt(bytes)` constructor
+3. During network sync, zero values in state storage caused the exception
+
+#### Workaround
+
+**Temporary mitigation** (before fix):
+- No reliable workaround available
+- Restarting node may temporarily help but issue recurs
+- Avoid syncing from scratch on affected networks
+
+#### Permanent Fix
+
+**Applied in commit**: `afc0626`
+
+Modified `ArbitraryIntegerMpt.bigIntSerializer.fromBytes` to handle empty byte arrays:
+
+```scala
+// Before (buggy):
+override def fromBytes(bytes: Array[Byte]): BigInt = BigInt(bytes)
+
+// After (fixed):
+override def fromBytes(bytes: Array[Byte]): BigInt = 
+  if (bytes.isEmpty) BigInt(0) else BigInt(bytes)
+```
+
+This aligns with:
+- Ethereum RLP specification (empty byte string = zero)
+- Ethereum Yellow Paper (Appendix B - RLP encoding)
+- devp2p RLPx protocol requirements
+- Existing RLP implementation in fukuii
+
+#### Prevention & Testing
+
+**Test coverage added**:
+- 7 tests in `ArbitraryIntegerMptSpec` for zero/empty value handling
+- 3 tests in `RLPSuite` for BigInt edge cases
+- 21 tests in new `BigIntSerializationSpec` covering:
+  - Empty byte array deserialization
+  - Zero value round-trip serialization
+  - Network sync edge cases
+  - Ethereum spec compliance (0x80 encoding)
+  - All serialization paths (RLP, ArbitraryIntegerMpt, ByteUtils)
+
+**Documentation**:
+- Detailed specification compliance documented
+- Root cause analysis included
+- All serialization paths verified
+
+#### Verification
+
+After applying fix, verify with:
+
+```bash
+# Run comprehensive test suite
+sbt "testOnly com.chipprbots.ethereum.domain.BigIntSerializationSpec"
+sbt "testOnly com.chipprbots.ethereum.domain.ArbitraryIntegerMptSpec"
+sbt "rlp / testOnly com.chipprbots.ethereum.rlp.RLPSuite"
+
+# Sync from scratch on Mordor testnet (regression test)
+./bin/fukuii-launcher mordor
+# Should complete without NumberFormatException
+```
+
+#### Related Issues
+
+- Similar pattern in `ByteUtils.toBigInt` - already correctly used `foldLeft`
+- Similar pattern in RLP layer - already correctly handled empty arrays
+- UInt256 construction - uses safe `ByteUtils.toBigInt` path
+
+#### Impact Assessment
+
+**Before fix**:
+- Network sync could fail intermittently
+- State storage corruption possible with zero values
+- Consensus divergence risk if nodes handled zero differently
+
+**After fix**:
+- Full Ethereum specification compliance
+- Reliable network sync on all networks
+- Consistent zero value handling across all serialization paths
+
+#### References
+
+1. [Ethereum RLP Specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/)
+2. [Ethereum Yellow Paper - Appendix B](https://ethereum.github.io/yellowpaper/paper.pdf)
+3. [devp2p RLPx Protocol](https://github.com/ethereum/devp2p/blob/master/rlpx.md)
+4. [Ethereum Execution Specs](https://github.com/ethereum/execution-specs)
+5. Java BigInteger JavaDoc: Empty arrays not supported
+
+#### Status
+
+**Fixed**: v1.0.1 and later include the fix. Update to latest version or apply patch manually.
+
+---
+
 ## Reporting New Issues
 
 If you encounter an issue not documented here:
@@ -894,6 +1029,6 @@ Please submit a pull request or open an issue to update this documentation.
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: 2025-11-02  
+**Document Version**: 1.1  
+**Last Updated**: 2025-11-04  
 **Maintainer**: Chippr Robotics LLC
