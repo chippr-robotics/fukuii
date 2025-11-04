@@ -17,19 +17,13 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.consensus.blocks.BlockTimestampProvider
 import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
-import com.chipprbots.ethereum.consensus.blocks.PendingBlock
-import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
-import com.chipprbots.ethereum.consensus.blocks.TestBlockGenerator
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
-import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -43,7 +37,6 @@ import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
-import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.FilterConfig
 
@@ -76,29 +69,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     encodeAsHex(RawTransactionCodec.asRawTransaction(x))
 
   val version = Config.clientVersion
-
-  // Stub block generator to avoid Scala 3 reflection issues with scalamock
-  var stubGenerateBlockResult: Option[PendingBlockAndState] = None
-  var stubGetPreparedResult: ByteString => Option[PendingBlock] = _ => None
-  val blockGenerator: PoWBlockGenerator = new PoWBlockGenerator {
-    override type X = Seq[BlockHeader]
-    override def blockTimestampProvider: BlockTimestampProvider = ???
-    override def withBlockTimestampProvider(blockTimestampProvider: BlockTimestampProvider): TestBlockGenerator = this
-    override def generateBlock(
-        parent: Block,
-        transactions: Seq[SignedTransaction],
-        beneficiary: Address,
-        x: Seq[BlockHeader],
-        initialWorldStateBeforeExecution: Option[InMemoryWorldStateProxy]
-    )(implicit blockchainConfig: BlockchainConfig): PendingBlockAndState =
-      stubGenerateBlockResult.getOrElse(
-        throw new NotImplementedError("stubGenerateBlockResult not set for test")
-      )
-    override def getPrepared(powHeaderHash: ByteString): Option[PendingBlock] = stubGetPreparedResult(powHeaderHash)
-    override def getPendingBlockAndState: Option[PendingBlockAndState] = ???
-    override def getPendingBlock: Option[PendingBlock] = ???
-    override def emptyX: Ommers = Nil
-  }
+  val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
 
   val syncingController: TestProbe = TestProbe()
 

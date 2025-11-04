@@ -299,11 +299,16 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-
-    // Configure stub block generator response
-    stubGenerateBlockResult = Some(
-      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
-    )
+    (blockGenerator
+      .generateBlock(
+        _: Block,
+        _: Seq[SignedTransaction],
+        _: Address,
+        _: Seq[BlockHeader],
+        _: Option[InMemoryWorldStateProxy]
+      )(_: BlockchainConfig))
+      .expects(parentBlock, *, *, *, *, *)
+      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
 
     // Set up AutoPilot to respond immediately when messages are received
     pendingTransactionsManager.setAutoPilot(simpleAutoPilot { case PendingTransactionsManager.GetPendingTransactions =>
@@ -336,11 +341,16 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-
-    // Configure stub block generator response
-    stubGenerateBlockResult = Some(
-      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
-    )
+    (blockGenerator
+      .generateBlock(
+        _: Block,
+        _: Seq[SignedTransaction],
+        _: Address,
+        _: Seq[BlockHeader],
+        _: Option[InMemoryWorldStateProxy]
+      )(_: BlockchainConfig))
+      .expects(parentBlock, *, *, *, *, *)
+      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
 
     // Don't set up AutoPilot - let the actors timeout and verify error handling returns empty lists
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
@@ -364,12 +374,9 @@ class JsonRpcControllerEthSpec
     val mixHash: String = s"""0x${"01" * 32}"""
     val headerPowHash: String = "02" * 32
 
-    // Configure stub to return a pending block for the expected hash
-    stubGetPreparedResult = { hash =>
-      if (hash == ByteString(Hex.decode(headerPowHash)))
-        Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil))
-      else None
-    }
+    (blockGenerator.getPrepared _)
+      .expects(ByteString(Hex.decode(headerPowHash)))
+      .returns(Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil)))
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitWork",
