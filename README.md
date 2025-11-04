@@ -168,15 +168,27 @@ The launcher accepts the same network names that Fukuii did (etc, eth, mordor, t
 
 Command line interface (CLI)
 
-Fukuii’s CLI tool provides utilities for key generation and other functions. The entry point is:
+Fukuii's CLI tool provides utilities for key generation and other cryptographic functions. To see all available commands and options:
 
-./bin/fukuii cli [options]
+```bash
+./bin/fukuii --help          # Show all launcher commands
+./bin/fukuii cli --help      # Show all CLI utilities
+```
 
+Examples:
 
-For example, to generate a new private key:
-
+```bash
+# Generate a new private key
 ./bin/fukuii cli generate-private-key
 
+# Derive address from a private key
+./bin/fukuii cli derive-address <private-key-hex>
+
+# Get help on any specific command
+./bin/fukuii cli generate-key-pairs --help
+```
+
+For detailed CLI documentation, see the [Node Configuration Runbook](docs/runbooks/node-configuration.md#cli-subcommands).
 Configuration and Environment
 
 Many configuration properties begin with the prefix fukuii instead of mantis. For example, the RPC settings are controlled by keys like fukuii.network.rpc.http.mode. Similarly, the environment variable FUKUII_DEV=true enables developer‑friendly settings during the build.

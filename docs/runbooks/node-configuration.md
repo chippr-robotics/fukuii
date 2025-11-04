@@ -509,61 +509,123 @@ Control JVM behavior using options in `.jvmopts` file or via command line:
 
 ### CLI Subcommands
 
-Fukuii includes CLI utilities accessible via the `cli` subcommand:
+Fukuii includes CLI utilities accessible via the `cli` subcommand. For help on any command, use the `--help` flag:
+
+**Show All CLI Commands**:
+```bash
+./bin/fukuii cli --help
+```
+
+**Get Help on a Specific Command**:
+```bash
+./bin/fukuii cli <command> --help
+```
+
+#### Available CLI Commands
 
 **Generate Private Key**:
 ```bash
 ./bin/fukuii cli generate-private-key
 ```
+Generates a new random private key for use with Ethereum accounts.
 
 **Derive Address from Private Key**:
 ```bash
 ./bin/fukuii cli derive-address <private-key-hex>
 ```
+Derives the Ethereum address from a given private key (without 0x prefix).
+
+Example:
+```bash
+./bin/fukuii cli derive-address 00b11c32957057651d56cd83085ef3b259319057e0e887bd0fdaee657e6f75d0
+```
 
 **Generate Key Pairs**:
 ```bash
-./bin/fukuii cli generate-key-pairs <number>
+./bin/fukuii cli generate-key-pairs [number]
+```
+Generates one or more private/public key pairs. If no number is specified, generates one key pair.
+
+Example:
+```bash
+./bin/fukuii cli generate-key-pairs 5
 ```
 
 **Encrypt Private Key**:
 ```bash
-./bin/fukuii cli encrypt-key <private-key-hex> --passphrase <passphrase>
+./bin/fukuii cli encrypt-key <private-key-hex> [--passphrase <passphrase>]
+```
+Encrypts a private key with an optional passphrase, producing JSON keystore format.
+
+Example:
+```bash
+./bin/fukuii cli encrypt-key 00b11c32957057651d56cd83085ef3b259319057e0e887bd0fdaee657e6f75d0 --passphrase mypassword
 ```
 
 **Generate Genesis Allocs**:
 ```bash
-./bin/fukuii cli generate-allocs --key <private-key> --balance <amount>
+./bin/fukuii cli generate-allocs [--key <private-key>]... [--address <address>]... --balance <amount>
+```
+Generates genesis allocation JSON for creating private networks. You can specify multiple keys and addresses.
+
+Example:
+```bash
+./bin/fukuii cli generate-allocs --key 00b11c32957057651d56cd83085ef3b259319057e0e887bd0fdaee657e6f75d0 --balance 1000000000000000000000
 ```
 
 ### Other Launch Modes
 
-The `App.scala` entry point supports additional modes:
+The `App.scala` entry point supports additional modes. For a complete list of available commands, use:
+
+```bash
+./bin/fukuii --help
+```
+
+Available launch modes include:
+
+**Start Node (Default)**:
+```bash
+./bin/fukuii [network]
+# Or explicitly:
+./bin/fukuii fukuii [network]
+```
+Networks: `etc`, `eth`, `mordor`, `testnet-internal`
+
+**CLI Utilities**:
+```bash
+./bin/fukuii cli [subcommand]
+```
+See the [CLI Subcommands](#cli-subcommands) section above for details.
 
 **Key Management Tool**:
 ```bash
 ./bin/fukuii keytool
 ```
+Interactive tool for managing keystores and keys.
 
 **Bootstrap Database Download**:
 ```bash
-./bin/fukuii bootstrap <path>
+./bin/fukuii bootstrap [path]
 ```
+Downloads and extracts blockchain bootstrap data to speed up initial sync.
 
 **Faucet Server**:
 ```bash
 ./bin/fukuii faucet
 ```
-
-**Signature Validator**:
-```bash
-./bin/fukuii signature-validator
-```
+Runs a faucet service for testnet token distribution.
 
 **EC Key Generator**:
 ```bash
 ./bin/fukuii eckeygen
 ```
+Generates elliptic curve key pairs for testing and development.
+
+**Signature Validator**:
+```bash
+./bin/fukuii signature-validator
+```
+Tool for validating cryptographic signatures.
 
 ## Environment Variables
 
