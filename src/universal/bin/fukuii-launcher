@@ -3,11 +3,45 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd $DIR/..
 
-CONFIG_FILE="./conf/$1.conf"
-if [ -f "$CONFIG_FILE" ]; then
-  shift
-  CHAIN_PARAM="-Dconfig.file=$CONFIG_FILE"
-elif [ -z "$1" ]; then
+# Check if first argument is a network name (config file)
+# Skip if it starts with - or -- (it's a flag, not a network name)
+if [ -n "$1" ]; then
+  case "$1" in
+    -*) 
+      # Argument starts with -, it's a flag, not a network name
+      # Use default network
+      CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
+      ;;
+    *)
+      # Argument doesn't start with -, treat it as a network name
+      CONFIG_FILE="./conf/$1.conf"
+      if [ -f "$CONFIG_FILE" ]; then
+        shift
+        CHAIN_PARAM="-Dconfig.file=$CONFIG_FILE"
+      else
+        # Network name provided but config file doesn't exist
+        echo "Error: Unknown network '$1'"
+        echo ""
+        echo "Available networks:"
+        for conf in ./conf/*.conf; do
+          if [ -f "$conf" ] && [ "$(basename "$conf")" != "app.conf" ] && [ "$(basename "$conf")" != "base.conf" ] && [ "$(basename "$conf")" != "base-testnet.conf" ] && [ "$(basename "$conf")" != "metrics.conf" ] && [ "$(basename "$conf")" != "faucet.conf" ] && [ "$(basename "$conf")" != "testmode.conf" ]; then
+            network=$(basename "$conf" .conf)
+            echo "  - $network"
+          fi
+        done
+        echo ""
+        echo "Usage: fukuii [network] [options]"
+        echo "   or: fukuii [options]  (defaults to 'etc' network)"
+        echo ""
+        echo "Examples:"
+        echo "  fukuii etc         # Start Ethereum Classic node"
+        echo "  fukuii mordor      # Start Mordor testnet node"
+        exit 1
+      fi
+      ;;
+  esac
+else
+  # No arguments provided, use default network
   CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
 fi
 
