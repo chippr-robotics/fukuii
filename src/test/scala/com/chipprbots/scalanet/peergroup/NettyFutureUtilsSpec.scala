@@ -1,12 +1,10 @@
 package com.chipprbots.scalanet.peergroup
 
-import java.util.concurrent.RejectedExecutionException
-
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
 import io.netty.channel.nio.NioEventLoopGroup
-import io.netty.util.concurrent.{DefaultPromise, Future}
+import io.netty.util.concurrent.DefaultPromise
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -123,8 +121,9 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
       // Cancelled futures should not invoke the callback (they are ignored)
       // so the IO should hang. We'll use timeout to detect this behavior.
       // Using 500ms timeout to be reliable across different environments
+      import scala.concurrent.duration._
       val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise))
-        .timeout(scala.concurrent.duration.Duration(500, "ms"))
+        .timeout(500.milliseconds)
         .attempt
         .unsafeRunSync()
       
