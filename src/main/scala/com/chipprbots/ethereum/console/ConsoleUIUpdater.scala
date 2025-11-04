@@ -1,10 +1,5 @@
 package com.chipprbots.ethereum.console
 
-import scala.concurrent.duration._
-
-import cats.effect.IO
-import cats.effect.unsafe.implicits.global
-
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
 
@@ -94,7 +89,7 @@ class ConsoleUIUpdater(
         }
       }
     } finally {
-      consoleUI.shutdown()
+      // Shutdown is handled in StdNode.shutdown() to avoid race conditions
     }
   }
 

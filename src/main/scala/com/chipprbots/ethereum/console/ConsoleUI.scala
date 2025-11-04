@@ -433,13 +433,13 @@ class ConsoleUI extends Logger {
     case 'd' =>
       shutdown()
       log.info("Console UI disabled, switching to standard logging")
-      true
+      false
     case _ =>
       true
   }
 
   /** Shutdown and cleanup the console UI. */
-  def shutdown(): Unit = {
+  def shutdown(): Unit = synchronized {
     terminal.foreach { term =>
       try {
         // Show cursor
