@@ -643,7 +643,7 @@ git push origin v1.0.0
 
 **Tags Generated:**
 - `nightly` - Always points to the latest nightly build
-- `nightly-YYYYMMDD` - Specific nightly build date (e.g., `nightly-20231115`)
+- `nightly-YYYYMMDD` - Specific nightly build date (e.g., `nightly-20250115`)
 
 **Use Cases:**
 - Testing latest changes before a release
@@ -657,7 +657,7 @@ git push origin v1.0.0
 docker pull chipprbots/fukuii-mainnet:nightly
 
 # Pull specific nightly build
-docker pull chipprbots/fukuii-mordor-miner:nightly-20231115
+docker pull chipprbots/fukuii-mordor-miner:nightly-20250115
 
 # Use in Docker Compose for continuous testing
 ```yaml
