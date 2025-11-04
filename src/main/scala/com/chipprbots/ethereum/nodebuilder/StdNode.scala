@@ -127,7 +127,8 @@ abstract class BaseNode extends Node {
         consoleUI,
         Some(peerManager),
         Some(syncController),
-        Config.blockchains.network
+        Config.blockchains.network,
+        shutdown
       )(system)
       consoleUIUpdater = Some(updater)
       updater.start()

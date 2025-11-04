@@ -20,9 +20,12 @@ class ConsoleUIUpdater(
     consoleUI: ConsoleUI,
     peerManager: Option[ActorRef[PeerManagerActor.PeerManagementCommand]],
     syncController: Option[ActorRef[SyncProtocol.Command]],
-    networkName: String
+    networkName: String,
+    shutdownHook: () => Unit
 )(implicit system: ActorSystem[_])
     extends Logger {
+
+  import ConsoleUI._
 
   private var running = false
   private var updateThread: Option[Thread] = None
@@ -51,7 +54,7 @@ class ConsoleUIUpdater(
     running = false
     updateThread.foreach { thread =>
       thread.interrupt()
-      thread.join(1000)
+      thread.join(SHUTDOWN_TIMEOUT_MS)
     }
     updateThread = None
   }
@@ -73,21 +76,21 @@ class ConsoleUIUpdater(
               val shouldContinue = consoleUI.handleCommand(cmd)
               if (!shouldContinue) {
                 log.info("Quit requested via console UI")
-                // Shutdown the application
-                IO(System.exit(0)).unsafeRunSync()
+                // Use the provided shutdown hook for graceful shutdown
+                shutdownHook()
               }
             case None => // No input
           }
 
           // Sleep for a bit
-          Thread.sleep(1000)
+          Thread.sleep(UPDATE_INTERVAL_MS)
         } catch {
           case _: InterruptedException =>
             // Thread interrupted, exit loop
             running = false
           case e: Exception =>
             log.error(s"Error in console UI update loop: ${e.getMessage}", e)
-            Thread.sleep(1000)
+            Thread.sleep(UPDATE_INTERVAL_MS)
         }
       }
     } finally {

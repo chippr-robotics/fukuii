@@ -20,6 +20,8 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class ConsoleUI extends Logger {
 
+  import ConsoleUI._
+
   private var terminal: Option[Terminal] = None
   private var shouldStop = false
   private var enabled = true
@@ -100,7 +102,7 @@ class ConsoleUI extends Logger {
       term.writer().flush()
       
       // Brief pause to show banner
-      Thread.sleep(1000)
+      Thread.sleep(BANNER_DISPLAY_DURATION_MS)
     }
   }
 
@@ -461,6 +463,11 @@ class ConsoleUI extends Logger {
 }
 
 object ConsoleUI {
+  // Configuration constants
+  private[console] val UPDATE_INTERVAL_MS: Long = 1000
+  private[console] val BANNER_DISPLAY_DURATION_MS: Long = 1000
+  private[console] val SHUTDOWN_TIMEOUT_MS: Long = 1000
+
   // Singleton instance
   private var instance: Option[ConsoleUI] = None
 
