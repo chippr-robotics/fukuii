@@ -1,5 +1,7 @@
 package com.chipprbots.scalanet.peergroup
 
+import scala.concurrent.duration._
+
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
@@ -121,7 +123,6 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
       // Cancelled futures should not invoke the callback (they are ignored)
       // so the IO should hang. We'll use timeout to detect this behavior.
       // Using 500ms timeout to be reliable across different environments
-      import scala.concurrent.duration._
       val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise))
         .timeout(500.milliseconds)
         .attempt
