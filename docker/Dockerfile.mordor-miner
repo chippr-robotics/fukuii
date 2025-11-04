@@ -59,8 +59,9 @@ fukuii {\n\
     # Enable mining\n\
     mining-enabled = true\n\
 \n\
-    # Set coinbase address (override with environment variable FUKUII_COINBASE)\n\
-    # This is a placeholder - users should provide their own address\n\
+    # IMPORTANT: Set your own coinbase address to receive mining rewards!\n\
+    # Override with: -Dfukuii.mining.coinbase=YOUR_ADDRESS\n\
+    # This placeholder will mine to the null address - rewards will be lost!\n\
     coinbase = "0000000000000000000000000000000000000000"\n\
 \n\
     # Extra data to add to mined blocks\n\

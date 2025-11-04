@@ -304,7 +304,7 @@ Pre-configured for Ethereum Classic Mordor testnet with mining enabled by defaul
 - Environment variable `FUKUII_MINING_ENABLED=true` pre-set
 - Requires setting a coinbase address to receive mining rewards
 
-**Important:** You must specify a coinbase address to receive mining rewards. The default address is a placeholder and should be changed.
+**⚠️ IMPORTANT:** You **MUST** specify a coinbase address to receive mining rewards. The default address (`0000000000000000000000000000000000000000`) is a null/burn address - any rewards mined to this address will be **permanently lost**. Always override the coinbase address using `-Dfukuii.mining.coinbase=YOUR_ADDRESS` when starting the container.
 
 **Docker Hub:**
 - `chipprbots/fukuii-mordor-miner:latest` (latest build)
@@ -660,6 +660,7 @@ docker pull chipprbots/fukuii-mainnet:nightly
 docker pull chipprbots/fukuii-mordor-miner:nightly-20231115
 
 # Use in Docker Compose for continuous testing
+```yaml
 version: '3.8'
 services:
   fukuii:
