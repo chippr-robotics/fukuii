@@ -45,7 +45,7 @@ class PeerDiscoveryManagerSpec
     with ScalaFutures
     with LongPatience {
 
-  implicit val runtime: IORuntime = IORuntime.global
+  given runtime: IORuntime = IORuntime.global
   implicit val timeout: Timeout = Timeouts.normalTimeout
 
   val defaultConfig: DiscoveryConfig = DiscoveryConfig(Config.config, bootstrapNodes = Set.empty)

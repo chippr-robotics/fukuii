@@ -121,7 +121,7 @@ class FaucetHandlerSpec
   }
 
   implicit val ec: ExecutionContext = ExecutionContext.global
-  implicit val runtime: IORuntime = IORuntime.global
+  given runtime: IORuntime = IORuntime.global
 
   trait TestSetup extends FaucetConfigBuilder {
     val walletService: WalletService = mock[WalletService]
@@ -161,13 +161,13 @@ class FaucetHandlerSpec
   }
 }
 
-class FaucetHandlerFake(walletService: WalletService, config: FaucetConfig)(implicit runtime: IORuntime)
+class FaucetHandlerFake(walletService: WalletService, config: FaucetConfig)(using runtime: IORuntime)
     extends FaucetHandler(walletService, config) {
   override def preStart(): Unit = {}
 }
 
 object FaucetHandlerFake {
-  def props(walletRpcClient: WalletService, config: FaucetConfig)(implicit runtime: IORuntime): Props = Props(
+  def props(walletRpcClient: WalletService, config: FaucetConfig)(using runtime: IORuntime): Props = Props(
     new FaucetHandlerFake(walletRpcClient, config)
   )
 }
