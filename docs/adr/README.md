@@ -30,6 +30,7 @@ Each ADR follows this structure:
 - [ADR-005: EIP-3855 Implementation](005-eip-3855-implementation.md) - Accepted
 - [ADR-006: EIP-3860 Implementation](006-eip-3860-implementation.md) - Accepted
 - [ADR-007: EIP-6049 Implementation](007-eip-6049-implementation.md) - Accepted
+- [ADR-008: Enhanced Console User Interface](008-console-ui.md) - Accepted
 
 ## Creating a New ADR
 
