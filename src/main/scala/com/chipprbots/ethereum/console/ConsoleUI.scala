@@ -56,7 +56,7 @@ class ConsoleUI extends Logger {
         term.writer().flush()
         // Clear screen
         clearScreen()
-        
+
         // Show a brief startup banner with the Fukuii mini logo
         showStartupBanner()
       }
@@ -71,10 +71,10 @@ class ConsoleUI extends Logger {
   }
 
   /** Display startup banner briefly before main UI takes over. */
-  private def showStartupBanner(): Unit = {
+  private def showStartupBanner(): Unit =
     terminal.foreach { term =>
       val width = term.getWidth
-      
+
       // Compact Fukuii branding
       val banner = Seq(
         "",
@@ -91,7 +91,7 @@ class ConsoleUI extends Logger {
       )
 
       val greenStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-      
+
       term.writer().print("\u001b[H") // Move to top
       banner.foreach { line =>
         val centered = " " * ((width - line.length) / 2) + line
@@ -100,16 +100,14 @@ class ConsoleUI extends Logger {
         term.writer().println(styledLine.toAnsi())
       }
       term.writer().flush()
-      
+
       // Brief pause to show banner
       Thread.sleep(BANNER_DISPLAY_DURATION_MS)
     }
-  }
 
   /** Disable the console UI. */
-  def disable(): Unit = {
+  def disable(): Unit =
     enabled = false
-  }
 
   /** Check if the console UI is enabled. */
   def isEnabled: Boolean = enabled
@@ -127,19 +125,16 @@ class ConsoleUI extends Logger {
   }
 
   /** Update the network name. */
-  def updateNetwork(name: String): Unit = {
+  def updateNetwork(name: String): Unit =
     networkName = name
-  }
 
   /** Update the sync status. */
-  def updateSyncStatus(status: String): Unit = {
+  def updateSyncStatus(status: String): Unit =
     syncStatus = status
-  }
 
   /** Update the connection status. */
-  def updateConnectionStatus(status: String): Unit = {
+  def updateConnectionStatus(status: String): Unit =
     connectionStatus = status
-  }
 
   /** Render the console UI. */
   def render(): Unit = {
@@ -192,15 +187,15 @@ class ConsoleUI extends Logger {
     lines += createInfoLine("Current Block", formatNumber(currentBlock), width)
     lines += createInfoLine("Best Block", formatNumber(bestBlock), width)
     lines += createInfoLine("Sync Status", syncStatus, width)
-    
+
     if (bestBlock > 0 && currentBlock > 0 && currentBlock < bestBlock) {
       val progress = (currentBlock.toDouble / bestBlock.toDouble) * 100.0
       val remaining = bestBlock - currentBlock
-      
+
       // Create progress bar
       lines += createProgressBar("Sync Progress", progress, width)
       lines += createInfoLine("Blocks Remaining", formatNumber(remaining), width)
-      
+
       // Estimate sync time
       val uptime = Duration.between(startTime, Instant.now()).getSeconds
       if (uptime > 10 && currentBlock > 0) {
@@ -214,7 +209,7 @@ class ConsoleUI extends Logger {
     } else if (currentBlock >= bestBlock && bestBlock > 0) {
       lines += createInfoLine("Status", "✓ SYNCHRONIZED", width)
     }
-    
+
     lines += createSeparator(width)
 
     // Runtime section
@@ -227,9 +222,8 @@ class ConsoleUI extends Logger {
     lines += createFooter(width)
 
     // Fill remaining space
-    while (lines.length < height - 1) {
+    while (lines.length < height - 1)
       lines += new AttributedString(" " * width)
-    }
 
     lines.toSeq
   }
@@ -259,13 +253,13 @@ class ConsoleUI extends Logger {
   private def createInfoLine(label: String, value: String, width: Int): AttributedString = {
     val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
     val valueStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold()
-    
+
     val labelPart = new AttributedString(s"   $label: ", labelStyle)
     val valuePart = new AttributedString(value, valueStyle)
-    
-    val combined = labelPart.concat(valuePart)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+
+    val combinedLength = labelPart.columnLength() + valuePart.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + valuePart.toAnsi() + padding)
   }
 
   /** Create a progress bar with percentage. */
@@ -274,40 +268,42 @@ class ConsoleUI extends Logger {
     val barWidth = Math.min(40, width - 30) // Max 40 chars for bar
     val filled = ((percentage / 100.0) * barWidth).toInt
     val empty = barWidth - filled
-    
+
     val labelPart = new AttributedString(s"   $label: ", labelStyle)
     val barStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
     val emptyStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE)
-    
+
     val filledBar = new AttributedString("█" * filled, barStyle)
     val emptyBar = new AttributedString("░" * empty, emptyStyle)
-    val percentText = new AttributedString(f" $percentage%.2f%%", AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold())
-    
-    val combined = labelPart.concat(filledBar).concat(emptyBar).concat(percentText)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+    val percentText =
+      new AttributedString(f" $percentage%.2f%%", AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold())
+
+    val combinedLength =
+      labelPart.columnLength() + filledBar.columnLength() + emptyBar.columnLength() + percentText.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + filledBar.toAnsi() + emptyBar.toAnsi() + percentText.toAnsi() + padding)
   }
 
   /** Create a status line with color-coded status indicator. */
   private def createStatusLine(label: String, status: String, width: Int): AttributedString = {
     val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
     val statusStyle = status.toLowerCase match {
-      case s if s.contains("connected") || s.contains("running") => 
+      case s if s.contains("connected") || s.contains("running") =>
         AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-      case s if s.contains("starting") || s.contains("initializing") => 
+      case s if s.contains("starting") || s.contains("initializing") =>
         AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW).bold()
-      case s if s.contains("error") || s.contains("failed") => 
+      case s if s.contains("error") || s.contains("failed") =>
         AttributedStyle.DEFAULT.foreground(AttributedStyle.RED).bold()
-      case _ => 
+      case _ =>
         AttributedStyle.DEFAULT.foreground(AttributedStyle.WHITE).bold()
     }
-    
+
     val labelPart = new AttributedString(s"   $label: ", labelStyle)
     val statusPart = new AttributedString(s"● $status", statusStyle)
-    
-    val combined = labelPart.concat(statusPart)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+
+    val combinedLength = labelPart.columnLength() + statusPart.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + statusPart.toAnsi() + padding)
   }
 
   /** Create peer status line with visual indicator. */
@@ -320,26 +316,25 @@ class ConsoleUI extends Logger {
     } else {
       AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
     }
-    
+
     val labelPart = new AttributedString(s"   Peers: ", labelStyle)
     val peerText = s"$count / $max"
     val peerPart = new AttributedString(peerText, peerStyle)
-    
+
     // Add visual indicator
     val indicator = if (count > 0) " ◆" * Math.min(count, 10) else ""
     val indicatorPart = new AttributedString(indicator, peerStyle)
-    
-    val combined = labelPart.concat(peerPart).concat(indicatorPart)
-    val padding = " " * (width - combined.columnLength())
-    combined.concat(new AttributedString(padding))
+
+    val combinedLength = labelPart.columnLength() + peerPart.columnLength() + indicatorPart.columnLength()
+    val padding = " " * (width - combinedLength)
+    new AttributedString(labelPart.toAnsi() + peerPart.toAnsi() + indicatorPart.toAnsi() + padding)
   }
 
-  private def createSeparator(width: Int): AttributedString = {
+  private def createSeparator(width: Int): AttributedString =
     new AttributedString(
       "─" * width,
       AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN)
     )
-  }
 
   private def createFooter(width: Int): AttributedString = {
     val footer = " Commands: [Q]uit | [R]efresh | [D]isable UI "
@@ -370,7 +365,7 @@ class ConsoleUI extends Logger {
     )
 
     val greenStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()
-    
+
     logo.foreach { line =>
       val centered = " " * ((width - line.length) / 2) + line
       val padded = centered + " " * (width - centered.length)
@@ -378,9 +373,8 @@ class ConsoleUI extends Logger {
     }
   }
 
-  private def formatNumber(n: Long): String = {
+  private def formatNumber(n: Long): String =
     "%,d".format(n)
-  }
 
   private def formatDuration(seconds: Long): String = {
     val days = seconds / 86400
@@ -394,7 +388,7 @@ class ConsoleUI extends Logger {
     else s"${secs}s"
   }
 
-  private def clearScreen(): Unit = {
+  private def clearScreen(): Unit =
     terminal.foreach { term =>
       // Clear entire screen
       term.writer().print("\u001b[2J")
@@ -402,20 +396,19 @@ class ConsoleUI extends Logger {
       term.writer().print("\u001b[H")
       term.writer().flush()
     }
-  }
 
   /** Check for keyboard input (non-blocking). */
   def checkInput(): Option[Char] = {
     if (!enabled || terminal.isEmpty) return None
 
     terminal.flatMap { term =>
-      try {
+      try
         if (term.reader().peek(0) > 0) {
           Some(term.reader().read().toChar.toLower)
         } else {
           None
         }
-      } catch {
+      catch {
         case _: Exception => None
       }
     }
@@ -472,7 +465,7 @@ object ConsoleUI {
   private var instance: Option[ConsoleUI] = None
 
   /** Get or create the singleton instance. */
-  def getInstance(): ConsoleUI = {
+  def getInstance(): ConsoleUI =
     instance match {
       case Some(ui) => ui
       case None =>
@@ -480,7 +473,6 @@ object ConsoleUI {
         instance = Some(ui)
         ui
     }
-  }
 
   /** Reset the singleton instance (useful for testing). */
   def reset(): Unit = {

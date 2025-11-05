@@ -12,7 +12,8 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   * @note
   *   This is generally a stateful object.
   * @see
-  *   [[com.chipprbots.ethereum.consensus.mining.Mining.blockGenerator]], [[com.chipprbots.ethereum.ledger.BlockPreparator BlockPreparator]]
+  *   [[com.chipprbots.ethereum.consensus.mining.Mining.blockGenerator]],
+  *   [[com.chipprbots.ethereum.ledger.BlockPreparator BlockPreparator]]
   */
 trait BlockGenerator {
 

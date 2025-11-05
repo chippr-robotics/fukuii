@@ -9,7 +9,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 object App extends Logger {
 
-  private def showHelp(): Unit = {
+  private def showHelp(): Unit =
     println(
       """
         |Fukuii Ethereum Client
@@ -46,7 +46,6 @@ object App extends Logger {
         |For more information, visit: https://github.com/chippr-robotics/fukuii
         |""".stripMargin
     )
-  }
 
   def main(args: Array[String]): Unit = {
 

@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.rlp // Package object for encode/decode methods
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
@@ -60,7 +61,7 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
     // Test that the RLP decoder can handle empty bytes directly
     val emptyBytes = Array.empty[Byte]
     val emptyRlpValue = RLPValue(emptyBytes)
-    
+
     // Decoding empty RLPValue should work without throwing exceptions
     val decoded = RLPImplicits.bigIntEncDec.decode(emptyRlpValue)
     decoded shouldBe BigInt(0)
@@ -125,12 +126,12 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
   "Network sync edge cases" should "handle empty values in state storage" in {
     // This simulates the actual network sync scenario where empty byte arrays
     // might be stored in the state storage and need to be deserialized
-    
+
     // Test ArbitraryIntegerMpt serializer with empty input
     val emptyInput = Array.empty[Byte]
     val deserializedValue = ArbitraryIntegerMpt.bigIntSerializer.fromBytes(emptyInput)
     deserializedValue shouldBe BigInt(0)
-    
+
     // Test that we can serialize and deserialize zero
     val zero = BigInt(0)
     val serialized = ArbitraryIntegerMpt.bigIntSerializer.toBytes(zero)
@@ -143,7 +144,7 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
     val emptyRlpValue = RLPValue(Array.empty[Byte])
     val decoded = RLPImplicits.bigIntEncDec.decode(emptyRlpValue)
     decoded shouldBe BigInt(0)
-    
+
     // Test full encode/decode cycle
     val zero = BigInt(0)
     val encoded = rlp.encode[BigInt](zero)
@@ -155,10 +156,10 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
     // According to Ethereum RLP spec, integer 0 is encoded as empty byte string (0x80)
     val zero = BigInt(0)
     val encoded = rlp.encode[BigInt](zero)
-    
+
     // The encoding should be 0x80 (empty byte string in RLP)
     encoded shouldBe Array[Byte](0x80.toByte)
-    
+
     // Decoding should return zero
     val decoded = rlp.decode[BigInt](encoded)
     decoded shouldBe zero
@@ -167,17 +168,17 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
   it should "handle all integer serialization paths consistently" in {
     // Test that all serialization paths handle zero consistently
     val zero = BigInt(0)
-    
+
     // Path 1: RLP (network protocol)
     val rlpEncoded = rlp.encode[BigInt](zero)
     val rlpDecoded = rlp.decode[BigInt](rlpEncoded)
     rlpDecoded shouldBe zero
-    
+
     // Path 2: ArbitraryIntegerMpt (internal storage)
     val arbitraryEncoded = ArbitraryIntegerMpt.bigIntSerializer.toBytes(zero)
     val arbitraryDecoded = ArbitraryIntegerMpt.bigIntSerializer.fromBytes(arbitraryEncoded)
     arbitraryDecoded shouldBe zero
-    
+
     // Path 3: ByteUtils (utility conversions)
     val emptyByteString = ByteString.empty
     val byteUtilsDecoded = com.chipprbots.ethereum.utils.ByteUtils.toBigInt(emptyByteString)
@@ -192,7 +193,7 @@ class BigIntSerializationSpec extends AnyFlatSpec with Matchers {
       Array[Byte](0, 0),
       Array[Byte](0, 0, 0, 0)
     )
-    
+
     testCases.foreach { bytes =>
       // Should not throw NumberFormatException
       noException should be thrownBy {

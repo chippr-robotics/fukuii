@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.console
 
-import org.apache.pekko.actor.typed.ActorRef
-import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.actor.ActorSystem
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -13,11 +12,11 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class ConsoleUIUpdater(
     consoleUI: ConsoleUI,
-    peerManager: Option[ActorRef[PeerManagerActor.PeerManagementCommand]],
-    syncController: Option[ActorRef[SyncProtocol.Command]],
+    peerManager: Option[Any],
+    syncController: Option[Any],
     networkName: String,
     shutdownHook: () => Unit
-)(implicit system: ActorSystem[_])
+)(implicit system: ActorSystem)
     extends Logger {
 
   import ConsoleUI._
@@ -55,9 +54,9 @@ class ConsoleUIUpdater(
   }
 
   /** Main update loop. */
-  private def updateLoop(): Unit = {
-    try {
-      while (running && consoleUI.isEnabled) {
+  private def updateLoop(): Unit =
+    try
+      while (running && consoleUI.isEnabled)
         try {
           // Update status information
           updateStatus()
@@ -87,17 +86,15 @@ class ConsoleUIUpdater(
             log.error(s"Error in console UI update loop: ${e.getMessage}", e)
             Thread.sleep(UPDATE_INTERVAL_MS)
         }
-      }
-    } finally {
+    finally {
       // Shutdown is handled in StdNode.shutdown() to avoid race conditions
     }
-  }
 
   /** Update status information from various sources. */
-  private def updateStatus(): Unit = {
+  private def updateStatus(): Unit =
     // In a real implementation, we would query actors for status
     // For now, we'll just update some placeholder values
-    
+
     // Update connection status based on whether managers are defined
     if (peerManager.isDefined && syncController.isDefined) {
       consoleUI.updateConnectionStatus("Connected")
@@ -109,8 +106,7 @@ class ConsoleUIUpdater(
     // 1. Query PeerManagerActor for peer count
     // 2. Query SyncController for sync status and block info
     // 3. Use Ask pattern or some other mechanism to get this information
-    // 
+    //
     // For this initial implementation, we're setting up the structure.
     // The actual actor queries would be added in integration.
-  }
 }

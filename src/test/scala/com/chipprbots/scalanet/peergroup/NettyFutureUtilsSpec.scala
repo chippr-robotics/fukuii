@@ -26,9 +26,7 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
 
       val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise)).unsafeRunSync()
       result shouldBe "test-value"
-    } finally {
-      eventLoopGroup.shutdownGracefully().sync()
-    }
+    } finally eventLoopGroup.shutdownGracefully().sync()
   }
 
   it should "handle futures that complete normally" in {
@@ -36,28 +34,26 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
     try {
       val executor = eventLoopGroup.next()
       val promise = new DefaultPromise[Int](executor)
-      
+
       // Complete the promise asynchronously
       executor.execute(() => promise.setSuccess(42))
 
       val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise)).unsafeRunSync()
       result shouldBe 42
-    } finally {
-      eventLoopGroup.shutdownGracefully().sync()
-    }
+    } finally eventLoopGroup.shutdownGracefully().sync()
   }
 
   it should "handle futures when event loop is shutting down" in {
     val eventLoopGroup = new NioEventLoopGroup(1)
     val executor = eventLoopGroup.next()
     val promise = new DefaultPromise[String](executor)
-    
+
     // Shut down the event loop immediately
     eventLoopGroup.shutdownGracefully()
-    
+
     // Complete the promise after shutdown
     promise.setSuccess("completed-after-shutdown")
-    
+
     // This should not throw RejectedExecutionException
     val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise)).unsafeRunSync()
     result shouldBe "completed-after-shutdown"
@@ -66,14 +62,14 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
   it should "handle toTask with already completed futures during shutdown" in {
     val eventLoopGroup = new NioEventLoopGroup(1)
     val executor = eventLoopGroup.next()
-    
+
     // Create a promise that will complete
     val promise = new DefaultPromise[Void](executor)
     promise.setSuccess(null)
-    
+
     // Shut down the event loop
     eventLoopGroup.shutdownGracefully()
-    
+
     // This should not throw RejectedExecutionException
     noException should be thrownBy {
       NettyFutureUtils.toTask(promise).unsafeRunSync()
@@ -83,16 +79,16 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
   it should "handle toTask when event loop shuts down before listener is added" in {
     val eventLoopGroup = new NioEventLoopGroup(1)
     val executor = eventLoopGroup.next()
-    
+
     // Create a promise that is not yet complete
     val promise = new DefaultPromise[Void](executor)
-    
+
     // Shut down the event loop immediately
     eventLoopGroup.shutdownGracefully()
-    
+
     // Complete the promise after shutdown
     promise.setSuccess(null)
-    
+
     // This should not throw RejectedExecutionException
     noException should be thrownBy {
       NettyFutureUtils.toTask(promise).unsafeRunSync()
@@ -111,9 +107,7 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
         NettyFutureUtils.fromNettyFuture(IO.pure(promise)).unsafeRunSync()
       }
       caught.getMessage shouldBe "test failure"
-    } finally {
-      eventLoopGroup.shutdownGracefully().sync()
-    }
+    } finally eventLoopGroup.shutdownGracefully().sync()
   }
 
   it should "handle cancelled futures" in {
@@ -125,14 +119,13 @@ class NettyFutureUtilsSpec extends AnyFlatSpec with Matchers {
 
       // Cancelled futures should not invoke the callback (they are ignored)
       // so the IO should hang. We'll use timeout to detect this behavior.
-      val result = NettyFutureUtils.fromNettyFuture(IO.pure(promise))
+      val result = NettyFutureUtils
+        .fromNettyFuture(IO.pure(promise))
         .timeout(TestTimeout)
         .attempt
         .unsafeRunSync()
-      
+
       result.isLeft shouldBe true
-    } finally {
-      eventLoopGroup.shutdownGracefully().sync()
-    }
+    } finally eventLoopGroup.shutdownGracefully().sync()
   }
 }

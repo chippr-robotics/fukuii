@@ -54,9 +54,7 @@ object Fukuii extends Logger {
     }
 
     // Add shutdown hook to cleanup console UI
-    Runtime.getRuntime.addShutdownHook(new Thread(() => {
-      consoleUI.foreach(_.shutdown())
-    }))
+    Runtime.getRuntime.addShutdownHook(new Thread(() => consoleUI.foreach(_.shutdown())))
 
     node.start()
   }
