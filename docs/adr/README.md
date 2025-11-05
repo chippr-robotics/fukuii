@@ -32,6 +32,7 @@ Each ADR follows this structure:
 - [ADR-007: EIP-6049 Implementation](007-eip-6049-implementation.md) - Accepted
 - [ADR-008: Enhanced Console User Interface](008-console-ui.md) - Accepted
 - [ADR-009: Actor System Architecture - Untyped vs Typed Actors](009-actor-system-architecture.md) - Accepted
+- [ADR-010: Apache HttpClient Transport for JupnP UPnP Port Forwarding](010-jupnp-apache-httpclient-transport.md) - Accepted
 
 ## Creating a New ADR
 
