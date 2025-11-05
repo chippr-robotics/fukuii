@@ -64,6 +64,7 @@ class RLPxConnectionHandler(
       context.become(waitingForConnectionResult(uri))
 
     case HandleConnection(connection) =>
+      context.watch(connection)
       connection ! Register(self)
       val timeout = system.scheduler.scheduleOnce(rlpxConfiguration.waitForHandshakeTimeout, self, AuthHandshakeTimeout)
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeInit(authHandshaker, timeout))
@@ -72,6 +73,7 @@ class RLPxConnectionHandler(
   def waitingForConnectionResult(uri: URI): Receive = {
     case Connected(_, _) =>
       val connection = sender()
+      context.watch(connection)
       connection ! Register(self)
       val (initPacket, handshaker) = authHandshaker.initiate(uri)
       connection ! Write(initPacket)
@@ -86,8 +88,14 @@ class RLPxConnectionHandler(
 
   class ConnectedHandler(connection: ActorRef) {
 
+    def handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
+      log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
+      context.parent ! ConnectionFailed
+      context.stop(self)
+    }
+
     def waitingForAuthHandshakeInit(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
-      handleTimeout.orElse(handleConnectionClosed).orElse { case Received(data) =>
+      handleConnectionTerminated.orElse(handleTimeout).orElse(handleConnectionClosed).orElse { case Received(data) =>
         timeout.cancel()
         // FIXME EIP8 is 6 years old, time to drop it
         val maybePreEIP8Result = Try {
@@ -118,7 +126,7 @@ class RLPxConnectionHandler(
       }
 
     def waitingForAuthHandshakeResponse(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
-      handleWriteFailed.orElse(handleTimeout).orElse(handleConnectionClosed).orElse { case Received(data) =>
+      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse { case Received(data) =>
         timeout.cancel()
         val maybePreEIP8Result = Try {
           val result = handshaker.handleResponseMessage(data.take(ResponsePacketLength))
@@ -187,7 +195,7 @@ class RLPxConnectionHandler(
         cancellableAckTimeout: Option[CancellableAckTimeout] = None,
         seqNumber: Int = 0
     ): Receive =
-      handleWriteFailed.orElse(handleConnectionClosed).orElse {
+      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
         // TODO when cancellableAckTimeout is Some
         case SendMessage(h: HelloEnc) =>
           val out = extractor.writeHello(h)
@@ -286,7 +294,7 @@ class RLPxConnectionHandler(
         cancellableAckTimeout: Option[CancellableAckTimeout] = None,
         seqNumber: Int = 0
     ): Receive =
-      handleWriteFailed.orElse(handleConnectionClosed).orElse {
+      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
         case sm: SendMessage =>
           if (cancellableAckTimeout.isEmpty)
             sendMessage(messageCodec, sm.serializable, seqNumber, messagesNotSent)
