@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.{_, given}
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object SignedTransaction {
 
@@ -54,7 +55,6 @@ object SignedTransaction {
       signatureRandom: ByteString,
       signature: ByteString
   ): SignedTransaction = {
-    import com.chipprbots.ethereum.utils.ByteUtils
     val txSignature = ECDSASignature(
       r = ByteUtils.bytesToBigInt(signatureRandom.toArray),
       s = ByteUtils.bytesToBigInt(signature.toArray),
