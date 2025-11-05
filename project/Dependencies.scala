@@ -141,6 +141,10 @@ object Dependencies {
     "commons-io" % "commons-io" % "2.16.1" // Stable version
   )
 
+  val apacheHttpClient = Seq(
+    "org.apache.httpcomponents.client5" % "httpclient5" % "5.3.1" // For JupnP UPnP transport without URLStreamHandlerFactory
+  )
+
   val jline = "org.jline" % "jline" % "3.26.1" // Stable version
 
   val jna = "net.java.dev.jna" % "jna" % "5.14.0" // Stable version
