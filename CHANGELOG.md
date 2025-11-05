@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated documentation for release process
 - Modified `ProgramState` initialization to conditionally include COINBASE in warm addresses set
 
+### Fixed
+- **Critical**: Fixed ETH68 peer connection failures due to incorrect message decoder order
+  - Network protocol messages (Hello, Disconnect, Ping, Pong) are now decoded before capability-specific messages
+  - Resolves issue where peers would disconnect immediately after handshake with "Cannot decode Disconnect" error
+  - Fixes "Unknown eth/68 message type: 1" debug messages
+  - Node can now maintain stable peer connections and sync properly with ETH68-capable peers
+
 ## [0.1.0] - Initial Version
 
 ### Added
