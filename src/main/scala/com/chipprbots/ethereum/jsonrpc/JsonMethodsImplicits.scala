@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.utils.BigIntExtensionMethods.BigIntAsUnsigned
+import com.chipprbots.ethereum.utils.ByteUtils
 
 trait JsonMethodsImplicits {
   implicit val formats: Formats = JsonSerializers.formats
@@ -81,7 +82,7 @@ trait JsonMethodsImplicits {
         Right(n)
 
       case JString(s) =>
-        Try(BigInt(1, decode(s))).toEither.left.map(_ => InvalidParams())
+        Try(ByteUtils.bytesToBigInt(decode(s))).toEither.left.map(_ => InvalidParams())
 
       case _ =>
         Left(InvalidParams("could not extract quantity"))

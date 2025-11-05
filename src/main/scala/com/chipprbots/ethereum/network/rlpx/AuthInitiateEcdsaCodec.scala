@@ -7,6 +7,7 @@ import org.bouncycastle.util.BigIntegers.asUnsignedByteArray
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.crypto.ECDSASignature.RLength
 import com.chipprbots.ethereum.crypto.ECDSASignature.SLength
+import com.chipprbots.ethereum.utils.ByteUtils
 
 trait AuthInitiateEcdsaCodec {
 
@@ -29,6 +30,6 @@ trait AuthInitiateEcdsaCodec {
     val r = input.take(RLength)
     val s = input.slice(SIndex, SIndex + SLength)
     val v = input(VIndex) + 27
-    ECDSASignature(BigInt(1, r), BigInt(1, s), v.toByte)
+    ECDSASignature(ByteUtils.bytesToBigInt(r), ByteUtils.bytesToBigInt(s), v.toByte)
   }
 }

@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.domain
 
-import java.math.BigInteger
-
 import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
@@ -22,6 +20,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.{_, given}
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode, _}
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object SignedTransaction {
 
@@ -57,8 +56,8 @@ object SignedTransaction {
       signature: ByteString
   ): SignedTransaction = {
     val txSignature = ECDSASignature(
-      r = new BigInteger(1, signatureRandom.toArray),
-      s = new BigInteger(1, signature.toArray),
+      r = ByteUtils.bytesToBigInt(signatureRandom.toArray),
+      s = ByteUtils.bytesToBigInt(signature.toArray),
       v = pointSign
     )
     SignedTransaction(tx, txSignature)
