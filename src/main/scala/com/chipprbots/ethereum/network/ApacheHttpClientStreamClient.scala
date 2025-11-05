@@ -150,15 +150,16 @@ object ApacheHttpClientStreamClient {
         streamResponse.setBody(UpnpMessage.BodyType.BYTES, bodyBytes)
         // Use charset from Content-Type if available, otherwise UTF-8
         val charset = Option(entity.getContentType())
-          .map { contentTypeStr =>
-            // Try to extract charset from Content-Type header (e.g., "text/xml; charset=utf-8")
-            contentTypeStr.split(";")
-              .find(_.trim.startsWith("charset="))
-              .map(_.split("=", 2)(1).trim)
-              .getOrElse("UTF-8")
+          .flatMap { contentTypeStr =>
+            try {
+              Option(ContentType.parse(contentTypeStr).getCharset).map(_.name())
+            } catch {
+              case _: Exception => None
+            }
           }
           .getOrElse("UTF-8")
-        streamResponse.setBodyCharacters(new String(bodyBytes, charset).getBytes())
+        // setBodyCharacters expects bytes, properly encode the string representation
+        streamResponse.setBodyCharacters(new String(bodyBytes, charset).getBytes(charset))
       }
 
       streamResponse
@@ -199,7 +200,15 @@ object ApacheHttpClientStreamClient {
         val contentType = requestMessage.getContentTypeHeader()
         val entity = new ByteArrayEntity(
           bodyBytes,
-          if (contentType != null) ContentType.parse(contentType.toString()) else null
+          if (contentType != null) {
+            try {
+              ContentType.parse(contentType.toString())
+            } catch {
+              case ex: Exception =>
+                log.warn(s"Invalid content type header: '$contentType'. Using default.", ex)
+                null
+            }
+          } else null
         )
         request.setEntity(entity)
       }
