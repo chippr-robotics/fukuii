@@ -35,7 +35,20 @@ class ApacheHttpClientStreamClient(val configuration: StreamClientConfiguration)
     extends AbstractStreamClient[StreamClientConfiguration, ApacheHttpClientStreamClient.HttpCallable]()
     with Logger {
 
-  private val httpClient: CloseableHttpClient = HttpClients.createDefault()
+  private val httpClient: CloseableHttpClient = {
+    import org.apache.hc.client5.http.config.RequestConfig
+    import org.apache.hc.core5.util.Timeout
+    
+    val timeoutMillis = configuration.getTimeoutSeconds() * 1000
+    val requestConfig = RequestConfig.custom()
+      .setConnectionRequestTimeout(Timeout.ofMilliseconds(timeoutMillis))
+      .setResponseTimeout(Timeout.ofMilliseconds(timeoutMillis))
+      .build()
+    
+    HttpClients.custom()
+      .setDefaultRequestConfig(requestConfig)
+      .build()
+  }
 
   override def getConfiguration(): StreamClientConfiguration = configuration
 
@@ -114,6 +127,43 @@ object ApacheHttpClientStreamClient {
       }
     }
 
+    /** Helper method to populate StreamResponseMessage from Apache HttpClient response */
+    private def populateResponse(
+        statusCode: Int,
+        statusMessage: String,
+        response: org.apache.hc.core5.http.ClassicHttpResponse
+    ): StreamResponseMessage = {
+      val upnpResponse = new UpnpResponse(statusCode, statusMessage)
+      val streamResponse = new StreamResponseMessage(upnpResponse)
+
+      // Set response headers
+      val headers = new UpnpHeaders()
+      response.headerIterator().asScala.foreach { header =>
+        headers.add(header.getName(), header.getValue())
+      }
+      streamResponse.setHeaders(headers)
+
+      // Set response body
+      val entity = response.getEntity()
+      if (entity != null) {
+        val bodyBytes = EntityUtils.toByteArray(entity)
+        streamResponse.setBody(UpnpMessage.BodyType.BYTES, bodyBytes)
+        // Use charset from Content-Type if available, otherwise UTF-8
+        val charset = Option(entity.getContentType())
+          .map { contentTypeStr =>
+            // Try to extract charset from Content-Type header (e.g., "text/xml; charset=utf-8")
+            contentTypeStr.split(";")
+              .find(_.trim.startsWith("charset="))
+              .map(_.split("=", 2)(1).trim)
+              .getOrElse("UTF-8")
+          }
+          .getOrElse("UTF-8")
+        streamResponse.setBodyCharacters(new String(bodyBytes, charset).getBytes())
+      }
+
+      streamResponse
+    }
+
     private def executeGet(uri: String): StreamResponseMessage = {
       val request = new HttpGet(uri)
       
@@ -128,28 +178,7 @@ object ApacheHttpClientStreamClient {
         if (aborted) {
           null
         } else {
-          // Create response with status
-          val statusCode = response.getCode()
-          val statusMessage = response.getReasonPhrase()
-          val upnpResponse = new UpnpResponse(statusCode, statusMessage)
-          val streamResponse = new StreamResponseMessage(upnpResponse)
-
-          // Set response headers
-          val headers = new UpnpHeaders()
-          response.headerIterator().asScala.foreach { header =>
-            headers.add(header.getName(), header.getValue())
-          }
-          streamResponse.setHeaders(headers)
-
-          // Set response body
-          val entity = response.getEntity()
-          if (entity != null) {
-            val bodyBytes = EntityUtils.toByteArray(entity)
-            streamResponse.setBody(UpnpMessage.BodyType.BYTES, bodyBytes)
-            streamResponse.setBodyCharacters(bodyBytes)
-          }
-
-          streamResponse
+          populateResponse(response.getCode(), response.getReasonPhrase(), response)
         }
       })
     }
@@ -179,28 +208,7 @@ object ApacheHttpClientStreamClient {
         if (aborted) {
           null
         } else {
-          // Create response with status
-          val statusCode = response.getCode()
-          val statusMessage = response.getReasonPhrase()
-          val upnpResponse = new UpnpResponse(statusCode, statusMessage)
-          val streamResponse = new StreamResponseMessage(upnpResponse)
-
-          // Set response headers
-          val headers = new UpnpHeaders()
-          response.headerIterator().asScala.foreach { header =>
-            headers.add(header.getName(), header.getValue())
-          }
-          streamResponse.setHeaders(headers)
-
-          // Set response body
-          val entity = response.getEntity()
-          if (entity != null) {
-            val bodyBytes = EntityUtils.toByteArray(entity)
-            streamResponse.setBody(UpnpMessage.BodyType.BYTES, bodyBytes)
-            streamResponse.setBodyCharacters(bodyBytes)
-          }
-
-          streamResponse
+          populateResponse(response.getCode(), response.getReasonPhrase(), response)
         }
       })
     }
