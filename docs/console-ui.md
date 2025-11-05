@@ -17,27 +17,29 @@ The Console UI provides a rich, visual interface with:
 
 ## Usage
 
-### Starting with Console UI (Default)
+### Starting with Standard Logging (Default)
 
-By default, the console UI is enabled when you start Fukuii:
+By default, Fukuii uses standard logging output:
 
 ```bash
 ./bin/fukuii etc
 ```
 
-### Disabling Console UI
+**Note**: The console UI is currently disabled by default while under further development.
 
-To disable the console UI and use standard logging instead:
+### Enabling Console UI
+
+To enable the enhanced console UI for interactive monitoring:
 
 ```bash
-./bin/fukuii etc --no-tui
+./bin/fukuii etc --tui
 ```
 
-This is useful when:
-- Running in headless/background mode
-- Piping logs to files
-- Running in environments without proper terminal support
-- Debugging issues with logging output
+The console UI is useful when:
+- Monitoring node status in real-time
+- Running interactively in a terminal
+- Viewing sync progress with visual indicators
+- Using keyboard shortcuts for control
 
 ## Display Layout
 
@@ -170,7 +172,7 @@ Potential improvements for future releases:
 1. Check terminal size: `echo $COLUMNS x $LINES`
 2. Verify UTF-8 support: `echo $LANG`
 3. Try different terminal emulator
-4. Use `--no-tui` flag as fallback
+4. Remove `--tui` flag to use standard logging as fallback
 
 ### Terminal not cleaning up properly
 
@@ -188,26 +190,31 @@ echo -e "\033[32mGreen\033[0m \033[31mRed\033[0m"
 
 ## Examples
 
-### Standard startup with console UI
+### Standard startup with logging
 ```bash
 ./bin/fukuii etc
 ```
 
-### Start without console UI for logging to file
+### Start with console UI for interactive monitoring
 ```bash
-./bin/fukuii etc --no-tui 2>&1 | tee fukuii.log
+./bin/fukuii etc --tui
 ```
 
-### Running in screen/tmux
+### Running in screen/tmux with console UI
 ```bash
 screen -S fukuii
-./bin/fukuii etc
+./bin/fukuii etc --tui
 # Detach with Ctrl+A, D
 ```
 
-### Background process (no TUI)
+### Background process (standard logging)
 ```bash
-nohup ./bin/fukuii etc --no-tui > fukuii.log 2>&1 &
+nohup ./bin/fukuii etc > fukuii.log 2>&1 &
+```
+
+### Logging to file
+```bash
+./bin/fukuii etc 2>&1 | tee fukuii.log
 ```
 
 ## See Also

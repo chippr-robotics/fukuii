@@ -46,14 +46,16 @@ While these methods work for production deployments and automated monitoring, th
 ### Requirements
 
 From Issue #300:
-1. Enabled by default when using fukuii-launcher
-2. Can be disabled with a flag on launch
+1. ~~Enabled by default when using fukuii-launcher~~ **Update**: Disabled by default per maintainer decision
+2. Can be enabled/disabled with a flag on launch
 3. Screen should not scroll (fixed layout)
 4. Grid layout for organized information display
 5. Display: peer connections, network, block height, sync progress
 6. Basic keyboard commands (quit, toggle features)
 7. Green color scheme matching Ethereum Classic branding
 8. Proper terminal cleanup on exit
+
+**Status Update (November 2025)**: The console UI is currently disabled by default while under further development. Users can enable it explicitly with the `--tui` flag.
 
 ## Decision
 
@@ -80,8 +82,9 @@ We decided to implement an **Enhanced Console User Interface (TUI)** using JLine
    - Organized sections: Network, Blockchain, Runtime
    - Visual separators between sections
 
-3. **Default Enabled with Opt-Out**
-   - `--no-tui` flag to disable for headless/background mode
+3. **Default Disabled with Opt-In**
+   - `--tui` flag to enable for interactive monitoring
+   - Standard logging by default for headless/background mode
    - Automatic fallback on initialization failure
    - No impact on existing deployments using systemd/docker
 
@@ -121,7 +124,7 @@ We decided to implement an **Enhanced Console User Interface (TUI)** using JLine
 - Initialization failure → automatic fallback to standard logging
 - Unsupported terminal → logs warning and continues
 - Small terminal → adapts layout (hides logo if needed)
-- `--no-tui` flag → skips initialization entirely
+- Standard logging by default → skips initialization unless `--tui` flag provided
 
 ## Consequences
 
@@ -146,8 +149,9 @@ We decided to implement an **Enhanced Console User Interface (TUI)** using JLine
    - Clean separation from core node logic
 
 4. **Operational Flexibility**
-   - `--no-tui` for automation and scripting
-   - Works in SSH sessions
+   - Standard logging by default for automation and scripting
+   - Optional `--tui` flag for interactive monitoring
+   - Works in SSH sessions when enabled
    - Compatible with screen/tmux
    - Doesn't interfere with log aggregation
 
@@ -168,7 +172,7 @@ We decided to implement an **Enhanced Console User Interface (TUI)** using JLine
 2. **Accessibility**
    - Screen readers may not work well with TUI
    - Colorblind users may have difficulty with color indicators
-   - Mitigated by: `--no-tui` flag, text-based status in addition to colors
+   - Mitigated by: TUI disabled by default, text-based status in addition to colors
 
 3. **Maintenance Overhead**
    - Additional code to maintain and test
@@ -184,7 +188,7 @@ We decided to implement an **Enhanced Console User Interface (TUI)** using JLine
 
 **Chosen**: Fixed grid layout with 1-second updates
 **Alternative**: Scrolling log view with embedded status
-**Rationale**: Non-scrolling layout provides stable, easy-to-read dashboard. Logs still available with `--no-tui`.
+**Rationale**: Non-scrolling layout provides stable, easy-to-read dashboard. Standard logs available by default (without `--tui`).
 
 **Chosen**: JLine 3 library
 **Alternative**: Lanterna framework, raw ANSI codes
@@ -212,7 +216,7 @@ src/main/scala/com/chipprbots/ethereum/console/
 
 1. **Fukuii.scala**: Command-line parsing, initialization
 2. **StdNode.scala**: Lifecycle integration, updater startup
-3. **App.scala**: Help text with `--no-tui` documentation
+3. **App.scala**: Help text with `--tui` documentation
 
 ### Testing Strategy
 
@@ -227,7 +231,7 @@ src/main/scala/com/chipprbots/ethereum/console/
 - `docs/console-ui.md`: Comprehensive user guide
 - `docs/adr/008-console-ui.md`: This ADR
 - Updated README.md with console UI information
-- Help text with `--no-tui` flag
+- Help text with `--tui` flag
 
 ## Alternatives Considered
 
@@ -354,3 +358,4 @@ Potential improvements for future releases:
 ## Changelog
 
 - **November 2025**: Initial implementation with basic monitoring features
+- **November 2025**: Changed to disabled by default (opt-in with `--tui` flag) per maintainer decision
