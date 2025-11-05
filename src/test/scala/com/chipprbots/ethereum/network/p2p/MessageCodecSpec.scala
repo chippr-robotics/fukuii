@@ -30,7 +30,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
 
   it should "compress messages when remote side advertises p2p version larger or equal 5" in new TestSetup {
     override lazy val negotiatedRemoteP2PVersion: Long = 5L
-    override lazy val negotiatedLocalP2PVersion: Long = 4L
+    override lazy val negotiatedLocalP2PVersion: Long = 3L
 
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
@@ -39,8 +39,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
       remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
-    // remote peer did not receive local status so it treats all remote messages as uncompressed,
-    // but local peer compress messages after V5 Hello message
+    // remote peer did not receive local hello so it treats all remote messages as uncompressed,
+    // but local peer compresses messages when remote advertises p2p version >= 4
     assert(remoteReadNotCompressedStatus.size == 1)
     assert(remoteReadNotCompressedStatus.head.isLeft)
   }
@@ -107,8 +107,9 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val decoder: MessageDecoder =
       NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63))
 
-    val messageCodec = new MessageCodec(frameCodec, decoder, negotiatedLocalP2PVersion)
-    val remoteMessageCodec = new MessageCodec(remoteFrameCodec, decoder, negotiatedRemoteP2PVersion)
+    // Each codec should be instantiated with the peer's p2p version (i.e. the version of the remote peer)
+    val messageCodec = new MessageCodec(frameCodec, decoder, negotiatedRemoteP2PVersion)
+    val remoteMessageCodec = new MessageCodec(remoteFrameCodec, decoder, negotiatedLocalP2PVersion)
 
   }
 
