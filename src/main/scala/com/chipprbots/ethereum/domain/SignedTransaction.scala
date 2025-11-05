@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.domain
 
-import java.math.BigInteger
-
 import org.apache.pekko.util.ByteString
 
 import cats.effect.IO

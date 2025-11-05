@@ -24,4 +24,25 @@ class ByteUtilsSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
       assert(asBytes.sameElements(bytes))
     }
   }
+
+  test("bytesToBigInt handles empty array") {
+    val emptyArray = Array.empty[Byte]
+    val result = ByteUtils.bytesToBigInt(emptyArray)
+    assert(result == BigInt(0))
+  }
+
+  test("bytesToBigInt handles non-empty arrays") {
+    val testCases = Seq(
+      (Array[Byte](0x01), BigInt(1)),
+      (Array[Byte](0x00, 0x01), BigInt(1)),
+      (Array[Byte](0x01, 0x00), BigInt(256)),
+      (Array[Byte](0xff.toByte), BigInt(255)),
+      (Array[Byte](0x01, 0x00, 0x00), BigInt(65536))
+    )
+    
+    testCases.foreach { case (bytes, expected) =>
+      val result = ByteUtils.bytesToBigInt(bytes)
+      assert(result == expected, s"Failed for bytes ${bytes.mkString("[", ", ", "]")}")
+    }
+  }
 }
