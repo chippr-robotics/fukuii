@@ -30,6 +30,6 @@ trait AuthInitiateEcdsaCodec {
     val r = input.take(RLength)
     val s = input.slice(SIndex, SIndex + SLength)
     val v = input(VIndex) + 27
-    ECDSASignature(ByteUtils.bytesToBigInt(r).bigInteger, ByteUtils.bytesToBigInt(s).bigInteger, v.toByte)
+    ECDSASignature(ByteUtils.bytesToBigInt(r), ByteUtils.bytesToBigInt(s), v.toByte)
   }
 }

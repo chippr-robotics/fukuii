@@ -46,7 +46,7 @@ object ByteUtils {
     * Empty arrays are converted to BigInt(0) instead of throwing NumberFormatException.
     *
     * @param bytes
-    *   \- byte array to convert (can be empty)
+    *   - byte array to convert (can be empty)
     * @return
     *   BigInt value, BigInt(0) for empty array
     */

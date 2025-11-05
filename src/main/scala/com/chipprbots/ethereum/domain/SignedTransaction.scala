@@ -56,8 +56,8 @@ object SignedTransaction {
   ): SignedTransaction = {
     import com.chipprbots.ethereum.utils.ByteUtils
     val txSignature = ECDSASignature(
-      r = ByteUtils.bytesToBigInt(signatureRandom.toArray).bigInteger,
-      s = ByteUtils.bytesToBigInt(signature.toArray).bigInteger,
+      r = ByteUtils.bytesToBigInt(signatureRandom.toArray),
+      s = ByteUtils.bytesToBigInt(signature.toArray),
       v = pointSign
     )
     SignedTransaction(tx, txSignature)
