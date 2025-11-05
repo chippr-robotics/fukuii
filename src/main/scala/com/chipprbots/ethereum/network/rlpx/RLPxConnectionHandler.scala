@@ -88,7 +88,7 @@ class RLPxConnectionHandler(
 
   class ConnectedHandler(connection: ActorRef) {
 
-    def handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
+    val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
       log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
       context.stop(self)
