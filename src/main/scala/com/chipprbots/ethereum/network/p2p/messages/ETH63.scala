@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object ETH63 {
 
@@ -68,8 +69,8 @@ object ETH63 {
               RLPValue(codeHashBytes)
             ) =>
           Account(
-            UInt256(BigInt(1, nonceBytes)),
-            UInt256(BigInt(1, balanceBytes)),
+            UInt256(ByteUtils.bytesToBigInt(nonceBytes)),
+            UInt256(ByteUtils.bytesToBigInt(balanceBytes)),
             ByteString(storageRootBytes),
             ByteString(codeHashBytes)
           )
@@ -256,7 +257,7 @@ object ETH63 {
           }
           LegacyReceipt(
             stateHash,
-            BigInt(1, cumulativeGasUsedBytes),
+            ByteUtils.bytesToBigInt(cumulativeGasUsedBytes),
             ByteString(logsBloomFilterBytes),
             logs.items.map(_.toTxLogEntry)
           )

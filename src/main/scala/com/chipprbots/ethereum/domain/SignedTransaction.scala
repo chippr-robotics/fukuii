@@ -56,9 +56,10 @@ object SignedTransaction {
       signatureRandom: ByteString,
       signature: ByteString
   ): SignedTransaction = {
+    import com.chipprbots.ethereum.utils.ByteUtils
     val txSignature = ECDSASignature(
-      r = new BigInteger(1, signatureRandom.toArray),
-      s = new BigInteger(1, signature.toArray),
+      r = ByteUtils.bytesToBigInt(signatureRandom.toArray).bigInteger,
+      s = ByteUtils.bytesToBigInt(signature.toArray).bigInteger,
       v = pointSign
     )
     SignedTransaction(tx, txSignature)
