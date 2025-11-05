@@ -54,12 +54,22 @@ class MessageCodec(
     }
 
   private def decompressData(data: Array[Byte]): Try[Array[Byte]] =
-    Try(Snappy.uncompressedLength(data)).flatMap { decompressedSize =>
-      if (decompressedSize > MaxDecompressedLength)
-        Failure(new RuntimeException("Message size larger than 16mb"))
-      else
-        Try(Snappy.uncompress(data))
-    }
+    Try(Snappy.uncompressedLength(data))
+      .flatMap { decompressedSize =>
+        if (decompressedSize > MaxDecompressedLength)
+          Failure(new RuntimeException(s"Message size larger than 16mb: $decompressedSize bytes"))
+        else
+          Try(Snappy.uncompress(data)).recoverWith { case ex =>
+            Failure(new RuntimeException(s"FAILED_TO_UNCOMPRESS(${ex.getClass.getSimpleName}): ${ex.getMessage}"))
+          }
+      }
+      .recoverWith { case ex =>
+        Failure(
+          new RuntimeException(
+            s"FAILED_TO_UNCOMPRESS(InvalidHeader): Cannot read uncompressed length - ${ex.getMessage}"
+          )
+        )
+      }
 
   def encodeMessage(serializable: MessageSerializable): ByteString = {
     val encoded: Array[Byte] = serializable.toBytes

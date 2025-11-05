@@ -95,34 +95,35 @@ class RLPxConnectionHandler(
     }
 
     def waitingForAuthHandshakeInit(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
-      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse { case Received(data) =>
-        timeout.cancel()
-        // FIXME EIP8 is 6 years old, time to drop it
-        val maybePreEIP8Result = Try {
-          val (responsePacket, result) = handshaker.handleInitialMessage(data.take(InitiatePacketLength))
-          val remainingData = data.drop(InitiatePacketLength)
-          (responsePacket, result, remainingData)
-        }
-        lazy val maybePostEIP8Result = Try {
-          val (packetData, remainingData) = decodeV4Packet(data)
-          val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData)
-          (responsePacket, result, remainingData)
-        }
+      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse {
+        case Received(data) =>
+          timeout.cancel()
+          // FIXME EIP8 is 6 years old, time to drop it
+          val maybePreEIP8Result = Try {
+            val (responsePacket, result) = handshaker.handleInitialMessage(data.take(InitiatePacketLength))
+            val remainingData = data.drop(InitiatePacketLength)
+            (responsePacket, result, remainingData)
+          }
+          lazy val maybePostEIP8Result = Try {
+            val (packetData, remainingData) = decodeV4Packet(data)
+            val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData)
+            (responsePacket, result, remainingData)
+          }
 
-        maybePreEIP8Result.orElse(maybePostEIP8Result) match {
-          case Success((responsePacket, result, remainingData)) =>
-            connection ! Write(responsePacket, Ack)
-            processHandshakeResult(result, remainingData)
+          maybePreEIP8Result.orElse(maybePostEIP8Result) match {
+            case Success((responsePacket, result, remainingData)) =>
+              connection ! Write(responsePacket, Ack)
+              processHandshakeResult(result, remainingData)
 
-          case Failure(ex) =>
-            log.debug(
-              "[Stopping Connection] Init AuthHandshaker message handling failed for peer {} due to {}",
-              peerId,
-              ex.getMessage
-            )
-            context.parent ! ConnectionFailed
-            context.stop(self)
-        }
+            case Failure(ex) =>
+              log.debug(
+                "[Stopping Connection] Init AuthHandshaker message handling failed for peer {} due to {}",
+                peerId,
+                ex.getMessage
+              )
+              context.parent ! ConnectionFailed
+              context.stop(self)
+          }
       }
 
     def waitingForAuthHandshakeResponse(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
@@ -282,7 +283,8 @@ class RLPxConnectionHandler(
       case Left(ex) =>
         log.info("Cannot decode message from {}, because of {}", peerId, ex.getMessage)
         // break connection in case of failed decoding, to avoid attack which would send us garbage
-        context.stop(self)
+        connection ! Close
+      // Let handleConnectionTerminated clean up after TCP connection closes
     }
 
     /** Handles sending and receiving messages from the Akka TCP connection, while also handling acknowledgement of
