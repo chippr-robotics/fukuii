@@ -227,6 +227,7 @@ lazy val node = {
       Dependencies.pekko,
       Dependencies.pekkoHttp,
       Dependencies.apacheCommons,
+      Dependencies.apacheHttpClient,
       Dependencies.boopickle,
       Dependencies.cats,
       Dependencies.circe,

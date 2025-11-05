@@ -50,7 +50,10 @@ object ETC64 {
           Status(
             ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
             ByteUtils.bytesToBigInt(networkIdBytes).toInt,
-            ChainWeight(ByteUtils.bytesToBigInt(lastCheckpointNumberBytes), ByteUtils.bytesToBigInt(totalDifficultyBytes)),
+            ChainWeight(
+              ByteUtils.bytesToBigInt(lastCheckpointNumberBytes),
+              ByteUtils.bytesToBigInt(totalDifficultyBytes)
+            ),
             ByteString(bestHashBytes),
             ByteString(genesisHashBytes)
           )
@@ -123,7 +126,10 @@ object ETC64 {
                 uncleNodesList.items.map(_.toBlockHeader)
               )
             ),
-            ChainWeight(ByteUtils.bytesToBigInt(lastCheckpointNumberBytes), ByteUtils.bytesToBigInt(totalDifficultyBytes))
+            ChainWeight(
+              ByteUtils.bytesToBigInt(lastCheckpointNumberBytes),
+              ByteUtils.bytesToBigInt(totalDifficultyBytes)
+            )
           )
         case _ => throw new RuntimeException("Cannot decode NewBlock ETC64 version")
       }

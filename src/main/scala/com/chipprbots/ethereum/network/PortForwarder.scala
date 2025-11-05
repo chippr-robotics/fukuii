@@ -18,7 +18,6 @@ import org.jupnp.support.igd.PortMappingListener
 import org.jupnp.support.model.PortMapping
 import org.jupnp.support.model.PortMapping.Protocol.TCP
 import org.jupnp.support.model.PortMapping.Protocol.UDP
-import org.jupnp.tool.transport.JDKTransportConfiguration
 import org.jupnp.transport.Router
 import org.jupnp.transport.spi.NetworkAddressFactory
 import org.jupnp.transport.spi.StreamClient
@@ -34,8 +33,19 @@ private class ClientOnlyUpnpServiceConfiguration extends DefaultUpnpServiceConfi
   override def createDefaultExecutorService(): ExecutorService =
     QueueingThreadPoolExecutor.createInstance("fukuii-jupnp", THREAD_POOL_SIZE);
 
-  override def createStreamClient(): StreamClient[_ <: StreamClientConfiguration] =
-    JDKTransportConfiguration.INSTANCE.createStreamClient(getSyncProtocolExecutorService())
+  override def createStreamClient(): StreamClient[_ <: StreamClientConfiguration] = {
+    // Use Apache HttpClient-based transport to avoid URLStreamHandlerFactory issues
+    val config = new StreamClientConfiguration() {
+      override def getTimeoutSeconds(): Int = 10
+      override def getLogWarningSeconds(): Int = 5
+      override def getRetryAfterSeconds(): Int = 60
+      override def getRequestExecutorService(): java.util.concurrent.ExecutorService =
+        getSyncProtocolExecutorService()
+      override def getUserAgentValue(majorVersion: Int, minorVersion: Int): String =
+        s"Fukuii/$majorVersion.$minorVersion UPnP/1.1"
+    }
+    new ApacheHttpClientStreamClient(config)
+  }
 
   override def createStreamServer(networkAddressFactory: NetworkAddressFactory): NoStreamServer.type =
     NoStreamServer // prevent a StreamServer from running needlessly
@@ -51,6 +61,28 @@ private object NoStreamServer extends StreamServer[StreamServerConfiguration] {
   }
 }
 
+/** A no-op UPnP service implementation used as a fallback when UPnP initialization fails. This allows the node to
+  * continue running without automatic port forwarding.
+  *
+  * WARNING: This service returns null for all getter methods. It should only be used for the shutdown lifecycle method
+  * and should not have its methods called. The service is created only when UPnP initialization fails, and is
+  * immediately passed to stopForwarding for cleanup.
+  */
+private class NoOpUpnpService extends UpnpService {
+  import org.jupnp.UpnpServiceConfiguration
+  import org.jupnp.controlpoint.ControlPoint
+  import org.jupnp.protocol.ProtocolFactory
+  import org.jupnp.registry.Registry
+
+  def getConfiguration(): UpnpServiceConfiguration = null
+  def getControlPoint(): ControlPoint = null
+  def getProtocolFactory(): ProtocolFactory = null
+  def getRegistry(): Registry = null
+  def getRouter(): Router = null
+  def shutdown(): Unit = ()
+  def startup(): Unit = ()
+}
+
 object PortForwarder extends Logger {
   final private val description = "Fukuii"
 
@@ -59,24 +91,44 @@ object PortForwarder extends Logger {
 
   private def startForwarding(tcpPorts: Seq[Int], udpPorts: Seq[Int]): IO[UpnpService] = IO {
     log.info("Attempting port forwarding for TCP ports {} and UDP ports {}", tcpPorts, udpPorts)
-    new UpnpServiceImpl(new ClientOnlyUpnpServiceConfiguration()).tap { service =>
-      service.startup()
+    try
+      new UpnpServiceImpl(new ClientOnlyUpnpServiceConfiguration()).tap { service =>
+        service.startup()
 
-      val bindAddresses =
-        service
-          .getConfiguration()
-          .createNetworkAddressFactory()
-          .getBindAddresses()
-          .asScala
-          .map(_.getHostAddress())
-          .toArray
+        val bindAddresses =
+          service
+            .getConfiguration()
+            .createNetworkAddressFactory()
+            .getBindAddresses()
+            .asScala
+            .map(_.getHostAddress())
+            .toArray
 
-      val portMappings = for {
-        address <- bindAddresses
-        (port, protocol) <- tcpPorts.map(_ -> TCP) ++ udpPorts.map(_ -> UDP)
-      } yield new PortMapping(port, address, protocol).tap(_.setDescription(description))
+        val portMappings = for {
+          address <- bindAddresses
+          (port, protocol) <- tcpPorts.map(_ -> TCP) ++ udpPorts.map(_ -> UDP)
+        } yield new PortMapping(port, address, protocol).tap(_.setDescription(description))
 
-      service.getRegistry().addListener(new PortMappingListener(portMappings))
+        service.getRegistry().addListener(new PortMappingListener(portMappings))
+        log.info("UPnP port forwarding initialized successfully")
+      }
+    catch {
+      case ex: org.jupnp.transport.spi.InitializationException =>
+        log.warn(
+          "Failed to initialize UPnP port forwarding: {}. " +
+            "The node will continue to run, but automatic port forwarding is disabled. " +
+            "Please configure port forwarding manually on your router if needed.",
+          ex.getMessage
+        )
+        // Return a no-op service that can be safely shut down
+        new NoOpUpnpService()
+      case ex: Throwable =>
+        log.warn(
+          "Unexpected error during UPnP initialization: {}. " +
+            "The node will continue to run without automatic port forwarding.",
+          ex.getMessage
+        )
+        new NoOpUpnpService()
     }
   }
 

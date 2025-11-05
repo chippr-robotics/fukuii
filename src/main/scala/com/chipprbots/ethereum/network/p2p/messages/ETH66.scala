@@ -223,7 +223,10 @@ object ETH66 {
 
       def toPooledTransactions: PooledTransactions = rawDecode(bytes) match {
         case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
-          PooledTransactions(ByteUtils.bytesToBigInt(requestIdBytes), rlpList.items.toTypedRLPEncodables.map(_.toSignedTransaction))
+          PooledTransactions(
+            ByteUtils.bytesToBigInt(requestIdBytes),
+            rlpList.items.toTypedRLPEncodables.map(_.toSignedTransaction)
+          )
         case _ => throw new RuntimeException("Cannot decode PooledTransactions")
       }
     }
