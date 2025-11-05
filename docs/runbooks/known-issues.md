@@ -1,12 +1,12 @@
 # Known Issues
 
 **Audience**: Operators troubleshooting common problems  
-**Last Updated**: 2025-11-04  
+**Last Updated**: 2025-11-05  
 **Status**: Living Document
 
 ## Overview
 
-This document catalogs known issues, their symptoms, root causes, workarounds, and permanent fixes for Fukuii operations. It focuses on three main areas: RocksDB database issues, temporary directory problems, and JVM configuration issues.
+This document catalogs known issues, their symptoms, root causes, workarounds, and permanent fixes for Fukuii operations. It focuses on database issues, temporary directory problems, JVM configuration, and network connectivity issues.
 
 ## Table of Contents
 
@@ -15,6 +15,7 @@ This document catalogs known issues, their symptoms, root causes, workarounds, a
 3. [JVM Configuration Issues](#jvm-configuration-issues)
 4. [Other Common Issues](#other-common-issues)
    - [Issue 13: Network Sync Error - Zero Length BigInteger](#issue-13-network-sync-error---zero-length-biginteger)
+   - [Issue 14: ETH68 Peer Connection Failures](#issue-14-eth68-peer-connection-failures)
 
 ## RocksDB Issues
 
@@ -1001,6 +1002,130 @@ sbt "rlp / testOnly com.chipprbots.ethereum.rlp.RLPSuite"
 #### Status
 
 **Fixed**: v1.0.1 and later include the fix. Update to latest version or apply patch manually.
+
+---
+
+### Issue 14: ETH68 Peer Connection Failures
+
+**Severity**: Critical  
+**Frequency**: Affects all nodes connecting to ETH68-capable peers  
+**Impact**: Unable to maintain peer connections, zero stable peers, no sync  
+**Status**: Fixed in next release
+
+#### Symptoms
+
+```
+DEBUG [c.c.e.n.p2p.MessageDecoder$$anon$1] - Unknown eth/68 message type: 1
+INFO  [c.c.e.n.rlpx.RLPxConnectionHandler] - Cannot decode message from <peer-ip>:30303, because of Cannot decode Disconnect
+INFO  [c.c.e.b.sync.fast.PivotBlockSelector] - Cannot pick pivot block. Need at least 3 peers, but there are only 0
+INFO  [c.c.e.network.PeerManagerActor] - Handshaked 0/80, pending connection attempts 26
+```
+
+- Handshake with ETH68 peers completes successfully
+- Peers immediately disconnect after handshake
+- "Cannot decode Disconnect" errors repeatedly in logs
+- Node unable to maintain any stable peer connections
+- Blockchain sync cannot proceed (requires minimum 3 peers)
+- Issue affects all networks (ETC mainnet, Mordor testnet, etc.)
+
+#### Root Cause
+
+The message decoder chain in `RLPxConnectionHandler.ethMessageCodecFactory` was ordered incorrectly. According to the [Ethereum devp2p specification](https://github.com/ethereum/devp2p), network protocol messages (Hello, Disconnect, Ping, Pong) are part of the base RLPx wire protocol and must be decoded before capability-specific messages.
+
+**Technical Details**:
+- **Location**: `src/main/scala/com/chipprbots/ethereum/network/rlpx/RLPxConnectionHandler.scala`
+- **Affected component**: Message decoder chain composition
+- **Issue**: ETH68 decoder tried to decode network messages first, failing on Disconnect (code 0x01)
+- **Spec violation**: RLPx wire protocol messages must be handled before capability messages
+
+The bug occurred because:
+1. Peer advertises ETH68 capability during handshake
+2. Node creates decoder chain: `EthereumMessageDecoder.ethMessageDecoder(ETH68).orElse(NetworkMessageDecoder)`
+3. When peer sends Disconnect message (code 0x01):
+   - ETH68MessageDecoder tries first → fails with "Unknown eth/68 message type: 1"
+   - NetworkMessageDecoder tries next → also fails to decode properly
+4. Connection terminated due to decode error
+5. Process repeats with all peers, resulting in zero stable connections
+
+#### Ethereum Specification Context
+
+According to the [Ethereum devp2p specification](https://github.com/ethereum/devp2p):
+- RLPx wire protocol messages (codes 0x00-0x0f) are base protocol
+- Capability messages (ETH, SNAP, etc.) use separate message space
+- Wire protocol messages must always be decodable regardless of negotiated capabilities
+
+The [RLPx protocol specification](https://github.com/ethereum/devp2p/blob/master/rlpx.md) states:
+- Message code 0x00: Hello
+- Message code 0x01: Disconnect
+- Message code 0x02: Ping
+- Message code 0x03: Pong
+
+These are always present and independent of capability negotiation.
+
+#### Workaround
+
+**Temporary mitigation** (before fix):
+- No reliable workaround available
+- Cannot connect to ETH68-capable peers (most modern clients)
+- May work with older clients advertising only ETH64-ETH67
+- Consider using fork that doesn't have this issue
+
+#### Permanent Fix
+
+**Applied in commit**: `801b236`
+
+Modified `RLPxConnectionHandler.ethMessageCodecFactory` to correct decoder order:
+
+```scala
+// Before (buggy):
+val md = EthereumMessageDecoder.ethMessageDecoder(negotiated).orElse(NetworkMessageDecoder)
+
+// After (fixed):
+val md = NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))
+```
+
+This ensures:
+- Network protocol messages (0x00-0x03) decoded by NetworkMessageDecoder first
+- Capability-specific messages decoded by appropriate ETH decoder (ETH64-ETH68)
+- Proper fallback chain when message type unknown
+- Compliance with Ethereum devp2p specification
+
+#### Prevention & Testing
+
+**Test coverage**:
+- MessageDecodersSpec: 15 tests covering all protocol versions
+- MessageCodecSpec: 4 tests for message encoding/decoding
+- All tests already used correct decoder order
+- Tests pass with fix applied
+
+**Impact Assessment**:
+- Single-line change, minimal risk
+- Aligns with test suite expectations
+- Matches other ETC/ETH client implementations
+- No consensus-critical behavior affected
+
+**Before fix**:
+- Zero peer connections possible
+- Node cannot sync blockchain
+- Fast sync cannot proceed (requires 3+ peers)
+- Full sync cannot proceed (requires 1+ peers)
+
+**After fix**:
+- Successful handshakes with ETH68 peers
+- Disconnect messages handled gracefully
+- Stable peer connections maintained
+- Normal sync operation restored
+
+#### References
+
+1. [Ethereum devp2p Specifications](https://github.com/ethereum/devp2p)
+2. [RLPx Transport Protocol](https://github.com/ethereum/devp2p/blob/master/rlpx.md)
+3. [ETH Wire Protocol](https://github.com/ethereum/devp2p/blob/master/caps/eth.md)
+4. [Ethereum Execution APIs](https://ethereum.github.io/execution-apis/api-documentation/)
+
+#### Status
+
+**Fixed**: Next release includes the fix. Update to latest version when available.
 
 ---
 
