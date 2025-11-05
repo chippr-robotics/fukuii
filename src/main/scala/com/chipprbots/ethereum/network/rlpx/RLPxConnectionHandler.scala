@@ -76,7 +76,7 @@ class RLPxConnectionHandler(
       context.watch(connection)
       connection ! Register(self)
       val (initPacket, handshaker) = authHandshaker.initiate(uri)
-      connection ! Write(initPacket)
+      connection ! Write(initPacket, Ack)
       val timeout = system.scheduler.scheduleOnce(rlpxConfiguration.waitForHandshakeTimeout, self, AuthHandshakeTimeout)
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeResponse(handshaker, timeout))
 
@@ -95,7 +95,7 @@ class RLPxConnectionHandler(
     }
 
     def waitingForAuthHandshakeInit(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
-      handleConnectionTerminated.orElse(handleTimeout).orElse(handleConnectionClosed).orElse { case Received(data) =>
+      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse { case Received(data) =>
         timeout.cancel()
         // FIXME EIP8 is 6 years old, time to drop it
         val maybePreEIP8Result = Try {
@@ -111,7 +111,7 @@ class RLPxConnectionHandler(
 
         maybePreEIP8Result.orElse(maybePostEIP8Result) match {
           case Success((responsePacket, result, remainingData)) =>
-            connection ! Write(responsePacket)
+            connection ! Write(responsePacket, Ack)
             processHandshakeResult(result, remainingData)
 
           case Failure(ex) =>
@@ -126,31 +126,36 @@ class RLPxConnectionHandler(
       }
 
     def waitingForAuthHandshakeResponse(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
-      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse { case Received(data) =>
-        timeout.cancel()
-        val maybePreEIP8Result = Try {
-          val result = handshaker.handleResponseMessage(data.take(ResponsePacketLength))
-          val remainingData = data.drop(ResponsePacketLength)
-          (result, remainingData)
-        }
-        val maybePostEIP8Result = Try {
-          val (packetData, remainingData) = decodeV4Packet(data)
-          val result = handshaker.handleResponseMessageV4(packetData)
-          (result, remainingData)
-        }
-        maybePreEIP8Result.orElse(maybePostEIP8Result) match {
-          case Success((result, remainingData)) =>
-            processHandshakeResult(result, remainingData)
+      handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse {
+        case Ack =>
+          // Init packet write succeeded, continue waiting for response
+          ()
 
-          case Failure(ex) =>
-            log.debug(
-              "[Stopping Connection] Response AuthHandshaker message handling failed for peer {} due to {}",
-              peerId,
-              ex.getMessage
-            )
-            context.parent ! ConnectionFailed
-            context.stop(self)
-        }
+        case Received(data) =>
+          timeout.cancel()
+          val maybePreEIP8Result = Try {
+            val result = handshaker.handleResponseMessage(data.take(ResponsePacketLength))
+            val remainingData = data.drop(ResponsePacketLength)
+            (result, remainingData)
+          }
+          val maybePostEIP8Result = Try {
+            val (packetData, remainingData) = decodeV4Packet(data)
+            val result = handshaker.handleResponseMessageV4(packetData)
+            (result, remainingData)
+          }
+          maybePreEIP8Result.orElse(maybePostEIP8Result) match {
+            case Success((result, remainingData)) =>
+              processHandshakeResult(result, remainingData)
+
+            case Failure(ex) =>
+              log.debug(
+                "[Stopping Connection] Response AuthHandshaker message handling failed for peer {} due to {}",
+                peerId,
+                ex.getMessage
+              )
+              context.parent ! ConnectionFailed
+              context.stop(self)
+          }
       }
 
     /** Decode V4 packet
@@ -213,6 +218,10 @@ class RLPxConnectionHandler(
           // Cancel pending message timeout
           cancellableAckTimeout.foreach(_.cancellable.cancel())
           context.become(awaitInitialHello(extractor, None, seqNumber))
+
+        case Ack =>
+          // Ack for auth handshake response packet write, no timeout to cancel
+          ()
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
