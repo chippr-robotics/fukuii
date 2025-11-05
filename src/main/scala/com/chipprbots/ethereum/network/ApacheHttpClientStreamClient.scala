@@ -23,13 +23,11 @@ import org.jupnp.transport.spi.StreamClientConfiguration
 import com.chipprbots.ethereum.utils.Logger
 
 /** Apache HttpClient-based StreamClient implementation for JupnP.
-  * 
-  * This implementation uses Apache HttpComponents Client 5.x instead of
-  * java.net.HttpURLConnection, avoiding the URLStreamHandlerFactory issue
-  * that occurs with the default JupnP StreamClient implementations.
-  * 
-  * This is a minimal implementation that supports the basic HTTP operations
-  * needed for UPnP port forwarding.
+  *
+  * This implementation uses Apache HttpComponents Client 5.x instead of java.net.HttpURLConnection, avoiding the
+  * URLStreamHandlerFactory issue that occurs with the default JupnP StreamClient implementations.
+  *
+  * This is a minimal implementation that supports the basic HTTP operations needed for UPnP port forwarding.
   */
 class ApacheHttpClientStreamClient(val configuration: StreamClientConfiguration)
     extends AbstractStreamClient[StreamClientConfiguration, ApacheHttpClientStreamClient.HttpCallable]()
@@ -38,14 +36,16 @@ class ApacheHttpClientStreamClient(val configuration: StreamClientConfiguration)
   private val httpClient: CloseableHttpClient = {
     import org.apache.hc.client5.http.config.RequestConfig
     import org.apache.hc.core5.util.Timeout
-    
+
     val timeoutMillis = configuration.getTimeoutSeconds() * 1000
-    val requestConfig = RequestConfig.custom()
+    val requestConfig = RequestConfig
+      .custom()
       .setConnectionRequestTimeout(Timeout.ofMilliseconds(timeoutMillis))
       .setResponseTimeout(Timeout.ofMilliseconds(timeoutMillis))
       .build()
-    
-    HttpClients.custom()
+
+    HttpClients
+      .custom()
       .setDefaultRequestConfig(requestConfig)
       .build()
   }
@@ -54,29 +54,25 @@ class ApacheHttpClientStreamClient(val configuration: StreamClientConfiguration)
 
   override protected def createRequest(
       requestMessage: StreamRequestMessage
-  ): ApacheHttpClientStreamClient.HttpCallable = {
+  ): ApacheHttpClientStreamClient.HttpCallable =
     new ApacheHttpClientStreamClient.HttpCallable(requestMessage, httpClient)
-  }
 
   override protected def createCallable(
       requestMessage: StreamRequestMessage,
       httpCallable: ApacheHttpClientStreamClient.HttpCallable
-  ): java.util.concurrent.Callable[StreamResponseMessage] = {
+  ): java.util.concurrent.Callable[StreamResponseMessage] =
     httpCallable
-  }
 
-  override def stop(): Unit = {
-    try {
+  override def stop(): Unit =
+    try
       httpClient.close()
-    } catch {
+    catch {
       case ex: Exception =>
         log.warn("Error closing Apache HttpClient", ex)
     }
-  }
 
-  override protected def abort(callable: ApacheHttpClientStreamClient.HttpCallable): Unit = {
+  override protected def abort(callable: ApacheHttpClientStreamClient.HttpCallable): Unit =
     callable.abort()
-  }
 
   override protected def logExecutionException(t: Throwable): Boolean = {
     log.warn("HTTP request execution failed", t)
@@ -95,9 +91,8 @@ object ApacheHttpClientStreamClient {
 
     @volatile private var aborted = false
 
-    def abort(): Unit = {
+    def abort(): Unit =
       aborted = true
-    }
 
     override def call(): StreamResponseMessage = {
       if (aborted) {
@@ -106,7 +101,7 @@ object ApacheHttpClientStreamClient {
 
       try {
         val uri = requestMessage.getOperation().getURI()
-        
+
         requestMessage.getOperation().getMethod match {
           case UpnpRequest.Method.GET =>
             executeGet(uri.toString())
@@ -151,9 +146,9 @@ object ApacheHttpClientStreamClient {
         // Use charset from Content-Type if available, otherwise UTF-8
         val charset = Option(entity.getContentType())
           .flatMap { contentTypeStr =>
-            try {
+            try
               Option(ContentType.parse(contentTypeStr).getCharset).map(_.name())
-            } catch {
+            catch {
               case _: Exception => None
             }
           }
@@ -167,7 +162,7 @@ object ApacheHttpClientStreamClient {
 
     private def executeGet(uri: String): StreamResponseMessage = {
       val request = new HttpGet(uri)
-      
+
       // Set request headers
       requestMessage.getHeaders().asScala.foreach { case (name, values) =>
         values.asScala.foreach { value =>
@@ -175,18 +170,20 @@ object ApacheHttpClientStreamClient {
         }
       }
 
-      httpClient.execute(request, response => {
-        if (aborted) {
-          null
-        } else {
-          populateResponse(response.getCode(), response.getReasonPhrase(), response)
-        }
-      })
+      httpClient.execute(
+        request,
+        response =>
+          if (aborted) {
+            null
+          } else {
+            populateResponse(response.getCode(), response.getReasonPhrase(), response)
+          }
+      )
     }
 
     private def executePost(uri: String): StreamResponseMessage = {
       val request = new HttpPost(uri)
-      
+
       // Set request headers
       requestMessage.getHeaders().asScala.foreach { case (name, values) =>
         values.asScala.foreach { value =>
@@ -201,9 +198,9 @@ object ApacheHttpClientStreamClient {
         val entity = new ByteArrayEntity(
           bodyBytes,
           if (contentType != null) {
-            try {
+            try
               ContentType.parse(contentType.toString())
-            } catch {
+            catch {
               case ex: Exception =>
                 log.warn(s"Invalid content type header: '$contentType'. Using default.", ex)
                 null
@@ -213,13 +210,15 @@ object ApacheHttpClientStreamClient {
         request.setEntity(entity)
       }
 
-      httpClient.execute(request, response => {
-        if (aborted) {
-          null
-        } else {
-          populateResponse(response.getCode(), response.getReasonPhrase(), response)
-        }
-      })
+      httpClient.execute(
+        request,
+        response =>
+          if (aborted) {
+            null
+          } else {
+            populateResponse(response.getCode(), response.getReasonPhrase(), response)
+          }
+      )
     }
   }
 }

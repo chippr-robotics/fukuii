@@ -39,9 +39,9 @@ private class ClientOnlyUpnpServiceConfiguration extends DefaultUpnpServiceConfi
       override def getTimeoutSeconds(): Int = 10
       override def getLogWarningSeconds(): Int = 5
       override def getRetryAfterSeconds(): Int = 60
-      override def getRequestExecutorService(): java.util.concurrent.ExecutorService = 
+      override def getRequestExecutorService(): java.util.concurrent.ExecutorService =
         getSyncProtocolExecutorService()
-      override def getUserAgentValue(majorVersion: Int, minorVersion: Int): String = 
+      override def getUserAgentValue(majorVersion: Int, minorVersion: Int): String =
         s"Fukuii/$majorVersion.$minorVersion UPnP/1.1"
     }
     new ApacheHttpClientStreamClient(config)
@@ -61,13 +61,12 @@ private object NoStreamServer extends StreamServer[StreamServerConfiguration] {
   }
 }
 
-/** A no-op UPnP service implementation used as a fallback when UPnP initialization fails.
-  * This allows the node to continue running without automatic port forwarding.
-  * 
-  * WARNING: This service returns null for all getter methods. It should only be used
-  * for the shutdown lifecycle method and should not have its methods called.
-  * The service is created only when UPnP initialization fails, and is immediately
-  * passed to stopForwarding for cleanup.
+/** A no-op UPnP service implementation used as a fallback when UPnP initialization fails. This allows the node to
+  * continue running without automatic port forwarding.
+  *
+  * WARNING: This service returns null for all getter methods. It should only be used for the shutdown lifecycle method
+  * and should not have its methods called. The service is created only when UPnP initialization fails, and is
+  * immediately passed to stopForwarding for cleanup.
   */
 private class NoOpUpnpService extends UpnpService {
   import org.jupnp.UpnpServiceConfiguration
@@ -92,7 +91,7 @@ object PortForwarder extends Logger {
 
   private def startForwarding(tcpPorts: Seq[Int], udpPorts: Seq[Int]): IO[UpnpService] = IO {
     log.info("Attempting port forwarding for TCP ports {} and UDP ports {}", tcpPorts, udpPorts)
-    try {
+    try
       new UpnpServiceImpl(new ClientOnlyUpnpServiceConfiguration()).tap { service =>
         service.startup()
 
@@ -113,7 +112,7 @@ object PortForwarder extends Logger {
         service.getRegistry().addListener(new PortMappingListener(portMappings))
         log.info("UPnP port forwarding initialized successfully")
       }
-    } catch {
+    catch {
       case ex: org.jupnp.transport.spi.InitializationException =>
         log.warn(
           "Failed to initialize UPnP port forwarding: {}. " +
