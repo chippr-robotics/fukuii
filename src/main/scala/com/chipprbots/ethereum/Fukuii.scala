@@ -14,8 +14,8 @@ object Fukuii extends Logger {
   def main(args: Array[String]): Unit = {
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
 
-    // Check for --no-tui flag
-    val enableConsoleUI = !args.contains("--no-tui")
+    // Check for --tui flag to enable console UI (disabled by default)
+    val enableConsoleUI = args.contains("--tui")
 
     // Initialize console UI if enabled
     val consoleUI = if (enableConsoleUI) {
@@ -27,7 +27,7 @@ object Fukuii extends Logger {
         None
       }
     } else {
-      log.info("Console UI disabled via --no-tui flag")
+      log.info("Console UI disabled (use --tui flag to enable)")
       None
     }
 
