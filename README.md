@@ -171,11 +171,11 @@ The launcher accepts the same network names that Fukuii did (etc, eth, mordor, t
 Fukuii includes an enhanced Terminal User Interface (TUI) for real-time monitoring:
 
 ```bash
-# Start with console UI (default)
+# Start with standard logging (default)
 ./bin/fukuii etc
 
-# Disable console UI for headless/background mode
-./bin/fukuii etc --no-tui
+# Enable console UI for interactive monitoring
+./bin/fukuii etc --tui
 ```
 
 The console UI provides:
@@ -184,6 +184,8 @@ The console UI provides:
 - Network information and status
 - Keyboard commands (Q=quit, R=refresh, D=disable UI)
 - Color-coded health indicators
+
+**Note**: The console UI is currently disabled by default while under further development.
 
 See [Console UI Documentation](docs/console-ui.md) for detailed information.
 
