@@ -1,0 +1,63 @@
+# Environment variables with secrets
+.env
+
+# SSL certificates and keys
+ssl/
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# Secrets
+secrets/
+
+# Logs
+*.log
+logs/
+
+# Backup files
+*.bak
+*.backup
+backups/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+
+# Database dumps
+*.sql
+*.dump
+*.dmp
+
+# Cassandra data (managed by Docker volumes)
+cassandra-data/
+
+# Prometheus data (managed by Docker volumes)
+prometheus-data/
+
+# Grafana data (managed by Docker volumes)
+grafana-data/
+
+# Fukuii data (managed by Docker volumes)
+fukuii-data/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Local testing configurations
+*-local.yml
+*-local.conf
+test-*.yml

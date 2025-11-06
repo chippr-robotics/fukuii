@@ -1,0 +1,98 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'fukuii-kong-monitor'
+    cluster: 'fukuii-production'
+
+# Alerting configuration (optional - can be configured later)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+rule_files:
+  # - "alert_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'prometheus'
+          environment: 'production'
+
+  # Fukuii primary instance metrics
+  - job_name: 'fukuii-primary'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['fukuii-primary:9095']
+        labels:
+          instance: 'fukuii-primary'
+          role: 'primary'
+          network: 'ethereum-classic'
+          environment: 'production'
+
+  # Fukuii secondary instance metrics
+  - job_name: 'fukuii-secondary'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['fukuii-secondary:9095']
+        labels:
+          instance: 'fukuii-secondary'
+          role: 'secondary'
+          network: 'ethereum-classic'
+          environment: 'production'
+
+  # Kong API Gateway metrics
+  - job_name: 'kong'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ['kong:8001']
+        labels:
+          instance: 'kong-gateway'
+          role: 'api-gateway'
+          environment: 'production'
+    metrics_path: '/metrics'
+
+  # Cassandra metrics (if exposed via JMX exporter)
+  # - job_name: 'cassandra'
+  #   scrape_interval: 30s
+  #   static_configs:
+  #     - targets: ['cassandra-exporter:9404']
+  #       labels:
+  #         instance: 'cassandra'
+  #         role: 'database'
+
+  # Grafana metrics
+  - job_name: 'grafana'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['grafana:3000']
+        labels:
+          instance: 'grafana'
+          role: 'monitoring'
+    metrics_path: '/metrics'
+
+# Remote write configuration (optional - for long-term storage)
+# remote_write:
+#   - url: "http://remote-storage:9009/api/v1/write"
+#     queue_config:
+#       capacity: 10000
+#       max_shards: 5
+#       min_shards: 1
+#       max_samples_per_send: 5000
+#       batch_send_deadline: 5s
+
+# Remote read configuration (optional)
+# remote_read:
+#   - url: "http://remote-storage:9009/api/v1/read"
