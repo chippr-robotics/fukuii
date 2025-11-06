@@ -2,6 +2,18 @@
 
 This directory contains a complete Kong API Gateway setup for managing Fukuii Ethereum Classic nodes with high availability, security, and monitoring capabilities.
 
+## ⚠️ CRITICAL SECURITY NOTICE
+
+**This setup includes EXAMPLE CREDENTIALS for demonstration purposes. These MUST be changed before any production deployment!**
+
+Default credentials that MUST be changed:
+- Basic Auth passwords
+- API keys  
+- JWT secrets
+- Grafana admin password
+
+See [SECURITY.md](SECURITY.md) for detailed instructions on securing your deployment.
+
 ## Overview
 
 The Kong setup provides:

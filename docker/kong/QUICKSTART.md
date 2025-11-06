@@ -2,6 +2,22 @@
 
 This guide will get you up and running with Kong API Gateway for Fukuii in under 5 minutes.
 
+## ⚠️ SECURITY WARNING
+
+**DO NOT use this setup in production without changing the default passwords and secrets!**
+
+The default configuration includes example credentials for demonstration purposes only:
+- Default passwords: `fukuii_admin_password`, `fukuii_dev_password`
+- Default API keys: `admin_api_key_change_me`, `dev_api_key_change_me`
+- Default JWT secret: `your_jwt_secret_change_me`
+- Default Grafana password: `fukuii_grafana_admin`
+
+**Before production deployment:**
+1. Copy `.env.example` to `.env`
+2. Generate strong random passwords and secrets
+3. Update all credentials in `.env` and `kong.yml`
+4. Review the [SECURITY.md](SECURITY.md) guide
+
 ## Prerequisites
 
 - Docker 20.10+
