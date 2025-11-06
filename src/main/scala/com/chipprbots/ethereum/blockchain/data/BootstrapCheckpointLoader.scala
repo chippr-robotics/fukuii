@@ -11,8 +11,7 @@ import com.chipprbots.ethereum.utils.Logger
   * discovery phase and start syncing immediately.
   */
 class BootstrapCheckpointLoader(
-    blockchainReader: BlockchainReader,
-    blockchainWriter: BlockchainWriter
+    blockchainReader: BlockchainReader
 ) extends Logger {
 
   /** Load bootstrap checkpoints if enabled and the database is empty (only genesis block exists).
@@ -45,6 +44,7 @@ class BootstrapCheckpointLoader(
     }
 
     val sortedCheckpoints = blockchainConfig.bootstrapCheckpoints.sortBy(_.blockNumber)
+    // Safe to use .last because we check for emptiness at line 34
     val highestCheckpoint = sortedCheckpoints.last
 
     log.info(
@@ -62,7 +62,7 @@ class BootstrapCheckpointLoader(
     // Instead, we use these checkpoints as trusted reference points for the sync process.
     // TODO: Future enhancement - modify sync controller to reference these checkpoints when selecting pivot block
     // This would allow skipping the peer wait entirely. For now, checkpoints serve as trusted hints.
-    
+
     log.info(
       "Bootstrap checkpoints loaded. {} checkpoints available. Node will use these as trusted reference points for syncing.",
       sortedCheckpoints.size

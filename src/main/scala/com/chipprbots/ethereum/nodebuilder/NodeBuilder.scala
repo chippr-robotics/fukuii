@@ -841,8 +841,7 @@ trait BootstrapCheckpointLoaderBuilder {
 
   lazy val bootstrapCheckpointLoader =
     new com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader(
-      blockchainReader,
-      blockchainWriter
+      blockchainReader
     )
 }
 

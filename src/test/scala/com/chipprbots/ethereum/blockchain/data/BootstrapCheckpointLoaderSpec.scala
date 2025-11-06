@@ -13,8 +13,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
 
   "BootstrapCheckpointLoader.loadBootstrapCheckpoints" should "return false when checkpoints are disabled" in {
     val mockReader = mock[BlockchainReader]
-    val mockWriter = mock[BlockchainWriter]
-    val loader = new BootstrapCheckpointLoader(mockReader, mockWriter)
+    val loader = new BootstrapCheckpointLoader(mockReader)
 
     implicit val config: BlockchainConfig = createTestConfig(
       useBootstrapCheckpoints = false,
@@ -28,8 +27,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
 
   it should "return false when no checkpoints are configured" in {
     val mockReader = mock[BlockchainReader]
-    val mockWriter = mock[BlockchainWriter]
-    val loader = new BootstrapCheckpointLoader(mockReader, mockWriter)
+    val loader = new BootstrapCheckpointLoader(mockReader)
 
     implicit val config: BlockchainConfig = createTestConfig(
       useBootstrapCheckpoints = true,
@@ -43,8 +41,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
 
   it should "return false when blockchain already has blocks beyond genesis" in {
     val mockReader = mock[BlockchainReader]
-    val mockWriter = mock[BlockchainWriter]
-    val loader = new BootstrapCheckpointLoader(mockReader, mockWriter)
+    val loader = new BootstrapCheckpointLoader(mockReader)
 
     (mockReader.getBestBlockNumber _).expects().returning(BigInt(100))
 
@@ -62,8 +59,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
 
   it should "return true when checkpoints are loaded successfully" in {
     val mockReader = mock[BlockchainReader]
-    val mockWriter = mock[BlockchainWriter]
-    val loader = new BootstrapCheckpointLoader(mockReader, mockWriter)
+    val loader = new BootstrapCheckpointLoader(mockReader)
 
     (mockReader.getBestBlockNumber _).expects().returning(BigInt(0))
 
@@ -83,8 +79,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
 
   it should "handle single checkpoint" in {
     val mockReader = mock[BlockchainReader]
-    val mockWriter = mock[BlockchainWriter]
-    val loader = new BootstrapCheckpointLoader(mockReader, mockWriter)
+    val loader = new BootstrapCheckpointLoader(mockReader)
 
     (mockReader.getBestBlockNumber _).expects().returning(BigInt(0))
 
