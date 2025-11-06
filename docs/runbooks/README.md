@@ -9,6 +9,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[Operating Modes](operating-modes.md)** - Comprehensive guide to full nodes, archive nodes, boot nodes, and mining nodes
 - **[Node Configuration](node-configuration.md)** - Chain configs, node configs, and command line options
 - **[Security](security.md)** - Node security, firewall configuration, and security best practices
+- **[TLS Operations](tls-operations.md)** - TLS/HTTPS configuration for secure JSON-RPC connections
 
 ### Operations
 - **[Peering](peering.md)** - Peer discovery, network connectivity, and peering troubleshooting

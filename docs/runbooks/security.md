@@ -506,6 +506,8 @@ Restrict with firewall (see above) to specific IPs only.
 
 Use nginx or Caddy as reverse proxy:
 
+**Note**: For direct TLS/HTTPS configuration on Fukuii (without reverse proxy), see the [TLS Operations](tls-operations.md) runbook for detailed instructions on certificate generation, configuration, and testing.
+
 **Nginx example:**
 ```nginx
 # /etc/nginx/sites-available/fukuii-rpc
@@ -573,6 +575,26 @@ rpc.example.com {
     }
 }
 ```
+
+**Alternative: Direct HTTPS on Fukuii**
+
+Instead of using a reverse proxy, you can enable TLS/HTTPS directly on Fukuii:
+
+```hocon
+fukuii.network.rpc.http {
+  mode = "https"
+  interface = "0.0.0.0"
+  port = 8546
+  
+  certificate {
+    keystore-path = "tls/fukuiiCA.p12"
+    keystore-type = "pkcs12"
+    password-file = "tls/password"
+  }
+}
+```
+
+For complete TLS setup instructions including certificate generation, testing, and production considerations, see the **[TLS Operations Runbook](tls-operations.md)**.
 
 ### RPC Method Filtering
 
