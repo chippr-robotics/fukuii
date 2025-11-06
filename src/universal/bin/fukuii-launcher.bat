@@ -14,8 +14,9 @@ if "%1"=="" goto :check_defaults
 REM Handle --config=<file> format
 echo %1 | findstr /b /c:"--config=" >nul
 if not errorlevel 1 (
-    set "CONFIG_VALUE=%1"
-    set "CONFIG_VALUE=!CONFIG_VALUE:--config=!"
+    REM Extract value after --config= using substring
+    set "FULL_ARG=%1"
+    set "CONFIG_VALUE=!FULL_ARG:~9!"
     set "JVM_ARGS=!JVM_ARGS! -Dconfig.file=!CONFIG_VALUE!"
     shift
     goto :process_args
@@ -34,8 +35,8 @@ if "%1"=="--config" (
     goto :process_args
 )
 
-REM Handle -D, -X, -XX, -agentlib flags
-echo %1 | findstr /b /r /c:"-D.*" /c:"-X.*" /c:"-XX.*" /c:"-agentlib.*" >nul
+REM Handle -D, -X, -XX, -agentlib flags (using exact prefix matching)
+echo %1 | findstr /b /c:"-D" /c:"-X" /c:"-XX" /c:"-agentlib" >nul
 if not errorlevel 1 (
     set "JVM_ARGS=!JVM_ARGS! %1"
     shift
@@ -80,8 +81,15 @@ if "%NETWORK_SPECIFIED%"=="false" (
 :check_defaults
 REM If no config was specified, use default
 if "%CHAIN_PARAM%"=="" (
-    echo !JVM_ARGS! | findstr /c:"-Dconfig.file=" >nul
-    if errorlevel 1 (
+    REM Check if JVM_ARGS contains config.file
+    set "HAS_CONFIG=false"
+    if not "!JVM_ARGS!"=="" (
+        echo !JVM_ARGS! | findstr /c:"-Dconfig.file=" >nul
+        if not errorlevel 1 (
+            set "HAS_CONFIG=true"
+        )
+    )
+    if "!HAS_CONFIG!"=="false" (
         set "CHAIN_PARAM=-Dconfig.file=conf\etc.conf"
     )
 )

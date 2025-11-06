@@ -96,10 +96,8 @@ while [ $# -gt 0 ]; do
 done
 
 # If no network was specified and no config was provided via --config or -D, use default
-if [ -z "$CHAIN_PARAM" ] && [ ${#JVM_ARGS[@]} -eq 0 ]; then
-  CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
-elif [ -z "$CHAIN_PARAM" ]; then
-  # Config was provided via --config or -D, check if it includes config.file
+if [ -z "$CHAIN_PARAM" ]; then
+  # Check if config.file was provided via --config or -D
   HAS_CONFIG=false
   for arg in "${JVM_ARGS[@]}"; do
     if [[ "$arg" == -Dconfig.file=* ]]; then
