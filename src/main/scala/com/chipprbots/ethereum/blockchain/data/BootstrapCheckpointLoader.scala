@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.data
 
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.utils.Logger
 
 /** Loads bootstrap checkpoints into the blockchain to provide a starting point for syncing without waiting for peers.
