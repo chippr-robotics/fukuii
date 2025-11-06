@@ -1,0 +1,159 @@
+version: '3.8'
+
+# DB-less Kong setup - Simpler deployment without Cassandra
+# Uses only declarative configuration from kong.yml
+# Suitable for development and smaller deployments
+
+volumes:
+  fukuii-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  fukuii-network:
+    driver: bridge
+
+services:
+  # Kong API Gateway (DB-less mode)
+  kong:
+    image: kong:3.5
+    container_name: fukuii-kong
+    restart: unless-stopped
+    environment:
+      # DB-less configuration
+      - KONG_DATABASE=off
+      - KONG_DECLARATIVE_CONFIG=/etc/kong/kong.yml
+      
+      # Proxy configuration
+      - KONG_PROXY_ACCESS_LOG=/dev/stdout
+      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
+      - KONG_PROXY_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      
+      # Admin API configuration
+      - KONG_ADMIN_LISTEN=0.0.0.0:8001, 0.0.0.0:8444 ssl
+      
+      # Proxy listeners
+      - KONG_PROXY_LISTEN=0.0.0.0:8000, 0.0.0.0:8443 ssl
+      
+      # Plugins
+      - KONG_PLUGINS=bundled,prometheus
+      
+      # Logging
+      - KONG_LOG_LEVEL=info
+    ports:
+      - "8000:8000"   # Kong proxy HTTP
+      - "8443:8443"   # Kong proxy HTTPS
+      - "8001:8001"   # Kong Admin API HTTP
+      - "8444:8444"   # Kong Admin API HTTPS
+    volumes:
+      - ./kong.yml:/etc/kong/kong.yml:ro
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Fukuii Ethereum Client - Primary Instance
+  fukuii-primary:
+    image: chipprbots/fukuii:latest
+    container_name: fukuii-primary
+    restart: unless-stopped
+    ports:
+      - "8545:8545"   # JSON-RPC HTTP (internal)
+      - "8546:8546"   # JSON-RPC WebSocket (internal)
+      - "30303:30303" # P2P
+      - "9095:9095"   # Metrics
+    volumes:
+      - fukuii-data:/app/data
+      - ./fukuii-conf:/app/conf:ro
+    environment:
+      - JAVA_OPTS=-Xmx4g -Xms4g
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Fukuii Ethereum Client - Secondary Instance (for HADR)
+  fukuii-secondary:
+    image: chipprbots/fukuii:latest
+    container_name: fukuii-secondary
+    restart: unless-stopped
+    ports:
+      - "8547:8545"   # JSON-RPC HTTP (internal)
+      - "8548:8546"   # JSON-RPC WebSocket (internal)
+      - "30304:30303" # P2P
+      - "9096:9095"   # Metrics
+    volumes:
+      - ./fukuii-conf:/app/conf:ro
+    environment:
+      - JAVA_OPTS=-Xmx4g -Xms4g
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: fukuii-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - fukuii-network
+    depends_on:
+      - fukuii-primary
+      - fukuii-secondary
+      - kong
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: fukuii-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=fukuii_grafana_admin
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - fukuii-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
