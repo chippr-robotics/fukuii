@@ -216,8 +216,12 @@ include "base.conf"
 
 fukuii {
   # Disable fast sync - archive requires full sync from genesis
+  # Also optimize sync performance
   sync {
     do-fast-sync = false
+    max-concurrent-requests = 20
+    block-headers-per-request = 256
+    block-bodies-per-request = 256
   }
   
   # Archive mode: no pruning
@@ -232,13 +236,6 @@ fukuii {
       max-outgoing-peers = 100
       max-incoming-peers = 50
     }
-  }
-  
-  # Optional: Optimize sync performance
-  sync {
-    max-concurrent-requests = 20
-    block-headers-per-request = 256
-    block-bodies-per-request = 256
   }
 }
 ```
@@ -521,16 +518,15 @@ fukuii {
     history = 64
   }
   
-  # Optimize peer connectivity for miners
+  # Network configuration
   network {
+    # Optimize peer connectivity for miners
     peer {
       min-outgoing-peers = 30
       max-outgoing-peers = 100
     }
-  }
-  
-  # Enable RPC for external miners (getWork/submitWork)
-  network {
+    
+    # Enable RPC for external miners (getWork/submitWork)
     rpc {
       http {
         enabled = true
