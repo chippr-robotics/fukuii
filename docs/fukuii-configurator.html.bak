@@ -1167,36 +1167,36 @@
                             <h2>P2P & Discovery Configuration</h2>
                             <div class="grid">
                                 <div class="form-group">
-                                    <label for="p2p-port">P2P Port</label>
-                                    <input type="number" id="p2p-port" value="${config.p2pPort}" 
+                                    <label>P2P Port</label>
+                                    <input type="number" value="${config.p2pPort}" 
                                         onchange="updateConfig('p2pPort', this.value)"
                                         placeholder="30303">
                                     <div class="help-text">Peer-to-peer port</div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="p2p-host">P2P Host</label>
-                                    <input type="text" id="p2p-host" value="${config.p2pHost}" 
+                                    <label>P2P Host</label>
+                                    <input type="text" value="${config.p2pHost}" 
                                         onchange="updateConfig('p2pHost', this.value)"
                                         placeholder="0.0.0.0">
                                     <div class="help-text">P2P bind address</div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="max-peers">Max Peers</label>
-                                    <input type="number" id="max-peers" value="${config.maxPeers}" 
+                                    <label>Max Peers</label>
+                                    <input type="number" value="${config.maxPeers}" 
                                         onchange="updateConfig('maxPeers', this.value)"
                                         placeholder="50">
                                     <div class="help-text">Maximum peer connections</div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="max-incoming-peers">Max Incoming Peers</label>
-                                    <input type="number" id="max-incoming-peers" value="${config.maxIncomingPeers}" 
+                                    <label>Max Incoming Peers</label>
+                                    <input type="number" value="${config.maxIncomingPeers}" 
                                         onchange="updateConfig('maxIncomingPeers', this.value)"
                                         placeholder="25">
                                     <div class="help-text">Maximum incoming connections</div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="max-outgoing-peers">Max Outgoing Peers</label>
-                                    <input type="number" id="max-outgoing-peers" value="${config.maxOutgoingPeers}" 
+                                    <label>Max Outgoing Peers</label>
+                                    <input type="number" value="${config.maxOutgoingPeers}" 
                                         onchange="updateConfig('maxOutgoingPeers', this.value)"
                                         placeholder="25">
                                     <div class="help-text">Maximum outgoing connections</div>
@@ -1212,8 +1212,8 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label for="bootnode-uris">Bootnode URIs (one per line)</label>
-                                <textarea id="bootnode-uris" onchange="updateConfig('bootnodesUris', this.value)" 
+                                <label>Bootnode URIs (one per line)</label>
+                                <textarea onchange="updateConfig('bootnodesUris', this.value)" 
                                     placeholder="enode://..."
                                     rows="4">${config.bootnodesUris}</textarea>
                                 <div class="help-text">Bootstrap node enode URIs</div>
@@ -1222,20 +1222,20 @@
                                 <h3>Discovery Settings</h3>
                                 <div class="grid">
                                     <div class="form-group">
-                                        <label for="known-nodes-file">Known Nodes File</label>
-                                        <input type="text" id="known-nodes-file" value="${config.knownNodesFile}" 
+                                        <label>Known Nodes File</label>
+                                        <input type="text" value="${config.knownNodesFile}" 
                                             onchange="updateConfig('knownNodesFile', this.value)"
                                             placeholder="known-nodes.json">
                                     </div>
                                     <div class="form-group">
-                                        <label for="update-nodes-delay">Update Nodes Initial Delay</label>
-                                        <input type="text" id="update-nodes-delay" value="${config.updateNodesInitialDelay}" 
+                                        <label>Update Nodes Initial Delay</label>
+                                        <input type="text" value="${config.updateNodesInitialDelay}" 
                                             onchange="updateConfig('updateNodesInitialDelay', this.value)"
                                             placeholder="5.seconds">
                                     </div>
                                     <div class="form-group">
-                                        <label for="update-nodes-interval">Update Nodes Interval</label>
-                                        <input type="text" id="update-nodes-interval" value="${config.updateNodesInterval}" 
+                                        <label>Update Nodes Interval</label>
+                                        <input type="text" value="${config.updateNodesInterval}" 
                                             onchange="updateConfig('updateNodesInterval', this.value)"
                                             placeholder="20.seconds">
                                     </div>
@@ -1263,28 +1263,28 @@
                                 ${config.enableRpcHttp ? `
                                     <div class="grid">
                                         <div class="form-group">
-                                            <label for="rpc-http-mode">HTTP Mode</label>
-                                            <select id="rpc-http-mode" onchange="updateConfig('rpcHttpMode', this.value)">
+                                            <label>HTTP Mode</label>
+                                            <select onchange="updateConfig('rpcHttpMode', this.value)">
                                                 <option value="http" ${config.rpcHttpMode === 'http' ? 'selected' : ''}>HTTP</option>
                                                 <option value="https" ${config.rpcHttpMode === 'https' ? 'selected' : ''}>HTTPS</option>
                                             </select>
                                         </div>
                                         <div class="form-group">
-                                            <label for="rpc-http-interface">HTTP Interface</label>
-                                            <input type="text" id="rpc-http-interface" value="${config.rpcHttpInterface}" 
+                                            <label>HTTP Interface</label>
+                                            <input type="text" value="${config.rpcHttpInterface}" 
                                                 onchange="updateConfig('rpcHttpInterface', this.value)"
                                                 placeholder="127.0.0.1">
                                             <div class="help-text">RPC bind address</div>
                                         </div>
                                         <div class="form-group">
-                                            <label for="rpc-http-port">HTTP Port</label>
-                                            <input type="number" id="rpc-http-port" value="${config.rpcHttpPort}" 
+                                            <label>HTTP Port</label>
+                                            <input type="number" value="${config.rpcHttpPort}" 
                                                 onchange="updateConfig('rpcHttpPort', this.value)"
                                                 placeholder="8545">
                                         </div>
                                         <div class="form-group">
-                                            <label for="rpc-cors-origins">CORS Allowed Origins</label>
-                                            <input type="text" id="rpc-cors-origins" value="${config.rpcHttpCORSAllowedOrigins}" 
+                                            <label>CORS Allowed Origins</label>
+                                            <input type="text" value="${config.rpcHttpCORSAllowedOrigins}" 
                                                 onchange="updateConfig('rpcHttpCORSAllowedOrigins', this.value)"
                                                 placeholder="*">
                                             <div class="help-text">Comma-separated origins</div>
@@ -1327,14 +1327,14 @@
                                 ${config.enableRpcWs ? `
                                     <div class="grid">
                                         <div class="form-group">
-                                            <label for="rpc-ws-interface">WebSocket Interface</label>
-                                            <input type="text" id="rpc-ws-interface" value="${config.rpcWsInterface}" 
+                                            <label>WebSocket Interface</label>
+                                            <input type="text" value="${config.rpcWsInterface}" 
                                                 onchange="updateConfig('rpcWsInterface', this.value)"
                                                 placeholder="127.0.0.1">
                                         </div>
                                         <div class="form-group">
-                                            <label for="rpc-ws-port">WebSocket Port</label>
-                                            <input type="number" id="rpc-ws-port" value="${config.rpcWsPort}" 
+                                            <label>WebSocket Port</label>
+                                            <input type="number" value="${config.rpcWsPort}" 
                                                 onchange="updateConfig('rpcWsPort', this.value)"
                                                 placeholder="8546">
                                         </div>
@@ -1354,8 +1354,8 @@
                                 </div>
                                 ${config.enableRpcIpc ? `
                                     <div class="form-group">
-                                        <label for="rpc-ipc-socket">IPC Socket File</label>
-                                        <input type="text" id="rpc-ipc-socket" value="${config.rpcIpcSocketFile}" 
+                                        <label>IPC Socket File</label>
+                                        <input type="text" value="${config.rpcIpcSocketFile}" 
                                             onchange="updateConfig('rpcIpcSocketFile', this.value)"
                                             placeholder="~/.fukuii/fukuii.ipc">
                                     </div>
@@ -1396,32 +1396,32 @@
                                     <div class="help-text">Download bootstrap database</div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="pivot-block-offset">Pivot Block Offset</label>
-                                    <input type="number" id="pivot-block-offset" value="${config.pivotBlockOffset}" 
+                                    <label>Pivot Block Offset</label>
+                                    <input type="number" value="${config.pivotBlockOffset}" 
                                         onchange="updateConfig('pivotBlockOffset', this.value)"
                                         placeholder="128">
                                 </div>
                                 <div class="form-group">
                                     <label>Max Headers Per Request</label>
-                                    <input type="number" id="max-blocks-headers" value="${config.maxBlocksHeadersPerRequest}" 
+                                    <input type="number" value="${config.maxBlocksHeadersPerRequest}" 
                                         onchange="updateConfig('maxBlocksHeadersPerRequest', this.value)"
                                         placeholder="128">
                                 </div>
                                 <div class="form-group">
                                     <label>Max Bodies Per Request</label>
-                                    <input type="number" id="max-blocks-bodies" value="${config.maxBlocksBodiesPerRequest}" 
+                                    <input type="number" value="${config.maxBlocksBodiesPerRequest}" 
                                         onchange="updateConfig('maxBlocksBodiesPerRequest', this.value)"
                                         placeholder="128">
                                 </div>
                                 <div class="form-group">
-                                    <label for="max-receipts">Max Receipts Per Request</label>
-                                    <input type="number" id="max-receipts" value="${config.maxReceiptsPerRequest}" 
+                                    <label>Max Receipts Per Request</label>
+                                    <input type="number" value="${config.maxReceiptsPerRequest}" 
                                         onchange="updateConfig('maxReceiptsPerRequest', this.value)"
                                         placeholder="60">
                                 </div>
                                 <div class="form-group">
-                                    <label for="fast-sync-throttle">Fast Sync Throttle</label>
-                                    <input type="text" id="fast-sync-throttle" value="${config.fastSyncThrottle}" 
+                                    <label>Fast Sync Throttle</label>
+                                    <input type="text" value="${config.fastSyncThrottle}" 
                                         onchange="updateConfig('fastSyncThrottle', this.value)"
                                         placeholder="100.milliseconds">
                                 </div>
@@ -1447,27 +1447,27 @@
                                 <div class="grid">
                                     <div class="form-group">
                                         <label>Miner Coinbase</label>
-                                        <input type="text" id="miner-coinbase" value="${config.minerCoinbase}" 
+                                        <input type="text" value="${config.minerCoinbase}" 
                                             onchange="updateConfig('minerCoinbase', this.value)"
                                             placeholder="0x...">
                                         <div class="help-text">Address for mining rewards</div>
                                     </div>
                                     <div class="form-group">
-                                        <label for="miner-extra-data">Miner Extra Data</label>
-                                        <input type="text" id="miner-extra-data" value="${config.minerExtraData}" 
+                                        <label>Miner Extra Data</label>
+                                        <input type="text" value="${config.minerExtraData}" 
                                             onchange="updateConfig('minerExtraData', this.value)"
                                             placeholder="fukuii">
                                         <div class="help-text">Extra data in mined blocks</div>
                                     </div>
                                     <div class="form-group">
-                                        <label for="ethash-dir">Ethash Directory</label>
-                                        <input type="text" id="ethash-dir" value="${config.ethashDir}" 
+                                        <label>Ethash Directory</label>
+                                        <input type="text" value="${config.ethashDir}" 
                                             onchange="updateConfig('ethashDir', this.value)"
                                             placeholder="~/.fukuii/ethash">
                                     </div>
                                     <div class="form-group">
-                                        <label for="mine-rounds">Mine Rounds</label>
-                                        <input type="number" id="mine-rounds" value="${config.mineRounds}" 
+                                        <label>Mine Rounds</label>
+                                        <input type="number" value="${config.mineRounds}" 
                                             onchange="updateConfig('mineRounds', this.value)"
                                             placeholder="100000">
                                     </div>
@@ -1502,7 +1502,7 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label for="rocksdb-cache-size">Cache Size (MB)</label>
+                                    <label>Cache Size (MB)</label>
                                     <input type="number" value="${config.cacheSize}" 
                                         onchange="updateConfig('cacheSize', this.value)"
                                         placeholder="256">
@@ -1514,38 +1514,38 @@
                                 <div class="grid">
                                     <div class="form-group">
                                         <label>RocksDB Cache Size (MB)</label>
-                                        <input type="number" id="rocksdb-cache-size" value="${config.rocksDbCacheSize}" 
+                                        <input type="number" value="${config.rocksDbCacheSize}" 
                                             onchange="updateConfig('rocksDbCacheSize', this.value)"
                                             placeholder="256">
                                     </div>
                                     <div class="form-group">
-                                        <label for="rocksdb-block-cache">Block Cache Size (MB)</label>
-                                        <input type="number" id="rocksdb-block-cache" value="${config.rocksDbBlockCacheSize}" 
+                                        <label>Block Cache Size (MB)</label>
+                                        <input type="number" value="${config.rocksDbBlockCacheSize}" 
                                             onchange="updateConfig('rocksDbBlockCacheSize', this.value)"
                                             placeholder="128">
                                     </div>
                                     <div class="form-group">
-                                        <label for="rocksdb-write-buffer">Write Buffer Size (MB)</label>
-                                        <input type="number" id="rocksdb-write-buffer" value="${config.rocksDbWriteBufferSize}" 
+                                        <label>Write Buffer Size (MB)</label>
+                                        <input type="number" value="${config.rocksDbWriteBufferSize}" 
                                             onchange="updateConfig('rocksDbWriteBufferSize', this.value)"
                                             placeholder="64">
                                     </div>
                                     <div class="form-group">
-                                        <label for="rocksdb-max-files">Max Open Files</label>
-                                        <input type="number" id="rocksdb-max-files" value="${config.rocksDbMaxOpenFiles}" 
+                                        <label>Max Open Files</label>
+                                        <input type="number" value="${config.rocksDbMaxOpenFiles}" 
                                             onchange="updateConfig('rocksDbMaxOpenFiles', this.value)"
                                             placeholder="-1">
                                         <div class="help-text">-1 = unlimited</div>
                                     </div>
                                     <div class="form-group">
-                                        <label for="rocksdb-parallelism">Parallelism</label>
-                                        <input type="number" id="rocksdb-parallelism" value="${config.rocksDbParallelism}" 
+                                        <label>Parallelism</label>
+                                        <input type="number" value="${config.rocksDbParallelism}" 
                                             onchange="updateConfig('rocksDbParallelism', this.value)"
                                             placeholder="2">
                                     </div>
                                     <div class="form-group">
-                                        <label for="rocksdb-compression">Compression</label>
-                                        <select id="rocksdb-compression" onchange="updateConfig('rocksDbCompression', this.value)">
+                                        <label>Compression</label>
+                                        <select onchange="updateConfig('rocksDbCompression', this.value)">
                                             <option value="snappy" ${config.rocksDbCompression === 'snappy' ? 'selected' : ''}>Snappy</option>
                                             <option value="lz4" ${config.rocksDbCompression === 'lz4' ? 'selected' : ''}>LZ4</option>
                                             <option value="none" ${config.rocksDbCompression === 'none' ? 'selected' : ''}>None</option>
@@ -1573,19 +1573,19 @@
                                 <div class="grid">
                                     <div class="form-group">
                                         <label>TX Pool Size</label>
-                                        <input type="number" id="txpool-size" value="${config.txPoolSize}" 
+                                        <input type="number" value="${config.txPoolSize}" 
                                             onchange="updateConfig('txPoolSize', this.value)"
                                             placeholder="4096">
                                     </div>
                                     <div class="form-group">
                                         <label>Query Timeout</label>
-                                        <input type="text" id="pending-tx-timeout" value="${config.pendingTxManagerQueryTimeout}" 
+                                        <input type="text" value="${config.pendingTxManagerQueryTimeout}" 
                                             onchange="updateConfig('pendingTxManagerQueryTimeout', this.value)"
                                             placeholder="5.seconds">
                                     </div>
                                     <div class="form-group">
-                                        <label for="transaction-timeout">Transaction Timeout</label>
-                                        <input type="text" id="transaction-timeout" value="${config.transactionTimeout}" 
+                                        <label>Transaction Timeout</label>
+                                        <input type="text" value="${config.transactionTimeout}" 
                                             onchange="updateConfig('transactionTimeout', this.value)"
                                             placeholder="30.minutes">
                                     </div>
@@ -1621,14 +1621,14 @@
                                         </div>
                                         <div class="form-group">
                                             <label>No Update Threshold</label>
-                                            <input type="text" id="health-no-update" value="${config.healthCheckNoUpdateThreshold}" 
+                                            <input type="text" value="${config.healthCheckNoUpdateThreshold}" 
                                                 onchange="updateConfig('healthCheckNoUpdateThreshold', this.value)"
                                                 placeholder="30.minutes">
                                             <div class="help-text">Max time without block updates</div>
                                         </div>
                                         <div class="form-group">
                                             <label>Syncing Threshold</label>
-                                            <input type="number" id="health-syncing" value="${config.healthCheckSyncingThreshold}" 
+                                            <input type="number" value="${config.healthCheckSyncingThreshold}" 
                                                 onchange="updateConfig('healthCheckSyncingThreshold', this.value)"
                                                 placeholder="10">
                                             <div class="help-text">Block difference for synced status</div>
@@ -1650,14 +1650,14 @@
                                 ${config.enableMetrics ? `
                                     <div class="grid">
                                         <div class="form-group">
-                                            <label for="metrics-port">Metrics Port</label>
-                                            <input type="number" id="metrics-port" value="${config.metricsPort}" 
+                                            <label>Metrics Port</label>
+                                            <input type="number" value="${config.metricsPort}" 
                                                 onchange="updateConfig('metricsPort', this.value)"
                                                 placeholder="13798">
                                         </div>
                                         <div class="form-group">
-                                            <label for="metrics-host">Metrics Host</label>
-                                            <input type="text" id="metrics-host" value="${config.metricsHost}" 
+                                            <label>Metrics Host</label>
+                                            <input type="text" value="${config.metricsHost}" 
                                                 onchange="updateConfig('metricsHost', this.value)"
                                                 placeholder="127.0.0.1">
                                         </div>
@@ -1669,8 +1669,8 @@
                                 <h3>Logging</h3>
                                 <div class="grid">
                                     <div class="form-group">
-                                        <label for="log-level">Log Level</label>
-                                        <select id="log-level" onchange="updateConfig('logLevel', this.value)">
+                                        <label>Log Level</label>
+                                        <select onchange="updateConfig('logLevel', this.value)">
                                             <option value="ERROR" ${config.logLevel === 'ERROR' ? 'selected' : ''}>ERROR</option>
                                             <option value="WARN" ${config.logLevel === 'WARN' ? 'selected' : ''}>WARN</option>
                                             <option value="INFO" ${config.logLevel === 'INFO' ? 'selected' : ''}>INFO</option>
@@ -1680,13 +1680,13 @@
                                     </div>
                                     <div class="form-group">
                                         <label>Log Directory</label>
-                                        <input type="text" id="logs-dir" value="${config.logDir}" 
+                                        <input type="text" value="${config.logDir}" 
                                             onchange="updateConfig('logDir', this.value)"
                                             placeholder="~/.fukuii/logs">
                                     </div>
                                     <div class="form-group">
                                         <label>Log File</label>
-                                        <input type="text" id="log-file" value="${config.logFile}" 
+                                        <input type="text" value="${config.logFile}" 
                                             onchange="updateConfig('logFile', this.value)"
                                             placeholder="fukuii.log">
                                     </div>
@@ -1834,7 +1834,7 @@
                             
                             <div class="form-group">
                                 <label>Custom Configuration (HOCON Format)</label>
-                                <textarea id="custom-flags" onchange="updateConfig('customFlags', this.value)" 
+                                <textarea onchange="updateConfig('customFlags', this.value)" 
                                     placeholder="Additional HOCON configuration..."
                                     rows="6">${config.customFlags}</textarea>
                                 <div class="help-text">Advanced custom options</div>
