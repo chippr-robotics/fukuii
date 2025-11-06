@@ -459,14 +459,97 @@ Fukuii provides several command line options for launching the node with differe
 ./bin/fukuii
 ```
 
+### Custom Configuration Files
+
+You can specify a custom configuration file using either the `--config` flag or the `-Dconfig.file` JVM system property:
+
+**Using --config flag** (recommended):
+```bash
+# Absolute path
+./bin/fukuii --config /path/to/custom.conf
+
+# Relative path
+./bin/fukuii --config ./conf/mining-node.conf
+
+# With equals sign
+./bin/fukuii --config=./conf/archive-node.conf
+```
+
+**Using -D flag** (JVM system property):
+```bash
+./bin/fukuii -Dconfig.file=/path/to/custom.conf
+```
+
+**Examples with network names**:
+```bash
+# Custom config for mining on ETC
+./bin/fukuii etc --config ./conf/mining.conf
+
+# Custom config for archive node
+./bin/fukuii --config /path/to/archive-node.conf
+```
+
+**⚠️ Important: Custom Configuration File Requirements**
+
+Custom configuration files **must** include the base configuration at the top of the file:
+
+```hocon
+# At the top of your custom config file
+include "app.conf"
+
+# Then add your custom settings
+fukuii {
+  blockchains {
+    network = "etc"  # or "mordor", "eth", etc.
+  }
+  
+  # Your custom overrides here
+  network {
+    rpc {
+      http {
+        interface = "0.0.0.0"
+        port = 8545
+      }
+    }
+  }
+}
+```
+
+**Example: Custom Mining Configuration**
+
+Create a file `mining-node.conf`:
+```hocon
+# Include base configuration (required)
+include "app.conf"
+
+# Override settings for mining
+fukuii {
+  blockchains {
+    network = "etc"
+  }
+  
+  # Enable mining
+  mining {
+    enabled = true
+    coinbase = "0x1234567890123456789012345678901234567890"
+    mining-threads = 4
+  }
+  
+  # Increase memory for mining
+  blockchain {
+    cache-size = 4096
+  }
+}
+```
+
+Then start with:
+```bash
+./bin/fukuii --config mining-node.conf
+```
+
 ### Java System Properties
 
 You can override any configuration value using JVM system properties with the `-D` flag:
-
-**Custom Configuration File**:
-```bash
-./bin/fukuii -Dconfig.file=/path/to/custom.conf etc
-```
 
 **Override Specific Values**:
 ```bash
