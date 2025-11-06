@@ -278,16 +278,17 @@ docker run -d \
 Query historical state to verify archive capabilities:
 
 ```bash
-# Query account balance at an old block (e.g., block 1,000,000)
+# Query account balance at an early block (e.g., block 100,000)
+# This is well before default pruning history of 64 blocks
 curl -X POST --data '{
   "jsonrpc":"2.0",
   "method":"eth_getBalance",
-  "params":["0x0000000000000000000000000000000000000000", "0xF4240"],
+  "params":["0x0000000000000000000000000000000000000000", "0x186A0"],
   "id":1
 }' http://localhost:8546
 ```
 
-Archive node should return the balance; full node may return error for blocks outside history window.
+Archive node should return the balance at that historical block; full node will likely return an error for blocks outside its pruning history window (~64 blocks).
 
 ### Resource Requirements
 
@@ -535,7 +536,8 @@ fukuii {
       }
       
       # Enable mining-related APIs
-      apis = "eth,web3,net,personal,fukuii"
+      # Note: 'personal' API removed for security - manage keys separately
+      apis = "eth,web3,net,fukuii"
     }
   }
 }
@@ -570,7 +572,8 @@ For GPU/ASIC mining, use external mining software with Fukuii's RPC:
   etc
 
 # Connect ethminer to Fukuii
-ethminer -P http://localhost:8546
+# Use localhost if on same machine, or server IP if remote
+ethminer -P http://YOUR_SERVER_IP:8546
 ```
 
 ### Verifying Mining Status
@@ -1035,8 +1038,8 @@ fukuii {
         }
       }
       
-      # Mining-related APIs
-      apis = "eth,web3,net"
+      # Mining-related APIs (includes fukuii for mining-specific methods)
+      apis = "eth,web3,net,fukuii"
     }
   }
 }
