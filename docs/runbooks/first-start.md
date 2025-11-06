@@ -285,6 +285,52 @@ The first sync can take several hours to days depending on:
 
 **Mainnet ETC blockchain size**: ~200-400 GB (as of 2025)
 
+### Bootstrap Checkpoints (Default Behavior)
+
+**New in v1.1.0**: Fukuii now includes bootstrap checkpoints that significantly improve initial sync times.
+
+#### What are Bootstrap Checkpoints?
+
+Bootstrap checkpoints are trusted block references at known heights (typically major fork activation blocks) that allow your node to begin syncing immediately without waiting for peer consensus. This solves the "bootstrap problem" where a new node had to wait for at least 3 peers before it could determine where to start syncing.
+
+#### Benefits
+
+- **Faster Initial Sync**: Node begins syncing immediately without waiting for peers
+- **Improved Reliability**: Less dependent on network conditions and peer availability
+- **Better User Experience**: See sync progress much sooner after starting
+
+#### How It Works
+
+1. When starting with an empty database, Fukuii loads pre-configured checkpoint block references
+2. These checkpoints serve as trusted starting points for the sync process
+3. The node can begin validating and syncing blocks immediately
+4. All blocks are still fully validated; checkpoints are just starting hints
+
+#### Configuration
+
+Bootstrap checkpoints are **enabled by default** and configured in the network chain configuration files:
+- **ETC Mainnet**: Uses major fork blocks (Spiral, Mystique, Magneto, Phoenix)
+- **Mordor Testnet**: Uses testnet fork blocks
+
+To disable bootstrap checkpoints and force traditional pivot sync:
+
+```bash
+# Using command-line flag
+./bin/fukuii etc --force-pivot-sync
+
+# Or via configuration
+fukuii.blockchains.use-bootstrap-checkpoints = false
+```
+
+#### When to Disable Checkpoints
+
+You might want to use `--force-pivot-sync` if:
+- You want to verify the node syncs without any trusted hints
+- You're testing sync behavior
+- You're running on a private network without configured checkpoints
+
+For more details, see [ADR-012: Bootstrap Checkpoints](../adr/012-bootstrap-checkpoints.md).
+
 ## Verification
 
 ### Check Node is Running
