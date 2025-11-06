@@ -280,6 +280,15 @@ object EtcPeerManagerActor {
   }
 
   object RemoteStatus {
+    def apply(status: ETH64.Status, negotiatedCapability: Capability): RemoteStatus =
+      RemoteStatus(
+        negotiatedCapability,
+        status.networkId,
+        ChainWeight.totalDifficultyOnly(status.totalDifficulty),
+        status.bestHash,
+        status.genesisHash
+      )
+
     def apply(status: ETH64.Status): RemoteStatus =
       RemoteStatus(
         Capability.ETH64,

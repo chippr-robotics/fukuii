@@ -29,7 +29,7 @@ case class EthNodeStatus64ExchangeState(
           status.forkId
         )
     } yield validationResult match {
-      case Connect => applyRemoteStatusMessage(RemoteStatus(status))
+      case Connect => applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
       case _       => DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     }).unsafeRunSync()
   }
