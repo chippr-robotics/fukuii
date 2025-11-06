@@ -34,6 +34,7 @@ Each ADR follows this structure:
 - [ADR-009: Actor System Architecture - Untyped vs Typed Actors](009-actor-system-architecture.md) - Accepted
 - [ADR-010: Apache HttpClient Transport for JupnP UPnP Port Forwarding](010-jupnp-apache-httpclient-transport.md) - Accepted
 - [ADR-011: RLPx Protocol Deviations and Peer Bootstrap Challenge](011-rlpx-protocol-deviations-and-peer-bootstrap.md) - Accepted
+- [ADR-012: Bootstrap Checkpoints for Improved Initial Sync](012-bootstrap-checkpoints.md) - Accepted
 
 ## Creating a New ADR
 

@@ -77,7 +77,10 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def loadGenesisData(): Unit =
-    if (!Config.testmode) genesisDataLoader.loadGenesisData()
+    if (!Config.testmode) {
+      genesisDataLoader.loadGenesisData()
+      bootstrapCheckpointLoader.loadBootstrapCheckpoints()
+    }
 
   private[this] def runDBConsistencyCheck(): Unit =
     StorageConsistencyChecker.checkStorageConsistency(
