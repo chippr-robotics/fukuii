@@ -1111,8 +1111,8 @@
                             <h2>Network Configuration</h2>
                             <div class="grid">
                                 <div class="form-group">
-                                    <label>Network</label>
-                                    <select value="${config.networkId}" onchange="updateConfig('networkId', this.value); renderTabContent();">
+                                    <label for="network-select">Network</label>
+                                    <select id="network-select" onchange="updateConfig('networkId', this.value); renderTabContent();">
                                         <option value="etc" ${config.networkId === 'etc' ? 'selected' : ''}>ETC Mainnet</option>
                                         <option value="mordor" ${config.networkId === 'mordor' ? 'selected' : ''}>Mordor Testnet</option>
                                         <option value="testnet-internal" ${config.networkId === 'testnet-internal' ? 'selected' : ''}>Internal Testnet</option>
@@ -1122,36 +1122,36 @@
                                 </div>
                                 ${config.networkId === 'custom' ? `
                                     <div class="form-group">
-                                        <label>Custom Network ID</label>
-                                        <input type="text" value="${config.customNetworkId}" 
+                                        <label for="custom-network-id">Custom Network ID</label>
+                                        <input type="text" id="custom-network-id" value="${config.customNetworkId}" 
                                             onchange="updateConfig('customNetworkId', this.value)"
                                             placeholder="my-etc-network">
                                     </div>
                                 ` : ''}
                                 <div class="form-group">
-                                    <label>Data Directory</label>
-                                    <input type="text" value="${config.dataDir}" 
+                                    <label for="data-dir">Data Directory</label>
+                                    <input type="text" id="data-dir" value="${config.dataDir}" 
                                         onchange="updateConfig('dataDir', this.value)"
                                         placeholder="~/.fukuii">
                                     <div class="help-text">Blockchain data location</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Node Name</label>
-                                    <input type="text" value="${config.nodeName}" 
+                                    <label for="node-name">Node Name</label>
+                                    <input type="text" id="node-name" value="${config.nodeName}" 
                                         onchange="updateConfig('nodeName', this.value)"
                                         placeholder="fukuii-node">
                                     <div class="help-text">Node identifier</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Client ID</label>
-                                    <input type="text" value="${config.clientId}" 
+                                    <label for="client-id">Client ID</label>
+                                    <input type="text" id="client-id" value="${config.clientId}" 
                                         onchange="updateConfig('clientId', this.value)"
                                         placeholder="fukuii">
                                     <div class="help-text">Client identifier string</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Client Version</label>
-                                    <input type="text" value="${config.clientVersion}" 
+                                    <label for="client-version">Client Version</label>
+                                    <input type="text" id="client-version" value="${config.clientVersion}" 
                                         onchange="updateConfig('clientVersion', this.value)"
                                         placeholder="1.0.0">
                                     <div class="help-text">Version string</div>
@@ -1866,64 +1866,70 @@
             // Network Configuration
             lines.push('fukuii {');
             lines.push('  # Network Configuration');
-            lines.push('  network {');
-            lines.push(`    network-id = "${config.networkId}"`);
-            lines.push(`    data-dir = "${config.dataDir}"`);
-            lines.push(`    node-name = "${config.nodeName}"`);
-            lines.push(`    client-id = "${config.clientId}"`);
-            lines.push(`    client-version = "${config.clientVersion}"`);
+            lines.push('  blockchains {');
+            lines.push(`    network = "${config.networkId}"`);
             lines.push('  }');
+            lines.push('');
+            lines.push('  # Data Directory');
+            lines.push(`  datadir = "${config.dataDir}"`);
             lines.push('');
             
             // P2P Configuration
-            lines.push('  # Peer-to-Peer Configuration');
-            lines.push('  network.peer {');
-            lines.push(`    port = ${config.p2pPort}`);
-            lines.push(`    interface = "${config.p2pHost}"`);
-            lines.push(`    max-peers = ${config.maxPeers}`);
-            lines.push(`    max-incoming-peers = ${config.maxIncomingPeers}`);
-            lines.push(`    max-outgoing-peers = ${config.maxOutgoingPeers}`);
-            lines.push(`    discovery-enabled = ${config.enableDiscovery}`);
-            if (config.bootnodesUris) {
-                lines.push('    bootnodes-uris = [');
-                config.bootnodesUris.split('\n').filter(n => n.trim()).forEach((node, i, arr) => {
-                    lines.push(`      "${node.trim()}"${i < arr.length - 1 ? ',' : ''}`);
-                });
-                lines.push('    ]');
+            lines.push('  # Node Identity and P2P Configuration');
+            lines.push('  network {');
+            if (config.nodeName && config.nodeName !== 'fukuii-node') {
+                lines.push(`    node-name = "${config.nodeName}"`);
             }
-            lines.push('  }');
+            lines.push('    ');
+            lines.push('    # Peer-to-Peer Settings');
+            lines.push('    peer {');
+            lines.push(`      port = ${config.p2pPort}`);
+            lines.push(`      interface = "${config.p2pHost}"`);
+            lines.push(`      max-peers = ${config.maxPeers}`);
+            lines.push(`      max-incoming-peers = ${config.maxIncomingPeers}`);
+            lines.push(`      max-outgoing-peers = ${config.maxOutgoingPeers}`);
+            lines.push(`      discovery-enabled = ${config.enableDiscovery}`);
+            if (config.bootnodesUris) {
+                lines.push('      bootnodes-uris = [');
+                config.bootnodesUris.split('\n').filter(n => n.trim()).forEach((node, i, arr) => {
+                    lines.push(`        "${node.trim()}"${i < arr.length - 1 ? ',' : ''}`);
+                });
+                lines.push('      ]');
+            }
+            lines.push('    }');
             lines.push('');
             
             // RPC Configuration
-            lines.push('  # RPC Configuration');
-            lines.push('  network.rpc {');
+            lines.push('    # RPC Configuration');
+            lines.push('    rpc {');
             if (config.enableRpcHttp) {
-                lines.push('    http {');
-                lines.push(`      mode = "${config.rpcHttpMode}"`);
-                lines.push(`      interface = "${config.rpcHttpInterface}"`);
-                lines.push(`      port = ${config.rpcHttpPort}`);
-                lines.push(`      apis = "${config.rpcHttpAPIs.join(',')}"`);
-                lines.push(`      cors-allowed-origins = "${config.rpcHttpCORSAllowedOrigins}"`);
-                lines.push(`      rate-limit-enabled = ${config.rpcHttpRateLimitEnabled}`);
-                lines.push('    }');
+                lines.push('      http {');
+                lines.push(`        mode = "${config.rpcHttpMode}"`);
+                lines.push(`        interface = "${config.rpcHttpInterface}"`);
+                lines.push(`        port = ${config.rpcHttpPort}`);
+                lines.push(`        apis = "${config.rpcHttpAPIs.join(',')}"`);
+                lines.push(`        cors-allowed-origins = "${config.rpcHttpCORSAllowedOrigins}"`);
+                lines.push(`        rate-limit-enabled = ${config.rpcHttpRateLimitEnabled}`);
+                lines.push('      }');
             }
             if (config.enableRpcWs) {
-                lines.push('    websocket {');
-                lines.push(`      interface = "${config.rpcWsInterface}"`);
-                lines.push(`      port = ${config.rpcWsPort}`);
-                lines.push('    }');
+                lines.push('      websocket {');
+                lines.push(`        interface = "${config.rpcWsInterface}"`);
+                lines.push(`        port = ${config.rpcWsPort}`);
+                lines.push('      }');
             }
             if (config.enableRpcIpc) {
-                lines.push('    ipc {');
-                lines.push(`      socket-file = "${config.rpcIpcSocketFile}"`);
-                lines.push('    }');
+                lines.push('      ipc {');
+                lines.push(`        socket-file = "${config.rpcIpcSocketFile}"`);
+                lines.push('      }');
             }
             if (config.enableHealthCheck) {
-                lines.push('    health {');
-                lines.push(`      no-update-duration-threshold = ${config.healthCheckNoUpdateThreshold}`);
-                lines.push(`      syncing-status-threshold = ${config.healthCheckSyncingThreshold}`);
-                lines.push('    }');
+                lines.push('      health {');
+                lines.push(`        no-update-duration-threshold = ${config.healthCheckNoUpdateThreshold}`);
+                lines.push(`        syncing-status-threshold = ${config.healthCheckSyncingThreshold}`);
+                lines.push('      }');
             }
+            lines.push('    }');
             lines.push('  }');
             lines.push('');
             

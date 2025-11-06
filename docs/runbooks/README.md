@@ -47,8 +47,8 @@ tail -f ~/.fukuii/etc/logs/fukuii.log
 ### Essential Ports
 - **9076** - Ethereum protocol (P2P)
 - **30303** - Discovery protocol (UDP)
-- **8546** - JSON-RPC HTTP API
-- **8545** - Alternative JSON-RPC port (configurable)
+- **8545** - JSON-RPC HTTP API
+- **8546** - Alternative JSON-RPC port (WebSocket, configurable)
 
 ## Configuration Tool
 
