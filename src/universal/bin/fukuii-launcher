@@ -3,60 +3,114 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd $DIR/..
 
-# Check if first argument is a network name (config file)
-# Skip if it starts with - or -- (it's a flag, not a network name)
-if [ -n "$1" ]; then
+# Initialize variables
+CHAIN_PARAM=""
+JVM_ARGS=()
+APP_ARGS=()
+NETWORK_SPECIFIED=false
+
+# Process arguments
+while [ $# -gt 0 ]; do
   case "$1" in
-    -*) 
-      # Argument starts with -, it's a flag, not a network name
-      # Use default network
-      CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
+    --config=*)
+      # Handle --config=<file> format
+      CONFIG_VALUE="${1#*=}"
+      JVM_ARGS+=("-Dconfig.file=$CONFIG_VALUE")
+      shift
       ;;
-    *)
-      # Argument doesn't start with -, treat it as a network name
-      CONFIG_FILE="./conf/$1.conf"
-      if [ -f "$CONFIG_FILE" ]; then
-        shift
-        CHAIN_PARAM="-Dconfig.file=$CONFIG_FILE"
+    --config)
+      # Handle --config <file> format
+      if [ -n "$2" ] && [[ "$2" != -* ]]; then
+        JVM_ARGS+=("-Dconfig.file=$2")
+        shift 2
       else
-        # Network name provided but config file doesn't exist
-        echo "Error: Unknown network '$1'"
-        echo ""
-        echo "Available networks:"
-        # List of config files to exclude from network list
-        excluded_configs="app.conf base.conf base-testnet.conf metrics.conf faucet.conf testmode.conf"
-        shopt -s nullglob  # Handle case when no .conf files exist
-        for conf in ./conf/*.conf; do
-          basename_conf=$(basename "$conf")
-          # Check if this config file should be excluded
-          is_excluded=false
-          for excluded in $excluded_configs; do
-            if [ "$basename_conf" = "$excluded" ]; then
-              is_excluded=true
-              break
-            fi
-          done
-          # If not excluded, show it as available network
-          if [ "$is_excluded" = false ]; then
-            network=$(basename "$conf" .conf)
-            echo "  - $network"
-          fi
-        done
-        shopt -u nullglob
-        echo ""
-        echo "Usage: fukuii [network] [options]"
-        echo "   or: fukuii [options]  (defaults to 'etc' network)"
-        echo ""
-        echo "Examples:"
-        echo "  fukuii etc         # Start Ethereum Classic node"
-        echo "  fukuii mordor      # Start Mordor testnet node"
+        echo "Error: --config requires a value"
+        echo "Usage: fukuii --config <config-file> [options]"
         exit 1
       fi
       ;;
+    -D*)
+      # Pass -D flags directly to JVM
+      JVM_ARGS+=("$1")
+      shift
+      ;;
+    -X*|-XX*|-agentlib*)
+      # Pass other JVM flags directly
+      JVM_ARGS+=("$1")
+      shift
+      ;;
+    -*)
+      # Other flags are application arguments
+      APP_ARGS+=("$1")
+      shift
+      ;;
+    *)
+      # First non-flag argument could be a network name
+      if [ "$NETWORK_SPECIFIED" = false ]; then
+        CONFIG_FILE="./conf/$1.conf"
+        if [ -f "$CONFIG_FILE" ]; then
+          CHAIN_PARAM="-Dconfig.file=$CONFIG_FILE"
+          NETWORK_SPECIFIED=true
+          shift
+        else
+          # Not a network name, check if it's a valid network
+          # List available networks for error message
+          echo "Error: Unknown network '$1'"
+          echo ""
+          echo "Available networks:"
+          excluded_configs="app.conf base.conf base-testnet.conf metrics.conf faucet.conf testmode.conf"
+          shopt -s nullglob
+          for conf in ./conf/*.conf; do
+            basename_conf=$(basename "$conf")
+            is_excluded=false
+            for excluded in $excluded_configs; do
+              if [ "$basename_conf" = "$excluded" ]; then
+                is_excluded=true
+                break
+              fi
+            done
+            if [ "$is_excluded" = false ]; then
+              network=$(basename "$conf" .conf)
+              echo "  - $network"
+            fi
+          done
+          shopt -u nullglob
+          echo ""
+          echo "Usage: fukuii [network] [options]"
+          echo "   or: fukuii [options]  (defaults to 'etc' network)"
+          echo ""
+          echo "Examples:"
+          echo "  fukuii etc                      # Start Ethereum Classic node"
+          echo "  fukuii mordor                   # Start Mordor testnet node"
+          echo "  fukuii --config mining.conf     # Start with custom config"
+          echo "  fukuii -Dconfig.file=custom.conf # Start with custom config (JVM style)"
+          exit 1
+        fi
+      else
+        # Already have a network, this is an app argument
+        APP_ARGS+=("$1")
+        shift
+      fi
+      ;;
   esac
-else
-  # No arguments provided, use default network
+done
+
+# If no network was specified and no config was provided via --config or -D, use default
+if [ -z "$CHAIN_PARAM" ] && [ ${#JVM_ARGS[@]} -eq 0 ]; then
   CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
+elif [ -z "$CHAIN_PARAM" ]; then
+  # Config was provided via --config or -D, check if it includes config.file
+  HAS_CONFIG=false
+  for arg in "${JVM_ARGS[@]}"; do
+    if [[ "$arg" == -Dconfig.file=* ]]; then
+      HAS_CONFIG=true
+      break
+    fi
+  done
+  if [ "$HAS_CONFIG" = false ]; then
+    CHAIN_PARAM="-Dconfig.file=./conf/etc.conf"
+  fi
 fi
 
-exec ./bin/fukuii ${CHAIN_PARAM:+"$CHAIN_PARAM"} "$@"
+# Build final command
+exec ./bin/fukuii ${CHAIN_PARAM:+"$CHAIN_PARAM"} "${JVM_ARGS[@]}" "${APP_ARGS[@]}"
