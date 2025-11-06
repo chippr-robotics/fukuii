@@ -14,7 +14,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 case class EthNodeStatus64ExchangeState(
-    handshakerConfiguration: EtcHandshakerConfiguration
+    handshakerConfiguration: EtcHandshakerConfiguration,
+    negotiatedCapability: Capability
 ) extends EtcNodeStatusExchangeState[ETH64.Status] {
 
   import handshakerConfiguration._
@@ -43,7 +44,7 @@ case class EthNodeStatus64ExchangeState(
     val genesisHash = blockchainReader.genesisHeader.hash
 
     val status = ETH64.Status(
-      protocolVersion = Capability.ETH64.version,
+      protocolVersion = negotiatedCapability.version,
       networkId = peerConfiguration.networkId,
       totalDifficulty = chainWeight.totalDifficulty,
       bestHash = bestBlockHeader.hash,
