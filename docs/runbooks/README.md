@@ -6,6 +6,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 
 ### Getting Started
 - **[First Start](first-start.md)** - Initial node setup, configuration, and first-time startup procedures
+- **[Operating Modes](operating-modes.md)** - Comprehensive guide to full nodes, archive nodes, boot nodes, and mining nodes
 - **[Node Configuration](node-configuration.md)** - Chain configs, node configs, and command line options
 - **[Security](security.md)** - Node security, firewall configuration, and security best practices
 
@@ -62,4 +63,4 @@ These runbooks are living documents. If you encounter issues not covered here or
 2. Submit a pull request with corrections or improvements
 3. Contact the maintainers at Chippr Robotics LLC
 
-**Last Updated**: 2025-11-04
+**Last Updated**: 2025-11-06
