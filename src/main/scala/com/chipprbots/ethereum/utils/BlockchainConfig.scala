@@ -8,6 +8,7 @@ import scala.util.Try
 import com.typesafe.config.ConfigRenderOptions
 import com.typesafe.config.{Config => TypesafeConfig}
 
+import com.chipprbots.ethereum.blockchain.data.BootstrapCheckpoint
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -30,7 +31,9 @@ case class BlockchainConfig(
     bootstrapNodes: Set[String],
     checkpointPubKeys: Set[ByteString] = Set.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
-    capabilities: List[Capability] = List.empty
+    capabilities: List[Capability] = List.empty,
+    bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
+    useBootstrapCheckpoints: Boolean = true
 ) {
   val minRequireSignatures: Int = (Math.floor(checkpointPubKeys.size.toDouble / 2) + 1).toInt
 
@@ -184,6 +187,14 @@ object BlockchainConfig {
     val capabilities: List[Capability] =
       blockchainConfig.getStringList("capabilities").asScala.toList.map(Capability.parseUnsafe)
 
+    val bootstrapCheckpoints: List[BootstrapCheckpoint] = ConfigUtils
+      .getOptionalValue(blockchainConfig, _.getStringList, "bootstrap-checkpoints")
+      .map(_.asScala.toList.flatMap(BootstrapCheckpoint.fromString))
+      .getOrElse(List.empty)
+
+    val useBootstrapCheckpoints: Boolean =
+      Try(blockchainConfig.getBoolean("use-bootstrap-checkpoints")).getOrElse(true)
+
     BlockchainConfig(
       powTargetTime = powTargetTime,
       forkBlockNumbers = ForkBlockNumbers(
@@ -228,7 +239,9 @@ object BlockchainConfig {
       bootstrapNodes = bootstrapNodes,
       checkpointPubKeys = checkpointPubKeys,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
-      capabilities = capabilities
+      capabilities = capabilities,
+      bootstrapCheckpoints = bootstrapCheckpoints,
+      useBootstrapCheckpoints = useBootstrapCheckpoints
     )
   }
   // scalastyle:on method.length

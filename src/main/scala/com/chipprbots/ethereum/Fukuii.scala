@@ -14,6 +14,13 @@ object Fukuii extends Logger {
   def main(args: Array[String]): Unit = {
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
 
+    // Check for --force-pivot-sync flag to disable checkpoint bootstrapping
+    val forcePivotSync = args.contains("--force-pivot-sync")
+    if (forcePivotSync) {
+      System.setProperty("fukuii.blockchain.use-bootstrap-checkpoints", "false")
+      log.info("Checkpoint bootstrapping disabled, will use pivot sync")
+    }
+
     // Check for --tui flag to enable console UI (disabled by default)
     val enableConsoleUI = args.contains("--tui")
 

@@ -36,6 +36,7 @@ object App extends Logger {
         |Options:
         |  --help, -h             Show this help message
         |  --tui                  Enable the console UI (disabled by default)
+        |  --force-pivot-sync     Disable checkpoint bootstrapping and force pivot sync
         |
         |Examples:
         |  fukuii etc                      # Start Ethereum Classic node with standard logging

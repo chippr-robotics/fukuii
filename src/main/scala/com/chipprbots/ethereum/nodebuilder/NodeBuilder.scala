@@ -836,6 +836,15 @@ trait GenesisDataLoaderBuilder {
 
 }
 
+trait BootstrapCheckpointLoaderBuilder {
+  self: BlockchainBuilder =>
+
+  lazy val bootstrapCheckpointLoader =
+    new com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader(
+      blockchainReader
+    )
+}
+
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
   * configuration.
   *
@@ -883,6 +892,7 @@ trait Node
     with ShutdownHookBuilder
     with Logger
     with GenesisDataLoaderBuilder
+    with BootstrapCheckpointLoaderBuilder
     with BlockchainConfigBuilder
     with VmConfigBuilder
     with PeerEventBusBuilder

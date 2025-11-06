@@ -54,6 +54,35 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
 
+## Key Features
+
+### 🚀 Fast Initial Sync with Bootstrap Checkpoints
+
+**New in v1.1.0**: Fukuii now includes bootstrap checkpoints that significantly improve initial sync times:
+
+- **No Peer Wait**: Begin syncing immediately without waiting for peer consensus
+- **Trusted Reference Points**: Uses well-known fork activation blocks as starting points
+- **Faster Time-to-Sync**: Eliminates the bootstrap delay that previously affected new nodes
+- **Enabled by Default**: Works out-of-the-box for ETC mainnet and Mordor testnet
+- **Optional Override**: Use `--force-pivot-sync` flag to disable if needed
+
+See [ADR-012: Bootstrap Checkpoints](docs/adr/012-bootstrap-checkpoints.md) for technical details.
+
+### 🛡️ Production-Ready
+
+- **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
+- **Apache Pekko** actor system for reliable concurrency
+- **Full EIP Support**: Includes Spiral (ECIP-1109), Mystique (ECIP-1104), Magneto (ECIP-1103), and more
+- **Comprehensive Testing**: Unit, integration, and blockchain tests
+- **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
+
+### 🎯 Developer-Friendly
+
+- **Interactive Console UI**: Optional TUI for monitoring sync progress (use `--tui` flag)
+- **Extensive CLI Tools**: Key generation, address derivation, and more
+- **JSON-RPC API**: Full eth/web3/net API support
+- **Well-Documented**: Comprehensive runbooks and ADRs
+
 Getting started
 
 ## Option 1: Docker (Recommended for Production)
