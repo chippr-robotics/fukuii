@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.data
 
 import org.apache.pekko.util.ByteString
+import org.bouncycastle.util.encoders.Hex
 
 /** Represents a bootstrap checkpoint - a trusted block at a known height that can be used as a starting point for
   * syncing without waiting for peers.
@@ -24,7 +25,7 @@ object BootstrapCheckpoint {
       case Array(numberStr, hashStr) =>
         try {
           val number = BigInt(numberStr)
-          val hash = ByteString(org.bouncycastle.util.encoders.Hex.decode(hashStr.stripPrefix("0x")))
+          val hash = ByteString(Hex.decode(hashStr.stripPrefix("0x")))
           Some(BootstrapCheckpoint(number, hash))
         } catch {
           case _: Exception => None

@@ -60,7 +60,8 @@ class BootstrapCheckpointLoader(
 
     // Note: We don't actually insert checkpoint blocks into the database because we don't have the full block data.
     // Instead, we use these checkpoints as trusted reference points for the sync process.
-    // The sync controller should be modified to use these checkpoints when selecting a pivot block.
+    // TODO: Future enhancement - modify sync controller to reference these checkpoints when selecting pivot block
+    // This would allow skipping the peer wait entirely. For now, checkpoints serve as trusted hints.
     
     log.info(
       "Bootstrap checkpoints loaded. {} checkpoints available. Node will use these as trusted reference points for syncing.",

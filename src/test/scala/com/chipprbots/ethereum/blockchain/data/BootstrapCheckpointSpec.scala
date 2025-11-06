@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.data
 
 import org.apache.pekko.util.ByteString
+import org.bouncycastle.util.encoders.Hex
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -14,7 +15,7 @@ class BootstrapCheckpointSpec extends AnyFlatSpec with Matchers {
     result shouldBe defined
     result.get.blockNumber shouldEqual BigInt(10500839)
     result.get.blockHash shouldEqual ByteString(
-      org.bouncycastle.util.encoders.Hex.decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+      Hex.decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
     )
   }
 
@@ -25,7 +26,7 @@ class BootstrapCheckpointSpec extends AnyFlatSpec with Matchers {
     result shouldBe defined
     result.get.blockNumber shouldEqual BigInt(13189133)
     result.get.blockHash shouldEqual ByteString(
-      org.bouncycastle.util.encoders.Hex.decode("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
+      Hex.decode("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
     )
   }
 
