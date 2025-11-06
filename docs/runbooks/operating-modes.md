@@ -537,6 +537,7 @@ fukuii {
       
       # Enable mining-related APIs
       # Note: 'personal' API removed for security - manage keys separately
+      # 'fukuii' API provides Fukuii-specific methods; use localhost interface for security
       apis = "eth,web3,net,fukuii"
     }
   }
@@ -1032,7 +1033,10 @@ fukuii {
     rpc {
       http {
         enabled = true
-        interface = "0.0.0.0"  # ⚠️ Use VPN/firewall
+        # ⚠️ SECURITY WARNING: Exposes RPC to all network interfaces
+        # Ensure proper firewall rules, consider reverse proxy with authentication
+        # or use VPN for production deployments
+        interface = "0.0.0.0"
         port = 8546
         
         # Rate limiting for miner requests
@@ -1043,6 +1047,8 @@ fukuii {
       }
       
       # Mining-related APIs (includes fukuii for mining-specific methods)
+      # ⚠️ SECURITY: fukuii API may contain administrative methods
+      # Consider restricting API list for public-facing deployments
       apis = "eth,web3,net,fukuii"
     }
   }
