@@ -2,6 +2,20 @@
 
 This directory contains Dockerfiles for building and running Fukuii Ethereum Client in containerized environments.
 
+## Kong API Gateway
+
+For production deployments with load balancing, authentication, and monitoring, see the [Kong API Gateway setup](kong/README.md) which provides:
+
+- **API Gateway**: Kong Gateway for routing and managing all traffic
+- **High Availability**: Load balancing across multiple Fukuii instances
+- **Security**: Basic Auth, JWT, rate limiting, and CORS support
+- **Monitoring**: Prometheus metrics and Grafana dashboards
+- **Multi-Network Support**: HD wallet hierarchy routing for Bitcoin, Ethereum, and Ethereum Classic
+
+Quick start: `cd kong && ./setup.sh`
+
+Full documentation: [kong/README.md](kong/README.md)
+
 ## Container Registries
 
 Fukuii maintains images in multiple container registries:

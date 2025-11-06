@@ -1,0 +1,302 @@
+_format_version: "3.0"
+_transform: true
+
+# Services define the upstream APIs and microservices Kong will proxy to
+services:
+  # Main Fukuii JSON-RPC service with load balancing across primary and secondary instances
+  - name: fukuii-jsonrpc
+    url: http://fukuii-primary:8546
+    protocol: http
+    host: fukuii-primary
+    port: 8546
+    path: /
+    retries: 3
+    connect_timeout: 60000
+    write_timeout: 60000
+    read_timeout: 60000
+    tags:
+      - fukuii
+      - json-rpc
+    
+    # Routes define how requests are mapped to services
+    routes:
+      # Main JSON-RPC endpoint
+      - name: jsonrpc-main
+        protocols:
+          - http
+          - https
+        methods:
+          - POST
+          - GET
+          - OPTIONS
+        paths:
+          - /
+          - /rpc
+        strip_path: false
+        preserve_host: false
+        tags:
+          - json-rpc
+          - main
+      
+      # HD Wallet Bitcoin routing
+      - name: jsonrpc-bitcoin
+        protocols:
+          - http
+          - https
+        methods:
+          - POST
+        paths:
+          - /bitcoin
+          - /btc
+        strip_path: true
+        preserve_host: false
+        tags:
+          - bitcoin
+          - hd-wallet
+      
+      # HD Wallet Ethereum routing
+      - name: jsonrpc-ethereum
+        protocols:
+          - http
+          - https
+        methods:
+          - POST
+        paths:
+          - /ethereum
+          - /eth
+        strip_path: true
+        preserve_host: false
+        tags:
+          - ethereum
+          - hd-wallet
+      
+      # HD Wallet Ethereum Classic routing
+      - name: jsonrpc-etc
+        protocols:
+          - http
+          - https
+        methods:
+          - POST
+        paths:
+          - /etc
+          - /ethereum-classic
+        strip_path: true
+        preserve_host: false
+        tags:
+          - ethereum-classic
+          - hd-wallet
+    
+    # Plugins for the service
+    plugins:
+      # Rate limiting to prevent abuse
+      - name: rate-limiting
+        config:
+          minute: 100
+          hour: 5000
+          policy: local
+          fault_tolerant: true
+      
+      # CORS support
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+          headers:
+            - Accept
+            - Accept-Version
+            - Content-Length
+            - Content-MD5
+            - Content-Type
+            - Date
+            - X-Auth-Token
+            - Authorization
+          exposed_headers:
+            - X-Auth-Token
+          credentials: true
+          max_age: 3600
+      
+      # Request/Response logging
+      - name: file-log
+        config:
+          path: /dev/stdout
+          reopen: true
+      
+      # Prometheus metrics
+      - name: prometheus
+        config:
+          per_consumer: true
+      
+      # IP restriction (optional - commented out by default)
+      # - name: ip-restriction
+      #   config:
+      #     allow:
+      #       - 10.0.0.0/8
+      #       - 172.16.0.0/12
+      #       - 192.168.0.0/16
+
+  # Health check endpoint
+  - name: fukuii-health
+    url: http://fukuii-primary:8546/health
+    protocol: http
+    host: fukuii-primary
+    port: 8546
+    path: /health
+    retries: 3
+    tags:
+      - fukuii
+      - health
+    
+    routes:
+      - name: health-check
+        protocols:
+          - http
+          - https
+        methods:
+          - GET
+        paths:
+          - /health
+        strip_path: false
+        preserve_host: false
+        tags:
+          - health
+
+  # Readiness check endpoint
+  - name: fukuii-readiness
+    url: http://fukuii-primary:8546/readiness
+    protocol: http
+    host: fukuii-primary
+    port: 8546
+    path: /readiness
+    retries: 3
+    tags:
+      - fukuii
+      - readiness
+    
+    routes:
+      - name: readiness-check
+        protocols:
+          - http
+          - https
+        methods:
+          - GET
+        paths:
+          - /readiness
+        strip_path: false
+        preserve_host: false
+        tags:
+          - readiness
+
+# Upstreams for load balancing
+upstreams:
+  - name: fukuii-cluster
+    algorithm: round-robin
+    hash_on: none
+    hash_fallback: none
+    hash_on_cookie_path: /
+    slots: 10000
+    healthchecks:
+      active:
+        https_verify_certificate: false
+        healthy:
+          interval: 10
+          successes: 2
+        unhealthy:
+          interval: 10
+          http_failures: 3
+          timeouts: 3
+        type: http
+        http_path: /health
+        timeout: 10
+        concurrency: 10
+      passive:
+        healthy:
+          successes: 5
+        unhealthy:
+          http_failures: 5
+          timeouts: 2
+    tags:
+      - fukuii
+      - load-balancing
+    
+    targets:
+      - target: fukuii-primary:8546
+        weight: 100
+        tags:
+          - primary
+      - target: fukuii-secondary:8546
+        weight: 100
+        tags:
+          - secondary
+
+# Consumers for authentication
+consumers:
+  - username: admin
+    custom_id: admin-user
+    tags:
+      - admin
+    
+    # Basic Auth credentials
+    basicauth_credentials:
+      - username: admin
+        password: fukuii_admin_password
+    
+    # Key Auth credentials
+    keyauth_credentials:
+      - key: admin_api_key_change_me
+    
+    # JWT credentials (optional)
+    jwt_secrets:
+      - key: admin_jwt_key
+        algorithm: HS256
+        secret: your_jwt_secret_change_me
+    
+    # ACL groups
+    acls:
+      - group: admin
+  
+  - username: developer
+    custom_id: developer-user
+    tags:
+      - developer
+    
+    basicauth_credentials:
+      - username: developer
+        password: fukuii_dev_password
+    
+    keyauth_credentials:
+      - key: dev_api_key_change_me
+    
+    jwt_secrets:
+      - key: developer_jwt_key
+        algorithm: HS256
+        secret: your_jwt_secret_change_me
+    
+    acls:
+      - group: developer
+
+# Global plugins
+plugins:
+  # Request size limiting
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 10
+      size_unit: megabytes
+  
+  # Bot detection (optional)
+  - name: bot-detection
+    config:
+      allow:
+        - curl
+        - HTTPie
+        - postman
+      deny: []
+
+# ACL (Access Control List) groups
+# This can be used to restrict access to specific routes based on consumer groups
