@@ -128,6 +128,10 @@ object WireProtocol {
         case RLPList(RLPValue(reasonBytes), _*) =>
           val reason = ByteUtils.bytesToBigInt(reasonBytes).toLong
           Disconnect(reason = reason)
+        case RLPValue(reasonBytes) =>
+          // Handle case where peer sends a single RLP value instead of a list (protocol deviation but common)
+          val reason = ByteUtils.bytesToBigInt(reasonBytes).toLong
+          Disconnect(reason = reason)
         case _ => throw new RuntimeException("Cannot decode Disconnect")
       }
     }
