@@ -571,9 +571,12 @@ For GPU/ASIC mining, use external mining software with Fukuii's RPC:
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
   etc
 
-# Connect ethminer to Fukuii
-# Use localhost if on same machine, or server IP if remote
-ethminer -P http://YOUR_SERVER_IP:8546
+# Connect ethminer to Fukuii (use -U for CUDA, -G for OpenCL)
+# For local mining on the same machine:
+ethminer -U http://127.0.0.1:8546
+
+# For remote mining:
+ethminer -U http://YOUR_SERVER_IP:8546
 ```
 
 ### Verifying Mining Status
@@ -906,7 +909,8 @@ fukuii {
       }
       
       # Full API suite for archive node
-      apis = "eth,web3,net,personal,fukuii,debug"
+      # Note: 'personal' API removed for security - manage keys separately
+      apis = "eth,web3,net,fukuii,debug"
     }
   }
   
