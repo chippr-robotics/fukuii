@@ -33,23 +33,24 @@ test_endpoint() {
     
     echo -ne "${YELLOW}Testing ${name}...${NC} "
     
-    local cmd="curl -s -o /dev/null -w '%{http_code}'"
-    
+    local response
     if [ "$method" = "POST" ]; then
-        cmd="$cmd -X POST"
+        if [ -n "$auth" ] && [ -n "$data" ]; then
+            response=$(curl -s -o /dev/null -w '%{http_code}' -X POST -u "$auth" -H 'Content-Type: application/json' -d "$data" "$url")
+        elif [ -n "$auth" ]; then
+            response=$(curl -s -o /dev/null -w '%{http_code}' -X POST -u "$auth" "$url")
+        elif [ -n "$data" ]; then
+            response=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$data" "$url")
+        else
+            response=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$url")
+        fi
+    else
+        if [ -n "$auth" ]; then
+            response=$(curl -s -o /dev/null -w '%{http_code}' -u "$auth" "$url")
+        else
+            response=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+        fi
     fi
-    
-    if [ -n "$auth" ]; then
-        cmd="$cmd -u $auth"
-    fi
-    
-    if [ -n "$data" ]; then
-        cmd="$cmd -H 'Content-Type: application/json' -d '$data'"
-    fi
-    
-    cmd="$cmd $url"
-    
-    local response=$(eval $cmd)
     
     if [ "$response" = "200" ] || [ "$response" = "401" ] || [ "$response" = "429" ]; then
         echo -e "${GREEN}✓ ($response)${NC}"

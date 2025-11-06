@@ -236,22 +236,25 @@ upstreams:
           - secondary
 
 # Consumers for authentication
+# ⚠️ WARNING: The credentials below are EXAMPLES ONLY for demonstration purposes.
+# ⚠️ CHANGE ALL PASSWORDS, API KEYS, AND SECRETS before deploying to production!
+# For production, consider using environment variables or external secrets management.
 consumers:
   - username: admin
     custom_id: admin-user
     tags:
       - admin
     
-    # Basic Auth credentials
+    # Basic Auth credentials - CHANGE THIS PASSWORD!
     basicauth_credentials:
       - username: admin
         password: fukuii_admin_password
     
-    # Key Auth credentials
+    # Key Auth credentials - CHANGE THIS API KEY!
     keyauth_credentials:
       - key: admin_api_key_change_me
     
-    # JWT credentials (optional)
+    # JWT credentials (optional) - CHANGE THIS SECRET!
     jwt_secrets:
       - key: admin_jwt_key
         algorithm: HS256

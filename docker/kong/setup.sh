@@ -27,9 +27,11 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    echo -e "${RED}Error: Docker Compose is not installed${NC}"
-    exit 1
+if ! command -v docker-compose &> /dev/null; then
+    if ! docker compose version &> /dev/null; then
+        echo -e "${RED}Error: Docker Compose is not installed${NC}"
+        exit 1
+    fi
 fi
 
 echo -e "${GREEN}✓ Docker is installed${NC}"
