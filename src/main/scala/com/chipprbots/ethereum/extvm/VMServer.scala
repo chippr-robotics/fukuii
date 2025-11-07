@@ -35,7 +35,7 @@ import com.chipprbots.ethereum.vm.VM
 
 object VmServerApp extends Logger {
 
-  implicit val system: ActorSystem = ActorSystem("EVM_System")
+  implicit val system: ActorSystem = ActorSystem("EVM_System", ConfigFactory.load())
 
   def main(args: Array[String]): Unit = {
     val config = ConfigFactory.load()
