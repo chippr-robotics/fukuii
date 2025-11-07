@@ -238,6 +238,8 @@ This repository is a continuation of the Mantis Ethereum Classic client original
 - [README.md](README.md) - Getting started and features
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
 - [CHANGELOG.md](CHANGELOG.md) - Version history
+- [docs/ARCHITECTURE_DIAGRAMS.md](docs/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
+- [docs/VENDORED_MODULES_INTEGRATION_PLAN.md](docs/VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
 - [LICENSE](LICENSE) - Apache 2.0 license
 - [NOTICE](NOTICE) - Attribution and notices
 
