@@ -968,4 +968,5 @@ object DiscoveryService {
         } yield succeeded
       })
     }
+  }
 }
