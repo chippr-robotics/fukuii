@@ -260,7 +260,7 @@ object DiscoveryNetwork {
                 // https://github.com/paritytech/parity/issues/8038
                 // https://github.com/ethereumproject/go-ethereum/issues/312
                 val dataHash = Keccak256(packet.data)
-                IO(logger.debug(s"DiscoveryNetwork: Ping sent to ${peer.address}, packet hash=${packet.hash.toHex.take(16)}..., waiting for Pong")) >>
+                IO(logger.debug(s"DiscoveryNetwork: Ping sent to ${peer.address}, packet hash=${packet.hash.value.toHex.take(16)}..., waiting for Pong")) >>
                 channel.collectFirstResponse(peer.id) {
                   case Pong(_, pingHash, _, maybeRemoteEnrSeq) if pingHash == packet.hash || pingHash == dataHash =>
                     logger.debug(s"DiscoveryNetwork: Received Pong from ${peer.address} with ENR seq $maybeRemoteEnrSeq")
