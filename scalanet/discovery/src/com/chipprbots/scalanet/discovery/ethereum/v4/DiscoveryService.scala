@@ -935,7 +935,9 @@ object DiscoveryService {
       } else {
         for {
           nodeId <- stateRef.get.map(_.node.id)
+          _ <- IO(println(s"DEBUG: local nodeId = ${nodeId.value.toHex.take(32)}..."))
           bootstrapPeers = config.knownPeers.toList.map(toPeer).filterNot(_.id == nodeId)
+          _ <- IO(println(s"DEBUG: config.knownPeers IDs = ${config.knownPeers.take(3).map(_.id.value.toHex.take(32)).mkString(", ")}..."))
           _ <- IO(println(s"DEBUG: bootstrapPeers.size after filtering = ${bootstrapPeers.size}"))
           _ <- IO(
             if (bootstrapPeers.isEmpty) {
