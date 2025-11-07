@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.faucet.jsonrpc
 
 import org.apache.pekko.actor.ActorSystem
 
+import com.typesafe.config.ConfigFactory
+
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Await
@@ -20,7 +22,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 trait ActorSystemBuilder {
   def systemName: String
-  implicit lazy val system: ActorSystem = ActorSystem(systemName)
+  implicit lazy val system: ActorSystem = ActorSystem(systemName, ConfigFactory.load())
 }
 
 trait FaucetControllerBuilder {
