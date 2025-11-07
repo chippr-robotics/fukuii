@@ -929,14 +929,21 @@ object DiscoveryService {
       */
     protected[v4] def enroll: IO[Boolean] = {
       IO(println(s"DEBUG: enroll called, config.knownPeers.size = ${config.knownPeers.size}")) >>
-      (if (config.knownPeers.isEmpty)
-        IO.pure(false)
-      else {
+      (if (config.knownPeers.isEmpty) {
+        IO(logger.warn("No bootstrap nodes configured. Skipping enrollment.")) >>
+          IO.pure(false)
+      } else {
         for {
           nodeId <- stateRef.get.map(_.node.id)
           bootstrapPeers = config.knownPeers.toList.map(toPeer).filterNot(_.id == nodeId)
           _ <- IO(println(s"DEBUG: bootstrapPeers.size after filtering = ${bootstrapPeers.size}"))
-          _ <- IO(logger.info(s"Enrolling with ${bootstrapPeers.size} bootstrap nodes."))
+          _ <- IO(
+            if (bootstrapPeers.isEmpty) {
+              logger.warn("All bootstrap nodes were filtered out (possibly because they match the local node ID).")
+            } else {
+              logger.info(s"Enrolling with ${bootstrapPeers.size} bootstrap nodes.")
+            }
+          )
           maybeBootstrapEnrs <- bootstrapPeers.parTraverse(fetchEnr(_, delay = true))
           enrolled = maybeBootstrapEnrs.count(_.isDefined)
           succeeded = enrolled > 0
