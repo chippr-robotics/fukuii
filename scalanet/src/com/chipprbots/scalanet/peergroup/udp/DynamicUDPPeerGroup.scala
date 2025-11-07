@@ -286,10 +286,20 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
         _ <- IO(logger.debug(s"Sending message ${message.toString.take(100)}... to peer ${recipient}"))
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
+        // Check packet size before attempting to send
+        // UDP supports up to 64KB theoretically, but practical MTU is typically 1280-1500 bytes
+        // Using a conservative 64KB limit here to catch truly oversized packets
+        _ <- if (asBuffer.capacity > 65535) {
+          IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity()))
+        } else {
+          IO.unit
+        }
         _ <- toTask(nettyChannel.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), recipient, sender)))
           .handleErrorWith {
-            case _: IOException =>
-              IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity()))
+            case ex: IOException =>
+              // Log the actual IOException to help diagnose the real problem
+              IO(logger.error(s"Failed to send UDP packet to $recipient: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)) >>
+              IO.raiseError(ex)
           }
       } yield ()
     }

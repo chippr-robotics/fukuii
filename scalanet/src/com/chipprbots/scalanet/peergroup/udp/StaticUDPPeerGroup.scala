@@ -400,10 +400,20 @@ object StaticUDPPeerGroup extends StrictLogging {
         )
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
+        // Check packet size before attempting to send
+        // UDP supports up to 64KB theoretically, but practical MTU is typically 1280-1500 bytes
+        // Using a conservative 64KB limit here to catch truly oversized packets
+        _ <- if (asBuffer.capacity > 65535) {
+          IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
+        } else {
+          IO.unit
+        }
         packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress, localAddress)
         _ <- toTask(nettyChannel.writeAndFlush(packet)).handleErrorWith {
-          case _: IOException =>
-            IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
+          case ex: IOException =>
+            // Log the actual IOException to help diagnose the real problem
+            IO(logger.error(s"Failed to send UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)) >>
+            IO.raiseError(ex)
         }
       } yield ()
 
