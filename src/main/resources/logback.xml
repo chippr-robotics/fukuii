@@ -3,12 +3,23 @@
     <property name="stdoutEncoderPattern" value="%d %-5level [%logger{36}] - %msg%n" />
     <property name="fileEncoderPattern" value="%d [%thread] %-5level %logger{36} %X{akkaSource} - %msg%n" />
 
-    <!--read properties from application.conf-->
-    <newRule pattern="*/load" actionClass="com.chipprbots.ethereum.utils.LoadFromApplicationConfiguration"/>
-    <load key="logging.json-output" as="ASJSON"/>
-    <load key="logging.logs-dir" as="LOGSDIR"/>
-    <load key="logging.logs-file" as="LOGSFILENAME"/>
-    <load key="logging.logs-level" as="LOGSLEVEL"/>
+    <!--read properties from application.conf using PropertyDefiner (logback 1.5.x compatible)-->
+    <define name="LOGSLEVEL" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-level</key>
+        <defaultValue>INFO</defaultValue>
+    </define>
+    <define name="ASJSON" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.json-output</key>
+        <defaultValue>false</defaultValue>
+    </define>
+    <define name="LOGSDIR" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-dir</key>
+        <defaultValue>./logs</defaultValue>
+    </define>
+    <define name="LOGSFILENAME" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-file</key>
+        <defaultValue>fukuii</defaultValue>
+    </define>
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
