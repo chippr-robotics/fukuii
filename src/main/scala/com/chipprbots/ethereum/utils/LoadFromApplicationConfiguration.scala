@@ -9,16 +9,16 @@ import org.xml.sax.Attributes
   * 
   * This class is instantiated by logback during initialization to load configuration
   * properties from the application's TypeSafe Config (application.conf/base.conf) and
-  * make them available as logback variables.
+  * make them available as logback substitution variables (used in logback.xml).
   * 
-  * Properties loaded:
-  * - logging.logs-level (default: "INFO") → LOGSLEVEL
-  * - logging.json-output (default: "false") → ASJSON  
-  * - logging.logs-dir (default: "./logs") → LOGSDIR
-  * - logging.logs-file (default: "fukuii") → LOGSFILENAME
+  * Properties loaded (config key → logback variable name):
+  * - logging.logs-level (default: "INFO") → ${LOGSLEVEL} in logback.xml
+  * - logging.json-output (default: "false") → ${ASJSON} in logback.xml
+  * - logging.logs-dir (default: "./logs") → ${LOGSDIR} in logback.xml
+  * - logging.logs-file (default: "fukuii") → ${LOGSFILENAME} in logback.xml
   * 
   * If a property is missing from the configuration, a sensible default is used
-  * and a warning is logged.
+  * and a warning is logged. Unknown configuration keys will cause an error.
   */
 class LoadFromApplicationConfiguration extends Action {
 
@@ -34,18 +34,19 @@ class LoadFromApplicationConfiguration extends Action {
     } catch {
       case _: ConfigException.Missing =>
         // Provide sensible defaults for known properties
-        val defaultValue = key match {
-          case "logging.logs-level" => "INFO"
-          case "logging.json-output" => "false"
-          case "logging.logs-dir" => "./logs"
-          case "logging.logs-file" => "fukuii"
-          case _ => ""
+        val defaultValueOpt = key match {
+          case "logging.logs-level" => Some("INFO")
+          case "logging.json-output" => Some("false")
+          case "logging.logs-dir" => Some("./logs")
+          case "logging.logs-file" => Some("fukuii")
+          case _ => None
         }
-        if (defaultValue.nonEmpty) {
-          ic.addSubstitutionProperty(asName, defaultValue)
-          addWarn(s"Configuration key '$key' not found, using default value: $defaultValue")
-        } else {
-          addError(s"Configuration key '$key' not found and no default value available")
+        defaultValueOpt match {
+          case Some(defaultValue) =>
+            ic.addSubstitutionProperty(asName, defaultValue)
+            addWarn(s"Configuration key '$key' not found, using default value: $defaultValue")
+          case None =>
+            addError(s"Configuration key '$key' not found and no default value available")
         }
     }
   }
