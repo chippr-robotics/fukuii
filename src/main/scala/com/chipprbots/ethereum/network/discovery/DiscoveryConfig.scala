@@ -24,13 +24,15 @@ case class DiscoveryConfig(
 object DiscoveryConfig {
   def apply(etcClientConfig: com.typesafe.config.Config, bootstrapNodes: Set[String]): DiscoveryConfig = {
     val discoveryConfig = etcClientConfig.getConfig("network.discovery")
+    val parsedBootstrapNodes = NodeParser.parseNodes(bootstrapNodes)
+    println(s"DEBUG: DiscoveryConfig.apply - bootstrapNodes.size = ${bootstrapNodes.size}, parsedBootstrapNodes.size = ${parsedBootstrapNodes.size}")
 
     DiscoveryConfig(
       discoveryEnabled = discoveryConfig.getBoolean("discovery-enabled"),
       host = ConfigUtils.getOptionalValue(discoveryConfig, _.getString, "host"),
       interface = discoveryConfig.getString("interface"),
       port = discoveryConfig.getInt("port"),
-      bootstrapNodes = NodeParser.parseNodes(bootstrapNodes),
+      bootstrapNodes = parsedBootstrapNodes,
       reuseKnownNodes = discoveryConfig.getBoolean("reuse-known-nodes"),
       scanInterval = discoveryConfig.getDuration("scan-interval").toMillis.millis,
       messageExpiration = discoveryConfig.getDuration("message-expiration").toMillis.millis,

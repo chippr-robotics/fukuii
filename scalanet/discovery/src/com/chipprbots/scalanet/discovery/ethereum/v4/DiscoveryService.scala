@@ -927,17 +927,20 @@ object DiscoveryService {
       * or `false` if none of them responded with a correct ENR,
       * which would mean we don't have anyone to do lookups with.
       */
-    protected[v4] def enroll: IO[Boolean] =
-      if (config.knownPeers.isEmpty)
+    protected[v4] def enroll: IO[Boolean] = {
+      IO(println(s"DEBUG: enroll called, config.knownPeers.size = ${config.knownPeers.size}")) >>
+      (if (config.knownPeers.isEmpty)
         IO.pure(false)
       else {
         for {
           nodeId <- stateRef.get.map(_.node.id)
           bootstrapPeers = config.knownPeers.toList.map(toPeer).filterNot(_.id == nodeId)
+          _ <- IO(println(s"DEBUG: bootstrapPeers.size after filtering = ${bootstrapPeers.size}"))
           _ <- IO(logger.info(s"Enrolling with ${bootstrapPeers.size} bootstrap nodes."))
           maybeBootstrapEnrs <- bootstrapPeers.parTraverse(fetchEnr(_, delay = true))
           enrolled = maybeBootstrapEnrs.count(_.isDefined)
           succeeded = enrolled > 0
+          _ <- IO(println(s"DEBUG: enrolled = $enrolled, succeeded = $succeeded"))
           _ <- if (succeeded) {
             for {
               _ <- IO(
@@ -954,6 +957,6 @@ object DiscoveryService {
             IO(logger.warn("Failed to enroll with any of the the bootstrap nodes."))
           }
         } yield succeeded
-      }
-  }
+      })
+    }
 }

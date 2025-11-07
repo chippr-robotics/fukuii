@@ -98,6 +98,7 @@ trait DiscoveryServiceBuilder {
           )
         )
       }
+      _ <- IO(println(s"DEBUG: discoveryConfig.bootstrapNodes size = ${discoveryConfig.bootstrapNodes.size}, reusedKnownNodes size = ${reusedKnownNodes.size}, knownPeers size = ${knownPeers.size}"))
       config = v4.DiscoveryConfig.default.copy(
         messageExpiration = discoveryConfig.messageExpiration,
         maxClockDrift = discoveryConfig.maxClockDrift,
