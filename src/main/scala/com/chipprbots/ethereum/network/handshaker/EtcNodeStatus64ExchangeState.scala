@@ -14,11 +14,16 @@ case class EtcNodeStatus64ExchangeState(
   import handshakerConfiguration._
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETC64.Status =>
+    log.info(
+      s"STATUS_EXCHANGE: Received ETC Status - protocolVersion=${status.protocolVersion}, " +
+      s"networkId=${status.networkId}, totalDifficulty=${status.chainWeight.totalDifficulty}"
+    )
     applyRemoteStatusMessage(RemoteStatus(status))
   }
 
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
+    val bestBlockNumber = blockchainReader.getBestBlockNumber()
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
       .getOrElse(
@@ -33,7 +38,11 @@ case class EtcNodeStatus64ExchangeState(
       genesisHash = blockchainReader.genesisHeader.hash
     )
 
-    log.debug(s"sending status $status")
+    log.info(
+      s"STATUS_EXCHANGE: Sending ETC Status - protocolVersion=${status.protocolVersion}, " +
+      s"networkId=${status.networkId}, bestBlock=${bestBlockNumber}, " +
+      s"totalDifficulty=${chainWeight.totalDifficulty}, chainWeight=${chainWeight.chainWeight}"
+    )
     status
   }
 

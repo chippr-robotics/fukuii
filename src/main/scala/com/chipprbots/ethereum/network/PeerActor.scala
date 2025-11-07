@@ -90,6 +90,9 @@ class PeerActor[R <: HandshakeResult](
   def waitingForConnectionResult(rlpxConnection: RLPxConnection, numRetries: Int = 0): Receive =
     handleTerminated(rlpxConnection, numRetries, Connecting).orElse(stashMessages).orElse {
       case RLPxConnectionHandler.ConnectionEstablished(remoteNodeId) =>
+        val peerInfo = rlpxConnection.uriOpt.map(_.toString).getOrElse(s"${peerAddress.getHostString}:${peerAddress.getPort}")
+        log.info(s"PEER_CONNECTION: RLPx connection established with $peerInfo, starting handshake")
+        
         val newUri =
           rlpxConnection.uriOpt.map(outGoingUri => modifyOutGoingUri(remoteNodeId, rlpxConnection, outGoingUri))
         processHandshakerNextMessage(
@@ -183,6 +186,9 @@ class PeerActor[R <: HandshakeResult](
         context.become(processingHandshaking(handshaker, remoteNodeId, rlpxConnection, newTimeout, numRetries))
 
       case Left(HandshakeSuccess(handshakeResult)) =>
+        val peerInfo = rlpxConnection.uriOpt.map(_.toString).getOrElse(s"${peerAddress.getHostString}:${peerAddress.getPort}")
+        log.info(s"PEER_CONNECTION: Handshake completed successfully with $peerInfo, peer is now ready")
+        
         rlpxConnection.uriOpt.foreach(uri => knownNodesManager ! KnownNodesManager.AddKnownNode(uri))
         context.become(new HandshakedPeer(remoteNodeId, rlpxConnection, handshakeResult).receive)
         unstashAll()
@@ -255,7 +261,33 @@ class PeerActor[R <: HandshakeResult](
   def handleDisconnectMsg(rlpxConnection: RLPxConnection, status: Status): Receive = {
     case RLPxConnectionHandler.MessageReceived(d: Disconnect) =>
       import Disconnect.Reasons._
-      log.info(s"DISCONNECT_DEBUG: Received disconnect from ${peerAddress.getHostString}:${peerAddress.getPort} - reason code: 0x${d.reason.toHexString} (${Disconnect.reasonToString(d.reason)})")
+      
+      val reasonHex = f"0x${d.reason}%02x"
+      val reasonStr = Disconnect.reasonToString(d.reason)
+      val peerInfo = rlpxConnection.uriOpt.map(uri => s"$uri").getOrElse(s"${peerAddress.getHostString}:${peerAddress.getPort}")
+      
+      // Log disconnect with full context including current status
+      status match {
+        case Handshaking(_) =>
+          log.warn(
+            s"PEER_DISCONNECT: Peer $peerInfo disconnected during handshake - " +
+            s"reason: $reasonHex ($reasonStr). This may indicate protocol incompatibility or peer selection policy."
+          )
+        case Handshaked =>
+          log.info(s"PEER_DISCONNECT: Peer $peerInfo disconnected after handshake - reason: $reasonHex ($reasonStr)")
+        case other =>
+          log.info(s"PEER_DISCONNECT: Peer $peerInfo disconnected while in status $other - reason: $reasonHex ($reasonStr)")
+      }
+      
+      // Special handling for 0x10 (Other/SubprotocolError) during handshake
+      if (d.reason == Other && status.isInstanceOf[Handshaking]) {
+        log.warn(
+          s"PEER_DISCONNECT: Received 0x10 (Other/SubprotocolError) during handshake from $peerInfo. " +
+          s"This typically means the peer rejected us after Status exchange. " +
+          s"Possible causes: incompatible fork, peer at different sync stage, or peer selection policy."
+        )
+      }
+      
       d.reason match {
         case IncompatibleP2pProtocolVersion | UselessPeer | NullNodeIdentityReceived | UnexpectedIdentity |
             IdentityTheSame | Other =>
@@ -265,7 +297,6 @@ class PeerActor[R <: HandshakeResult](
           context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
         case _ => // nothing
       }
-      log.debug(s"Received {}. Closing connection with peer ${peerAddress.getHostString}:${peerAddress.getPort}", d)
       stopActor(rlpxConnection, status)
   }
 

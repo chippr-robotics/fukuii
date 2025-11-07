@@ -19,29 +19,39 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
   import handshakerConfiguration._
 
   override def nextMessage: NextMessage = {
-    log.debug("RLPx connection established, sending Hello")
+    val helloMsg = createHelloMsg()
+    log.info(
+      s"HELLO_EXCHANGE: Sending Hello - clientId='${Config.clientId}', " +
+      s"capabilities=${handshakerConfiguration.blockchainConfig.capabilities.mkString("[", ",", "]")}, " +
+      s"p2pVersion=${EtcHelloExchangeState.P2pVersion}"
+    )
     NextMessage(
-      messageToSend = createHelloMsg(),
+      messageToSend = helloMsg,
       timeout = peerConfiguration.waitForHelloTimeout
     )
   }
 
   override def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case hello: Hello =>
-    log.debug("Protocol handshake finished with peer ({})", hello)
+    log.info(
+      s"HELLO_EXCHANGE: Received Hello from client='${hello.clientId}', " +
+      s"capabilities=${hello.capabilities.mkString("[", ",", "]")}, p2pVersion=${hello.p2pVersion}"
+    )
+    
     // FIXME in principle this should be already negotiated
     Capability.negotiate(hello.capabilities.toList, handshakerConfiguration.blockchainConfig.capabilities) match {
       case Some(Capability.ETC64) =>
-        log.debug("Negotiated protocol version with client {} is etc/64", hello.clientId)
+        log.info(s"HELLO_EXCHANGE: Negotiated etc/64 with client '${hello.clientId}'")
         EtcNodeStatus64ExchangeState(handshakerConfiguration)
       case Some(Capability.ETH63) =>
-        log.debug("Negotiated protocol version with client {} is eth/63", hello.clientId)
+        log.info(s"HELLO_EXCHANGE: Negotiated eth/63 with client '${hello.clientId}'")
         EthNodeStatus63ExchangeState(handshakerConfiguration)
       case Some(negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)) =>
-        log.debug("Negotiated protocol version with client {} is {}", hello.clientId, negotiated)
+        log.info(s"HELLO_EXCHANGE: Negotiated ${negotiated} with client '${hello.clientId}'")
         EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated)
       case _ =>
-        log.debug(
-          s"Connected peer does not support eth/63-68 or etc/64 protocol. Disconnecting."
+        log.warn(
+          s"HELLO_EXCHANGE: No compatible protocol found. Peer capabilities: ${hello.capabilities.mkString("[", ",", "]")}, " +
+          s"our capabilities: ${handshakerConfiguration.blockchainConfig.capabilities.mkString("[", ",", "]")}. Disconnecting."
         )
         DisconnectedState(Disconnect.Reasons.IncompatibleP2pProtocolVersion)
     }
