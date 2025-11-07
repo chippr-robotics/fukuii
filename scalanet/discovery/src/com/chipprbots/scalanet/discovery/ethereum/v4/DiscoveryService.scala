@@ -928,17 +928,17 @@ object DiscoveryService {
       * which would mean we don't have anyone to do lookups with.
       */
     protected[v4] def enroll: IO[Boolean] = {
-      IO(println(s"DEBUG: enroll called, config.knownPeers.size = ${config.knownPeers.size}")) >>
+      IO(logger.debug(s"Enrollment starting. Config has ${config.knownPeers.size} known peers.")) >>
       (if (config.knownPeers.isEmpty) {
         IO(logger.warn("No bootstrap nodes configured. Skipping enrollment.")) >>
           IO.pure(false)
       } else {
         for {
           nodeId <- stateRef.get.map(_.node.id)
-          _ <- IO(println(s"DEBUG: local nodeId = ${nodeId.value.toHex.take(32)}..."))
+          _ <- IO(logger.debug(s"Local node ID: ${nodeId.value.toHex.take(32)}..."))
           bootstrapPeers = config.knownPeers.toList.map(toPeer).filterNot(_.id == nodeId)
-          _ <- IO(println(s"DEBUG: config.knownPeers IDs = ${config.knownPeers.take(3).map(_.id.value.toHex.take(32)).mkString(", ")}..."))
-          _ <- IO(println(s"DEBUG: bootstrapPeers.size after filtering = ${bootstrapPeers.size}"))
+          _ <- IO(logger.debug(s"Sample known peer IDs: ${config.knownPeers.take(3).map(_.id.value.toHex.take(32)).mkString(", ")}..."))
+          _ <- IO(logger.debug(s"Bootstrap peers after filtering: ${bootstrapPeers.size}"))
           _ <- IO(
             if (bootstrapPeers.isEmpty) {
               logger.warn("All bootstrap nodes were filtered out (possibly because they match the local node ID).")
@@ -949,7 +949,7 @@ object DiscoveryService {
           maybeBootstrapEnrs <- bootstrapPeers.parTraverse(fetchEnr(_, delay = true))
           enrolled = maybeBootstrapEnrs.count(_.isDefined)
           succeeded = enrolled > 0
-          _ <- IO(println(s"DEBUG: enrolled = $enrolled, succeeded = $succeeded"))
+          _ <- IO(logger.debug(s"Enrollment result: enrolled=$enrolled, succeeded=$succeeded"))
           _ <- if (succeeded) {
             for {
               _ <- IO(

@@ -85,6 +85,9 @@ trait DiscoveryServiceBuilder {
           IO(knownNodesStorage.getKnownNodes().map(Node.fromUri))
         else
           IO.pure(Set.empty[Node])
+      _ <- IO.whenA(discoveryConfig.bootstrapNodes.nonEmpty || reusedKnownNodes.nonEmpty) {
+        IO(println(s"DEBUG: Bootstrap nodes: ${discoveryConfig.bootstrapNodes.size}, Reused known nodes: ${reusedKnownNodes.size}"))
+      }
       // Discovery is going to enroll with all the bootstrap nodes passed to it.
       // Since we're running the enrollment in the background, it won't hold up
       // anything even if we have to enroll with hundreds of previously known nodes.
@@ -98,7 +101,9 @@ trait DiscoveryServiceBuilder {
           )
         )
       }
-      _ <- IO(println(s"DEBUG: discoveryConfig.bootstrapNodes size = ${discoveryConfig.bootstrapNodes.size}, reusedKnownNodes size = ${reusedKnownNodes.size}, knownPeers size = ${knownPeers.size}"))
+      _ <- IO.whenA(knownPeers.nonEmpty) {
+        IO(println(s"DEBUG: Converted to ${knownPeers.size} known peers for v4.DiscoveryConfig"))
+      }
       config = v4.DiscoveryConfig.default.copy(
         messageExpiration = discoveryConfig.messageExpiration,
         maxClockDrift = discoveryConfig.maxClockDrift,
