@@ -520,9 +520,13 @@ object DiscoveryService {
     protected[v4] def pingAndMaybeUpdateTimestamp(peer: Peer[A]): IO[Option[Option[ENRSeq]]] =
       for {
         enrSeq <- localEnrSeq
+        _ <- IO(logger.debug(s"Sending ping to $peer with ENR seq $enrSeq"))
         maybeResponse <- rpc.ping(peer)(Some(enrSeq)).recover {
-          case NonFatal(_) => None
+          case NonFatal(ex) =>
+            logger.debug(s"Ping to $peer failed with exception: ${ex.getMessage}")
+            None
         }
+        _ <- IO(logger.debug(s"Ping response from $peer: $maybeResponse"))
         _ <- updateLastPongTime(peer).whenA(maybeResponse.isDefined)
       } yield maybeResponse
 
