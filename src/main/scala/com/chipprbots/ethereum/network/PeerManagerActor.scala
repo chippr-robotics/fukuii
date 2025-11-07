@@ -209,6 +209,10 @@ class PeerManagerActor(
     import Disconnect.Reasons._
     reason match {
       case TooManyPeers | AlreadyConnected | ClientQuitting => peerConfiguration.shortBlacklistDuration
+      // Use short blacklist for "Other" (0x10) disconnects - these are often due to peer selection
+      // policies (e.g., rejecting nodes at genesis) rather than actual protocol issues.
+      // Peers may be willing to connect later once we've synced past genesis.
+      case Other                                            => peerConfiguration.shortBlacklistDuration
       case _                                                => peerConfiguration.longBlacklistDuration
     }
   }
