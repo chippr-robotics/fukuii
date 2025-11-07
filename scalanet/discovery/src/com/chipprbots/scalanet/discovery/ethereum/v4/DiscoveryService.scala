@@ -946,7 +946,13 @@ object DiscoveryService {
               logger.info(s"Enrolling with ${bootstrapPeers.size} bootstrap nodes.")
             }
           )
-          maybeBootstrapEnrs <- bootstrapPeers.parTraverse(fetchEnr(_, delay = true))
+          maybeBootstrapEnrs <- bootstrapPeers
+            .grouped(config.kademliaAlpha)
+            .toList
+            .traverse { group =>
+              group.parTraverse(fetchEnr(_, delay = true))
+            }
+            .map(_.flatten)
           enrolled = maybeBootstrapEnrs.count(_.isDefined)
           succeeded = enrolled > 0
           _ <- IO(logger.debug(s"Enrollment result: enrolled=$enrolled, succeeded=$succeeded"))
