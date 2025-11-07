@@ -41,7 +41,7 @@ case class EtcNodeStatus64ExchangeState(
     log.info(
       s"STATUS_EXCHANGE: Sending ETC Status - protocolVersion=${status.protocolVersion}, " +
       s"networkId=${status.networkId}, bestBlock=${bestBlockNumber}, " +
-      s"totalDifficulty=${chainWeight.totalDifficulty}, chainWeight=${chainWeight.chainWeight}"
+      s"totalDifficulty=${chainWeight.totalDifficulty}"
     )
     status
   }

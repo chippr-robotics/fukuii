@@ -269,7 +269,7 @@ class PeerActor[R <: HandshakeResult](
       // Log disconnect with full context including current status
       status match {
         case Handshaking(_) =>
-          log.warn(
+          log.warning(
             s"PEER_DISCONNECT: Peer $peerInfo disconnected during handshake - " +
             s"reason: $reasonHex ($reasonStr). This may indicate protocol incompatibility or peer selection policy."
           )
@@ -281,7 +281,7 @@ class PeerActor[R <: HandshakeResult](
       
       // Special handling for 0x10 (Other/SubprotocolError) during handshake
       if (d.reason == Other && status.isInstanceOf[Handshaking]) {
-        log.warn(
+        log.warning(
           s"PEER_DISCONNECT: Received 0x10 (Other/SubprotocolError) during handshake from $peerInfo. " +
           s"This typically means the peer rejected us after Status exchange. " +
           s"Possible causes: incompatible fork, peer at different sync stage, or peer selection policy."

@@ -26,7 +26,7 @@ case class EthNodeStatus64ExchangeState(
     log.info(
       s"STATUS_EXCHANGE: Received ETH Status - negotiated=${negotiatedCapability}, " +
       s"protocolVersion=${status.protocolVersion}, networkId=${status.networkId}, " +
-      s"totalDifficulty=${status.totalDifficulty}, forkId=${status.forkId.hash.toHex}@${status.forkId.next}"
+      s"totalDifficulty=${status.totalDifficulty}, forkId=${status.forkId}"
     )
     
     // Validate that the remote peer sent the same protocol version we negotiated
@@ -77,7 +77,7 @@ case class EthNodeStatus64ExchangeState(
       s"STATUS_EXCHANGE: Sending ETH Status - negotiated=${negotiatedCapability}, " +
       s"protocolVersion=${status.protocolVersion}, networkId=${status.networkId}, " +
       s"bestBlock=${bestBlockNumber}, totalDifficulty=${status.totalDifficulty}, " +
-      s"forkId=${forkId.hash.toHex}@${forkId.next}"
+      s"forkId=${forkId}"
     )
     status
   }
