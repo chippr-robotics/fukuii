@@ -963,7 +963,7 @@ object DiscoveryService {
               _ <- IO(logger.info(s"Discovered $nodeCount nodes by the end of the lookup."))
             } yield ()
           } else {
-            IO(logger.warn("Failed to enroll with any of the the bootstrap nodes."))
+            IO(logger.warn("Failed to enroll with any of the bootstrap nodes."))
           }
         } yield succeeded
       })

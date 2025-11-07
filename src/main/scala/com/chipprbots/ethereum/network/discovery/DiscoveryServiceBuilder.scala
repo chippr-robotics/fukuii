@@ -86,6 +86,7 @@ trait DiscoveryServiceBuilder {
         else
           IO.pure(Set.empty[Node])
       _ <- IO.whenA(discoveryConfig.bootstrapNodes.nonEmpty || reusedKnownNodes.nonEmpty) {
+        // TODO: Replace with proper logger.debug once logger is available in trait
         IO(println(s"DEBUG: Bootstrap nodes: ${discoveryConfig.bootstrapNodes.size}, Reused known nodes: ${reusedKnownNodes.size}"))
       }
       // Discovery is going to enroll with all the bootstrap nodes passed to it.
@@ -102,6 +103,7 @@ trait DiscoveryServiceBuilder {
         )
       }
       _ <- IO.whenA(knownPeers.nonEmpty) {
+        // TODO: Replace with proper logger.debug once logger is available in trait
         IO(println(s"DEBUG: Converted to ${knownPeers.size} known peers for v4.DiscoveryConfig"))
       }
       config = v4.DiscoveryConfig.default.copy(

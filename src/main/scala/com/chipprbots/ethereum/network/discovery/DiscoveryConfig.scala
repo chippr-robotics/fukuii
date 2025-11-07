@@ -25,6 +25,7 @@ object DiscoveryConfig {
   def apply(etcClientConfig: com.typesafe.config.Config, bootstrapNodes: Set[String]): DiscoveryConfig = {
     val discoveryConfig = etcClientConfig.getConfig("network.discovery")
     val parsedBootstrapNodes = NodeParser.parseNodes(bootstrapNodes)
+    // TODO: Replace with proper logger.debug once logger is available in object
     println(s"DEBUG: DiscoveryConfig.apply - bootstrapNodes.size = ${bootstrapNodes.size}, parsedBootstrapNodes.size = ${parsedBootstrapNodes.size}")
 
     DiscoveryConfig(
