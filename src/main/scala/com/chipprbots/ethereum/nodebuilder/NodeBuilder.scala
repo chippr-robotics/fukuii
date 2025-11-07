@@ -7,6 +7,8 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.util.ByteString
 
+import com.typesafe.config.ConfigFactory
+
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits._
@@ -99,7 +101,7 @@ trait AsyncConfigBuilder {
 }
 
 trait ActorSystemBuilder {
-  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system")
+  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system", ConfigFactory.load())
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {
