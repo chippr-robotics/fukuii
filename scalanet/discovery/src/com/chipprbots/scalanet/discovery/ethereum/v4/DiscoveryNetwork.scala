@@ -247,7 +247,9 @@ object DiscoveryNetwork {
       /** Ping a peer. */
       override val ping: Peer[A] => Option[ENRSeq] => IO[Option[Option[ENRSeq]]] = (peer: Peer[A]) =>
         (localEnrSeq: Option[ENRSeq]) =>
+          IO(logger.debug(s"DiscoveryNetwork: Creating client for peer ${peer.address}")) >>
           peerGroup.client(peer.address).use { channel =>
+            IO(logger.debug(s"DiscoveryNetwork: Sending Ping to ${peer.address} with ENR seq $localEnrSeq")) >>
             channel
               .send(
                 Ping(version = 4, from = localNodeAddress, to = toNodeAddress(peer.address), 0, localEnrSeq)
@@ -258,12 +260,18 @@ object DiscoveryNetwork {
                 // https://github.com/paritytech/parity/issues/8038
                 // https://github.com/ethereumproject/go-ethereum/issues/312
                 val dataHash = Keccak256(packet.data)
-
+                IO(logger.debug(s"DiscoveryNetwork: Ping sent to ${peer.address}, packet hash=${packet.hash.toHex.take(16)}..., waiting for Pong")) >>
                 channel.collectFirstResponse(peer.id) {
                   case Pong(_, pingHash, _, maybeRemoteEnrSeq) if pingHash == packet.hash || pingHash == dataHash =>
+                    logger.debug(s"DiscoveryNetwork: Received Pong from ${peer.address} with ENR seq $maybeRemoteEnrSeq")
                     maybeRemoteEnrSeq
                 }
               }
+              .flatTap(result => IO(logger.debug(s"DiscoveryNetwork: Ping completed for ${peer.address}, result=$result")))
+          }
+          .handleErrorWith { ex =>
+            IO(logger.debug(s"DiscoveryNetwork: Ping to ${peer.address} failed with error: ${ex.getClass.getSimpleName}: ${ex.getMessage}")) >>
+              IO.raiseError(ex)
           }
 
       /** Ask a peer about neighbors of a target.
