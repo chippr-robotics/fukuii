@@ -115,17 +115,19 @@ If logs appear to ignore the configuration:
 
 ### Configuration is not loaded
 
-The LoadFromApplicationConfiguration class loads properties from TypeSafe Config into Logback. If it fails to load a property, it will:
+The ConfigPropertyDefiner class loads properties from TypeSafe Config into Logback. If it fails to load a property, it will:
 
-1. Use a sensible default value
+1. Use the default value specified in logback.xml
 2. Log a warning message
 3. Continue startup without failing
 
-Default values:
+Default values (defined in logback.xml):
 - `logging.logs-level` → "INFO"
 - `logging.json-output` → "false"
 - `logging.logs-dir` → "./logs"
 - `logging.logs-file` → "fukuii"
+
+These defaults ensure that even if the configuration file is missing or corrupted, the application will start with INFO level logging.
 
 ## Best Practices
 
@@ -145,3 +147,23 @@ To enable DEBUG for specific components without flooding all logs, edit `logback
 ```
 
 Then restart the application. Remember to change it back to INFO when done debugging.
+
+## Technical Details
+
+### How Configuration Loading Works
+
+Fukuii uses a custom `ConfigPropertyDefiner` class to bridge TypeSafe Config (application.conf) and Logback (logback.xml):
+
+1. **At startup**, Logback processes logback.xml
+2. **When encountering `<define>` tags**, Logback instantiates ConfigPropertyDefiner
+3. **ConfigPropertyDefiner** loads the full TypeSafe Config (application.conf + base.conf + reference.conf)
+4. **The requested key** (e.g., `logging.logs-level`) is looked up in the merged configuration
+5. **If found**, the value is returned to Logback
+6. **If not found**, the default value from logback.xml is used
+7. **Logback substitutes** these values into `${LOGSLEVEL}` and similar variables
+
+This approach is compatible with Logback 1.5.x and ensures reliable configuration loading with sensible fallbacks.
+
+### Logback 1.5.x Compatibility
+
+Previous versions of Fukuii used a custom Action class (`LoadFromApplicationConfiguration`) which is not compatible with Logback 1.5.x. The new `ConfigPropertyDefiner` approach using `<define>` tags is the recommended way to load external configuration in modern Logback versions.
