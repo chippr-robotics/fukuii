@@ -46,6 +46,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 - Milestone tracking and automatic closure
 
 **Quick Links:**
+- [Repository Structure](REPOSITORY_STRUCTURE.md) - Understand the codebase layout
 - [Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
