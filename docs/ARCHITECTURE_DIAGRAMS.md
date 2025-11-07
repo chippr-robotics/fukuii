@@ -126,37 +126,24 @@ Shows how the architecture will look after fully incorporating vendored modules 
 C4Component
     title Component - Fukuii Fully Integrated Architecture (Proposed)
 
-    Container_Boundary(main, "Main Application (src/)") {
-        Component(app, "App", "Main entry point")
-        Component(jsonrpc_api, "JSON-RPC API", "API endpoints")
-        Component(blockchain_mgr, "Blockchain Manager", "Block processing")
-        Component(consensus_eng, "Consensus", "PoW/mining")
-        Component(evm_exec, "EVM", "Contract execution")
-        Component(ledger, "Ledger", "State management")
-        Component(tx_pool, "Transaction Pool", "Mempool")
-        Component(storage_mgr, "Storage", "DB layer")
-        Component(mpt, "MPT", "Merkle trie")
-        
-        Component_Boundary(utils, "Utils Package") {
-            Component(bytes_int, "Bytes Utils", "Previously bytes/ module")
-        }
-        
-        Component_Boundary(crypto_pkg, "Crypto Package") {
-            Component(crypto_int, "Crypto Utils", "Previously crypto/ module")
-            Component(crypto_app, "App Crypto", "Application crypto logic")
-        }
-        
-        Component_Boundary(rlp_pkg, "RLP Package") {
-            Component(rlp_int, "RLP Codec", "Previously rlp/ module")
-            Component(rlp_app, "App RLP", "Application RLP logic")
-        }
-        
-        Component_Boundary(network_pkg, "Network Package") {
-            Component(network_p2p, "P2P Layer", "Peer management")
-            Component(scalanet_int, "Scalanet", "Previously scalanet/ module")
-            Component(discovery_int, "Discovery", "Previously scalanet/discovery")
-        }
-    }
+    Component(app, "App", "Scala", "Main entry point")
+    Component(jsonrpc_api, "JSON-RPC API", "Scala", "API endpoints")
+    Component(blockchain_mgr, "Blockchain Manager", "Scala", "Block processing")
+    Component(consensus_eng, "Consensus", "Scala", "PoW/mining")
+    Component(evm_exec, "EVM", "Scala", "Contract execution")
+    Component(ledger, "Ledger", "Scala", "State management")
+    Component(tx_pool, "Transaction Pool", "Scala", "Mempool")
+    Component(storage_mgr, "Storage", "Scala", "DB layer")
+    Component(mpt, "MPT", "Scala", "Merkle trie")
+    
+    ComponentDb(bytes_int, "Bytes Utils", "utils.bytes", "Previously bytes/ module")
+    ComponentDb(crypto_int, "Crypto Utils", "crypto.vendored", "Previously crypto/ module")
+    ComponentDb(crypto_app, "App Crypto", "crypto", "Application crypto logic")
+    ComponentDb(rlp_int, "RLP Codec", "rlp.vendored", "Previously rlp/ module")
+    ComponentDb(rlp_app, "App RLP", "rlp", "Application RLP logic")
+    Component(network_p2p, "P2P Layer", "Scala", "Peer management")
+    ComponentDb(scalanet_int, "Scalanet", "network.scalanet", "Previously scalanet/ module")
+    ComponentDb(discovery_int, "Discovery", "network.scalanet.discovery", "Previously scalanet/discovery")
 
     Rel(app, jsonrpc_api, "Initializes")
     Rel(blockchain_mgr, consensus_eng, "Validates")
