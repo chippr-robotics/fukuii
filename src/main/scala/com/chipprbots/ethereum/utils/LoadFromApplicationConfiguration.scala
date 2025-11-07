@@ -25,8 +25,14 @@ class LoadFromApplicationConfiguration extends Action {
   val config: Config = ConfigFactory.load
   
   override def begin(ic: SaxEventInterpretationContext, body: String, attributes: Attributes): Unit = {
-    val key = attributes.getValue("key")
-    val asName = attributes.getValue("as")
+    val key = Option(attributes.getValue("key")).getOrElse {
+      addError("Missing 'key' attribute in load element")
+      return
+    }
+    val asName = Option(attributes.getValue("as")).getOrElse {
+      addError("Missing 'as' attribute in load element")
+      return
+    }
     
     try {
       val value = config.getString(key)
@@ -34,18 +40,20 @@ class LoadFromApplicationConfiguration extends Action {
     } catch {
       case _: ConfigException.Missing =>
         // Provide sensible defaults for known properties
-        val defaultValueOpt = key match {
-          case "logging.logs-level" => Some("INFO")
-          case "logging.json-output" => Some("false")
-          case "logging.logs-dir" => Some("./logs")
-          case "logging.logs-file" => Some("fukuii")
-          case _ => None
-        }
-        defaultValueOpt match {
-          case Some(defaultValue) =>
-            ic.addSubstitutionProperty(asName, defaultValue)
-            addWarn(s"Configuration key '$key' not found, using default value: $defaultValue")
-          case None =>
+        key match {
+          case "logging.logs-level" =>
+            ic.addSubstitutionProperty(asName, "INFO")
+            addWarn(s"Configuration key '$key' not found, using default value: INFO")
+          case "logging.json-output" =>
+            ic.addSubstitutionProperty(asName, "false")
+            addWarn(s"Configuration key '$key' not found, using default value: false")
+          case "logging.logs-dir" =>
+            ic.addSubstitutionProperty(asName, "./logs")
+            addWarn(s"Configuration key '$key' not found, using default value: ./logs")
+          case "logging.logs-file" =>
+            ic.addSubstitutionProperty(asName, "fukuii")
+            addWarn(s"Configuration key '$key' not found, using default value: fukuii")
+          case _ =>
             addError(s"Configuration key '$key' not found and no default value available")
         }
     }
