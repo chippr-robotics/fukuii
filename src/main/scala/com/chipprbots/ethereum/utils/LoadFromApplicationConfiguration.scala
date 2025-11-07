@@ -5,7 +5,20 @@ import ch.qos.logback.core.joran.spi.SaxEventInterpretationContext
 import com.typesafe.config.{Config, ConfigException, ConfigFactory}
 import org.xml.sax.Attributes
 
-/** Make properties defined in application.conf available to logback
+/** Make properties defined in application.conf available to logback.
+  * 
+  * This class is instantiated by logback during initialization to load configuration
+  * properties from the application's TypeSafe Config (application.conf/base.conf) and
+  * make them available as logback variables.
+  * 
+  * Properties loaded:
+  * - logging.logs-level (default: "INFO") → LOGSLEVEL
+  * - logging.json-output (default: "false") → ASJSON  
+  * - logging.logs-dir (default: "./logs") → LOGSDIR
+  * - logging.logs-file (default: "fukuii") → LOGSFILENAME
+  * 
+  * If a property is missing from the configuration, a sensible default is used
+  * and a warning is logged.
   */
 class LoadFromApplicationConfiguration extends Action {
 
