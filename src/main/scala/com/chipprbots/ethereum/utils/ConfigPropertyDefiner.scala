@@ -27,8 +27,6 @@ class ConfigPropertyDefiner extends PropertyDefinerBase {
   private var key: String = _
   private var defaultValue: String = _
   
-  private lazy val config: Config = ConfigFactory.load()
-  
   /** Set the configuration key to load (called by logback via reflection) */
   def setKey(key: String): Unit = {
     this.key = key
@@ -41,28 +39,34 @@ class ConfigPropertyDefiner extends PropertyDefinerBase {
   
   /** Return the property value from config, or default if not found */
   override def getPropertyValue(): String = {
-    if (key == null || key.isEmpty) {
-      addError("ConfigPropertyDefiner: 'key' property must be set")
-      return if (defaultValue != null) defaultValue else ""
-    }
-    
-    try {
-      val value = config.getString(key)
-      addInfo(s"ConfigPropertyDefiner: Loaded '$key' = '$value'")
-      value
-    } catch {
-      case _: ConfigException.Missing =>
-        val fallback = if (defaultValue != null && defaultValue.nonEmpty) {
-          addWarn(s"ConfigPropertyDefiner: Key '$key' not found, using default: $defaultValue")
-          defaultValue
-        } else {
-          addError(s"ConfigPropertyDefiner: Key '$key' not found and no default value provided")
-          ""
+    Option(key).filter(_.nonEmpty) match {
+      case None =>
+        addError("ConfigPropertyDefiner: 'key' property must be set")
+        Option(defaultValue).getOrElse("")
+      case Some(configKey) =>
+        try {
+          val value = ConfigPropertyDefiner.config.getString(configKey)
+          addInfo(s"ConfigPropertyDefiner: Loaded '$configKey' = '$value'")
+          value
+        } catch {
+          case _: ConfigException.Missing =>
+            Option(defaultValue).filter(_.nonEmpty) match {
+              case Some(default) =>
+                addWarn(s"ConfigPropertyDefiner: Key '$configKey' not found, using default: $default")
+                default
+              case None =>
+                addError(s"ConfigPropertyDefiner: Key '$configKey' not found and no default value provided")
+                ""
+            }
+          case e: Exception =>
+            addError(s"ConfigPropertyDefiner: Error loading key '$configKey': ${e.getMessage}")
+            Option(defaultValue).getOrElse("")
         }
-        fallback
-      case e: Exception =>
-        addError(s"ConfigPropertyDefiner: Error loading key '$key': ${e.getMessage}")
-        if (defaultValue != null) defaultValue else ""
     }
   }
+}
+
+object ConfigPropertyDefiner {
+  /** Shared configuration instance to avoid reloading on each PropertyDefiner instantiation */
+  private lazy val config: Config = ConfigFactory.load()
 }
