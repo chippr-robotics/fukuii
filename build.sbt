@@ -109,6 +109,7 @@ lazy val scalanet = {
     .settings(publishSettings)
     .settings(
       Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
+      Test / unmanagedSourceDirectories += baseDirectory.value / "ut" / "src",
       libraryDependencies ++=
         Dependencies.pekko ++
           Dependencies.cats ++
