@@ -437,7 +437,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   }
 }
 
-trait MockBlockchain extends org.scalamock.scalatest.MockFactory { self: TestSetupWithVmAndValidators =>
+trait MockBlockchain { self: TestSetupWithVmAndValidators with org.scalamock.scalatest.MockFactory =>
   // + cake overrides
 
   override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
@@ -491,7 +491,7 @@ trait MockBlockchain extends org.scalamock.scalatest.MockFactory { self: TestSet
     (() => blockchainReader.genesisHeader).expects().returning(header)
 }
 
-trait EphemBlockchain extends TestSetupWithVmAndValidators { self: org.scalamock.scalatest.MockFactory =>
+trait EphemBlockchain extends TestSetupWithVmAndValidators {
   override lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, SyncConfig(Config.config))
 
   def blockImportWithMockedBlockExecution(blockExecutionMock: BlockExecution): ConsensusAdapter =
@@ -505,7 +505,7 @@ trait CheckpointHelpers {
     new CheckpointBlockGenerator().generate(parent, checkpoint)
 }
 
-trait OmmersTestSetup extends EphemBlockchain { self: org.scalamock.scalatest.MockFactory =>
+trait OmmersTestSetup extends EphemBlockchain {
   object OmmerValidation extends Mocks.MockValidatorsAlwaysSucceed {
     override val ommersValidator: OmmersValidator =
       new StdOmmersValidator(blockHeaderValidator)

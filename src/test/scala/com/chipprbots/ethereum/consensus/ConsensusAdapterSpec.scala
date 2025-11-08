@@ -544,6 +544,6 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockchainReader.getBestBlock().get shouldEqual checkpointBlock
   }
 
-  trait ImportBlockTestSetup extends TestSetupWithVmAndValidators with MockBlockchain
+  trait ImportBlockTestSetup extends TestSetupWithVmAndValidators with MockBlockchain with org.scalamock.scalatest.MockFactory
 
 }
