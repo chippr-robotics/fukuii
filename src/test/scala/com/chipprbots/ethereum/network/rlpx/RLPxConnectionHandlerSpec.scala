@@ -192,6 +192,10 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
+  // SCALA 3 MIGRATION: Removed self-type constraint `this: org.scalamock.scalatest.MockFactory =>`
+  // because Scala 3 doesn't allow instantiating TestSetup with `new TestSetup` when the self-type
+  // is present, even though the outer class (RLPxConnectionHandlerSpec) extends MockFactory.
+  // The mock functionality still works because the outer class provides MockFactory.
   trait TestSetup extends SecureRandomBuilder {
 
     // Mock parameters for RLPxConnectionHandler
@@ -204,13 +208,13 @@ class RLPxConnectionHandlerSpec
     val connection: TestProbe = TestProbe()
     val mockMessageCodec: MessageCodec = mock[MessageCodec]
     val mockHelloExtractor: HelloCodec = mock[HelloCodec]
-    
+
     private def createStubAuthHandshaker(): AuthHandshaker = {
       import java.security.SecureRandom
       import com.chipprbots.ethereum.crypto.generateKeyPair
-      
+
       val sr = new SecureRandom()
-      
+
       AuthHandshaker(
         nodeKey = generateKeyPair(sr),
         nonce = ByteString.empty,
@@ -267,11 +271,21 @@ class RLPxConnectionHandlerSpec
         .expects(data)
         // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
         // Create a minimal Secrets instance for test purposes
-        .returning((response, AuthHandshakeSuccess(
-          new Secrets(Array.emptyByteArray, Array.emptyByteArray, Array.emptyByteArray, 
-            new org.bouncycastle.crypto.digests.KeccakDigest(256), 
-            new org.bouncycastle.crypto.digests.KeccakDigest(256)), 
-          ByteString())))
+        .returning(
+          (
+            response,
+            AuthHandshakeSuccess(
+              new Secrets(
+                Array.emptyByteArray,
+                Array.emptyByteArray,
+                Array.emptyByteArray,
+                new org.bouncycastle.crypto.digests.KeccakDigest(256),
+                new org.bouncycastle.crypto.digests.KeccakDigest(256)
+              ),
+              ByteString()
+            )
+          )
+        )
       (mockHelloExtractor.readHello _)
         .expects(ByteString.empty)
         .returning(Some((Hello(5, "", Capability.ETH63 :: Nil, 30303, ByteString("abc")), Seq.empty)))
