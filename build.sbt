@@ -319,7 +319,9 @@ lazy val node = {
     .settings(
       inConfig(Integration)(
         Defaults.testSettings
-          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings :+ (Test / parallelExecution := false)
+          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings 
+          :+ (Test / parallelExecution := false)
+          :+ (Test / javaOptions += s"-DFUKUII_TEST_ID=${System.currentTimeMillis()}")
       ): _*
     )
     .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := false)): _*)
