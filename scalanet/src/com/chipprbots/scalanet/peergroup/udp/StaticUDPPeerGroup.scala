@@ -329,7 +329,17 @@ class StaticUDPPeerGroup[M] private (
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
       // Stop the in and outgoing traffic - use serverBinding.channel() directly
-      _ <- toTask(serverBinding.channel().close())
+      // Handle the case where the event loop might be shutting down
+      _ <- IO {
+        val channel = serverBinding.channel()
+        if (channel.isOpen) {
+          // Try to close synchronously to avoid event loop issues
+          channel.close().syncUninterruptibly()
+        }
+      }.handleErrorWith { error =>
+        // Log but don't fail shutdown if channel close fails
+        IO(logger.warn(s"Error closing channel during shutdown: ${error.getMessage}"))
+      }
     } yield ()
   }
 
