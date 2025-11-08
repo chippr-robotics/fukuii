@@ -307,7 +307,7 @@ class StaticUDPPeerGroup[M] private (
       // Use toTask to properly convert the Netty ChannelFuture to IO without blocking
       _ <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
-          IO.raiseError(new RuntimeException(s"Failed to bind UDP server: ${ex.getMessage}", ex))
+          IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
       // Now that the future has completed, get the channel
       channel = serverBinding.channel()
