@@ -66,7 +66,8 @@ class StaticUDPPeerGroup[M] private (
     serverQueue: CloseableQueue[ServerEvent[InetMultiAddress, M]],
     serverChannelSemaphore: Semaphore[IO],
     serverChannelsRef: Ref[IO, Map[InetSocketAddress, StaticUDPPeerGroup.ChannelAlloc[M]]],
-    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]]
+    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]],
+    boundChannelRef: Ref[IO, Option[io.netty.channel.Channel]]
 )(implicit codec: Codec[M])
     extends TerminalPeerGroup[InetMultiAddress, M]
     with StrictLogging {
@@ -95,9 +96,13 @@ class StaticUDPPeerGroup[M] private (
     for {
       _ <- Resource.eval(raiseIfShutdown)
       remoteAddress = to.inetSocketAddress
+      nettyChannel <- Resource.eval(boundChannelRef.get.flatMap {
+        case Some(ch) => IO.pure(ch)
+        case None => IO.raiseError(new IllegalStateException("UDP server channel not yet bound"))
+      })
       channel <- Resource {
         ChannelImpl[M](
-          nettyChannel = serverBinding.channel,
+          nettyChannel = nettyChannel,
           localAddress = localAddress,
           remoteAddress = remoteAddress,
           role = ChannelImpl.Client,
@@ -152,27 +157,32 @@ class StaticUDPPeerGroup[M] private (
               IO.pure(channel)
 
             case None =>
-              ChannelImpl[M](
-                nettyChannel = serverBinding.channel,
-                localAddress = config.bindAddress,
-                remoteAddress = remoteAddress,
-                role = ChannelImpl.Server,
-                capacity = config.channelCapacity
-              ).allocated.flatMap {
-                case (channel, release) =>
-                  val remove = for {
-                    _ <- serverChannelsRef.update(_ - remoteAddress)
-                    _ <- release
-                    _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
-                  } yield ()
+              boundChannelRef.get.flatMap {
+                case Some(nettyChannel) =>
+                  ChannelImpl[M](
+                    nettyChannel = nettyChannel,
+                    localAddress = config.bindAddress,
+                    remoteAddress = remoteAddress,
+                    role = ChannelImpl.Server,
+                    capacity = config.channelCapacity
+                  ).allocated.flatMap {
+                    case (channel, release) =>
+                      val remove = for {
+                        _ <- serverChannelsRef.update(_ - remoteAddress)
+                        _ <- release
+                        _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
+                      } yield ()
 
-                  val add = for {
-                    _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
-                    _ <- serverQueue.offer(ChannelCreated(channel, remove))
-                    _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
-                  } yield channel
+                      val add = for {
+                        _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
+                        _ <- serverQueue.offer(ChannelCreated(channel, remove))
+                        _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
+                      } yield channel
 
-                  add.as(channel)
+                      add.as(channel)
+                  }
+                case None =>
+                  IO.raiseError(new IllegalStateException("UDP server channel not yet bound"))
               }
           }
         }
@@ -293,10 +303,11 @@ class StaticUDPPeerGroup[M] private (
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
-      _ <- toTask(serverBinding).handleErrorWith {
+      channelFuture <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
+      _ <- boundChannelRef.set(Some(serverBinding.channel))
       _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}"))
     } yield ()
 
@@ -311,7 +322,10 @@ class StaticUDPPeerGroup[M] private (
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
       // Stop the in and outgoing traffic.
-      _ <- toTask(serverBinding.channel.close())
+      _ <- boundChannelRef.get.flatMap {
+        case Some(ch) => toTask(ch.close())
+        case None => IO.unit
+      }
     } yield ()
   }
 
@@ -342,6 +356,7 @@ object StaticUDPPeerGroup extends StrictLogging {
           serverChannelSemaphore <- Semaphore[IO](1)
           serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ChannelAlloc[M]])
           clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
+          boundChannelRef <- Ref[IO].of(Option.empty[io.netty.channel.Channel])
           peerGroup = new StaticUDPPeerGroup[M](
             config,
             workerGroup,
@@ -349,7 +364,8 @@ object StaticUDPPeerGroup extends StrictLogging {
             serverQueue,
             serverChannelSemaphore,
             serverChannelsRef,
-            clientChannelsRef
+            clientChannelsRef,
+            boundChannelRef
           )
           _ <- peerGroup.initialize
         } yield peerGroup
