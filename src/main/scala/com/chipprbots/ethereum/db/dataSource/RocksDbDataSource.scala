@@ -258,9 +258,9 @@ object RocksDbDataSource extends Logger {
     import java.nio.file.{Files, Paths, Path => JPath}
 
     // Load native RocksDB library first
-    try {
+    try
       RocksDB.loadLibrary()
-    } catch {
+    catch {
       case NonFatal(error) =>
         throw RocksDbDataSourceException(
           s"Failed to load RocksDB native library. Ensure rocksdbjni is in classpath and native libraries are accessible: ${error.getMessage}",
@@ -273,9 +273,9 @@ object RocksDbDataSource extends Logger {
       // Validate and prepare database path
       val dbPath: JPath = Paths.get(path)
       val pathExists = Files.exists(dbPath)
-      
+
       log.debug(s"Initializing RocksDB at path: $path (exists: $pathExists, createIfMissing: $createIfMissing)")
-      
+
       // Validate path before attempting to open database
       if (!pathExists && !createIfMissing) {
         throw RocksDbDataSourceException(
@@ -283,7 +283,7 @@ object RocksDbDataSource extends Logger {
           null
         )
       }
-      
+
       // Create directory if needed
       if (!pathExists && createIfMissing) {
         try {
@@ -297,7 +297,7 @@ object RocksDbDataSource extends Logger {
             )
         }
       }
-      
+
       // Verify directory is writable
       if (!Files.isWritable(dbPath)) {
         throw RocksDbDataSourceException(
@@ -337,29 +337,30 @@ object RocksDbDataSource extends Logger {
       val columnFamilyHandleList = mutable.Buffer.empty[ColumnFamilyHandle]
 
       log.debug(s"Opening RocksDB with ${cfDescriptors.size} column families at path: $path")
-      
-      val db = try {
-        RocksDB.open(options, path, cfDescriptors.asJava, columnFamilyHandleList.asJava)
-      } catch {
-        case error: RocksDBException =>
-          throw RocksDbDataSourceException(
-            s"RocksDB failed to open database at path: $path - ${error.getMessage}",
-            error
-          )
-        case NonFatal(error) =>
-          throw RocksDbDataSourceException(
-            s"Unexpected error opening RocksDB at path: $path - ${error.getMessage}",
-            error
-          )
-      }
-      
+
+      val db =
+        try
+          RocksDB.open(options, path, cfDescriptors.asJava, columnFamilyHandleList.asJava)
+        catch {
+          case error: RocksDBException =>
+            throw RocksDbDataSourceException(
+              s"RocksDB failed to open database at path: $path - ${error.getMessage}",
+              error
+            )
+          case NonFatal(error) =>
+            throw RocksDbDataSourceException(
+              s"Unexpected error opening RocksDB at path: $path - ${error.getMessage}",
+              error
+            )
+        }
+
       if (db == null) {
         throw RocksDbDataSourceException(
           s"RocksDB.open returned null for path: $path",
           null
         )
       }
-      
+
       log.info(s"Successfully opened RocksDB at path: $path with ${columnFamilyHandleList.size} column family handles")
 
       (
