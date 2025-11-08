@@ -303,12 +303,25 @@ class StaticUDPPeerGroup[M] private (
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
-      _ <- toTask(serverBinding).handleErrorWith {
+      _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
+      completedFuture <- IO(serverBinding.syncUninterruptibly()).handleErrorWith {
         case NonFatal(ex) =>
-          IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
+          IO.raiseError(new RuntimeException(s"Failed to bind UDP server: ${ex.getMessage}", ex))
       }
-      _ <- boundChannelRef.set(Some(serverBinding.channel))
-      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}"))
+      channel = completedFuture.channel()
+      _ <- IO(logger.info(s"Bind completed. Channel state: isOpen=${channel.isOpen}, isActive=${channel.isActive}, isRegistered=${channel.isRegistered}"))
+      _ <- IO {
+        // Add a close listener to detect when the channel closes
+        channel.closeFuture().addListener(new io.netty.util.concurrent.GenericFutureListener[io.netty.util.concurrent.Future[_ >: Void]] {
+          override def operationComplete(future: io.netty.util.concurrent.Future[_ >: Void]): Unit = {
+            logger.error(s"UDP server channel CLOSED! Channel: ${channel.getClass.getSimpleName}, localAddress: ${config.bindAddress}")
+            val stackTrace = Thread.currentThread().getStackTrace.take(10).mkString("\n  ")
+            logger.error(s"Channel close stack trace:\n  $stackTrace")
+          }
+        })
+      }
+      _ <- boundChannelRef.set(Some(channel))
+      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}, channel stored in boundChannelRef"))
     } yield ()
 
   private def shutdown: IO[Unit] = {
