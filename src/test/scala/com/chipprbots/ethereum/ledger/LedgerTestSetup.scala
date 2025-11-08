@@ -303,8 +303,6 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   lazy val blockQueue: BlockQueue
 
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
-  // Provide runtimeContext as alias for compatibility
-  implicit def runtimeContext: IORuntime = ioRuntime
 
   override lazy val consensusAdapter: ConsensusAdapter = mkConsensus()
 
@@ -434,7 +432,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
       // Using the global IORuntime is appropriate here because, in test scenarios,
       // validation operations do not require a custom runtime with specific threading characteristics.
       // Tests are typically run in isolation, so contention and performance concerns are minimal.
-      runtimeContext
+      ioRuntime
     )
   }
 }
@@ -493,7 +491,7 @@ trait MockBlockchain { self: TestSetupWithVmAndValidators with org.scalamock.sca
     (() => blockchainReader.genesisHeader).expects().returning(header)
 }
 
-trait EphemBlockchain extends TestSetupWithVmAndValidators { self: org.scalamock.scalatest.MockFactory =>
+trait EphemBlockchain extends TestSetupWithVmAndValidators {
   override lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, SyncConfig(Config.config))
 
   def blockImportWithMockedBlockExecution(blockExecutionMock: BlockExecution): ConsensusAdapter =
@@ -507,7 +505,7 @@ trait CheckpointHelpers {
     new CheckpointBlockGenerator().generate(parent, checkpoint)
 }
 
-trait OmmersTestSetup extends EphemBlockchain { self: org.scalamock.scalatest.MockFactory =>
+trait OmmersTestSetup extends EphemBlockchain {
   object OmmerValidation extends Mocks.MockValidatorsAlwaysSucceed {
     override val ommersValidator: OmmersValidator =
       new StdOmmersValidator(blockHeaderValidator)
