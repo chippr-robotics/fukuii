@@ -70,17 +70,15 @@ class StaticUDPPeerGroupSpec extends AnyFlatSpec with Matchers {
   it should "send and receive messages between peer groups" in {
     // Simplified test - just verify we can create peer groups and clients without errors
     // The actual messaging is tested in integration tests
-    val port1 = findAvailablePort()
-    val port2 = findAvailablePort()
-    
+    // Using port 0 to let OS assign random available ports (avoids race conditions)
     val config1 = StaticUDPPeerGroup.Config(
-      bindAddress = new InetSocketAddress("127.0.0.1", port1),
+      bindAddress = new InetSocketAddress("127.0.0.1", 0),
       channelCapacity = 10,
       receiveBufferSizeBytes = 1024
     )
     
     val config2 = StaticUDPPeerGroup.Config(
-      bindAddress = new InetSocketAddress("127.0.0.1", port2),
+      bindAddress = new InetSocketAddress("127.0.0.1", 0),
       channelCapacity = 10,
       receiveBufferSizeBytes = 1024
     )
@@ -101,15 +99,5 @@ class StaticUDPPeerGroupSpec extends AnyFlatSpec with Matchers {
         _ <- IO(count2 shouldBe 0)
       } yield ()
     }.unsafeRunSync()
-  }
-
-  // Helper to find an available port
-  private def findAvailablePort(): Int = {
-    val socket = new java.net.ServerSocket(0)
-    try {
-      socket.getLocalPort
-    } finally {
-      socket.close()
-    }
   }
 }
