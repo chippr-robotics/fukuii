@@ -237,12 +237,30 @@ trait RocksDbConfig {
   val blockCacheSize: Long
 }
 
-object RocksDbDataSource {
+object RocksDbDataSource extends Logger {
   case object IterationFinished extends RuntimeException
   case class IterationError(ex: Throwable)
 
   case class RocksDbDataSourceClosedException(message: String) extends IllegalStateException(message)
   case class RocksDbDataSourceException(message: String, cause: Throwable) extends RuntimeException(message, cause)
+
+  // Helper to create exception without cause
+  object RocksDbDataSourceException {
+    def apply(message: String): RocksDbDataSourceException =
+      new RocksDbDataSourceException(message, null)
+  }
+
+  // Load RocksDB native library once per JVM
+  private lazy val libraryLoaded: Unit =
+    try
+      RocksDB.loadLibrary()
+    catch {
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(
+          s"Failed to load RocksDB native library. Ensure rocksdbjni is in classpath and native libraries are accessible: ${error.getMessage}",
+          error
+        )
+    }
 
   /** The rocksdb implementation acquires a lock from the operating system to prevent misuse
     */
@@ -255,11 +273,40 @@ object RocksDbDataSource {
   ): (RocksDB, mutable.Buffer[ColumnFamilyHandle], ReadOptions, DBOptions, ColumnFamilyOptions) = {
     import rocksDbConfig._
     import scala.jdk.CollectionConverters._
+    import java.nio.file.{Files, Paths, Path => JPath}
 
-    RocksDB.loadLibrary()
+    // Ensure native RocksDB library is loaded (only happens once per JVM)
+    libraryLoaded
 
     RocksDbDataSource.dbLock.writeLock().lock()
     try {
+      // Validate and prepare database path
+      val dbPath: JPath = Paths.get(path)
+      val pathExists = Files.exists(dbPath)
+
+      log.debug(s"Initializing RocksDB at path: $path (exists: $pathExists, createIfMissing: $createIfMissing)")
+
+      // Validate path before attempting to open database
+      if (!pathExists && !createIfMissing) {
+        throw RocksDbDataSourceException(
+          s"Database path does not exist and createIfMissing is false: $path"
+        )
+      }
+
+      // Create directory if needed
+      if (!pathExists && createIfMissing) {
+        try {
+          Files.createDirectories(dbPath)
+          log.debug(s"Created database directory: $path")
+        } catch {
+          case NonFatal(error) =>
+            throw RocksDbDataSourceException(
+              s"Failed to create database directory at $path: ${error.getMessage}",
+              error
+            )
+        }
+      }
+
       val readOptions = new ReadOptions().setVerifyChecksums(rocksDbConfig.verifyChecksums)
 
       val tableCfg = new BlockBasedTableConfig()
@@ -290,16 +337,41 @@ object RocksDbDataSource {
 
       val columnFamilyHandleList = mutable.Buffer.empty[ColumnFamilyHandle]
 
+      log.debug(s"Opening RocksDB with ${cfDescriptors.size} column families at path: $path")
+
+      val db =
+        try
+          RocksDB.open(options, path, cfDescriptors.asJava, columnFamilyHandleList.asJava)
+        catch {
+          case error: RocksDBException =>
+            throw RocksDbDataSourceException(
+              s"RocksDB failed to open database at path: $path - ${error.getMessage}",
+              error
+            )
+          case NonFatal(error) =>
+            throw RocksDbDataSourceException(
+              s"Unexpected error opening RocksDB at path: $path - ${error.getMessage}",
+              error
+            )
+        }
+
+      log.info(s"Successfully opened RocksDB at path: $path with ${columnFamilyHandleList.size} column family handles")
+
       (
-        RocksDB.open(options, path, cfDescriptors.asJava, columnFamilyHandleList.asJava),
+        db,
         columnFamilyHandleList,
         readOptions,
         options,
         cfOpts
       )
     } catch {
+      case error: RocksDbDataSourceException =>
+        // Re-throw our exception without additional logging (caller will log if needed)
+        throw error
       case NonFatal(error) =>
-        throw RocksDbDataSourceException(s"Not created the DataSource properly", error)
+        val errorMsg = s"Unexpected error creating RocksDB DataSource at path: $path - ${error.getMessage}"
+        log.error(errorMsg, error)
+        throw RocksDbDataSourceException(errorMsg, error)
     } finally RocksDbDataSource.dbLock.writeLock().unlock()
   }
 

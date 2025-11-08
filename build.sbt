@@ -319,7 +319,22 @@ lazy val node = {
     .settings(
       inConfig(Integration)(
         Defaults.testSettings
-          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings :+ (Test / parallelExecution := false)
+          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings 
+          :+ (Test / parallelExecution := false)
+          :+ (Test / testGrouping := {
+            val tests = (Test / definedTests).value
+            tests.map { test =>
+              Tests.Group(
+                name = test.name,
+                tests = Seq(test),
+                runPolicy = Tests.SubProcess(
+                  ForkOptions().withRunJVMOptions(
+                    Vector(s"-DFUKUII_TEST_ID=${System.currentTimeMillis()}-${test.name.hashCode.abs}")
+                  )
+                )
+              )
+            }
+          })
       ): _*
     )
     .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := false)): _*)
