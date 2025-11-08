@@ -33,7 +33,7 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import org.scalatest.Ignore
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for AuthHandshaker
-@Ignore
+// @Ignore - Un-ignored per issue to identify test failures
 class RLPxConnectionHandlerSpec
     extends TestKit(ActorSystem("RLPxConnectionHandlerSpec_System"))
     with AnyFlatSpecLike
