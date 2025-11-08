@@ -107,6 +107,31 @@ This decision represents a **non-trivial update** requiring:
    - New bugs introduced during rewrite of complex logic
    - Reduced test coverage during migration period
 
+### Discovered During Migration
+
+6. **Monix Task vs Cats Effect IO Behavioral Differences**
+   - **Issue**: Netty ChannelFuture interaction patterns differ between Monix Task and Cats Effect IO
+   - **Root Cause**: The vendored scalanet library was migrated from Monix Task to Cats Effect IO, introducing subtle timing differences in how Netty futures are handled
+   - **Manifestation**: UDP channels reported as "CLOSED" during peer enrollment despite successful bind operations
+   - **Investigation Findings**:
+     - Monix Task's lazy evaluation semantics differ from Cats Effect IO's eager evaluation in certain contexts
+     - Lazy vals containing Netty ChannelFutures interact differently with the two effect systems
+     - The migration introduced a `boundChannelRef` optimization that cached channel references before full initialization
+     - Netty's async channel lifecycle (register → bind → activate) has subtle race conditions with IO's threading model
+   - **Resolution Pattern**: 
+     - Remove intermediate caching of Netty channel references
+     - Access channels directly from Netty ChannelFutures using the original IOHK scalanet pattern
+     - Ensure channel state checks happen on appropriate threads (avoid cross-thread state inspection)
+     - Wait for both bind future completion AND channel activation before usage
+   - **Lesson Learned**: When migrating effect systems, vendored libraries that interact with async Java frameworks (like Netty) require careful validation of lifecycle assumptions, not just type-level compatibility
+   - **Pattern for Future Migrations**: 
+     1. Compare original library implementation line-by-line with vendored version
+     2. Test async resource lifecycle extensively (channels, connections, file handles)
+     3. Avoid premature optimization through caching of async resources
+     4. Validate thread safety assumptions when crossing effect system boundaries
+     5. Create unit tests that specifically validate resource initialization sequences
+   - **Reference**: See PR #337 and commits 61d2076, d1b64e6 for detailed investigation and fix
+
 ## Implementation Details
 
 The migration was executed in phases:

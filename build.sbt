@@ -23,7 +23,14 @@ inThisBuild(
       ScmInfo(url("https://github.com/chippr-robotics/chordodes_fukuii"), "git@github.com:chippr-robotics/chordodes_fukuii.git")
     ),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
-    developers := List()
+    developers := List(),
+    // Add reliable resolvers to avoid transient HTTP 503 errors
+    resolvers ++= Seq(
+      Resolver.mavenCentral,
+      "Typesafe Releases" at "https://repo.typesafe.com/typesafe/releases/",
+      "Sonatype OSS Releases" at "https://oss.sonatype.org/content/repositories/releases/",
+      "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/"
+    )
   )
 )
 
@@ -65,8 +72,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   ThisBuild / scalafixDependencies ++= List(
     "com.github.liancheng" %% "organize-imports" % "0.6.0"
   ),
-  // Scalanet snapshots are published to Sonatype after each build.
-  resolvers += "Sonatype OSS Snapshots".at("https://oss.sonatype.org/content/repositories/snapshots"),
+  // Scalanet snapshots are published to Sonatype after each build (now defined in inThisBuild resolvers).
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
   // Configure scalacOptions for Scala 3
@@ -109,6 +115,7 @@ lazy val scalanet = {
     .settings(publishSettings)
     .settings(
       Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
+      Test / unmanagedSourceDirectories += baseDirectory.value / "ut" / "src",
       libraryDependencies ++=
         Dependencies.pekko ++
           Dependencies.cats ++

@@ -66,8 +66,7 @@ class StaticUDPPeerGroup[M] private (
     serverQueue: CloseableQueue[ServerEvent[InetMultiAddress, M]],
     serverChannelSemaphore: Semaphore[IO],
     serverChannelsRef: Ref[IO, Map[InetSocketAddress, StaticUDPPeerGroup.ChannelAlloc[M]]],
-    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]],
-    boundChannelRef: Ref[IO, Option[io.netty.channel.Channel]]
+    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]]
 )(implicit codec: Codec[M])
     extends TerminalPeerGroup[InetMultiAddress, M]
     with StrictLogging {
@@ -96,10 +95,9 @@ class StaticUDPPeerGroup[M] private (
     for {
       _ <- Resource.eval(raiseIfShutdown)
       remoteAddress = to.inetSocketAddress
-      nettyChannel <- Resource.eval(boundChannelRef.get.flatMap {
-        case Some(ch) => IO.pure(ch)
-        case None => IO.raiseError(new IllegalStateException("UDP server channel not yet bound"))
-      })
+      // FIXED: Use serverBinding.channel() directly like the original IOHK implementation
+      // This avoids the race condition with boundChannelRef
+      nettyChannel = serverBinding.channel()
       channel <- Resource {
         ChannelImpl[M](
           nettyChannel = nettyChannel,
@@ -157,32 +155,29 @@ class StaticUDPPeerGroup[M] private (
               IO.pure(channel)
 
             case None =>
-              boundChannelRef.get.flatMap {
-                case Some(nettyChannel) =>
-                  ChannelImpl[M](
-                    nettyChannel = nettyChannel,
-                    localAddress = config.bindAddress,
-                    remoteAddress = remoteAddress,
-                    role = ChannelImpl.Server,
-                    capacity = config.channelCapacity
-                  ).allocated.flatMap {
-                    case (channel, release) =>
-                      val remove = for {
-                        _ <- serverChannelsRef.update(_ - remoteAddress)
-                        _ <- release
-                        _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
-                      } yield ()
+              // FIXED: Use serverBinding.channel() directly like the original IOHK implementation
+              val nettyChannel = serverBinding.channel()
+              ChannelImpl[M](
+                nettyChannel = nettyChannel,
+                localAddress = config.bindAddress,
+                remoteAddress = remoteAddress,
+                role = ChannelImpl.Server,
+                capacity = config.channelCapacity
+              ).allocated.flatMap {
+                case (channel, release) =>
+                  val remove = for {
+                    _ <- serverChannelsRef.update(_ - remoteAddress)
+                    _ <- release
+                    _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
+                  } yield ()
 
-                      val add = for {
-                        _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
-                        _ <- serverQueue.offer(ChannelCreated(channel, remove))
-                        _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
-                      } yield channel
+                  val add = for {
+                    _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
+                    _ <- serverQueue.offer(ChannelCreated(channel, remove))
+                    _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
+                  } yield channel
 
-                      add.as(channel)
-                  }
-                case None =>
-                  IO.raiseError(new IllegalStateException("UDP server channel not yet bound"))
+                  add.as(channel)
               }
           }
         }
@@ -258,7 +253,7 @@ class StaticUDPPeerGroup[M] private (
     new io.netty.channel.FixedRecvByteBufAllocator(bufferSize)
   }
 
-  private lazy val serverBinding =
+  private lazy val serverBinding: io.netty.channel.ChannelFuture =
     new Bootstrap()
       .group(workerGroup)
       .channel(classOf[NioDatagramChannel])
@@ -315,37 +310,12 @@ class StaticUDPPeerGroup[M] private (
     for {
       _ <- raiseIfShutdown
       _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
-      // Use toTask to properly convert the Netty ChannelFuture to IO without blocking
-      // The bind future completes when the bind operation is done
-      bindFuture <- IO(serverBinding)
-      _ <- toTask(bindFuture).handleErrorWith {
+      // Wait for the bind to complete - this matches the original IOHK implementation
+      _ <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
-      // Now that the bind future has completed, get the channel from it
-      channel = bindFuture.channel()
-      _ <- IO(logger.info(s"Bind completed. Channel state: isOpen=${channel.isOpen}, isActive=${channel.isActive}, isRegistered=${channel.isRegistered}"))
-      // Verify the channel is actually usable
-      _ <- if (!channel.isOpen || !channel.isActive) {
-        IO.raiseError(InitializationError(
-          s"Channel is not ready: isOpen=${channel.isOpen}, isActive=${channel.isActive}, isRegistered=${channel.isRegistered}",
-          null
-        ))
-      } else {
-        IO.unit
-      }
-      _ <- IO {
-        // Add a close listener to detect when the channel closes
-        channel.closeFuture().addListener(new io.netty.util.concurrent.GenericFutureListener[io.netty.util.concurrent.Future[_ >: Void]] {
-          override def operationComplete(future: io.netty.util.concurrent.Future[_ >: Void]): Unit = {
-            logger.error(s"UDP server channel CLOSED! Channel: ${channel.getClass.getSimpleName}, localAddress: ${config.bindAddress}")
-            val stackTrace = Thread.currentThread().getStackTrace.take(10).mkString("\n  ")
-            logger.error(s"Channel close stack trace:\n  $stackTrace")
-          }
-        })
-      }
-      _ <- boundChannelRef.set(Some(channel))
-      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}, channel stored in boundChannelRef"))
+      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}"))
     } yield ()
 
   private def shutdown: IO[Unit] = {
@@ -358,10 +328,17 @@ class StaticUDPPeerGroup[M] private (
       _ <- clientChannelsRef.get.map(_.values.flatten.toList.map(_._2.attempt).sequence)
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
-      // Stop the in and outgoing traffic.
-      _ <- boundChannelRef.get.flatMap {
-        case Some(ch) => toTask(ch.close())
-        case None => IO.unit
+      // Stop the in and outgoing traffic - use serverBinding.channel() directly
+      // Handle the case where the event loop might be shutting down
+      _ <- IO {
+        val channel = serverBinding.channel()
+        if (channel.isOpen) {
+          // Try to close synchronously to avoid event loop issues
+          channel.close().syncUninterruptibly()
+        }
+      }.handleErrorWith { error =>
+        // Log but don't fail shutdown if channel close fails
+        IO(logger.warn(s"Error closing channel during shutdown: ${error.getMessage}"))
       }
     } yield ()
   }
@@ -393,7 +370,6 @@ object StaticUDPPeerGroup extends StrictLogging {
           serverChannelSemaphore <- Semaphore[IO](1)
           serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ChannelAlloc[M]])
           clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
-          boundChannelRef <- Ref[IO].of(Option.empty[io.netty.channel.Channel])
           peerGroup = new StaticUDPPeerGroup[M](
             config,
             workerGroup,
@@ -401,8 +377,7 @@ object StaticUDPPeerGroup extends StrictLogging {
             serverQueue,
             serverChannelSemaphore,
             serverChannelsRef,
-            clientChannelsRef,
-            boundChannelRef
+            clientChannelsRef
           )
           _ <- peerGroup.initialize
         } yield peerGroup

@@ -24,6 +24,7 @@ Each ADR follows this structure:
 ## Index of ADRs
 
 - [ADR-001: Migration to Scala 3 and JDK 21](001-scala-3-migration.md) - Accepted
+  - [ADR-001a: Netty Channel Lifecycle with Cats Effect IO](001a-netty-cats-effect-integration.md) - Accepted (Addendum)
 - [ADR-002: EIP-3541 Implementation](002-eip-3541-implementation.md) - Accepted
 - [ADR-003: EIP-3529 Implementation](003-eip-3529-implementation.md) - Accepted
 - [ADR-004: EIP-3651 Implementation](004-eip-3651-implementation.md) - Accepted
