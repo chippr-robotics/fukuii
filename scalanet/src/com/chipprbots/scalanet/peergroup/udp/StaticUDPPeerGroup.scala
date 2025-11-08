@@ -284,13 +284,24 @@ class StaticUDPPeerGroup[M] private (
               }
 
               override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-                ctx.channel().id()
-                val remoteAddress = ctx.channel.remoteAddress().asInstanceOf[InetSocketAddress]
+                // For UDP channels, we don't want to close on exceptions since it's connectionless
+                // Log the exception and handle it, but don't propagate to super which might close the channel
+                val channelId = ctx.channel().id()
+                val remoteAddress = Option(ctx.channel.remoteAddress())
+                  .collect { case addr: InetSocketAddress => addr }
+                  .getOrElse(new InetSocketAddress(0))
+                
+                logger.debug(s"Exception in UDP channel $channelId from $remoteAddress: ${cause.getClass.getSimpleName}: ${cause.getMessage}")
+                
                 cause match {
                   case NonFatal(ex) =>
                     handleError(remoteAddress, ex)
+                  case fatal =>
+                    // For fatal exceptions, we might still want to log but not close UDP channel
+                    logger.error(s"Fatal exception in UDP channel $channelId from $remoteAddress", fatal)
                 }
-                super.exceptionCaught(ctx, cause)
+                // Don't call super.exceptionCaught as it may close the channel
+                // UDP is connectionless and should stay open for other packets
               }
             })
 
@@ -305,13 +316,24 @@ class StaticUDPPeerGroup[M] private (
       _ <- raiseIfShutdown
       _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
       // Use toTask to properly convert the Netty ChannelFuture to IO without blocking
-      _ <- toTask(serverBinding).handleErrorWith {
+      // The bind future completes when the bind operation is done
+      bindFuture <- IO(serverBinding)
+      _ <- toTask(bindFuture).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
-      // Now that the future has completed, get the channel
-      channel = serverBinding.channel()
+      // Now that the bind future has completed, get the channel from it
+      channel = bindFuture.channel()
       _ <- IO(logger.info(s"Bind completed. Channel state: isOpen=${channel.isOpen}, isActive=${channel.isActive}, isRegistered=${channel.isRegistered}"))
+      // Verify the channel is actually usable
+      _ <- if (!channel.isOpen || !channel.isActive) {
+        IO.raiseError(InitializationError(
+          s"Channel is not ready: isOpen=${channel.isOpen}, isActive=${channel.isActive}, isRegistered=${channel.isRegistered}",
+          null
+        ))
+      } else {
+        IO.unit
+      }
       _ <- IO {
         // Add a close listener to detect when the channel closes
         channel.closeFuture().addListener(new io.netty.util.concurrent.GenericFutureListener[io.netty.util.concurrent.Future[_ >: Void]] {
@@ -439,6 +461,12 @@ object StaticUDPPeerGroup extends StrictLogging {
             logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
           }
         }
+        // Verify channel is open before attempting to send
+        _ <- if (!nettyChannel.isOpen) {
+          IO.raiseError(new IOException(s"Channel is closed, cannot send to $remoteAddress"))
+        } else {
+          IO.unit
+        }
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
         // Check packet size before attempting to send
@@ -454,6 +482,10 @@ object StaticUDPPeerGroup extends StrictLogging {
           case ex: IOException =>
             // Log the actual IOException to help diagnose the real problem
             IO(logger.error(s"Failed to send UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)) >>
+            IO.raiseError(ex)
+          case ex: Throwable =>
+            // Catch any other exceptions that might occur during send
+            IO(logger.error(s"Unexpected error sending UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)) >>
             IO.raiseError(ex)
         }
       } yield ()
