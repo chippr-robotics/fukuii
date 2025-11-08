@@ -179,18 +179,18 @@ override def client(to: Address): Resource[IO, Channel] = {
 2. **Simpler Code**: Removed complexity of managing `boundChannelRef`
 3. **Proven Pattern**: Matches battle-tested original IOHK implementation
 4. **Thread Safety**: Let Netty manage its own threading and state
-5. **Test Validation**: 2/3 unit tests pass reliably; initialization works correctly
+5. **Test Validation**: All 3 unit tests pass reliably; initialization and shutdown work correctly
+6. **Robust Shutdown**: Synchronous channel close with error handling prevents shutdown failures
 
 ### Negative
 
-1. **Incomplete Understanding**: We don't fully understand why direct access works better with IO
-2. **Third Test Failure**: Multi-peer-group test still fails (separate shutdown sequencing issue)
-3. **Documentation Gap**: This pattern isn't well-documented in Netty or CE3 resources
+1. **Migration Complexity**: Required deep understanding of Netty and effect system differences
+2. **Investigation Time**: Significant effort to identify and resolve both initialization and shutdown races
 
 ### Neutral
 
 1. **Performance**: No measurable difference (caching would have been premature optimization anyway)
-2. **Type Safety**: Both approaches are type-safe; the issue was runtime lifecycle management
+2. **Type Safety**: Both approaches are type-safe; the issues were runtime lifecycle management
 
 ## Lessons Learned
 
@@ -210,14 +210,18 @@ override def client(to: Address): Resource[IO, Channel] = {
 - Access channels directly from ChannelFutures when needed
 - Wait for bind futures to complete before considering resources ready
 - Use `IO.blocking` for operations that might block on Netty event loops
+- Use synchronous channel operations (`.syncUninterruptibly()`) in shutdown paths
 - Add comprehensive logging during debugging to track state transitions
+- Handle errors gracefully in shutdown code to avoid cascading failures
 
 **DON'T:**
 - Cache Netty channel references in separate Refs/state holders
 - Inspect channel state from threads other than Netty's event loop
 - Assume ChannelFuture completion means full resource readiness
+- Use async operations in shutdown that schedule on potentially-terminating executors
 - Optimize prematurely by introducing intermediate caching
 - Skip comparing with original implementations when migrating
+- Let shutdown failures propagate without error handling
 
 ### Debugging Approach That Worked
 
@@ -235,7 +239,30 @@ override def client(to: Address): Resource[IO, Channel] = {
 Unit tests validate:
 - Basic initialization works and channel becomes active
 - Client channels can be created after initialization
-- Multiple peer groups can coexist (partially - shutdown race remains)
+- Multiple peer groups can coexist and shut down cleanly
+
+**Final Resolution (November 2025):**
+All three unit tests now pass reliably after fixing the shutdown race condition:
+
+1. **Shutdown Race Fix**: The final issue was in the `shutdown()` method, which used `toTask(channel.close())` to asynchronously close the channel. This scheduled work on Netty's EventLoopGroup, but when multiple peer groups were shutting down in sequence, the executor could already be terminating, causing "event executor terminated" errors.
+
+2. **Solution**: Changed to synchronous close with error handling:
+```scala
+// Before (async scheduling that could fail):
+_ <- toTask(serverBinding.channel().close())
+
+// After (synchronous close with error handling):
+_ <- IO {
+  val channel = serverBinding.channel()
+  if (channel.isOpen) {
+    channel.close().syncUninterruptibly()
+  }
+}.handleErrorWith { error =>
+  IO(logger.warn(s"Error closing channel: ${error.getMessage}"))
+}
+```
+
+This avoids scheduling on the potentially-shutting-down executor and handles errors gracefully.
 
 Integration tests (in production):
 - Actual peer discovery and enrollment
