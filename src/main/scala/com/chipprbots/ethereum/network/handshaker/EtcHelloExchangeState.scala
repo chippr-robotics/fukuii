@@ -36,7 +36,9 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
       case Some(Capability.ETH63) =>
         log.debug("Negotiated protocol version with client {} is eth/63", hello.clientId)
         EthNodeStatus63ExchangeState(handshakerConfiguration)
-      case Some(negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)) =>
+      case Some(
+            negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
+          ) =>
         log.debug("Negotiated protocol version with client {} is {}", hello.clientId, negotiated)
         EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated)
       case _ =>

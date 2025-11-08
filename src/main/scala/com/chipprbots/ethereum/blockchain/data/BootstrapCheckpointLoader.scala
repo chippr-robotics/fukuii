@@ -16,8 +16,8 @@ class BootstrapCheckpointLoader(
 
   /** Load bootstrap checkpoints if enabled and the database is empty (only genesis block exists).
     *
-    * This method will load the highest trusted checkpoint block number into the app state, allowing the sync process
-    * to use it as a starting reference point.
+    * This method will load the highest trusted checkpoint block number into the app state, allowing the sync process to
+    * use it as a starting reference point.
     *
     * @param blockchainConfig
     *   The blockchain configuration containing bootstrap checkpoints

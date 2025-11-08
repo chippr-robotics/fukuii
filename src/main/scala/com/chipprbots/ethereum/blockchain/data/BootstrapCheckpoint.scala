@@ -20,7 +20,7 @@ object BootstrapCheckpoint {
 
   /** Parse a checkpoint from a configuration string in the format "blockNumber:blockHash"
     */
-  def fromString(s: String): Option[BootstrapCheckpoint] = {
+  def fromString(s: String): Option[BootstrapCheckpoint] =
     s.split(":") match {
       case Array(numberStr, hashStr) =>
         try {
@@ -32,5 +32,4 @@ object BootstrapCheckpoint {
         }
       case _ => None
     }
-  }
 }

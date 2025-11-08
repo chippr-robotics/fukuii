@@ -212,8 +212,8 @@ class PeerManagerActor(
       // Use short blacklist for 0x10 (Other) disconnects - these are often due to peer selection
       // policies (e.g., rejecting nodes at genesis) rather than actual protocol issues.
       // Peers may be willing to connect later once we've synced past genesis.
-      case Other                                            => peerConfiguration.shortBlacklistDuration
-      case _                                                => peerConfiguration.longBlacklistDuration
+      case Other => peerConfiguration.shortBlacklistDuration
+      case _     => peerConfiguration.longBlacklistDuration
     }
   }
 

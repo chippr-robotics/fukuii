@@ -284,12 +284,18 @@ class RLPxConnectionHandler(
         log.info("Cannot decode message from {}, because of {}", peerId, ex.getMessage)
         // Enhanced debugging for decompression failures
         if (ex.getMessage.contains("FAILED_TO_UNCOMPRESS")) {
-          log.error("DECODE_ERROR_DEBUG: Peer {} failed message decode - connection will be closed. Error details: {}", peerId, ex.getMessage)
+          log.error(
+            "DECODE_ERROR_DEBUG: Peer {} failed message decode - connection will be closed. Error details: {}",
+            peerId,
+            ex.getMessage
+          )
         }
         // break connection in case of failed decoding, to avoid attack which would send us garbage
         connection ! Close
-        // Let handleConnectionTerminated clean up after TCP connection closes
-    }    /** Handles sending and receiving messages from the Akka TCP connection, while also handling acknowledgement of
+      // Let handleConnectionTerminated clean up after TCP connection closes
+    }
+
+    /** Handles sending and receiving messages from the Akka TCP connection, while also handling acknowledgement of
       * messages sent. Messages are only sent when all Ack from previous messages were received.
       *
       * @param messageCodec

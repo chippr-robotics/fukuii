@@ -66,7 +66,8 @@ class StaticUDPPeerGroup[M] private (
     serverQueue: CloseableQueue[ServerEvent[InetMultiAddress, M]],
     serverChannelSemaphore: Semaphore[IO],
     serverChannelsRef: Ref[IO, Map[InetSocketAddress, StaticUDPPeerGroup.ChannelAlloc[M]]],
-    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]]
+    clientChannelsRef: Ref[IO, Map[InetSocketAddress, Set[StaticUDPPeerGroup.ChannelAlloc[M]]]],
+    boundChannelRef: Ref[IO, Option[io.netty.channel.Channel]]
 )(implicit codec: Codec[M])
     extends TerminalPeerGroup[InetMultiAddress, M]
     with StrictLogging {
@@ -95,9 +96,13 @@ class StaticUDPPeerGroup[M] private (
     for {
       _ <- Resource.eval(raiseIfShutdown)
       remoteAddress = to.inetSocketAddress
+      nettyChannel <- Resource.eval(boundChannelRef.get.flatMap {
+        case Some(ch) => IO.pure(ch)
+        case None => IO.raiseError(new IllegalStateException("UDP server channel not yet bound"))
+      })
       channel <- Resource {
         ChannelImpl[M](
-          nettyChannel = serverBinding.channel,
+          nettyChannel = nettyChannel,
           localAddress = localAddress,
           remoteAddress = remoteAddress,
           role = ChannelImpl.Client,
@@ -152,27 +157,32 @@ class StaticUDPPeerGroup[M] private (
               IO.pure(channel)
 
             case None =>
-              ChannelImpl[M](
-                nettyChannel = serverBinding.channel,
-                localAddress = config.bindAddress,
-                remoteAddress = remoteAddress,
-                role = ChannelImpl.Server,
-                capacity = config.channelCapacity
-              ).allocated.flatMap {
-                case (channel, release) =>
-                  val remove = for {
-                    _ <- serverChannelsRef.update(_ - remoteAddress)
-                    _ <- release
-                    _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
-                  } yield ()
+              boundChannelRef.get.flatMap {
+                case Some(nettyChannel) =>
+                  ChannelImpl[M](
+                    nettyChannel = nettyChannel,
+                    localAddress = config.bindAddress,
+                    remoteAddress = remoteAddress,
+                    role = ChannelImpl.Server,
+                    capacity = config.channelCapacity
+                  ).allocated.flatMap {
+                    case (channel, release) =>
+                      val remove = for {
+                        _ <- serverChannelsRef.update(_ - remoteAddress)
+                        _ <- release
+                        _ <- IO(logger.debug(s"Removed UDP server channel from $remoteAddress to $localAddress"))
+                      } yield ()
 
-                  val add = for {
-                    _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
-                    _ <- serverQueue.offer(ChannelCreated(channel, remove))
-                    _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
-                  } yield channel
+                      val add = for {
+                        _ <- serverChannelsRef.update(_.updated(remoteAddress, channel -> release))
+                        _ <- serverQueue.offer(ChannelCreated(channel, remove))
+                        _ <- IO(logger.debug(s"Added UDP server channel from $remoteAddress to $localAddress"))
+                      } yield channel
 
-                  add.as(channel)
+                      add.as(channel)
+                  }
+                case None =>
+                  IO.raiseError(new IllegalStateException("UDP server channel not yet bound"))
               }
           }
         }
@@ -293,11 +303,27 @@ class StaticUDPPeerGroup[M] private (
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
+      _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
+      // Use toTask to properly convert the Netty ChannelFuture to IO without blocking
       _ <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
-      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}"))
+      // Now that the future has completed, get the channel
+      channel = serverBinding.channel()
+      _ <- IO(logger.info(s"Bind completed. Channel state: isOpen=${channel.isOpen}, isActive=${channel.isActive}, isRegistered=${channel.isRegistered}"))
+      _ <- IO {
+        // Add a close listener to detect when the channel closes
+        channel.closeFuture().addListener(new io.netty.util.concurrent.GenericFutureListener[io.netty.util.concurrent.Future[_ >: Void]] {
+          override def operationComplete(future: io.netty.util.concurrent.Future[_ >: Void]): Unit = {
+            logger.error(s"UDP server channel CLOSED! Channel: ${channel.getClass.getSimpleName}, localAddress: ${config.bindAddress}")
+            val stackTrace = Thread.currentThread().getStackTrace.take(10).mkString("\n  ")
+            logger.error(s"Channel close stack trace:\n  $stackTrace")
+          }
+        })
+      }
+      _ <- boundChannelRef.set(Some(channel))
+      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}, channel stored in boundChannelRef"))
     } yield ()
 
   private def shutdown: IO[Unit] = {
@@ -311,7 +337,10 @@ class StaticUDPPeerGroup[M] private (
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
       // Stop the in and outgoing traffic.
-      _ <- toTask(serverBinding.channel.close())
+      _ <- boundChannelRef.get.flatMap {
+        case Some(ch) => toTask(ch.close())
+        case None => IO.unit
+      }
     } yield ()
   }
 
@@ -342,6 +371,7 @@ object StaticUDPPeerGroup extends StrictLogging {
           serverChannelSemaphore <- Semaphore[IO](1)
           serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ChannelAlloc[M]])
           clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
+          boundChannelRef <- Ref[IO].of(Option.empty[io.netty.channel.Channel])
           peerGroup = new StaticUDPPeerGroup[M](
             config,
             workerGroup,
@@ -349,7 +379,8 @@ object StaticUDPPeerGroup extends StrictLogging {
             serverQueue,
             serverChannelSemaphore,
             serverChannelsRef,
-            clientChannelsRef
+            clientChannelsRef,
+            boundChannelRef
           )
           _ <- peerGroup.initialize
         } yield peerGroup
@@ -398,12 +429,32 @@ object StaticUDPPeerGroup extends StrictLogging {
         _ <- IO(
           logger.debug(s"Sending $role message ${message.toString.take(100)}... from $localAddress to $remoteAddress")
         )
+        // Check if the Netty channel is actually open
+        _ <- IO {
+          if (!nettyChannel.isOpen) {
+            logger.error(s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}")
+          } else if (!nettyChannel.isActive) {
+            logger.warn(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
+          } else {
+            logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
+          }
+        }
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
+        // Check packet size before attempting to send
+        // UDP supports up to 64KB theoretically, but practical MTU is typically 1280-1500 bytes
+        // Using a conservative 64KB limit here to catch truly oversized packets
+        _ <- if (asBuffer.capacity > 65535) {
+          IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
+        } else {
+          IO.unit
+        }
         packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress, localAddress)
         _ <- toTask(nettyChannel.writeAndFlush(packet)).handleErrorWith {
-          case _: IOException =>
-            IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
+          case ex: IOException =>
+            // Log the actual IOException to help diagnose the real problem
+            IO(logger.error(s"Failed to send UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)) >>
+            IO.raiseError(ex)
         }
       } yield ()
 

@@ -39,12 +39,17 @@ class MessageCodec(
     log.debug("readMessages: Received {} bytes of data, p2pVersion: {}", data.length, remotePeer2PeerVersion)
     val frames = frameCodec.readFrames(data)
     log.debug("readMessages: Decoded {} frames from {} bytes", frames.length, data.length)
-    
+
     frames.zipWithIndex.foreach { case (frame, idx) =>
-      log.debug("Frame[{}]: type=0x{}, payloadSize={}, header={}", 
-        idx, frame.`type`.toHexString, frame.payload.length, frame.header)
+      log.debug(
+        "Frame[{}]: type=0x{}, payloadSize={}, header={}",
+        idx,
+        frame.`type`.toHexString,
+        frame.payload.length,
+        frame.header
+      )
     }
-    
+
     readFrames(frames)
   }
 
@@ -52,28 +57,40 @@ class MessageCodec(
     frames.map { frame =>
       val frameData = frame.payload.toArray
       val isWireProtocolMessage = frame.`type` >= 0x00 && frame.`type` <= 0x03
-      
+
       // Check if data looks like RLP (starts with 0xc0-0xff for lists, 0x80-0xbf for strings)
       val looksLikeRLP = frameData.nonEmpty && {
-        val firstByte = frameData(0) & 0xFF
+        val firstByte = frameData(0) & 0xff
         firstByte >= 0xc0 || (firstByte >= 0x80 && firstByte < 0xc0)
       }
-      
+
       val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
-      
-      log.debug("Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, willDecompress={}, looksLikeRLP={}", 
-        frame.`type`.toHexString, isWireProtocolMessage, remotePeer2PeerVersion, shouldCompress, looksLikeRLP)
-      
+
+      log.debug(
+        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, willDecompress={}, looksLikeRLP={}",
+        frame.`type`.toHexString,
+        isWireProtocolMessage,
+        remotePeer2PeerVersion,
+        shouldCompress,
+        looksLikeRLP
+      )
+
       val payloadTry =
         if (shouldCompress && !looksLikeRLP) {
           // Only attempt decompression if it doesn't look like RLP
           decompressData(frameData, frame)
         } else if (shouldCompress && looksLikeRLP) {
           // Peer sent uncompressed data when compression was expected - protocol deviation but handle gracefully
-          log.warn("Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 4 (protocol deviation)", frame.`type`.toHexString)
+          log.warn(
+            "Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 4 (protocol deviation)",
+            frame.`type`.toHexString
+          )
           Success(frameData)
         } else {
-          log.debug("Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 4)", frame.`type`.toHexString)
+          log.debug(
+            "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 4)",
+            frame.`type`.toHexString
+          )
           Success(frameData)
         }
 
@@ -85,10 +102,14 @@ class MessageCodec(
   private def decompressData(data: Array[Byte], frame: Frame): Try[Array[Byte]] = {
     // First, let's check if this might be uncompressed data sent by mistake
     val dataHex = if (data.length <= 32) Hex.toHexString(data) else Hex.toHexString(data.take(32)) + "..."
-    
-    log.debug("decompressData: Attempting to decompress frame type 0x{}, size {} bytes, hex: {}", 
-      frame.`type`.toHexString, data.length, dataHex)
-    
+
+    log.debug(
+      "decompressData: Attempting to decompress frame type 0x{}, size {} bytes, hex: {}",
+      frame.`type`.toHexString,
+      data.length,
+      dataHex
+    )
+
     val result = Try(Snappy.uncompressedLength(data))
       .flatMap { decompressedSize =>
         log.debug("decompressData: Snappy header indicates uncompressed size: {} bytes", decompressedSize)
@@ -114,32 +135,32 @@ class MessageCodec(
       } else {
         Hex.toHexString(data.take(32)) + "..." + Hex.toHexString(data.takeRight(32))
       }
-      
+
       // Check if this might be uncompressed data by looking for patterns
       val possibleUncompressed = if (data.length > 0) {
         // Check if first byte looks like a message type (reasonable range for ETH protocol)
-        val firstByte = data(0) & 0xFF
+        val firstByte = data(0) & 0xff
         firstByte >= 0x10 && firstByte <= 0x20
       } else false
-      
+
       log.error(
         "DECOMPRESSION_DEBUG: Failed to decompress frame - " +
-        s"frameType: 0x${frame.`type`.toHexString}, " +
-        s"frameSize: ${data.length}, " +
-        s"p2pVersion: $remotePeer2PeerVersion, " +
-        s"possibleUncompressed: $possibleUncompressed, " +
-        s"hexData: $hexData, " +
-        s"error: ${ex.getMessage}"
+          s"frameType: 0x${frame.`type`.toHexString}, " +
+          s"frameSize: ${data.length}, " +
+          s"p2pVersion: $remotePeer2PeerVersion, " +
+          s"possibleUncompressed: $possibleUncompressed, " +
+          s"hexData: $hexData, " +
+          s"error: ${ex.getMessage}"
       )
-      
+
       // Additional detailed logging for investigation
       log.debug(
         "DECOMPRESSION_DEBUG: Frame details - " +
-        s"header: ${frame.header}, " +
-        s"payload.length: ${frame.payload.length}, " +
-        s"first8bytes: ${if (data.length >= 8) Hex.toHexString(data.take(8)) else "N/A"}"
+          s"header: ${frame.header}, " +
+          s"payload.length: ${frame.payload.length}, " +
+          s"first8bytes: ${if (data.length >= 8) Hex.toHexString(data.take(8)) else "N/A"}"
       )
-      
+
       // If it looks like uncompressed data, try to decode it directly
       if (possibleUncompressed && data.length < 1024) { // reasonable size limit
         log.warn("DECOMPRESSION_DEBUG: Attempting to decode as uncompressed data (peer protocol deviation)")
