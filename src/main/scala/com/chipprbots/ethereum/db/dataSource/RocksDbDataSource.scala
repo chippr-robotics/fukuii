@@ -244,6 +244,24 @@ object RocksDbDataSource extends Logger {
   case class RocksDbDataSourceClosedException(message: String) extends IllegalStateException(message)
   case class RocksDbDataSourceException(message: String, cause: Throwable) extends RuntimeException(message, cause)
 
+  // Helper to create exception without cause
+  object RocksDbDataSourceException {
+    def apply(message: String): RocksDbDataSourceException =
+      new RocksDbDataSourceException(message, null)
+  }
+
+  // Load RocksDB native library once per JVM
+  private lazy val libraryLoaded: Unit =
+    try
+      RocksDB.loadLibrary()
+    catch {
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(
+          s"Failed to load RocksDB native library. Ensure rocksdbjni is in classpath and native libraries are accessible: ${error.getMessage}",
+          error
+        )
+    }
+
   /** The rocksdb implementation acquires a lock from the operating system to prevent misuse
     */
   private val dbLock = new ReentrantReadWriteLock()
@@ -257,16 +275,8 @@ object RocksDbDataSource extends Logger {
     import scala.jdk.CollectionConverters._
     import java.nio.file.{Files, Paths, Path => JPath}
 
-    // Load native RocksDB library first
-    try
-      RocksDB.loadLibrary()
-    catch {
-      case NonFatal(error) =>
-        throw RocksDbDataSourceException(
-          s"Failed to load RocksDB native library. Ensure rocksdbjni is in classpath and native libraries are accessible: ${error.getMessage}",
-          error
-        )
-    }
+    // Ensure native RocksDB library is loaded (only happens once per JVM)
+    libraryLoaded
 
     RocksDbDataSource.dbLock.writeLock().lock()
     try {
@@ -279,8 +289,7 @@ object RocksDbDataSource extends Logger {
       // Validate path before attempting to open database
       if (!pathExists && !createIfMissing) {
         throw RocksDbDataSourceException(
-          s"Database path does not exist and createIfMissing is false: $path",
-          null
+          s"Database path does not exist and createIfMissing is false: $path"
         )
       }
 
@@ -296,14 +305,6 @@ object RocksDbDataSource extends Logger {
               error
             )
         }
-      }
-
-      // Verify directory is writable
-      if (!Files.isWritable(dbPath)) {
-        throw RocksDbDataSourceException(
-          s"Database path is not writable: $path (check permissions)",
-          null
-        )
       }
 
       val readOptions = new ReadOptions().setVerifyChecksums(rocksDbConfig.verifyChecksums)
@@ -354,13 +355,6 @@ object RocksDbDataSource extends Logger {
             )
         }
 
-      if (db == null) {
-        throw RocksDbDataSourceException(
-          s"RocksDB.open returned null for path: $path",
-          null
-        )
-      }
-
       log.info(s"Successfully opened RocksDB at path: $path with ${columnFamilyHandleList.size} column family handles")
 
       (
@@ -372,7 +366,7 @@ object RocksDbDataSource extends Logger {
       )
     } catch {
       case error: RocksDbDataSourceException =>
-        log.error(s"Failed to create RocksDB DataSource: ${error.getMessage}", error)
+        // Re-throw our exception without additional logging (caller will log if needed)
         throw error
       case NonFatal(error) =>
         val errorMsg = s"Unexpected error creating RocksDB DataSource at path: $path - ${error.getMessage}"
