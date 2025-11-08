@@ -304,11 +304,13 @@ class StaticUDPPeerGroup[M] private (
     for {
       _ <- raiseIfShutdown
       _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
-      completedFuture <- IO(serverBinding.syncUninterruptibly()).handleErrorWith {
+      // Use toTask to properly convert the Netty ChannelFuture to IO without blocking
+      _ <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(new RuntimeException(s"Failed to bind UDP server: ${ex.getMessage}", ex))
       }
-      channel = completedFuture.channel()
+      // Now that the future has completed, get the channel
+      channel = serverBinding.channel()
       _ <- IO(logger.info(s"Bind completed. Channel state: isOpen=${channel.isOpen}, isActive=${channel.isActive}, isRegistered=${channel.isRegistered}"))
       _ <- IO {
         // Add a close listener to detect when the channel closes
