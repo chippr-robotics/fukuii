@@ -86,7 +86,7 @@ object ConsensusImplSpec {
   val initialBestBlock = initialChain.last
 
   abstract class ConsensusSetup {
-    private val testSetup = new EphemBlockchainTestSetup with MockFactory with org.scalatest.TestSuite {
+    private val testSetup = new EphemBlockchainTestSetup with MockFactory {
       override lazy val blockExecution: BlockExecution = stub[BlockExecution]
       (blockExecution
         .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))

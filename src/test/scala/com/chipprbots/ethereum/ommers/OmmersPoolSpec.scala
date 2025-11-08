@@ -126,7 +126,6 @@ class OmmersPoolSpec
   }
 
   trait TestSetup {
-    this: org.scalamock.scalatest.MockFactory =>
 
     // In order to support all the blocks for the given scenarios
     val ommersPoolSize: Int = 8

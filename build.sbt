@@ -284,20 +284,17 @@ lazy val node = {
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap,
       // Temporarily exclude test files with MockFactory compilation issues (Scala 3 migration)
       // These files need additional refactoring to work with Scala 3's MockFactory self-type requirements
+      // Un-ignored 6 priority tests per issue to identify failure causes:
+      // - FastSyncBranchResolverActorSpec, BranchResolutionSpec, RLPxConnectionHandlerSpec,
+      // - ConsensusAdapterSpec, OmmersPoolSpec, ConsensusImplSpec
       (Test / excludeFilter) := {
         val base = (Test / excludeFilter).value
         base || 
-          "RLPxConnectionHandlerSpec.scala" ||
-          "OmmersPoolSpec.scala" ||
-          "ConsensusAdapterSpec.scala" ||
-          "ConsensusImplSpec.scala" ||
           "PoWMiningCoordinatorSpec.scala" ||
           "PoWMiningSpec.scala" ||
           "EthashMinerSpec.scala" ||
           "KeccakMinerSpec.scala" ||
           "MockedMinerSpec.scala" ||
-          "BranchResolutionSpec.scala" ||
-          "FastSyncBranchResolverActorSpec.scala" ||
           "MessageHandlerSpec.scala" ||
           "BlockExecutionSpec.scala" ||
           "QaJRCSpec.scala" ||

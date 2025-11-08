@@ -193,7 +193,6 @@ class RLPxConnectionHandlerSpec
   }
 
   trait TestSetup extends SecureRandomBuilder {
-    this: org.scalamock.scalatest.MockFactory =>
 
     // Mock parameters for RLPxConnectionHandler
     val mockMessageDecoder: MessageDecoder = new MessageDecoder {

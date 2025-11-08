@@ -303,8 +303,6 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   lazy val blockQueue: BlockQueue
 
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
-  // Provide runtimeContext as alias for compatibility
-  implicit def runtimeContext: IORuntime = ioRuntime
 
   override lazy val consensusAdapter: ConsensusAdapter = mkConsensus()
 
@@ -434,12 +432,12 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
       // Using the global IORuntime is appropriate here because, in test scenarios,
       // validation operations do not require a custom runtime with specific threading characteristics.
       // Tests are typically run in isolation, so contention and performance concerns are minimal.
-      runtimeContext
+      ioRuntime
     )
   }
 }
 
-trait MockBlockchain { self: TestSetupWithVmAndValidators with org.scalamock.scalatest.MockFactory =>
+trait MockBlockchain extends org.scalamock.scalatest.MockFactory { self: TestSetupWithVmAndValidators =>
   // + cake overrides
 
   override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
