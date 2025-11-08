@@ -237,7 +237,7 @@ trait RocksDbConfig {
   val blockCacheSize: Long
 }
 
-object RocksDbDataSource {
+object RocksDbDataSource extends Logger {
   case object IterationFinished extends RuntimeException
   case class IterationError(ex: Throwable)
 
