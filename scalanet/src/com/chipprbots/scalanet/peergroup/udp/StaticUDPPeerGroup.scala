@@ -303,7 +303,7 @@ class StaticUDPPeerGroup[M] private (
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
-      channelFuture <- toTask(serverBinding).handleErrorWith {
+      _ <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
@@ -414,6 +414,16 @@ object StaticUDPPeerGroup extends StrictLogging {
         _ <- IO(
           logger.debug(s"Sending $role message ${message.toString.take(100)}... from $localAddress to $remoteAddress")
         )
+        // Check if the Netty channel is actually open
+        _ <- IO {
+          if (!nettyChannel.isOpen) {
+            logger.error(s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}")
+          } else if (!nettyChannel.isActive) {
+            logger.warn(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
+          } else {
+            logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
+          }
+        }
         encodedMessage <- IO.fromTry(codec.encode(message).toTry)
         asBuffer = encodedMessage.toByteBuffer
         // Check packet size before attempting to send

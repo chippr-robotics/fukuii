@@ -290,7 +290,7 @@ class DynamicUDPPeerGroup[M] private (val config: DynamicUDPPeerGroup.Config)(
         // UDP supports up to 64KB theoretically, but practical MTU is typically 1280-1500 bytes
         // Using a conservative 64KB limit here to catch truly oversized packets
         _ <- if (asBuffer.capacity > 65535) {
-          IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity()))
+          IO.raiseError(new MessageMTUException[InetMultiAddress](to, asBuffer.capacity))
         } else {
           IO.unit
         }

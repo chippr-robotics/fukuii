@@ -255,7 +255,9 @@ class PeerActor[R <: HandshakeResult](
   def handleDisconnectMsg(rlpxConnection: RLPxConnection, status: Status): Receive = {
     case RLPxConnectionHandler.MessageReceived(d: Disconnect) =>
       import Disconnect.Reasons._
-      log.info(s"DISCONNECT_DEBUG: Received disconnect from ${peerAddress.getHostString}:${peerAddress.getPort} - reason code: 0x${d.reason.toHexString} (${Disconnect.reasonToString(d.reason)})")
+      log.info(
+        s"DISCONNECT_DEBUG: Received disconnect from ${peerAddress.getHostString}:${peerAddress.getPort} - reason code: 0x${d.reason.toHexString} (${Disconnect.reasonToString(d.reason)})"
+      )
       d.reason match {
         case IncompatibleP2pProtocolVersion | UselessPeer | NullNodeIdentityReceived | UnexpectedIdentity |
             IdentityTheSame | Other =>
