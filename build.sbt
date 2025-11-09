@@ -286,11 +286,12 @@ lazy val node = {
       // These files need additional refactoring to work with Scala 3's MockFactory self-type requirements
       // Un-ignored 6 priority tests per issue to identify failure causes.
       // 2 tests fixed and compile successfully: OmmersPoolSpec, RLPxConnectionHandlerSpec
-      // 4 tests have MockBlockchain/MockFactory Scala 3 incompatibility and need architectural changes
+      // 1 test fixed with abstract mock pattern: BranchResolutionSpec
+      // Remaining tests need same pattern applied
       (Test / excludeFilter) := {
         val base = (Test / excludeFilter).value
         base || 
-          "BranchResolutionSpec.scala" ||
+          // "BranchResolutionSpec.scala" ||  // FIXED - using abstract mock members pattern
           "ConsensusAdapterSpec.scala" ||
           "ConsensusImplSpec.scala" ||
           "FastSyncBranchResolverActorSpec.scala" ||
