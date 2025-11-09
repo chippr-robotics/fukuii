@@ -230,13 +230,19 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     // Mock discovery config
     override lazy val discoveryConfig: DiscoveryConfig = DiscoveryConfig(
       discoveryEnabled = true,
+      host = None,
       interface = "0.0.0.0",
       port = 30303,
       bootstrapNodes = Set.empty,
-      nodesLimit = 20,
-      scanMaxNodes = 50,
+      reuseKnownNodes = false,
       scanInterval = 10.seconds,
-      messageExpiration = 60.seconds
+      messageExpiration = 60.seconds,
+      maxClockDrift = 10.seconds,
+      requestTimeout = 10.seconds,
+      kademliaTimeout = 10.seconds,
+      kademliaBucketSize = 16,
+      kademliaAlpha = 3,
+      channelCapacity = 100
     )
 
     // Override the portForwarding to use a mock implementation
