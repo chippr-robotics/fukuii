@@ -788,17 +788,26 @@ trait PortForwardingBuilder {
     .allocated
     .map(_._2)
 
-  // reference to an IO that produces the release IO,
+  // reference to the cleanup IO for the port forwarding resource,
   // memoized to prevent running multiple port forwarders at once
-  private val portForwardingRelease = new AtomicReference(Option.empty[IO[IO[Unit]]])
+  private val portForwardingRelease = new AtomicReference(Option.empty[IO[Unit]])
 
   def startPortForwarding(): Future[Unit] = {
-    portForwardingRelease.compareAndSet(None, Some(portForwarding))
-    portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
+    if (portForwardingRelease.get().isEmpty) {
+      // Run the allocation IO to get the cleanup function and store it
+      portForwarding.flatMap { cleanup =>
+        IO {
+          portForwardingRelease.compareAndSet(None, Some(cleanup))
+          ()
+        }
+      }.unsafeToFuture()(ioRuntime)
+    } else {
+      Future.unit
+    }
   }
 
   def stopPortForwarding(): Future[Unit] =
-    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.flatten.unsafeToFuture()(ioRuntime))
+    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.unsafeToFuture()(ioRuntime))
 }
 
 trait ShutdownHookBuilder {
