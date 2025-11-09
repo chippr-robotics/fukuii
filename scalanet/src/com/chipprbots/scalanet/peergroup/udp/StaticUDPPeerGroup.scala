@@ -95,12 +95,9 @@ class StaticUDPPeerGroup[M] private (
     for {
       _ <- Resource.eval(raiseIfShutdown)
       remoteAddress = to.inetSocketAddress
-      // FIXED: Use serverBinding.channel() directly like the original IOHK implementation
-      // This avoids the race condition with boundChannelRef
-      nettyChannel = serverBinding.channel()
       channel <- Resource {
         ChannelImpl[M](
-          nettyChannel = nettyChannel,
+          nettyChannel = serverBinding.channel,
           localAddress = localAddress,
           remoteAddress = remoteAddress,
           role = ChannelImpl.Client,
@@ -155,10 +152,8 @@ class StaticUDPPeerGroup[M] private (
               IO.pure(channel)
 
             case None =>
-              // FIXED: Use serverBinding.channel() directly like the original IOHK implementation
-              val nettyChannel = serverBinding.channel()
               ChannelImpl[M](
-                nettyChannel = nettyChannel,
+                nettyChannel = serverBinding.channel,
                 localAddress = config.bindAddress,
                 remoteAddress = remoteAddress,
                 role = ChannelImpl.Server,
@@ -253,28 +248,16 @@ class StaticUDPPeerGroup[M] private (
     new io.netty.channel.FixedRecvByteBufAllocator(bufferSize)
   }
 
-  private lazy val serverBinding: io.netty.channel.ChannelFuture = {
-    val future = new Bootstrap()
+  private lazy val serverBinding: io.netty.channel.ChannelFuture =
+    new Bootstrap()
       .group(workerGroup)
       .channel(classOf[NioDatagramChannel])
       .option[RecvByteBufAllocator](ChannelOption.RCVBUF_ALLOCATOR, bufferAllocator)
       .handler(new ChannelInitializer[NioDatagramChannel]() {
         override def initChannel(nettyChannel: NioDatagramChannel): Unit = {
-          logger.debug(s"Initializing Netty channel pipeline for $localAddress")
           nettyChannel
             .pipeline()
             .addLast(new ChannelInboundHandlerAdapter() {
-              override def channelActive(ctx: ChannelHandlerContext): Unit = {
-                logger.debug(s"Channel became active: ${ctx.channel().localAddress()}")
-                super.channelActive(ctx)
-              }
-              
-              override def channelInactive(ctx: ChannelHandlerContext): Unit = {
-                val ch = ctx.channel()
-                logger.debug(s"Channel became inactive: ${ch.localAddress()}. isOpen=${ch.isOpen}, isRegistered=${ch.isRegistered}")
-                super.channelInactive(ctx)
-              }
-              
               override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit = {
                 val datagram = msg.asInstanceOf[DatagramPacket]
                 val remoteAddress = datagram.sender
@@ -291,8 +274,6 @@ class StaticUDPPeerGroup[M] private (
               }
 
               override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-                // For UDP channels, we don't want to close on exceptions since it's connectionless
-                // Log the exception and handle it, but don't propagate to super which might close the channel
                 val channelId = ctx.channel().id()
                 val remoteAddress = Option(ctx.channel.remoteAddress())
                   .collect { case addr: InetSocketAddress => addr }
@@ -304,11 +285,10 @@ class StaticUDPPeerGroup[M] private (
                   case NonFatal(ex) =>
                     handleError(remoteAddress, ex)
                   case fatal =>
-                    // For fatal exceptions, we might still want to log but not close UDP channel
                     logger.error(s"Fatal exception in UDP channel $channelId from $remoteAddress", fatal)
                 }
-                // Don't call super.exceptionCaught as it may close the channel
-                // UDP is connectionless and should stay open for other packets
+                // Don't call super.exceptionCaught for UDP - it may close the channel
+                // UDP is connectionless and should stay open
               }
             })
 
@@ -316,33 +296,16 @@ class StaticUDPPeerGroup[M] private (
         }
       })
       .bind(localAddress)
-    
-    logger.debug(s"Bind initiated for $localAddress, ChannelFuture created")
-    future
-  }
 
-  // Wait until the server is bound and channel is ready.
+  // Wait until the server is bound.
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
-      _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
-      // Wait for the bind to complete - this matches the original IOHK implementation
       _ <- toTask(serverBinding).handleErrorWith {
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
-      // Verify channel state after bind completes
-      // For UDP (DatagramChannel), the channel should be active immediately after bind
-      _ <- IO {
-        val channel = serverBinding.channel()
-        val isOpen = channel.isOpen
-        val isActive = channel.isActive
-        val isRegistered = channel.isRegistered
-        logger.info(s"Server bound to address ${config.bindAddress}. Channel state: isOpen=$isOpen, isActive=$isActive, isRegistered=$isRegistered")
-        if (!isActive || !isOpen) {
-          logger.warn(s"UDP channel is not fully active after bind. isOpen=$isOpen, isActive=$isActive, isRegistered=$isRegistered. This may cause send operations to fail initially.")
-        }
-      }
+      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}"))
     } yield ()
 
   private def shutdown: IO[Unit] = {
@@ -355,18 +318,8 @@ class StaticUDPPeerGroup[M] private (
       _ <- clientChannelsRef.get.map(_.values.flatten.toList.map(_._2.attempt).sequence)
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
-      // Stop the in and outgoing traffic - use serverBinding.channel() directly
-      // Handle the case where the event loop might be shutting down
-      _ <- IO {
-        val channel = serverBinding.channel()
-        if (channel.isOpen) {
-          // Try to close synchronously to avoid event loop issues
-          channel.close().syncUninterruptibly()
-        }
-      }.handleErrorWith { error =>
-        // Log but don't fail shutdown if channel close fails
-        IO(logger.warn(s"Error closing channel during shutdown: ${error.getMessage}"))
-      }
+      // Stop the in and outgoing traffic.
+      _ <- toTask(serverBinding.channel.close())
     } yield ()
   }
 
