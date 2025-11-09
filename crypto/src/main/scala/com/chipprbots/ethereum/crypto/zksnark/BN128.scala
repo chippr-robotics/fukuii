@@ -193,11 +193,6 @@ object BN128 {
       */
     val R: BigInt = BigInt("21888242871839275222246405745257275088548364400416034343698204186575808495617")
 
-    private val negOneModR = -BigInt(1).mod(R)
-
-    private def isGroupElement(p: Point[Fp2]): Boolean =
-      add(mul(p, negOneModR), p).isZero // -1 * p + p == 0
-
     /** Constructs valid element of subgroup `G2` To be valid element of subgroup, elements needs to be valid point
       * (have valid coordinates in Fp_2 and to be on curve Bn128 in Fp_2) and fullfill the equation `-1 * p + p == 0`
       * @return
