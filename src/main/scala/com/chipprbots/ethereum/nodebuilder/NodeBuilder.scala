@@ -793,15 +793,19 @@ trait PortForwardingBuilder {
   private val portForwardingRelease = new AtomicReference(Option.empty[IO[Unit]])
 
   def startPortForwarding(): Future[Unit] = {
-    if (portForwardingRelease.get().isEmpty) {
-      // Run the allocation IO to get the cleanup function and store it
+    // Only allocate the resource if it hasn't been started yet
+    // Use a placeholder to ensure only one thread performs the allocation
+    val placeholder = IO.unit
+    if (portForwardingRelease.compareAndSet(None, Some(placeholder))) {
+      // We won the race - allocate the resource and store the cleanup function
       portForwarding.flatMap { cleanup =>
         IO {
-          portForwardingRelease.compareAndSet(None, Some(cleanup))
+          portForwardingRelease.set(Some(cleanup))
           ()
         }
       }.unsafeToFuture()(ioRuntime)
     } else {
+      // Resource was already started by another thread
       Future.unit
     }
   }
