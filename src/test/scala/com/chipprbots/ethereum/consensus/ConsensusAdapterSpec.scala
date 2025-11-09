@@ -144,21 +144,33 @@ class ConsensusAdapterSpec
     )
   }
 
-  it should "handle total difficulty error when importing to top" in new ImportBlockTestSetupImpl {
+  it should "handle total difficulty error when importing to top by logging and continuing" in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
+    val difficulty: BigInt = block.header.difficulty
+    val hash: ByteString = block.header.hash
 
     setBlockExists(block, inChain = false, inQueue = false)
     setBestBlock(bestBlock)
     (blockchainReader.getChainWeightByHash _).expects(*).returning(None)
 
-    (blockchainReader.getBlockHeaderByHash _).expects(*).returning(Some(block.header))
+    val newWeight = currentWeight.increaseTotalDifficulty(difficulty)
 
-    whenReady(consensusAdapter.evaluateBranchBlock(block).unsafeToFuture()) { result =>
-      result shouldBe a[BlockImportFailed]
-      result
-        .asInstanceOf[BlockImportFailed]
-        .error
-        .should(startWith("Couldn't get total difficulty for current best block"))
+    // Just to bypass metrics needs
+    (blockchainReader.getBlockByHash _).expects(*).anyNumberOfTimes().returning(None)
+    (blockchainWriter.save _).expects(*, *, *, *).returning(())
+    (blockchainWriter.saveBestKnownBlocks _).expects(*, *, *).returning(())
+
+    (blockQueue.enqueueBlock _).expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
+    (blockQueue.getBranch _).expects(hash, true).returning(List(block))
+
+    (blockchainReader.getBlockHeaderByHash _).expects(*).returning(Some(block.header))
+    (blockchain.getBackingMptStorage _)
+      .expects(*)
+      .returning(storagesInstance.storages.stateStorage.getBackingStorage(6))
+
+    expectBlockSaved(block, Seq.empty[Receipt], newWeight, saveAsBestBlock = true)
+    whenReady(blockImportNotFailingAfterExecValidation.evaluateBranchBlock(block).unsafeToFuture()) {
+      _ shouldEqual BlockImportedToTop(List(BlockData(block, Seq.empty[Receipt], newWeight)))
     }
   }
 

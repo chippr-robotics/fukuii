@@ -15,8 +15,7 @@ object AkkaTaskOps {
     def askFor[A](
         message: Any
     )(implicit timeout: Timeout, classTag: ClassTag[A], sender: ActorRef = Actor.noSender): IO[A] =
-      IO
-        .fromFuture(IO((to ? message).mapTo[A]))
-        .timeout(timeout.duration)
+      // let the akka ask future manage its timeout instead of adding a second timeout layer
+      IO.fromFuture(IO((to ? message).mapTo[A]))
   }
 }
