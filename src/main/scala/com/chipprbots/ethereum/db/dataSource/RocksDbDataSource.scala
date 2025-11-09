@@ -23,7 +23,7 @@ class RocksDbDataSource(
     private var readOptions: ReadOptions,
     private var dbOptions: DBOptions,
     private var cfOptions: ColumnFamilyOptions,
-    private var nameSpaces: Seq[Namespace],
+    private val nameSpaces: Seq[Namespace],
     private var handles: Map[Namespace, ColumnFamilyHandle]
 ) extends DataSource
     with Logger {
