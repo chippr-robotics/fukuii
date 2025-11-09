@@ -9,6 +9,11 @@ import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import org.scalamock.handlers.CallHandler0
+import org.scalamock.handlers.CallHandler1
+import org.scalamock.handlers.CallHandler2
+import org.scalamock.handlers.CallHandler4
+
 import com.chipprbots.ethereum.Mocks
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
@@ -22,8 +27,11 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParen
 import com.chipprbots.ethereum.consensus.validators._
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.domain.branch.Branch
+import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockQueue.Leaf
 import com.chipprbots.ethereum.ledger.CheckpointHelpers
 import com.chipprbots.ethereum.ledger.EphemBlockchain
@@ -34,12 +42,16 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures with org.scalamock.scalatest.MockFactory {
+class ConsensusAdapterSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ScalaFutures
+    with org.scalamock.scalatest.MockFactory {
 
   implicit override val patienceConfig: PatienceConfig =
     PatienceConfig(timeout = scaled(2 seconds), interval = scaled(1 second))
 
-  "ConsensusAdapter" should "ignore duplicated block" in new ImportBlockTestSetup {
+  "ConsensusAdapter" should "ignore duplicated block" in new ImportBlockTestSetupImpl {
     val block1: Block = getBlock()
     val block2: Block = getBlock()
 
@@ -54,7 +66,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     whenReady(consensusAdapter.evaluateBranchBlock(block2).unsafeToFuture())(_ shouldEqual DuplicateBlock)
   }
 
-  it should "import a block to the top of the main chain" in new ImportBlockTestSetup {
+  it should "import a block to the top of the main chain" in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
     val difficulty: BigInt = block.header.difficulty
     val hash: ByteString = block.header.hash
@@ -85,7 +97,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     }
   }
 
-  it should "handle exec error when importing to top" in new ImportBlockTestSetup {
+  it should "handle exec error when importing to top" in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
 
     setBlockExists(block, inChain = false, inQueue = false)
@@ -120,7 +132,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     )
   }
 
-  it should "handle no best block available error when importing to top" in new ImportBlockTestSetup {
+  it should "handle no best block available error when importing to top" in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
 
     setBlockExists(block, inChain = false, inQueue = false)
@@ -132,7 +144,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     )
   }
 
-  it should "handle total difficulty error when importing to top" in new ImportBlockTestSetup {
+  it should "handle total difficulty error when importing to top" in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
 
     setBlockExists(block, inChain = false, inQueue = false)
@@ -245,7 +257,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockQueue.isQueued(newBlock3.header.hash) shouldBe false
   }
 
-  it should "report an orphaned block" in new ImportBlockTestSetup {
+  it should "report an orphaned block" in new ImportBlockTestSetupImpl {
     override lazy val validators: MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed {
       override val blockHeaderValidator: BlockHeaderValidator = mock[BlockHeaderValidator]
     }
@@ -265,7 +277,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     )
   }
 
-  it should "validate blocks prior to import" in new ImportBlockTestSetup {
+  it should "validate blocks prior to import" in new ImportBlockTestSetupImpl {
     override lazy val validators: MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed {
       override val blockHeaderValidator: BlockHeaderValidator = mock[BlockHeaderValidator]
     }
@@ -285,7 +297,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     }
   }
 
-  it should "correctly handle importing genesis block" in new ImportBlockTestSetup {
+  it should "correctly handle importing genesis block" in new ImportBlockTestSetupImpl {
     val genesisBlock = Block(genesisHeader, BlockBody.empty)
 
     setBestBlock(genesisBlock)
@@ -544,6 +556,64 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockchainReader.getBestBlock().get shouldEqual checkpointBlock
   }
 
-  trait ImportBlockTestSetup extends TestSetupWithVmAndValidators with MockBlockchain with org.scalamock.scalatest.MockFactory
+  class ImportBlockTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain {
+    // Provide mock implementations - these are created in the test class context which has MockFactory
+    override lazy val mockBlockchainReader: BlockchainReader = mock[BlockchainReader]
+    override lazy val mockBlockchainWriter: BlockchainWriter = mock[BlockchainWriter]
+    override lazy val mockBlockchain: BlockchainImpl = mock[BlockchainImpl]
+    override lazy val mockBlockQueue: BlockQueue = mock[BlockQueue]
+
+    // Setup default expectations
+    (blockchainReader.getBestBranch _).expects().anyNumberOfTimes().returning(EmptyBranch)
+
+    // Helper methods implementation (have MockFactory context here)
+    override def setBlockExists(block: Block, inChain: Boolean, inQueue: Boolean): CallHandler1[ByteString, Boolean] = {
+      (blockchainReader.getBlockByHash _)
+        .expects(block.header.hash)
+        .anyNumberOfTimes()
+        .returning(Some(block).filter(_ => inChain))
+      (blockQueue.isQueued _).expects(block.header.hash).anyNumberOfTimes().returning(inQueue)
+    }
+
+    override def setBestBlock(block: Block): CallHandler0[BigInt] = {
+      (blockchainReader.getBestBlock _).expects().anyNumberOfTimes().returning(Some(block))
+      (blockchainReader.getBestBlockNumber _).expects().anyNumberOfTimes().returning(block.header.number)
+    }
+
+    override def setBestBlockNumber(num: BigInt): CallHandler0[BigInt] =
+      (blockchainReader.getBestBlockNumber _).expects().returning(num)
+
+    override def setChainWeightForBlock(
+        block: Block,
+        weight: ChainWeight
+    ): CallHandler1[ByteString, Option[ChainWeight]] =
+      setChainWeightByHash(block.hash, weight)
+
+    override def setChainWeightByHash(
+        hash: ByteString,
+        weight: ChainWeight
+    ): CallHandler1[ByteString, Option[ChainWeight]] =
+      (blockchainReader.getChainWeightByHash _).expects(hash).anyNumberOfTimes().returning(Some(weight))
+
+    override def expectBlockSaved(
+        block: Block,
+        receipts: Seq[Receipt],
+        weight: ChainWeight,
+        saveAsBestBlock: Boolean
+    ): CallHandler4[Block, Seq[Receipt], ChainWeight, Boolean, Unit] =
+      (blockchainWriter
+        .save(_: Block, _: Seq[Receipt], _: ChainWeight, _: Boolean))
+        .expects(block, receipts, weight, saveAsBestBlock)
+        .once()
+
+    override def setHeaderInChain(hash: ByteString, result: Boolean = true): CallHandler2[Branch, ByteString, Boolean] =
+      (blockchainReader.isInChain _).expects(*, hash).returning(result)
+
+    override def setBlockByNumber(number: BigInt, block: Option[Block]): CallHandler2[Branch, BigInt, Option[Block]] =
+      (blockchainReader.getBlockByNumber _).expects(*, number).returning(block)
+
+    override def setGenesisHeader(header: BlockHeader): Unit =
+      (() => blockchainReader.genesisHeader).expects().returning(header)
+  }
 
 }
