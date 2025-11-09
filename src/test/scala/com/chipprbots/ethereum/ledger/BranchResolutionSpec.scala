@@ -196,11 +196,11 @@ class BranchResolutionSpec
       }
   }
 
-  // Helper to satisfy Scala 3 self-type requirements
-  class BranchResolutionTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain with org.scalamock.scalatest.MockFactory {
+  // Helper method to create test setup with proper MockFactory context
+  def createBranchResolutionTestSetup(): BranchResolutionTestSetupImpl = new BranchResolutionTestSetupImpl()
+
+  class BranchResolutionTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain {
     val branchResolution = new BranchResolution(blockchainReader)
   }
-
-  trait BranchResolutionTestSetup extends BranchResolutionTestSetupImpl
 
 }

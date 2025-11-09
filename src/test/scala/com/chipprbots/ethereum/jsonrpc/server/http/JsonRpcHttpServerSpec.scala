@@ -46,7 +46,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
 
   import JsonRpcHttpServerSpec._
 
-  it should "respond to healthcheck" in new TestSetupWithMockFactory {
+  it should "respond to healthcheck" in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(IO.pure(HealthcheckResponse(List(HealthcheckResult.ok("peerCount", Some("2"))))))
@@ -63,7 +63,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "respond to healthcheck with an error if one healthcheck fails" in new TestSetupWithMockFactory {
+  it should "respond to healthcheck with an error if one healthcheck fails" in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(
@@ -90,7 +90,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "respond to buildinfo" in new TestSetupWithMockFactory {
+  it should "respond to buildinfo" in new TestSetup {
     val buildInfoRequest = HttpRequest(HttpMethods.GET, uri = "/buildinfo")
 
     buildInfoRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
@@ -106,7 +106,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "pass valid json request to controller" in new TestSetupWithMockFactory {
+  it should "pass valid json request to controller" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -123,7 +123,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "pass valid batch json request to controller" in new TestSetupWithMockFactory {
+  it should "pass valid batch json request to controller" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -140,7 +140,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return BadRequest when malformed request is received" in new TestSetupWithMockFactory {
+  it should "return BadRequest when malformed request is received" in new TestSetup {
     val jsonRequestInvalid = ByteString("""{"jsonrpc":"2.0", "method": "this is not a valid json""")
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequestInvalid))
@@ -150,7 +150,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return a CORS Error" in new TestSetupWithMockFactory {
+  it should "return a CORS Error" in new TestSetup {
     val postRequest = HttpRequest(
       HttpMethods.POST,
       uri = "/",
@@ -164,7 +164,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept CORS Requests" in new TestSetupWithMockFactory {
+  it should "accept CORS Requests" in new TestSetup {
 
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -182,7 +182,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept json request with ip restriction and only one request" in new TestSetupWithMockFactory {
+  it should "accept json request with ip restriction and only one request" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -199,7 +199,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return too many requests error with ip-restriction enabled and two requests executed in a row" in new TestSetupWithMockFactory {
+  it should "return too many requests error with ip-restriction enabled and two requests executed in a row" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -219,7 +219,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return method not allowed error for batch request with ip-restriction enabled" in new TestSetupWithMockFactory {
+  it should "return method not allowed error for batch request with ip-restriction enabled" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -235,7 +235,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept json request after rejected request with ip-restriction enabled once time has passed" in new TestSetupWithMockFactory {
+  it should "accept json request after rejected request with ip-restriction enabled once time has passed" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -266,7 +266,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept json requests from different IPs with ip-restriction enabled" in new TestSetupWithMockFactory {
+  it should "accept json requests from different IPs with ip-restriction enabled" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -299,7 +299,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code OK when throw LogicError" in new TestSetupWithMockFactory {
+  it should "return status code OK when throw LogicError" in new TestSetup {
     val jsonRpcError = JsonRpcError.LogicError("Faucet error: Connection not established")
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -326,7 +326,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code BadRequest when request invalid is received" in new TestSetupWithMockFactory {
+  it should "return status code BadRequest when request invalid is received" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
@@ -358,7 +358,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code BadRequest when parser request failure" in new TestSetupWithMockFactory {
+  it should "return status code BadRequest when parser request failure" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
@@ -386,7 +386,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code BadRequest when the request has invalid params" in new TestSetupWithMockFactory {
+  it should "return status code BadRequest when the request has invalid params" in new TestSetup {
     val error = JsonRpcError.InvalidParams()
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -518,9 +518,6 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       cors = serverConfigWithRateLimit.corsAllowedOrigins
     )
   }
-
-  // Helper trait to satisfy Scala 3 self-type requirements when using TestSetup
-  trait TestSetupWithMockFactory extends TestSetup with org.scalamock.scalatest.MockFactory
 }
 
 object JsonRpcHttpServerSpec extends JsonMethodsImplicits {

@@ -650,7 +650,7 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
       }
     }
 
-    "drain DAO accounts and send the funds to refund address if Pro DAO Fork was configured" in new DaoForkTestSetupWithMockFactory {
+    "drain DAO accounts and send the funds to refund address if Pro DAO Fork was configured" in new DaoForkTestSetup {
 
       (worldState.getAccount _)
         .expects(supportDaoForkConfig.refundContract.get)
@@ -673,7 +673,7 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
       )
     }
 
-    "neither drain DAO accounts nor send the funds to refund address if Pro DAO Fork was not configured" in new DaoForkTestSetupWithMockFactory {
+    "neither drain DAO accounts nor send the funds to refund address if Pro DAO Fork was not configured" in new DaoForkTestSetup {
       // Check we drain all the accounts and send the balance to refund contract
       supportDaoForkConfig.drainList.foreach { _ =>
         (worldState.transfer _).expects(*, *, *).never()
@@ -702,7 +702,4 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
       )
 
   }
-
-  // Helper trait to satisfy Scala 3 self-type requirements when using DaoForkTestSetup
-  trait DaoForkTestSetupWithMockFactory extends DaoForkTestSetup with org.scalamock.scalatest.MockFactory
 }
