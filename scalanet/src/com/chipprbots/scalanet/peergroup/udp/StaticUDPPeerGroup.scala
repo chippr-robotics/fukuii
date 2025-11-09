@@ -253,16 +253,28 @@ class StaticUDPPeerGroup[M] private (
     new io.netty.channel.FixedRecvByteBufAllocator(bufferSize)
   }
 
-  private lazy val serverBinding: io.netty.channel.ChannelFuture =
-    new Bootstrap()
+  private lazy val serverBinding: io.netty.channel.ChannelFuture = {
+    val future = new Bootstrap()
       .group(workerGroup)
       .channel(classOf[NioDatagramChannel])
       .option[RecvByteBufAllocator](ChannelOption.RCVBUF_ALLOCATOR, bufferAllocator)
       .handler(new ChannelInitializer[NioDatagramChannel]() {
         override def initChannel(nettyChannel: NioDatagramChannel): Unit = {
+          logger.debug(s"Initializing Netty channel pipeline for $localAddress")
           nettyChannel
             .pipeline()
             .addLast(new ChannelInboundHandlerAdapter() {
+              override def channelActive(ctx: ChannelHandlerContext): Unit = {
+                logger.debug(s"Channel became active: ${ctx.channel().localAddress()}")
+                super.channelActive(ctx)
+              }
+              
+              override def channelInactive(ctx: ChannelHandlerContext): Unit = {
+                val ch = ctx.channel()
+                logger.debug(s"Channel became inactive: ${ch.localAddress()}. isOpen=${ch.isOpen}, isRegistered=${ch.isRegistered}")
+                super.channelInactive(ctx)
+              }
+              
               override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit = {
                 val datagram = msg.asInstanceOf[DatagramPacket]
                 val remoteAddress = datagram.sender
@@ -304,6 +316,10 @@ class StaticUDPPeerGroup[M] private (
         }
       })
       .bind(localAddress)
+    
+    logger.debug(s"Bind initiated for $localAddress, ChannelFuture created")
+    future
+  }
 
   // Wait until the server is bound and channel is ready.
   private def initialize: IO[Unit] =
@@ -437,19 +453,21 @@ object StaticUDPPeerGroup extends StrictLogging {
         _ <- IO(
           logger.debug(s"Sending $role message ${message.toString.take(100)}... from $localAddress to $remoteAddress")
         )
-        // Check if the Netty channel is actually open
+        // Check if the Netty channel is actually open and active
         _ <- IO {
           if (!nettyChannel.isOpen) {
             logger.error(s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}")
           } else if (!nettyChannel.isActive) {
-            logger.warn(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
+            logger.error(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
           } else {
             logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
           }
         }
-        // Verify channel is open before attempting to send
+        // Verify channel is open and active before attempting to send
         _ <- if (!nettyChannel.isOpen) {
           IO.raiseError(new IOException(s"Channel is closed, cannot send to $remoteAddress"))
+        } else if (!nettyChannel.isActive) {
+          IO.raiseError(new IOException(s"Channel is not active, cannot send to $remoteAddress"))
         } else {
           IO.unit
         }
