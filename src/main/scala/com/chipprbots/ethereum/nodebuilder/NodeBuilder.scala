@@ -779,7 +779,8 @@ trait PortForwardingBuilder {
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
-  private val portForwarding = PortForwarder
+  // protected for testing purposes - allows test fixtures to override with mock implementation
+  protected lazy val portForwarding: IO[IO[Unit]] = PortForwarder
     .openPorts(
       Seq(Config.Network.Server.port),
       Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled)
