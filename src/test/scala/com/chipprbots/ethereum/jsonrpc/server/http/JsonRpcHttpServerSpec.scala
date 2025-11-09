@@ -42,7 +42,11 @@ import org.scalatest.Ignore
 // SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (JsonRpcController with Option[TestService])
 // This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking JsonRpcController
 @Ignore
-class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteTest with org.scalamock.scalatest.MockFactory {
+class JsonRpcHttpServerSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ScalatestRouteTest
+    with org.scalamock.scalatest.MockFactory {
 
   import JsonRpcHttpServerSpec._
 
@@ -460,7 +464,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       config = serverConfig,
       cors = serverConfig.corsAllowedOrigins
     )
-    
+
     private def createStubJsonRpcController(): JsonRpcController = {
       import com.chipprbots.ethereum.jsonrpc._
       import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
@@ -470,19 +474,19 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       import org.apache.pekko.actor.ActorRef
       import java.security.SecureRandom
       import scala.concurrent.duration._
-      
+
       val stubNodeStatus = NodeStatus(
         key = generateKeyPair(new SecureRandom()),
         serverStatus = ServerStatus.NotListening,
         discoveryStatus = ServerStatus.NotListening
       )
-      
+
       val stubNetService = new NetService(
         new AtomicReference[NodeStatus](stubNodeStatus),
         mock[ActorRef],
         NetService.NetServiceConfig(10.seconds)
       )
-      
+
       JsonRpcController(
         web3Service = mock[Web3Service],
         netService = stubNetService,

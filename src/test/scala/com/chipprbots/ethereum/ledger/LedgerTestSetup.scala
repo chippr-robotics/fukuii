@@ -215,7 +215,8 @@ trait BlockchainSetup extends TestSetup {
     SignedTransaction.sign(validTx, originKeyPair, Some(blockchainConfig.chainId))
 }
 
-trait DaoForkTestSetup extends TestSetup { self: org.scalamock.scalatest.MockFactory =>
+trait DaoForkTestSetup extends TestSetup {
+  self: org.scalamock.scalatest.MockFactory =>
 
   lazy val testBlockchainReader: BlockchainReader = mock[BlockchainReader]
   lazy val testBlockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -437,58 +438,33 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   }
 }
 
-trait MockBlockchain { self: TestSetupWithVmAndValidators with org.scalamock.scalatest.MockFactory =>
-  // + cake overrides
+trait MockBlockchain {
+  self: TestSetupWithVmAndValidators =>
 
-  override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
-  override lazy val blockchainWriter: BlockchainWriter = mock[BlockchainWriter]
-  (blockchainReader.getBestBranch _).expects().anyNumberOfTimes().returning(EmptyBranch)
-  override lazy val blockchain: BlockchainImpl = mock[BlockchainImpl]
+  // These will be implemented by mixing in concrete implementations from test class
+  // The test class (which extends MockFactory) will provide these
+  def mockBlockchainReader: BlockchainReader
+  def mockBlockchainWriter: BlockchainWriter
+  def mockBlockchain: BlockchainImpl
+  def mockBlockQueue: BlockQueue
+
+  // + cake overrides
+  final override lazy val blockchainReader: BlockchainReader = mockBlockchainReader
+  final override lazy val blockchainWriter: BlockchainWriter = mockBlockchainWriter
+  final override lazy val blockchain: BlockchainImpl = mockBlockchain
+  final override lazy val blockQueue: BlockQueue = mockBlockQueue
   // - cake overrides
 
-  override lazy val blockQueue: BlockQueue = mock[BlockQueue]
-
-  def setBlockExists(block: Block, inChain: Boolean, inQueue: Boolean): CallHandler1[ByteString, Boolean] = {
-    (blockchainReader.getBlockByHash _)
-      .expects(block.header.hash)
-      .anyNumberOfTimes()
-      .returning(Some(block).filter(_ => inChain))
-    (blockQueue.isQueued _).expects(block.header.hash).anyNumberOfTimes().returning(inQueue)
-  }
-
-  def setBestBlock(block: Block): CallHandler0[BigInt] = {
-    (blockchainReader.getBestBlock _).expects().anyNumberOfTimes().returning(Some(block))
-    (blockchainReader.getBestBlockNumber _).expects().anyNumberOfTimes().returning(block.header.number)
-  }
-
-  def setBestBlockNumber(num: BigInt): CallHandler0[BigInt] =
-    (blockchainReader.getBestBlockNumber _).expects().returning(num)
-
-  def setChainWeightForBlock(block: Block, weight: ChainWeight): CallHandler1[ByteString, Option[ChainWeight]] =
-    setChainWeightByHash(block.hash, weight)
-
-  def setChainWeightByHash(hash: ByteString, weight: ChainWeight): CallHandler1[ByteString, Option[ChainWeight]] =
-    (blockchainReader.getChainWeightByHash _).expects(hash).anyNumberOfTimes().returning(Some(weight))
-
-  def expectBlockSaved(
-      block: Block,
-      receipts: Seq[Receipt],
-      weight: ChainWeight,
-      saveAsBestBlock: Boolean
-  ): CallHandler4[Block, Seq[Receipt], ChainWeight, Boolean, Unit] =
-    (blockchainWriter
-      .save(_: Block, _: Seq[Receipt], _: ChainWeight, _: Boolean))
-      .expects(block, receipts, weight, saveAsBestBlock)
-      .once()
-
-  def setHeaderInChain(hash: ByteString, result: Boolean = true): CallHandler2[Branch, ByteString, Boolean] =
-    (blockchainReader.isInChain _).expects(*, hash).returning(result)
-
-  def setBlockByNumber(number: BigInt, block: Option[Block]): CallHandler2[Branch, BigInt, Option[Block]] =
-    (blockchainReader.getBlockByNumber _).expects(*, number).returning(block)
-
-  def setGenesisHeader(header: BlockHeader): Unit =
-    (() => blockchainReader.genesisHeader).expects().returning(header)
+  // Helper methods - must be implemented in subclass that has MockFactory context
+  def setBlockExists(block: Block, inChain: Boolean, inQueue: Boolean): Any
+  def setBestBlock(block: Block): Any
+  def setBestBlockNumber(num: BigInt): Any
+  def setChainWeightForBlock(block: Block, weight: ChainWeight): Any
+  def setChainWeightByHash(hash: ByteString, weight: ChainWeight): Any
+  def expectBlockSaved(block: Block, receipts: Seq[Receipt], weight: ChainWeight, saveAsBestBlock: Boolean): Any
+  def setHeaderInChain(hash: ByteString, result: Boolean = true): Any
+  def setBlockByNumber(number: BigInt, block: Option[Block]): Any
+  def setGenesisHeader(header: BlockHeader): Unit
 }
 
 trait EphemBlockchain extends TestSetupWithVmAndValidators {
