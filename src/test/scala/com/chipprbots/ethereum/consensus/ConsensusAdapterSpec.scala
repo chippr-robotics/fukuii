@@ -160,9 +160,9 @@ class ConsensusAdapterSpec
       result match {
         case BlockImportFailed(error) =>
           // Should NOT be the old immediate failure message from returnNoTotalDifficulty
-          error should not startWith ("Couldn't get total difficulty for current best block")
+          (error should not).startWith("Couldn't get total difficulty for current best block")
         case BlockEnqueued => // Also acceptable - block was enqueued for later processing
-        case _ => // Other results are also acceptable
+        case _             => // Other results are also acceptable
       }
     }
   }

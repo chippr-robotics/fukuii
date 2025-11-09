@@ -9,12 +9,10 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.OptionToNull._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
-import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 
 object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
 
   import org.json4s.CustomSerializer
-  import org.json4s.Formats
 
   // Manual encoder for TxLog to avoid Scala 3 reflection issues
   private def encodeTxLog(log: FilterManager.TxLog): JValue =

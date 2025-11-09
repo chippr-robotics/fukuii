@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.console
 
 import org.apache.pekko.actor.ActorSystem
 
-import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.Logger
 
 /** Periodically updates the console UI with node status information.
