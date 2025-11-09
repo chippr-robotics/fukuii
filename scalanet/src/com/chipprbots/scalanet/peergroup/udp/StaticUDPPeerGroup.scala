@@ -10,6 +10,7 @@ import cats.effect.std.Semaphore
 import cats.effect.unsafe.implicits.global
 import cats.implicits._
 
+import scala.concurrent.duration._
 import scala.util.control.NonFatal
 
 import com.chipprbots.scalanet.peergroup.Channel
@@ -305,7 +306,7 @@ class StaticUDPPeerGroup[M] private (
       })
       .bind(localAddress)
 
-  // Wait until the server is bound.
+  // Wait until the server is bound and active.
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
@@ -315,8 +316,35 @@ class StaticUDPPeerGroup[M] private (
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
-      _ <- IO(logger.info(s"Server bound to address ${config.bindAddress}"))
+      _ <- IO(logger.info(s"Server bind completed, verifying channel is active..."))
+      // Verify the channel is active before returning
+      // For UDP datagram channels, this should be immediate after bind, but we verify to be safe
+      channel = serverBinding.channel()
+      _ <- waitForChannelActive(channel)
+      _ <- IO(logger.info(s"Server channel is active at address ${config.bindAddress}"))
     } yield ()
+  
+  // Helper method to wait for a channel to become active
+  private def waitForChannelActive(channel: io.netty.channel.Channel): IO[Unit] = {
+    def checkActive(attempt: Int, maxAttempts: Int): IO[Unit] = {
+      if (channel.isActive) {
+        IO.unit
+      } else if (attempt >= maxAttempts) {
+        IO(logger.error(s"Channel failed to become active after $maxAttempts attempts. isOpen: ${channel.isOpen}, isRegistered: ${channel.isRegistered}")) >>
+        IO.raiseError(
+          new InitializationError(
+            s"UDP channel bound but not active after ${maxAttempts * 10}ms",
+            null
+          )
+        )
+      } else {
+        IO(logger.debug(s"Channel not yet active, waiting... (attempt ${attempt + 1}/$maxAttempts)")) >>
+        IO.sleep(10.millis) >>
+        checkActive(attempt + 1, maxAttempts)
+      }
+    }
+    checkActive(0, 10)
+  }
 
   private def shutdown: IO[Unit] = {
     for {
@@ -426,19 +454,21 @@ object StaticUDPPeerGroup extends StrictLogging {
         _ <- IO(
           logger.debug(s"Sending $role message ${message.toString.take(100)}... from $localAddress to $remoteAddress")
         )
-        // Check if the Netty channel is actually open
+        // Check if the Netty channel is actually open and active
         _ <- IO {
           if (!nettyChannel.isOpen) {
             logger.error(s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}")
           } else if (!nettyChannel.isActive) {
-            logger.warn(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
+            logger.error(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
           } else {
             logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
           }
         }
-        // Verify channel is open before attempting to send
+        // Verify channel is open and active before attempting to send
         _ <- if (!nettyChannel.isOpen) {
           IO.raiseError(new IOException(s"Channel is closed, cannot send to $remoteAddress"))
+        } else if (!nettyChannel.isActive) {
+          IO.raiseError(new IOException(s"Channel is not active, cannot send to $remoteAddress"))
         } else {
           IO.unit
         }
