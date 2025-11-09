@@ -283,16 +283,15 @@ lazy val node = {
       (Test / fork) := true,
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap,
       // Temporarily exclude test files with MockFactory compilation issues (Scala 3 migration)
-      // These files need additional refactoring to work with Scala 3's MockFactory self-type requirements
-      // Un-ignored 6 priority tests per issue to identify failure causes.
-      // 2 tests fixed and compile successfully: OmmersPoolSpec, RLPxConnectionHandlerSpec
-      // 1 test fixed with abstract mock pattern: BranchResolutionSpec
-      // Remaining tests need same pattern applied
+      // 2 tests fixed with abstract mock pattern: BranchResolutionSpec, ConsensusAdapterSpec
+      // Remaining tests need different approaches (DaoForkTestSetup, TestSetup have existing self-types)
       (Test / excludeFilter) := {
         val base = (Test / excludeFilter).value
-        base || 
+        base ||
           // "BranchResolutionSpec.scala" ||  // FIXED - using abstract mock members pattern
-          "ConsensusAdapterSpec.scala" ||
+          // "ConsensusAdapterSpec.scala" ||  // FIXED - using abstract mock members pattern
+          "BlockExecutionSpec.scala" || // Has DaoForkTestSetup with self-type, needs different approach
+          "JsonRpcHttpServerSpec.scala" || // Has TestSetup with self-type, needs different approach
           "ConsensusImplSpec.scala" ||
           "FastSyncBranchResolverActorSpec.scala" ||
           "PoWMiningCoordinatorSpec.scala" ||
@@ -301,9 +300,7 @@ lazy val node = {
           "KeccakMinerSpec.scala" ||
           "MockedMinerSpec.scala" ||
           "MessageHandlerSpec.scala" ||
-          "BlockExecutionSpec.scala" ||
           "QaJRCSpec.scala" ||
-          "JsonRpcHttpServerSpec.scala" ||
           "EthProofServiceSpec.scala" ||
           "LegacyTransactionHistoryServiceSpec.scala"
       }

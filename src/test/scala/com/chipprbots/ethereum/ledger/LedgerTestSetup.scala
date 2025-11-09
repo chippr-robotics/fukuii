@@ -440,19 +440,19 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
 
 trait MockBlockchain {
   self: TestSetupWithVmAndValidators =>
-  
+
   // These will be implemented by mixing in concrete implementations from test class
   // The test class (which extends MockFactory) will provide these
   def mockBlockchainReader: BlockchainReader
   def mockBlockchainWriter: BlockchainWriter
   def mockBlockchain: BlockchainImpl
   def mockBlockQueue: BlockQueue
-  
+
   // + cake overrides
-  override final lazy val blockchainReader: BlockchainReader = mockBlockchainReader
-  override final lazy val blockchainWriter: BlockchainWriter = mockBlockchainWriter
-  override final lazy val blockchain: BlockchainImpl = mockBlockchain
-  override final lazy val blockQueue: BlockQueue = mockBlockQueue
+  final override lazy val blockchainReader: BlockchainReader = mockBlockchainReader
+  final override lazy val blockchainWriter: BlockchainWriter = mockBlockchainWriter
+  final override lazy val blockchain: BlockchainImpl = mockBlockchain
+  final override lazy val blockQueue: BlockQueue = mockBlockQueue
   // - cake overrides
 
   // Helper methods - must be implemented in subclass that has MockFactory context

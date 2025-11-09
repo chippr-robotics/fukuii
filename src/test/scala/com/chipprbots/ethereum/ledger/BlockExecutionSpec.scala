@@ -35,7 +35,11 @@ import org.scalatest.Ignore
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in LedgerTestSetup
 // scalastyle:off magic.number
 @Ignore
-class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckPropertyChecks with org.scalamock.scalatest.MockFactory {
+class BlockExecutionSpec
+    extends AnyWordSpec
+    with Matchers
+    with ScalaCheckPropertyChecks
+    with org.scalamock.scalatest.MockFactory {
 
   "BlockExecution" should {
 
@@ -274,7 +278,8 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
 
         // Check valid receipts
         resultingReceipts.size shouldBe 1
-        val LegacyReceipt(rootHashReceipt, gasUsedReceipt, logsBloomFilterReceipt, logsReceipt) = ((resultingReceipts.head): @unchecked)
+        val LegacyReceipt(rootHashReceipt, gasUsedReceipt, logsBloomFilterReceipt, logsReceipt) =
+          resultingReceipts.head: @unchecked
         rootHashReceipt shouldBe HashOutcome(expectedStateRoot)
         gasUsedReceipt shouldBe resultingGasUsed
         logsBloomFilterReceipt shouldBe BloomFilter.create(Nil)
@@ -353,7 +358,7 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
             // Check valid receipts
             resultingReceipts.size shouldBe 1
             val LegacyReceipt(rootHashReceipt, gasUsedReceipt, logsBloomFilterReceipt, logsReceipt) =
-              ((resultingReceipts.head): @unchecked)
+              resultingReceipts.head: @unchecked
             rootHashReceipt shouldBe HashOutcome(expectedStateRoot)
             gasUsedReceipt shouldBe resultingGasUsed
             logsBloomFilterReceipt shouldBe BloomFilter.create(logs)
@@ -612,7 +617,8 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
         )
         val expectedStateRootTx1 = applyChanges(validBlockParentHeader.stateRoot, changesTx1)
 
-        val LegacyReceipt(rootHashReceipt1, gasUsedReceipt1, logsBloomFilterReceipt1, logsReceipt1) = (receipt1: @unchecked)
+        val LegacyReceipt(rootHashReceipt1, gasUsedReceipt1, logsBloomFilterReceipt1, logsReceipt1) =
+          receipt1: @unchecked
         rootHashReceipt1 shouldBe HashOutcome(expectedStateRootTx1)
         gasUsedReceipt1 shouldBe stx1.tx.tx.gasLimit
         logsBloomFilterReceipt1 shouldBe BloomFilter.create(Nil)
@@ -627,7 +633,8 @@ class BlockExecutionSpec extends AnyWordSpec with Matchers with ScalaCheckProper
         )
         val expectedStateRootTx2 = applyChanges(expectedStateRootTx1, changesTx2)
 
-        val LegacyReceipt(rootHashReceipt2, gasUsedReceipt2, logsBloomFilterReceipt2, logsReceipt2) = (receipt2: @unchecked)
+        val LegacyReceipt(rootHashReceipt2, gasUsedReceipt2, logsBloomFilterReceipt2, logsReceipt2) =
+          receipt2: @unchecked
         rootHashReceipt2 shouldBe HashOutcome(expectedStateRootTx2)
         gasUsedReceipt2 shouldBe (transaction1.gasLimit + transaction2.gasLimit)
         logsBloomFilterReceipt2 shouldBe BloomFilter.create(Nil)

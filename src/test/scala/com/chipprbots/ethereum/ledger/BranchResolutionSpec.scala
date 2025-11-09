@@ -212,12 +212,12 @@ class BranchResolutionSpec
     override lazy val mockBlockchainWriter: BlockchainWriter = mock[BlockchainWriter]
     override lazy val mockBlockchain: BlockchainImpl = mock[BlockchainImpl]
     override lazy val mockBlockQueue: BlockQueue = mock[BlockQueue]
-    
+
     // Setup default expectations
     (blockchainReader.getBestBranch _).expects().anyNumberOfTimes().returning(EmptyBranch)
-    
+
     val branchResolution = new BranchResolution(blockchainReader)
-    
+
     // Helper methods implementation (have MockFactory context here)
     override def setBlockExists(block: Block, inChain: Boolean, inQueue: Boolean): CallHandler1[ByteString, Boolean] = {
       (blockchainReader.getBlockByHash _)
@@ -235,10 +235,16 @@ class BranchResolutionSpec
     override def setBestBlockNumber(num: BigInt): CallHandler0[BigInt] =
       (blockchainReader.getBestBlockNumber _).expects().returning(num)
 
-    override def setChainWeightForBlock(block: Block, weight: ChainWeight): CallHandler1[ByteString, Option[ChainWeight]] =
+    override def setChainWeightForBlock(
+        block: Block,
+        weight: ChainWeight
+    ): CallHandler1[ByteString, Option[ChainWeight]] =
       setChainWeightByHash(block.hash, weight)
 
-    override def setChainWeightByHash(hash: ByteString, weight: ChainWeight): CallHandler1[ByteString, Option[ChainWeight]] =
+    override def setChainWeightByHash(
+        hash: ByteString,
+        weight: ChainWeight
+    ): CallHandler1[ByteString, Option[ChainWeight]] =
       (blockchainReader.getChainWeightByHash _).expects(hash).anyNumberOfTimes().returning(Some(weight))
 
     override def expectBlockSaved(
