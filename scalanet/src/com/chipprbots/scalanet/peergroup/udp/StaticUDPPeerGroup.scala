@@ -321,7 +321,7 @@ class StaticUDPPeerGroup[M] private (
     future
   }
 
-  // Wait until the server is bound.
+  // Wait until the server is bound and channel is ready.
   private def initialize: IO[Unit] =
     for {
       _ <- raiseIfShutdown
@@ -331,12 +331,18 @@ class StaticUDPPeerGroup[M] private (
         case NonFatal(ex) =>
           IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
       }
-      // Note: We don't check channel.isActive here because there's a race condition
-      // The channel becomes active on the Netty event loop thread, but may become
-      // inactive immediately after due to Netty's internal lifecycle management.
-      // Instead, we trust that the bind completed successfully and the channel
-      // will be available when needed (accessed lazily via serverBinding.channel())
-      _ <- IO(logger.info(s"Server bound successfully to address ${config.bindAddress}"))
+      // Verify channel state after bind completes
+      // For UDP (DatagramChannel), the channel should be active immediately after bind
+      _ <- IO {
+        val channel = serverBinding.channel()
+        val isOpen = channel.isOpen
+        val isActive = channel.isActive
+        val isRegistered = channel.isRegistered
+        logger.info(s"Server bound to address ${config.bindAddress}. Channel state: isOpen=$isOpen, isActive=$isActive, isRegistered=$isRegistered")
+        if (!isActive || !isOpen) {
+          logger.warn(s"UDP channel is not fully active after bind. isOpen=$isOpen, isActive=$isActive, isRegistered=$isRegistered. This may cause send operations to fail initially.")
+        }
+      }
     } yield ()
 
   private def shutdown: IO[Unit] = {
