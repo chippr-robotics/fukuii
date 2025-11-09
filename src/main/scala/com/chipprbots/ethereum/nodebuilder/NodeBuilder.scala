@@ -779,7 +779,8 @@ trait PortForwardingBuilder {
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
-  private val portForwarding = PortForwarder
+  // protected for testing purposes - allows test fixtures to override with mock implementation
+  protected lazy val portForwarding: IO[IO[Unit]] = PortForwarder
     .openPorts(
       Seq(Config.Network.Server.port),
       Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled)
@@ -788,17 +789,30 @@ trait PortForwardingBuilder {
     .allocated
     .map(_._2)
 
-  // reference to an IO that produces the release IO,
+  // reference to the cleanup IO for the port forwarding resource,
   // memoized to prevent running multiple port forwarders at once
-  private val portForwardingRelease = new AtomicReference(Option.empty[IO[IO[Unit]]])
+  private val portForwardingRelease = new AtomicReference(Option.empty[IO[Unit]])
 
   def startPortForwarding(): Future[Unit] = {
-    portForwardingRelease.compareAndSet(None, Some(portForwarding))
-    portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
+    // Only allocate the resource if it hasn't been started yet
+    // Use a placeholder to ensure only one thread performs the allocation
+    val placeholder = IO.unit
+    if (portForwardingRelease.compareAndSet(None, Some(placeholder))) {
+      // We won the race - allocate the resource and store the cleanup function
+      portForwarding.flatMap { cleanup =>
+        IO {
+          portForwardingRelease.set(Some(cleanup))
+          ()
+        }
+      }.unsafeToFuture()(ioRuntime)
+    } else {
+      // Resource was already started by another thread
+      Future.unit
+    }
   }
 
   def stopPortForwarding(): Future[Unit] =
-    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.flatten.unsafeToFuture()(ioRuntime))
+    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.unsafeToFuture()(ioRuntime))
 }
 
 trait ShutdownHookBuilder {
