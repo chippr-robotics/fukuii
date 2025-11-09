@@ -21,7 +21,8 @@ class BranchResolutionSpec
     with Matchers
     with ObjectGenerators
     with ScalaFutures
-    with ScalaCheckPropertyChecks {
+    with ScalaCheckPropertyChecks
+    with org.scalamock.scalatest.MockFactory {
 
   "BranchResolution" should {
 
@@ -195,8 +196,11 @@ class BranchResolutionSpec
       }
   }
 
-  trait BranchResolutionTestSetup extends TestSetupWithVmAndValidators with MockBlockchain {
+  // Helper to satisfy Scala 3 self-type requirements
+  class BranchResolutionTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain with org.scalamock.scalatest.MockFactory {
     val branchResolution = new BranchResolution(blockchainReader)
   }
+
+  trait BranchResolutionTestSetup extends BranchResolutionTestSetupImpl
 
 }

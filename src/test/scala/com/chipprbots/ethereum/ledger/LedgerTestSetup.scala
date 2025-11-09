@@ -442,11 +442,19 @@ trait MockBlockchain { self: TestSetupWithVmAndValidators with org.scalamock.sca
 
   override lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
   override lazy val blockchainWriter: BlockchainWriter = mock[BlockchainWriter]
-  (blockchainReader.getBestBranch _).expects().anyNumberOfTimes().returning(EmptyBranch)
   override lazy val blockchain: BlockchainImpl = mock[BlockchainImpl]
   // - cake overrides
 
   override lazy val blockQueue: BlockQueue = mock[BlockQueue]
+
+  // Setup default mock expectations
+  // In Scala 3, initialization order is stricter, so we use a lazy val instead of direct execution
+  private lazy val mockSetup: Unit = {
+    (blockchainReader.getBestBranch _).expects().anyNumberOfTimes().returning(EmptyBranch)
+  }
+
+  // Ensure mockSetup is called
+  mockSetup
 
   def setBlockExists(block: Block, inChain: Boolean, inQueue: Boolean): CallHandler1[ByteString, Boolean] = {
     (blockchainReader.getBlockByHash _)
