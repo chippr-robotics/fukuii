@@ -23,7 +23,6 @@ class ConsoleUI extends Logger {
   import ConsoleUI._
 
   private var terminal: Option[Terminal] = None
-  private var shouldStop = false
   private var enabled = true
   private val startTime = Instant.now()
 

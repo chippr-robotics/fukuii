@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.OptionToNull._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
-import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 
 object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
 
