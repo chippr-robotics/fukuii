@@ -47,10 +47,17 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
     case PeerDisconnected(peerId)                   => removePeerById(peerId)
   }
 
-  def peersToDownloadFrom: Map[PeerId, PeerWithInfo] =
-    handshakedPeers.filterNot { case (peerId, _) =>
-      blacklist.isBlacklisted(peerId)
+  def peersToDownloadFrom: Map[PeerId, PeerWithInfo] = {
+    val available = handshakedPeers.filterNot { case (peerId, _) =>
+      val isBlacklisted = blacklist.isBlacklisted(peerId)
+      if (isBlacklisted) {
+        log.debug("Peer {} is blacklisted and excluded from download peers", peerId)
+      }
+      isBlacklisted
     }
+    log.debug("peersToDownloadFrom: {} available out of {} handshaked peers", available.size, handshakedPeers.size)
+    available
+  }
 
   def getPeerById(peerId: PeerId): Option[Peer] = handshakedPeers.get(peerId).map(_.peer)
 
@@ -58,23 +65,49 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
     peersToDownloadFrom.values.toList.sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering).headOption
 
   def blacklistIfHandshaked(peerId: PeerId, duration: FiniteDuration, reason: BlacklistReason): Unit =
-    handshakedPeers.get(peerId).foreach(_ => blacklist.add(peerId, duration, reason))
+    handshakedPeers.get(peerId) match {
+      case Some(peerWithInfo) =>
+        log.debug("Blacklisting peer {} ({}) for {} ms. Reason: {}", 
+          peerId, peerWithInfo.peer.remoteAddress, duration.toMillis, reason)
+        blacklist.add(peerId, duration, reason)
+      case None =>
+        log.debug("Attempted to blacklist non-handshaked peer {}", peerId)
+    }
 
   private def updatePeers(peers: Map[Peer, PeerInfo]): Unit = {
     val updated = peers.map { case (peer, peerInfo) =>
       (peer.id, PeerWithInfo(peer, peerInfo))
     }
-    updated.filterNot(p => handshakedPeers.keySet.contains(p._1)).foreach { case (peerId, _) =>
-      peerEventBus ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
+    
+    val newPeers = updated.filterNot(p => handshakedPeers.keySet.contains(p._1))
+    if (newPeers.nonEmpty) {
+      log.debug("Adding {} new handshaked peers", newPeers.size)
+      newPeers.foreach { case (peerId, peerWithInfo) =>
+        log.debug("New peer {} ({}) - ready: {}, maxBlock: {}, chainWeight: {}", 
+          peerId, peerWithInfo.peer.remoteAddress, peerWithInfo.peerInfo.forkAccepted,
+          peerWithInfo.peerInfo.maxBlockNumber, peerWithInfo.peerInfo.chainWeight)
+        peerEventBus ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
+      }
     }
+    
+    if (handshakedPeers.size != updated.size) {
+      log.debug("Handshaked peers changed: {} -> {} peers", handshakedPeers.size, updated.size)
+    }
+    
     handshakedPeers = updated
   }
 
   private def removePeerById(peerId: PeerId): Unit =
     if (handshakedPeers.keySet.contains(peerId)) {
+      val peerInfo = handshakedPeers(peerId)
+      log.debug("Removing disconnected peer {} ({})", peerId, peerInfo.peer.remoteAddress)
       peerEventBus ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
       blacklist.remove(peerId)
+      log.debug("Removed peer {} from blacklist", peerId)
       handshakedPeers = handshakedPeers - peerId
+      log.debug("Remaining handshaked peers: {}", handshakedPeers.size)
+    } else {
+      log.debug("Attempted to remove non-existent peer {}", peerId)
     }
 
 }
