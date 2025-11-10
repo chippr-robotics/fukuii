@@ -34,7 +34,7 @@ class HeadersFetcher(
     with FetchRequest[HeadersFetcherCommand] {
 
   val log: Logger = context.log
-  implicit val ec: IORuntime = IORuntime.global
+  implicit val runtime: IORuntime = IORuntime.global
 
   import HeadersFetcher._
 

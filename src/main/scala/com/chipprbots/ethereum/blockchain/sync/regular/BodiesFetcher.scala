@@ -32,7 +32,7 @@ class BodiesFetcher(
     with FetchRequest[BodiesFetcherCommand] {
 
   val log = context.log
-  implicit val ec: IORuntime = IORuntime.global
+  implicit val runtime: IORuntime = IORuntime.global
 
   import BodiesFetcher._
 
