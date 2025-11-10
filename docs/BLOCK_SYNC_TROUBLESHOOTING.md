@@ -262,7 +262,7 @@ fork-id-report-latest-when-unsynced = true
 To disable (use traditional block-0 ForkId):
 
 ```hocon
-# In etc-chain.conf  
+# In etc-chain.conf
 fork-id-report-latest-when-unsynced = false
 ```
 
