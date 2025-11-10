@@ -23,7 +23,7 @@ object ForkId {
     val crc = new CRC32()
     crc.update(genesisHash.asByteBuffer)
     val forks = gatherForks(config)
-    
+
     // Special handling for block-0 nodes when configured to report latest fork
     // This helps avoid peer rejection when starting sync from genesis
     val effectiveHead = if (head == 0 && config.forkIdReportLatestWhenUnsynced && forks.nonEmpty) {
@@ -32,7 +32,7 @@ object ForkId {
     } else {
       head
     }
-    
+
     val next = forks.find { fork =>
       if (fork <= effectiveHead) {
         crc.update(bigIntToBytes(fork, 8))

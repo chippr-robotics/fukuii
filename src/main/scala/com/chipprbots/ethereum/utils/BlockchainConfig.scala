@@ -243,7 +243,7 @@ object BlockchainConfig {
       capabilities = capabilities,
       bootstrapCheckpoints = bootstrapCheckpoints,
       useBootstrapCheckpoints = useBootstrapCheckpoints,
-      forkIdReportLatestWhenUnsynced = blockchainConfig.hasPath("fork-id-report-latest-when-unsynced") && 
+      forkIdReportLatestWhenUnsynced = blockchainConfig.hasPath("fork-id-report-latest-when-unsynced") &&
         blockchainConfig.getBoolean("fork-id-report-latest-when-unsynced")
     )
   }
