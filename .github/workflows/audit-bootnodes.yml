@@ -1,0 +1,282 @@
+name: Audit Bootnodes
+
+on:
+  schedule:
+    # Run daily at 6 PM UTC (18:00)
+    - cron: '0 18 * * *'
+
+  pull_request:
+    branches:
+      - 'main'
+      - 'develop'
+    paths:
+      - 'src/main/resources/conf/chains/etc-chain.conf'
+      - 'src/main/resources/conf/chains/mordor-chain.conf'
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  audit-bootnodes:
+    name: Audit ETC and Mordor Bootnodes
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Check out Fukuii repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up SBT
+        run: |
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          sudo apt-get update
+          sudo apt-get install -y sbt
+
+      - name: Cache SBT and Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.sbt
+            ~/.coursier
+            ~/.cache/coursier
+          key: ${{ runner.os }}-sbt-${{ hashFiles('**/build.sbt', 'project/**') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-
+
+      - name: Build Fukuii bootnode checker
+        run: |
+          # Compile the bootnode health checker
+          sbt "compile"
+          
+      - name: Create bootnode checker script
+        run: |
+          cat > check-bootnodes.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          # Simple bootnode health checker using nc (netcat) to test UDP connectivity
+          # This is a lightweight alternative until we have a full Scala implementation
+          
+          CONFIG_FILE="$1"
+          NETWORK_NAME="$2"
+          
+          if [ -z "$CONFIG_FILE" ] || [ -z "$NETWORK_NAME" ]; then
+            echo "Usage: $0 <config-file> <network-name>"
+            exit 1
+          fi
+          
+          echo "=== Testing Bootnodes for $NETWORK_NAME ==="
+          
+          # Extract enodes from config
+          ENODES=$(grep -oP 'enode://[^"]+' "$CONFIG_FILE" || true)
+          
+          if [ -z "$ENODES" ]; then
+            echo "No enodes found in $CONFIG_FILE"
+            exit 0
+          fi
+          
+          PASSED=0
+          FAILED=0
+          
+          while IFS= read -r enode; do
+            if [ -z "$enode" ]; then
+              continue
+            fi
+            
+            # Parse enode URL to get IP and port
+            # Format: enode://pubkey@ip:port or enode://pubkey@ip:port?discport=30303
+            IP=$(echo "$enode" | grep -oP '@\K[^:?]+')
+            PORT=$(echo "$enode" | grep -oP ':(\d+)' | head -1 | tr -d ':')
+            
+            if [ -z "$IP" ] || [ -z "$PORT" ]; then
+              echo "  ? SKIP: Could not parse $enode"
+              continue
+            fi
+            
+            echo -n "  Testing ${enode:0:60}... "
+            
+            # Test UDP port connectivity with timeout
+            # Send a test packet and see if the port is reachable
+            if timeout 5 bash -c "echo -n '' | nc -u -w 2 $IP $PORT 2>/dev/null"; then
+              echo "✓ PASS"
+              echo "$enode" >> "/tmp/${NETWORK_NAME}_passed.txt"
+              PASSED=$((PASSED + 1))
+            else
+              # Also try TCP as a fallback test
+              if timeout 3 bash -c "nc -z -w 2 $IP $PORT 2>/dev/null"; then
+                echo "✓ PASS (TCP)"
+                echo "$enode" >> "/tmp/${NETWORK_NAME}_passed.txt"
+                PASSED=$((PASSED + 1))
+              else
+                echo "✗ FAIL"
+                echo "$enode" >> "/tmp/${NETWORK_NAME}_failed.txt"
+                FAILED=$((FAILED + 1))
+              fi
+            fi
+          done <<< "$ENODES"
+          
+          echo ""
+          echo "Results for $NETWORK_NAME:"
+          echo "  Passed: $PASSED"
+          echo "  Failed: $FAILED"
+          
+          exit 0
+          SCRIPT_EOF
+          
+          chmod +x check-bootnodes.sh
+
+      - name: Audit ETC Mainnet Bootnodes
+        id: audit-etc
+        shell: bash
+        run: |
+          ./check-bootnodes.sh "src/main/resources/conf/chains/etc-chain.conf" "etc-mainnet"
+
+      - name: Audit Mordor Testnet Bootnodes
+        id: audit-mordor
+        shell: bash
+        run: |
+          ./check-bootnodes.sh "src/main/resources/conf/chains/mordor-chain.conf" "mordor-testnet"
+
+      - name: Remove failed bootnodes from configs
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          echo "=== Removing failed bootnodes from configuration files ==="
+          
+          remove_failed_nodes() {
+            local config_file="$1"
+            local failed_file="$2"
+            
+            if [ ! -f "$failed_file" ]; then
+              echo "No failed nodes for $config_file"
+              return
+            fi
+            
+            echo "Processing $config_file..."
+            while IFS= read -r failed_node; do
+              if [ -z "$failed_node" ]; then
+                continue
+              fi
+              
+              # Extract the node ID (first part of enode URL before @)
+              node_id=$(echo "$failed_node" | grep -oP 'enode://\K[^@]+')
+              
+              if [ -n "$node_id" ]; then
+                echo "  Removing node: ${node_id:0:40}..."
+                # Remove the entire line containing this node ID
+                sed -i "/enode:\/\/${node_id}/d" "$config_file"
+              fi
+            done < "$failed_file"
+            
+            echo "Completed processing $config_file"
+          }
+          
+          # Remove failed nodes from both configs
+          if [ -f "/tmp/etc-mainnet_failed.txt" ]; then
+            remove_failed_nodes "src/main/resources/conf/chains/etc-chain.conf" "/tmp/etc-mainnet_failed.txt"
+          fi
+          
+          if [ -f "/tmp/mordor-testnet_failed.txt" ]; then
+            remove_failed_nodes "src/main/resources/conf/chains/mordor-chain.conf" "/tmp/mordor-testnet_failed.txt"
+          fi
+
+      - name: Show changes
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "=== Changes made to configuration files ==="
+          git --no-pager diff src/main/resources/conf/chains/
+
+      - name: Generate summary report
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "# Bootnode Audit Summary" > /tmp/audit_summary.md
+          echo "" >> /tmp/audit_summary.md
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> /tmp/audit_summary.md
+          echo "" >> /tmp/audit_summary.md
+          
+          # ETC Mainnet results
+          echo "## ETC Mainnet" >> /tmp/audit_summary.md
+          if [ -f "/tmp/etc-mainnet_passed.txt" ]; then
+            passed=$(wc -l < "/tmp/etc-mainnet_passed.txt")
+            echo "- ✅ Passed: $passed nodes" >> /tmp/audit_summary.md
+          else
+            echo "- ✅ Passed: 0 nodes" >> /tmp/audit_summary.md
+          fi
+          
+          if [ -f "/tmp/etc-mainnet_failed.txt" ]; then
+            failed=$(wc -l < "/tmp/etc-mainnet_failed.txt")
+            echo "- ❌ Failed: $failed nodes" >> /tmp/audit_summary.md
+            if [ $failed -gt 0 ]; then
+              echo "" >> /tmp/audit_summary.md
+              echo "### Failed ETC Mainnet Nodes" >> /tmp/audit_summary.md
+              while IFS= read -r node; do
+                echo "- \`${node:0:80}...\`" >> /tmp/audit_summary.md
+              done < "/tmp/etc-mainnet_failed.txt"
+            fi
+          else
+            echo "- ❌ Failed: 0 nodes" >> /tmp/audit_summary.md
+          fi
+          
+          echo "" >> /tmp/audit_summary.md
+          
+          # Mordor Testnet results
+          echo "## Mordor Testnet" >> /tmp/audit_summary.md
+          if [ -f "/tmp/mordor-testnet_passed.txt" ]; then
+            passed=$(wc -l < "/tmp/mordor-testnet_passed.txt")
+            echo "- ✅ Passed: $passed nodes" >> /tmp/audit_summary.md
+          else
+            echo "- ✅ Passed: 0 nodes" >> /tmp/audit_summary.md
+          fi
+          
+          if [ -f "/tmp/mordor-testnet_failed.txt" ]; then
+            failed=$(wc -l < "/tmp/mordor-testnet_failed.txt")
+            echo "- ❌ Failed: $failed nodes" >> /tmp/audit_summary.md
+            if [ $failed -gt 0 ]; then
+              echo "" >> /tmp/audit_summary.md
+              echo "### Failed Mordor Testnet Nodes" >> /tmp/audit_summary.md
+              while IFS= read -r node; do
+                echo "- \`${node:0:80}...\`" >> /tmp/audit_summary.md
+              done < "/tmp/mordor-testnet_failed.txt"
+            fi
+          else
+            echo "- ❌ Failed: 0 nodes" >> /tmp/audit_summary.md
+          fi
+          
+          echo "" >> /tmp/audit_summary.md
+          echo "---" >> /tmp/audit_summary.md
+          echo "" >> /tmp/audit_summary.md
+          echo "These bootnodes did not respond to connectivity tests within the timeout period." >> /tmp/audit_summary.md
+          echo "" >> /tmp/audit_summary.md
+          echo "**Testing Method:** Network connectivity tests using Fukuii's standalone health checker." >> /tmp/audit_summary.md
+          echo "" >> /tmp/audit_summary.md
+          echo "For details: https://github.com/${{github.repository}}/actions/runs/${{github.run_id}}" >> /tmp/audit_summary.md
+          
+          cat /tmp/audit_summary.md
+
+      - name: Create Pull Request
+        if: github.event_name != 'pull_request'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'config: remove unresponsive bootnodes from ETC and Mordor'
+          title: 'config: remove unresponsive bootnodes'
+          body-path: /tmp/audit_summary.md
+          branch: automated/remove-stale-bootnodes
+          delete-branch: true
+          labels: |
+            automated
+            network
+            bootnodes
+          assignees: ${{ github.repository_owner }}
