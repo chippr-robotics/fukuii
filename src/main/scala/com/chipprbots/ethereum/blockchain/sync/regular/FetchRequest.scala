@@ -34,21 +34,20 @@ trait FetchRequest[A] {
     IO
       .fromFuture(IO(peersClient ? request))
       .tap { result =>
-        IO {
-          blacklistPeerOnFailedRequest(result)
-          result match {
-            case PeersClient.Response(peer, _) => 
-              log.debug("Received response from peer {}", peer.id)
-            case RequestFailed(peer, reason) => 
-              log.debug("Request failed from peer {}: {}", peer.id, reason)
-            case NoSuitablePeer => 
-              log.debug("No suitable peer available for request")
-            case Failure(cause) => 
-              log.debug("Request resulted in failure: {}", cause.getMessage)
-            case _ => 
-              log.debug("Request resulted in unexpected response: {}", result)
-          }
+        blacklistPeerOnFailedRequest(result)
+        result match {
+          case PeersClient.Response(peer, _) => 
+            log.debug("Received response from peer {}", peer.id)
+          case RequestFailed(peer, reason) => 
+            log.debug("Request failed from peer {}: {}", peer.id, reason)
+          case NoSuitablePeer => 
+            log.debug("No suitable peer available for request")
+          case Failure(cause) => 
+            log.debug("Request resulted in failure: {}", cause.getMessage)
+          case _ => 
+            log.debug("Request resulted in unexpected response: {}", result)
         }
+        IO.unit
       }
       .flatMap(handleRequestResult(responseFallback))
       .handleError { error =>
