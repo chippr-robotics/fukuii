@@ -112,6 +112,44 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(9957000) shouldBe ForkId(0x3a6b00d7L, None) // First Spiral block
     }
 
+    "report latest fork when at block 0 with forkIdReportLatestWhenUnsynced enabled" in {
+      val etcConf = config.blockchains("etc")
+      val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
+      
+      // With the feature enabled, block 0 should report as if at latest fork (Spiral: 19,250,000)
+      val etcConfWithFeature = etcConf.copy(forkIdReportLatestWhenUnsynced = true)
+      val forkIdAtBlock0 = ForkId.create(etcGenesisHash, etcConfWithFeature)(0)
+      
+      // Should match the ForkId at the latest known fork block (Spiral)
+      forkIdAtBlock0 shouldBe ForkId(0xbe46d57cL, None)
+    }
+
+    "still report correct fork when not at block 0 with forkIdReportLatestWhenUnsynced enabled" in {
+      val etcConf = config.blockchains("etc")
+      val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
+      
+      // With the feature enabled, but not at block 0, should report normally
+      val etcConfWithFeature = etcConf.copy(forkIdReportLatestWhenUnsynced = true)
+      
+      // At block 1 should still report normal Frontier ForkId
+      ForkId.create(etcGenesisHash, etcConfWithFeature)(1) shouldBe ForkId(0xfc64ec04L, Some(1150000))
+      
+      // At block 1150000 should report Homestead ForkId
+      ForkId.create(etcGenesisHash, etcConfWithFeature)(1150000) shouldBe ForkId(0x97c2c34cL, Some(2500000))
+    }
+
+    "use default behavior when forkIdReportLatestWhenUnsynced is disabled" in {
+      val etcConf = config.blockchains("etc")
+      val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
+      
+      // With the feature disabled (default), block 0 should report genesis fork
+      val etcConfWithoutFeature = etcConf.copy(forkIdReportLatestWhenUnsynced = false)
+      val forkIdAtBlock0 = ForkId.create(etcGenesisHash, etcConfWithoutFeature)(0)
+      
+      // Should match the traditional ForkId at block 0
+      forkIdAtBlock0 shouldBe ForkId(0xfc64ec04L, Some(1150000))
+    }
+
     // Here’s a couple of tests to verify the proper RLP encoding (since FORK_HASH is a 4 byte binary but FORK_NEXT is an 8 byte quantity):
     "be correctly encoded via rlp" in {
       roundTrip(ForkId(0, None), "c6840000000080")
