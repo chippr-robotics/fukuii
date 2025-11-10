@@ -37,15 +37,15 @@ trait FetchRequest[A] {
       .tap { result =>
         blacklistPeerOnFailedRequest(result)
         result match {
-          case PeersClient.Response(peer, msg) => 
+          case PeersClient.Response(peer, msg) =>
             log.debug("Received response from peer {} - message type: {}", peer.id, msg.getClass.getSimpleName)
-          case RequestFailed(peer, reason) => 
+          case RequestFailed(peer, reason) =>
             log.warn("Request failed from peer {} ({}): {}", peer.id, peer.remoteAddress, reason)
-          case NoSuitablePeer => 
+          case NoSuitablePeer =>
             log.debug("No suitable peer available for request - will retry")
-          case Failure(cause) => 
+          case Failure(cause) =>
             log.warn("Request resulted in failure: {} - {}", cause.getClass.getSimpleName, cause.getMessage)
-          case _ => 
+          case _ =>
             log.debug("Request resulted in unexpected response type: {}", result.getClass.getSimpleName)
         }
         IO.unit
@@ -58,10 +58,10 @@ trait FetchRequest[A] {
   }
 
   def blacklistPeerOnFailedRequest(msg: Any): Unit = msg match {
-    case RequestFailed(peer, reason) => 
+    case RequestFailed(peer, reason) =>
       log.debug("Blacklisting peer {} due to failed request: {}", peer.id, reason)
       peersClient ! BlacklistPeer(peer.id, reason)
-    case _                           => ()
+    case _ => ()
   }
 
   def handleRequestResult(fallback: A)(msg: Any): IO[A] =

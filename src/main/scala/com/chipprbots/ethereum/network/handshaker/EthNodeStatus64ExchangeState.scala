@@ -22,17 +22,27 @@ case class EthNodeStatus64ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH64.Status =>
     import ForkIdValidator.syncIoLogger
-    log.debug("Received status from peer: protocolVersion={}, networkId={}, totalDifficulty={}, bestHash={}, genesisHash={}, forkId={}", 
-      status.protocolVersion, status.networkId, status.totalDifficulty, status.bestHash, status.genesisHash, status.forkId)
-    
+    log.debug(
+      "Received status from peer: protocolVersion={}, networkId={}, totalDifficulty={}, bestHash={}, genesisHash={}, forkId={}",
+      status.protocolVersion,
+      status.networkId,
+      status.totalDifficulty,
+      status.bestHash,
+      status.genesisHash,
+      status.forkId
+    )
+
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
-    
+
     log.debug("Local state for comparison: bestBlock={}, genesisHash={}", localBestBlock, localGenesisHash)
-    
+
     if (status.genesisHash != localGenesisHash) {
-      log.warn("Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer", 
-        localGenesisHash, status.genesisHash)
+      log.warn(
+        "Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
+        localGenesisHash,
+        status.genesisHash
+      )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else {
       (for {
@@ -44,7 +54,7 @@ case class EthNodeStatus64ExchangeState(
       } yield {
         log.debug("ForkId validation result: {}", validationResult)
         validationResult match {
-          case Connect => 
+          case Connect =>
             log.debug("ForkId validation passed - accepting peer connection")
             applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
           case other =>
@@ -75,9 +85,16 @@ case class EthNodeStatus64ExchangeState(
       forkId = forkId
     )
 
-    log.debug("Sending status: protocolVersion={}, networkId={}, totalDifficulty={}, bestBlock={}, bestHash={}, genesisHash={}, forkId={}", 
-      status.protocolVersion, status.networkId, status.totalDifficulty, bestBlockNumber, 
-      bestBlockHeader.hash, genesisHash, forkId)
+    log.debug(
+      "Sending status: protocolVersion={}, networkId={}, totalDifficulty={}, bestBlock={}, bestHash={}, genesisHash={}, forkId={}",
+      status.protocolVersion,
+      status.networkId,
+      status.totalDifficulty,
+      bestBlockNumber,
+      bestBlockHeader.hash,
+      genesisHash,
+      forkId
+    )
     status
   }
 

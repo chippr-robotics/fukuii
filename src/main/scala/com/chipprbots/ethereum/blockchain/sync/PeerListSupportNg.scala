@@ -67,8 +67,13 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
   def blacklistIfHandshaked(peerId: PeerId, duration: FiniteDuration, reason: BlacklistReason): Unit =
     handshakedPeers.get(peerId) match {
       case Some(peerWithInfo) =>
-        log.debug("Blacklisting peer {} ({}) for {} ms. Reason: {}", 
-          peerId, peerWithInfo.peer.remoteAddress, duration.toMillis, reason)
+        log.debug(
+          "Blacklisting peer {} ({}) for {} ms. Reason: {}",
+          peerId,
+          peerWithInfo.peer.remoteAddress,
+          duration.toMillis,
+          reason
+        )
         blacklist.add(peerId, duration, reason)
       case None =>
         log.debug("Attempted to blacklist non-handshaked peer {}", peerId)
@@ -78,22 +83,27 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
     val updated = peers.map { case (peer, peerInfo) =>
       (peer.id, PeerWithInfo(peer, peerInfo))
     }
-    
+
     val newPeers = updated.filterNot(p => handshakedPeers.keySet.contains(p._1))
     if (newPeers.nonEmpty) {
       log.debug("Adding {} new handshaked peers", newPeers.size)
       newPeers.foreach { case (peerId, peerWithInfo) =>
-        log.debug("New peer {} ({}) - ready: {}, maxBlock: {}, chainWeight: {}", 
-          peerId, peerWithInfo.peer.remoteAddress, peerWithInfo.peerInfo.forkAccepted,
-          peerWithInfo.peerInfo.maxBlockNumber, peerWithInfo.peerInfo.chainWeight)
+        log.debug(
+          "New peer {} ({}) - ready: {}, maxBlock: {}",
+          peerId,
+          peerWithInfo.peer.remoteAddress,
+          peerWithInfo.peerInfo.forkAccepted,
+          peerWithInfo.peerInfo.maxBlockNumber
+        )
+        log.debug("Peer {} chainWeight: {}", peerId, peerWithInfo.peerInfo.chainWeight)
         peerEventBus ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
       }
     }
-    
+
     if (handshakedPeers.size != updated.size) {
       log.debug("Handshaked peers changed: {} -> {} peers", handshakedPeers.size, updated.size)
     }
-    
+
     handshakedPeers = updated
   }
 

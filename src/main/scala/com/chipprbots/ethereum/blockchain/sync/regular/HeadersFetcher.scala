@@ -52,8 +52,12 @@ class HeadersFetcher(
         requestHeaders(Right(block), amount)
         Behaviors.same
       case AdaptedMessage(peer, BlockHeaders(headers)) =>
-        log.debug("Fetched {} headers starting from block {} (peer: {})", 
-          headers.size, headers.headOption.map(_.number), peer.id)
+        log.debug(
+          "Fetched {} headers starting from block {} (peer: {})",
+          headers.size,
+          headers.headOption.map(_.number),
+          peer.id
+        )
         if (headers.isEmpty) {
           log.warn("Received empty headers response from peer {}", peer.id)
         } else {
@@ -65,7 +69,7 @@ class HeadersFetcher(
         log.debug("Retrying headers request")
         supervisor ! BlockFetcher.RetryHeadersRequest
         Behaviors.same
-      case _ => 
+      case _ =>
         log.debug("HeadersFetcher received unhandled message")
         Behaviors.unhandled
     }
@@ -80,13 +84,13 @@ class HeadersFetcher(
         case AdaptedMessage(_, BlockHeaders(headers)) if headers.isEmpty =>
           log.debug("Empty BlockHeaders response. Retry in {}", syncConfig.syncRetryInterval)
           IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(syncConfig.syncRetryInterval)
-        case res => 
+        case res =>
           log.debug("Received non-empty headers response")
           IO.pure(res)
       }
 
     context.pipeToSelf(resp.unsafeToFuture()) {
-      case Success(res) => 
+      case Success(res) =>
         log.debug("Headers request completed successfully")
         res
       case Failure(ex) =>
