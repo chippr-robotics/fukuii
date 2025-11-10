@@ -28,6 +28,29 @@ Analysis of a production Fukuii node experiencing complete synchronization failu
 3. Enable fast sync mode
 4. Review ForkId calculation against core-geth
 
+### [Fast-Sync Mode Log Analysis](fast-sync-log-analysis.md)
+
+**Date**: 2025-11-10  
+**Type**: Follow-up Analysis  
+**Severity**: Critical
+
+Follow-up analysis after enabling fast-sync mode per original recommendations. Confirms the issue persists in fast-sync mode, providing critical insight into the root cause.
+
+**Key Findings**:
+- Fast-sync properly enabled but cannot proceed (needs 3 peers minimum)
+- **Peer-side rejection confirmed**: Our ForkId validation accepts peers, but peers reject us
+- Same 0x10 disconnect pattern persists regardless of sync mode
+- Issue is not sync-mode related but peer compatibility
+
+**Critical Insight**:
+The disconnect is happening on the **peer's side**, not ours. Peers running standard ETC clients are rejecting our technically-correct block-0 ForkId `0xfc64ec04`.
+
+**Updated Recommendations**:
+1. Bootstrap from trusted state snapshot at block 19,250,000
+2. Use manual peer connections to known-tolerant nodes
+3. Investigate core-geth peer behavior
+4. Community engagement for peer compatibility
+
 ## Purpose
 
 These analysis reports provide:
