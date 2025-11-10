@@ -229,6 +229,43 @@ Full fork list comparison with core-geth `params/config_classic.go`:
 
 **Result**: Configuration matches core-geth perfectly. ForkId calculation is correct.
 
+## Solution Implemented: Alternative ForkId Reporting for Unsynced Nodes
+
+As of v1.1.0+, Fukuii includes a workaround for the peer rejection issue when starting at block 0. When enabled via configuration, the node will report the latest known fork in its ForkId instead of the technically-correct block-0 fork.
+
+### How It Works
+
+- **Configuration Option**: `fork-id-report-latest-when-unsynced = true` (enabled by default for ETC mainnet and Mordor)
+- **Behavior**: When the node is at block 0 and this option is enabled, it reports ForkId `0xbe46d57c, next: None` (matching Spiral fork) instead of `0xfc64ec04, next: 1150000`
+- **Result**: Peers running at the latest block see a compatible ForkId and accept the connection
+- **Safety**: Once the node advances past block 0, normal ForkId reporting resumes
+
+### Why This Works
+
+Peers running Core-Geth and similar clients at block 19,250,000+ have strict ForkId validation that rejects nodes reporting very old fork values, even when technically correct. By reporting the latest known fork when at block 0, we match peer expectations and avoid immediate disconnection.
+
+This is safe because:
+1. Our node knows all fork configurations up to Spiral (block 19,250,000)
+2. We accept any valid historical blocks from peers
+3. Normal ForkId validation resumes once we advance past block 0
+4. The feature can be disabled by setting `fork-id-report-latest-when-unsynced = false`
+
+### Configuration
+
+To enable this feature (default for ETC mainnet):
+
+```hocon
+# In etc-chain.conf
+fork-id-report-latest-when-unsynced = true
+```
+
+To disable (use traditional block-0 ForkId):
+
+```hocon
+# In etc-chain.conf
+fork-id-report-latest-when-unsynced = false
+```
+
 ## Contact
 
 For additional support or if this guide doesn't resolve the issue:

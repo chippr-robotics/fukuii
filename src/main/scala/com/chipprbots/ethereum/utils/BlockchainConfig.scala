@@ -33,7 +33,8 @@ case class BlockchainConfig(
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
     capabilities: List[Capability] = List.empty,
     bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
-    useBootstrapCheckpoints: Boolean = true
+    useBootstrapCheckpoints: Boolean = true,
+    forkIdReportLatestWhenUnsynced: Boolean = false
 ) {
   val minRequireSignatures: Int = (Math.floor(checkpointPubKeys.size.toDouble / 2) + 1).toInt
 
@@ -241,7 +242,9 @@ object BlockchainConfig {
       allowedMinersPublicKeys = allowedMinersPublicKeys,
       capabilities = capabilities,
       bootstrapCheckpoints = bootstrapCheckpoints,
-      useBootstrapCheckpoints = useBootstrapCheckpoints
+      useBootstrapCheckpoints = useBootstrapCheckpoints,
+      forkIdReportLatestWhenUnsynced =
+        Try(blockchainConfig.getBoolean("fork-id-report-latest-when-unsynced")).getOrElse(false)
     )
   }
   // scalastyle:on method.length
