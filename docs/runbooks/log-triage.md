@@ -685,9 +685,14 @@ When investigating an issue:
 - [Peering](peering.md) - Network and peer-related logs
 - [Disk Management](disk-management.md) - Database and storage logs
 - [Known Issues](known-issues.md) - Common log patterns and solutions
+- [Log Analysis Reports](../analysis/) - Detailed analysis of production incidents and operational issues
+
+### Example Analysis Reports
+
+- **[Sync Process Log Analysis](../analysis/sync-process-log-analysis.md)** - Analysis of a complete sync failure due to peer connection issues, including ForkId validation failures and remediation steps
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: 2025-11-02  
+**Document Version**: 1.1  
+**Last Updated**: 2025-11-10  
 **Maintainer**: Chippr Robotics LLC
