@@ -33,7 +33,22 @@ trait FetchRequest[A] {
   def makeRequest(request: Request[_], responseFallback: A): IO[A] =
     IO
       .fromFuture(IO(peersClient ? request))
-      .tap(blacklistPeerOnFailedRequest)
+      .tap { result =>
+        blacklistPeerOnFailedRequest(result)
+        result match {
+          case PeersClient.Response(peer, _) => 
+            log.debug("Received response from peer {}", peer.id)
+          case RequestFailed(peer, reason) => 
+            log.debug("Request failed from peer {}: {}", peer.id, reason)
+          case NoSuitablePeer => 
+            log.debug("No suitable peer available for request")
+          case Failure(cause) => 
+            log.debug("Request resulted in failure: {}", cause.getMessage)
+          case _ => 
+            log.debug("Request resulted in unexpected response: {}", result)
+        }
+        IO.unit
+      }
       .flatMap(handleRequestResult(responseFallback))
       .handleError { error =>
         log.error("Unexpected error while doing a request", error)
@@ -48,14 +63,16 @@ trait FetchRequest[A] {
   def handleRequestResult(fallback: A)(msg: Any): IO[A] =
     msg match {
       case failed: RequestFailed =>
-        log.debug("Request failed due to {}", failed)
+        log.debug("Request failed due to {}, using fallback", failed)
         IO.pure(fallback)
       case NoSuitablePeer =>
+        log.debug("No suitable peer, retrying after {}", syncConfig.syncRetryInterval)
         IO.pure(fallback).delayBy(syncConfig.syncRetryInterval)
       case Failure(cause) =>
         log.error("Unexpected error on the request result", cause)
         IO.pure(fallback)
       case PeersClient.Response(peer, msg) =>
+        log.debug("Successfully received response from peer {}", peer.id)
         IO.pure(makeAdaptedMessage(peer, msg))
     }
 }

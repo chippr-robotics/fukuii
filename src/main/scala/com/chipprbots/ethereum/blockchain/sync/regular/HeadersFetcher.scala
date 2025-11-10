@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class HeadersFetcher(
@@ -43,25 +44,35 @@ class HeadersFetcher(
   override def onMessage(message: HeadersFetcherCommand): Behavior[HeadersFetcherCommand] =
     message match {
       case FetchHeadersByNumber(block: BigInt, amount: BigInt) =>
-        log.debug("Start fetching headers from block {}", block)
+        log.debug("Start fetching headers from block {} (amount: {})", block, amount)
         requestHeaders(Left(block), amount)
         Behaviors.same
       case FetchHeadersByHash(block: ByteString, amount: BigInt) =>
-        log.debug("Start fetching headers from block {}", block)
+        log.debug("Start fetching headers from block hash {} (amount: {})", block, amount)
         requestHeaders(Right(block), amount)
         Behaviors.same
       case AdaptedMessage(peer, BlockHeaders(headers)) =>
-        log.debug("Fetched {} headers starting from block {}", headers.size, headers.headOption.map(_.number))
+        log.debug("Fetched {} headers starting from block {} (peer: {})", 
+          headers.size, headers.headOption.map(_.number), peer.id)
+        if (headers.isEmpty) {
+          log.warn("Received empty headers response from peer {}", peer.id)
+        } else {
+          log.debug("Headers range: {} to {}", headers.headOption.map(_.number), headers.lastOption.map(_.number))
+        }
         supervisor ! BlockFetcher.ReceivedHeaders(peer, headers)
         Behaviors.same
       case HeadersFetcher.RetryHeadersRequest =>
+        log.debug("Retrying headers request")
         supervisor ! BlockFetcher.RetryHeadersRequest
         Behaviors.same
-      case _ => Behaviors.unhandled
+      case _ => 
+        log.debug("HeadersFetcher received unhandled message")
+        Behaviors.unhandled
     }
 
   private def requestHeaders(block: Either[BigInt, ByteString], amount: BigInt): Unit = {
-    log.debug("Fetching headers from block {}", block)
+    val blockDesc = block.fold(num => s"number $num", hash => s"hash ${ByteStringUtils.hash2string(hash)}")
+    log.debug("Requesting headers from block {} (amount: {})", blockDesc, amount)
     val msg = GetBlockHeaders(block, amount, skip = 0, reverse = false)
 
     val resp = makeRequest(Request.create(msg, BestPeer), HeadersFetcher.RetryHeadersRequest)
@@ -69,12 +80,18 @@ class HeadersFetcher(
         case AdaptedMessage(_, BlockHeaders(headers)) if headers.isEmpty =>
           log.debug("Empty BlockHeaders response. Retry in {}", syncConfig.syncRetryInterval)
           IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(syncConfig.syncRetryInterval)
-        case res => IO.pure(res)
+        case res => 
+          log.debug("Received non-empty headers response")
+          IO.pure(res)
       }
 
     context.pipeToSelf(resp.unsafeToFuture()) {
-      case Success(res) => res
-      case Failure(_)   => HeadersFetcher.RetryHeadersRequest
+      case Success(res) => 
+        log.debug("Headers request completed successfully")
+        res
+      case Failure(ex) =>
+        log.warn("Headers request failed with exception: {}", ex.getMessage)
+        HeadersFetcher.RetryHeadersRequest
     }
   }
 }

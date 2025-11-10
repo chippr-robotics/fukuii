@@ -41,24 +41,38 @@ class BodiesFetcher(
   override def onMessage(message: BodiesFetcherCommand): Behavior[BodiesFetcherCommand] =
     message match {
       case FetchBodies(hashes) =>
-        log.debug("Start fetching bodies")
+        log.debug("Start fetching bodies for {} hashes", hashes.size)
+        if (hashes.isEmpty) {
+          log.warn("FetchBodies called with empty hashes list")
+        }
         requestBodies(hashes)
         Behaviors.same
       case AdaptedMessage(peer, BlockBodies(bodies)) =>
-        log.debug(s"Received ${bodies.size} block bodies")
+        log.debug("Received {} block bodies from peer {}", bodies.size, peer.id)
+        if (bodies.isEmpty) {
+          log.debug("Received empty bodies response from peer {}", peer.id)
+        }
         supervisor ! BlockFetcher.ReceivedBodies(peer, bodies)
         Behaviors.same
       case BodiesFetcher.RetryBodiesRequest =>
+        log.debug("Retrying bodies request")
         supervisor ! BlockFetcher.RetryBodiesRequest
         Behaviors.same
-      case _ => Behaviors.unhandled
+      case _ => 
+        log.debug("BodiesFetcher received unhandled message")
+        Behaviors.unhandled
     }
 
   private def requestBodies(hashes: Seq[ByteString]): Unit = {
+    log.debug("Requesting {} block bodies", hashes.size)
     val resp = makeRequest(Request.create(GetBlockBodies(hashes), BestPeer), BodiesFetcher.RetryBodiesRequest)
     context.pipeToSelf(resp.unsafeToFuture()) {
-      case Success(res) => res
-      case Failure(_)   => BodiesFetcher.RetryBodiesRequest
+      case Success(res) => 
+        log.debug("Bodies request completed successfully")
+        res
+      case Failure(ex) =>
+        log.warn("Bodies request failed with exception: {}", ex.getMessage)
+        BodiesFetcher.RetryBodiesRequest
     }
   }
 }
