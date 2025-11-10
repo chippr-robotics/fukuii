@@ -132,6 +132,15 @@ This decision represents a **non-trivial update** requiring:
      5. Create unit tests that specifically validate resource initialization sequences
    - **Reference**: See PR #337 and commits 61d2076, d1b64e6 for detailed investigation and fix
 
+7. **Implicit Naming Conventions**
+   - **Issue**: Inconsistent naming of implicit `IORuntime` instances across fetcher classes
+   - **Root Cause**: During the Monix to Cats Effect migration, some classes used `ec` (ExecutionContext naming convention) while others used `runtime` for `IORuntime` instances
+   - **Manifestation**: Code compiles correctly but naming is misleading - `ec` typically denotes `ExecutionContext`, not `IORuntime`
+   - **Resolution**: Standardized all implicit `IORuntime` instances to be named `runtime` for clarity and consistency
+   - **Affected Files**: `HeadersFetcher.scala`, `BodiesFetcher.scala`
+   - **Lesson Learned**: When migrating between effect systems, maintain consistent naming conventions for implicit instances to avoid confusion
+   - **Convention Established**: Use `runtime` for `IORuntime` instances, reserve `ec` for actual `ExecutionContext` instances
+
 ## Implementation Details
 
 The migration was executed in phases:
