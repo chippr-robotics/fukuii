@@ -52,15 +52,42 @@ class PeersClient(
       case BlacklistPeer(peerId, reason) => blacklistIfHandshaked(peerId, syncConfig.blacklistDuration, reason)
       case Request(message, peerSelector, toSerializable) =>
         val requester = sender()
+        log.debug(
+          "Received request for message type {} using selector {}",
+          message.getClass.getSimpleName,
+          peerSelector
+        )
+        log.debug(
+          "Total handshaked peers: {}, Available peers (not blacklisted): {}",
+          handshakedPeers.size,
+          peersToDownloadFrom.size
+        )
+
+        if (peersToDownloadFrom.isEmpty && handshakedPeers.nonEmpty) {
+          log.debug("All {} handshaked peers are blacklisted", handshakedPeers.size)
+          handshakedPeers.foreach { case (peerId, peerInfo) =>
+            log.debug(
+              "Peer {} ({}): blacklisted={}",
+              peerId,
+              peerInfo.peer.remoteAddress,
+              blacklist.isBlacklisted(peerId)
+            )
+          }
+        }
+
         selectPeer(peerSelector) match {
           case Some(peer) =>
-            log.debug("Selected peer {} with address {}", peer.id, peer.remoteAddress.getHostString)
+            log.debug("Selected peer {} with address {} for request", peer.id, peer.remoteAddress.getHostString)
             val handler =
               makeRequest(peer, message, responseMsgCode(message), toSerializable)(scheduler, responseClassTag(message))
             val newRequesters = requesters + (handler -> requester)
             context.become(running(newRequesters))
           case None =>
-            log.debug("No suitable peer found to issue a request")
+            log.debug(
+              "No suitable peer found to issue a request (handshaked: {}, available: {})",
+              handshakedPeers.size,
+              peersToDownloadFrom.size
+            )
             requester ! NoSuitablePeer
         }
       case PeerRequestHandler.ResponseReceived(peer, message, _) =>
@@ -95,7 +122,9 @@ class PeersClient(
 
   private def selectPeer(peerSelector: PeerSelector): Option[Peer] =
     peerSelector match {
-      case BestPeer => bestPeer(peersToDownloadFrom)
+      case BestPeer =>
+        log.debug("Selecting best peer from {} available peers", peersToDownloadFrom.size)
+        bestPeer(peersToDownloadFrom, log)
     }
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
@@ -178,6 +207,42 @@ object PeersClient {
   sealed trait PeerSelector
   case object BestPeer extends PeerSelector
 
+  def bestPeer(
+      peersToDownloadFrom: Map[PeerId, PeerWithInfo],
+      log: org.apache.pekko.event.LoggingAdapter
+  ): Option[Peer] = {
+    log.debug("Evaluating {} peers to find best peer", peersToDownloadFrom.size)
+
+    val peersToUse = peersToDownloadFrom.values
+      .map { case PeerWithInfo(peer, peerInfo) =>
+        val isReady = peerInfo.forkAccepted
+        log.debug(
+          "Peer {} ({}) - ready: {}, maxBlock: {}",
+          peer.id,
+          peer.remoteAddress,
+          isReady,
+          peerInfo.maxBlockNumber
+        )
+        log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
+        (peer, peerInfo, isReady)
+      }
+      .collect { case (peer, PeerInfo(_, chainWeight, true, _, _), _) =>
+        log.debug("Peer {} is ready and eligible for selection", peer.id)
+        log.debug("Peer {} chainWeight: {}", peer.id, chainWeight)
+        (peer, chainWeight)
+      }
+
+    if (peersToUse.nonEmpty) {
+      val (peer, chainWeight) = peersToUse.maxBy(_._2)
+      log.debug("Selected best peer {} with chainWeight {}", peer.id, chainWeight)
+      Some(peer)
+    } else {
+      log.debug("No ready peers available for selection from {} total peers", peersToDownloadFrom.size)
+      None
+    }
+  }
+
+  // Legacy method for backward compatibility
   def bestPeer(peersToDownloadFrom: Map[PeerId, PeerWithInfo]): Option[Peer] = {
     val peersToUse = peersToDownloadFrom.values
       .collect { case PeerWithInfo(peer, PeerInfo(_, chainWeight, true, _, _)) =>

@@ -58,7 +58,7 @@ class BodiesFetcher(
         log.debug("Retrying bodies request")
         supervisor ! BlockFetcher.RetryBodiesRequest
         Behaviors.same
-      case _ => 
+      case _ =>
         log.debug("BodiesFetcher received unhandled message")
         Behaviors.unhandled
     }
@@ -67,7 +67,7 @@ class BodiesFetcher(
     log.debug("Requesting {} block bodies", hashes.size)
     val resp = makeRequest(Request.create(GetBlockBodies(hashes), BestPeer), BodiesFetcher.RetryBodiesRequest)
     context.pipeToSelf(resp.unsafeToFuture()) {
-      case Success(res) => 
+      case Success(res) =>
         log.debug("Bodies request completed successfully")
         res
       case Failure(ex) =>

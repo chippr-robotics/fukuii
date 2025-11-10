@@ -116,8 +116,14 @@ class BlockFetcher(
       case PrintStatus =>
         log.info("BlockFetcher status: {}", state.status)
         log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
-        log.debug("Current state - last block: {}, known top: {}, is on top: {}, ready blocks: {}, waiting headers: {}", 
-          state.lastBlock, state.knownTop, state.isOnTop, state.readyBlocks.size, state.waitingHeaders.size)
+        log.debug(
+          "Current state - last block: {}, known top: {}, is on top: {}, ready blocks: {}, waiting headers: {}",
+          state.lastBlock,
+          state.knownTop,
+          state.isOnTop,
+          state.readyBlocks.size,
+          state.waitingHeaders.size
+        )
         Behaviors.same
 
       case PickBlocks(amount, replyTo) =>
@@ -143,8 +149,12 @@ class BlockFetcher(
       case InvalidateBlocksFrom(blockNr, reason, withBlacklist) =>
         log.debug("Invalidate blocks from {} requested. Reason: {}, Blacklist: {}", blockNr, reason, withBlacklist)
         val (blockProvider, newState) = state.invalidateBlocksFrom(blockNr, withBlacklist)
-        log.debug("Invalidate blocks from {}. Provider to blacklist: {}, New last block: {}", 
-          blockNr, blockProvider, newState.lastBlock)
+        log.debug(
+          "Invalidate blocks from {}. Provider to blacklist: {}, New last block: {}",
+          blockNr,
+          blockProvider,
+          newState.lastBlock
+        )
         blockProvider.foreach { peerId =>
           log.debug("Blacklisting peer {} due to block import error: {}", peerId, reason)
           peersClient ! BlacklistPeer(peerId, BlacklistReason.BlockImportError(reason))
@@ -166,25 +176,44 @@ class BlockFetcher(
             )
             state.withHeaderFetchReceived
           } else {
-            log.debug("Fetched {} headers starting from block {} (peer: {})", 
-              headers.size, headers.headOption.map(_.number), peer.id)
+            log.debug(
+              "Fetched {} headers starting from block {} (peer: {})",
+              headers.size,
+              headers.headOption.map(_.number),
+              peer.id
+            )
             if (headers.isEmpty) {
               log.warn("Received empty headers response from peer {}", peer.id)
             } else {
-              log.debug("Header range: {} to {} (last block in state: {})", 
-                headers.headOption.map(_.number), headers.lastOption.map(_.number), state.lastBlock)
+              log.debug(
+                "Header range: {} to {} (last block in state: {})",
+                headers.headOption.map(_.number),
+                headers.lastOption.map(_.number),
+                state.lastBlock
+              )
             }
             state.appendHeaders(headers) match {
               case Left(HeadersNotFormingSeq) =>
                 log.info("Dismissed received headers due to: {} (peer: {})", HeadersNotFormingSeq.description, peer.id)
-                log.debug("Header validation failed: headers do not form a sequence. First: {}, Last: {}, Count: {}", 
-                  headers.headOption.map(_.number), headers.lastOption.map(_.number), headers.size)
+                log.debug(
+                  "Header validation failed: headers do not form a sequence. First: {}, Last: {}, Count: {}",
+                  headers.headOption.map(_.number),
+                  headers.lastOption.map(_.number),
+                  headers.size
+                )
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
                 state.withHeaderFetchReceived
               case Left(HeadersNotMatchingReadyBlocks) =>
-                log.info("Dismissed received headers due to: {} (peer: {})", HeadersNotMatchingReadyBlocks.description, peer.id)
-                log.debug("Header validation failed: headers do not match ready blocks. Ready blocks: {}, Headers first: {}", 
-                  state.readyBlocks.lastOption.map(_.number), headers.headOption.map(_.number))
+                log.info(
+                  "Dismissed received headers due to: {} (peer: {})",
+                  HeadersNotMatchingReadyBlocks.description,
+                  peer.id
+                )
+                log.debug(
+                  "Header validation failed: headers do not match ready blocks. Ready blocks: {}, Headers first: {}",
+                  state.readyBlocks.lastOption.map(_.number),
+                  headers.headOption.map(_.number)
+                )
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
                 state.withHeaderFetchReceived
               case Left(err) =>
@@ -192,8 +221,11 @@ class BlockFetcher(
                 log.debug("Header validation error details: {}", err.description)
                 state.withHeaderFetchReceived
               case Right(updatedState) =>
-                log.debug("Successfully validated and appended {} headers. New waiting headers count: {}", 
-                  headers.size, updatedState.waitingHeaders.size)
+                log.debug(
+                  "Successfully validated and appended {} headers. New waiting headers count: {}",
+                  headers.size,
+                  updatedState.waitingHeaders.size
+                )
                 updatedState.withHeaderFetchReceived
             }
           }
@@ -214,8 +246,11 @@ class BlockFetcher(
           fetchBlocks(state.withBodiesFetchReceived)
         } else {
           if (bodies.isEmpty) {
-            log.warn("Received empty bodies response from peer {} (expected up to {} bodies)", 
-              peer.id, state.waitingHeaders.size.min(syncConfig.blockBodiesPerRequest))
+            log.warn(
+              "Received empty bodies response from peer {} (expected up to {} bodies)",
+              peer.id,
+              state.waitingHeaders.size.min(syncConfig.blockBodiesPerRequest)
+            )
           } else {
             log.debug("Processing {} bodies. Waiting headers: {}", bodies.size, state.waitingHeaders.size)
           }
@@ -229,14 +264,20 @@ class BlockFetcher(
               case Right(newBlocks) =>
                 log.debug("Successfully validated {} blocks from received bodies", newBlocks.size)
                 if (newBlocks.nonEmpty) {
-                  log.debug("Block range validated: {} to {}", 
-                    newBlocks.headOption.map(_.number), newBlocks.lastOption.map(_.number))
+                  log.debug(
+                    "Block range validated: {} to {}",
+                    newBlocks.headOption.map(_.number),
+                    newBlocks.lastOption.map(_.number)
+                  )
                 }
                 state.withBodiesFetchReceived.handleRequestedBlocks(newBlocks, peer.id)
             }
           val waitingHeadersDequeued = state.waitingHeaders.size - newState.waitingHeaders.size
-          log.debug("Processed {} new blocks from received block bodies (remaining waiting headers: {})", 
-            waitingHeadersDequeued, newState.waitingHeaders.size)
+          log.debug(
+            "Processed {} new blocks from received block bodies (remaining waiting headers: {})",
+            waitingHeadersDequeued,
+            newState.waitingHeaders.size
+          )
           fetchBlocks(newState)
         }
 
@@ -259,9 +300,12 @@ class BlockFetcher(
           case Left(err) =>
             log.debug("NewBlockHashes validation failed: {}", err)
             state
-          case Right(validHashes) => 
-            log.debug("Validated {} new block hashes. Setting possible new top to {}", 
-              validHashes.size, validHashes.lastOption.map(_.number))
+          case Right(validHashes) =>
+            log.debug(
+              "Validated {} new block hashes. Setting possible new top to {}",
+              validHashes.size,
+              validHashes.lastOption.map(_.number)
+            )
             state.withPossibleNewTopAt(validHashes.lastOption.map(_.number))
         }
         supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
@@ -276,7 +320,7 @@ class BlockFetcher(
       case BlockImportFailed(blockNr, reason) =>
         log.warn("Block import failed for block {}: {}", blockNr, reason)
         val (peerId, newState) = state.invalidateBlocksFrom(blockNr)
-        peerId.foreach { id => 
+        peerId.foreach { id =>
           log.debug("Blacklisting peer {} due to block import failure", id)
           peersClient ! BlacklistPeer(id, reason)
         }
@@ -306,8 +350,12 @@ class BlockFetcher(
     val newBlockNr = block.number
     val nextExpectedBlock = state.lastBlock + 1
 
-    log.debug("NewBlock analysis: block number {}, next expected {}, is on top: {}", 
-      newBlockNr, nextExpectedBlock, state.isOnTop)
+    log.debug(
+      "NewBlock analysis: block number {}, next expected {}, is on top: {}",
+      newBlockNr,
+      nextExpectedBlock,
+      state.isOnTop
+    )
 
     if (state.isOnTop && newBlockNr == nextExpectedBlock) {
       log.debug("Passing block {} directly to importer (on top and sequential)", newBlockNr)
@@ -319,16 +367,26 @@ class BlockFetcher(
       supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
       processFetchCommands(newState)
     } else {
-      log.debug("Handling block {} as future block (on top: {}, expected: {}, received: {})", 
-        block.idTag, state.isOnTop, nextExpectedBlock, newBlockNr)
+      log.debug(
+        "Handling block {} as future block (on top: {}, expected: {}, received: {})",
+        block.idTag,
+        state.isOnTop,
+        nextExpectedBlock,
+        newBlockNr
+      )
       handleFutureBlock(block, state)
     }
   }
 
   private def handleFutureBlock(block: Block, state: BlockFetcherState): Behavior[FetchCommand] = {
     log.debug("Ignoring received block {} as it doesn't match local state or fetch side is not on top", block.idTag)
-    log.debug("Block number: {}, last block: {}, known top: {}, is on top: {}", 
-      block.number, state.lastBlock, state.knownTop, state.isOnTop)
+    log.debug(
+      "Block number: {}, last block: {}, known top: {}, is on top: {}",
+      block.number,
+      state.lastBlock,
+      state.knownTop,
+      state.isOnTop
+    )
     val newState = state.withPossibleNewTopAt(block.number)
     supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
     fetchBlocks(newState)
@@ -358,12 +416,22 @@ class BlockFetcher(
       }
       .filter { state =>
         val notAtTop = !state.hasFetchedTopHeader
-        if (!notAtTop) log.debug("Skipping header fetch: already at top (next block: {}, known top: {})", state.nextBlockToFetch, state.knownTop)
+        if (!notAtTop)
+          log.debug(
+            "Skipping header fetch: already at top (next block: {}, known top: {})",
+            state.nextBlockToFetch,
+            state.knownTop
+          )
         notAtTop
       }
       .filter { state =>
         val hasSpace = !state.hasReachedSize(syncConfig.maxFetcherQueueSize)
-        if (!hasSpace) log.debug("Skipping header fetch: queue full (size: {}, max: {})", state.readyBlocks.size + state.waitingHeaders.size, syncConfig.maxFetcherQueueSize)
+        if (!hasSpace)
+          log.debug(
+            "Skipping header fetch: queue full (size: {}, max: {})",
+            state.readyBlocks.size + state.waitingHeaders.size,
+            syncConfig.maxFetcherQueueSize
+          )
         hasSpace
       }
       .tap(fetchHeaders)
@@ -373,8 +441,13 @@ class BlockFetcher(
   private def fetchHeaders(state: BlockFetcherState): Unit = {
     val blockNr = state.nextBlockToFetch
     val amount = syncConfig.blockHeadersPerRequest
-    log.debug("Initiating header fetch: block number {} for {} headers (last block: {}, known top: {})", 
-      blockNr, amount, state.lastBlock, state.knownTop)
+    log.debug(
+      "Initiating header fetch: block number {} for {} headers (last block: {}, known top: {})",
+      blockNr,
+      amount,
+      state.lastBlock,
+      state.knownTop
+    )
     headersFetcher ! HeadersFetcher.FetchHeadersByNumber(blockNr, amount)
   }
 
@@ -397,11 +470,17 @@ class BlockFetcher(
 
   private def fetchBodies(state: BlockFetcherState): Unit = {
     val hashes = state.takeHashes(syncConfig.blockBodiesPerRequest)
-    log.debug("Initiating body fetch: {} hashes (max per request: {}, total waiting: {})", 
-      hashes.size, syncConfig.blockBodiesPerRequest, state.waitingHeaders.size)
-    log.debug("First hash: {}, Last hash: {}", 
-      hashes.headOption.map(ByteStringUtils.hash2string), 
-      hashes.lastOption.map(ByteStringUtils.hash2string))
+    log.debug(
+      "Initiating body fetch: {} hashes (max per request: {}, total waiting: {})",
+      hashes.size,
+      syncConfig.blockBodiesPerRequest,
+      state.waitingHeaders.size
+    )
+    log.debug(
+      "First hash: {}, Last hash: {}",
+      hashes.headOption.map(ByteStringUtils.hash2string),
+      hashes.lastOption.map(ByteStringUtils.hash2string)
+    )
     bodiesFetcher ! BodiesFetcher.FetchBodies(hashes)
   }
 }
