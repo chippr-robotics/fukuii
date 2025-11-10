@@ -91,11 +91,13 @@
 
     <!-- NB. be aware you might want to adjust akka.loglevel if you set any level to DEBUG -->
     <logger name="io.netty" level="WARN"/>
-    <logger name="com.chipprbots.scalanet" level="INFO" />
-    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="WARN" />
+    <logger name="com.chipprbots.scalanet" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerActor" level="${LOGSLEVEL}" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="${LOGSLEVEL}" />
+    <logger name="com.chipprbots.ethereum.network.PeerActor" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.discovery" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
     <logger name="org.jupnp.QueueingThreadPoolExecutor" level="WARN" />
     <logger name="org.jupnp.util.SpecificationViolationReporter" level="ERROR" />

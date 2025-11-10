@@ -225,7 +225,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
   ) extends PortForwardingBuilder
       with DiscoveryConfigBuilder {
 
-    override implicit lazy val ioRuntime: IORuntime = IORuntime.global
+    implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
     // Mock discovery config
     override lazy val discoveryConfig: DiscoveryConfig = DiscoveryConfig(
@@ -246,7 +246,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     )
 
     // Override the portForwarding to use a mock implementation
-    override protected lazy val portForwarding: IO[IO[Unit]] = {
+    override protected lazy val portForwarding: IO[IO[Unit]] =
       IO {
         // Simulate allocation work
         if (simulateDelay > 0) {
@@ -259,6 +259,5 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
           cleanupCounter.incrementAndGet()
         }
       }
-    }
   }
 }
