@@ -799,12 +799,14 @@ trait PortForwardingBuilder {
     val placeholder = IO.unit
     if (portForwardingRelease.compareAndSet(None, Some(placeholder))) {
       // We won the race - allocate the resource and store the cleanup function
-      portForwarding.flatMap { cleanup =>
-        IO {
-          portForwardingRelease.set(Some(cleanup))
-          ()
+      portForwarding
+        .flatMap { cleanup =>
+          IO {
+            portForwardingRelease.set(Some(cleanup))
+            ()
+          }
         }
-      }.unsafeToFuture()(ioRuntime)
+        .unsafeToFuture()(ioRuntime)
     } else {
       // Resource was already started by another thread
       Future.unit
