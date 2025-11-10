@@ -26,48 +26,24 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
       - name: Check out Fukuii repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
 
-      - name: Set up SBT
-        run: |
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
-          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
-          sudo apt-get update
-          sudo apt-get install -y sbt
-
-      - name: Cache SBT and Coursier
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.sbt
-            ~/.coursier
-            ~/.cache/coursier
-          key: ${{ runner.os }}-sbt-${{ hashFiles('**/build.sbt', 'project/**') }}
-          restore-keys: |
-            ${{ runner.os }}-sbt-
-
-      - name: Build Fukuii bootnode checker
-        run: |
-          # Compile the bootnode health checker
-          sbt "compile"
-          
       - name: Create bootnode checker script
         run: |
           cat > check-bootnodes.sh << 'SCRIPT_EOF'
           #!/bin/bash
-          # Simple bootnode health checker using nc (netcat) to test UDP connectivity
-          # This is a lightweight alternative until we have a full Scala implementation
+          # Lightweight bootnode connectivity checker
+          # 
+          # LIMITATIONS:
+          # - Uses basic UDP/TCP port connectivity tests, NOT full Discovery v4 protocol
+          # - UDP tests with 'nc' may produce false positives (connectionless protocol)
+          # - Results should be manually reviewed before removing bootnodes
+          # - This is a temporary solution until proper Discovery v4 ping is implemented
+          # 
+          # FUTURE: Implement proper Discovery v4 PING/PONG message exchange
           
           CONFIG_FILE="$1"
           NETWORK_NAME="$2"
@@ -107,20 +83,24 @@ jobs:
             
             echo -n "  Testing ${enode:0:60}... "
             
+            # NOTE: UDP connectivity test with 'nc' is unreliable
+            # - UDP is connectionless, so nc may report success even if port is not listening
+            # - This can produce false positives (reporting unhealthy nodes as healthy)
+            # - A proper Discovery v4 PING/PONG exchange would be more reliable
+            # 
             # Test UDP port connectivity with timeout
-            # Send a test packet and see if the port is reachable
             if timeout 5 bash -c "echo -n '' | nc -u -w 2 $IP $PORT 2>/dev/null"; then
-              echo "✓ PASS"
+              echo "✓ PASS (UDP)"
               echo "$enode" >> "/tmp/${NETWORK_NAME}_passed.txt"
               PASSED=$((PASSED + 1))
             else
-              # Also try TCP as a fallback test
+              # Fallback: Try TCP connectivity as secondary check
               if timeout 3 bash -c "nc -z -w 2 $IP $PORT 2>/dev/null"; then
                 echo "✓ PASS (TCP)"
                 echo "$enode" >> "/tmp/${NETWORK_NAME}_passed.txt"
                 PASSED=$((PASSED + 1))
               else
-                echo "✗ FAIL"
+                echo "✗ FAIL (both UDP and TCP)"
                 echo "$enode" >> "/tmp/${NETWORK_NAME}_failed.txt"
                 FAILED=$((FAILED + 1))
               fi
@@ -257,9 +237,16 @@ jobs:
           echo "" >> /tmp/audit_summary.md
           echo "---" >> /tmp/audit_summary.md
           echo "" >> /tmp/audit_summary.md
-          echo "These bootnodes did not respond to connectivity tests within the timeout period." >> /tmp/audit_summary.md
+          echo "## ⚠️ Important: Manual Review Required" >> /tmp/audit_summary.md
           echo "" >> /tmp/audit_summary.md
-          echo "**Testing Method:** Network connectivity tests using Fukuii's standalone health checker." >> /tmp/audit_summary.md
+          echo "**Testing Method:** Basic network connectivity tests (UDP/TCP port checks)" >> /tmp/audit_summary.md
+          echo "" >> /tmp/audit_summary.md
+          echo "**Limitations:**" >> /tmp/audit_summary.md
+          echo "- NOT using full Discovery v4 protocol ping/pong exchange" >> /tmp/audit_summary.md
+          echo "- UDP tests may produce false positives due to connectionless nature" >> /tmp/audit_summary.md
+          echo "- Nodes may be healthy but not responding to simple connectivity probes" >> /tmp/audit_summary.md
+          echo "" >> /tmp/audit_summary.md
+          echo "**⚠️ Please manually verify failed nodes before merging this PR to avoid removing healthy bootnodes.**" >> /tmp/audit_summary.md
           echo "" >> /tmp/audit_summary.md
           echo "For details: https://github.com/${{github.repository}}/actions/runs/${{github.run_id}}" >> /tmp/audit_summary.md
           
