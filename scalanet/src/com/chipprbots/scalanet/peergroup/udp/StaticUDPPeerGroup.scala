@@ -255,105 +255,100 @@ class StaticUDPPeerGroup[M] private (
     new io.netty.channel.FixedRecvByteBufAllocator(bufferSize)
   }
 
-  // Store the bound channel and future after initialization completes
+  // Store the bound channel after initialization completes
   @volatile private var boundChannelOpt: Option[io.netty.channel.Channel] = None
-  @volatile private var boundFutureOpt: Option[io.netty.channel.ChannelFuture] = None
 
-  // Wait until the server is bound and store the channel
-  private def initialize: IO[Unit] =
-    for {
-      _ <- raiseIfShutdown
-      _ <- IO(logger.debug(s"Starting UDP server bind to ${config.bindAddress}"))
-      // Create and execute the bind operation
-      bindFuture <- IO {
-        new Bootstrap()
-          .group(workerGroup)
-          .channel(classOf[NioDatagramChannel])
-          .option[RecvByteBufAllocator](ChannelOption.RCVBUF_ALLOCATOR, bufferAllocator)
-          .handler(new ChannelInitializer[NioDatagramChannel]() {
-            override def initChannel(nettyChannel: NioDatagramChannel): Unit = {
-              nettyChannel
-                .pipeline()
-                .addLast(new ChannelInboundHandlerAdapter() {
-                  override def channelActive(ctx: ChannelHandlerContext): Unit = {
-                    logger.debug(s"UDP channel became ACTIVE: ${ctx.channel().id()}")
-                    super.channelActive(ctx)
-                  }
+  // Create the server channel as a Resource to keep it alive
+  private def createServerChannel: Resource[IO, io.netty.channel.Channel] =
+    Resource.make {
+      for {
+        _ <- raiseIfShutdown
+        _ <- IO(logger.info(s"Initializing UDP server, waiting for bind to complete..."))
+        // Bind the channel
+        channel <- IO.async[io.netty.channel.Channel] { cb =>
+          IO {
+            val bootstrap = new Bootstrap()
+              .group(workerGroup)
+              .channel(classOf[NioDatagramChannel])
+              .option[RecvByteBufAllocator](ChannelOption.RCVBUF_ALLOCATOR, bufferAllocator)
+              .handler(new ChannelInitializer[NioDatagramChannel]() {
+                override def initChannel(nettyChannel: NioDatagramChannel): Unit = {
+                  nettyChannel
+                    .pipeline()
+                    .addLast(new ChannelInboundHandlerAdapter() {
+                      override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit = {
+                        val datagram = msg.asInstanceOf[DatagramPacket]
+                        val remoteAddress = datagram.sender
+                        try {
+                          logger.debug(s"Server channel at $localAddress read message from $remoteAddress")
+                          handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+                        } catch {
+                          case NonFatal(ex) =>
+                            handleError(remoteAddress, ex)
+                        } finally {
+                          datagram.content().release()
+                          ()
+                        }
+                      }
 
-                  override def channelInactive(ctx: ChannelHandlerContext): Unit = {
-                    logger.warn(s"UDP channel became INACTIVE: ${ctx.channel().id()}")
-                    logger.warn(s"Stack trace for channel becoming inactive:", new Exception("Channel inactive stack trace"))
-                    // Don't call super - this might be closing the channel
-                    // super.channelInactive(ctx)
-                  }
+                      override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
+                        val remoteAddress = Option(ctx.channel.remoteAddress())
+                          .collect { case addr: InetSocketAddress => addr }
+                          .getOrElse(new InetSocketAddress(0))
+                        
+                        logger.debug(s"Exception in UDP channel from $remoteAddress: ${cause.getClass.getSimpleName}: ${cause.getMessage}")
+                        
+                        cause match {
+                          case NonFatal(ex) =>
+                            handleError(remoteAddress, ex)
+                          case fatal =>
+                            logger.error(s"Fatal exception in UDP channel from $remoteAddress", fatal)
+                        }
+                        // Don't call super.exceptionCaught for UDP - it may close the channel
+                        // UDP is connectionless and should stay open
+                      }
+                    })
+                  ()
+                }
+              })
 
-                  override def channelRegistered(ctx: ChannelHandlerContext): Unit = {
-                    logger.debug(s"UDP channel REGISTERED: ${ctx.channel().id()}")
-                    super.channelRegistered(ctx)
-                  }
-
-                  override def channelUnregistered(ctx: ChannelHandlerContext): Unit = {
-                    logger.warn(s"UDP channel UNREGISTERED: ${ctx.channel().id()}")
-                    super.channelUnregistered(ctx)
-                  }
-
-                  override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit = {
-                    val datagram = msg.asInstanceOf[DatagramPacket]
-                    val remoteAddress = datagram.sender
-                    try {
-                      logger.debug(s"Server channel at $localAddress read message from $remoteAddress")
-                      handleMessage(remoteAddress, tryDecodeDatagram(datagram))
-                    } catch {
-                      case NonFatal(ex) =>
-                        handleError(remoteAddress, ex)
-                    } finally {
-                      datagram.content().release()
-                      ()
-                    }
-                  }
-
-                  override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-                    val channelId = ctx.channel().id()
-                    val remoteAddress = Option(ctx.channel.remoteAddress())
-                      .collect { case addr: InetSocketAddress => addr }
-                      .getOrElse(new InetSocketAddress(0))
-                    
-                    logger.debug(s"Exception in UDP channel $channelId from $remoteAddress: ${cause.getClass.getSimpleName}: ${cause.getMessage}")
-                    
-                    cause match {
-                      case NonFatal(ex) =>
-                        handleError(remoteAddress, ex)
-                      case fatal =>
-                        logger.error(s"Fatal exception in UDP channel $channelId from $remoteAddress", fatal)
-                    }
-                    // Don't call super.exceptionCaught for UDP - it may close the channel
-                    // UDP is connectionless and should stay open
-                  }
-                })
-
-              ()
-            }
-          })
-          .bind(localAddress)
+            val bindFuture = bootstrap.bind(localAddress)
+            bindFuture.addListener((future: io.netty.channel.ChannelFuture) => {
+              if (future.isSuccess) {
+                val ch = future.channel()
+                logger.info(s"Server bound to address ${config.bindAddress}. Channel state: isOpen=${ch.isOpen}, isActive=${ch.isActive}, isRegistered=${ch.isRegistered}")
+                cb(Right(ch))
+              } else {
+                logger.error(s"Failed to bind to ${config.bindAddress}", future.cause())
+                cb(Left(InitializationError(s"Failed to bind to ${config.bindAddress}", future.cause())))
+              }
+            })
+            // Return cancellation token
+            Some(IO(bindFuture.cancel(false)).void)
+          }
+        }
+        _ <- IO { boundChannelOpt = Some(channel) }
+      } yield channel
+    } { channel =>
+      // Release: Close the channel
+      IO.async_[Unit] { cb =>
+        logger.info(s"Closing UDP server channel on ${config.bindAddress}")
+        val closeFuture = channel.close()
+        closeFuture.addListener((future: io.netty.channel.ChannelFuture) => {
+          if (future.isSuccess || future.isCancelled) {
+            logger.info(s"UDP channel closed successfully")
+            cb(Right(()))
+          } else {
+            logger.error(s"Failed to close channel", future.cause())
+            cb(Left(new Exception("Failed to close channel", future.cause())))
+          }
+        })
       }
-      _ <- IO(logger.debug(s"Bind initiated, storing future and waiting for completion"))
-      // Store the future before waiting
-      _ <- IO { boundFutureOpt = Some(bindFuture) }
-      // Wait for bind to complete
-      _ <- toTask(bindFuture).handleErrorWith {
-        case NonFatal(ex) =>
-          IO.raiseError(InitializationError(ex.getMessage, ex.getCause))
-      }
-      _ <- IO(logger.debug(s"UDP server bind completed"))
-      // After bind completes, get and store the channel
-      _ <- IO {
-        val ch = bindFuture.channel()
-        logger.debug(s"Got channel from bindFuture: isOpen=${ch.isOpen}, isActive=${ch.isActive}, isRegistered=${ch.isRegistered}")
-        boundChannelOpt = Some(ch)
-        logger.info(s"Server bound to address ${config.bindAddress}. Channel: isOpen=${ch.isOpen}, isActive=${ch.isActive}, isRegistered=${ch.isRegistered}")
-      }
-      _ <- IO(logger.debug(s"Initialize method completing"))
-    } yield ()
+    }
+
+  // Initialize by storing the channel - actual lifecycle managed by Resource
+  // This method is no longer needed as initialization happens in createServerChannel Resource
+
 
   private def shutdown: IO[Unit] = {
     for {
@@ -365,11 +360,7 @@ class StaticUDPPeerGroup[M] private (
       _ <- clientChannelsRef.get.map(_.values.flatten.toList.map(_._2.attempt).sequence)
       // Release server channels.
       _ <- serverChannelsRef.get.map(_.values.toList.map(_._2.attempt).sequence)
-      // Stop the in and outgoing traffic.
-      _ <- boundChannelOpt match {
-        case Some(channel) => toTask(channel.close())
-        case None => IO.unit
-      }
+      // Note: Channel closure now handled by Resource finalizer in createServerChannel
     } yield ()
   }
 
@@ -391,33 +382,59 @@ object StaticUDPPeerGroup extends StrictLogging {
 
   private type ChannelAlloc[M] = (ChannelImpl[M], Release)
 
-  def apply[M: Codec](config: Config): Resource[IO, StaticUDPPeerGroup[M]] =
-    Resource.make {
+  def apply[M: Codec](config: Config): Resource[IO, StaticUDPPeerGroup[M]] = {
+    // Create event loop group as a Resource
+    val eventLoopResource = Resource.make {
       IO(new NioEventLoopGroup(1))
     } { group =>
       IO(logger.debug(s"Shutting down NioEventLoopGroup")) *>
-      toTask(group.shutdownGracefully())
-    }.flatMap { workerGroup =>
-      Resource.make {
+      IO.async_[Unit] { cb =>
+        group.shutdownGracefully(0, 15, java.util.concurrent.TimeUnit.SECONDS)
+          .addListener((future: io.netty.util.concurrent.Future[_]) => {
+            if (future.isSuccess) cb(Right(()))
+            else cb(Left(new Exception("EventLoopGroup shutdown failed", future.cause())))
+          })
+      }
+    }
+
+    eventLoopResource.flatMap { workerGroup =>
+      // Create the peer group with all its dependencies
+      val peerGroupResource = Resource.eval {
         for {
           isShutdownRef <- Ref[IO].of(false)
           serverQueue <- CloseableQueue.unbounded[ServerEvent[InetMultiAddress, M]]
           serverChannelSemaphore <- Semaphore[IO](1)
           serverChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, ChannelAlloc[M]])
           clientChannelsRef <- Ref[IO].of(Map.empty[InetSocketAddress, Set[ChannelAlloc[M]]])
-          peerGroup = new StaticUDPPeerGroup[M](
-            config,
-            workerGroup,
-            isShutdownRef,
-            serverQueue,
-            serverChannelSemaphore,
-            serverChannelsRef,
-            clientChannelsRef
-          )
-          _ <- peerGroup.initialize
-        } yield peerGroup
-      }(_.shutdown)
+        } yield new StaticUDPPeerGroup[M](
+          config,
+          workerGroup,
+          isShutdownRef,
+          serverQueue,
+          serverChannelSemaphore,
+          serverChannelsRef,
+          clientChannelsRef
+        )
+      }
+
+      peerGroupResource.flatMap { peerGroup =>
+        // Create the server channel as a Resource
+        peerGroup.createServerChannel.flatMap { channel =>
+          // CRITICAL: Use a Semaphore to keep the Resource from completing
+          // This prevents the event loop from shutting down prematurely
+          Resource.eval(Semaphore[IO](0)).flatMap { keepAlive =>
+            Resource.make {
+              IO(logger.debug("UDP server channel Resource is now active and will remain so until shutdown"))
+                .as(peerGroup)
+            } { _ =>
+              // Shutdown will be called when the Resource is released
+              peerGroup.shutdown
+            } <* Resource.eval(keepAlive.acquire) // This blocks until the Resource is explicitly released
+          }
+        }
+      }
     }
+  }
 
   private class ChannelImpl[M](
       nettyChannel: io.netty.channel.Channel,
