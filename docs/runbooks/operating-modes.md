@@ -342,10 +342,31 @@ A **Boot Node** (or **Discovery Node**) serves as an entry point for new nodes j
 
 ### Configuration
 
-Create `boot-node.conf`:
+Fukuii includes a pre-configured bootnode configuration file optimized for peer discovery. The configuration file is located at:
+- **In source:** `src/main/resources/conf/bootnode.conf`
+- **In distribution:** `conf/bootnode.conf`
+
+The bootnode configuration includes:
+- Blockchain synchronization disabled
+- RPC endpoints disabled
+- Maximized peer limits (500 outgoing, 200 incoming)
+- Aggressive discovery settings (30s scan interval, 64 bucket size)
+- Enhanced known-nodes persistence (2000 nodes)
+- Comprehensive inline documentation
+
+**Quick Start with Pre-configured File:**
+
+```bash
+# Using the included bootnode.conf
+./bin/fukuii -Dconfig.file=conf/bootnode.conf etc
+```
+
+**Custom Configuration Example:**
+
+If you need to customize the bootnode settings, you can create your own configuration file:
 
 ```hocon
-include "base.conf"
+include "app.conf"
 
 fukuii {
   # Disable blockchain synchronization
@@ -353,7 +374,7 @@ fukuii {
     do-fast-sync = false
   }
   
-  # Disable RPC (optional, but boot nodes typically don't serve RPC)
+  # Disable RPC (bootnodes don't serve RPC)
   network {
     rpc {
       http {
@@ -368,43 +389,80 @@ fukuii {
     discovery {
       discovery-enabled = true
       scan-interval = 30.seconds
-      kademlia-bucket-size = 32
+      kademlia-bucket-size = 64
+      kademlia-alpha = 5
+      
+      # Set your public IP/hostname
+      # host = "boot.example.com"
     }
     
     # High peer limits for boot node
     peer {
-      min-outgoing-peers = 50
-      max-outgoing-peers = 200
-      max-incoming-peers = 100
+      min-outgoing-peers = 100
+      max-outgoing-peers = 500
+      max-incoming-peers = 200
+    }
+    
+    # Enhanced peer persistence
+    known-nodes {
+      persist-interval = 10.seconds
+      max-persisted-nodes = 2000
     }
   }
-  
-  # Optional: Configure public-facing address
-  # Uncomment and set your public IP/hostname
-  # network.discovery.host = "boot.example.com"
 }
 ```
 
+For complete documentation and all available settings, see `conf/bootnode.conf` in your Fukuii distribution.
+
 ### Starting a Boot Node
 
-**Docker:**
+**Recommended: Using Pre-configured File**
+
+The easiest way to start a bootnode is using the included `bootnode.conf`:
+
+```bash
+# From distribution
+./bin/fukuii -Dconfig.file=conf/bootnode.conf etc
+```
+
+**Docker with Pre-configured File:**
 ```bash
 docker run -d \
   --name fukuii-bootnode \
   --restart unless-stopped \
   -p 30303:30303/udp \
+  -p 9076:9076 \
   -v fukuii-bootnode-data:/app/data \
+  -v $(pwd)/conf:/app/conf:ro \
   ghcr.io/chippr-robotics/chordodes_fukuii:latest \
-  -Dfukuii.sync.do-fast-sync=false \
-  -Dfukuii.network.rpc.http.enabled=false
+  -Dconfig.file=/app/conf/bootnode.conf etc
 ```
 
-**From Distribution:**
+**Alternative: Docker with Inline Configuration:**
 ```bash
-./bin/fukuii \
+docker run -d \
+  --name fukuii-bootnode \
+  --restart unless-stopped \
+  -p 30303:30303/udp \
+  -p 9076:9076 \
+  -v fukuii-bootnode-data:/app/data \
+  -e JAVA_OPTS="-Xms2g -Xmx4g" \
+  ghcr.io/chippr-robotics/chordodes_fukuii:latest \
   -Dfukuii.sync.do-fast-sync=false \
   -Dfukuii.network.rpc.http.enabled=false \
-  -Dfukuii.network.peer.max-outgoing-peers=200 \
+  -Dfukuii.network.peer.max-outgoing-peers=500 \
+  -Dfukuii.network.peer.max-incoming-peers=200 \
+  etc
+```
+
+**Alternative: From Distribution with Inline Flags:**
+```bash
+./bin/fukuii \
+  -J-Xms2g -J-Xmx4g \
+  -Dfukuii.sync.do-fast-sync=false \
+  -Dfukuii.network.rpc.http.enabled=false \
+  -Dfukuii.network.peer.max-outgoing-peers=500 \
+  -Dfukuii.network.peer.max-incoming-peers=200 \
   etc
 ```
 
@@ -987,14 +1045,17 @@ fukuii {
 }
 ```
 
-**Start:**
+**Using the Built-in Configuration:**
 ```bash
+# Recommended: Use the included bootnode.conf
 ./bin/fukuii \
   -J-Xms2g \
   -J-Xmx4g \
-  -Dconfig.file=boot-node.conf \
+  -Dconfig.file=conf/bootnode.conf \
   etc
 ```
+
+**Note:** The included `conf/bootnode.conf` provides a comprehensive, production-ready configuration with detailed documentation. See that file for all available settings and best practices.
 
 ### Example 4: Mining Pool Node
 
@@ -1114,15 +1175,17 @@ services:
     restart: unless-stopped
     ports:
       - "30305:30303/udp"
+      - "9078:9076"
     volumes:
       - fukuii-boot-data:/app/data
+      - ./conf:/app/conf:ro  # Mount config directory
     environment:
       - JAVA_OPTS=-Xms2g -Xmx4g
     command: >
       etc
-      -Dfukuii.sync.do-fast-sync=false
-      -Dfukuii.network.rpc.http.enabled=false
+      -Dconfig.file=/app/conf/bootnode.conf
       -Dfukuii.network.discovery.port=30305
+      -Dfukuii.network.server-address.port=9078
 
 volumes:
   fukuii-full-data:
