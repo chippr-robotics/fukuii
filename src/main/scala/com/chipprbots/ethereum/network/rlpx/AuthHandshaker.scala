@@ -50,6 +50,8 @@ object AuthHandshaker {
   }
 }
 
+// Implements scala.reflect.Selectable so tests using structural access work on Scala 3.
+// This mirrors Scala 2 reflective behavior required by some tests/mocks.
 case class AuthHandshaker(
     nodeKey: AsymmetricCipherKeyPair,
     nonce: ByteString,
@@ -59,7 +61,7 @@ case class AuthHandshaker(
     initiatePacketOpt: Option[ByteString] = None,
     responsePacketOpt: Option[ByteString] = None,
     remotePubKeyOpt: Option[ECPoint] = None
-) {
+) extends scala.reflect.Selectable {
 
   import AuthHandshaker._
 
