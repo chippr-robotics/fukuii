@@ -30,6 +30,7 @@ Node unable to sync blocks on Ethereum Classic mainnet. Debug log analysis reque
 - # 1 - mainnet, 3 - ropsten, 7 - mordor
 - network-id = 1
 + # 61 - ETC mainnet, 1 - ETH mainnet, 7 - mordor testnet
++ # Note: Mordor's chain ID is 63 (0x3f), but its network ID is 7.
 + network-id = 61
 ```
 
