@@ -67,6 +67,9 @@ class BodiesFetcher(
     log.debug("Requesting {} block bodies", hashes.size)
     val resp = makeRequest(Request.create(GetBlockBodies(hashes), BestPeer), BodiesFetcher.RetryBodiesRequest)
     context.pipeToSelf(resp.unsafeToFuture()) {
+      case Success(res: BodiesFetcher.RetryBodiesRequest.type) =>
+        log.debug("Bodies request will be retried")
+        res
       case Success(res) =>
         log.debug("Bodies request completed successfully")
         res
