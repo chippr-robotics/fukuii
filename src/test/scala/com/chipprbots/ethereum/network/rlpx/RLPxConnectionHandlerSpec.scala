@@ -192,10 +192,8 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
-  // SCALA 3 MIGRATION: Removed self-type constraint `this: org.scalamock.scalatest.MockFactory =>`
-  // because Scala 3 doesn't allow instantiating TestSetup with `new TestSetup` when the self-type
-  // is present, even though the outer class (RLPxConnectionHandlerSpec) extends MockFactory.
-  // The mock functionality still works because the outer class provides MockFactory.
+  // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
+  // Using lazy val for mocks ensures they're created when accessed within MockFactory context.
   trait TestSetup extends SecureRandomBuilder {
 
     // Mock parameters for RLPxConnectionHandler
@@ -204,10 +202,12 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    val mockHandshaker: AuthHandshaker = createStubAuthHandshaker()
-    val connection: TestProbe = TestProbe()
-    val mockMessageCodec: MessageCodec = mock[MessageCodec]
-    val mockHelloExtractor: HelloCodec = mock[HelloCodec]
+    // SCALA 3 MIGRATION: Using real AuthHandshaker instance instead of mock because
+    // AuthHandshaker case class with default parameters causes ScalaMock type inference issues in Scala 3
+    lazy val mockHandshaker: AuthHandshaker = createStubAuthHandshaker()
+    lazy val connection: TestProbe = TestProbe()
+    lazy val mockMessageCodec: MessageCodec = mock[MessageCodec]
+    lazy val mockHelloExtractor: HelloCodec = mock[HelloCodec]
 
     private def createStubAuthHandshaker(): AuthHandshaker = {
       import java.security.SecureRandom
@@ -239,9 +239,9 @@ class RLPxConnectionHandlerSpec
       override val waitForHandshakeTimeout: FiniteDuration = Timeouts.veryLongTimeout
     }
 
-    val tcpActorProbe: TestProbe = TestProbe()
-    val rlpxConnectionParent: TestProbe = TestProbe()
-    val rlpxConnection: TestActorRef[Nothing] = TestActorRef(
+    lazy val tcpActorProbe: TestProbe = TestProbe()
+    lazy val rlpxConnectionParent: TestProbe = TestProbe()
+    lazy val rlpxConnection: TestActorRef[Nothing] = TestActorRef(
       Props(
         new RLPxConnectionHandler(
           protocolVersion :: Nil,
