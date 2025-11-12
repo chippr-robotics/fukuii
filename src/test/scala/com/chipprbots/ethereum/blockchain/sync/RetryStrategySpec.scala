@@ -20,10 +20,10 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
     val delay2 = strategy.nextDelay(2).toMillis
     val delay3 = strategy.nextDelay(3).toMillis
 
-    delay0 shouldBe 100 +- 1
-    delay1 shouldBe 200 +- 1
-    delay2 shouldBe 400 +- 1
-    delay3 shouldBe 800 +- 1
+    delay0 shouldBe 100L +- 1L
+    delay1 shouldBe 200L +- 1L
+    delay2 shouldBe 400L +- 1L
+    delay3 shouldBe 800L +- 1L
   }
 
   it should "respect maximum delay cap" in {
@@ -35,7 +35,7 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
     )
 
     val delay10 = strategy.nextDelay(10) // Would be 102,400ms without cap
-    delay10.toMillis shouldBe 500 +- 1
+    delay10.toMillis shouldBe 500L +- 1L
   }
 
   it should "add jitter to delay" in {
@@ -73,7 +73,7 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
 
     // 0: 100ms, 1: 200ms, 2: 400ms, total: 700ms
     val total = strategy.totalTime(3).toMillis
-    total shouldBe 700 +- 50 // Allow some variance
+    total shouldBe 700L +- 50L // Allow some variance
   }
 
   "RetryStrategy.default" should "have reasonable parameters" in {
@@ -157,7 +157,7 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
     val state = RetryState(attempt = 2, strategy = strategy)
 
     val delay = state.nextDelay.toMillis
-    delay shouldBe 400 +- 1 // 100 * 2^2
+    delay shouldBe 400L +- 1L // 100 * 2^2
   }
 
   it should "detect when max attempts reached" in {
