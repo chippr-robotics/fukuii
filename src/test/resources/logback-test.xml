@@ -12,6 +12,9 @@
     <logger name="com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
     
+    <!-- Enhanced logging for RLPxConnectionHandler to diagnose test failures -->
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
+    
     <!-- Reduce log noise from sync components in tests -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler" level="WARN" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="WARN" />
