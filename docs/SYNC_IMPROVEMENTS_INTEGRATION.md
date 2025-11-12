@@ -313,18 +313,26 @@ class BootstrapCheckpointLoader(
     // Load existing checkpoints
     val existing = loadBootstrapCheckpoints()
     
-    // Optionally fetch latest checkpoints
-    if (config.getBoolean("fukuii.checkpoints.auto-update")) {
+    // Check configuration flag before auto-updating
+    val autoUpdate = config.getBoolean("fukuii.checkpoints.auto-update")
+    if (autoUpdate) {
+      log.info("Auto-update enabled, fetching latest checkpoints")
       updateService.fetchLatestCheckpoints(
         sources = CheckpointUpdateService.defaultEtcSources,
         quorumSize = 2
       ).onComplete {
         case Success(verified) =>
           log.info(s"Fetched ${verified.size} verified checkpoints")
-          updateService.updateConfiguration(verified)
+          if (verified.nonEmpty) {
+            updateService.updateConfiguration(verified)
+          } else {
+            log.warn("No verified checkpoints received, using existing checkpoints")
+          }
         case Failure(ex) =>
           log.warn(s"Failed to fetch latest checkpoints: ${ex.getMessage}")
       }
+    } else {
+      log.debug("Auto-update disabled, using static checkpoints")
     }
   }
 }
@@ -361,11 +369,14 @@ fukuii.checkpoints {
 
 ### Security Considerations
 
-1. **Disabled by default**: Auto-update should be opt-in
-2. **Quorum required**: At least 2 sources must agree
-3. **HTTPS only**: All checkpoint sources must use HTTPS
-4. **Cryptographic verification**: Consider adding signature verification
-5. **Manual override**: Operators can always manually specify checkpoints
+1. **Disabled by default**: Auto-update is disabled by default (see configuration above)
+2. **Configuration check required**: Implementers MUST check the `auto-update` flag before calling `fetchLatestCheckpoints`
+3. **Quorum required**: At least 2 sources must agree on checkpoint hash
+4. **HTTPS only**: All checkpoint sources must use HTTPS
+5. **Timeouts configured**: HTTP requests have 10s connect timeout, 30s idle timeout
+6. **Placeholder JSON parsing**: Current implementation returns empty sequences - integrate proper JSON library before production use
+7. **Cryptographic verification**: Consider adding signature verification in production
+8. **Manual override**: Operators can always manually specify checkpoints
 
 ### Testing
 

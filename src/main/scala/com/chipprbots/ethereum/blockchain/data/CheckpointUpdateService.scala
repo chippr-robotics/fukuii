@@ -1,12 +1,14 @@
 package com.chipprbots.ethereum.blockchain.data
 
 import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration._
 import scala.util.{Failure, Success}
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.http.scaladsl.model._
 import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
+import org.apache.pekko.http.scaladsl.settings.ConnectionPoolSettings
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.utils.Logger
@@ -68,8 +70,19 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
   private def fetchFromSource(source: CheckpointSource): Future[Either[String, Seq[BootstrapCheckpoint]]] = {
     log.debug(s"Fetching checkpoints from ${source.name}: ${source.url}")
 
+    val request = HttpRequest(uri = source.url)
+      .withHeaders(headers.`User-Agent`("Fukuii-Checkpoint-Fetcher"))
+    
     Http()
-      .singleRequest(HttpRequest(uri = source.url))
+      .singleRequest(
+        request,
+        settings = ConnectionPoolSettings(system)
+          .withConnectionSettings(
+            ConnectionPoolSettings(system).connectionSettings
+              .withConnectingTimeout(10.seconds)
+              .withIdleTimeout(30.seconds)
+          )
+      )
       .flatMap { response =>
         response.status match {
           case StatusCodes.OK =>
@@ -111,10 +124,33 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     }
   }
 
-  /** Simplified JSON parsing (replace with proper library in production) */
+  /** Simplified JSON parsing (replace with proper library in production)
+    *
+    * IMPORTANT: This is a placeholder implementation that returns empty sequences.
+    * Before using this feature in production, implement proper JSON parsing using
+    * circe or play-json. The expected JSON format is documented above.
+    *
+    * Example implementation with circe:
+    * {{{
+    * import io.circe.parser._
+    * import io.circe.generic.auto._
+    * 
+    * case class CheckpointJson(blockNumber: Long, blockHash: String)
+    * case class CheckpointsResponse(network: String, checkpoints: Seq[CheckpointJson])
+    * 
+    * decode[CheckpointsResponse](json).map { response =>
+    *   response.checkpoints.map { cp =>
+    *     BootstrapCheckpoint(
+    *       BigInt(cp.blockNumber),
+    *       ByteString(hexStringToBytes(cp.blockHash))
+    *     )
+    *   }
+    * }
+    * }}}
+    */
   private def parseSimpleJson(json: String): Seq[BootstrapCheckpoint] = {
-    // TODO: Replace with proper JSON parsing using circe or play-json
-    // This is a placeholder implementation
+    log.warn("JSON parsing not implemented - returning empty checkpoint list. " +
+      "Implement parseSimpleJson with circe or play-json before using in production.")
     Seq.empty
   }
 
@@ -136,8 +172,9 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
       // Find hash that appears at least quorumSize times
       byHash.collectFirst {
         case (hash, cps) if cps.size >= quorumSize =>
+          val hashHex = hash.take(10).map("%02x".format(_)).mkString
           log.info(
-            s"Checkpoint verified: block $blockNumber, hash ${hash.take(10).toHex}..., " +
+            s"Checkpoint verified: block $blockNumber, hash $hashHex..., " +
               s"agreement from ${cps.size}/${checkpointSets.size} sources"
           )
           VerifiedCheckpoint(blockNumber, hash, cps.size)
@@ -172,8 +209,9 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     // TODO: Integrate with BlockchainConfig to update checkpoint configuration
     // This would require modifying the configuration management system
     checkpoints.foreach { cp =>
+      val hashHex = cp.blockHash.take(10).map("%02x".format(_)).mkString
       log.info(
-        s"  Block ${cp.blockNumber}: ${cp.blockHash.take(10).toHex}... " +
+        s"  Block ${cp.blockNumber}: $hashHex... " +
           s"(verified by ${cp.sourceCount} sources)"
       )
     }
@@ -182,17 +220,26 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
 
 object CheckpointUpdateService {
 
-  /** Default checkpoint sources for ETC mainnet */
+  /** Default checkpoint sources for ETC mainnet
+    *
+    * NOTE: These URLs are placeholders and should be verified before production use.
+    * Ensure these endpoints exist and return data in the expected JSON format.
+    */
   val defaultEtcSources: Seq[CheckpointSource] = Seq(
-    CheckpointSource("Official ETC", "https://checkpoints.ethereumclassic.org/mainnet.json", priority = 1),
-    CheckpointSource("BlockScout", "https://blockscout.com/etc/mainnet/api/checkpoints", priority = 2),
-    CheckpointSource("Expedition", "https://expedition.dev/api/checkpoints/etc", priority = 2)
+    CheckpointSource("Official ETC", "https://checkpoints.ethereumclassic.org/mainnet.json", priority = 1)
+    // Additional sources commented out until endpoints are verified:
+    // CheckpointSource("BlockScout", "https://blockscout.com/etc/mainnet/api/checkpoints", priority = 2),
+    // CheckpointSource("Expedition", "https://expedition.dev/api/checkpoints/etc", priority = 2)
   )
 
-  /** Default checkpoint sources for Mordor testnet */
+  /** Default checkpoint sources for Mordor testnet
+    *
+    * NOTE: These URLs are placeholders and should be verified before production use.
+    */
   val defaultMordorSources: Seq[CheckpointSource] = Seq(
-    CheckpointSource("Official ETC", "https://checkpoints.ethereumclassic.org/mordor.json", priority = 1),
-    CheckpointSource("Expedition", "https://expedition.dev/api/checkpoints/mordor", priority = 2)
+    CheckpointSource("Official ETC", "https://checkpoints.ethereumclassic.org/mordor.json", priority = 1)
+    // Additional sources commented out until endpoints are verified:
+    // CheckpointSource("Expedition", "https://expedition.dev/api/checkpoints/mordor", priority = 2)
   )
 
   /** Recommended quorum size based on number of sources */

@@ -1,7 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync
 
+import java.util.concurrent.ThreadLocalRandom
+
 import scala.concurrent.duration._
-import scala.util.Random
 
 /** Exponential backoff retry strategy with jitter
   *
@@ -22,8 +23,6 @@ final case class RetryStrategy(
   require(multiplier >= 1.0, "Multiplier must be >= 1.0")
   require(jitterFactor >= 0.0 && jitterFactor <= 1.0, "Jitter factor must be between 0.0 and 1.0")
 
-  private val random = new Random()
-
   /** Calculate next delay for given attempt number (0-indexed)
     *
     * Formula: min(initialDelay * multiplier^attempt, maxDelay) + jitter
@@ -37,9 +36,11 @@ final case class RetryStrategy(
       maxDelay.toMillis
     )
 
-    val jitterMs = if (jitterFactor > 0.0) {
-      random.nextInt((baseDelay * jitterFactor).toInt + 1)
-    } else 0
+    val jitterRange = (baseDelay * jitterFactor).toInt
+    val jitterMs =
+      if (jitterFactor > 0.0 && jitterRange > 0)
+        ThreadLocalRandom.current().nextInt(jitterRange + 1)
+      else 0
 
     (baseDelay.toLong + jitterMs).millis
   }
@@ -97,6 +98,7 @@ object RetryStrategy {
 final case class RetryState(
     attempt: Int = 0,
     strategy: RetryStrategy = RetryStrategy.default,
+    firstAttemptTime: Option[Long] = None,
     lastAttemptTime: Option[Long] = None
 ) {
 
@@ -104,20 +106,24 @@ final case class RetryState(
   def nextDelay: FiniteDuration = strategy.nextDelay(attempt)
 
   /** Record a retry attempt */
-  def recordAttempt: RetryState = copy(
-    attempt = attempt + 1,
-    lastAttemptTime = Some(System.currentTimeMillis())
-  )
+  def recordAttempt: RetryState = {
+    val now = System.currentTimeMillis()
+    copy(
+      attempt = attempt + 1,
+      firstAttemptTime = firstAttemptTime.orElse(Some(now)),
+      lastAttemptTime = Some(now)
+    )
+  }
 
   /** Reset retry state (e.g., after success) */
-  def reset: RetryState = RetryState(0, strategy, None)
+  def reset: RetryState = RetryState(0, strategy, None, None)
 
   /** Check if max attempts reached */
   def shouldGiveUp(maxAttempts: Int): Boolean = attempt >= maxAttempts
 
   /** Get total time spent retrying */
   def totalTimeSpent: FiniteDuration =
-    lastAttemptTime match {
+    firstAttemptTime match {
       case None => 0.millis
       case Some(startTime) =>
         (System.currentTimeMillis() - startTime).millis

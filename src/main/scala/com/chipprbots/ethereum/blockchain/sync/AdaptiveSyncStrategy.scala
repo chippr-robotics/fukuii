@@ -58,18 +58,22 @@ final case class NetworkConditions(
 sealed trait SyncResult
 
 object SyncResult {
-  final case class Success(blockssynced: Long, durationMs: Long) extends SyncResult
+  final case class Success(blocksSynced: Long, durationMs: Long) extends SyncResult
   final case class Failure(reason: String, canRetry: Boolean) extends SyncResult
   case object InProgress extends SyncResult
 }
 
-/** Adaptive sync controller with fallback logic */
+/** Adaptive sync controller with fallback logic
+  *
+  * Note: This class is NOT thread-safe. It should be used from a single actor
+  * or protected by external synchronization.
+  */
 class AdaptiveSyncController extends Logger {
   import SyncStrategy._
 
-  private var currentStrategy: Option[SyncStrategy] = None
-  private var failedStrategies: Set[SyncStrategy] = Set.empty
-  private var attemptCount: Map[SyncStrategy, Int] = Map.empty.withDefaultValue(0)
+  @volatile private var currentStrategy: Option[SyncStrategy] = None
+  @volatile private var failedStrategies: Set[SyncStrategy] = Set.empty
+  @volatile private var attemptCount: Map[SyncStrategy, Int] = Map.empty.withDefaultValue(0)
 
   /** Select best sync strategy based on network conditions
     *

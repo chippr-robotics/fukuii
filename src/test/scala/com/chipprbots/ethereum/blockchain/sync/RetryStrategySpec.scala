@@ -133,14 +133,17 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
     val updated = state.recordAttempt
 
     updated.attempt shouldBe 1
+    updated.firstAttemptTime should be(defined)
     updated.lastAttemptTime should be(defined)
+    updated.firstAttemptTime shouldBe updated.lastAttemptTime
   }
 
   it should "reset to initial state" in {
-    val state = RetryState(attempt = 5, lastAttemptTime = Some(System.currentTimeMillis()))
+    val state = RetryState(attempt = 5, firstAttemptTime = Some(System.currentTimeMillis()), lastAttemptTime = Some(System.currentTimeMillis()))
     val reset = state.reset
 
     reset.attempt shouldBe 0
+    reset.firstAttemptTime shouldBe None
     reset.lastAttemptTime shouldBe None
   }
 
@@ -165,11 +168,11 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
     state.shouldGiveUp(maxAttempts = 10) shouldBe false
   }
 
-  it should "track total time spent" in {
+  it should "track total time spent from first attempt" in {
     val initialTime = System.currentTimeMillis()
     Thread.sleep(100)
 
-    val state = RetryState(lastAttemptTime = Some(initialTime))
+    val state = RetryState(firstAttemptTime = Some(initialTime))
     val elapsed = state.totalTimeSpent.toMillis
 
     elapsed should be >= 100L
