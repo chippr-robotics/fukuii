@@ -192,9 +192,9 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
-  // SCALA 3 MIGRATION: Self-type constraint required for proper mock initialization
-  // In Scala 3, this works correctly when instantiating TestSetup within a class that extends MockFactory
-  trait TestSetup extends SecureRandomBuilder { this: MockFactory =>
+  // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
+  // Using lazy val for mocks ensures they're created when accessed within MockFactory context.
+  trait TestSetup extends SecureRandomBuilder {
 
     // Mock parameters for RLPxConnectionHandler
     val mockMessageDecoder: MessageDecoder = new MessageDecoder {
@@ -202,10 +202,10 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    val mockHandshaker: AuthHandshaker = createStubAuthHandshaker()
-    val connection: TestProbe = TestProbe()
-    val mockMessageCodec: MessageCodec = mock[MessageCodec]
-    val mockHelloExtractor: HelloCodec = mock[HelloCodec]
+    lazy val mockHandshaker: AuthHandshaker = createStubAuthHandshaker()
+    lazy val connection: TestProbe = TestProbe()
+    lazy val mockMessageCodec: MessageCodec = mock[MessageCodec]
+    lazy val mockHelloExtractor: HelloCodec = mock[HelloCodec]
 
     private def createStubAuthHandshaker(): AuthHandshaker = {
       import java.security.SecureRandom
@@ -237,9 +237,9 @@ class RLPxConnectionHandlerSpec
       override val waitForHandshakeTimeout: FiniteDuration = Timeouts.veryLongTimeout
     }
 
-    val tcpActorProbe: TestProbe = TestProbe()
-    val rlpxConnectionParent: TestProbe = TestProbe()
-    val rlpxConnection: TestActorRef[Nothing] = TestActorRef(
+    lazy val tcpActorProbe: TestProbe = TestProbe()
+    lazy val rlpxConnectionParent: TestProbe = TestProbe()
+    lazy val rlpxConnection: TestActorRef[Nothing] = TestActorRef(
       Props(
         new RLPxConnectionHandler(
           protocolVersion :: Nil,
