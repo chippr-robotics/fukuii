@@ -119,6 +119,15 @@ This continues for ~5 seconds until first peers connect at 14:06:30.
 
 **Frequency**: This pattern repeats 40+ times in the log.
 
+**Root Cause of Misleading Logs** (Code Analysis):
+- The log message "Headers request completed successfully" comes from `HeadersFetcher.scala` line 94
+- This is in the `Success` case of a `pipeToSelf` callback
+- However, the Success case includes scenarios where `NoSuitablePeer` or other retry conditions occur
+- When `NoSuitablePeer`, the code returns `RetryHeadersRequest` as a successful result
+- This goes through Success path (not Failure), causing misleading "completed successfully" log
+- The subsequent "Something failed on a headers request" comes from `BlockFetcher.scala` when handling `RetryHeadersRequest`
+- **Recommendation**: Improve log messages to distinguish between actual success and retry scenarios
+
 ### 5. Transaction Pool Message Decoding Failures
 
 **Problem**: Node cannot decode NewPooledTransactionHashes messages from Ethereum mainnet peers.
