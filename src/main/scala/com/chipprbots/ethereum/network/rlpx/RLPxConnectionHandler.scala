@@ -272,7 +272,7 @@ class RLPxConnectionHandler(
               context.stop(self)
           }
         case None =>
-          log.warn("[RLPx] Did not find 'Hello' in message from peer {}, continuing to await", peerId)
+          log.warning("[RLPx] Did not find 'Hello' in message from peer {}, continuing to await", peerId)
           context.become(awaitInitialHello(extractor, cancellableAckTimeout, seqNumber))
       }
 
