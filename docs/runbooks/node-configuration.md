@@ -95,7 +95,7 @@ Chain configuration files define blockchain-specific parameters such as fork blo
 
 | Chain File | Network | Network ID | Chain ID |
 |------------|---------|------------|----------|
-| `etc-chain.conf` | Ethereum Classic | 61 | 0x3d (61) |
+| `etc-chain.conf` | Ethereum Classic | 1 | 0x3d (61) |
 | `eth-chain.conf` | Ethereum | 1 | 0x01 (1) |
 | `mordor-chain.conf` | Mordor Testnet | 7 | 0x3f (63) |
 | `pottery-chain.conf` | Pottery Testnet | 10 | 0xa (10) |
