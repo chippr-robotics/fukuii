@@ -236,7 +236,7 @@ class BlockFetcher(
         Behaviors.same
 
       case RetryHeadersRequest if state.isFetchingHeaders =>
-        log.debug("Something failed on a headers request, cancelling the request and re-fetching")
+        log.debug("Retrying headers request (likely due to no suitable peer available)")
         fetchBlocks(state.withHeaderFetchReceived)
 
       case ReceivedBodies(peer, bodies) if state.isFetchingBodies =>
@@ -286,7 +286,7 @@ class BlockFetcher(
         Behaviors.same
 
       case RetryBodiesRequest if state.isFetchingBodies =>
-        log.debug("Something failed on a bodies request, cancelling the request and re-fetching")
+        log.debug("Retrying bodies request (likely due to no suitable peer available)")
         fetchBlocks(state.withBodiesFetchReceived)
 
       case FetchStateNode(hash, replyTo) =>
