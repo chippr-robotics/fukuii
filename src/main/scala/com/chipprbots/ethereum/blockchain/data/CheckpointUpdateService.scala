@@ -13,27 +13,27 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.utils.Logger
 
+/** Checkpoint source configuration */
+final case class CheckpointSource(
+    name: String,
+    url: String,
+    priority: Int = 1
+)
+
+/** Verified checkpoint with consensus from multiple sources */
+final case class VerifiedCheckpoint(
+    blockNumber: BigInt,
+    blockHash: ByteString,
+    sourceCount: Int,
+    timestamp: Long = System.currentTimeMillis()
+)
+
 /** Checkpoint update service with multi-source verification
   *
   * Fetches and verifies bootstrap checkpoints from trusted sources.
   * Based on investigation report recommendations (Priority 4).
   */
 class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext) extends Logger {
-
-  /** Checkpoint source configuration */
-  final case class CheckpointSource(
-      name: String,
-      url: String,
-      priority: Int = 1
-  )
-
-  /** Verified checkpoint with consensus from multiple sources */
-  final case class VerifiedCheckpoint(
-      blockNumber: BigInt,
-      blockHash: ByteString,
-      sourceCount: Int,
-      timestamp: Long = System.currentTimeMillis()
-  )
 
   /** Fetch checkpoints from configured sources
     *
