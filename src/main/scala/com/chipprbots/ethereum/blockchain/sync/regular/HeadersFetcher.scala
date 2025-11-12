@@ -90,6 +90,9 @@ class HeadersFetcher(
       }
 
     context.pipeToSelf(resp.unsafeToFuture()) {
+      case Success(res: HeadersFetcher.RetryHeadersRequest.type) =>
+        log.debug("Headers request will be retried")
+        res
       case Success(res) =>
         log.debug("Headers request completed successfully")
         res

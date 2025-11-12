@@ -125,10 +125,8 @@ class OmmersPoolSpec
     }
   }
 
-  // SCALA 3 MIGRATION: Removed self-type constraint `this: org.scalamock.scalatest.MockFactory =>`
-  // because Scala 3 doesn't allow instantiating TestSetup with `new TestSetup` when the self-type
-  // is present, even though the outer class (OmmersPoolSpec) extends MockFactory.
-  // The mock functionality still works because the outer class provides MockFactory.
+  // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
+  // Using lazy val for mock ensures it's created when accessed within MockFactory context.
   trait TestSetup {
 
     // In order to support all the blocks for the given scenarios
@@ -164,10 +162,9 @@ class OmmersPoolSpec
 
     val block1Chain5: BlockHeader = Block3125369.header.copy(number = 1, parentHash = block0.hash, difficulty = 15)
 
-    val testProbe: TestProbe = TestProbe()
-
-    val blockchainReader: BlockchainReader = mock[BlockchainReader]
-    val ommersPool: ActorRef =
+    // Mock created lazily so it's initialized when accessed within the MockFactory context
+    lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
+    lazy val ommersPool: ActorRef =
       system.actorOf(
         OmmersPool.props(blockchainReader, ommersPoolSize, ommerGenerationLimit, returnedOmmerSizeLimit)
       )

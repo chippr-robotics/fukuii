@@ -438,6 +438,8 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
   }
 }
 
+// SCALA 3 MIGRATION: Cannot use self-type constraint with anonymous instantiation in Scala 3.
+// The implementing class must extend MockFactory and create mocks as lazy vals.
 trait MockBlockchain {
   self: TestSetupWithVmAndValidators =>
 
