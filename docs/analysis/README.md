@@ -4,6 +4,31 @@ This directory contains detailed analysis reports for operational logs and syste
 
 ## Available Reports
 
+### [Network Mismatch Log Analysis](network-mismatch-log-analysis.md)
+
+**Date**: 2025-11-12  
+**Type**: Configuration Issue Analysis  
+**Severity**: Critical
+
+Analysis of a Fukuii node configured for Ethereum Classic (networkId: 61) that completely fails to synchronize due to discovering only Ethereum mainnet peers (networkId: 1). The report identifies:
+
+- 100% network ID mismatch across all 29 discovered peers
+- Wrong bootstrap node configuration causing discovery of incompatible peers
+- All peers blacklisted for 10 hours due to network incompatibility
+- Zero successful handshakes preventing any sync progress
+
+**Key Findings**:
+- Node correctly configured for ETC but using ETH bootstrap nodes
+- All discovered peers respond with networkId: 1 (Ethereum) instead of 61 (ETC)
+- No recovery possible until bootstrap configuration is fixed
+- Issue difficult to diagnose from INFO-level logs alone
+
+**Recommended Actions**:
+1. Update bootstrap nodes to ETC-specific nodes
+2. Clear cached peer database
+3. Add configuration validation
+4. Implement network-specific peer database segregation
+
 ### [Sync Process Log Analysis](sync-process-log-analysis.md)
 
 **Date**: 2025-11-10  
@@ -115,4 +140,4 @@ When creating new analysis reports:
 ---
 
 **Maintainer**: Chippr Robotics LLC  
-**Last Updated**: 2025-11-10
+**Last Updated**: 2025-11-12

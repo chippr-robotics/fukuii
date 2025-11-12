@@ -398,6 +398,38 @@ grep "Disconnected from peer" ~/.fukuii/etc/logs/fukuii.log | \
 
 **Solution**: Usually normal - node filters incompatible peers. If excessive (> 50% disconnect rate), see [peering.md](peering.md#problem-high-peer-churn)
 
+#### Problem: Network ID Mismatch (All Peers Disconnecting)
+
+**Log pattern**:
+```
+INFO  [PeerManagerActor] - Total number of discovered nodes 29. Handshaked 0/80
+DEBUG [PeerActor] - Message received: Status { networkId: 1, ... }
+DEBUG [RLPxConnectionHandler] - Sent message: Status { networkId: 61, ... }
+INFO  [CacheBasedBlacklist] - Blacklisting peer [...] for 36000000 milliseconds
+DEBUG [PeersClient] - Total handshaked peers: 0, Available peers (not blacklisted): 0
+```
+
+**Diagnosis**:
+```bash
+# Check network ID in status messages
+grep "networkId" ~/.fukuii/etc/logs/fukuii.log | head -20
+
+# Check if all peers are being blacklisted
+grep "Blacklisting peer" ~/.fukuii/etc/logs/fukuii.log | wc -l
+
+# Verify configured network
+grep "Using network" ~/.fukuii/etc/logs/fukuii.log
+```
+
+**Root Cause**: Node configured for one network (e.g., Ethereum Classic with networkId: 61) but discovering peers from another network (e.g., Ethereum mainnet with networkId: 1). This typically indicates wrong bootstrap nodes in configuration.
+
+**Solution**: 
+1. Update bootstrap nodes to match your network (ETC, not ETH)
+2. Clear peer database: `rm -rf ~/.fukuii/etc/discovery/ ~/.fukuii/etc/nodeDatabase/`
+3. Restart node
+
+**Detailed Analysis**: See [Network Mismatch Log Analysis](../analysis/network-mismatch-log-analysis.md) for comprehensive troubleshooting steps
+
 ### RPC and API Issues
 
 #### Problem: RPC Not Responding
@@ -689,6 +721,7 @@ When investigating an issue:
 
 ### Example Analysis Reports
 
+- **[Network Mismatch Log Analysis](../analysis/network-mismatch-log-analysis.md)** - Analysis of a sync failure caused by network ID mismatch (ETC node discovering ETH mainnet peers), including root cause analysis and bootstrap node configuration fixes
 - **[Sync Process Log Analysis](../analysis/sync-process-log-analysis.md)** - Analysis of a complete sync failure due to peer connection issues, including ForkId validation failures and remediation steps
 
 ---
