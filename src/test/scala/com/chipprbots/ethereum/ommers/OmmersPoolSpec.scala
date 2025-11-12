@@ -162,8 +162,6 @@ class OmmersPoolSpec
 
     val block1Chain5: BlockHeader = Block3125369.header.copy(number = 1, parentHash = block0.hash, difficulty = 15)
 
-    lazy val testProbe: TestProbe = TestProbe()
-
     // Mock created lazily so it's initialized when accessed within the MockFactory context
     lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
     lazy val ommersPool: ActorRef =

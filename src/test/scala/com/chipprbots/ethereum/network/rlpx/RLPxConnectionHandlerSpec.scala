@@ -202,8 +202,8 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    // SCALA 3 MIGRATION: Using stub instead of mock because AuthHandshaker case class
-    // with default parameters causes ScalaMock type inference issues in Scala 3
+    // SCALA 3 MIGRATION: Using real AuthHandshaker instance instead of mock because
+    // AuthHandshaker case class with default parameters causes ScalaMock type inference issues in Scala 3
     lazy val mockHandshaker: AuthHandshaker = createStubAuthHandshaker()
     lazy val connection: TestProbe = TestProbe()
     lazy val mockMessageCodec: MessageCodec = mock[MessageCodec]
