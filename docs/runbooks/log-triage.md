@@ -421,14 +421,18 @@ grep "Blacklisting peer" ~/.fukuii/etc/logs/fukuii.log | wc -l
 grep "Using network" ~/.fukuii/etc/logs/fukuii.log
 ```
 
-**Root Cause**: Node configured for one network (e.g., Ethereum Classic with networkId: 61) but discovering peers from another network (e.g., Ethereum mainnet with networkId: 1). This typically indicates wrong bootstrap nodes in configuration.
+**Root Cause**: For **Ethereum Classic (ETC)**, this typically indicates incorrect network ID configuration. Core-Geth (the dominant ETC client) uses **networkId: 1** for Ethereum Classic, not 61. If Fukuii is configured with networkId: 61, it will be incompatible with all Core-Geth ETC peers.
 
-**Solution**: 
-1. Update bootstrap nodes to match your network (ETC, not ETH)
-2. Clear peer database: `rm -rf ~/.fukuii/etc/discovery/ ~/.fukuii/etc/nodeDatabase/`
-3. Restart node
+**Solution for ETC**: 
+1. Edit `src/main/resources/conf/chains/etc-chain.conf`
+2. Change `network-id = 61` to `network-id = 1`
+3. Clear peer database: `rm -rf ~/.fukuii/etc/discovery/ ~/.fukuii/etc/nodeDatabase/`
+4. Rebuild: `sbt dist`
+5. Restart node
 
-**Detailed Analysis**: See [Network Mismatch Log Analysis](../analysis/network-mismatch-log-analysis.md) for comprehensive troubleshooting steps
+**Important**: Core-Geth uses networkId 1 for both ETH and ETC. Networks are distinguished by genesis hash and fork configuration, not network ID.
+
+**Detailed Analysis**: See [Network ID Configuration Error Log Analysis](../analysis/network-mismatch-log-analysis.md) for comprehensive troubleshooting steps
 
 ### RPC and API Issues
 

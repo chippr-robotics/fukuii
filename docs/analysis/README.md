@@ -4,30 +4,32 @@ This directory contains detailed analysis reports for operational logs and syste
 
 ## Available Reports
 
-### [Network Mismatch Log Analysis](network-mismatch-log-analysis.md)
+### [Network ID Configuration Error Log Analysis](network-mismatch-log-analysis.md)
 
-**Date**: 2025-11-12  
+**Date**: 2025-11-12 (Corrected: 2025-11-12)  
 **Type**: Configuration Issue Analysis  
 **Severity**: Critical
 
-Analysis of a Fukuii node configured for Ethereum Classic (networkId: 61) that completely fails to synchronize due to discovering only Ethereum mainnet peers (networkId: 1). The report identifies:
+Analysis of a Fukuii ETC node that completely fails to synchronize after being changed from networkId: 1 to networkId: 61. The report identifies:
 
-- 100% network ID mismatch across all 29 discovered peers
-- Wrong bootstrap node configuration causing discovery of incompatible peers
-- All peers blacklisted for 10 hours due to network incompatibility
+- 100% network ID mismatch: local (61) vs all Core-Geth ETC peers (1)
+- Core-Geth uses networkId: 1 for Ethereum Classic, not 61
+- Recent configuration change broke compatibility with ETC network
+- All 29 legitimate ETC peers blacklisted for 10 hours due to mismatch
 - Zero successful handshakes preventing any sync progress
 
 **Key Findings**:
-- Node correctly configured for ETC but using ETH bootstrap nodes
-- All discovered peers respond with networkId: 1 (Ethereum) instead of 61 (ETC)
-- No recovery possible until bootstrap configuration is fixed
-- Issue difficult to diagnose from INFO-level logs alone
+- Core-Geth (dominant ETC client) uses networkId: 1 for both ETH and ETC
+- Networks differentiated by genesis hash and fork config, not networkId
+- Fukuii was recently changed from networkId 1 → 61, breaking ETC compatibility
+- All discovered peers ARE legitimate ETC nodes, not ETH nodes
+- Issue difficult to diagnose without understanding Core-Geth conventions
 
 **Recommended Actions**:
-1. Update bootstrap nodes to ETC-specific nodes
+1. Revert ETC network ID from 61 back to 1
 2. Clear cached peer database
-3. Add configuration validation
-4. Implement network-specific peer database segregation
+3. Document Core-Geth networkId behavior
+4. Add configuration validation for ETC network ID
 
 ### [Sync Process Log Analysis](sync-process-log-analysis.md)
 
