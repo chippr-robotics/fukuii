@@ -125,11 +125,9 @@ class OmmersPoolSpec
     }
   }
 
-  // SCALA 3 MIGRATION: Removed self-type constraint `this: org.scalamock.scalatest.MockFactory =>`
-  // because Scala 3 doesn't allow instantiating TestSetup with `new TestSetup` when the self-type
-  // is present, even though the outer class (OmmersPoolSpec) extends MockFactory.
-  // The mock functionality still works because the outer class provides MockFactory.
-  trait TestSetup {
+  // SCALA 3 MIGRATION: Self-type constraint required for proper mock initialization
+  // In Scala 3, this works correctly when instantiating TestSetup within a class that extends MockFactory
+  trait TestSetup { this: MockFactory =>
 
     // In order to support all the blocks for the given scenarios
     val ommersPoolSize: Int = 8

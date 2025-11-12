@@ -439,7 +439,7 @@ trait TestSetupWithVmAndValidators extends EphemBlockchainTestSetup {
 }
 
 trait MockBlockchain {
-  self: TestSetupWithVmAndValidators =>
+  self: TestSetupWithVmAndValidators with org.scalamock.scalatest.MockFactory =>
 
   // These will be implemented by mixing in concrete implementations from test class
   // The test class (which extends MockFactory) will provide these

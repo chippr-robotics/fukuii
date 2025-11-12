@@ -192,11 +192,9 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
-  // SCALA 3 MIGRATION: Removed self-type constraint `this: org.scalamock.scalatest.MockFactory =>`
-  // because Scala 3 doesn't allow instantiating TestSetup with `new TestSetup` when the self-type
-  // is present, even though the outer class (RLPxConnectionHandlerSpec) extends MockFactory.
-  // The mock functionality still works because the outer class provides MockFactory.
-  trait TestSetup extends SecureRandomBuilder {
+  // SCALA 3 MIGRATION: Self-type constraint required for proper mock initialization
+  // In Scala 3, this works correctly when instantiating TestSetup within a class that extends MockFactory
+  trait TestSetup extends SecureRandomBuilder { this: MockFactory =>
 
     // Mock parameters for RLPxConnectionHandler
     val mockMessageDecoder: MessageDecoder = new MessageDecoder {
