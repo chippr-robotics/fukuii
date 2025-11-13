@@ -304,7 +304,7 @@ class RLPxConnectionHandler(
         val errorMsg = Option(ex.getMessage).getOrElse(ex.toString)
         log.info("Cannot decode message from {}, because of {}", peerId, errorMsg)
         // Enhanced debugging for decompression failures
-        if (Option(ex.getMessage).exists(_.contains("FAILED_TO_UNCOMPRESS"))) {
+        if (errorMsg.contains("FAILED_TO_UNCOMPRESS")) {
           log.error(
             "DECODE_ERROR_DEBUG: Peer {} failed message decode - connection will be closed. Error details: {}",
             peerId,
