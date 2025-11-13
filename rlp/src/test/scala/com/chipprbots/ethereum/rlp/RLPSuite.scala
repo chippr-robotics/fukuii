@@ -465,7 +465,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     // This tests the specific case that was causing network sync errors
     val emptyBytes = Array.empty[Byte]
     val rlpValue = RLPValue(emptyBytes)
-    
+
     val result = RLPImplicits.bigIntEncDec.decode(rlpValue)
     assert(result == BigInt(0))
   }
@@ -684,13 +684,14 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
       }
 
       override def decode(rlp: RLPEncodeable): MultiList1 = rlp match {
-        case l: RLPList => MultiList1(
-          intFromEncodeable(l.items.head),
-          stringSeqEncDec.decode(l.items(1)),
-          stringFromEncodeable(l.items(2)),
-          intSeqEncDec.decode(l.items(3))
-        )
-        case _          => throw new RuntimeException("Invalid Int Seq Decoder")
+        case l: RLPList =>
+          MultiList1(
+            intFromEncodeable(l.items.head),
+            stringSeqEncDec.decode(l.items(1)),
+            stringFromEncodeable(l.items(2)),
+            intSeqEncDec.decode(l.items(3))
+          )
+        case _ => throw new RuntimeException("Invalid Int Seq Decoder")
       }
     }
   }
@@ -706,12 +707,13 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
       }
 
       override def decode(rlp: RLPEncodeable): MultiList2 = rlp match {
-        case l: RLPList => MultiList2(
-          stringSeqEncDec.decode(l.items.head),
-          intSeqEncDec.decode(l.items(1)),
-          emptySeqEncDec.decode(l.items(2))
-        )
-        case _          => throw new RuntimeException("Invalid Int Seq Decoder")
+        case l: RLPList =>
+          MultiList2(
+            stringSeqEncDec.decode(l.items.head),
+            intSeqEncDec.decode(l.items(1)),
+            emptySeqEncDec.decode(l.items(2))
+          )
+        case _ => throw new RuntimeException("Invalid Int Seq Decoder")
       }
     }
   }
@@ -787,7 +789,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
         }
 
         override def decode(rlp: RLPEncodeable): TestSimpleTransaction = rlp match {
-          case RLPList(idRlp, nameRlp) => 
+          case RLPList(idRlp, nameRlp) =>
             TestSimpleTransaction(
               intFromEncodeable(idRlp),
               stringFromEncodeable(nameRlp)

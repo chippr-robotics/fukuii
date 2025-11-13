@@ -23,7 +23,9 @@ object VersionInfo {
     }
     val version = {
       val version = BuildInfo.version
-      val commit = BuildInfo.gitHeadCommit.map("-" + _.take(7)).getOrElse("")
+      val commit =
+        if (BuildInfo.gitHeadCommit != "unknown" && BuildInfo.gitHeadCommit.nonEmpty) s"-${BuildInfo.gitHeadCommit}"
+        else ""
       s"v$version$commit"
     }
     val os = {

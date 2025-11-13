@@ -4,7 +4,7 @@ javaAgents += "io.kamon" % "kanela-agent" % "1.0.6"
 
 import scala.sys.process.Process
 import NativePackagerHelper._
-import com.typesafe.sbt.SbtGit.GitKeys._
+import com.github.sbt.git.SbtGit.git
 
 // Necessary for the nix build, please do not remove.
 val nixBuild = sys.props.isDefinedAt("nix")
@@ -272,11 +272,14 @@ lazy val node = {
         version,
         scalaVersion,
         sbtVersion,
-        gitHeadCommit,
-        gitCurrentBranch,
-        gitCurrentTags,
-        gitDescribedVersion,
-        gitUncommittedChanges,
+        BuildInfoKey.action("gitHeadCommit") { git.gitHeadCommit.?.value.flatten.map(_.take(7)).getOrElse("unknown") },
+        BuildInfoKey.action("gitCurrentBranch") { 
+          val branch = git.gitCurrentBranch.?.value.getOrElse("")
+          if (branch != null && branch.nonEmpty) branch else "unknown"
+        },
+        BuildInfoKey.action("gitCurrentTags") { git.gitCurrentTags.?.value.getOrElse(Seq.empty).mkString(",") },
+        BuildInfoKey.action("gitDescribedVersion") { git.gitDescribedVersion.?.value.flatten.getOrElse("unknown") },
+        BuildInfoKey.action("gitUncommittedChanges") { git.gitUncommittedChanges.?.value.getOrElse(false) },
         (Compile / libraryDependencies)
       ),
       buildInfoPackage := "com.chipprbots.ethereum.utils",

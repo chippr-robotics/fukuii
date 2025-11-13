@@ -9,7 +9,7 @@ import RLPCodec.Ops
 
 object RLPImplicits {
 
-  given byteEncDec: (RLPEncoder[Byte] & RLPDecoder[Byte]) = new RLPEncoder[Byte] with RLPDecoder[Byte] {
+  private val byteCodec = new RLPEncoder[Byte] with RLPDecoder[Byte] {
     override def encode(obj: Byte): RLPValue = RLPValue(byteToByteArray(obj))
 
     override def decode(rlp: RLPEncodeable): Byte = rlp match {
@@ -23,8 +23,12 @@ object RLPImplicits {
       case _ => throw RLPException("src is not an RLPValue", rlp)
     }
   }
+  
+  given byteEncDec: (RLPEncoder[Byte] & RLPDecoder[Byte]) = byteCodec
+  given RLPEncoder[Byte] = byteCodec
+  given RLPDecoder[Byte] = byteCodec
 
-  given shortEncDec: (RLPEncoder[Short] & RLPDecoder[Short]) = new RLPEncoder[Short] with RLPDecoder[Short] {
+  private val shortCodec = new RLPEncoder[Short] with RLPDecoder[Short] {
     override def encode(obj: Short): RLPValue = RLPValue(shortToBigEndianMinLength(obj))
 
     override def decode(rlp: RLPEncodeable): Short = rlp match {
@@ -39,8 +43,12 @@ object RLPImplicits {
       case _ => throw RLPException("src is not an RLPValue", rlp)
     }
   }
+  
+  given shortEncDec: (RLPEncoder[Short] & RLPDecoder[Short]) = shortCodec
+  given RLPEncoder[Short] = shortCodec
+  given RLPDecoder[Short] = shortCodec
 
-  given intEncDec: (RLPEncoder[Int] & RLPDecoder[Int]) = new RLPEncoder[Int] with RLPDecoder[Int] {
+  private val intCodec = new RLPEncoder[Int] with RLPDecoder[Int] {
     override def encode(obj: Int): RLPValue = RLPValue(intToBigEndianMinLength(obj))
 
     override def decode(rlp: RLPEncodeable): Int = rlp match {
@@ -48,10 +56,13 @@ object RLPImplicits {
       case _               => throw RLPException("src is not an RLPValue", rlp)
     }
   }
+  
+  given intEncDec: (RLPEncoder[Int] & RLPDecoder[Int]) = intCodec
+  given RLPEncoder[Int] = intCodec
+  given RLPDecoder[Int] = intCodec
 
   // Used for decoding and encoding positive (or 0) BigInts
-  given bigIntEncDec: (RLPEncoder[BigInt] & RLPDecoder[BigInt]) = new RLPEncoder[BigInt]
-    with RLPDecoder[BigInt] {
+  private val bigIntCodec = new RLPEncoder[BigInt] with RLPDecoder[BigInt] {
 
     override def encode(obj: BigInt): RLPValue = RLPValue(
       if (obj.equals(BigInt(0))) byteToByteArray(0: Byte) else ByteUtils.bigIntToUnsignedByteArray(obj)
@@ -63,20 +74,27 @@ object RLPImplicits {
       case _ => throw RLPException("src is not an RLPValue", rlp)
     }
   }
+  
+  given bigIntEncDec: (RLPEncoder[BigInt] & RLPDecoder[BigInt]) = bigIntCodec
+  given RLPEncoder[BigInt] = bigIntCodec
+  given RLPDecoder[BigInt] = bigIntCodec
 
   // Used for decoding and encoding positive (or 0) longs
-  given longEncDec: (RLPEncoder[Long] & RLPDecoder[Long]) = new RLPEncoder[Long] with RLPDecoder[Long] {
-    override def encode(obj: Long): RLPEncodeable = bigIntEncDec.encode(BigInt(obj))
+  private val longCodec = new RLPEncoder[Long] with RLPDecoder[Long] {
+    override def encode(obj: Long): RLPEncodeable = bigIntCodec.encode(BigInt(obj))
 
     override def decode(rlp: RLPEncodeable): Long = rlp match {
-      case RLPValue(bytes) if bytes.length <= 8 => bigIntEncDec.decode(rlp).toLong
+      case RLPValue(bytes) if bytes.length <= 8 => bigIntCodec.decode(rlp).toLong
       case RLPValue(bytes) => throw RLPException(s"expected max 8 bytes for Long; got ${bytes.length}", rlp)
       case _               => throw RLPException(s"src is not an RLPValue", rlp)
     }
   }
+  
+  given longEncDec: (RLPEncoder[Long] & RLPDecoder[Long]) = longCodec
+  given RLPEncoder[Long] = longCodec
+  given RLPDecoder[Long] = longCodec
 
-  given stringEncDec: (RLPEncoder[String] & RLPDecoder[String]) = new RLPEncoder[String]
-    with RLPDecoder[String] {
+  private val stringCodec = new RLPEncoder[String] with RLPDecoder[String] {
     override def encode(obj: String): RLPValue = RLPValue(obj.getBytes)
 
     override def decode(rlp: RLPEncodeable): String = rlp match {
@@ -84,9 +102,12 @@ object RLPImplicits {
       case _               => throw RLPException("src is not an RLPValue", rlp)
     }
   }
+  
+  given stringEncDec: (RLPEncoder[String] & RLPDecoder[String]) = stringCodec
+  given RLPEncoder[String] = stringCodec
+  given RLPDecoder[String] = stringCodec
 
-  given byteArrayEncDec: (RLPEncoder[Array[Byte]] & RLPDecoder[Array[Byte]]) = new RLPEncoder[Array[Byte]]
-    with RLPDecoder[Array[Byte]] {
+  private val byteArrayCodec = new RLPEncoder[Array[Byte]] with RLPDecoder[Array[Byte]] {
 
     override def encode(obj: Array[Byte]): RLPValue = RLPValue(obj)
 
@@ -95,23 +116,33 @@ object RLPImplicits {
       case _               => throw RLPException("src is not an RLPValue", rlp)
     }
   }
+  
+  given byteArrayEncDec: (RLPEncoder[Array[Byte]] & RLPDecoder[Array[Byte]]) = byteArrayCodec
+  given RLPEncoder[Array[Byte]] = byteArrayCodec
+  given RLPDecoder[Array[Byte]] = byteArrayCodec
 
-  given byteStringEncDec: (RLPEncoder[ByteString] & RLPDecoder[ByteString]) = new RLPEncoder[ByteString]
-    with RLPDecoder[ByteString] {
-    override def encode(obj: ByteString): RLPEncodeable = byteArrayEncDec.encode(obj.toArray[Byte])
+  private val byteStringCodec = new RLPEncoder[ByteString] with RLPDecoder[ByteString] {
+    override def encode(obj: ByteString): RLPEncodeable = byteArrayCodec.encode(obj.toArray[Byte])
 
-    override def decode(rlp: RLPEncodeable): ByteString = ByteString(byteArrayEncDec.decode(rlp))
+    override def decode(rlp: RLPEncodeable): ByteString = ByteString(byteArrayCodec.decode(rlp))
   }
+  
+  given byteStringEncDec: (RLPEncoder[ByteString] & RLPDecoder[ByteString]) = byteStringCodec
+  given RLPEncoder[ByteString] = byteStringCodec
+  given RLPDecoder[ByteString] = byteStringCodec
 
-  given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): (RLPEncoder[Seq[T]] & RLPDecoder[Seq[T]]) =
-    new RLPEncoder[Seq[T]] with RLPDecoder[Seq[T]] {
-      override def encode(obj: Seq[T]): RLPEncodeable = RLPList(obj.map(enc.encode): _*)
+  private def seqCodec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]) = new RLPEncoder[Seq[T]] with RLPDecoder[Seq[T]] {
+    override def encode(obj: Seq[T]): RLPEncodeable = RLPList(obj.map(enc.encode): _*)
 
-      override def decode(rlp: RLPEncodeable): Seq[T] = rlp match {
-        case l: RLPList => l.items.map(dec.decode)
-        case _          => throw RLPException("src is not a Seq", rlp)
-      }
+    override def decode(rlp: RLPEncodeable): Seq[T] = rlp match {
+      case l: RLPList => l.items.map(dec.decode)
+      case _          => throw RLPException("src is not a Seq", rlp)
     }
+  }
+  
+  given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): (RLPEncoder[Seq[T]] & RLPDecoder[Seq[T]]) = seqCodec[T]
+  given [T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPEncoder[Seq[T]] = seqCodec[T]
+  given [T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPDecoder[Seq[T]] = seqCodec[T]
 
   given listEncDec[T: RLPEncoder: RLPDecoder]: RLPCodec[List[T]] =
     seqEncDec[T].xmap(_.toList, _.toSeq)
@@ -127,21 +158,24 @@ object RLPImplicits {
     case rlp            => throw RLPException(s"${rlp} should be a list with 1 or 0 elements", rlp)
   }
 
-  given booleanEncDec: (RLPEncoder[Boolean] & RLPDecoder[Boolean]) = new RLPEncoder[Boolean]
-    with RLPDecoder[Boolean] {
+  private val booleanCodec = new RLPEncoder[Boolean] with RLPDecoder[Boolean] {
     override def encode(obj: Boolean): RLPEncodeable = {
       val intRepresentation: Int = if (obj) 1 else 0
-      intEncDec.encode(intRepresentation)
+      intCodec.encode(intRepresentation)
     }
 
     override def decode(rlp: RLPEncodeable): Boolean = {
-      val intRepresentation = intEncDec.decode(rlp)
+      val intRepresentation = intCodec.decode(rlp)
 
       if (intRepresentation == 1) true
       else if (intRepresentation == 0) false
       else throw RLPException(s"$rlp should be 1 or 0", rlp)
     }
   }
+  
+  given booleanEncDec: (RLPEncoder[Boolean] & RLPDecoder[Boolean]) = booleanCodec
+  given RLPEncoder[Boolean] = booleanCodec
+  given RLPDecoder[Boolean] = booleanCodec
 
   given tuple2Codec[A: RLPCodec, B: RLPCodec]: RLPCodec[(A, B)] =
     RLPCodec.instance[(A, B)](
