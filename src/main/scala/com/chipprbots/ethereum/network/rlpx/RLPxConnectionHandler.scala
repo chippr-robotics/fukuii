@@ -301,13 +301,14 @@ class RLPxConnectionHandler(
         context.parent ! MessageReceived(message)
 
       case Left(ex) =>
-        log.info("Cannot decode message from {}, because of {}", peerId, ex.getMessage)
+        val errorMsg = Option(ex.getMessage).getOrElse(ex.toString)
+        log.info("Cannot decode message from {}, because of {}", peerId, errorMsg)
         // Enhanced debugging for decompression failures
-        if (ex.getMessage.contains("FAILED_TO_UNCOMPRESS")) {
+        if (Option(ex.getMessage).exists(_.contains("FAILED_TO_UNCOMPRESS"))) {
           log.error(
             "DECODE_ERROR_DEBUG: Peer {} failed message decode - connection will be closed. Error details: {}",
             peerId,
-            ex.getMessage
+            errorMsg
           )
         }
         // break connection in case of failed decoding, to avoid attack which would send us garbage
