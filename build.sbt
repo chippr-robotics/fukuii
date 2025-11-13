@@ -272,11 +272,14 @@ lazy val node = {
         version,
         scalaVersion,
         sbtVersion,
-        BuildInfoKey.map(git.gitHeadCommit) { case (k, v) => k -> v.map(_.take(7)).getOrElse("unknown") },
-        BuildInfoKey.map(git.gitCurrentBranch) { case (k, v) => k -> (if (v != null && v.nonEmpty) v else "unknown") },
-        BuildInfoKey.map(git.gitCurrentTags) { case (k, v) => k -> v.mkString(",") },
-        BuildInfoKey.map(git.gitDescribedVersion) { case (k, v) => k -> v.getOrElse("unknown") },
-        BuildInfoKey.map(git.gitUncommittedChanges) { case (k, v) => k -> v },
+        BuildInfoKey.action("gitHeadCommit") { git.gitHeadCommit.?.value.flatten.map(_.take(7)).getOrElse("unknown") },
+        BuildInfoKey.action("gitCurrentBranch") { 
+          val branch = git.gitCurrentBranch.?.value.getOrElse("")
+          if (branch != null && branch.nonEmpty) branch else "unknown"
+        },
+        BuildInfoKey.action("gitCurrentTags") { git.gitCurrentTags.?.value.getOrElse(Seq.empty).mkString(",") },
+        BuildInfoKey.action("gitDescribedVersion") { git.gitDescribedVersion.?.value.flatten.getOrElse("unknown") },
+        BuildInfoKey.action("gitUncommittedChanges") { git.gitUncommittedChanges.?.value.getOrElse(false) },
         (Compile / libraryDependencies)
       ),
       buildInfoPackage := "com.chipprbots.ethereum.utils",
