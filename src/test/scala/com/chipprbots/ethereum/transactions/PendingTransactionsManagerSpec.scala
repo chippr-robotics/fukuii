@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.TxPoolConfig
+import com.chipprbots.ethereum.network.EtcPeerManagerActor.SendMessage
 
 class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
 
