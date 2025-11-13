@@ -168,7 +168,8 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
     val state = RetryState(attempt = 5)
 
     state.shouldGiveUp(maxAttempts = 3) shouldBe true
-    state.shouldGiveUp(maxAttempts = 5) shouldBe false
+    state.shouldGiveUp(maxAttempts = 5) shouldBe true  // At attempt 5, we've exhausted 5 attempts (0-4)
+    state.shouldGiveUp(maxAttempts = 6) shouldBe false
     state.shouldGiveUp(maxAttempts = 10) shouldBe false
   }
 
