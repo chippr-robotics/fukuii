@@ -29,7 +29,7 @@ final case class RetryStrategy(
 
   /** Calculate next delay for given attempt number (0-indexed)
     *
-    * Formula: min(initialDelay * multiplier^attempt, maxDelay) + jitter Jitter is random value between 0 and (delay *
+    * Formula: min(initialDelay * multiplier^attempt, maxDelay) + jitter. Jitter is random value between 0 and (delay *
     * jitterFactor)
     */
   def nextDelay(attempt: Int): FiniteDuration = {

@@ -74,12 +74,16 @@ class AdaptiveSyncController extends Logger {
   @volatile private var failedStrategies: Set[SyncStrategy] = Set.empty
   @volatile private var attemptCount: Map[SyncStrategy, Int] = Map.empty.withDefaultValue(0)
 
+  // format: off
   /** Select best sync strategy based on network conditions
     *
     * Selection logic:
-    *   1. If checkpoints available and good connectivity → SnapSync 2. If 3+ peers and medium connectivity → FastSync
-    *      3. If 1+ peers → FullSync 4. If previous failures → try next in fallback chain
+    *   1. If checkpoints available and good connectivity → SnapSync
+    *   2. If 3+ peers and medium connectivity → FastSync
+    *   3. If 1+ peers → FullSync
+    *   4. If previous failures → try next in fallback chain
     */
+  // format: on
   def selectStrategy(conditions: NetworkConditions): SyncStrategy = {
     val candidates = getRemainingStrategies
 
