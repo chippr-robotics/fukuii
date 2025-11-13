@@ -273,7 +273,7 @@ lazy val node = {
         scalaVersion,
         sbtVersion,
         BuildInfoKey.map(git.gitHeadCommit) { case (k, v) => k -> v.map(_.take(7)).getOrElse("unknown") },
-        BuildInfoKey.map(git.gitCurrentBranch) { case (k, v) => k -> v.getOrElse("unknown") },
+        BuildInfoKey.map(git.gitCurrentBranch) { case (k, v) => k -> (if (v != null && v.nonEmpty) v else "unknown") },
         BuildInfoKey.map(git.gitCurrentTags) { case (k, v) => k -> v.mkString(",") },
         BuildInfoKey.map(git.gitDescribedVersion) { case (k, v) => k -> v.getOrElse("unknown") },
         BuildInfoKey.map(git.gitUncommittedChanges) { case (k, v) => k -> v },
