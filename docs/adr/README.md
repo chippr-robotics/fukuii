@@ -36,6 +36,7 @@ Each ADR follows this structure:
 - [ADR-010: Apache HttpClient Transport for JupnP UPnP Port Forwarding](010-jupnp-apache-httpclient-transport.md) - Accepted
 - [ADR-011: RLPx Protocol Deviations and Peer Bootstrap Challenge](011-rlpx-protocol-deviations-and-peer-bootstrap.md) - Accepted
 - [ADR-012: Bootstrap Checkpoints for Improved Initial Sync](012-bootstrap-checkpoints.md) - Accepted
+- [ADR-013: Block Sync Improvements - Enhanced Reliability and Performance](013-block-sync-improvements.md) - Accepted
 
 ## Creating a New ADR
 
