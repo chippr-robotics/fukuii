@@ -30,8 +30,6 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.InitialHelloRe
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 
-import org.scalatest.Ignore
-
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for AuthHandshaker
 // @Ignore - Un-ignored per issue to identify test failures
 class RLPxConnectionHandlerSpec

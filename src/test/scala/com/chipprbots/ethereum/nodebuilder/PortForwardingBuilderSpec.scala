@@ -3,10 +3,8 @@ package com.chipprbots.ethereum.nodebuilder
 import java.util.concurrent.atomic.AtomicInteger
 
 import cats.effect.IO
-import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
-import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration._

@@ -4,8 +4,8 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Adaptive sync strategy with fallback chain
   *
-  * Implements progressive fallback from fastest to most reliable sync method.
-  * Based on investigation report recommendations (Priority 2).
+  * Implements progressive fallback from fastest to most reliable sync method. Based on investigation report
+  * recommendations (Priority 2).
   */
 sealed trait SyncStrategy {
   def name: String
@@ -47,7 +47,7 @@ final case class NetworkConditions(
     previousSyncFailures: Int = 0,
     averagePeerLatencyMs: Option[Double] = None
 ) {
-  def hasGoodConnectivity: Boolean = 
+  def hasGoodConnectivity: Boolean =
     availablePeerCount >= 5 && averagePeerLatencyMs.exists(_ < 500)
 
   def hasPoorConnectivity: Boolean =
@@ -65,8 +65,7 @@ object SyncResult {
 
 /** Adaptive sync controller with fallback logic
   *
-  * Note: This class is NOT thread-safe. It should be used from a single actor
-  * or protected by external synchronization.
+  * Note: This class is NOT thread-safe. It should be used from a single actor or protected by external synchronization.
   */
 class AdaptiveSyncController extends Logger {
   import SyncStrategy._
@@ -78,10 +77,8 @@ class AdaptiveSyncController extends Logger {
   /** Select best sync strategy based on network conditions
     *
     * Selection logic:
-    * 1. If checkpoints available and good connectivity → SnapSync
-    * 2. If 3+ peers and medium connectivity → FastSync
-    * 3. If 1+ peers → FullSync
-    * 4. If previous failures → try next in fallback chain
+    *   1. If checkpoints available and good connectivity → SnapSync 2. If 3+ peers and medium connectivity → FastSync
+    *      3. If 1+ peers → FullSync 4. If previous failures → try next in fallback chain
     */
   def selectStrategy(conditions: NetworkConditions): SyncStrategy = {
     val candidates = getRemainingStrategies
@@ -108,18 +105,18 @@ class AdaptiveSyncController extends Logger {
     strategy match {
       case SnapSync =>
         conditions.checkpointsAvailable &&
-          conditions.availablePeerCount >= strategy.requiresMinPeers &&
-          !failedStrategies.contains(SnapSync) &&
-          attemptCount(SnapSync) < 2
+        conditions.availablePeerCount >= strategy.requiresMinPeers &&
+        !failedStrategies.contains(SnapSync) &&
+        attemptCount(SnapSync) < 2
 
       case FastSync =>
         conditions.availablePeerCount >= strategy.requiresMinPeers &&
-          !failedStrategies.contains(FastSync) &&
-          attemptCount(FastSync) < 3
+        !failedStrategies.contains(FastSync) &&
+        attemptCount(FastSync) < 3
 
       case FullSync =>
         conditions.availablePeerCount >= strategy.requiresMinPeers &&
-          attemptCount(FullSync) < 5 // More retries for full sync
+        attemptCount(FullSync) < 5 // More retries for full sync
     }
 
   /** Record sync result and update strategy */
@@ -184,9 +181,8 @@ class AdaptiveSyncController extends Logger {
   def getCurrentStrategy: Option[SyncStrategy] = currentStrategy
 
   /** Get statistics */
-  def getStatistics: String = {
+  def getStatistics: String =
     s"Current: ${currentStrategy.map(_.name).getOrElse("none")}, " +
       s"Failed: ${failedStrategies.map(_.name).mkString(", ")}, " +
       s"Attempts: ${attemptCount.map { case (s, a) => s"${s.name}=$a" }.mkString(", ")}"
-  }
 }

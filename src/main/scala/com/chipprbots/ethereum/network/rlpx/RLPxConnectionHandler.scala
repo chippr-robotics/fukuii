@@ -181,7 +181,11 @@ class RLPxConnectionHandler(
     }
 
     def handleTimeout: Receive = { case AuthHandshakeTimeout =>
-      log.error("[Stopping Connection] Auth handshake timeout for peer {} after {}ms", peerId, rlpxConfiguration.waitForHandshakeTimeout.toMillis)
+      log.error(
+        "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
+        peerId,
+        rlpxConfiguration.waitForHandshakeTimeout.toMillis
+      )
       context.parent ! ConnectionFailed
       context.stop(self)
     }
@@ -248,7 +252,12 @@ class RLPxConnectionHandler(
     ): Unit =
       extractor.readHello(data) match {
         case Some((hello, restFrames)) =>
-          log.info("[RLPx] Extracted Hello message from peer {}, protocol version: {}, capabilities: {}", peerId, hello.p2pVersion, hello.capabilities.mkString(", "))
+          log.info(
+            "[RLPx] Extracted Hello message from peer {}, protocol version: {}, capabilities: {}",
+            peerId,
+            hello.p2pVersion,
+            hello.capabilities.mkString(", ")
+          )
           val messageCodecOpt = for {
             opt <- negotiateCodec(hello, extractor)
             (messageCodec, negotiated) = opt

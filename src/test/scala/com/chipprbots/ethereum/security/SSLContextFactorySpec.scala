@@ -15,14 +15,6 @@ import org.scalamock.scalatest.MockFactory
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
 
 class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory with BeforeAndAfterAll {
 

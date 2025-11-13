@@ -8,14 +8,10 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.Fixtures.{Blocks => BlockFixtures}
-import com.chipprbots.ethereum.consensus.validators.SignedTransactionError._
-import com.chipprbots.ethereum.consensus.validators.std.StdSignedTransactionValidator
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.LegacyTransaction
-import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.Config
 

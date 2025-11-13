@@ -4,7 +4,6 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.ImplicitSender
 import org.apache.pekko.testkit.TestKit
-import org.apache.pekko.testkit.TestProbe
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.freespec.AnyFreeSpecLike

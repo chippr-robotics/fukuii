@@ -9,10 +9,6 @@ import cats.effect.unsafe.IORuntime
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.util.encoders.Hex
-import org.scalamock.handlers.CallHandler0
-import org.scalamock.handlers.CallHandler1
-import org.scalamock.handlers.CallHandler2
-import org.scalamock.handlers.CallHandler4
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks
@@ -35,7 +31,6 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.branch.Branch
-import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.security.SecureRandomBuilder

@@ -30,16 +30,19 @@ final case class VerifiedCheckpoint(
 
 /** Checkpoint update service with multi-source verification
   *
-  * Fetches and verifies bootstrap checkpoints from trusted sources.
-  * Based on investigation report recommendations (Priority 4).
+  * Fetches and verifies bootstrap checkpoints from trusted sources. Based on investigation report recommendations
+  * (Priority 4).
   */
 class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext) extends Logger {
 
   /** Fetch checkpoints from configured sources
     *
-    * @param sources List of checkpoint sources to query
-    * @param quorumSize Minimum number of sources that must agree
-    * @return Future of verified checkpoints
+    * @param sources
+    *   List of checkpoint sources to query
+    * @param quorumSize
+    *   Minimum number of sources that must agree
+    * @return
+    *   Future of verified checkpoints
     */
   def fetchLatestCheckpoints(
       sources: Seq[CheckpointSource],
@@ -72,7 +75,7 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
 
     val request = HttpRequest(uri = source.url)
       .withHeaders(headers.`User-Agent`("Fukuii-Checkpoint-Fetcher"))
-    
+
     Http()
       .singleRequest(
         request,
@@ -104,16 +107,10 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
 
   /** Parse checkpoints from JSON response
     *
-    * Expected format:
-    * {
-    *   "network": "etc-mainnet",
-    *   "checkpoints": [
-    *     {"blockNumber": 19250000, "blockHash": "0x..."},
-    *     {"blockNumber": 14525000, "blockHash": "0x..."}
-    *   ]
-    * }
+    * Expected format: { "network": "etc-mainnet", "checkpoints": [ {"blockNumber": 19250000, "blockHash": "0x..."},
+    * {"blockNumber": 14525000, "blockHash": "0x..."} ] }
     */
-  private def parseCheckpointsFromJson(json: String): Either[String, Seq[BootstrapCheckpoint]] = {
+  private def parseCheckpointsFromJson(json: String): Either[String, Seq[BootstrapCheckpoint]] =
     try {
       // Note: In production, use proper JSON library (circe, play-json, etc.)
       // This is a simplified implementation for demonstration
@@ -122,22 +119,20 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     } catch {
       case ex: Exception => Left(ex.getMessage)
     }
-  }
 
   /** Simplified JSON parsing (replace with proper library in production)
     *
-    * IMPORTANT: This is a placeholder implementation that returns empty sequences.
-    * Before using this feature in production, implement proper JSON parsing using
-    * circe or play-json. The expected JSON format is documented above.
+    * IMPORTANT: This is a placeholder implementation that returns empty sequences. Before using this feature in
+    * production, implement proper JSON parsing using circe or play-json. The expected JSON format is documented above.
     *
     * Example implementation with circe:
     * {{{
     * import io.circe.parser._
     * import io.circe.generic.auto._
-    * 
+    *
     * case class CheckpointJson(blockNumber: Long, blockHash: String)
     * case class CheckpointsResponse(network: String, checkpoints: Seq[CheckpointJson])
-    * 
+    *
     * decode[CheckpointsResponse](json).map { response =>
     *   response.checkpoints.map { cp =>
     *     BootstrapCheckpoint(
@@ -149,8 +144,10 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     * }}}
     */
   private def parseSimpleJson(json: String): Seq[BootstrapCheckpoint] = {
-    log.warn("JSON parsing not implemented - returning empty checkpoint list. " +
-      "Implement parseSimpleJson with circe or play-json before using in production.")
+    log.warn(
+      "JSON parsing not implemented - returning empty checkpoint list. " +
+        "Implement parseSimpleJson with circe or play-json before using in production."
+    )
     Seq.empty
   }
 
@@ -165,44 +162,49 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     // Group all checkpoints by block number
     val byBlockNumber = checkpointSets.flatten.groupBy(_.blockNumber)
 
-    byBlockNumber.flatMap { case (blockNumber, checkpoints) =>
-      // Group by hash to find consensus
-      val byHash = checkpoints.groupBy(_.blockHash)
+    byBlockNumber
+      .flatMap { case (blockNumber, checkpoints) =>
+        // Group by hash to find consensus
+        val byHash = checkpoints.groupBy(_.blockHash)
 
-      // Find hash that appears at least quorumSize times
-      byHash.collectFirst {
-        case (hash, cps) if cps.size >= quorumSize =>
-          val hashHex = hash.take(10).map("%02x".format(_)).mkString
-          log.info(
-            s"Checkpoint verified: block $blockNumber, hash $hashHex..., " +
-              s"agreement from ${cps.size}/${checkpointSets.size} sources"
-          )
-          VerifiedCheckpoint(blockNumber, hash, cps.size)
+        // Find hash that appears at least quorumSize times
+        byHash.collectFirst {
+          case (hash, cps) if cps.size >= quorumSize =>
+            val hashHex = hash.take(10).map("%02x".format(_)).mkString
+            log.info(
+              s"Checkpoint verified: block $blockNumber, hash $hashHex..., " +
+                s"agreement from ${cps.size}/${checkpointSets.size} sources"
+            )
+            VerifiedCheckpoint(blockNumber, hash, cps.size)
+        }
       }
-    }.toSeq.sortBy(-_.blockNumber)
+      .toSeq
+      .sortBy(-_.blockNumber)
   }
 
   /** Verify a checkpoint against multiple sources
     *
-    * @param checkpoint Checkpoint to verify
-    * @param sources Sources to check against
-    * @param minAgreement Minimum number of sources that must agree
-    * @return True if checkpoint is verified
+    * @param checkpoint
+    *   Checkpoint to verify
+    * @param sources
+    *   Sources to check against
+    * @param minAgreement
+    *   Minimum number of sources that must agree
+    * @return
+    *   True if checkpoint is verified
     */
   def verifyCheckpoint(
       checkpoint: BootstrapCheckpoint,
       sources: Seq[CheckpointSource],
       minAgreement: Int = 2
-  ): Future[Boolean] = {
+  ): Future[Boolean] =
     fetchLatestCheckpoints(sources, minAgreement).map { verified =>
       verified.exists(v => v.blockNumber == checkpoint.blockNumber && v.blockHash == checkpoint.blockHash)
     }
-  }
 
   /** Update configuration with new checkpoints
     *
-    * This would integrate with the blockchain configuration system
-    * to update checkpoint definitions
+    * This would integrate with the blockchain configuration system to update checkpoint definitions
     */
   def updateConfiguration(checkpoints: Seq[VerifiedCheckpoint]): Unit = {
     log.info(s"Updating configuration with ${checkpoints.size} verified checkpoints")
@@ -222,8 +224,8 @@ object CheckpointUpdateService {
 
   /** Default checkpoint sources for ETC mainnet
     *
-    * NOTE: These URLs are placeholders and should be verified before production use.
-    * Ensure these endpoints exist and return data in the expected JSON format.
+    * NOTE: These URLs are placeholders and should be verified before production use. Ensure these endpoints exist and
+    * return data in the expected JSON format.
     */
   val defaultEtcSources: Seq[CheckpointSource] = Seq(
     CheckpointSource("Official ETC", "https://checkpoints.ethereumclassic.org/mainnet.json", priority = 1)
