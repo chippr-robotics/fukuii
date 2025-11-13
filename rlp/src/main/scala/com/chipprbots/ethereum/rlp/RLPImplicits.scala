@@ -9,7 +9,7 @@ import RLPCodec.Ops
 
 object RLPImplicits {
 
-  given byteEncDec: RLPEncoder[Byte] & RLPDecoder[Byte] = new RLPEncoder[Byte] with RLPDecoder[Byte] {
+  given byteEncDec: RLPEncoder[Byte] with RLPDecoder[Byte] = new RLPEncoder[Byte] with RLPDecoder[Byte] {
     override def encode(obj: Byte): RLPValue = RLPValue(byteToByteArray(obj))
 
     override def decode(rlp: RLPEncodeable): Byte = rlp match {
@@ -24,7 +24,7 @@ object RLPImplicits {
     }
   }
 
-  given shortEncDec: RLPEncoder[Short] & RLPDecoder[Short] = new RLPEncoder[Short] with RLPDecoder[Short] {
+  given shortEncDec: RLPEncoder[Short] with RLPDecoder[Short] = new RLPEncoder[Short] with RLPDecoder[Short] {
     override def encode(obj: Short): RLPValue = RLPValue(shortToBigEndianMinLength(obj))
 
     override def decode(rlp: RLPEncodeable): Short = rlp match {
@@ -40,7 +40,7 @@ object RLPImplicits {
     }
   }
 
-  given intEncDec: RLPEncoder[Int] & RLPDecoder[Int] = new RLPEncoder[Int] with RLPDecoder[Int] {
+  given intEncDec: RLPEncoder[Int] with RLPDecoder[Int] = new RLPEncoder[Int] with RLPDecoder[Int] {
     override def encode(obj: Int): RLPValue = RLPValue(intToBigEndianMinLength(obj))
 
     override def decode(rlp: RLPEncodeable): Int = rlp match {
@@ -50,7 +50,7 @@ object RLPImplicits {
   }
 
   // Used for decoding and encoding positive (or 0) BigInts
-  given bigIntEncDec: RLPEncoder[BigInt] & RLPDecoder[BigInt] = new RLPEncoder[BigInt] with RLPDecoder[BigInt] {
+  given bigIntEncDec: RLPEncoder[BigInt] with RLPDecoder[BigInt] = new RLPEncoder[BigInt] with RLPDecoder[BigInt] {
 
     override def encode(obj: BigInt): RLPValue = RLPValue(
       if (obj.equals(BigInt(0))) byteToByteArray(0: Byte) else ByteUtils.bigIntToUnsignedByteArray(obj)
@@ -64,7 +64,7 @@ object RLPImplicits {
   }
 
   // Used for decoding and encoding positive (or 0) longs
-  given longEncDec: RLPEncoder[Long] & RLPDecoder[Long] = new RLPEncoder[Long] with RLPDecoder[Long] {
+  given longEncDec: RLPEncoder[Long] with RLPDecoder[Long] = new RLPEncoder[Long] with RLPDecoder[Long] {
     override def encode(obj: Long): RLPEncodeable = bigIntEncDec.encode(BigInt(obj))
 
     override def decode(rlp: RLPEncodeable): Long = rlp match {
@@ -74,7 +74,7 @@ object RLPImplicits {
     }
   }
 
-  given stringEncDec: RLPEncoder[String] & RLPDecoder[String] = new RLPEncoder[String] with RLPDecoder[String] {
+  given stringEncDec: RLPEncoder[String] with RLPDecoder[String] = new RLPEncoder[String] with RLPDecoder[String] {
     override def encode(obj: String): RLPValue = RLPValue(obj.getBytes)
 
     override def decode(rlp: RLPEncodeable): String = rlp match {
@@ -83,7 +83,7 @@ object RLPImplicits {
     }
   }
 
-  given byteArrayEncDec: RLPEncoder[Array[Byte]] & RLPDecoder[Array[Byte]] = new RLPEncoder[Array[Byte]]
+  given byteArrayEncDec: RLPEncoder[Array[Byte]] with RLPDecoder[Array[Byte]] = new RLPEncoder[Array[Byte]]
     with RLPDecoder[Array[Byte]] {
 
     override def encode(obj: Array[Byte]): RLPValue = RLPValue(obj)
@@ -94,14 +94,14 @@ object RLPImplicits {
     }
   }
 
-  given byteStringEncDec: RLPEncoder[ByteString] & RLPDecoder[ByteString] = new RLPEncoder[ByteString]
+  given byteStringEncDec: RLPEncoder[ByteString] with RLPDecoder[ByteString] = new RLPEncoder[ByteString]
     with RLPDecoder[ByteString] {
     override def encode(obj: ByteString): RLPEncodeable = byteArrayEncDec.encode(obj.toArray[Byte])
 
     override def decode(rlp: RLPEncodeable): ByteString = ByteString(byteArrayEncDec.decode(rlp))
   }
 
-  given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPEncoder[Seq[T]] & RLPDecoder[Seq[T]] =
+  given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPEncoder[Seq[T]] with RLPDecoder[Seq[T]] =
     new RLPEncoder[Seq[T]] with RLPDecoder[Seq[T]] {
       override def encode(obj: Seq[T]): RLPEncodeable = RLPList(obj.map(enc.encode): _*)
 
@@ -125,7 +125,7 @@ object RLPImplicits {
     case rlp            => throw RLPException(s"${rlp} should be a list with 1 or 0 elements", rlp)
   }
 
-  given booleanEncDec: RLPEncoder[Boolean] & RLPDecoder[Boolean] = new RLPEncoder[Boolean] with RLPDecoder[Boolean] {
+  given booleanEncDec: RLPEncoder[Boolean] with RLPDecoder[Boolean] = new RLPEncoder[Boolean] with RLPDecoder[Boolean] {
     override def encode(obj: Boolean): RLPEncodeable = {
       val intRepresentation: Int = if (obj) 1 else 0
       intEncDec.encode(intRepresentation)
