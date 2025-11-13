@@ -10,7 +10,9 @@ class PeerScoreSpec extends AnyFlatSpec with Matchers {
 
   "PeerScore" should "start with neutral score for empty metrics" in {
     val score = PeerScore.empty
-    score.score shouldBe 0.0 +- 0.1
+    // Empty score has neutral values (0.5) for most metrics except recency (0.0)
+    // (0.5 * 0.3) + (0.5 * 0.25) + (0.5 * 0.2) + (1.0 * 0.15) + (0.0 * 0.1) = 0.525
+    score.score shouldBe 0.525 +- 0.01
   }
 
   it should "have perfect score with all successful operations" in {
