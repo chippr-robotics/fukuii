@@ -39,7 +39,7 @@ class ByteUtilsSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
       (Array[Byte](0xff.toByte), BigInt(255)),
       (Array[Byte](0x01, 0x00, 0x00), BigInt(65536))
     )
-    
+
     testCases.foreach { case (bytes, expected) =>
       val result = ByteUtils.bytesToBigInt(bytes)
       assert(result == expected, s"Failed for bytes ${bytes.mkString("[", ", ", "]")}")

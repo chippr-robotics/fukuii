@@ -50,7 +50,8 @@ object ECIESCoder {
       kdf = Left(new ConcatKDFBytesGenerator(new SHA256Digest)),
       mac = new HMac(new SHA256Digest),
       hash = new SHA256Digest,
-      cipher = Some(new BufferedBlockCipher(SICBlockCipher.newInstance(aesEngine))): @annotation.nowarn("cat=deprecation"),
+      cipher =
+        Some(new BufferedBlockCipher(SICBlockCipher.newInstance(aesEngine))): @annotation.nowarn("cat=deprecation"),
       IV = IV,
       prvSrc = Left(new ECPrivateKeyParameters(prv, curve)),
       pubSrc = Left(new ECPublicKeyParameters(ephem, curve))
@@ -95,7 +96,8 @@ object ECIESCoder {
       kdf = Left(new ConcatKDFBytesGenerator(new SHA256Digest)),
       mac = new HMac(new SHA256Digest),
       hash = new SHA256Digest,
-      cipher = Some(new BufferedBlockCipher(SICBlockCipher.newInstance(aesEngine))): @annotation.nowarn("cat=deprecation"),
+      cipher =
+        Some(new BufferedBlockCipher(SICBlockCipher.newInstance(aesEngine))): @annotation.nowarn("cat=deprecation"),
       IV = IV,
       prvSrc = Left(new ECPrivateKeyParameters(prv, curve)),
       pubSrc = Left(new ECPublicKeyParameters(pub, curve))

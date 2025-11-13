@@ -42,8 +42,8 @@ object ByteUtils {
   def toBigInt(bytes: ByteString): BigInt =
     bytes.foldLeft(BigInt(0))((n, b) => (n << 8) + (b & 0xff))
 
-  /** Safely converts a byte array to BigInt, handling empty arrays.
-    * Empty arrays are converted to BigInt(0) instead of throwing NumberFormatException.
+  /** Safely converts a byte array to BigInt, handling empty arrays. Empty arrays are converted to BigInt(0) instead of
+    * throwing NumberFormatException.
     *
     * @param bytes
     *   - byte array to convert (can be empty)

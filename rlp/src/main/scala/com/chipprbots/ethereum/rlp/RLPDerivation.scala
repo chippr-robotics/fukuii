@@ -5,9 +5,9 @@ import scala.deriving.Mirror
 import scala.reflect.ClassTag
 
 /** Scala 3 native derivation for RLP codecs using Mirror type class.
-  * 
+  *
   * This replaces the Shapeless 2-based derivation in RLPImplicitDerivations.
-  * 
+  *
   * Usage:
   * {{{
   *   case class MyData(field1: Int, field2: String) derives RLPCodec
@@ -69,7 +69,7 @@ object RLPDerivation {
   // Type-level helpers for checking if a type is Option[_]
   private type IsOption[T] <: Boolean = T match {
     case Option[?] => true
-    case _ => false
+    case _         => false
   }
 
   /** Compile-time encoder for product fields */
@@ -77,7 +77,7 @@ object RLPDerivation {
       values: T,
       labels: Tuple,
       policy: DerivationPolicy
-  ): (RLPList, List[FieldInfo]) = {
+  ): (RLPList, List[FieldInfo]) =
     inline values match {
       case EmptyTuple => (RLPList(), Nil)
       case head *: tail =>
@@ -87,7 +87,7 @@ object RLPDerivation {
             val headEncoded = summonInline[RLPEncoder[head.type]].encode(head)
             val (tailList, tailInfos) = encodeProductFields(tail, labels, policy)
             val hInfo = FieldInfo(isOptional = true)
-            
+
             val finalList = if (policy.omitTrailingOptionals && tailInfos.forall(_.isOptional)) {
               // Trailing optional - can be inserted as value or omitted
               headEncoded match {
@@ -103,7 +103,7 @@ object RLPDerivation {
               headEncoded +: tailList
             }
             (finalList, hInfo :: tailInfos)
-            
+
           case _: false =>
             // Non-optional field
             val headEncoded = summonInline[RLPEncoder[head.type]].encode(head)
@@ -112,20 +112,19 @@ object RLPDerivation {
             (headEncoded +: tailList, hInfo :: tailInfos)
         }
     }
-  }
 
   /** Compile-time decoder for product fields */
   private inline def decodeProductFields[T <: Tuple](
       items: List[RLPEncodeable],
       labels: Tuple,
       policy: DerivationPolicy
-  ): (T, List[FieldInfo]) = {
+  ): (T, List[FieldInfo]) =
     inline erasedValue[T] match {
       case _: EmptyTuple.type =>
         items match {
-          case Nil => (EmptyTuple.asInstanceOf[T], Nil)
+          case Nil                               => (EmptyTuple.asInstanceOf[T], Nil)
           case _ if policy.omitTrailingOptionals => (EmptyTuple.asInstanceOf[T], Nil)
-          case _ => 
+          case _ =>
             throw RLPException(
               s"Unexpected items at the end of the RLPList: ${items.size} leftover items.",
               RLPList(items: _*)
@@ -146,20 +145,21 @@ object RLPDerivation {
               case rlpHead :: rlpTail =>
                 val (tailDecoded, tailInfos) = decodeProductFields[tail](rlpTail, labels, policy)
                 val decoder = summonInline[RLPDecoder[head]]
-                val headValue = try {
-                  if (policy.omitTrailingOptionals && tailInfos.forall(_.isOptional)) {
-                    // Trailing optional - try as value wrapped in list
-                    try decoder.decode(RLPList(rlpHead))
-                    catch {
-                      case _: Throwable => None.asInstanceOf[head]
+                val headValue =
+                  try
+                    if (policy.omitTrailingOptionals && tailInfos.forall(_.isOptional)) {
+                      // Trailing optional - try as value wrapped in list
+                      try decoder.decode(RLPList(rlpHead))
+                      catch {
+                        case _: Throwable => None.asInstanceOf[head]
+                      }
+                    } else {
+                      decoder.decode(rlpHead)
                     }
-                  } else {
-                    decoder.decode(rlpHead)
+                  catch {
+                    case ex: Throwable =>
+                      throw RLPException(s"Cannot decode optional field: ${ex.getMessage}", List(rlpHead))
                   }
-                } catch {
-                  case ex: Throwable =>
-                    throw RLPException(s"Cannot decode optional field: ${ex.getMessage}", List(rlpHead))
-                }
                 ((headValue *: tailDecoded).asInstanceOf[T], hInfo :: tailInfos)
             }
           case _: false =>
@@ -170,30 +170,31 @@ object RLPDerivation {
                 throw RLPException(s"RLPList is empty for non-optional field.", RLPList())
               case rlpHead :: rlpTail =>
                 val decoder = summonInline[RLPDecoder[head]]
-                val headValue = try {
-                  decoder.decode(rlpHead)
-                } catch {
-                  case ex: Throwable =>
-                    throw RLPException(s"Cannot decode field: ${ex.getMessage}", List(rlpHead))
-                }
+                val headValue =
+                  try
+                    decoder.decode(rlpHead)
+                  catch {
+                    case ex: Throwable =>
+                      throw RLPException(s"Cannot decode field: ${ex.getMessage}", List(rlpHead))
+                  }
                 val (tailDecoded, tailInfos) = decodeProductFields[tail](rlpTail, labels, policy)
                 ((headValue *: tailDecoded).asInstanceOf[T], hInfo :: tailInfos)
             }
         }
     }
-  }
 
   /** Derive encoder for product types (case classes).
-    * 
-    * This is a transparent inline method that performs compile-time derivation.
-    * Use this for explicit derivation where you directly call the method.
-    * For automatic implicit derivation, use RLPImplicitDerivations.
-    * 
-    * @example {{{
-    *   val encoder = RLPDerivation.derivedEncoder[MyCase]
-    * }}}
+    *
+    * This is a transparent inline method that performs compile-time derivation. Use this for explicit derivation where
+    * you directly call the method. For automatic implicit derivation, use RLPImplicitDerivations.
+    *
+    * @example
+    *   {{{ val encoder = RLPDerivation.derivedEncoder[MyCase] }}}
     */
-  transparent inline def derivedEncoder[T](using m: Mirror.ProductOf[T], policy: DerivationPolicy = DerivationPolicy.default): RLPEncoder[T] =
+  transparent inline def derivedEncoder[T](using
+      m: Mirror.ProductOf[T],
+      policy: DerivationPolicy = DerivationPolicy.default
+  ): RLPEncoder[T] =
     RLPEncoder.instance[T] { obj =>
       val tuple = Tuple.fromProduct(obj.asInstanceOf[Product])
       val labels = constValueTuple[m.MirroredElemLabels]
@@ -202,18 +203,19 @@ object RLPDerivation {
     }
 
   /** Derive decoder for product types (case classes).
-    * 
-    * This is a transparent inline method that performs compile-time derivation.
-    * Use this for explicit derivation where you directly call the method.
-    * For automatic implicit derivation, use RLPImplicitDerivations.
-    * 
-    * @example {{{
-    *   case class MyData(field1: Int, field2: String)
-    *   given ClassTag[MyData] = ClassTag(classOf[MyData])
-    *   val decoder = RLPDerivation.derivedDecoder[MyData]
-    * }}}
+    *
+    * This is a transparent inline method that performs compile-time derivation. Use this for explicit derivation where
+    * you directly call the method. For automatic implicit derivation, use RLPImplicitDerivations.
+    *
+    * @example
+    *   {{{ case class MyData(field1: Int, field2: String) given ClassTag[MyData] = ClassTag(classOf[MyData]) val
+    *   decoder = RLPDerivation.derivedDecoder[MyData] }}}
     */
-  transparent inline def derivedDecoder[T](using m: Mirror.ProductOf[T], ct: ClassTag[T], policy: DerivationPolicy = DerivationPolicy.default): RLPDecoder[T] =
+  transparent inline def derivedDecoder[T](using
+      m: Mirror.ProductOf[T],
+      ct: ClassTag[T],
+      policy: DerivationPolicy = DerivationPolicy.default
+  ): RLPDecoder[T] =
     RLPDecoder.instance[T] { rlp =>
       rlp match {
         case list: RLPList =>
@@ -230,18 +232,15 @@ object RLPDerivation {
     }
 
   /** Derive both encoder and decoder for product types.
-    * 
-    * This is a transparent inline method that performs compile-time derivation.
-    * Use this for explicit derivation where you directly call the method.
-    * For automatic implicit derivation, use RLPImplicitDerivations.
-    * 
-    * @example {{{
-    *   case class MyData(field1: Int, field2: String)
-    *   given ClassTag[MyData] = ClassTag(classOf[MyData])
-    *   val codec = RLPDerivation.derivedCodec[MyData]
-    * }}}
+    *
+    * This is a transparent inline method that performs compile-time derivation. Use this for explicit derivation where
+    * you directly call the method. For automatic implicit derivation, use RLPImplicitDerivations.
+    *
+    * @example
+    *   {{{ case class MyData(field1: Int, field2: String) given ClassTag[MyData] = ClassTag(classOf[MyData]) val codec
+    *   \= RLPDerivation.derivedCodec[MyData] }}}
     */
-  transparent inline def derivedCodec[T](using 
+  transparent inline def derivedCodec[T](using
       m: Mirror.ProductOf[T],
       ct: ClassTag[T],
       policy: DerivationPolicy = DerivationPolicy.default
