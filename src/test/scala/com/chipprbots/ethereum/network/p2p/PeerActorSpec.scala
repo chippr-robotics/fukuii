@@ -59,7 +59,6 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 import org.apache.pekko.actor.Actor
-import org.apache.pekko.actor.Actor
 
 class PeerActorSpec
     extends TestKit(

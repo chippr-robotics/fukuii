@@ -7,8 +7,8 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Manager for peer scoring system
   *
-  * Tracks and updates scores for all known peers to enable intelligent peer selection.
-  * Thread-safe implementation using concurrent data structures.
+  * Tracks and updates scores for all known peers to enable intelligent peer selection. Thread-safe implementation using
+  * concurrent data structures.
   */
 class PeerScoringManager extends Logger {
   private val scores = TrieMap.empty[PeerId, PeerScore]

@@ -48,12 +48,12 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
 
     // With 20% jitter, delay should be between base and base*1.2
     val delay0 = strategy.nextDelay(0).toMillis
-    delay0 should (be >= 1000L and be <= 1200L)
+    delay0 should ((be >= 1000L).and(be <= 1200L))
 
     // Test multiple times to ensure randomness
     val delays = (1 to 100).map(_ => strategy.nextDelay(0).toMillis)
     delays.toSet.size should be > 1 // Should have variance
-    delays.foreach(_ should (be >= 1000L and be <= 1200L))
+    delays.foreach(_ should ((be >= 1000L).and(be <= 1200L)))
   }
 
   it should "require non-negative attempt number" in {
@@ -139,7 +139,11 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
   }
 
   it should "reset to initial state" in {
-    val state = RetryState(attempt = 5, firstAttemptTime = Some(System.currentTimeMillis()), lastAttemptTime = Some(System.currentTimeMillis()))
+    val state = RetryState(
+      attempt = 5,
+      firstAttemptTime = Some(System.currentTimeMillis()),
+      lastAttemptTime = Some(System.currentTimeMillis())
+    )
     val reset = state.reset
 
     reset.attempt shouldBe 0
@@ -164,7 +168,8 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers {
     val state = RetryState(attempt = 5)
 
     state.shouldGiveUp(maxAttempts = 3) shouldBe true
-    state.shouldGiveUp(maxAttempts = 5) shouldBe false
+    state.shouldGiveUp(maxAttempts = 5) shouldBe true // At attempt index 5, we've exceeded maxAttempts=5 (since 5 >= 5)
+    state.shouldGiveUp(maxAttempts = 6) shouldBe false
     state.shouldGiveUp(maxAttempts = 10) shouldBe false
   }
 

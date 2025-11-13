@@ -5,8 +5,8 @@ import scala.concurrent.duration._
 
 /** Peer scoring system for enhanced peer selection
   *
-  * Tracks peer reliability metrics to prioritize better peers for sync operations.
-  * Based on investigation report recommendations (Priority 1).
+  * Tracks peer reliability metrics to prioritize better peers for sync operations. Based on investigation report
+  * recommendations (Priority 1).
   */
 final case class PeerScore(
     successfulHandshakes: Int = 0,
@@ -25,11 +25,11 @@ final case class PeerScore(
   /** Calculate composite score (0.0 to 1.0, higher is better)
     *
     * Factors:
-    * - Handshake success rate (30%)
-    * - Response rate (25%)
-    * - Latency (20%)
-    * - Protocol compliance (15%)
-    * - Recency (10%)
+    *   - Handshake success rate (30%)
+    *   - Response rate (25%)
+    *   - Latency (20%)
+    *   - Protocol compliance (15%)
+    *   - Recency (10%)
     */
   def score: Double = {
     val handshakeScore = calculateHandshakeScore
@@ -59,7 +59,7 @@ final case class PeerScore(
 
   private def calculateLatencyScore: Double =
     averageLatencyMs match {
-      case None => 0.5 // neutral score if no data
+      case None          => 0.5 // neutral score if no data
       case Some(latency) =>
         // Score decreases with latency: 0ms=1.0, 1000ms=0.5, >2000ms=0.0
         math.max(0.0, 1.0 - (latency / 2000.0))
@@ -99,7 +99,7 @@ final case class PeerScore(
   /** Update score after successful response */
   def recordResponse(bytes: Long, latencyMs: Long): PeerScore = {
     val newAverageLatency = averageLatencyMs match {
-      case None    => latencyMs.toDouble
+      case None      => latencyMs.toDouble
       case Some(avg) =>
         // Exponential moving average with alpha=0.3
         (avg * 0.7) + (latencyMs * 0.3)

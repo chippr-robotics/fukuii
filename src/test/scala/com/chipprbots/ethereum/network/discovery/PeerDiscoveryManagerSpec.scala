@@ -34,8 +34,6 @@ import com.chipprbots.ethereum.LongPatience
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.utils.Config
-import com.chipprbots.ethereum.network.discovery.Node
-import scala.collection.immutable.Range.Inclusive
 
 class PeerDiscoveryManagerSpec
     extends AnyFlatSpecLike

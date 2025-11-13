@@ -6,13 +6,17 @@ import scala.concurrent.duration._
 
 /** Exponential backoff retry strategy with jitter
   *
-  * Implements progressive retry delays to reduce network load during sync issues.
-  * Based on investigation report recommendations (Priority 3).
+  * Implements progressive retry delays to reduce network load during sync issues. Based on investigation report
+  * recommendations (Priority 3).
   *
-  * @param initialDelay Starting delay for first retry
-  * @param maxDelay Maximum delay cap
-  * @param multiplier Exponential growth factor
-  * @param jitterFactor Maximum jitter as fraction of delay (0.0-1.0)
+  * @param initialDelay
+  *   Starting delay for first retry
+  * @param maxDelay
+  *   Maximum delay cap
+  * @param multiplier
+  *   Exponential growth factor
+  * @param jitterFactor
+  *   Maximum jitter as fraction of delay (0.0-1.0)
   */
 final case class RetryStrategy(
     initialDelay: FiniteDuration = 500.millis,
@@ -25,8 +29,8 @@ final case class RetryStrategy(
 
   /** Calculate next delay for given attempt number (0-indexed)
     *
-    * Formula: min(initialDelay * multiplier^attempt, maxDelay) + jitter
-    * Jitter is random value between 0 and (delay * jitterFactor)
+    * Formula: min(initialDelay * multiplier^attempt, maxDelay) + jitter. Jitter is random value between 0 and (delay *
+    * jitterFactor)
     */
   def nextDelay(attempt: Int): FiniteDuration = {
     require(attempt >= 0, "Attempt must be non-negative")
@@ -46,11 +50,10 @@ final case class RetryStrategy(
   }
 
   /** Calculate total time spent after N attempts */
-  def totalTime(attempts: Int): FiniteDuration = {
+  def totalTime(attempts: Int): FiniteDuration =
     (0 until attempts)
       .map(nextDelay)
       .foldLeft(0.millis)(_ + _)
-  }
 
   /** Create a retry strategy with different parameters */
   def withInitialDelay(delay: FiniteDuration): RetryStrategy =

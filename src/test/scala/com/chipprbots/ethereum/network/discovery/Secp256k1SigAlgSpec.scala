@@ -6,16 +6,6 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.bits.BitVector
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
-import com.chipprbots.scalanet.discovery.crypto.PublicKey
-import com.chipprbots.scalanet.discovery.crypto.PublicKey
-import com.chipprbots.scalanet.discovery.crypto.Signature
-import com.chipprbots.scalanet.discovery.crypto.Signature
-import com.chipprbots.scalanet.discovery.crypto.Signature
-import com.chipprbots.scalanet.discovery.crypto.Signature
-import com.chipprbots.scalanet.discovery.crypto.Signature
-import com.chipprbots.scalanet.discovery.crypto.Signature
-import com.chipprbots.scalanet.discovery.crypto.PublicKey
-import com.chipprbots.scalanet.discovery.crypto.Signature
 import com.chipprbots.scalanet.discovery.crypto.Signature
 
 class Secp256k1SigAlgSpec extends AnyFlatSpec with Matchers {

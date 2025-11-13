@@ -21,21 +21,10 @@ import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.KeyStore.IOError
 import com.chipprbots.ethereum.keystore.KeyStore.KeyNotFound
 import com.chipprbots.ethereum.keystore.KeyStore.PassPhraseTooShort
+import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.KeyStoreConfig
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 
 class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder {
 
