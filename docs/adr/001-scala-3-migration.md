@@ -141,6 +141,47 @@ This decision represents a **non-trivial update** requiring:
    - **Lesson Learned**: When migrating between effect systems, maintain consistent naming conventions for implicit instances to avoid confusion
    - **Convention Established**: Use `runtime` for `IORuntime` instances, reserve `ec` for actual `ExecutionContext` instances
 
+8. **RLPx Message Decoding Pattern Matching Syntax**
+   - **Issue**: RLPx message decoding failures with "Cannot decode GetBlockHeaders from RLP" errors, causing integration test failures (FastSyncItSpec, RegularSyncItSpec, ForksTest, ContractTest)
+   - **Root Cause**: Scala 3 stricter pattern matching syntax for varargs extractors. The pattern `RLPList((block: RLPValue), ...)` with extra parentheses around typed patterns is problematic in Scala 3
+   - **Manifestation**: 
+     - ETH68/ETH66 protocol message decoding threw runtime exceptions
+     - Peer synchronization failed with decode errors
+     - Authentication succeeded but message parsing failed
+     - 19 integration tests failing with RLPException
+   - **Technical Details**: 
+     - `RLPList` uses varargs constructor: `case class RLPList(items: RLPEncodeable*)`
+     - In Scala 2, pattern `RLPList((x: Type), y, z)` was accepted
+     - In Scala 3, the extra parentheses around `(x: Type)` create an incorrect pattern
+     - Correct syntax: `RLPList(x: Type, y, z)` without inner parentheses
+   - **Resolution**: Removed extra parentheses in pattern matching:
+     ```scala
+     // Before (Scala 2 compatible but problematic in Scala 3):
+     case RLPList(
+       RLPValue(requestIdBytes),
+       RLPList((block: RLPValue), RLPValue(maxHeadersBytes), ...)
+     )
+     
+     // After (Scala 3 correct syntax):
+     case RLPList(
+       RLPValue(requestIdBytes),
+       RLPList(block: RLPValue, RLPValue(maxHeadersBytes), ...)
+     )
+     ```
+   - **Affected Files**: `ETH66.scala` (GetBlockHeadersDec)
+   - **Impact**: Fixed all 19 RLPx-related integration test failures
+   - **Lesson Learned**: 
+     - Scala 3 pattern matching has stricter syntax rules for varargs extractors
+     - Extra parentheses in patterns can compile but cause runtime issues
+     - Test with actual message decoding, not just compilation
+     - Review all varargs pattern matches during Scala 3 migration
+   - **Pattern for Future Migrations**:
+     1. Search for `case .*\(\([a-z][^)]*:\s*[A-Z]` regex patterns in case classes with varargs
+     2. Remove unnecessary parentheses around typed patterns in varargs contexts
+     3. Test message serialization/deserialization explicitly
+     4. Validate protocol codec compatibility with integration tests
+   - **Reference**: Issue "RPLX fixes" - resolved RLP codec issues after RocksDB lock contention fix
+
 ## Implementation Details
 
 The migration was executed in phases:
