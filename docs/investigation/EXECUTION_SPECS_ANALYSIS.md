@@ -4,17 +4,48 @@
 
 After reviewing the [ethereum/execution-specs](https://github.com/ethereum/execution-specs) and [ethereum/tests](https://github.com/ethereum/tests) repositories, this document analyzes whether we can use official test vectors instead of regenerating custom fixtures.
 
-## CRITICAL INSIGHT: Pre-DAO Fork Equivalence
+## CRITICAL INSIGHT: EVM Compatibility Through Spiral Fork
 
-**The user is absolutely correct**: Ethereum and Ethereum Classic are **identical from the VM perspective until the DAO fork** (block 1920000, July 20, 2016).
+**The user is absolutely correct**: Ethereum Classic is **EVM-compatible with Ethereum until the Spiral fork** (block 19,250,000, January 31, 2023).
 
-### Our Test Blocks Are Pre-DAO
+### ETC Fork Timeline and ETH Equivalence
 
-- **ForksTest**: Blocks 0-11 (testing Frontier, Homestead, EIP-150, EIP-160 transitions)
-- **ContractTest**: Blocks 0-3 (testing contract deployment and execution)
-- **DAO Fork**: Block 1920000
+| ETC Fork | Block | ETH Equivalent | Block | EVM Compatible? |
+|----------|-------|---------------|-------|-----------------|
+| Homestead | 1,150,000 | Homestead | 1,150,000 | ✅ **100%** |
+| Tangerine Whistle | 2,463,000 | Tangerine Whistle | 2,463,000 | ✅ **100%** |
+| Spurious Dragon | 3,000,000 | Spurious Dragon | 2,675,000 | ✅ **100% (EVM)** |
+| **DAO Fork** | **NOT IMPLEMENTED** | **DAO Fork** | **1,920,000** | ✅ **100% (Pre-DAO)** |
+| Atlantis | 8,772,000 | Byzantium | 4,370,000 | ✅ **100% (EVM)** |
+| Agharta | 9,573,000 | Constantinople | 7,280,000 | ✅ **100% (EVM)** |
+| Phoenix | 10,500,839 | Istanbul | 9,069,000 | ✅ **100% (EVM)** |
+| Magneto | 13,189,133 | Berlin | 12,244,000 | ✅ **100% (EVM)** |
+| Mystique | 14,525,000 | London | 12,965,000 | ✅ **100% (EVM, NO EIP-1559)** |
+| **Spiral** | **19,250,000** | **Shanghai** | **17,034,870** | ❌ **DIVERGENCE** |
 
-**Conclusion**: Our test blocks execute **identically** on both ETH and ETC chains. We CAN use Ethereum test vectors for validation!
+### Key Insight: Consensus vs EVM
+
+The differences between ETH and ETC before Spiral are **consensus-level, not EVM-level**:
+
+**Consensus Differences (Don't Affect EVM)**:
+- ❌ DAO Fork (ETC skipped it entirely)
+- ❌ ECIP-1017 block rewards (5M20 emission)
+- ❌ ECIP-1099 DAG size limit (Ethash mining)
+- ❌ EIP-1559 transaction type (Mystique skipped it)
+- ❌ PoS/Merge (ETC stayed PoW)
+
+**EVM Differences (Would Affect Execution)**:
+- ✅ NONE before Spiral!
+
+All EVM opcodes, gas costs, precompiles, and state transition rules are **identical** between ETH and ETC through Mystique (block 14,525,000).
+
+### Our Test Blocks Are Fully Compatible
+
+- **ForksTest**: Blocks 0-11 (testing Frontier → Spurious Dragon transitions)
+- **ContractTest**: Blocks 0-3 (contract deployment)
+- **Last Incompatibility**: Spiral at block 19,250,000
+
+**Conclusion**: Our test blocks (0-11) can use Ethereum test vectors with **100% EVM compatibility**!
 
 ## Key Findings
 
@@ -26,17 +57,25 @@ After reviewing the [ethereum/execution-specs](https://github.com/ethereum/execu
 - **VMTests/**: Pure EVM opcode tests
 - Format: JSON with pre-state, transactions, post-state, and expected roots
 
-### 2. Pre-DAO Fork Compatibility
+### 2. EVM Compatibility Timeline
 
-| Fork | Block Number | ETH | ETC | Test Compatibility |
-|------|-------------|-----|-----|-------------------|
-| Frontier | 0 | ✅ | ✅ | **100% Compatible** |
-| Homestead | 1,150,000 | ✅ | ✅ | **100% Compatible** |
-| Tangerine Whistle (EIP-150) | 2,463,000 | ✅ | ✅ | **100% Compatible** |
-| Spurious Dragon (EIP-155/160/161) | 2,675,000 | ✅ | ✅ | **100% Compatible** |
-| **DAO Fork** | **1,920,000** | **✅** | **❌** | **DIVERGENCE POINT** |
-| Byzantium | 4,370,000 | ✅ | ❌ (Atlantis 8,772,000) | Different blocks, same rules |
-| Constantinople | 7,280,000 | ✅ | ❌ (Agharta 9,573,000) | Different blocks, same rules |
+**ETC is EVM-compatible with Ethereum through Spiral fork (block 19,250,000)**
+
+The key differences are **consensus-level** (block rewards, transaction types, PoS), not **EVM execution-level**:
+
+| Fork Era | ETH/ETC Difference | Affects EVM? |
+|----------|-------------------|--------------|
+| Pre-DAO (< 1,920,000) | DAO state change | ❌ No (both chains identical before fork) |
+| Post-DAO (1,920,000+) | Different state roots | ❌ No (only affected accounts, not EVM logic) |
+| ECIP-1017 (5M+) | Block rewards | ❌ No (consensus, not EVM) |
+| Mystique vs London | EIP-1559 | ❌ No (transaction format, not EVM opcodes) |
+| Pre-Spiral (< 19,250,000) | Fork schedule timing | ❌ No (same EIPs, different blocks) |
+| **Spiral (19,250,000+)** | **EVM divergence begins** | ✅ **YES** |
+
+**Critical Finding**: All forks through Mystique (block 14,525,000) have **identical EVM execution** between ETH and ETC. The only differences are:
+- When forks activate (different block numbers)
+- Consensus rules (rewards, PoW vs PoS, transaction types)
+- NOT the EVM opcodes, gas costs, or state transitions
 
 ### 3. Our Current Test Fixtures vs Ethereum Tests
 
@@ -62,11 +101,12 @@ After reviewing the [ethereum/execution-specs](https://github.com/ethereum/execu
 
 ### Why This Solves Our Problem
 
-1. **Same execution logic**: Pre-DAO blocks execute identically on ETH and ETC
-2. **Canonical test vectors**: Ethereum tests are the gold standard
-3. **No node required**: Tests are in the repository
+1. **EVM execution identical**: Pre-Spiral blocks execute identically on ETH and ETC
+2. **Canonical test vectors**: Ethereum tests are the gold standard for EVM validation
+3. **No node required**: Tests are in the ethereum/tests repository
 4. **Version controlled**: Can track test changes over time
-5. **Comprehensive coverage**: Thousands of test cases
+5. **Comprehensive coverage**: Thousands of test cases covering all forks through Berlin/London
+6. **Works for all our tests**: Our blocks 0-11 are far below Spiral fork (19,250,000)
 
 ### Implementation Approach
 
@@ -87,7 +127,17 @@ BlockchainTests/ValidBlocks/bcStateTests/*.json
 BlockchainTests/ValidBlocks/bcGasPricerTest/*.json
 ```
 
-**Filter condition**: `network in ["Frontier", "Homestead", "EIP150", "EIP158"]`
+**Filter condition**: Select tests for forks that ETC has implemented with EVM compatibility:
+- `Frontier` ✅
+- `Homestead` ✅  
+- `EIP150` (Tangerine Whistle) ✅
+- `EIP158` (Spurious Dragon) ✅
+- `Byzantium` ✅ (ETC: Atlantis)
+- `Constantinople` ✅ (ETC: Agharta)
+- `Istanbul` ✅ (ETC: Phoenix)
+- `Berlin` ✅ (ETC: Magneto)
+- `London` ⚠️ (ETC: Mystique - filter out EIP-1559 tests)
+- Skip: Paris (PoS), Shanghai (Spiral+), Cancun, Prague
 
 #### Option B: Generate New Fixtures from Ethereum Tests
 
@@ -152,7 +202,7 @@ val result = blockExecution.executeAndValidateBlock(block)
 ### Validation Strategy
 
 **Phase 1: Single Test Validation**
-- Pick one simple Ethereum test (e.g., SimpleTx)
+- Pick one simple Ethereum test (e.g., SimpleTx - Homestead variant)
 - Adapt to our test framework
 - Execute with our code
 - Compare state root
@@ -160,13 +210,17 @@ val result = blockExecution.executeAndValidateBlock(block)
 **Phase 2: Comprehensive Validation**
 - Run all Frontier tests
 - Run all Homestead tests  
-- Run all EIP-150 tests
-- Run all EIP-155/160/161 tests
+- Run all EIP-150/EIP-158 tests
+- Run all Byzantium tests (ETC: Atlantis-equivalent)
+- Run all Constantinople tests (ETC: Agharta-equivalent)
+- Run all Istanbul tests (ETC: Phoenix-equivalent)
+- Run all Berlin tests (ETC: Magneto-equivalent)
+- Run London tests excluding EIP-1559 (ETC: Mystique-equivalent)
 
 **Phase 3: Fix or Update**
-- If all pass: Update our fixtures from Ethereum tests
-- If some fail: Fix bugs, then update fixtures
-- Document any ETC-specific deviations (should be none for pre-DAO)
+- If all pass: Our implementation is correct! Update fixtures from Ethereum tests
+- If some fail: Fix EVM bugs, then update fixtures
+- Document any ETC-specific deviations (should be none for EVM execution)
 
 ## Why This Is Better Than Regenerating
 
@@ -188,41 +242,64 @@ val result = blockExecution.executeAndValidateBlock(block)
 
 ### What Remains ETC-Specific
 
-Post-DAO blocks require different handling:
-- Block rewards (ECIP-1017)
+**Consensus-level differences (not EVM)**:
+- Block rewards (ECIP-1017: 5M20 emission reduction)
 - DAG limits (ECIP-1099)
-- Fork schedule (Atlantis != Byzantium in block number)
-- Ethash PoW validation
+- Transaction types (no EIP-1559 in Mystique)
+- Fork activation blocks (same EIPs, different block numbers)
+- Ethash PoW validation (vs ETH's PoS post-Paris)
+
+**Post-Spiral differences (block 19,250,000+)**:
+- ETC implements only partial Shanghai (Spiral)
+- Future ETC-specific opcodes or precompiles
 
 ### How to Handle ETC-Specific Tests
 
-For blocks > 1920000 (post-DAO):
-- Use core-geth as reference
-- OR generate fixtures from ETC node
-- OR create manual test cases for ECIP features
+**For blocks 0 - 19,250,000 (pre-Spiral)**:
+- ✅ **Use Ethereum tests** - EVM execution is identical!
+- Only difference is block numbers for fork activation
+- Configure test to use ETC fork schedule when loading
 
-For blocks ≤ 1920000 (pre-DAO):
-- **Use Ethereum tests** - they're identical!
+**For blocks 19,250,000+ (post-Spiral)**:
+- Use core-geth as reference
+- OR generate fixtures from ETC node  
+- OR create manual test cases for ETC-specific features
+
+**For our current tests (blocks 0-11)**:
+- ✅ **100% compatible with Ethereum tests**
+- No ETC-specific handling needed
+- Just map fork names: Byzantium=Atlantis, Constantinople=Agharta, etc.
 
 ## Conclusion
 
-**MAJOR INSIGHT**: We don't need to regenerate fixtures from an ETC node for pre-DAO blocks!
+**MAJOR INSIGHT**: We don't need to regenerate fixtures from an ETC node for pre-Spiral blocks!
 
-**The user is correct**: The execution client should be the same for Ethereum Classic from the VM POV until the DAO split.
+**The user is correct**: ETC is EVM-compatible with Ethereum through the Spiral fork (block 19,250,000).
+
+**Our test blocks (0-11) are in the Frontier/Homestead/EIP-150/EIP-160 era**, which is:
+- ✅ Far below Spiral fork (19,250,000)
+- ✅ 100% EVM-compatible with Ethereum
+- ✅ Can use ethereum/tests directly
 
 **New Strategy**:
-1. Use ethereum/tests for blocks 0-1920000
+1. Use ethereum/tests for all blocks < 19,250,000
 2. Validate our implementation passes Ethereum tests
 3. If tests pass: Our code is correct, update fixtures from Ethereum tests
-4. If tests fail: Fix bugs first, then update fixtures
-5. For post-DAO blocks: Use ETC-specific test generation
+4. If tests fail: Fix EVM bugs first, then update fixtures
+5. For post-Spiral blocks: Use ETC-specific test generation
 
-**Next Step**: Create adapter to run Ethereum SimpleTx test against our Fukuii implementation as proof of concept.
+**Compatibility Range**:
+- ✅ **Frontier through Mystique (block 14,525,000)**: 100% EVM compatible
+- ✅ **Can use Ethereum tests**: Byzantium, Constantinople, Istanbul, Berlin, London (minus EIP-1559)
+- ❌ **Spiral+ (block 19,250,000+)**: ETC-specific implementation
+
+**Next Step**: Create adapter to run Ethereum SimpleTx test (Homestead) against our Fukuii implementation as proof of concept.
 
 ## References
 
-- [Ethereum Tests](https://github.com/ethereum/tests) - **Primary source for pre-DAO validation**
+- [Ethereum Tests](https://github.com/ethereum/tests) - **Primary source for EVM validation through Spiral**
 - [Ethereum Execution Specs](https://github.com/ethereum/execution-specs)
-- [Core-Geth (ETC Reference)](https://github.com/etclabscore/core-geth)
-- [DAO Fork Details](https://blog.ethereum.org/2016/07/20/hard-fork-completed) - Block 1920000
+- [Core-Geth](https://github.com/etclabscore/core-geth) - ETC reference implementation
+- [ETC Fork Schedule](https://etclabscore.github.io/core-geth/getting-started/installation/#ethereum-classic)
+- [Spiral Fork Details](https://ecips.ethereumclassic.org/ECIPs/ecip-1109) - Block 19,250,000
 
