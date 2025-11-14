@@ -2,197 +2,227 @@
 
 ## Executive Summary
 
-After reviewing the [ethereum/execution-specs](https://github.com/ethereum/execution-specs) repository, this document analyzes whether we can use official test vectors instead of regenerating custom fixtures.
+After reviewing the [ethereum/execution-specs](https://github.com/ethereum/execution-specs) and [ethereum/tests](https://github.com/ethereum/tests) repositories, this document analyzes whether we can use official test vectors instead of regenerating custom fixtures.
+
+## CRITICAL INSIGHT: Pre-DAO Fork Equivalence
+
+**The user is absolutely correct**: Ethereum and Ethereum Classic are **identical from the VM perspective until the DAO fork** (block 1920000, July 20, 2016).
+
+### Our Test Blocks Are Pre-DAO
+
+- **ForksTest**: Blocks 0-11 (testing Frontier, Homestead, EIP-150, EIP-160 transitions)
+- **ContractTest**: Blocks 0-3 (testing contract deployment and execution)
+- **DAO Fork**: Block 1920000
+
+**Conclusion**: Our test blocks execute **identically** on both ETH and ETC chains. We CAN use Ethereum test vectors for validation!
 
 ## Key Findings
 
-### 1. Execution Specs Scope
-- **Target**: Ethereum mainnet specification and test vectors
-- **Coverage**: Frontier through Prague forks
-- **Format**: JSON-based state tests with pre/post state expectations
-- **Purpose**: Validate EVM execution, state transitions, and consensus rules
+### 1. Ethereum Tests Repository Structure
 
-### 2. Ethereum vs Ethereum Classic Differences
+[ethereum/tests](https://github.com/ethereum/tests) contains comprehensive test vectors:
+- **BlockchainTests/**: Full block execution tests with state roots
+- **GeneralStateTests/**: Transaction-level state tests
+- **VMTests/**: Pure EVM opcode tests
+- Format: JSON with pre-state, transactions, post-state, and expected roots
 
-| Aspect | Ethereum (execution-specs) | Ethereum Classic (fukuii) |
-|--------|---------------------------|---------------------------|
-| Consensus | Proof-of-Stake (Paris+) | Proof-of-Work (Ethash) |
-| DAO Fork | Implemented (block 1920000) | NOT implemented |
-| EIP-1559 | Implemented (London) | NOT implemented |
-| Hard Forks | ETH-specific schedule | ETC-specific (Atlantis, Agharta, Phoenix, Magneto, Mystique) |
-| Difficulty Bomb | Delayed multiple times | Modified (ECIP-1099) |
-| Block Rewards | Changed with PoS | ECIP-1017 (5M20 reduction) |
+### 2. Pre-DAO Fork Compatibility
 
-### 3. Our Current Test Fixtures
+| Fork | Block Number | ETH | ETC | Test Compatibility |
+|------|-------------|-----|-----|-------------------|
+| Frontier | 0 | ✅ | ✅ | **100% Compatible** |
+| Homestead | 1,150,000 | ✅ | ✅ | **100% Compatible** |
+| Tangerine Whistle (EIP-150) | 2,463,000 | ✅ | ✅ | **100% Compatible** |
+| Spurious Dragon (EIP-155/160/161) | 2,675,000 | ✅ | ✅ | **100% Compatible** |
+| **DAO Fork** | **1,920,000** | **✅** | **❌** | **DIVERGENCE POINT** |
+| Byzantium | 4,370,000 | ✅ | ❌ (Atlantis 8,772,000) | Different blocks, same rules |
+| Constantinople | 7,280,000 | ✅ | ❌ (Agharta 9,573,000) | Different blocks, same rules |
 
-**Format**: Custom `<block_hash> <rlp_encoded_data>` format
-**Source**: Generated from actual ETC blockchain using `DumpChainApp`
-**Content**:
-- Complete block headers with ETC-specific fields
-- Full transaction history with ETC consensus
-- State trie nodes matching ETC execution
-- Receipt formats (pre/post Byzantium)
+### 3. Our Current Test Fixtures vs Ethereum Tests
 
-## Analysis: Can We Use Execution Specs?
+**Our Custom Format**: `<block_hash> <rlp_encoded_data>`
+- Source: Generated from actual blockchain using `DumpChainApp`
+- Pros: Complete real-world data
+- Cons: Opaque, requires node access to regenerate
 
-### ✅ What We CAN Validate
-
-1. **Core EVM Opcodes**: Use execution-specs state tests to validate our EVM implementation
-   - Arithmetic operations
-   - Stack/memory operations
-   - Storage operations
-   - Control flow
-   - Call operations
-
-2. **Common Consensus Rules**: 
-   - Gas calculation (pre-EIP-1559)
-   - Transaction validation
-   - Account state management
-   - Trie operations
-
-3. **Shared Hard Forks**:
-   - Frontier
-   - Homestead
-   - EIP-150 (Tangerine Whistle)
-   - EIP-155/160/161 (Spurious Dragon)
-   - Byzantium (similar to ETC Atlantis)
-   - Constantinople (similar to ETC Agharta)
-
-### ❌ What We CANNOT Validate
-
-1. **ETC-Specific Consensus**:
-   - ECIP-1017 block rewards (5M20 emission reduction)
-   - ECIP-1099 DAG size limit
-   - Ethash PoW validation
-   - Uncle reward calculations
-   - ETC-specific hard fork transitions
-
-2. **Different Transaction Types**:
-   - ETC doesn't support EIP-1559 transactions
-   - ETC doesn't support blob transactions (EIP-4844)
-   - Different transaction encoding post-Berlin
-
-3. **State Root Calculations**:
-   - Execution-specs tests won't match ETC block state roots
-   - Different genesis states
-   - Different block reward recipients
-   - Different uncle handling
-
-## Our Test Failure Root Cause
-
-### The Real Problem
-
-Our `ForksTest` and `ContractTest` failures show:
+**Ethereum Tests Format**: JSON with explicit expectations
+```json
+{
+  "blocks": [...],
+  "genesisBlockHeader": {...},
+  "postState": {...},
+  "network": "Homestead"
+}
 ```
-Expected: 794c3c380c4272a3e69d83a7dee16d885c5e956674eddf2302788cdfbf0a8a3b
-Actual:   225ce73da683bb17cd073a9c008b73ce25b6474a6fc32bd66836e3d6a8
+- Source: Official Ethereum test suite
+- Pros: Human-readable, comprehensive, version-controlled
+- Cons: Need adapter to convert to our format
+
+## SOLUTION: Use Ethereum Tests for Pre-DAO Validation
+
+### Why This Solves Our Problem
+
+1. **Same execution logic**: Pre-DAO blocks execute identically on ETH and ETC
+2. **Canonical test vectors**: Ethereum tests are the gold standard
+3. **No node required**: Tests are in the repository
+4. **Version controlled**: Can track test changes over time
+5. **Comprehensive coverage**: Thousands of test cases
+
+### Implementation Approach
+
+#### Option A: Direct Ethereum Test Integration (Recommended)
+
+**Create adapter to run Ethereum tests**:
+
+1. Load JSON test files from ethereum/tests
+2. Parse genesis state, blocks, and expected outputs
+3. Execute blocks using our Fukuii code
+4. Compare results against test expectations
+5. Filter to pre-DAO forks only (Frontier, Homestead, EIP-150, EIP-160/161)
+
+**Files to import**:
+```
+BlockchainTests/ValidBlocks/bcValidBlockTest/*.json
+BlockchainTests/ValidBlocks/bcStateTests/*.json  
+BlockchainTests/ValidBlocks/bcGasPricerTest/*.json
 ```
 
-**State roots are completely different**, indicating:
-1. Different account states after execution
-2. Different trie construction
-3. Different encoding/serialization
-4. OR: Fixtures generated with different code (Scala 2 vs Scala 3)
+**Filter condition**: `network in ["Frontier", "Homestead", "EIP150", "EIP158"]`
 
-### Why Execution Specs Won't Help
+#### Option B: Generate New Fixtures from Ethereum Tests
 
-The execution-specs test vectors:
-- Don't include ETC-specific blocks
-- Don't match ETC consensus rules
-- Don't validate against ETC state roots
-- Use different genesis configurations
+**Convert Ethereum tests to our fixture format**:
 
-## Recommended Approach
+1. Load JSON test files
+2. Extract block headers, bodies, receipts, state
+3. Encode in our `<hash> <rlp>` format
+4. Generate fixture files matching our current structure
+5. Run existing ForksTest and ContractTest unchanged
 
-### Option 1: Regenerate Fixtures (RECOMMENDED)
+### Proof of Concept: Validate SimpleTx Test
 
-**Why**: Ensures tests match current Scala 3 implementation
+The ethereum/tests repository has a simple transaction test we can use to validate:
 
-**Process**:
-1. Connect `DumpChainApp` to synced ETC node
-2. Extract blocks 0-11 for `forksTest`
-3. Extract blocks 0-3 for `purchaseContract`
-4. Replace existing fixtures
-5. Tests should pass with regenerated data
+**Test**: `BlockchainTests/ValidBlocks/bcValidBlockTest/SimpleTx.json`
+**Network**: Frontier/Homestead variants available
+**Blocks**: Genesis + 1 block with single transaction
+**Expected State Root**: Provided in test file
 
-**Pros**:
-- ✅ Validates actual ETC execution
-- ✅ Tests consensus-critical code
-- ✅ Matches our architecture
-- ✅ Quick once node access available
+**This test should produce identical results** on our Fukuii implementation if we're correctly executing Ethereum/ETC blocks.
 
-**Cons**:
+## Action Plan
+
+### Immediate: Validate Against Ethereum Tests
+
+Instead of regenerating fixtures, we should:
+
+1. ✅ Clone ethereum/tests repository
+2. ✅ Create test adapter for JSON format
+3. ✅ Run SimpleTx test (Frontier) to validate our implementation
+4. ✅ Run ForksTest equivalent using Ethereum test vectors
+5. ✅ If tests pass: Our code is correct, fixtures need updating
+6. ✅ If tests fail: We have bugs to fix first
+
+### Steps to Implement
+
+```scala
+// 1. Create EthereumTestLoader
+object EthereumTestLoader {
+  def loadBlockchainTest(path: String): BlockchainTest
+  def parseGenesisState(json: JsonObject): WorldState
+  def parseBlocks(json: JsonArray): Seq[Block]
+  def parseExpectedPostState(json: JsonObject): Map[Address, Account]
+}
+
+// 2. Create EthereumTestRunner
+class EthereumTestRunner extends AnyFlatSpec {
+  "Fukuii" should "pass Ethereum SimpleTx test" in {
+    val test = EthereumTestLoader.loadBlockchainTest("SimpleTx.json")
+    val result = executeBlocks(test.genesis, test.blocks)
+    result.stateRoot shouldBe test.expectedStateRoot
+    result.accounts shouldBe test.expectedPostState
+  }
+}
+
+// 3. Run against our existing BlockExecution
+val blockExecution = new BlockExecution(...)
+val result = blockExecution.executeAndValidateBlock(block)
+```
+
+### Validation Strategy
+
+**Phase 1: Single Test Validation**
+- Pick one simple Ethereum test (e.g., SimpleTx)
+- Adapt to our test framework
+- Execute with our code
+- Compare state root
+
+**Phase 2: Comprehensive Validation**
+- Run all Frontier tests
+- Run all Homestead tests  
+- Run all EIP-150 tests
+- Run all EIP-155/160/161 tests
+
+**Phase 3: Fix or Update**
+- If all pass: Update our fixtures from Ethereum tests
+- If some fail: Fix bugs, then update fixtures
+- Document any ETC-specific deviations (should be none for pre-DAO)
+
+## Why This Is Better Than Regenerating
+
+### Regenerating Fixtures (Old Approach)
 - ❌ Requires ETC node access
-- ❌ Time-dependent (sync time)
+- ❌ Time-consuming (sync time)
+- ❌ Opaque (can't see what changed)
+- ❌ No validation of correctness
+- ❌ Single source (our node only)
 
-### Option 2: Adapt Execution Specs Tests
+### Using Ethereum Tests (New Approach)
+- ✅ No node required
+- ✅ Immediate (tests in repo)
+- ✅ Transparent (JSON diff)
+- ✅ Validates correctness
+- ✅ Multiple independent sources
 
-**Why**: Validate core EVM without fixtures
+## ETC-Specific Considerations
 
-**Process**:
-1. Import ethereum/execution-specs state tests
-2. Filter for pre-PoS tests (Frontier through Istanbul)
-3. Adapt JSON format to our test framework
-4. Skip ETC-specific consensus validation
-5. Focus on EVM opcode correctness
+### What Remains ETC-Specific
 
-**Pros**:
-- ✅ No node access needed
-- ✅ Comprehensive EVM coverage
-- ✅ Community-maintained tests
-- ✅ Catch EVM bugs
+Post-DAO blocks require different handling:
+- Block rewards (ECIP-1017)
+- DAG limits (ECIP-1099)
+- Fork schedule (Atlantis != Byzantium in block number)
+- Ethash PoW validation
 
-**Cons**:
-- ❌ Doesn't test ETC consensus
-- ❌ Doesn't validate state roots
-- ❌ Requires test adapter implementation
-- ❌ Won't fix current failures
+### How to Handle ETC-Specific Tests
 
-### Option 3: Hybrid Approach
+For blocks > 1920000 (post-DAO):
+- Use core-geth as reference
+- OR generate fixtures from ETC node
+- OR create manual test cases for ECIP features
 
-**Combine both strategies**:
-
-1. **Short-term**: Regenerate fixtures to fix failing tests
-2. **Long-term**: Add execution-specs tests for EVM validation
-
-**Benefits**:
-- ✅ Immediate test fix
-- ✅ Enhanced EVM coverage
-- ✅ Future-proof testing
-- ✅ Best of both worlds
+For blocks ≤ 1920000 (pre-DAO):
+- **Use Ethereum tests** - they're identical!
 
 ## Conclusion
 
-**For the current test failures (ForksTest/ContractTest)**, we MUST regenerate fixtures because:
+**MAJOR INSIGHT**: We don't need to regenerate fixtures from an ETC node for pre-DAO blocks!
 
-1. Tests validate **full block execution** including ETC consensus
-2. State roots must match **ETC blockchain state**
-3. Execution-specs are **Ethereum mainnet**, not ETC
-4. Our architecture requires **ETC-specific test data**
+**The user is correct**: The execution client should be the same for Ethereum Classic from the VM POV until the DAO split.
 
-**For future test enhancement**, we SHOULD add execution-specs tests because:
+**New Strategy**:
+1. Use ethereum/tests for blocks 0-1920000
+2. Validate our implementation passes Ethereum tests
+3. If tests pass: Our code is correct, update fixtures from Ethereum tests
+4. If tests fail: Fix bugs first, then update fixtures
+5. For post-DAO blocks: Use ETC-specific test generation
 
-1. Validates **core EVM** independent of consensus
-2. Catches **opcode-level bugs**
-3. Provides **comprehensive coverage**
-4. Aligns with **industry standards**
-
-## Action Items
-
-### Immediate (Fix Current Failures)
-- [ ] Obtain access to synced ETC node
-- [ ] Run `DumpChainApp` to regenerate fixtures
-- [ ] Verify ForksTest and ContractTest pass
-
-### Future (Enhanced Testing)
-- [ ] Create execution-specs test adapter
-- [ ] Import relevant state tests (Frontier-Istanbul)
-- [ ] Filter out PoS and EIP-1559 tests
-- [ ] Add to CI/CD pipeline
+**Next Step**: Create adapter to run Ethereum SimpleTx test against our Fukuii implementation as proof of concept.
 
 ## References
 
+- [Ethereum Tests](https://github.com/ethereum/tests) - **Primary source for pre-DAO validation**
 - [Ethereum Execution Specs](https://github.com/ethereum/execution-specs)
 - [Core-Geth (ETC Reference)](https://github.com/etclabscore/core-geth)
-- [ECIP-1017 (5M20)](https://ecips.ethereumclassic.org/ECIPs/ecip-1017)
-- [ECIP-1099 (DAG Limit)](https://ecips.ethereumclassic.org/ECIPs/ecip-1099)
+- [DAO Fork Details](https://blog.ethereum.org/2016/07/20/hard-fork-completed) - Block 1920000
+
