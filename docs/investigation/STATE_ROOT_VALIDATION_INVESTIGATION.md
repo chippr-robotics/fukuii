@@ -91,13 +91,58 @@ There could be a subtle behavioral difference in Scala 3 that affects determinis
 
 **Resolution**: Add comprehensive logging to trace execution
 
+## Code Fixes Applied
+
+### Fix 1: noEmptyAccounts Configuration (BlockExecution.scala)
+
+**Issue**: BlockExecution was using `parentHeader.number` instead of `block.header.number` when determining the `noEmptyAccounts` configuration.
+
+**Core-Geth Reference**:
+```go
+eip161d := config.IsEnabled(config.GetEIP161dTransition, blockNumber)
+```
+
+**Fix Applied**:
+```scala
+// Before:
+noEmptyAccounts = EvmConfig.forBlock(parentHeader.number, blockchainConfig).noEmptyAccounts
+
+// After:
+noEmptyAccounts = EvmConfig.forBlock(block.header.number, blockchainConfig).noEmptyAccounts
+```
+
+**Impact**: This ensures the correct EVM configuration is applied for the block being executed, matching core-geth's behavior. However, this fix alone did not resolve the test failures, indicating additional issues exist.
+
 ## Recommendations
 
-### To Regenerate Test Fixtures
-The most likely solution is to regenerate test fixtures using the Scala 3 version. The fixtures require actual blockchain data from an ETC node. This was likely not updated when migrating from Scala 2 to Scala 3, causing the state root mismatches.
+### Primary Recommendation: Regenerate Test Fixtures
+The most likely solution is to regenerate test fixtures using the Scala 3 version. The fixtures require actual blockchain data from an ETC node. Analysis suggests these were generated with Scala 2 and may contain subtle encoding differences.
 
-### Files That Need Regeneration
+**Evidence**:
+1. All unit tests pass (RLP, MPT, VM)
+2. Code logic matches core-geth implementation
+3. Only integration tests with pre-generated fixtures fail
+4. State roots are consistently different (deterministic mismatch)
+
+**Files That Need Regeneration**:
 - `src/it/resources/txExecTest/forksTest/*.txt`
 - `src/it/resources/txExecTest/purchaseContract/*.txt`
 
-Use `DumpChainApp` to connect to an ETC node and regenerate these fixtures.
+**Process**: Use `DumpChainApp` to connect to an ETC node and regenerate these fixtures.
+
+### Secondary Recommendation: Detailed Execution Tracing
+If fixture regeneration is not feasible, add comprehensive logging to identify the exact divergence point:
+
+1. Log account state after each transaction
+2. Log storage changes
+3. Log account deletions (self-destruct and empty account cleanup)  
+4. Compare logs step-by-step with expected behavior
+5. Identify exact operation that produces different result
+
+### Tertiary Recommendation: Cross-Reference with Core-Geth Tests
+Use core-geth's test infrastructure to validate our implementation:
+
+1. Export test vectors from core-geth
+2. Import into fukuii test suite
+3. Identify specific operations that produce different results
+4. Fix discrepancies
