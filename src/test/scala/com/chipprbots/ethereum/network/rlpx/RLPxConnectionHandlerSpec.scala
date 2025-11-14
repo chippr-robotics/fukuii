@@ -30,6 +30,8 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.InitialHelloRe
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for AuthHandshaker
 // @Ignore - Un-ignored per issue to identify test failures
 class RLPxConnectionHandlerSpec
@@ -204,24 +206,17 @@ class RLPxConnectionHandlerSpec
     lazy val mockHelloExtractor: HelloCodec = mock[HelloCodec]
 
     // Configurable test double for AuthHandshaker that can be set up for different test scenarios
-    class ConfigurableAuthHandshaker extends AuthHandshaker(
-      nodeKey = {
-        import java.security.SecureRandom
-        import com.chipprbots.ethereum.crypto.generateKeyPair
-        generateKeyPair(new SecureRandom())
-      },
-      nonce = ByteString.empty,
-      ephemeralKey = {
-        import java.security.SecureRandom
-        import com.chipprbots.ethereum.crypto.generateKeyPair
-        generateKeyPair(new SecureRandom())
-      },
-      secureRandom = new java.security.SecureRandom(),
-      isInitiator = false,
-      initiatePacketOpt = None,
-      responsePacketOpt = None,
-      remotePubKeyOpt = None
-    ) {
+    class ConfigurableAuthHandshaker
+        extends AuthHandshaker(
+          nodeKey = ConfigurableAuthHandshaker.generateKeyPairHelper(),
+          nonce = ByteString.empty,
+          ephemeralKey = ConfigurableAuthHandshaker.generateKeyPairHelper(),
+          secureRandom = new java.security.SecureRandom(),
+          isInitiator = false,
+          initiatePacketOpt = None,
+          responsePacketOpt = None,
+          remotePubKeyOpt = None
+        ) {
       var initiateHandler: Option[URI => (ByteString, AuthHandshaker)] = None
       var handleInitialMessageHandler: Option[ByteString => (ByteString, AuthHandshakeResult)] = None
       var handleInitialMessageV4Handler: Option[ByteString => (ByteString, AuthHandshakeResult)] = None
@@ -242,6 +237,14 @@ class RLPxConnectionHandlerSpec
 
       override def handleResponseMessageV4(data: ByteString): AuthHandshakeResult =
         handleResponseMessageV4Handler.map(_(data)).getOrElse(super.handleResponseMessageV4(data))
+    }
+
+    object ConfigurableAuthHandshaker {
+      private def generateKeyPairHelper(): AsymmetricCipherKeyPair = {
+        import java.security.SecureRandom
+        import com.chipprbots.ethereum.crypto.generateKeyPair
+        generateKeyPair(new SecureRandom())
+      }
     }
 
     val uri = new URI(
@@ -284,7 +287,7 @@ class RLPxConnectionHandlerSpec
       val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
       val hello = ByteString((1 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
       val response = ByteString("response data")
-      
+
       // Configure the test double to return specific responses
       mockHandshaker.handleInitialMessageHandler = Some { _ =>
         (
@@ -301,7 +304,7 @@ class RLPxConnectionHandlerSpec
           )
         )
       }
-      
+
       (mockHelloExtractor.readHello _)
         .expects(ByteString.empty)
         .returning(Some((Hello(5, "", Capability.ETH63 :: Nil, 30303, ByteString("abc")), Seq.empty)))

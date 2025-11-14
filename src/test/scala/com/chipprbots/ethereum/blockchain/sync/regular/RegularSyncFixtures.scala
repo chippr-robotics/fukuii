@@ -387,7 +387,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       }
 
     peersClient.setAutoPilot(new PeersClientAutoPilot)
-    
+
     // Set up AutoPilot for ommersPool to respond to GetOmmers messages
     ommersPool.setAutoPilot(new AutoPilot {
       def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
@@ -397,7 +397,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         case _ => this
       }
     })
-    
+
     // Set up AutoPilot for pendingTransactionsManager to respond to GetPendingTransactions messages
     pendingTransactionsManager.setAutoPilot(new AutoPilot {
       def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
