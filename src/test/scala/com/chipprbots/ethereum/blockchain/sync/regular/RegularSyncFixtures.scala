@@ -49,7 +49,9 @@ import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -385,6 +387,26 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       }
 
     peersClient.setAutoPilot(new PeersClientAutoPilot)
+    
+    // Set up AutoPilot for ommersPool to respond to GetOmmers messages
+    ommersPool.setAutoPilot(new AutoPilot {
+      def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
+        case OmmersPool.GetOmmers(_) =>
+          sender ! OmmersPool.Ommers(Seq.empty)
+          this
+        case _ => this
+      }
+    })
+    
+    // Set up AutoPilot for pendingTransactionsManager to respond to GetPendingTransactions messages
+    pendingTransactionsManager.setAutoPilot(new AutoPilot {
+      def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
+        case PendingTransactionsManager.GetPendingTransactions =>
+          sender ! PendingTransactionsManager.PendingTransactionsResponse(Seq.empty)
+          this
+        case _ => this
+      }
+    })
 
     def waitForSubscription(): Unit = {
       peerEventBus.expectMsgClass(classOf[Subscribe])
