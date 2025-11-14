@@ -114,7 +114,6 @@ class BranchResolutionSpec
 
       setHeaderInChain(differentGenesis.parentHash, result = false)
       setGenesisHeader(genesisHeader)
-      setBestBlockNumber(10)
 
       branchResolution.resolveBranch(headers) shouldEqual UnknownBranch
     }
