@@ -33,7 +33,6 @@ class OmmersPoolSpec
         */
       (blockchainReader.getBlockHeaderByHash _).expects(block2Chain1.hash).returns(Some(block2Chain1))
       (blockchainReader.getBlockHeaderByHash _).expects(block1Chain1.hash).returns(Some(block1Chain1))
-      (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0))
 
       ommersPool ! AddOmmers(
         block0,
@@ -77,7 +76,6 @@ class OmmersPoolSpec
           */
         (blockchainReader.getBlockHeaderByHash _).expects(block1Chain4.hash).returns(Some(block1Chain4)).once()
         (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0)).once()
-        (blockchainReader.getBlockHeaderByHash _).expects(block0.parentHash).returns(None).once()
 
         ommersPool ! AddOmmers(
           block0,
@@ -105,7 +103,6 @@ class OmmersPoolSpec
           */
         (blockchainReader.getBlockHeaderByHash _).expects(block2Chain1.hash).returns(Some(block2Chain1))
         (blockchainReader.getBlockHeaderByHash _).expects(block1Chain1.hash).returns(Some(block1Chain1))
-        (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0))
 
         ommersPool ! AddOmmers(
           block0,
