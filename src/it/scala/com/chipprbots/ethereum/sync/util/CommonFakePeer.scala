@@ -117,7 +117,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
   lazy val storagesInstance: RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
     new RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages {
-      override val dataSource: RocksDbDataSource =
+      override lazy val dataSource: RocksDbDataSource =
         RocksDbDataSource(getRockDbTestConfig(tempDir.toAbsolutePath.toString), Namespaces.nsSeq)
     }
   implicit override lazy val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
