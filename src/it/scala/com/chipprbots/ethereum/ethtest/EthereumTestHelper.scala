@@ -45,8 +45,90 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup {
     }
   }
   
+  /** Setup initial state and execute blocks using the same storage instance
+    *
+    * This ensures the initial state is persisted in the blockchain's storage
+    * before block execution begins, avoiding the "Root node not found" error.
+    */
+  def setupAndExecuteTest(
+      preState: Map[String, AccountState],
+      blocks: Seq[TestBlock],
+      genesisBlockHeader: Option[TestBlockHeader]
+  ): Either[String, InMemoryWorldStateProxy] = {
+    try {
+      if (blocks.isEmpty) {
+        return Right(InMemoryWorldStateProxy(
+          evmCodeStorage = testBlockchainStorages.evmCodeStorage,
+          mptStorage = testBlockchainStorages.stateStorage.getReadOnlyStorage,
+          getBlockHashByNumber = (_: BigInt) => None,
+          accountStartNonce = blockchainConfig.accountStartNonce,
+          stateRootHash = Account.EmptyStorageRootHash,
+          noEmptyAccounts = false,
+          ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+        ))
+      }
+
+      // Get the first block's number to determine which storage to use
+      val firstBlockNumber = parseBigInt(blocks.head.blockHeader.number)
+      
+      // Step 1: Setup initial state using the backing storage for block 0
+      val mptStorage = blockchain.getBackingMptStorage(0)
+      var world = InMemoryWorldStateProxy(
+        evmCodeStorage = testBlockchainStorages.evmCodeStorage,
+        mptStorage = mptStorage,
+        getBlockHashByNumber = (_: BigInt) => None,
+        accountStartNonce = blockchainConfig.accountStartNonce,
+        stateRootHash = Account.EmptyStorageRootHash,
+        noEmptyAccounts = false,
+        ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+      )
+
+      // Set up each account from pre-state
+      preState.foreach { case (addressHex, accountState) =>
+        val address = Address(ByteString(parseHex(addressHex)))
+        val balance = UInt256(parseBigInt(accountState.balance))
+        val nonce = UInt256(parseBigInt(accountState.nonce))
+        val code = ByteString(parseHex(accountState.code))
+
+        // Create account
+        val account = Account(
+          nonce = nonce,
+          balance = balance,
+          storageRoot = Account.EmptyStorageRootHash,
+          codeHash = Account.EmptyCodeHash
+        )
+
+        // Save account
+        world = world.saveAccount(address, account)
+
+        // Save code if present
+        if (code.nonEmpty) {
+          world = world.saveCode(address, code)
+        }
+
+        // Save storage if present
+        accountState.storage.foreach { case (keyHex, valueHex) =>
+          val key = parseBigInt(keyHex)
+          val value = parseBigInt(valueHex)
+          val storage = world.getStorage(address)
+          val newStorage = storage.store(key, value)
+          world = world.saveStorage(address, newStorage)
+        }
+      }
+
+      // Persist the initial state into the blockchain's storage
+      val persistedWorld = InMemoryWorldStateProxy.persistState(world)
+      
+      // Step 2: Execute blocks using the same storage
+      executeBlocksWithInitialState(blocks, persistedWorld, genesisBlockHeader)
+    } catch {
+      case e: Exception => 
+        Left(s"Failed to setup and execute test: ${e.getMessage}\n${e.getStackTrace.take(10).mkString("\n")}")
+    }
+  }
+  
   /** Execute blocks and return final world state */
-  def executeBlocks(
+  private def executeBlocksWithInitialState(
       blocks: Seq[TestBlock],
       initialWorld: InMemoryWorldStateProxy,
       genesisBlockHeader: Option[TestBlockHeader]

@@ -38,9 +38,12 @@ object EthereumTestExecutor {
   ): Either[String, TestExecutionResult] = {
     given BlockchainConfig = TestConverter.networkToConfig(test.network, baseConfig)
 
+    // Use the helper which will handle both state setup and block execution
+    // using the same storage instance
+    val helper = new EthereumTestHelper(using summon[BlockchainConfig])
+    
     for {
-      initialWorld <- setupInitialState(test.pre)
-      finalWorld <- executeBlocks(test.blocks, initialWorld, test.genesisBlockHeader)
+      finalWorld <- helper.setupAndExecuteTest(test.pre, test.blocks, test.genesisBlockHeader)
       _ <- validatePostState(test.postState, finalWorld)
     } yield TestExecutionResult(
       network = test.network,
@@ -109,17 +112,6 @@ object EthereumTestExecutor {
     } catch {
       case e: Exception => Left(s"Failed to setup initial state: ${e.getMessage}")
     }
-  }
-
-  /** Execute a sequence of blocks using BlockExecution infrastructure */
-  private def executeBlocks(
-      blocks: Seq[TestBlock],
-      initialWorld: InMemoryWorldStateProxy,
-      genesisBlockHeader: Option[TestBlockHeader]
-  )(using blockchainConfig: BlockchainConfig): Either[String, InMemoryWorldStateProxy] = {
-    // Use the test helper which extends ScenarioSetup and provides all the infrastructure
-    val helper = new EthereumTestHelper(using blockchainConfig)
-    helper.executeBlocks(blocks, initialWorld, genesisBlockHeader)
   }
 
   /** Validate final state matches expected post-state */
