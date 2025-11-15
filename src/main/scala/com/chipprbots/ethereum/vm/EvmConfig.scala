@@ -364,6 +364,7 @@ object FeeSchedule {
   class MagnetoFeeSchedule extends PhoenixFeeSchedule {
     override val G_sload: BigInt = G_warm_storage_read
     override val G_sreset: BigInt = 5000 - G_cold_sload
+    override val G_sset: BigInt = 20000  // EIP-2929: G_sset remains 20000, cold access cost added separately in SSTORE
     override val G_access_list_address: BigInt = 2400
     override val G_access_list_storage: BigInt = 1900
   }
