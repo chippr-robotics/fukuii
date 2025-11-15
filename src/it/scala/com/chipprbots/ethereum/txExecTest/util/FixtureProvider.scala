@@ -69,53 +69,55 @@ object FixtureProvider {
         )
     }
 
-    // Iterate through headers with their original hash keys
-    fixtures.blockHeaders.foreach { case (originalHash, header) =>
-      if (header.number <= blockNumber) {
-        val receiptsUpdates = fixtures.receipts
-          .get(originalHash)
-          .map(r => storages.receiptStorage.put(originalHash, r))
-          .getOrElse(storages.receiptStorage.emptyBatchUpdate)
+    // Iterate through headers in block number order using original hash keys
+    fixtures.blockHeaders.toSeq
+      .sortBy { case (_, header) => header.number }
+      .foreach { case (originalHash, header) =>
+        if (header.number <= blockNumber) {
+          val receiptsUpdates = fixtures.receipts
+            .get(originalHash)
+            .map(r => storages.receiptStorage.put(originalHash, r))
+            .getOrElse(storages.receiptStorage.emptyBatchUpdate)
 
-        storages.blockBodiesStorage
-          .put(originalHash, fixtures.blockBodies(originalHash))
-          .and(storages.blockHeadersStorage.put(originalHash, header))
-          .and(storages.blockNumberMappingStorage.put(header.number, originalHash))
-          .and(receiptsUpdates)
-          .commit()
+          storages.blockBodiesStorage
+            .put(originalHash, fixtures.blockBodies(originalHash))
+            .and(storages.blockHeadersStorage.put(originalHash, header))
+            .and(storages.blockNumberMappingStorage.put(header.number, originalHash))
+            .and(receiptsUpdates)
+            .commit()
 
-        def traverse(nodeHash: ByteString): Unit =
-          fixtures.stateMpt.get(nodeHash).orElse(fixtures.contractMpts.get(nodeHash)) match {
-            case Some(m: BranchNode) =>
-              storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
-              m.children.collect { case HashNode(hash) => traverse(ByteString(hash)) }
+          def traverse(nodeHash: ByteString): Unit =
+            fixtures.stateMpt.get(nodeHash).orElse(fixtures.contractMpts.get(nodeHash)) match {
+              case Some(m: BranchNode) =>
+                storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
+                m.children.collect { case HashNode(hash) => traverse(ByteString(hash)) }
 
-            case Some(m: ExtensionNode) =>
-              storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
-              m.next match {
-                case HashNode(hash) if hash.nonEmpty => traverse(ByteString(hash))
-                case _                               =>
-              }
-
-            case Some(m: LeafNode) =>
-              import AccountImplicits._
-              storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
-              Try(m.value.toArray[Byte].toAccount).toOption.foreach { account =>
-                if (account.codeHash != DumpChainActor.emptyEvm) {
-                  storages.evmCodeStorage.put(account.codeHash, fixtures.evmCode(account.codeHash)).commit()
+              case Some(m: ExtensionNode) =>
+                storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
+                m.next match {
+                  case HashNode(hash) if hash.nonEmpty => traverse(ByteString(hash))
+                  case _                               =>
                 }
-                if (account.storageRoot != DumpChainActor.emptyStorage) {
-                  traverse(account.storageRoot)
+
+              case Some(m: LeafNode) =>
+                import AccountImplicits._
+                storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
+                Try(m.value.toArray[Byte].toAccount).toOption.foreach { account =>
+                  if (account.codeHash != DumpChainActor.emptyEvm) {
+                    storages.evmCodeStorage.put(account.codeHash, fixtures.evmCode(account.codeHash)).commit()
+                  }
+                  if (account.storageRoot != DumpChainActor.emptyStorage) {
+                    traverse(account.storageRoot)
+                  }
                 }
-              }
 
-            case _ =>
+              case _ =>
 
-          }
+            }
 
-        traverse(header.stateRoot)
+          traverse(header.stateRoot)
+        }
       }
-    }
 
     storages
   }
