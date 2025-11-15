@@ -164,6 +164,7 @@ object TestConverter {
           eip155BlockNumber = 0,
           byzantiumBlockNumber = 0,
           constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
           istanbulBlockNumber = 0
         )
       case "berlin" =>
@@ -175,6 +176,7 @@ object TestConverter {
           eip155BlockNumber = 0,
           byzantiumBlockNumber = 0,
           constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
           istanbulBlockNumber = 0,
           berlinBlockNumber = 0
         )
