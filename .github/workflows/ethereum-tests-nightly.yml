@@ -1,0 +1,145 @@
+name: Ethereum/Tests Nightly
+
+on:
+  schedule:
+    # Run at 02:00 GMT (2 AM UTC) every day
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+
+jobs:
+  comprehensive-ethereum-tests:
+    name: Comprehensive Ethereum/Tests Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'sbt'
+      
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-21-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-21-
+            ${{ runner.os }}-sbt-
+      
+      - name: Set up SBT
+        run: |
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          sudo apt-get update
+          sudo apt-get install sbt
+      
+      - name: Compile all modules
+        run: sbt compile-all
+        env:
+          FUKUII_DEV: true
+      
+      - name: Run Comprehensive Ethereum/Tests Suite
+        run: |
+          echo "=========================================="
+          echo "Running comprehensive ethereum/tests suite"
+          echo "This validates EVM compliance against official ethereum/tests"
+          echo "=========================================="
+          echo ""
+          
+          # Run all ethereum/tests integration tests
+          sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.*" 2>&1 | tee ethereum-tests-output.log
+          
+          echo ""
+          echo "=========================================="
+          echo "Ethereum/Tests Results Summary"
+          echo "=========================================="
+          
+          # Extract test summary
+          grep -E "(Total number of tests run|Tests: succeeded|All tests passed|TESTS FAILED)" ethereum-tests-output.log || true
+          
+          echo ""
+          echo "Full results available in artifacts"
+        env:
+          FUKUII_DEV: true
+        continue-on-error: true
+      
+      - name: Generate Test Report
+        if: always()
+        run: |
+          cat > ethereum-tests-summary.md << EOF
+          # Ethereum/Tests Nightly Run Summary
+          
+          **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Commit:** ${{ github.sha }}
+          **Branch:** ${{ github.ref_name }}
+          
+          ## Test Results
+          
+          See attached artifacts for detailed test results and logs.
+          
+          ## Test Categories Executed
+          
+          - **SimpleEthereumTest**: Basic validation tests
+          - **BlockchainTestsSpec**: Blockchain validation tests
+          - **ComprehensiveBlockchainTestsSpec**: Extended blockchain tests
+          - **GeneralStateTestsSpec**: State transition tests
+          
+          ## Artifacts
+          
+          - `ethereum-tests-output.log`: Full test execution output
+          - `fukuii.log`: Application logs from test execution
+          
+          ## Next Steps
+          
+          1. Review any test failures
+          2. Update issue tracking with results
+          3. Investigate any new failures
+          
+          EOF
+          
+          cat ethereum-tests-summary.md
+      
+      - name: Upload Test Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ethereum-tests-nightly-logs-${{ github.run_number }}
+          path: |
+            ethereum-tests-output.log
+            ethereum-tests-summary.md
+            /tmp/fukuii-it-test/**/*.log
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: Upload Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ethereum-tests-nightly-reports-${{ github.run_number }}
+          path: |
+            **/target/test-reports/**
+            **/target/scala-*/it-classes/**
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "::warning::Ethereum/Tests nightly run failed. Check artifacts for details."
+          echo "See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} for details"
