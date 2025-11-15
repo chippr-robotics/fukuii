@@ -8,15 +8,15 @@ import scala.io.Source
 
 /** Adapter for running ethereum/tests JSON blockchain tests
   *
-  * Implements support for the official Ethereum test suite at https://github.com/ethereum/tests
-  * This provides comprehensive EVM validation for blocks < 19.25M (pre-Spiral fork) where
-  * Ethereum Classic maintains 100% EVM compatibility with Ethereum.
+  * Implements support for the official Ethereum test suite at https://github.com/ethereum/tests This provides
+  * comprehensive EVM validation for blocks < 19.25M (pre-Spiral fork) where Ethereum Classic maintains 100% EVM
+  * compatibility with Ethereum.
   *
   * Test Format: JSON files containing blockchain test scenarios with:
-  * - Pre-state: Initial account states
-  * - Blocks: Transactions and expected post-state
-  * - Post-state: Expected state after block execution
-  * - Network: Fork configuration (Frontier, Homestead, Byzantium, etc.)
+  *   - Pre-state: Initial account states
+  *   - Blocks: Transactions and expected post-state
+  *   - Post-state: Expected state after block execution
+  *   - Network: Fork configuration (Frontier, Homestead, Byzantium, etc.)
   *
   * See ADR-014 for rationale and compatibility analysis.
   */
@@ -24,10 +24,12 @@ object EthereumTestsAdapter {
 
   /** Load and parse a JSON blockchain test file
     *
-    * @param resourcePath Path to JSON test file in resources
-    * @return Parsed test suite
+    * @param resourcePath
+    *   Path to JSON test file in resources
+    * @return
+    *   Parsed test suite
     */
-  def loadTestSuite(resourcePath: String)(implicit runtime: IORuntime): IO[BlockchainTestSuite] = {
+  def loadTestSuite(resourcePath: String)(implicit runtime: IORuntime): IO[BlockchainTestSuite] =
     IO {
       val source = Source.fromInputStream(getClass.getResourceAsStream(resourcePath))
       try {
@@ -40,17 +42,13 @@ object EthereumTestsAdapter {
             }
           case Left(error) => throw new RuntimeException(s"Failed to parse JSON: $error")
         }
-      } finally {
-        source.close()
-      }
+      } finally source.close()
     }
-  }
 }
 
 /** Container for multiple blockchain test cases
   *
-  * ethereum/tests JSON files contain multiple test cases in a single file.
-  * Each test case has a name and test data.
+  * ethereum/tests JSON files contain multiple test cases in a single file. Each test case has a name and test data.
   */
 case class BlockchainTestSuite(tests: Map[String, BlockchainTest])
 
@@ -64,11 +62,16 @@ object BlockchainTestSuite {
   *
   * Represents one test scenario from ethereum/tests.
   *
-  * @param pre Initial state before block execution
-  * @param blocks Blocks to execute in sequence
-  * @param postState Expected state after all blocks executed
-  * @param network Fork configuration (e.g., "Byzantium", "Constantinople")
-  * @param genesisBlockHeader Genesis block header (optional, for proper parent setup)
+  * @param pre
+  *   Initial state before block execution
+  * @param blocks
+  *   Blocks to execute in sequence
+  * @param postState
+  *   Expected state after all blocks executed
+  * @param network
+  *   Fork configuration (e.g., "Byzantium", "Constantinople")
+  * @param genesisBlockHeader
+  *   Genesis block header (optional, for proper parent setup)
   */
 case class BlockchainTest(
     pre: Map[String, AccountState],
@@ -92,10 +95,14 @@ object BlockchainTest {
 
 /** Account state in ethereum/tests format
   *
-  * @param balance Account balance in wei (hex string)
-  * @param code Contract bytecode (hex string)
-  * @param nonce Transaction nonce (hex string)
-  * @param storage Contract storage (hex key -> hex value)
+  * @param balance
+  *   Account balance in wei (hex string)
+  * @param code
+  *   Contract bytecode (hex string)
+  * @param nonce
+  *   Transaction nonce (hex string)
+  * @param storage
+  *   Contract storage (hex key -> hex value)
   */
 case class AccountState(
     balance: String,
@@ -117,9 +124,12 @@ object AccountState {
 
 /** Test block from ethereum/tests
   *
-  * @param blockHeader Block header fields
-  * @param transactions List of transactions in block
-  * @param uncleHeaders Uncle block headers
+  * @param blockHeader
+  *   Block header fields
+  * @param transactions
+  *   List of transactions in block
+  * @param uncleHeaders
+  *   Uncle block headers
   */
 case class TestBlock(
     blockHeader: TestBlockHeader,

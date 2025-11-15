@@ -14,9 +14,12 @@ object TestConverter {
 
   /** Convert ethereum/tests AccountState to internal Account
     *
-    * @param address Account address (hex string from test file key)
-    * @param state Account state from test
-    * @return Internal Account object
+    * @param address
+    *   Account address (hex string from test file key)
+    * @param state
+    *   Account state from test
+    * @return
+    *   Internal Account object
     */
   def toAccount(address: String, state: AccountState): Account = {
     val addr = Address(ByteString(parseHex(address)))
@@ -39,10 +42,12 @@ object TestConverter {
 
   /** Convert ethereum/tests TestBlockHeader to internal BlockHeader
     *
-    * @param testHeader Header from test file
-    * @return Internal BlockHeader object
+    * @param testHeader
+    *   Header from test file
+    * @return
+    *   Internal BlockHeader object
     */
-  def toBlockHeader(testHeader: TestBlockHeader): BlockHeader = {
+  def toBlockHeader(testHeader: TestBlockHeader): BlockHeader =
     BlockHeader(
       parentHash = ByteString(parseHex(testHeader.parentHash)),
       ommersHash = ByteString(parseHex(testHeader.uncleHash)),
@@ -60,12 +65,13 @@ object TestConverter {
       mixHash = ByteString(parseHex(testHeader.mixHash)),
       nonce = ByteString(parseHex(testHeader.nonce))
     )
-  }
 
   /** Convert ethereum/tests TestTransaction to internal Transaction
     *
-    * @param testTx Transaction from test file
-    * @return Internal SignedTransaction object
+    * @param testTx
+    *   Transaction from test file
+    * @return
+    *   Internal SignedTransaction object
     */
   def toTransaction(testTx: TestTransaction): SignedTransaction = {
     // Parse signature components
@@ -97,11 +103,13 @@ object TestConverter {
 
   /** Map network name to fork block numbers
     *
-    * ethereum/tests use network names like "Byzantium", "Constantinople", etc.
-    * We need to map these to our fork block configuration.
+    * ethereum/tests use network names like "Byzantium", "Constantinople", etc. We need to map these to our fork block
+    * configuration.
     *
-    * @param network Network name from test
-    * @return BlockchainConfig with appropriate fork configuration
+    * @param network
+    *   Network name from test
+    * @return
+    *   BlockchainConfig with appropriate fork configuration
     */
   def networkToConfig(network: String, baseConfig: BlockchainConfig): BlockchainConfig = {
     import com.chipprbots.ethereum.utils.ForkBlockNumbers
@@ -186,11 +194,10 @@ object TestConverter {
   }
 
   /** Parse hex or decimal string to BigInt */
-  private def parseBigInt(value: String): BigInt = {
+  private def parseBigInt(value: String): BigInt =
     if (value.startsWith("0x")) {
       BigInt(value.substring(2), 16)
     } else {
       BigInt(value)
     }
-  }
 }
