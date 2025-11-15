@@ -4,9 +4,8 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.storage._
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.ledger.{BlockExecution, InMemoryWorldStateProxy}
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.utils.{BlockchainConfig, Config}
-import com.chipprbots.ethereum.vm.EvmConfig
 
 /** Executes ethereum/tests blockchain tests
   *
@@ -31,19 +30,17 @@ object EthereumTestExecutor {
     *
     * @param test The blockchain test to execute
     * @param baseConfig Base blockchain configuration
-    * @param blockExecution Block execution infrastructure
     * @return Either error message or success
     */
   def executeTest(
       test: BlockchainTest,
-      baseConfig: BlockchainConfig,
-      blockExecution: BlockExecution
+      baseConfig: BlockchainConfig
   ): Either[String, TestExecutionResult] = {
     given BlockchainConfig = TestConverter.networkToConfig(test.network, baseConfig)
 
     for {
       initialWorld <- setupInitialState(test.pre)
-      finalWorld <- executeBlocks(test.blocks, initialWorld, blockExecution)
+      finalWorld <- executeBlocks(test.blocks, initialWorld)
       _ <- validatePostState(test.postState, finalWorld)
     } yield TestExecutionResult(
       network = test.network,
@@ -117,59 +114,52 @@ object EthereumTestExecutor {
   /** Execute a sequence of blocks using BlockExecution infrastructure */
   private def executeBlocks(
       blocks: Seq[TestBlock],
-      initialWorld: InMemoryWorldStateProxy,
-      blockExecution: BlockExecution
+      initialWorld: InMemoryWorldStateProxy
   )(using blockchainConfig: BlockchainConfig): Either[String, InMemoryWorldStateProxy] = {
-    try {
-      // For ethereum/tests, we need to execute blocks with the provided pre-state
-      // This is a simplified approach - proper implementation would need to:
-      // 1. Set up blockchain storage with initial state
-      // 2. Use BlockExecution.executeAndValidateBlock
-      // 3. Extract final state from blockchain after execution
-      
-      // For now, return the initial world as a placeholder
-      // TODO: Implement proper block execution using BlockExecution infrastructure
-      Right(initialWorld)
-    } catch {
-      case e: Exception => Left(s"Failed to execute blocks: ${e.getMessage}")
-    }
+    // Use the test helper which extends ScenarioSetup and provides all the infrastructure
+    val helper = new EthereumTestHelper(using blockchainConfig)
+    helper.executeBlocks(blocks, initialWorld)
   }
 
   /** Validate final state matches expected post-state */
   private def validatePostState(
       expectedPostState: Map[String, AccountState],
       finalWorld: InMemoryWorldStateProxy
-  )(using blockchainConfig: BlockchainConfig): Either[String, Unit] = {
+  ): Either[String, Unit] = {
+    import scala.util.boundary, boundary.break
+    
     try {
-      expectedPostState.foreach { case (addressHex, expectedAccount) =>
-        val address = Address(ByteString(parseHex(addressHex)))
-        val account = finalWorld.getAccount(address).getOrElse(Account.empty())
+      boundary {
+        expectedPostState.foreach { case (addressHex, expectedAccount) =>
+          val address = Address(ByteString(parseHex(addressHex)))
+          val account = finalWorld.getAccount(address).getOrElse(Account.empty())
 
-        val expectedBalance = UInt256(parseBigInt(expectedAccount.balance))
-        val expectedNonce = UInt256(parseBigInt(expectedAccount.nonce))
+          val expectedBalance = UInt256(parseBigInt(expectedAccount.balance))
+          val expectedNonce = UInt256(parseBigInt(expectedAccount.nonce))
 
-        if (account.balance != expectedBalance) {
-          return Left(s"Balance mismatch for $addressHex: expected $expectedBalance, got ${account.balance}")
-        }
+          if (account.balance != expectedBalance) {
+            break(Left(s"Balance mismatch for $addressHex: expected $expectedBalance, got ${account.balance}"))
+          }
 
-        if (account.nonce != expectedNonce) {
-          return Left(s"Nonce mismatch for $addressHex: expected $expectedNonce, got ${account.nonce}")
-        }
+          if (account.nonce != expectedNonce) {
+            break(Left(s"Nonce mismatch for $addressHex: expected $expectedNonce, got ${account.nonce}"))
+          }
 
-        // Validate storage
-        expectedAccount.storage.foreach { case (keyHex, valueHex) =>
-          val key = parseBigInt(keyHex)
-          val expectedValue = parseBigInt(valueHex)
-          val storage = finalWorld.getStorage(address)
-          val actualValue = storage.load(key)
+          // Validate storage
+          expectedAccount.storage.foreach { case (keyHex, valueHex) =>
+            val key = parseBigInt(keyHex)
+            val expectedValue = parseBigInt(valueHex)
+            val storage = finalWorld.getStorage(address)
+            val actualValue = storage.load(key)
 
-          if (actualValue != expectedValue) {
-            return Left(s"Storage mismatch for $addressHex at $key: expected $expectedValue, got $actualValue")
+            if (actualValue != expectedValue) {
+              break(Left(s"Storage mismatch for $addressHex at $key: expected $expectedValue, got $actualValue"))
+            }
           }
         }
-      }
 
-      Right(())
+        Right(())
+      }
     } catch {
       case e: Exception => Left(s"Failed to validate post-state: ${e.getMessage}")
     }
