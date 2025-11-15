@@ -98,8 +98,8 @@ object EthereumTestExecutor {
 
         // Save storage if present
         accountState.storage.foreach { case (keyHex, valueHex) =>
-          val key = BigInt(parseHex(keyHex))
-          val value = BigInt(parseHex(valueHex))
+          val key = parseBigInt(keyHex)
+          val value = parseBigInt(valueHex)
           val storage = world.getStorage(address)
           val newStorage = storage.store(key, value)
           world = world.saveStorage(address, newStorage)
@@ -158,8 +158,8 @@ object EthereumTestExecutor {
 
         // Validate storage
         expectedAccount.storage.foreach { case (keyHex, valueHex) =>
-          val key = BigInt(parseHex(keyHex))
-          val expectedValue = BigInt(parseHex(valueHex))
+          val key = parseBigInt(keyHex)
+          val expectedValue = parseBigInt(valueHex)
           val storage = finalWorld.getStorage(address)
           val actualValue = storage.load(key)
 
