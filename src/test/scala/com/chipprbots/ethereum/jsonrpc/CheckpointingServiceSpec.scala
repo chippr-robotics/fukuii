@@ -65,7 +65,7 @@ class CheckpointingServiceSpec
 
   it should "get latest block that is a descendant of the passed parent checkpoint block" in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
-      k <- Gen.choose[Int](1, 10) // checkpointing interval  
+      k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(1, 1000) // number of checkpoints in the chain (at least 1 to have a descendant)
       n <- Gen.choose(0, k - 1) // distance from best block to checkpointed block
     } yield (k, m, n)
