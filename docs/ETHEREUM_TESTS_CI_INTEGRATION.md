@@ -63,7 +63,7 @@ sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.*"
 **Test Classes:**
 - `SimpleEthereumTest`: Basic validation (4 tests)
 - `BlockchainTestsSpec`: Focused blockchain tests (10 tests)
-- `ComprehensiveBlockchainTestsSpec`: Extended tests (84+ passing tests)
+- `ComprehensiveBlockchainTestsSpec`: Extended tests (98+ passing tests)
 - `GeneralStateTestsSpec`: State transition tests
 - `GasCalculationIssuesSpec`: Gas calculation validation (flagged tests)
 

@@ -82,7 +82,7 @@ jobs:
       - name: Generate Test Report
         if: always()
         run: |
-          cat > ethereum-tests-summary.md << 'EOF'
+          cat > ethereum-tests-summary.md << EOF
           # Ethereum/Tests Nightly Run Summary
           
           **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
