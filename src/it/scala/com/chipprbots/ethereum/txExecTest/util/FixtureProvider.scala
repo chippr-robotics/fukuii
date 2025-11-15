@@ -198,7 +198,7 @@ object FixtureProvider {
     val blocksByOriginalHash = headers.flatMap { case (originalHash, header) =>
       bodies.get(originalHash).map(body => (originalHash, Block(header, body)))
     }
-    
+
     val blocks = blocksByOriginalHash.values.toList
 
     Fixture(

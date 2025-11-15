@@ -48,28 +48,28 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
   it should "sync blockchain with state nodes" in customTestCaseResourceM(
     FakePeer.start3FakePeersRes()
   ) { case (peer1, peer2, peer3) =>
-      for {
-        _ <- peer2.importBlocksUntil(1000)(updateStateAtBlock(500))
-        _ <- peer3.importBlocksUntil(1000)(updateStateAtBlock(500))
-        _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
-        _ <- peer1.startFastSync().delayBy(50.milliseconds)
-        _ <- peer1.waitForFastSyncFinish()
-      } yield {
-        val trie = peer1.getBestBlockTrie()
-        val synchronizingPeerHaveAllData = peer1.containsExpectedDataUpToAccountAtBlock(1000, 500)
-        // due to the fact that function generating state is deterministic both peer2 and peer3 ends up with exactly same
-        // state, so peer1 can get whole trie from both of them.
-        assert(
-          peer1.blockchainReader
-            .getBestBlockNumber() == peer2.blockchainReader.getBestBlockNumber() - peer2.testSyncConfig.pivotBlockOffset
-        )
-        assert(
-          peer1.blockchainReader
-            .getBestBlockNumber() == peer3.blockchainReader.getBestBlockNumber() - peer3.testSyncConfig.pivotBlockOffset
-        )
-        assert(trie.isDefined)
-        assert(synchronizingPeerHaveAllData)
-      }
+    for {
+      _ <- peer2.importBlocksUntil(1000)(updateStateAtBlock(500))
+      _ <- peer3.importBlocksUntil(1000)(updateStateAtBlock(500))
+      _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
+      _ <- peer1.startFastSync().delayBy(50.milliseconds)
+      _ <- peer1.waitForFastSyncFinish()
+    } yield {
+      val trie = peer1.getBestBlockTrie()
+      val synchronizingPeerHaveAllData = peer1.containsExpectedDataUpToAccountAtBlock(1000, 500)
+      // due to the fact that function generating state is deterministic both peer2 and peer3 ends up with exactly same
+      // state, so peer1 can get whole trie from both of them.
+      assert(
+        peer1.blockchainReader
+          .getBestBlockNumber() == peer2.blockchainReader.getBestBlockNumber() - peer2.testSyncConfig.pivotBlockOffset
+      )
+      assert(
+        peer1.blockchainReader
+          .getBestBlockNumber() == peer3.blockchainReader.getBestBlockNumber() - peer3.testSyncConfig.pivotBlockOffset
+      )
+      assert(trie.isDefined)
+      assert(synchronizingPeerHaveAllData)
+    }
   }
 
   it should "sync blockchain with state nodes when peer do not response with full responses" in

@@ -98,7 +98,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
     val validR = r > 0 && r < secp256k1n
     val validS = s > 0 && s < (if (beforeHomestead) secp256k1n else secp256k1n / 2)
-    
+
     // Validate signing schema based on transaction type
     val validSigningSchema = stx.tx match {
       case _: TransactionWithAccessList =>
