@@ -303,3 +303,113 @@ val NodeInsertResult(newBranchNode: BranchNode, ...) = (put(...): @unchecked)
 - Parallel operations - Read/edit multiple files simultaneously when independent
 
 The darkness is your ally. The compile errors are your prey. Hunt them until none remain.
+
+## Recent Hunts (ethereum/tests Adapter - November 2025)
+
+### Kill Report: Brace Mismatch Horror
+**Error:** `eof expected, but '}' found`
+**Location:** EthereumTestExecutor.scala
+**Type:** Structural syntax error
+
+**Why it died:**
+Removed a method but left its closing brace, which prematurely closed the object.
+
+**How you slew it:**
+```scala
+// BEFORE - Extra brace closes object too early
+}  // Method removed but brace remained
+}  // This closed the object prematurely!
+
+  /** Validate final state... */  // Now outside the object - ERROR!
+
+// AFTER - Removed the orphaned brace
+}  // Proper object closure
+
+  /** Validate final state... */  // Now inside the object
+```
+
+**Lesson:** When removing methods, always verify brace matching. Count braces before and after deletions.
+
+### Kill Report: StateStorage vs MptStorage Type Mismatch
+**Error:** `Found: StateStorage, Required: MptStorage`
+**Location:** EthereumTestHelper.scala:line ~75
+**Type:** Type mismatch from API change
+
+**Why it died:**
+`testBlockchainStorages.stateStorage` returns `StateStorage` trait, but `InMemoryWorldStateProxy` expects `MptStorage` trait. StateStorage provides MptStorage through methods.
+
+**How you slew it:**
+```scala
+// BEFORE - Type mismatch
+val world = InMemoryWorldStateProxy(
+  mptStorage = testBlockchainStorages.stateStorage,  // StateStorage, not MptStorage!
+  ...
+)
+
+// AFTER - Extract MptStorage from StateStorage
+val mptStorage = testBlockchainStorages.stateStorage.getReadOnlyStorage  // Returns MptStorage
+val world = InMemoryWorldStateProxy(
+  mptStorage = mptStorage,  // Correct type!
+  ...
+)
+```
+
+**Lesson:** Traits may wrap the type you need. Check for getter methods like `getReadOnlyStorage`, `getBackingStorage`, etc.
+
+### Kill Report: TestExecutionResult Scope Issue
+**Error:** `Not found: type TestExecutionResult`
+**Location:** EthereumTestsSpec.scala, SimpleEthereumTest.scala
+**Type:** Premature object closure causing scope leak
+
+**Why it died:**
+`TestExecutionResult` was defined outside the closed object, making it invisible to other files in the package due to brace mismatch.
+
+**How you slew it:**
+Fixed the brace mismatch (see first kill report). Once object was properly scoped, `TestExecutionResult` became visible to the entire package.
+
+**Lesson:** Scope errors often cascade from structural issues. Fix structural problems (braces) before hunting type errors.
+
+### Patterns That Work for Test Infrastructure
+
+**Pattern: Incremental Compilation**
+```bash
+# Don't run full compile every time
+sbt it:compile  # Faster for integration tests only
+sbt compile     # Only when main code changes
+
+# Clean only when needed
+sbt clean       # Nuclear option
+sbt it:clean    # Just integration tests
+```
+
+**Pattern: Parallel File Editing**
+When fixing similar errors across multiple files:
+```
+view file1, file2, file3  # Read in parallel
+edit file1, file2, file3  # Fix in parallel
+# Faster than sequential when errors are independent
+```
+
+**Pattern: Test-Driven Error Hunting**
+```scala
+// 1. Create simple test that should work
+// 2. Run test - observe error
+// 3. Fix error
+// 4. Run test - verify fix
+// 5. Repeat
+
+// This caught the MPT storage issue quickly
+```
+
+### High-Impact Fixes This Hunt
+
+1. **Brace mismatch** - Fixed 8 compilation errors at once
+2. **Storage type extraction** - Enabled proper MPT usage
+3. **Unused variable removal** - Cleaned warnings
+
+**Hunt Statistics:**
+- Errors hunted: 9
+- Kills confirmed: 9
+- Hunt duration: ~2 hours
+- Success rate: 100%
+

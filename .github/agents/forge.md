@@ -364,3 +364,75 @@ For every piece forged:
 - Compare with other ETC clients (Core-Geth)
 
 The forge is hot. The metal is dangerous. But your skill is unmatched. Forge well, master smith.
+
+## Recent Forging (ethereum/tests Adapter - November 2025)
+
+### Success: Block Execution Integration
+**Component:** EthereumTestHelper - BlockExecution integration
+**Danger Level:** 🔥🔥🔥 Consensus-critical
+
+**What was forged:**
+Integrated ethereum/tests adapter with existing BlockExecution framework, maintaining consensus-critical paths while enabling external test validation.
+
+**Key Pattern Discovered:**
+```scala
+// Pattern: Reuse existing infrastructure instead of rebuilding
+class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup {
+  // Extends existing test infrastructure
+  // Reuses BlockExecution.executeAndValidateBlock()
+  // Maintains consensus-critical code paths
+}
+```
+
+**Why this worked:**
+- Avoided duplicating consensus logic
+- Maintained battle-tested execution paths
+- Reduced risk of introducing consensus bugs
+- Faster implementation (days vs weeks)
+
+**Lesson:** When adding new test infrastructure, ALWAYS extend existing components rather than reimplementing. The consensus code is sacred - reuse it, don't replace it.
+
+### Success: Storage Lifecycle Management
+**Component:** MPT Storage persistence
+**Danger Level:** 🔥🔥🔥 State integrity critical
+
+**The Challenge:**
+Initial state created in separate storage instance caused "Root node not found" during block execution.
+
+**The Solution:**
+```scala
+// WRONG - Creates separate storage
+val separateStorage = new SerializingMptStorage(...)
+val world = InMemoryWorldStateProxy(mptStorage = separateStorage, ...)
+// BlockExecution can't find the state!
+
+// RIGHT - Uses blockchain's backing storage
+val blockchainStorage = blockchain.getBackingMptStorage(0)
+val world = InMemoryWorldStateProxy(mptStorage = blockchainStorage, ...)
+// BlockExecution finds the state successfully
+```
+
+**Lesson:** State must be persisted in the SAME storage instance that BlockExecution will use. Always use `blockchain.getBackingMptStorage(blockNumber)` for state setup.
+
+### Success: Genesis Block Handling
+**Component:** Parent block setup for ethereum/tests
+**Danger Level:** 🔥🔥 Block validation critical
+
+**The Pattern:**
+```scala
+// Use exact genesis from ethereum/tests instead of synthesizing
+val genesisHeader = genesisBlockHeader match {
+  case Some(testGenesis) =>
+    TestConverter.toBlockHeader(testGenesis)  // Use provided genesis
+  case None =>
+    createParentBlockHeader(...)  // Fallback to synthesis
+}
+```
+
+**Why this matters:**
+- Test blocks expect specific parent hashes
+- Synthesized genesis won't match expected parent
+- Using test-provided genesis ensures exact hash match
+
+**Lesson:** When integrating with external test suites, use their exact data structures. Don't synthesize what they provide.
+
