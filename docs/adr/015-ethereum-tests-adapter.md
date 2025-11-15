@@ -1,10 +1,22 @@
 # ADR-015: Ethereum/Tests Adapter Implementation
 
-**Status**: Accepted
+**Status**: In Progress (Phase 2 - Partial)
 
 **Date**: November 2025
 
 **Deciders**: Chippr Robotics LLC Engineering Team
+
+**Implementation Status:**
+- Phase 1 (JSON Parsing): ✅ Complete
+- Phase 2 (Execution): 🔄 In Progress (state setup complete, block execution pending)
+- Phase 3 (Integration): ⏳ Not Started
+
+**Latest Update:** November 15, 2025
+- Created EthereumTestExecutor with working state setup
+- Fixed Scala 3 API compatibility issues (LegacyTransaction, storage APIs)
+- Added SimpleEthereumTest with 3 passing validation tests
+- Initialized ethereum/tests git submodule
+- Ready for block execution implementation
 
 ## Context
 
@@ -277,17 +289,32 @@ For test execution, all forks are activated at block 0 to match test expectation
 - [x] Proper package structure
 - [x] Comprehensive documentation
 
-### Phase 2: Execution (Next)
+### Phase 2: Execution (In Progress - Partial Completion)
 
-**Tasks:**
-1. Implement EthereumTestExecutor
-2. State setup from pre-state
-3. Block execution loop
-4. Post-state validation
-5. State root comparison
-6. Error reporting
+**Status:** State setup complete, full execution pending
 
-**Timeline:** 1-2 weeks
+**Completed:**
+- [x] EthereumTestExecutor.scala - Test execution infrastructure
+- [x] Initial state setup from pre-state
+- [x] Storage initialization (SerializingMptStorage, EvmCodeStorage)
+- [x] Account creation with balance, nonce, code, and storage
+- [x] State root calculation and validation
+- [x] SimpleEthereumTest.scala - Validation tests (3 tests passing)
+
+**Remaining Tasks:**
+1. ⏳ Block execution loop using BlockExecution infrastructure
+2. ⏳ Transaction execution and receipt validation
+3. ⏳ Post-state validation against expected state
+4. ⏳ State root comparison
+5. ⏳ Comprehensive error reporting
+
+**Blockers/Notes:**
+- Block execution requires integration with existing BlockExecution framework
+- Need to create BlockchainStorages from initial world state
+- Transaction execution needs proper EVM context setup
+- Currently validated: JSON parsing, state setup, test structure
+
+**Timeline:** 1-2 weeks additional work
 
 ### Phase 3: Integration (Future)
 
@@ -319,30 +346,34 @@ For test execution, all forks are activated at block 0 to match test expectation
 - ✅ Scala 3 dialect
 
 **Testing:**
-- ✅ Base test class provided
+- ✅ Base test class provided (EthereumTestsSpec)
 - ✅ Example usage documented
 - ✅ Integration test location (src/it/scala)
+- ✅ SimpleEthereumTest validates infrastructure (3 tests passing)
+- ✅ State setup tested and working
 
 ### Documentation
 
 **Comprehensive Docs:**
 - ✅ ADR-015 (this document)
-- ✅ ETHEREUM_TESTS_ADAPTER.md (user guide)
+- ⏳ ETHEREUM_TESTS_ADAPTER.md (to be created with full execution guide)
 - ✅ Inline Scaladoc comments
-- ✅ Architecture diagrams
-- ✅ Usage examples
+- ⏳ Architecture diagrams (to be added)
+- ✅ Usage examples in SimpleEthereumTest
 
 ## Success Metrics
 
-**Short-term (Phase 1):**
+**Short-term (Phase 1):** ✅ COMPLETE
 - ✅ JSON parser successfully decodes ethereum/tests format
 - ✅ Converter produces valid domain objects
 - ✅ Documentation is clear and comprehensive
 
-**Medium-term (Phase 2):**
-- [ ] Test executor runs simple value transfer tests
-- [ ] State root validation passes
-- [ ] At least 10 ethereum/tests pass successfully
+**Medium-term (Phase 2):** 🔄 IN PROGRESS
+- 🔄 Test executor infrastructure created
+- ✅ Initial state setup working (validated in SimpleEthereumTest)
+- ✅ State root calculation working
+- ⏳ Block execution pending (requires BlockExecution integration)
+- ⏳ At least 10 ethereum/tests pass successfully (pending full execution)
 
 **Long-term (Phase 3):**
 - [ ] All relevant ethereum/tests categories passing
