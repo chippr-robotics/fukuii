@@ -96,4 +96,29 @@ class SimpleEthereumTest extends EthereumTestsSpec {
       info(s"  ✓ Test structure is valid")
     }
   }
+
+  it should "execute blocks and validate post-state" in {
+    val testFile = "/ethereum-tests/SimpleTx.json"
+    val suite = loadTestSuite(testFile)
+    
+    suite.tests.foreach { case (testName, test) =>
+      info(s"Executing test: $testName")
+      
+      val result = executeTest(test)
+      
+      result match {
+        case Right(executionResult) =>
+          info(s"  ✓ Test executed successfully")
+          info(s"  Network: ${executionResult.network}")
+          info(s"  Blocks executed: ${executionResult.blocksExecuted}")
+          info(s"  Final state root: ${executionResult.finalStateRoot.toHex}")
+          
+          // Test should have executed the expected number of blocks
+          executionResult.blocksExecuted shouldBe test.blocks.size
+          
+        case Left(error) =>
+          fail(s"Failed to execute test: $error")
+      }
+    }
+  }
 }

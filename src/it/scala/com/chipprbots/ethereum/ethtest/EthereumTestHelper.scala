@@ -48,30 +48,39 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup {
   /** Execute blocks and return final world state */
   def executeBlocks(
       blocks: Seq[TestBlock],
-      initialWorld: InMemoryWorldStateProxy
+      initialWorld: InMemoryWorldStateProxy,
+      genesisBlockHeader: Option[TestBlockHeader]
   ): Either[String, InMemoryWorldStateProxy] = {
     try {
       if (blocks.isEmpty) {
         return Right(initialWorld)
       }
       
-      // Get the first block to determine parent block number
-      val firstTestBlock = blocks.head
-      val firstBlockNumber = parseBigInt(firstTestBlock.blockHeader.number)
-      val parentBlockNumber = firstBlockNumber - 1
-      
-      // Create a genesis/parent block with the initial state root
-      val genesisHeader = createParentBlockHeader(
-        blockNumber = parentBlockNumber,
-        stateRoot = initialWorld.stateRootHash,
-        testBlock = firstTestBlock
-      )
+      // Create the parent block (genesis) either from the test or synthesize one
+      val genesisHeader = genesisBlockHeader match {
+        case Some(testGenesis) =>
+          // Use the provided genesis block header from the test
+          TestConverter.toBlockHeader(testGenesis)
+        case None =>
+          // Synthesize a genesis block for tests that don't provide one
+          val firstTestBlock = blocks.head
+          val firstBlockNumber = parseBigInt(firstTestBlock.blockHeader.number)
+          val parentBlockNumber: BigInt = if (firstBlockNumber > 0) firstBlockNumber - 1 else BigInt(0)
+          createParentBlockHeader(
+            blockNumber = parentBlockNumber,
+            stateRoot = initialWorld.stateRootHash,
+            testBlock = firstTestBlock
+          )
+      }
       
       // Store the genesis/parent block
       val genesisBlock = Block(genesisHeader, BlockBody(Seq.empty, Seq.empty))
       testBlockchainStorages.blockHeadersStorage.put(genesisHeader.hash, genesisHeader).commit()
       testBlockchainStorages.blockBodiesStorage.put(genesisHeader.hash, genesisBlock.body).commit()
       testBlockchainStorages.blockNumberMappingStorage.put(genesisHeader.number, genesisHeader.hash).commit()
+      
+      // Also need to store chain weight for the genesis block
+      testBlockchainStorages.chainWeightStorage.put(genesisHeader.hash, ChainWeight.zero).commit()
       
       // Create BlockExecution using the test infrastructure
       val syncConfig = Config.SyncConfig(Config.config)
@@ -100,6 +109,12 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup {
             testBlockchainStorages.blockBodiesStorage.put(block.header.hash, block.body).commit()
             testBlockchainStorages.blockNumberMappingStorage.put(block.header.number, block.header.hash).commit()
             testBlockchainStorages.receiptStorage.put(block.header.hash, receiptList).commit()
+            
+            // Update chain weight
+            val parentWeight = testBlockchainStorages.chainWeightStorage.get(block.header.parentHash)
+              .getOrElse(ChainWeight.zero)
+            val newWeight = parentWeight.increase(block.header)
+            testBlockchainStorages.chainWeightStorage.put(block.header.hash, newWeight).commit()
             
           case Left(execError) =>
             throw new RuntimeException(s"Block execution failed: $execError")

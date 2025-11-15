@@ -40,7 +40,7 @@ object EthereumTestExecutor {
 
     for {
       initialWorld <- setupInitialState(test.pre)
-      finalWorld <- executeBlocks(test.blocks, initialWorld)
+      finalWorld <- executeBlocks(test.blocks, initialWorld, test.genesisBlockHeader)
       _ <- validatePostState(test.postState, finalWorld)
     } yield TestExecutionResult(
       network = test.network,
@@ -114,11 +114,12 @@ object EthereumTestExecutor {
   /** Execute a sequence of blocks using BlockExecution infrastructure */
   private def executeBlocks(
       blocks: Seq[TestBlock],
-      initialWorld: InMemoryWorldStateProxy
+      initialWorld: InMemoryWorldStateProxy,
+      genesisBlockHeader: Option[TestBlockHeader]
   )(using blockchainConfig: BlockchainConfig): Either[String, InMemoryWorldStateProxy] = {
     // Use the test helper which extends ScenarioSetup and provides all the infrastructure
     val helper = new EthereumTestHelper(using blockchainConfig)
-    helper.executeBlocks(blocks, initialWorld)
+    helper.executeBlocks(blocks, initialWorld, genesisBlockHeader)
   }
 
   /** Validate final state matches expected post-state */

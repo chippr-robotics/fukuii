@@ -86,4 +86,9 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
     val bytes = org.bouncycastle.util.encoders.Hex.decode(cleaned)
     com.chipprbots.ethereum.domain.Address(ByteString(bytes))
   }
+
+  /** Execute a complete test including block execution and post-state validation */
+  def executeTest(test: BlockchainTest): Either[String, TestExecutionResult] = {
+    EthereumTestExecutor.executeTest(test, baseBlockchainConfig)
+  }
 }
