@@ -214,8 +214,26 @@ case class TestTransaction(
     value: String,
     v: String,
     r: String,
-    s: String
+    s: String,
+    txType: Option[String] = None, // "0x01" for EIP-2930, "0x02" for EIP-1559, etc.
+    chainId: Option[String] = None, // Chain ID for typed transactions
+    accessList: Option[List[TestAccessListItem]] = None // Access list for EIP-2930+
 )
+
+/** Access list item from ethereum/tests */
+case class TestAccessListItem(
+    address: String,
+    storageKeys: List[String]
+)
+
+object TestAccessListItem {
+  implicit val decoder: Decoder[TestAccessListItem] = Decoder.instance { cursor =>
+    for {
+      address <- cursor.downField("address").as[String]
+      storageKeys <- cursor.downField("storageKeys").as[List[String]]
+    } yield TestAccessListItem(address, storageKeys)
+  }
+}
 
 object TestTransaction {
   implicit val decoder: Decoder[TestTransaction] = Decoder.instance { cursor =>
@@ -229,6 +247,9 @@ object TestTransaction {
       v <- cursor.downField("v").as[String]
       r <- cursor.downField("r").as[String]
       s <- cursor.downField("s").as[String]
-    } yield TestTransaction(data, gasLimit, gasPrice, nonce, to, value, v, r, s)
+      txType <- cursor.downField("type").as[Option[String]]
+      chainId <- cursor.downField("chainId").as[Option[String]]
+      accessList <- cursor.downField("accessList").as[Option[List[TestAccessListItem]]]
+    } yield TestTransaction(data, gasLimit, gasPrice, nonce, to, value, v, r, s, txType, chainId, accessList)
   }
 }
