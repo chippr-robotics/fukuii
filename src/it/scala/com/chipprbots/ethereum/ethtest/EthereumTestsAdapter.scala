@@ -68,12 +68,14 @@ object BlockchainTestSuite {
   * @param blocks Blocks to execute in sequence
   * @param postState Expected state after all blocks executed
   * @param network Fork configuration (e.g., "Byzantium", "Constantinople")
+  * @param genesisBlockHeader Genesis block header (optional, for proper parent setup)
   */
 case class BlockchainTest(
     pre: Map[String, AccountState],
     blocks: Seq[TestBlock],
     postState: Map[String, AccountState],
-    network: String
+    network: String,
+    genesisBlockHeader: Option[TestBlockHeader]
 )
 
 object BlockchainTest {
@@ -83,7 +85,8 @@ object BlockchainTest {
       blocks <- cursor.downField("blocks").as[Seq[TestBlock]]
       postState <- cursor.downField("postState").as[Map[String, AccountState]]
       network <- cursor.downField("network").as[String]
-    } yield BlockchainTest(pre, blocks, postState, network)
+      genesisBlockHeader <- cursor.downField("genesisBlockHeader").as[Option[TestBlockHeader]]
+    } yield BlockchainTest(pre, blocks, postState, network, genesisBlockHeader)
   }
 }
 

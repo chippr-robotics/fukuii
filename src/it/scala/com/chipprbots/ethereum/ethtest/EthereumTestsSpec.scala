@@ -4,6 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import com.chipprbots.ethereum.utils.Config
 
 /** Base spec for running ethereum/tests blockchain tests
   *
@@ -14,7 +15,7 @@ import org.scalatest.matchers.should.Matchers
   * {{{
   * class MyEthereumTest extends EthereumTestsSpec {
   *   it should "pass simple value transfer test" in {
-  *     runTest("/BlockchainTests/GeneralStateTests/stExample/add11.json")
+  *     runTestFile("/BlockchainTests/GeneralStateTests/stExample/add11.json")
   *   }
   * }
   * }}}
@@ -23,7 +24,10 @@ import org.scalatest.matchers.should.Matchers
   */
 abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
 
-  implicit val runtime: IORuntime = IORuntime.global
+  given IORuntime = IORuntime.global
+
+  // Use blockchain config from Config
+  lazy val baseBlockchainConfig = Config.blockchains.blockchainConfig
 
   /** Run all test cases in a JSON test file
     *
@@ -45,19 +49,46 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
     * @param test Test data
     */
   def runSingleTest(testName: String, test: BlockchainTest): Unit = {
-    // TODO: Implement test execution
-    // 1. Set up initial state from test.pre
-    // 2. Execute each block in test.blocks
-    // 3. Validate final state matches test.postState
-    // 4. Validate block headers match expected values
-
     info(s"  Network: ${test.network}")
     info(s"  Pre-state accounts: ${test.pre.size}")
     info(s"  Blocks to execute: ${test.blocks.size}")
     info(s"  Expected post-state accounts: ${test.postState.size}")
 
-    // For now, just validate we can parse the test
-    test should not be null
-    test.network should not be empty
+    // TODO: Execute the test using BlockExecution infrastructure
+    // For now, just validate we can parse and set up state
+    val setupResult = EthereumTestExecutor.setupInitialStateForTest(test)
+    
+    setupResult match {
+      case Right(world) =>
+        info(s"  ✓ Initial state setup successful")
+        info(s"  State root: ${org.bouncycastle.util.encoders.Hex.toHexString(world.stateRootHash.toArray)}")
+        
+      case Left(error) =>
+        fail(s"Failed to setup initial state: $error")
+    }
+  }
+
+  /** Load a test suite from a resource path */
+  def loadTestSuite(resourcePath: String): BlockchainTestSuite = {
+    val suiteIO = EthereumTestsAdapter.loadTestSuite(resourcePath)
+    suiteIO.unsafeRunSync()
+  }
+
+  /** Set up initial state for a test */
+  def setupTestState(test: BlockchainTest) = {
+    EthereumTestExecutor.setupInitialStateForTest(test)
+  }
+
+  /** Parse address from hex string */
+  def parseAddress(hex: String): com.chipprbots.ethereum.domain.Address = {
+    import org.apache.pekko.util.ByteString
+    val cleaned = if (hex.startsWith("0x")) hex.substring(2) else hex
+    val bytes = org.bouncycastle.util.encoders.Hex.decode(cleaned)
+    com.chipprbots.ethereum.domain.Address(ByteString(bytes))
+  }
+
+  /** Execute a complete test including block execution and post-state validation */
+  def executeTest(test: BlockchainTest): Either[String, TestExecutionResult] = {
+    EthereumTestExecutor.executeTest(test, baseBlockchainConfig)
   }
 }

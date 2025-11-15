@@ -83,7 +83,7 @@ object TestConverter {
     val value = parseBigInt(testTx.value)
     val payload = ByteString(parseHex(testTx.data))
 
-    val tx = Transaction(
+    val tx = LegacyTransaction(
       nonce = nonce,
       gasPrice = gasPrice,
       gasLimit = gasLimit,
