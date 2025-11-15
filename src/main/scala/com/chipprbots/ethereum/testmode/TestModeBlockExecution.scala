@@ -40,7 +40,7 @@ class TestModeBlockExecution(
       getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot,
-      noEmptyAccounts = EvmConfig.forBlock(parentHeader.number, blockchainConfig).noEmptyAccounts,
+      noEmptyAccounts = EvmConfig.forBlock(block.header.number, blockchainConfig).noEmptyAccounts,
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage,
       saveStoragePreimage = saveStoragePreimage
     )
