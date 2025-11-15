@@ -65,8 +65,8 @@ class CheckpointingServiceSpec
 
   it should "get latest block that is a descendant of the passed parent checkpoint block" in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
-      k <- Gen.choose[Int](1, 10) // checkpointing interval
-      m <- Gen.choose(0, 1000) // number of checkpoints in the chain
+      k <- Gen.choose[Int](1, 10) // checkpointing interval  
+      m <- Gen.choose(1, 1000) // number of checkpoints in the chain (at least 1 to have a descendant)
       n <- Gen.choose(0, k - 1) // distance from best block to checkpointed block
     } yield (k, m, n)
 
@@ -76,6 +76,7 @@ class CheckpointingServiceSpec
     forAll(nums) { case (k, m, n) =>
       val checkpointedBlockNum: BigInt = k * m
       val bestBlockNum: BigInt = checkpointedBlockNum + n
+      val parentBlockNum: BigInt = checkpointedBlockNum - k // Parent is one checkpoint interval before
 
       val block = Block(Fixtures.Blocks.ValidBlock.header.copy(number = checkpointedBlockNum), BlockBody.empty)
 
@@ -85,7 +86,7 @@ class CheckpointingServiceSpec
       (blockchainReader.getBestBlockNumber _).expects().returning(bestBlockNum)
       (blockchainReader.getBlockHeaderByHash _)
         .expects(hash)
-        .returning(Some(previousCheckpoint.header.copy(number = 0)))
+        .returning(Some(previousCheckpoint.header.copy(number = parentBlockNum)))
       (blockchainReader.getBlockByNumber _).expects(*, checkpointedBlockNum).returning(Some(block))
       val result = service.getLatestBlock(request)
 

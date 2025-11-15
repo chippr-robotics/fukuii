@@ -54,7 +54,10 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
   }
 
   test("PUSH0 should fail with OutOfGas when not enough gas") {
-    val lowGasState = Generators.getProgramStateGen().sample.get.copy(gas = 1)
+    // Create state with gas=1 and ensure stack has room (to test gas check, not stack overflow)
+    val lowGasState = Generators.getProgramStateGen().sample.get
+      .withStack(Stack.empty())  // Ensure stack has room
+      .copy(gas = 1)
     val stateOut = PUSH0.execute(lowGasState)
 
     stateOut.error shouldBe Some(OutOfGas)

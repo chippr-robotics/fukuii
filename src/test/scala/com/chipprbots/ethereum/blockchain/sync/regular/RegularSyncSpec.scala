@@ -609,9 +609,11 @@ class RegularSyncSpec
 
         awaitCond(didTryToImportBlock(testBlocks.head))
         regularSync ! SyncProtocol.MinedBlock(minedBlock)
-        headPromise.success(BlockImportedToTop(Nil))
-        Thread.sleep(remainingOrDefault.toMillis)
+        // Give RegularSync time to process the MinedBlock message while still importing
+        Thread.sleep(remainingOrDefault.toMillis / 2)
         didTryToImportBlock(minedBlock) shouldBe false
+        // Clean up by completing the promise
+        headPromise.success(BlockImportedToTop(Nil))
       })
 
       "import when on top" in sync(new OnTopFixture(testSystem) {
