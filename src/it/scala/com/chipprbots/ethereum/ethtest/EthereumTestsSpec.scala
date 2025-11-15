@@ -67,4 +67,23 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
         fail(s"Failed to setup initial state: $error")
     }
   }
+
+  /** Load a test suite from a resource path */
+  def loadTestSuite(resourcePath: String): BlockchainTestSuite = {
+    val suiteIO = EthereumTestsAdapter.loadTestSuite(resourcePath)
+    suiteIO.unsafeRunSync()
+  }
+
+  /** Set up initial state for a test */
+  def setupTestState(test: BlockchainTest) = {
+    EthereumTestExecutor.setupInitialStateForTest(test)
+  }
+
+  /** Parse address from hex string */
+  def parseAddress(hex: String): com.chipprbots.ethereum.domain.Address = {
+    import org.apache.pekko.util.ByteString
+    val cleaned = if (hex.startsWith("0x")) hex.substring(2) else hex
+    val bytes = org.bouncycastle.util.encoders.Hex.decode(cleaned)
+    com.chipprbots.ethereum.domain.Address(ByteString(bytes))
+  }
 }
