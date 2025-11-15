@@ -68,7 +68,13 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
   }
 
   test("PUSH0 multiple times should push multiple zeros") {
-    val initialState = Generators.getProgramStateGen().sample.get
+    // Create state with an empty stack to ensure room for multiple pushes
+    val initialState = Generators
+      .getProgramStateGen()
+      .sample
+      .get
+      .withStack(Stack.empty())
+      .copy(gas = 1000)
 
     val state1 = PUSH0.execute(initialState)
     state1.error shouldBe None
