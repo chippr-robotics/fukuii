@@ -9,15 +9,17 @@ import com.chipprbots.ethereum.utils.{BlockchainConfig, Config}
 
 /** Executes ethereum/tests blockchain tests
   *
-  * Provides test execution infrastructure for running JSON blockchain tests
-  * from the official ethereum/tests repository.
+  * Provides test execution infrastructure for running JSON blockchain tests from the official ethereum/tests
+  * repository.
   */
 object EthereumTestExecutor {
 
   /** Setup initial state for a test (simplified version for testing)
     *
-    * @param test The blockchain test
-    * @return Either error message or initial world state
+    * @param test
+    *   The blockchain test
+    * @return
+    *   Either error message or initial world state
     */
   def setupInitialStateForTest(
       test: BlockchainTest
@@ -28,9 +30,12 @@ object EthereumTestExecutor {
 
   /** Execute a single blockchain test
     *
-    * @param test The blockchain test to execute
-    * @param baseConfig Base blockchain configuration
-    * @return Either error message or success
+    * @param test
+    *   The blockchain test to execute
+    * @param baseConfig
+    *   Base blockchain configuration
+    * @return
+    *   Either error message or success
     */
   def executeTest(
       test: BlockchainTest,
@@ -41,7 +46,7 @@ object EthereumTestExecutor {
     // Use the helper which will handle both state setup and block execution
     // using the same storage instance
     val helper = new EthereumTestHelper(using summon[BlockchainConfig])
-    
+
     for {
       finalWorld <- helper.setupAndExecuteTest(test.pre, test.blocks, test.genesisBlockHeader)
       _ <- validatePostState(test.postState, finalWorld)
@@ -55,7 +60,7 @@ object EthereumTestExecutor {
   /** Set up initial state from pre-state in test */
   private def setupInitialState(
       preState: Map[String, AccountState]
-  )(using blockchainConfig: BlockchainConfig): Either[String, InMemoryWorldStateProxy] = {
+  )(using blockchainConfig: BlockchainConfig): Either[String, InMemoryWorldStateProxy] =
     try {
       // Create in-memory storage for the test
       val dataSource = new EphemDataSourceComponent {}.dataSource
@@ -112,7 +117,6 @@ object EthereumTestExecutor {
     } catch {
       case e: Exception => Left(s"Failed to setup initial state: ${e.getMessage}")
     }
-  }
 
   /** Validate final state matches expected post-state */
   private def validatePostState(
@@ -120,8 +124,8 @@ object EthereumTestExecutor {
       finalWorld: InMemoryWorldStateProxy
   ): Either[String, Unit] = {
     import scala.util.boundary, boundary.break
-    
-    try {
+
+    try
       boundary {
         expectedPostState.foreach { case (addressHex, expectedAccount) =>
           val address = Address(ByteString(parseHex(addressHex)))
@@ -153,7 +157,7 @@ object EthereumTestExecutor {
 
         Right(())
       }
-    } catch {
+    catch {
       case e: Exception => Left(s"Failed to validate post-state: ${e.getMessage}")
     }
   }
@@ -166,13 +170,12 @@ object EthereumTestExecutor {
   }
 
   /** Parse hex or decimal string to BigInt */
-  private def parseBigInt(value: String): BigInt = {
+  private def parseBigInt(value: String): BigInt =
     if (value.startsWith("0x")) {
       BigInt(value.substring(2), 16)
     } else {
       BigInt(value)
     }
-  }
 }
 
 /** Result of test execution */

@@ -8,8 +8,7 @@ import com.chipprbots.ethereum.utils.Config
 
 /** Base spec for running ethereum/tests blockchain tests
   *
-  * Provides infrastructure for loading and executing JSON blockchain tests
-  * from the official ethereum/tests repository.
+  * Provides infrastructure for loading and executing JSON blockchain tests from the official ethereum/tests repository.
   *
   * Usage:
   * {{{
@@ -31,7 +30,8 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
 
   /** Run all test cases in a JSON test file
     *
-    * @param resourcePath Path to JSON test file in src/it/resources
+    * @param resourcePath
+    *   Path to JSON test file in src/it/resources
     */
   def runTestFile(resourcePath: String): Unit = {
     val suiteIO = EthereumTestsAdapter.loadTestSuite(resourcePath)
@@ -45,8 +45,10 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
 
   /** Run a single blockchain test case
     *
-    * @param testName Name of the test case
-    * @param test Test data
+    * @param testName
+    *   Name of the test case
+    * @param test
+    *   Test data
     */
   def runSingleTest(testName: String, test: BlockchainTest): Unit = {
     info(s"  Network: ${test.network}")
@@ -57,12 +59,12 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
     // TODO: Execute the test using BlockExecution infrastructure
     // For now, just validate we can parse and set up state
     val setupResult = EthereumTestExecutor.setupInitialStateForTest(test)
-    
+
     setupResult match {
       case Right(world) =>
         info(s"  ✓ Initial state setup successful")
         info(s"  State root: ${org.bouncycastle.util.encoders.Hex.toHexString(world.stateRootHash.toArray)}")
-        
+
       case Left(error) =>
         fail(s"Failed to setup initial state: $error")
     }
@@ -75,9 +77,8 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
   }
 
   /** Set up initial state for a test */
-  def setupTestState(test: BlockchainTest) = {
+  def setupTestState(test: BlockchainTest) =
     EthereumTestExecutor.setupInitialStateForTest(test)
-  }
 
   /** Parse address from hex string */
   def parseAddress(hex: String): com.chipprbots.ethereum.domain.Address = {
@@ -88,7 +89,6 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
   }
 
   /** Execute a complete test including block execution and post-state validation */
-  def executeTest(test: BlockchainTest): Either[String, TestExecutionResult] = {
+  def executeTest(test: BlockchainTest): Either[String, TestExecutionResult] =
     EthereumTestExecutor.executeTest(test, baseBlockchainConfig)
-  }
 }
