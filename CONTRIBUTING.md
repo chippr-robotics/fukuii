@@ -325,6 +325,18 @@ Always run tests before submitting your changes:
 sbt testAll
 ```
 
+**Run tests by tier (ADR-017):**
+```bash
+# Tier 1: Essential tests (< 5 min)
+sbt testEssential
+
+# Tier 2: Standard tests with coverage (< 30 min)
+sbt testCoverage
+
+# Tier 3: Comprehensive tests (< 3 hours)
+sbt testComprehensive
+```
+
 **Run specific module tests:**
 ```bash
 sbt bytes/test
@@ -337,6 +349,12 @@ sbt test
 ```bash
 sbt "IntegrationTest / test"
 ```
+
+**For more information on test strategy and KPI baselines:**
+- [Test Suite Strategy and KPIs (ADR-017)](docs/adr/017-test-suite-strategy-and-kpis.md)
+- [Testing Documentation](docs/testing/README.md)
+- [KPI Baselines](docs/testing/KPI_BASELINES.md)
+- [KPI Monitoring Guide](docs/testing/KPI_MONITORING_GUIDE.md)
 
 ## Submitting Changes
 
