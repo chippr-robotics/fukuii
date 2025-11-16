@@ -153,6 +153,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     }
   }
 
+  // TODO: investigate why reorganisation is not triggered after 2 nodes with conflicting branches connect
   "peers should choose the branch with a checkpoint even if it's shorter" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
@@ -173,7 +174,6 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
 //      assert(peer1.bl.getLatestCheckpointBlockNumber() == peer2.bl.getLatestCheckpointBlockNumber())
   }
 
-  // TODO: investigate why reorganisation is not triggered after 2 nodes with conflicting branches connect
   "peers with divergent chains will be forced to resolve branches" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>

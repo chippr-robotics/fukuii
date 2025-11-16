@@ -10,7 +10,7 @@ import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionL
 import com.chipprbots.ethereum.testing.Tags._
 
 class LegacyTransactionMappingStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
-  test("TransactionMappingStorage insert".taggedAs(UnitTest, DatabaseTest)) {
+  test("TransactionMappingStorage insert", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { txByteArrayHashes =>
       val txHashes = txByteArrayHashes.distinct
       val blockHashesList = Gen.listOfN(txByteArrayHashes.length, byteStringOfLengthNGen(32)).sample.get
@@ -32,7 +32,7 @@ class LegacyTransactionMappingStorageSuite extends AnyFunSuite with ScalaCheckPr
     }
   }
 
-  test("TransactionMappingStorage delete".taggedAs(UnitTest, DatabaseTest)) {
+  test("TransactionMappingStorage delete", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { txByteArrayHashes =>
       val txHashes = txByteArrayHashes.distinct
       val blockHashesList = Gen.listOfN(txByteArrayHashes.length, byteStringOfLengthNGen(32)).sample.get

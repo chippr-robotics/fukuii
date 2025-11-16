@@ -29,8 +29,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
   import Arbitrary._
   import Gen._
 
-  test("Store a Byte") {
-    taggedAs(UnitTest, VMTest)
+  test("Store a Byte", UnitTest, VMTest) {
     forAll(choose(10, 100), arbitrary[Byte], choose(0, 200)) { (initialMemorySize, b, idx) =>
       // We need this additional check.
       // Otherwise ScalaCheck generates negative numbers during shrinking.
@@ -46,8 +45,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     }
   }
 
-  test("Store an UInt256") {
-    taggedAs(UnitTest, VMTest)
+  test("Store an UInt256", UnitTest, VMTest) {
     forAll(choose(10, 100), getUInt256Gen(), choose(0, 200)) { (initialMemorySize, uint, idx) =>
       whenever(initialMemorySize >= 0 && idx >= 0) {
         val memory = Memory.empty.store(0, zeros(initialMemorySize)).store(idx, uint)
@@ -61,8 +59,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     }
   }
 
-  test("Store an Array[Byte]") {
-    taggedAs(UnitTest, VMTest)
+  test("Store an Array[Byte]", UnitTest, VMTest) {
     forAll(choose(10, 100), randomSizeByteArrayGen(0, 100), choose(0, 200)) { (initialMemorySize, arr, idx) =>
       whenever(initialMemorySize >= 0 && idx >= 0) {
         val memory = Memory.empty.store(0, zeros(initialMemorySize)).store(idx, arr)
@@ -81,8 +78,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     }
   }
 
-  test("Store a ByteString") {
-    taggedAs(UnitTest, VMTest)
+  test("Store a ByteString", UnitTest, VMTest) {
     forAll(choose(10, 100), randomSizeByteArrayGen(0, 100), choose(0, 200)) { (initialMemorySize, arr, idx) =>
       whenever(initialMemorySize >= 0 && idx >= 0) {
         val bs = ByteString(arr)
@@ -102,8 +98,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     }
   }
 
-  test("Load an UInt256") {
-    taggedAs(UnitTest, VMTest)
+  test("Load an UInt256", UnitTest, VMTest) {
     forAll(choose(0, 100), choose(0, 200)) { (initialMemorySize, idx) =>
       whenever(initialMemorySize >= 0 && idx >= 0) {
         val initialMemory = Memory.empty.store(0, consecutiveBytes(initialMemorySize))
@@ -127,8 +122,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     }
   }
 
-  test("Load a ByteString") {
-    taggedAs(UnitTest, VMTest)
+  test("Load a ByteString", UnitTest, VMTest) {
     forAll(choose(0, 100), choose(0, 200), choose(1, 100)) { (initialMemorySize, idx, size) =>
       whenever(initialMemorySize >= 0 && idx >= 0 && size > 0) {
         val initialMemory = Memory.empty.store(0, consecutiveBytes(initialMemorySize))
@@ -152,8 +146,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     }
   }
 
-  test("Correctly increase memory size when storing") {
-    taggedAs(UnitTest, VMTest)
+  test("Correctly increase memory size when storing", UnitTest, VMTest) {
 
     val table = Table(
       ("initialSize", "offset", "dataSize", "expectedDelta"),
@@ -174,8 +167,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
 
   }
 
-  test("Correctly increase memory size when loading") {
-    taggedAs(UnitTest, VMTest)
+  test("Correctly increase memory size when loading", UnitTest, VMTest) {
 
     val table = Table(
       ("initialSize", "offset", "dataSize", "expectedDelta"),
@@ -195,8 +187,7 @@ class MemorySpec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers
     }
   }
 
-  test("Correctly increase memory size when expanding") {
-    taggedAs(UnitTest, VMTest)
+  test("Correctly increase memory size when expanding", UnitTest, VMTest) {
 
     val table = Table(
       ("initialSize", "offset", "dataSize", "expectedDelta"),

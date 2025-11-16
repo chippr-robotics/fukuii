@@ -12,7 +12,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
 import com.chipprbots.ethereum.testing.Tags._
 
 class NodeStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
-  test("NodeStorage insert".taggedAs(UnitTest, DatabaseTest)) {
+  test("NodeStorage insert", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(nodeGen)) { unfilteredMptNodes =>
       val mptNodes = unfilteredMptNodes.distinct
       val initialNodeStorage: NodeStorage = new NodeStorage(EphemDataSource())
@@ -27,7 +27,7 @@ class NodeStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Ob
     }
   }
 
-  test("NodeStorage delete".taggedAs(UnitTest, DatabaseTest)) {
+  test("NodeStorage delete", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(nodeGen)) { unfilteredMptNodes =>
       val mptNodes = unfilteredMptNodes.distinct
 

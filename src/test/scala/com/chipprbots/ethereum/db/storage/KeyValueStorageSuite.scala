@@ -44,7 +44,7 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
     intsNotInStorage <- Gen.nonEmptyListOf(intGen.suchThat(value => !intsInStorage.contains(value)))
   } yield (intsInStorage, intsNotInStorage)
 
-  test("Get ints from KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Get ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(dataGenerator) { case (intsInStorage, intsNotInStorage) =>
       val intsInStorageIndexedSeq = intsInStorage.map(IntStorage.intSerializer(_))
       val initialIntDataSource = EphemDataSource()
@@ -57,7 +57,7 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
     }
   }
 
-  test("Insert ints to KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Insert ints to KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOfN(iterationsNumber, Gen.listOf(intGen))) { listOfListOfInt =>
       val keyValueStorage = listOfListOfInt.foldLeft(initialIntStorage) { case (recKeyValueStorage, intList) =>
         recKeyValueStorage.update(Seq(), intList.zip(intList))
@@ -69,7 +69,7 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
     }
   }
 
-  test("Delete ints from KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Delete ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       // Insert of keys
       val intStorage = initialIntStorage.update(Seq(), listOfInt.zip(listOfInt))
@@ -87,7 +87,7 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
     }
   }
 
-  test("Put ints into KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Put ints into KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       val keyValueStorage = listOfInt.foldLeft(initialIntStorage) { case (recKeyValueStorage, i) =>
         recKeyValueStorage.put(i, i)
@@ -99,7 +99,7 @@ class KeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks wit
     }
   }
 
-  test("Remove ints from KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Remove ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       // Insert of keys
       val intStorage = initialIntStorage.update(Seq(), listOfInt.zip(listOfInt))

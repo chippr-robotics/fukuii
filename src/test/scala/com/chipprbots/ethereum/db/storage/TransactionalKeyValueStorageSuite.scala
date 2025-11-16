@@ -40,7 +40,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     intsNotInStorage <- Gen.nonEmptyListOf(intGen.suchThat(value => !intsInStorage.contains(value)))
   } yield (intsInStorage, intsNotInStorage)
 
-  test("Get ints from KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Get ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(dataGenerator) { case (intsInStorage, intsNotInStorage) =>
       val intsInStorageIndexedSeq = intsInStorage.map(IntStorage.intSerializer(_))
       val intDataSource = EphemDataSource()
@@ -58,7 +58,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Insert ints to KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Insert ints to KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOfN(iterationsNumber, Gen.listOf(intGen))) { listOfListOfInt =>
       val keyValueStorage = newIntStorage()
 
@@ -72,7 +72,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Delete ints from KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Delete ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       // Insert of keys
       val intStorage = newIntStorage()
@@ -91,7 +91,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Put ints into KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Put ints into KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       val keyValueStorage = newIntStorage()
 
@@ -107,7 +107,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Remove ints from KeyValueStorage".taggedAs(UnitTest, DatabaseTest)) {
+  test("Remove ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       // Insert of keys
       val intStorage = newIntStorage()

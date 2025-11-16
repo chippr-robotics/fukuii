@@ -11,7 +11,7 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class ReceiptStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
 
-  test("ReceiptStorage insert".taggedAs(UnitTest, DatabaseTest)) {
+  test("ReceiptStorage insert", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { blockByteArrayHashes =>
       val blockHashes = blockByteArrayHashes.distinct
       val receipts = receiptsGen(blockHashes.length).sample.get
@@ -31,7 +31,7 @@ class ReceiptStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with
     }
   }
 
-  test("ReceiptStorage delete".taggedAs(UnitTest, DatabaseTest)) {
+  test("ReceiptStorage delete", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { blockByteArrayHashes =>
       val blockHashes = blockByteArrayHashes.distinct
       val receipts = receiptsGen(blockHashes.length).sample.get

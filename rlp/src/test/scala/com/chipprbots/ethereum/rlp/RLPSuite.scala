@@ -18,27 +18,23 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheckDrivenPropertyChecks {
 
-  test("nextElementIndex of empty data") {
-    taggedAs(UnitTest, RLPTest)
+  test("nextElementIndex of empty data", UnitTest, RLPTest) {
     val maybeIndex = Try(nextElementIndex(Array.emptyByteArray, 0))
     assert(maybeIndex.isFailure)
   }
 
-  test("Decoding of empty data") {
-    taggedAs(UnitTest, RLPTest)
+  test("Decoding of empty data", UnitTest, RLPTest) {
     val maybeDecoded = Try(decode[Array[Byte]](Array.emptyByteArray))
     assert(maybeDecoded.isFailure)
   }
 
-  test("Decoding failure: Passing RLPValue when RLPList is expected") {
-    taggedAs(UnitTest, RLPTest)
+  test("Decoding failure: Passing RLPValue when RLPList is expected", UnitTest, RLPTest) {
     val data = encode(0.toLong)
     val maybeSeqObtained = Try(decode[Seq[Long]](data))
     assert(maybeSeqObtained.isFailure)
   }
 
-  test("Decoding failure: Passing RLPList when RLPValue is expected") {
-    taggedAs(UnitTest, RLPTest)
+  test("Decoding failure: Passing RLPList when RLPValue is expected", UnitTest, RLPTest) {
     val data = RLP.encode(RLPList("cat", "dog"))
     val maybeByteObtained = Try(decode[Byte](data))
     val maybeShortObtained = Try(decode[Short](data))
@@ -56,8 +52,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(maybeBigIntObtained.isFailure)
   }
 
-  test("Decoding failure: Passing an RLPValue larger than expected") {
-    taggedAs(UnitTest, RLPTest)
+  test("Decoding failure: Passing an RLPValue larger than expected", UnitTest, RLPTest) {
     val num: BigInt = 16 * BigInt(Long.MaxValue)
     val data = encode(num)
     val maybeByteObtained = Try(decode[Byte](data))
@@ -70,8 +65,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(maybeLongObtained.isFailure)
   }
 
-  test("Byte Encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("Byte Encoding", UnitTest, RLPTest) {
     val expected = Array[Byte](0x80.toByte)
     val data = encode(0: Byte)
 
@@ -102,8 +96,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("Short Encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("Short Encoding", UnitTest, RLPTest) {
     val expected4 = Array[Byte](0x82.toByte, 0x76.toByte, 0x5f.toByte)
     val data4 = encode(30303.toShort)
     assert(expected4.sameElements(data4))
@@ -147,8 +140,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("String encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("String encoding", UnitTest, RLPTest) {
     val expected = Array[Byte](0x80.toByte)
     val data = encode("")
     assert(expected.sameElements(data))
@@ -345,8 +337,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("Int Encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("Int Encoding", UnitTest, RLPTest) {
     val expected = Array[Byte](0x80.toByte)
     val data = encode(0)
     assert(expected.sameElements(data))
@@ -418,8 +409,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("Long Encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("Long Encoding", UnitTest, RLPTest) {
     forAll(Gen.choose[Long](0, Long.MaxValue)) { (aLong: Long) =>
       val data = encode(aLong)
       val dataObtained = decode[Long](data)
@@ -428,8 +418,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("BigInt Encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("BigInt Encoding", UnitTest, RLPTest) {
     val expected = Array[Byte](0x80.toByte)
     val data = encode(BigInt(0))
     assert(expected.sameElements(data))
@@ -454,8 +443,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("BigInt Encoding - Edge Cases with Empty Bytes") {
-    taggedAs(UnitTest, RLPTest)
+  test("BigInt Encoding - Edge Cases with Empty Bytes", UnitTest, RLPTest) {
     // Test that empty byte array in RLPValue decodes to zero
     val emptyRlpValue = RLPValue(Array.empty[Byte])
     val decoded = RLPImplicits.bigIntEncDec.decode(emptyRlpValue)
@@ -474,8 +462,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(zerosDecoded == zeros)
   }
 
-  test("BigInt Decoding - RLPValue with empty bytes should decode to zero") {
-    taggedAs(UnitTest, RLPTest)
+  test("BigInt Decoding - RLPValue with empty bytes should decode to zero", UnitTest, RLPTest) {
     // This tests the specific case that was causing network sync errors
     val emptyBytes = Array.empty[Byte]
     val rlpValue = RLPValue(emptyBytes)
@@ -484,8 +471,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(result == BigInt(0))
   }
 
-  test("Byte Array Encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("Byte Array Encoding", UnitTest, RLPTest) {
     val byteArr =
       "ce73660a06626c1b3fda7b18ef7ba3ce17b6bf604f9541d3c6c654b7ae88b239407f659c78f419025d785727ed017b6add21952d7e12007373e321dbc31824ba"
     val byteArray: Array[Byte] = Hex.decode(byteArr)
@@ -511,8 +497,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("Encode ByteString") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode ByteString", UnitTest, RLPTest) {
     forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Byte])) { (aByteList: List[Byte]) =>
       val byteString = ByteString(aByteList.toArray)
       val data = encode(byteString)
@@ -522,8 +507,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("Encode Seq") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode Seq", UnitTest, RLPTest) {
     forAll(Gen.nonEmptyListOf(Gen.choose[Long](0, Long.MaxValue))) { (aLongList: List[Long]) =>
       val aLongSeq: Seq[Long] = aLongList
       val data = encode(aLongSeq)
@@ -532,8 +516,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("Encode Empty List") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode Empty List", UnitTest, RLPTest) {
     val expected = "c0"
     val data = encode(Seq[Any]())
     assert(expected == Hex.toHexString(data))
@@ -543,8 +526,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(obtained.isEmpty)
   }
 
-  test("Encode Short  List") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode Short  List", UnitTest, RLPTest) {
     val expected = "c88363617483646f67"
     val data = RLP.encode(RLPList("cat", "dog"))
     assert(expected == Hex.toHexString(data))
@@ -560,8 +542,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(Seq("dog", "god", "cat").equals(obtained2))
   }
 
-  test("Encode Long  List") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode Long  List", UnitTest, RLPTest) {
     val list = Seq("cat", "Lorem ipsum dolor sit amet, consectetur adipisicing elit")
     val expected =
       "f83e83636174b8384c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e7365637465747572206164697069736963696e6720656c6974"
@@ -572,8 +553,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(list.equals(obtained))
   }
 
-  test("Encode multilist") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode multilist", UnitTest, RLPTest) {
     val expected = "cc01c48363617483646f67c102"
     val multilist1 = MultiList1(1, Seq("cat"), "dog", Seq(2))
     val data = encode(multilist1)(MultiList1.encDec)
@@ -591,8 +571,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(multilist2.equals(obtained2))
   }
 
-  test("Encode Empty List Of List") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode Empty List Of List", UnitTest, RLPTest) {
     val emptyListOfList = EmptyListOfList()
     val expected = "c4c2c0c0c0"
     val data = encode(emptyListOfList)(EmptyListOfList.encDec)
@@ -602,8 +581,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(emptyListOfList.equals(obtained))
   }
 
-  test("Encode Rep Of Two List Of List") {
-    taggedAs(UnitTest, RLPTest)
+  test("Encode Rep Of Two List Of List", UnitTest, RLPTest) {
     val twoListOfList = RepOfTwoListOfList()
     val expected = "c7c0c1c0c3c0c1c0"
     val data = encode(twoListOfList)(RepOfTwoListOfList.encDec)
@@ -613,8 +591,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(twoListOfList.equals(obtained))
   }
 
-  test("https://github.com/ethereum/tests/blob/master/rlptest.txt") {
-    taggedAs(UnitTest, RLPTest)
+  test("https://github.com/ethereum/tests/blob/master/rlptest.txt", UnitTest, RLPTest) {
     for (input: (RLPEncodeable, String) <- rlpTestData) {
       val data = RLP.encode(input._1)
       assert(input._2 == Hex.toHexString(data))
@@ -625,8 +602,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     }
   }
 
-  test("SimpleBlock encoding") {
-    taggedAs(UnitTest, RLPTest)
+  test("SimpleBlock encoding", UnitTest, RLPTest) {
     val tx0 = TestSimpleTransaction(1, "cat")
     val tx1 = TestSimpleTransaction(2, "dog")
 
@@ -637,8 +613,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(block.equals(obtained))
   }
 
-  test("Partial Data Parse Test") {
-    taggedAs(UnitTest, RLPTest)
+  test("Partial Data Parse Test", UnitTest, RLPTest) {
     val hex: String = "000080c180000000000000000000000042699b1104e93abf0008be55f912c2ff"
     val data = Hex.decode(hex)
     val decoded: Seq[Int] = decode[Seq[Int]](data.splitAt(3)._2)
@@ -646,8 +621,7 @@ class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheck
     assert(0 == decoded.head)
   }
 
-  test("Multiple partial decode") {
-    taggedAs(UnitTest, RLPTest)
+  test("Multiple partial decode", UnitTest, RLPTest) {
     val seq1 = RLPList("cat", "dog")
     val seq2 = RLPList(23, 10, 1986)
     val seq3 = RLPList("cat", "Lorem ipsum dolor sit amet, consectetur adipisicing elit")
