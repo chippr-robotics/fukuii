@@ -16,7 +16,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
 
   "KPIBaselines" should "have a valid baseline date" in {
     KPIBaselines.baselineDate should not be empty
-    (KPIBaselines.baselineDate should fullyMatch).regex("""\d{4}-\d{2}-\d{2}""")
+    KPIBaselines.baselineDate should fullyMatch regex """\d{4}-\d{2}-\d{2}"""
   }
 
   "Test Execution Time baselines" should "be defined for all tiers" in {
