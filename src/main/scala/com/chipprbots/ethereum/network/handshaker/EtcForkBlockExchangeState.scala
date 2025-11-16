@@ -1,13 +1,17 @@
 package com.chipprbots.ethereum.network.handshaker
 
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.Logger
 
@@ -20,13 +24,20 @@ case class EtcForkBlockExchangeState(
 
   import handshakerConfiguration._
 
-  def nextMessage: NextMessage =
+  def nextMessage: NextMessage = {
+    val getBlockHeadersMsg: MessageSerializable =
+      if (Capability.usesRequestId(remoteStatus.capability))
+        ETH66GetBlockHeaders(0, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
+      else
+        ETH62GetBlockHeaders(Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
+
     NextMessage(
-      messageToSend = GetBlockHeaders(Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false),
+      messageToSend = getBlockHeadersMsg,
       timeout = peerConfiguration.waitForChainCheckTimeout
     )
+  }
 
-  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case BlockHeaders(blockHeaders) =>
+  private def processForkBlockHeaders(blockHeaders: Seq[BlockHeader]): HandshakerState[PeerInfo] = {
     val forkBlockHeaderOpt = blockHeaders.find(_.number == forkResolver.forkBlockNumber)
 
     forkBlockHeaderOpt match {
@@ -48,17 +59,30 @@ case class EtcForkBlockExchangeState(
         log.debug("Peer did not respond with fork block header")
         ConnectedState(PeerInfo.withNotForkAccepted(remoteStatus))
     }
-
   }
+
+  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
+    case ETH62BlockHeaders(blockHeaders)    => processForkBlockHeaders(blockHeaders)
+    case ETH66BlockHeaders(_, blockHeaders) => processForkBlockHeaders(blockHeaders)
+  }
+
+  private def createBlockHeaderResponse(requestId: BigInt, header: Option[BlockHeader]): MessageSerializable =
+    if (Capability.usesRequestId(remoteStatus.capability))
+      ETH66BlockHeaders(requestId, header.toSeq)
+    else
+      ETH62BlockHeaders(header.toSeq)
 
   override def respondToRequest(receivedMessage: Message): Option[MessageSerializable] = receivedMessage match {
 
-    case GetBlockHeaders(Left(number), numHeaders, _, _) if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
+    case ETH62GetBlockHeaders(Left(number), numHeaders, _, _)
+        if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
       log.debug("Received request for fork block")
-      blockchainReader.getBlockHeaderByNumber(number) match {
-        case Some(header) => Some(BlockHeaders(Seq(header)))
-        case None         => Some(BlockHeaders(Nil))
-      }
+      Some(createBlockHeaderResponse(0, blockchainReader.getBlockHeaderByNumber(number)))
+
+    case ETH66GetBlockHeaders(requestId, Left(number), numHeaders, _, _)
+        if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
+      log.debug("Received request for fork block")
+      Some(createBlockHeaderResponse(requestId, blockchainReader.getBlockHeaderByNumber(number)))
 
     case _ => None
 

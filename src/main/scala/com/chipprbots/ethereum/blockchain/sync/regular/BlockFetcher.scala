@@ -40,7 +40,9 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.FunctorOps._
@@ -326,7 +328,15 @@ class BlockFetcher(
         }
         fetchBlocks(newState)
 
-      case AdaptedMessageFromEventBus(BlockHeaders(headers), _) =>
+      case AdaptedMessageFromEventBus(ETH62BlockHeaders(headers), _) =>
+        headers.lastOption
+          .map { bh =>
+            log.debug("Candidate for new top at block {}, current known top {}", bh.number, state.knownTop)
+            val newState = state.withPossibleNewTopAt(bh.number)
+            fetchBlocks(newState)
+          }
+          .getOrElse(processFetchCommands(state))
+      case AdaptedMessageFromEventBus(ETH66BlockHeaders(_, headers), _) =>
         headers.lastOption
           .map { bh =>
             log.debug("Candidate for new top at block {}, current known top {}", bh.number, state.knownTop)
