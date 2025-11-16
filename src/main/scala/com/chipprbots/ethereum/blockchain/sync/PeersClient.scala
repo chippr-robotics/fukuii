@@ -158,9 +158,10 @@ class PeersClient(
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {
-      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders => implicitly[ClassTag[ETH66BlockHeaders]]
-      case _: GetBlockBodies                                  => implicitly[ClassTag[BlockBodies]]
-      case _: GetNodeData                                     => implicitly[ClassTag[NodeData]]
+      case _: ETH66GetBlockHeaders  => implicitly[ClassTag[ETH66BlockHeaders]]
+      case _: ETH62.GetBlockHeaders => implicitly[ClassTag[ETH62.BlockHeaders]]
+      case _: GetBlockBodies        => implicitly[ClassTag[BlockBodies]]
+      case _: GetNodeData           => implicitly[ClassTag[NodeData]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =

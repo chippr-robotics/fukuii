@@ -41,7 +41,7 @@ object ETH66 {
 
     implicit class GetBlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
       def toGetBlockHeaders: GetBlockHeaders = rawDecode(bytes) match {
-        // ETH66+ format: [requestId, [block, maxHeaders, skip, reverse]]
+        /** ETH66+ format: [requestId, [block, maxHeaders, skip, reverse]] */
         case RLPList(
               RLPValue(requestIdBytes),
               RLPList(block: RLPValue, RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))

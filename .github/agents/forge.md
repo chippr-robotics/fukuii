@@ -175,14 +175,13 @@ Migrate Ethereum Classic's VM execution, mining, and blockchain core from Scala 
 // Pattern for Ethereum wire protocol messages (ETH66+ adds requestId wrapper)
 
 // Helper: Capability detection
-extension (capability: Capability)
-  def usesRequestId: Boolean = capability match {
-    case Capability.ETH66 | Capability.ETH67 | Capability.ETH68 => true
-    case _ => false // ETH63, ETH64, ETH65, ETC64
-  }
+def usesRequestId(capability: Capability): Boolean = capability match {
+  case Capability.ETH66 | Capability.ETH67 | Capability.ETH68 => true
+  case _ => false // ETH63, ETH64, ETH65, ETC64
+}
 
 // Sending: Check peer capability, create appropriate format
-val message = if (peerInfo.remoteStatus.capability.usesRequestId) {
+val message = if (Capability.usesRequestId(peerInfo.remoteStatus.capability)) {
   ETH66GetBlockHeaders(requestId = 0, block, maxHeaders, skip, reverse)
 } else {
   ETH62GetBlockHeaders(block, maxHeaders, skip, reverse)
@@ -217,7 +216,7 @@ private def adaptMessageForPeer(
     message: MessageSerializable,
     peerInfo: PeerInfo
 ): MessageSerializable = {
-  val usesRequestId = peerInfo.remoteStatus.capability.usesRequestId
+  val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
   
   message match {
     // Upgrade ETH62 → ETH66 for newer peers

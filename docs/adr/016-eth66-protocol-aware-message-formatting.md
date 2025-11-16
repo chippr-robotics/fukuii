@@ -124,11 +124,10 @@ We implement a system where message format is determined by the peer's negotiate
 **Location**: `src/main/scala/com/chipprbots/ethereum/network/p2p/messages/Capability.scala`
 
 ```scala
-extension (capability: Capability)
-  def usesRequestId: Boolean = capability match {
-    case Capability.ETH66 | Capability.ETH67 | Capability.ETH68 => true
-    case _ => false // ETH63, ETH64, ETH65, ETC64
-  }
+def usesRequestId(capability: Capability): Boolean = capability match {
+  case Capability.ETH66 | Capability.ETH67 | Capability.ETH68 => true
+  case _ => false // ETH63, ETH64, ETH65, ETC64
+}
 ```
 
 **Rationale**: Centralized capability detection prevents inconsistent checks across codebase
@@ -138,7 +137,7 @@ extension (capability: Capability)
 **Pattern Applied**:
 ```scala
 // When sending GetBlockHeaders
-val message = if (peerInfo.remoteStatus.capability.usesRequestId) {
+val message = if (Capability.usesRequestId(peerInfo.remoteStatus.capability)) {
   ETH66GetBlockHeaders(requestId = 0, block, maxHeaders, skip, reverse)
 } else {
   ETH62GetBlockHeaders(block, maxHeaders, skip, reverse)
