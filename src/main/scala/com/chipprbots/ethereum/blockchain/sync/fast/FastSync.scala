@@ -110,6 +110,11 @@ class FastSync(
 
   def waitingForPivotBlock: Receive = handlePeerListMessages.orElse {
     case SyncProtocol.GetStatus => sender() ! SyncProtocol.Status.NotSyncing
+    case PivotBlockSelector.SelectionFailed =>
+      log.warning("Pivot block selection failed after maximum attempts. Marking fast sync as done.")
+      appStateStorage.fastSyncDone().commit()
+      context.become(idle)
+      syncController ! Done
     case PivotBlockSelector.Result(pivotBlockHeader) =>
       if (pivotBlockHeader.number < 1) {
         log.info("Unable to start block synchronization in fast mode: pivot block is less than 1")
@@ -271,6 +276,14 @@ class FastSync(
     }
     def waitingForPivotBlockUpdate(updateReason: PivotBlockUpdateReason): Receive =
       handlePeerListMessages.orElse(handleStatus).orElse(handleRequestFailure).orElse {
+        case PivotBlockSelector.SelectionFailed =>
+          log.warning(
+            "Pivot block selection failed after maximum attempts during update. Continuing with current pivot."
+          )
+          syncState = syncState.copy(updatingPivotBlock = false)
+          context.become(this.receive)
+          processSyncing()
+
         case PivotBlockSelector.Result(pivotBlockHeader)
             if newPivotIsGoodEnough(pivotBlockHeader, syncState, updateReason) =>
           log.info("New pivot block with number {} received", pivotBlockHeader.number)
