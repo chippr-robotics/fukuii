@@ -21,8 +21,10 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.HeadersFetcher.HeadersFetcherCommand
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -51,7 +53,21 @@ class HeadersFetcher(
         log.debug("Start fetching headers from block hash {} (amount: {})", block, amount)
         requestHeaders(Right(block), amount)
         Behaviors.same
-      case AdaptedMessage(peer, BlockHeaders(headers)) =>
+      case AdaptedMessage(peer, ETH62BlockHeaders(headers)) =>
+        log.debug(
+          "Fetched {} headers starting from block {} (peer: {})",
+          headers.size,
+          headers.headOption.map(_.number),
+          peer.id
+        )
+        if (headers.isEmpty) {
+          log.warn("Received empty headers response from peer {}", peer.id)
+        } else {
+          log.debug("Headers range: {} to {}", headers.headOption.map(_.number), headers.lastOption.map(_.number))
+        }
+        supervisor ! BlockFetcher.ReceivedHeaders(peer, headers)
+        Behaviors.same
+      case AdaptedMessage(peer, ETH66BlockHeaders(_, headers)) =>
         log.debug(
           "Fetched {} headers starting from block {} (peer: {})",
           headers.size,
@@ -77,11 +93,14 @@ class HeadersFetcher(
   private def requestHeaders(block: Either[BigInt, ByteString], amount: BigInt): Unit = {
     val blockDesc = block.fold(num => s"number $num", hash => s"hash ${ByteStringUtils.hash2string(hash)}")
     log.debug("Requesting headers from block {} (amount: {})", blockDesc, amount)
-    val msg = GetBlockHeaders(block, amount, skip = 0, reverse = false)
+    val msg = ETH66GetBlockHeaders(0, block, amount, skip = 0, reverse = false)
 
     val resp = makeRequest(Request.create(msg, BestPeer), HeadersFetcher.RetryHeadersRequest)
       .flatMap {
-        case AdaptedMessage(_, BlockHeaders(headers)) if headers.isEmpty =>
+        case AdaptedMessage(_, ETH62BlockHeaders(headers)) if headers.isEmpty =>
+          log.debug("Empty BlockHeaders response. Retry in {}", syncConfig.syncRetryInterval)
+          IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(syncConfig.syncRetryInterval)
+        case AdaptedMessage(_, ETH66BlockHeaders(_, headers)) if headers.isEmpty =>
           log.debug("Empty BlockHeaders response. Retry in {}", syncConfig.syncRetryInterval)
           IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(syncConfig.syncRetryInterval)
         case res =>

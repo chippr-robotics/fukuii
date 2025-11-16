@@ -21,6 +21,8 @@ import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class PeersClient(
@@ -129,14 +131,14 @@ class PeersClient(
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {
-      case _: GetBlockHeaders => implicitly[ClassTag[BlockHeaders]]
+      case _: ETH66GetBlockHeaders => implicitly[ClassTag[ETH66BlockHeaders]]
       case _: GetBlockBodies  => implicitly[ClassTag[BlockBodies]]
       case _: GetNodeData     => implicitly[ClassTag[NodeData]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
     requestMsg match {
-      case _: GetBlockHeaders => Codes.BlockHeadersCode
+      case _: ETH66GetBlockHeaders => Codes.BlockHeadersCode
       case _: GetBlockBodies  => Codes.BlockBodiesCode
       case _: GetNodeData     => Codes.NodeDataCode
     }

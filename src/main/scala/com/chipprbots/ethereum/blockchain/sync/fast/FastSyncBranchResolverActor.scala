@@ -23,8 +23,10 @@ import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class FastSyncBranchResolverActor(
@@ -74,7 +76,14 @@ class FastSyncBranchResolverActor(
       requestHandler: ActorRef
   ): Receive =
     handlePeerListMessages.orElse {
-      case ResponseReceived(peer, BlockHeaders(headers), timeTaken) if peer == masterPeer =>
+      case ResponseReceived(peer, ETH62BlockHeaders(headers), timeTaken) if peer == masterPeer =>
+        if (headers.size == recentHeadersSize) {
+          log.debug("Received {} block headers from peer {} in {} ms", headers.size, masterPeer.id, timeTaken)
+          handleRecentBlockHeadersResponse(headers, masterPeer, bestBlockNumber)
+        } else {
+          handleInvalidResponse(peer, requestHandler)
+        }
+      case ResponseReceived(peer, ETH66BlockHeaders(_, headers), timeTaken) if peer == masterPeer =>
         if (headers.size == recentHeadersSize) {
           log.debug("Received {} block headers from peer {} in {} ms", headers.size, masterPeer.id, timeTaken)
           handleRecentBlockHeadersResponse(headers, masterPeer, bestBlockNumber)
@@ -91,7 +100,16 @@ class FastSyncBranchResolverActor(
       requestHandler: ActorRef
   ): Receive =
     handlePeerListMessages.orElse {
-      case ResponseReceived(peer, BlockHeaders(headers), durationMs) if peer == searchState.masterPeer =>
+      case ResponseReceived(peer, ETH62BlockHeaders(headers), durationMs) if peer == searchState.masterPeer =>
+        context.unwatch(requestHandler)
+        headers.toList match {
+          case childHeader :: Nil if childHeader.number == blockHeaderNumberToSearch =>
+            log.debug(ReceivedBlockHeaderLog, blockHeaderNumberToSearch, peer.id, durationMs)
+            handleBinarySearchBlockHeaderResponse(searchState, childHeader)
+          case _ =>
+            handleInvalidResponse(peer, requestHandler)
+        }
+      case ResponseReceived(peer, ETH66BlockHeaders(_, headers), durationMs) if peer == searchState.masterPeer =>
         context.unwatch(requestHandler)
         headers.toList match {
           case childHeader :: Nil if childHeader.number == blockHeaderNumberToSearch =>
@@ -171,12 +189,12 @@ class FastSyncBranchResolverActor(
 
   private def sendGetBlockHeadersRequest(peer: Peer, fromBlock: BigInt, amount: BigInt): ActorRef = {
     val handler = context.actorOf(
-      PeerRequestHandler.props[GetBlockHeaders, BlockHeaders](
+      PeerRequestHandler.props[ETH66GetBlockHeaders, ETH66BlockHeaders](
         peer,
         syncConfig.peerResponseTimeout,
         etcPeerManager,
         peerEventBus,
-        requestMsg = GetBlockHeaders(Left(fromBlock), amount, skip = 0, reverse = false),
+        requestMsg = ETH66GetBlockHeaders(0, Left(fromBlock), amount, skip = 0, reverse = false),
         responseMsgCode = Codes.BlockHeadersCode
       )
     )

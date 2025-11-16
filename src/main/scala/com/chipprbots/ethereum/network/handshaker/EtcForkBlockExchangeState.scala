@@ -6,8 +6,10 @@ import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.Logger
 
@@ -22,42 +24,73 @@ case class EtcForkBlockExchangeState(
 
   def nextMessage: NextMessage =
     NextMessage(
-      messageToSend = GetBlockHeaders(Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false),
+      messageToSend = ETH66GetBlockHeaders(0, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false),
       timeout = peerConfiguration.waitForChainCheckTimeout
     )
 
-  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case BlockHeaders(blockHeaders) =>
-    val forkBlockHeaderOpt = blockHeaders.find(_.number == forkResolver.forkBlockNumber)
+  def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
+    case ETH62BlockHeaders(blockHeaders) =>
+      val forkBlockHeaderOpt = blockHeaders.find(_.number == forkResolver.forkBlockNumber)
 
-    forkBlockHeaderOpt match {
-      case Some(forkBlockHeader) =>
-        val fork = forkResolver.recognizeFork(forkBlockHeader)
+      forkBlockHeaderOpt match {
+        case Some(forkBlockHeader) =>
+          val fork = forkResolver.recognizeFork(forkBlockHeader)
 
-        log.debug("Peer is running the {} fork", fork)
+          log.debug("Peer is running the {} fork", fork)
 
-        if (forkResolver.isAccepted(fork)) {
-          log.debug("Fork is accepted")
-          // setting maxBlockNumber to 0, as we do not know best block number yet
-          ConnectedState(PeerInfo.withForkAccepted(remoteStatus))
-        } else {
-          log.debug("Fork is not accepted")
-          DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
-        }
+          if (forkResolver.isAccepted(fork)) {
+            log.debug("Fork is accepted")
+            // setting maxBlockNumber to 0, as we do not know best block number yet
+            ConnectedState(PeerInfo.withForkAccepted(remoteStatus))
+          } else {
+            log.debug("Fork is not accepted")
+            DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+          }
 
-      case None =>
-        log.debug("Peer did not respond with fork block header")
-        ConnectedState(PeerInfo.withNotForkAccepted(remoteStatus))
-    }
+        case None =>
+          log.debug("Peer did not respond with fork block header")
+          ConnectedState(PeerInfo.withNotForkAccepted(remoteStatus))
+      }
+
+    case ETH66BlockHeaders(_, blockHeaders) =>
+      val forkBlockHeaderOpt = blockHeaders.find(_.number == forkResolver.forkBlockNumber)
+
+      forkBlockHeaderOpt match {
+        case Some(forkBlockHeader) =>
+          val fork = forkResolver.recognizeFork(forkBlockHeader)
+
+          log.debug("Peer is running the {} fork", fork)
+
+          if (forkResolver.isAccepted(fork)) {
+            log.debug("Fork is accepted")
+            // setting maxBlockNumber to 0, as we do not know best block number yet
+            ConnectedState(PeerInfo.withForkAccepted(remoteStatus))
+          } else {
+            log.debug("Fork is not accepted")
+            DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+          }
+
+        case None =>
+          log.debug("Peer did not respond with fork block header")
+          ConnectedState(PeerInfo.withNotForkAccepted(remoteStatus))
+      }
 
   }
 
   override def respondToRequest(receivedMessage: Message): Option[MessageSerializable] = receivedMessage match {
 
-    case GetBlockHeaders(Left(number), numHeaders, _, _) if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
+    case ETH62GetBlockHeaders(Left(number), numHeaders, _, _) if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
       log.debug("Received request for fork block")
       blockchainReader.getBlockHeaderByNumber(number) match {
-        case Some(header) => Some(BlockHeaders(Seq(header)))
-        case None         => Some(BlockHeaders(Nil))
+        case Some(header) => Some(ETH62BlockHeaders(Seq(header)))
+        case None         => Some(ETH62BlockHeaders(Nil))
+      }
+
+    case ETH66GetBlockHeaders(requestId, Left(number), numHeaders, _, _) if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
+      log.debug("Received request for fork block")
+      blockchainReader.getBlockHeaderByNumber(number) match {
+        case Some(header) => Some(ETH66BlockHeaders(requestId, Seq(header)))
+        case None         => Some(ETH66BlockHeaders(requestId, Nil))
       }
 
     case _ => None
