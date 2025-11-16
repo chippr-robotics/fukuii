@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpec._
 import com.chipprbots.ethereum.utils.Config
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
   implicit val testRuntime: IORuntime = IORuntime.global
 
@@ -32,7 +34,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
   }
 
   "peer 2 should sync to the top of peer1 blockchain" - {
-    "given a previously imported blockchain" in customTestCaseResourceM(FakePeer.start2FakePeersRes()) {
+    "given a previously imported blockchain" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(FakePeer.start2FakePeersRes()) {
       case (peer1, peer2) =>
         val blockNumber: Int = 2000
         for {
@@ -43,7 +45,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
         } yield assert(peer1.blockchainReader.getBestBlock().get.hash == peer2.blockchainReader.getBestBlock().get.hash)
     }
 
-    "given a previously mined blockchain" in customTestCaseResourceM(FakePeer.start2FakePeersRes()) {
+    "given a previously mined blockchain" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(FakePeer.start2FakePeersRes()) {
       case (peer1, peer2) =>
         val blockHeadersPerRequest = peer2.syncConfig.blockHeadersPerRequest
         for {
@@ -57,7 +59,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     }
   }
 
-  "peers should keep synced the same blockchain while their progressing forward" in customTestCaseResourceM(
+  "peers should keep synced the same blockchain while their progressing forward" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     val blockNumer: Int = 2000
@@ -74,7 +76,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     } yield assert(peer1.blockchainReader.getBestBlock().get.hash == peer2.blockchainReader.getBestBlock().get.hash)
   }
 
-  "peers should keep being synced on checkpoints" in customTestCaseResourceM(
+  "peers should keep being synced on checkpoints" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     val blockNumber: Int = 2000
@@ -95,7 +97,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     }
   }
 
-  "peers should keep being synced on checkpoints even if 2 checkpoints are issued to different forks at the same time" in customTestCaseResourceM(
+  "peers should keep being synced on checkpoints even if 2 checkpoints are issued to different forks at the same time" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     val blockNumber: Int = 2000
@@ -122,7 +124,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     }
   }
 
-  "peers should chose the branch with a checkpoint discarding blocks that come after the checkpoint" in customTestCaseResourceM(
+  "peers should chose the branch with a checkpoint discarding blocks that come after the checkpoint" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     val checkpointBlockNumber = 26
@@ -152,7 +154,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
   }
 
   // TODO: investigate why reorganisation is not triggered after 2 nodes with conflicting branches connect
-  "peers should choose the branch with a checkpoint even if it's shorter" in customTestCaseResourceM(
+  "peers should choose the branch with a checkpoint even if it's shorter" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     for {
@@ -172,7 +174,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
 //      assert(peer1.bl.getLatestCheckpointBlockNumber() == peer2.bl.getLatestCheckpointBlockNumber())
   }
 
-  "peers with divergent chains will be forced to resolve branches" in customTestCaseResourceM(
+  "peers with divergent chains will be forced to resolve branches" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     val blockNumer: Int = 2000
@@ -212,7 +214,7 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     }
   }
 
-  "A metric about mining a new block should be available" in customTestCaseResourceM(
+  "A metric about mining a new block should be available" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     import MetricsHelper._

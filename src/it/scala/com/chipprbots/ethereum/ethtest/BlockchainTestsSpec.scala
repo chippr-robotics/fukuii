@@ -5,6 +5,8 @@ import org.scalatest.matchers.should.Matchers
 import java.io.File
 import scala.io.Source
 
+import com.chipprbots.ethereum.testing.Tags._
+
 /** Test suite for ethereum/tests BlockchainTests category
   *
   * Runs tests from the BlockchainTests directory of the ethereum/tests repository. These tests validate:
@@ -80,7 +82,7 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
     }
   }
 
-  "BlockchainTests" should "pass SimpleTx from ValidBlocks" in {
+  "BlockchainTests" should "pass SimpleTx from ValidBlocks" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     info("Running SimpleTx test from ValidBlocks/bcValidBlockTest...")
     val suite = loadTestSuite("/ethereum-tests/SimpleTx.json")
 
@@ -102,7 +104,7 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "pass ExtraData32 test" in {
+  it should "pass ExtraData32 test" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     info("Running ExtraData32 test...")
     val suite = loadTestSuite("/ethereum-tests/ExtraData32.json")
 
@@ -118,7 +120,7 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "pass dataTx test" in {
+  it should "pass dataTx test" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     info("Running dataTx test...")
     val suite = loadTestSuite("/ethereum-tests/dataTx.json")
 
@@ -134,7 +136,7 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "discover tests in ValidBlocks/bcValidBlockTest" in {
+  it should "discover tests in ValidBlocks/bcValidBlockTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val basePath = "/home/runner/work/fukuii/fukuii/ets/tests/BlockchainTests"
     val baseDir = new File(basePath)
 
@@ -149,7 +151,7 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "discover tests in ValidBlocks/bcStateTests" in {
+  it should "discover tests in ValidBlocks/bcStateTests" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val basePath = "/home/runner/work/fukuii/fukuii/ets/tests/BlockchainTests"
     val baseDir = new File(basePath)
 
@@ -164,7 +166,7 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "filter out unsupported networks" in {
+  it should "filter out unsupported networks" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     // This test validates that we properly filter post-Spiral tests
     val suite = BlockchainTestSuite(
       Map(

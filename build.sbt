@@ -489,7 +489,42 @@ addCommandAlias(
     |""".stripMargin
 )
 
+// ===== Test Tagging Commands (ADR-017) =====
+// These commands enable selective test execution based on ScalaTest tags
 
+// testEssential - Tier 1: Essential tests (< 5 minutes)
+// Runs fast unit tests, excludes integration and slow tests
+addCommandAlias(
+  "testEssential",
+  """; compile-all
+    |; testOnly -- -l org.scalatest.tags.Slow -l IntegrationTest -l BenchmarkTest -l EthereumTest
+    |""".stripMargin
+)
+
+// testStandard - Tier 2: Standard tests (< 30 minutes)
+// Runs unit and integration tests, excludes benchmarks and comprehensive ethereum tests
+addCommandAlias(
+  "testStandard",
+  """; compile-all
+    |; testOnly -- -l BenchmarkTest -l EthereumTest
+    |""".stripMargin
+)
+
+// testComprehensive - Tier 3: Comprehensive tests (< 3 hours)
+// Runs all tests including ethereum/tests compliance suite
+addCommandAlias(
+  "testComprehensive",
+  "testAll"
+)
+
+// Module-specific test commands
+addCommandAlias("testCrypto", "testOnly -- -n CryptoTest")
+addCommandAlias("testVM", "testOnly -- -n VMTest")
+addCommandAlias("testNetwork", "testOnly -- -n NetworkTest")
+addCommandAlias("testDatabase", "testOnly -- -n DatabaseTest")
+addCommandAlias("testRLP", "testOnly -- -n RLPTest")
+addCommandAlias("testMPT", "testOnly -- -n MPTTest")
+addCommandAlias("testEthereum", "testOnly -- -n EthereumTest")
 
 // Scapegoat configuration for Scala 3
 (ThisBuild / scapegoatVersion) := "3.1.4"

@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.TxLogEntry
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.UInt256._
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.vm.Generators._
 
 import Fixtures.blockchainConfig

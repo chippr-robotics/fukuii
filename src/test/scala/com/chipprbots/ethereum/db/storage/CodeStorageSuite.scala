@@ -8,11 +8,12 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.testing.Tags._
 
 class CodeStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
   val LimitCodeSize = 100
 
-  test("CodeStorage insert") {
+  test("CodeStorage insert", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { unfilteredCodeHashes =>
       val codeHashes = unfilteredCodeHashes.distinct
       val codes = Gen.listOfN(codeHashes.length, randomSizeByteArrayGen(0, LimitCodeSize)).sample.get.map(ByteString(_))
@@ -28,7 +29,7 @@ class CodeStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Ob
     }
   }
 
-  test("CodeStorage delete") {
+  test("CodeStorage delete", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { unfilteredCodeHashes =>
       val codeHashes = unfilteredCodeHashes.distinct
       val codes = Gen.listOfN(codeHashes.length, randomSizeByteArrayGen(0, LimitCodeSize)).sample.get.map(ByteString(_))

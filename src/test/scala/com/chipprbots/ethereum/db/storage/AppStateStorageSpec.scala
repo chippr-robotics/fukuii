@@ -5,12 +5,13 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.testing.Tags._
 
 class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with ObjectGenerators {
 
   "AppStateStorage" should {
 
-    "insert and get best block number properly" in new Fixtures {
+    "insert and get best block number properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       forAll(ObjectGenerators.bigIntGen) { bestBlockNumber =>
         val storage = newAppStateStorage()
         storage.putBestBlockNumber(bestBlockNumber).commit()
@@ -19,22 +20,22 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       }
     }
 
-    "get zero as best block number when storage is empty" in new Fixtures {
+    "get zero as best block number when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       assert(newAppStateStorage().getBestBlockNumber() == 0)
     }
 
-    "insert and get fast sync done properly" in new Fixtures {
+    "insert and get fast sync done properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       val storage: AppStateStorage = newAppStateStorage()
       storage.fastSyncDone().commit()
 
       assert(storage.isFastSyncDone())
     }
 
-    "get fast sync done false when storage is empty" in new Fixtures {
+    "get fast sync done false when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       assert(!newAppStateStorage().isFastSyncDone())
     }
 
-    "insert and get estimated highest block properly" in new Fixtures {
+    "insert and get estimated highest block properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       forAll(ObjectGenerators.bigIntGen) { estimatedHighestBlock =>
         val storage = newAppStateStorage()
         storage.putEstimatedHighestBlock(estimatedHighestBlock).commit()
@@ -43,11 +44,11 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       }
     }
 
-    "get zero as estimated highest block when storage is empty" in new Fixtures {
+    "get zero as estimated highest block when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       assert(newAppStateStorage().getEstimatedHighestBlock() == 0)
     }
 
-    "insert and get sync starting block properly" in new Fixtures {
+    "insert and get sync starting block properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       forAll(ObjectGenerators.bigIntGen) { syncStartingBlock =>
         val storage = newAppStateStorage()
         storage.putSyncStartingBlock(syncStartingBlock).commit()
@@ -56,11 +57,11 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       }
     }
 
-    "get zero as sync starting block when storage is empty" in new Fixtures {
+    "get zero as sync starting block when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       assert(newAppStateStorage().getSyncStartingBlock() == 0)
     }
 
-    "update and remove latest checkpoint block number properly" in new Fixtures {
+    "update and remove latest checkpoint block number properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       forAll(ObjectGenerators.bigIntGen) { latestCheckpointBlockNumber =>
         val storage = newAppStateStorage()
 
@@ -72,7 +73,7 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       }
     }
 
-    "update checkpoint block number and get it properly" in new Fixtures {
+    "update checkpoint block number and get it properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       forAll(ObjectGenerators.bigIntGen) { latestCheckpointBlockNumber =>
         val storage = newAppStateStorage()
         storage.putLatestCheckpointBlockNumber(latestCheckpointBlockNumber).commit()
@@ -81,7 +82,7 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       }
     }
 
-    "get zero as checkpoint block number when storage is empty" in new Fixtures {
+    "get zero as checkpoint block number when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       assert(newAppStateStorage().getBestBlockNumber() == 0)
     }
   }

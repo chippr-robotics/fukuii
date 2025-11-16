@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
 import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
 
 class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators {
@@ -55,19 +56,19 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
       assert(fromStorage.hash.sameElements(node.hash))
     }
 
-  "ArchiveStateStorage" should "save node directly to db" in new TestSetup {
+  "ArchiveStateStorage" should "save node directly to db" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     saveNodeToDbTest(archiveStateStorage, archiveNodeStorage)
   }
 
-  it should "provide storage for trie" in new TestSetup {
+  it should "provide storage for trie" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     provideStorageForTrieTest(archiveStateStorage)
   }
 
-  it should "enable way to get node directly" in new TestSetup {
+  it should "enable way to get node directly" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     getNodeFromDbTest(archiveStateStorage)
   }
 
-  it should "provide function to act on block save" in new TestSetup {
+  it should "provide function to act on block save" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>
@@ -85,7 +86,7 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
     }
   }
 
-  it should "provide function to act on block rollback" in new TestSetup {
+  it should "provide function to act on block rollback" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>
@@ -103,19 +104,19 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
     }
   }
 
-  "ReferenceCountedStorage" should "save node directly to db" in new TestSetup {
+  "ReferenceCountedStorage" should "save node directly to db" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     saveNodeToDbTest(referenceCounteStateStorage, refCountNodeStorage)
   }
 
-  it should "provide storage for trie" in new TestSetup {
+  it should "provide storage for trie" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     provideStorageForTrieTest(referenceCounteStateStorage)
   }
 
-  it should "enable way to get node directly" in new TestSetup {
+  it should "enable way to get node directly" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     getNodeFromDbTest(referenceCounteStateStorage)
   }
 
-  it should "provide function to act on block save" in new TestSetup {
+  it should "provide function to act on block save" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>
@@ -133,7 +134,7 @@ class StateStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckProperty
     }
   }
 
-  it should "provide function to act on block rollback" in new TestSetup {
+  it should "provide function to act on block rollback" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     var ints: List[Int] = Nil
 
     forAll(listOfNodes(minNodes, maxNodes)) { nodes =>

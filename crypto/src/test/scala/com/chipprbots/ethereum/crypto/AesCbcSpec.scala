@@ -9,9 +9,11 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class AesCbcSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
 
-  "AES_CBC" should "correctly evaluate for the test vectors" in {
+  "AES_CBC" should "correctly evaluate for the test vectors" taggedAs (UnitTest, CryptoTest) in {
 
     // https://tools.ietf.org/html/rfc3602#section-4
     val testVectors = Table[String, String, ByteString, String](
@@ -61,7 +63,7 @@ class AesCbcSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks
     }
   }
 
-  it should "decrypt encrypted random values" in {
+  it should "decrypt encrypted random values" taggedAs (UnitTest, CryptoTest) in {
     val keyGen = Generators.getByteStringGen(16, 16)
     val ivGen = Generators.getByteStringGen(16, 16)
     val plaintextGen = Generators.getByteStringGen(1, 256)

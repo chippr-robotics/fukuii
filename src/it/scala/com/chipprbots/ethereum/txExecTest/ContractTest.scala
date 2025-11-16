@@ -12,6 +12,8 @@ import com.chipprbots.ethereum.txExecTest.util.FixtureProvider
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.domain.BlockchainStorages
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class ContractTest extends AnyFlatSpec with Matchers {
   val blockchainConfig = Config.blockchains.blockchainConfig
   val syncConfig: Config.SyncConfig = Config.SyncConfig(Config.config)
@@ -29,7 +31,7 @@ class ContractTest extends AnyFlatSpec with Matchers {
   //
   // To fix: Regenerate fixture with correct account codeHash values or wait until all other
   // tests are passing before addressing this legacy fixture issue.
-  ignore should "execute and validate" in new ScenarioSetup {
+  ignore should "execute and validate" taggedAs (IntegrationTest, VMTest, SlowTest) in new ScenarioSetup {
     val fixtures: FixtureProvider.Fixture = FixtureProvider.loadFixtures("/txExecTest/purchaseContract")
     override val testBlockchainStorages: BlockchainStorages = FixtureProvider.prepareStorages(2, fixtures)
 

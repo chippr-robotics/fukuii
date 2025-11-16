@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.{decode => rlpDecode}
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
+import com.chipprbots.ethereum.testing.Tags._
 
 class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
   val iterationsNumber = 100
@@ -39,7 +40,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     intsNotInStorage <- Gen.nonEmptyListOf(intGen.suchThat(value => !intsInStorage.contains(value)))
   } yield (intsInStorage, intsNotInStorage)
 
-  test("Get ints from KeyValueStorage") {
+  test("Get ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(dataGenerator) { case (intsInStorage, intsNotInStorage) =>
       val intsInStorageIndexedSeq = intsInStorage.map(IntStorage.intSerializer(_))
       val intDataSource = EphemDataSource()
@@ -57,7 +58,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Insert ints to KeyValueStorage") {
+  test("Insert ints to KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOfN(iterationsNumber, Gen.listOf(intGen))) { listOfListOfInt =>
       val keyValueStorage = newIntStorage()
 
@@ -71,7 +72,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Delete ints from KeyValueStorage") {
+  test("Delete ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       // Insert of keys
       val intStorage = newIntStorage()
@@ -90,7 +91,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Put ints into KeyValueStorage") {
+  test("Put ints into KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       val keyValueStorage = newIntStorage()
 
@@ -106,7 +107,7 @@ class TransactionalKeyValueStorageSuite extends AnyFunSuite with ScalaCheckPrope
     }
   }
 
-  test("Remove ints from KeyValueStorage") {
+  test("Remove ints from KeyValueStorage", UnitTest, DatabaseTest) {
     forAll(Gen.listOf(intGen)) { listOfInt =>
       // Insert of keys
       val intStorage = newIntStorage()

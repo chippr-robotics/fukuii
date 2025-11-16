@@ -7,12 +7,13 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockHeadersStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with ObjectGenerators {
 
   "BlockHeadersStorage" should {
 
-    "insert block header properly" in {
+    "insert block header properly" taggedAs (UnitTest, DatabaseTest) in {
       forAll(Gen.listOfN(32, ObjectGenerators.blockHeaderGen)) { blockHeaders =>
         val storage = new BlockHeadersStorage(EphemDataSource())
         val headers = blockHeaders.distinct
@@ -25,7 +26,7 @@ class BlockHeadersStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks 
       }
     }
 
-    "delete block header properly" in {
+    "delete block header properly" taggedAs (UnitTest, DatabaseTest) in {
       forAll(Gen.listOfN(32, ObjectGenerators.blockHeaderGen)) { blockHeaders =>
         val storage = new BlockHeadersStorage(EphemDataSource())
         val headers = blockHeaders.distinct

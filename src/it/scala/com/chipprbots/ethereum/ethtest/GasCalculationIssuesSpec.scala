@@ -4,6 +4,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
+import com.chipprbots.ethereum.testing.Tags._
+
 /** Test suite to identify and flag gas calculation discrepancies
   *
   * This spec runs tests that are failing due to gas calculation differences and provides detailed analysis to help
@@ -42,7 +44,7 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
       case result => result
     }
 
-  "GasCalculationIssues" should "flag add11 test gas calculation discrepancy" in {
+  "GasCalculationIssues" should "flag add11 test gas calculation discrepancy" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     info("Testing add11 (basic ADD opcode) - should use identical gas")
     val suite = loadTestSuite("/ethereum-tests/add11.json")
 
@@ -63,7 +65,7 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "flag addNonConst test gas calculation discrepancy" in {
+  it should "flag addNonConst test gas calculation discrepancy" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     info("Testing addNonConst (ADD with non-constant values) - should use identical gas")
     val suite = loadTestSuite("/ethereum-tests/addNonConst.json")
 
@@ -83,7 +85,7 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "provide detailed analysis of gas calculation patterns" in {
+  it should "provide detailed analysis of gas calculation patterns" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     info("Analyzing gas calculation patterns across multiple tests...")
 
     val testFiles = Seq(
@@ -127,7 +129,7 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "document known gas calculation issues for follow-up" in {
+  it should "document known gas calculation issues for follow-up" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     info("Documenting known gas calculation issues...")
     info("")
     info("KNOWN ISSUES:")

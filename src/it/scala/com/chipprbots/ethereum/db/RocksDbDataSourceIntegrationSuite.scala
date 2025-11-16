@@ -6,6 +6,8 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
 import com.chipprbots.ethereum.db.storage.Namespaces
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class RocksDbDataSourceIntegrationSuite extends AnyFlatSpec with DataSourceIntegrationTestBehavior {
 
   private def createDataSource(dataSourcePath: String) = RocksDbDataSource(
