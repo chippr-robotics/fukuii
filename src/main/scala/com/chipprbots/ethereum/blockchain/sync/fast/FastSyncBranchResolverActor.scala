@@ -190,9 +190,9 @@ class FastSyncBranchResolverActor(
 
   private def sendGetBlockHeadersRequest(peer: Peer, fromBlock: BigInt, amount: BigInt): ActorRef = {
     // Create message in correct format based on peer's negotiated capability
-    val usesRequestId = handshakedPeers.get(peer.id).exists(peerWithInfo =>
-      Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability)
-    )
+    val usesRequestId = handshakedPeers
+      .get(peer.id)
+      .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
 
     val handler = if (usesRequestId) {
       context.actorOf(

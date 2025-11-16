@@ -24,12 +24,12 @@ case class EtcForkBlockExchangeState(
   import handshakerConfiguration._
 
   def nextMessage: NextMessage = {
-    val getBlockHeadersMsg = 
+    val getBlockHeadersMsg =
       if (Capability.usesRequestId(remoteStatus.capability))
         ETH66GetBlockHeaders(0, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
       else
         ETH62GetBlockHeaders(Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
-    
+
     NextMessage(
       messageToSend = getBlockHeadersMsg,
       timeout = peerConfiguration.waitForChainCheckTimeout
@@ -87,14 +87,16 @@ case class EtcForkBlockExchangeState(
 
   override def respondToRequest(receivedMessage: Message): Option[MessageSerializable] = receivedMessage match {
 
-    case ETH62GetBlockHeaders(Left(number), numHeaders, _, _) if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
+    case ETH62GetBlockHeaders(Left(number), numHeaders, _, _)
+        if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
       log.debug("Received request for fork block")
       blockchainReader.getBlockHeaderByNumber(number) match {
         case Some(header) => Some(ETH62BlockHeaders(Seq(header)))
         case None         => Some(ETH62BlockHeaders(Nil))
       }
 
-    case ETH66GetBlockHeaders(requestId, Left(number), numHeaders, _, _) if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
+    case ETH66GetBlockHeaders(requestId, Left(number), numHeaders, _, _)
+        if number == forkResolver.forkBlockNumber && numHeaders == 1 =>
       log.debug("Received request for fork block")
       blockchainReader.getBlockHeaderByNumber(number) match {
         case Some(header) => Some(ETH66BlockHeaders(requestId, Seq(header)))

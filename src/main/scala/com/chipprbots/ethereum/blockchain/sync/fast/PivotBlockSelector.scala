@@ -243,7 +243,7 @@ class PivotBlockSelector(
 
   private def obtainBlockHeaderFromPeer(peer: PeerId, blockNumber: BigInt): Unit = {
     peerEventBus ! Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer)))
-    
+
     // Get peer info to determine message format based on negotiated capability
     val getBlockHeadersMsg = handshakedPeers.get(peer) match {
       case Some(peerWithInfo) if Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability) =>
@@ -251,7 +251,7 @@ class PivotBlockSelector(
       case _ =>
         ETH62GetBlockHeaders(Left(blockNumber), 1, 0, reverse = false)
     }
-    
+
     etcPeerManager ! EtcPeerManagerActor.SendMessage(getBlockHeadersMsg, peer)
   }
 

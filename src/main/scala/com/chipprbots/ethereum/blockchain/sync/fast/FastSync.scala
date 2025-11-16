@@ -866,9 +866,9 @@ class FastSync(
           syncState.safeDownloadTarget - syncState.bestBlockHeaderNumber
 
       // Create message in correct format based on peer's negotiated capability
-      val usesRequestId = handshakedPeers.get(peer.id).exists(peerWithInfo =>
-        Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability)
-      )
+      val usesRequestId = handshakedPeers
+        .get(peer.id)
+        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
 
       if (usesRequestId) {
         // Use ETH66 format for ETH66+ peers
@@ -878,7 +878,8 @@ class FastSync(
             peerResponseTimeout,
             etcPeerManager,
             peerEventBus,
-            requestMsg = ETH66.GetBlockHeaders(0, Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
+            requestMsg =
+              ETH66.GetBlockHeaders(0, Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
             responseMsgCode = Codes.BlockHeadersCode
           ),
           BlockHeadersHandlerName

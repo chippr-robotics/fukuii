@@ -57,9 +57,8 @@ object Capability {
   def best(capabilities: List[Capability]): Capability =
     capabilities.maxBy(_.version)
 
-  /** Determines if this capability uses RequestId wrapper in messages (ETH66+)
-    * ETH66, ETH67, ETH68 use RequestId wrapper
-    * ETH63, ETH64, ETH65, ETC64 do not use RequestId wrapper
+  /** Determines if this capability uses RequestId wrapper in messages (ETH66+) ETH66, ETH67, ETH68 use RequestId
+    * wrapper ETH63, ETH64, ETH65, ETC64 do not use RequestId wrapper
     */
   def usesRequestId(capability: Capability): Boolean = capability match {
     case ETH66 | ETH67 | ETH68 => true
