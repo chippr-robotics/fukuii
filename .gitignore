@@ -19,6 +19,7 @@ metals.sbt
 
 *.log
 *.log.zip
+fukuii-log.txt
 .evm-runner_history
 
 # Nix

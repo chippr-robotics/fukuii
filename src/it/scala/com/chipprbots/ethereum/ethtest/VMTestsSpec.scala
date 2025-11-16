@@ -3,6 +3,9 @@ package com.chipprbots.ethereum.ethtest
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import java.io.File
+import io.circe._
+import io.circe.parser._
+import scala.io.Source
 
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -60,29 +63,56 @@ class VMTestsSpec extends EthereumTestsSpec {
     }
   }
 
+  /** Load test suite from filesystem path
+    *
+    * @param filePath
+    *   Full filesystem path to test file
+    * @return
+    *   Parsed test suite
+    */
+  def loadTestSuiteFromFile(filePath: String): BlockchainTestSuite = {
+    import scala.io.Source
+    import io.circe.parser._
+    import cats.effect.unsafe.IORuntime
+
+    given IORuntime = IORuntime.global
+
+    val file = new File(filePath)
+    if (!file.exists()) {
+      BlockchainTestSuite(Map.empty)
+    } else {
+      val source = Source.fromFile(file)
+      try {
+        val jsonString = source.mkString
+        parse(jsonString) match {
+          case Right(json) =>
+            json.as[BlockchainTestSuite] match {
+              case Right(suite) => suite
+              case Left(error)  => throw new RuntimeException(s"Failed to decode test suite: $error")
+            }
+          case Left(error) => throw new RuntimeException(s"Failed to parse JSON: $error")
+        }
+      } finally source.close()
+    }
+  }
+
   /** Load and filter test suite to only include supported networks
     *
     * @param resourcePath
-    *   Path to test file
+    *   Path to test file relative to GeneralStateTests/VMTests
     * @return
     *   Filtered test suite with only supported networks
     */
   def loadAndFilterTestSuite(resourcePath: String): BlockchainTestSuite = {
-    val fullPath = s"/home/runner/work/fukuii/fukuii/ets/tests$resourcePath"
-    val file = new File(fullPath)
+    val fullPath = s"/home/runner/work/fukuii/fukuii/ets/tests/GeneralStateTests/VMTests$resourcePath"
+    val suite = loadTestSuiteFromFile(fullPath)
 
-    if (!file.exists()) {
-      BlockchainTestSuite(Map.empty)
-    } else {
-      val suite = EthereumTestsAdapter.loadTestSuite(resourcePath).unsafeRunSync()
-
-      // Filter to only supported networks
-      val filteredTests = suite.tests.filter { case (_, test) =>
-        supportedNetworks.contains(test.network)
-      }
-
-      BlockchainTestSuite(filteredTests)
+    // Filter to only supported networks
+    val filteredTests = suite.tests.filter { case (_, test) =>
+      supportedNetworks.contains(test.network)
     }
+
+    BlockchainTestSuite(filteredTests)
   }
 
   "VMTests" should "discover vmArithmeticTest tests" taggedAs (IntegrationTest, EthereumTest, VMTest, SlowTest) in {
@@ -184,5 +214,31 @@ class VMTestsSpec extends EthereumTestsSpec {
     filtered.size shouldBe 1
     (filtered should contain).key("Berlin_VM_Test")
     filtered should not contain key("London_VM_Test")
+  }
+
+  it should "load and parse a sample VM arithmetic test" taggedAs (IntegrationTest, EthereumTest, VMTest, SlowTest) in {
+    val testFile = "/home/runner/work/fukuii/fukuii/ets/tests/GeneralStateTests/VMTests/vmArithmeticTest/add.json"
+    val file = new File(testFile)
+
+    if (!file.exists()) {
+      info(s"Skipping test - ethereum/tests submodule not initialized")
+      pending
+    } else {
+      val suite = loadTestSuiteFromFile(testFile)
+      info(s"Loaded ${suite.tests.size} test cases from add.json")
+
+      suite.tests.size should be > 0
+
+      suite.tests.foreach { case (testName, test) =>
+        info(s"Test case: $testName")
+        info(s"  Network: ${test.network}")
+        info(s"  Pre-state accounts: ${test.pre.size}")
+        info(s"  Blocks: ${test.blocks.size}")
+        info(s"  Post-state accounts: ${test.postState.size}")
+
+        // Validate test structure
+        test.network should not be empty
+      }
+    }
   }
 }
