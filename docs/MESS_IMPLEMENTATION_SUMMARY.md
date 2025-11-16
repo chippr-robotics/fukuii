@@ -141,6 +141,8 @@ Both default to `enabled = false` for backward compatibility.
 These items are documented in ADR-016 but not yet implemented:
 
 1. **CLI Flags**: `--enable-mess`, `--disable-mess`, `--mess-decay-constant`
+   - **Status**: Not yet available in this release
+   - **Note**: Configuration examples showing CLI flags in documentation are for future reference only
    - Requires CLI argument parser updates
    - Should override config file settings
 

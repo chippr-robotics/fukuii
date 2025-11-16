@@ -72,7 +72,10 @@ case class ChainWeight(
     
     val newTotalDifficulty = totalDifficulty + header.difficulty
     val newMessScore = (messScore, messAdjustedDifficulty) match {
-      case (Some(score), Some(messDiff)) => Some(score + messDiff)
+      case (Some(score), Some(messDiff)) => 
+        // Note: BigInt addition is assumed not to overflow within reasonable chain lengths
+        // (i.e., total accumulated difficulty fits within BigInt's capacity)
+        Some(score + messDiff)
       case (None, Some(messDiff)) => Some(messDiff)
       case _ => None
     }

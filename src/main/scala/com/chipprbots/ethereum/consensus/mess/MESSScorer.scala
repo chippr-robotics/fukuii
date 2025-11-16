@@ -59,6 +59,9 @@ class MESSScorer(
     val currentTime = currentTimeMillis()
     
     val timeDeltaMillis = max(0L, currentTime - firstSeenTime)
+    // Convert to Double for exponential calculation
+    // Note: This introduces minor floating-point precision loss for very large
+    // time deltas, but the impact is negligible for the exponential decay calculation
     val timeDeltaSeconds = timeDeltaMillis / 1000.0
     
     // Cap time delta to avoid numerical issues
@@ -83,8 +86,12 @@ class MESSScorer(
     * @return
     *   Adjusted difficulty after applying MESS penalty
     */
-  def calculateMessDifficulty(header: BlockHeader): BigInt =
-    calculateMessDifficulty(header.hash, header.difficulty, header.unixTimestamp * 1000)
+  def calculateMessDifficulty(header: BlockHeader): BigInt = {
+    // Convert unixTimestamp (seconds) to milliseconds, using safe multiplication
+    // to avoid potential overflow for very far future timestamps
+    val timestampMillis = header.unixTimestamp.toLong * 1000L
+    calculateMessDifficulty(header.hash, header.difficulty, timestampMillis)
+  }
 
   /** Calculate the MESS multiplier for a block (for diagnostics/metrics).
     *

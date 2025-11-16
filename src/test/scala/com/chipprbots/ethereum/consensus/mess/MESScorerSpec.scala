@@ -59,6 +59,10 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
 
 class MESScorerSpec extends AnyFlatSpec with Matchers {
 
+  // Time conversion constants for readability
+  private val OneHourMillis = 3600 * 1000L
+  private val OneDayMillis = 24 * 3600 * 1000L
+
   // In-memory storage for testing
   class InMemoryBlockFirstSeenStorage extends BlockFirstSeenStorage {
     private val storage = mutable.Map[ByteString, Long]()
@@ -120,7 +124,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     
     val blockHash = ByteString("test")
     val difficulty = BigInt(1000000)
-    val firstSeenTime = currentTime - (3600 * 1000) // 1 hour ago
+    val firstSeenTime = currentTime - OneHourMillis // 1 hour ago
     
     storage.put(blockHash, firstSeenTime)
     
@@ -141,7 +145,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     
     val blockHash = ByteString("test")
     val difficulty = BigInt(1000000)
-    val firstSeenTime = currentTime - (24 * 3600 * 1000) // 24 hours ago
+    val firstSeenTime = currentTime - OneDayMillis // 24 hours ago
     
     storage.put(blockHash, firstSeenTime)
     

@@ -19,8 +19,10 @@ mess {
 }
 ```
 
-Or use the CLI flag (planned):
+Or use the CLI flag (planned for future release):
 ```bash
+# Note: CLI flags are not yet implemented in this release
+# This is for future reference only
 ./bin/fukuii etc --enable-mess
 ```
 
@@ -51,7 +53,7 @@ mess {
 - **Effect**: Higher values = stronger penalties for late blocks
 - **Examples**:
   - `0.0001`: 1 hour delay = ~30% penalty
-  - `0.0002`: 1 hour delay = ~50% penalty
+  - `0.0002`: 1 hour delay = ~51% penalty
   - `0.00005`: 1 hour delay = ~15% penalty
 
 ### `max-time-delta` (Long, seconds)

@@ -101,9 +101,9 @@ For chains:
 
 **Penalty Characteristics**:
 - Blocks seen immediately: no penalty (exp(0) = 1.0)
-- Blocks delayed by 1 hour: ~36% penalty (exp(-0.36) ≈ 0.70)
-- Blocks delayed by 6 hours: ~78% penalty (exp(-2.16) ≈ 0.22)
-- Blocks delayed by 24 hours: ~99% penalty (exp(-8.64) ≈ 0.0002)
+- Blocks delayed by 1 hour: ~30% penalty (exp(-0.36) ≈ 0.70, retains 70%)
+- Blocks delayed by 6 hours: ~88.5% penalty (exp(-2.16) ≈ 0.115, retains 11.5%)
+- Blocks delayed by 24 hours: ~99.98% penalty (exp(-8.64) ≈ 0.00018, retains 0.02%)
 
 #### 3. Configuration
 
@@ -316,38 +316,38 @@ Based on the core-geth implementation and Ethereum Classic community discussions
 ## Implementation Plan
 
 ### Phase 1: Core Infrastructure (Week 1-2)
-- [ ] Create `BlockFirstSeenStorage` trait and RocksDB implementation
+- [x] Create `BlockFirstSeenStorage` trait and RocksDB implementation
 - [ ] Add storage initialization in node startup
-- [ ] Create unit tests for storage layer
-- [ ] Update `BlockchainConfig` with MESS configuration
+- [x] Create unit tests for storage layer
+- [x] Update `BlockchainConfig` with MESS configuration
 
 ### Phase 2: MESS Scoring (Week 2-3)
-- [ ] Implement `MESSScorer` with exponential decay function
-- [ ] Create unit tests for scoring algorithm
-- [ ] Add configuration parsing and validation
+- [x] Implement `MESSScorer` with exponential decay function
+- [x] Create unit tests for scoring algorithm
+- [x] Add configuration parsing and validation
 - [ ] Implement CLI flag support
 
 ### Phase 3: Consensus Integration (Week 3-4)
-- [ ] Enhance `ChainWeight` with MESS score support
+- [x] Enhance `ChainWeight` with MESS score support
 - [ ] Update `ConsensusImpl` to use MESS scoring when enabled
 - [ ] Modify block reception to record first-seen times
 - [ ] Update chain comparison logic
 
 ### Phase 4: Testing (Week 4-5)
-- [ ] Create integration tests for MESS-enabled consensus
-- [ ] Test attack scenario simulations
+- [x] Create integration tests for MESS-enabled consensus
+- [x] Test attack scenario simulations
 - [ ] Test configuration and CLI overrides
-- [ ] Test backward compatibility (MESS disabled)
+- [x] Test backward compatibility (MESS disabled)
 
 ### Phase 5: Documentation and Metrics (Week 5-6)
-- [ ] Document MESS configuration in runbooks
+- [x] Document MESS configuration in runbooks
 - [ ] Add MESS metrics (Prometheus/Micrometer)
-- [ ] Update architecture documentation
-- [ ] Create user guide for MESS feature
+- [x] Update architecture documentation
+- [x] Create user guide for MESS feature
 
 ### Phase 6: Validation (Week 6)
-- [ ] Code review
-- [ ] Security analysis (CodeQL)
+- [x] Code review
+- [x] Security analysis (CodeQL)
 - [ ] Performance testing
 - [ ] Testnet deployment and monitoring
 
