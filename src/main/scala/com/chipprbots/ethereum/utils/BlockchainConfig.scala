@@ -9,6 +9,7 @@ import com.typesafe.config.ConfigRenderOptions
 import com.typesafe.config.{Config => TypesafeConfig}
 
 import com.chipprbots.ethereum.blockchain.data.BootstrapCheckpoint
+import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -34,7 +35,8 @@ case class BlockchainConfig(
     capabilities: List[Capability] = List.empty,
     bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
     useBootstrapCheckpoints: Boolean = true,
-    forkIdReportLatestWhenUnsynced: Boolean = false
+    forkIdReportLatestWhenUnsynced: Boolean = false,
+    messConfig: MESSConfig = MESSConfig()
 ) {
   val minRequireSignatures: Int = (Math.floor(checkpointPubKeys.size.toDouble / 2) + 1).toInt
 
@@ -196,6 +198,16 @@ object BlockchainConfig {
     val useBootstrapCheckpoints: Boolean =
       Try(blockchainConfig.getBoolean("use-bootstrap-checkpoints")).getOrElse(true)
 
+    val messConfig: MESSConfig = Try {
+      val messConf = blockchainConfig.getConfig("mess")
+      MESSConfig(
+        enabled = Try(messConf.getBoolean("enabled")).getOrElse(false),
+        decayConstant = Try(messConf.getDouble("decay-constant")).getOrElse(0.0001),
+        maxTimeDelta = Try(messConf.getLong("max-time-delta")).getOrElse(2592000L),
+        minWeightMultiplier = Try(messConf.getDouble("min-weight-multiplier")).getOrElse(0.0001)
+      )
+    }.getOrElse(MESSConfig())
+
     BlockchainConfig(
       powTargetTime = powTargetTime,
       forkBlockNumbers = ForkBlockNumbers(
@@ -244,7 +256,8 @@ object BlockchainConfig {
       bootstrapCheckpoints = bootstrapCheckpoints,
       useBootstrapCheckpoints = useBootstrapCheckpoints,
       forkIdReportLatestWhenUnsynced =
-        Try(blockchainConfig.getBoolean("fork-id-report-latest-when-unsynced")).getOrElse(false)
+        Try(blockchainConfig.getBoolean("fork-id-report-latest-when-unsynced")).getOrElse(false),
+      messConfig = messConfig
     )
   }
   // scalastyle:on method.length
