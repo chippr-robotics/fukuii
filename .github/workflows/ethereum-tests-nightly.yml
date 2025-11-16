@@ -54,6 +54,24 @@ jobs:
         env:
           FUKUII_DEV: true
       
+      - name: Validate KPI Baselines
+        run: |
+          echo "=========================================="
+          echo "Validating KPI Baselines"
+          echo "=========================================="
+          echo ""
+          
+          # Display KPI baseline summary
+          sbt "Test / runMain com.chipprbots.ethereum.testing.KPIBaselinesSummary" || true
+          
+          # Validate baseline definitions
+          sbt "testOnly *KPIBaselinesSpec"
+          
+          echo ""
+          echo "✅ KPI baselines validated successfully"
+        env:
+          FUKUII_DEV: true
+      
       - name: Run Comprehensive Ethereum/Tests Suite
         run: |
           echo "=========================================="
