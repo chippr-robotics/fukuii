@@ -329,7 +329,7 @@ You might want to use `--force-pivot-sync` if:
 - You're testing sync behavior
 - You're running on a private network without configured checkpoints
 
-For more details, see [ADR-012: Bootstrap Checkpoints](../adr/012-bootstrap-checkpoints.md).
+For more details, see [CON-002: Bootstrap Checkpoints](../adr/consensus/CON-002-bootstrap-checkpoints.md).
 
 ## Verification
 

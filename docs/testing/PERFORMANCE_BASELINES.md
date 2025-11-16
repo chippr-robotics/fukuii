@@ -2,7 +2,7 @@
 
 **Status**: ✅ Established  
 **Date**: November 16, 2025  
-**Related Documents**: [KPI_BASELINES.md](KPI_BASELINES.md), [ADR-017](../adr/017-test-suite-strategy-and-kpis.md)
+**Related Documents**: [KPI_BASELINES.md](KPI_BASELINES.md), [TEST-002](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 
 ## Overview
 
@@ -374,7 +374,7 @@ Version   | Date       | Changes
 ## References
 
 - [KPI Baselines](KPI_BASELINES.md)
-- [ADR-017: Test Suite Strategy and KPIs](../adr/017-test-suite-strategy-and-kpis.md)
+- [TEST-002: Test Suite Strategy and KPIs](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Metrics and Monitoring](../operations/metrics-and-monitoring.md)
 - [Java Microbenchmark Harness (JMH)](https://github.com/openjdk/jmh)
 - [Async-profiler](https://github.com/async-profiler/async-profiler)

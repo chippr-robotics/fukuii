@@ -5,8 +5,8 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 ## Test Strategy and KPIs
 
 ### Architecture Decision Records (ADRs)
-- **[ADR-015](../adr/015-ethereum-tests-adapter.md)** - Ethereum/Tests Adapter Implementation
-- **[ADR-017](../adr/017-test-suite-strategy-and-kpis.md)** - Test Suite Strategy, KPIs, and Execution Benchmarks
+- **[TEST-001](../adr/testing/TEST-001-ethereum-tests-adapter.md)** - Ethereum/Tests Adapter Implementation
+- **[TEST-002](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)** - Test Suite Strategy, KPIs, and Execution Benchmarks
 
 ### KPI Baseline Documentation
 - **[KPI_BASELINES.md](KPI_BASELINES.md)** - Comprehensive KPI baseline definitions and targets
@@ -19,7 +19,7 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 
 ## Test Tier Classification
 
-Based on ADR-017, tests are organized into three tiers:
+Based on TEST-002, tests are organized into three tiers:
 
 ### Tier 1: Essential Tests (< 5 minutes)
 **Purpose**: Fast feedback on core functionality

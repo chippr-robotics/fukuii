@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SBOM (Software Bill of Materials) generation in CycloneDX format
 - Assembly JAR attachment to GitHub releases
 - Release Drafter for auto-generated release notes
-- EIP-3651 implementation: Warm COINBASE address at transaction start (see ADR-004)
+- EIP-3651 implementation: Warm COINBASE address at transaction start (see VM-003)
   - Added `eip3651Enabled` configuration flag to `EvmConfig`
   - Added helper method to check EIP-3651 activation status
   - COINBASE address is now marked as warm when EIP-3651 is enabled, reducing gas costs by 2500 for first access

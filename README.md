@@ -67,7 +67,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 - **Enabled by Default**: Works out-of-the-box for ETC mainnet and Mordor testnet
 - **Optional Override**: Use `--force-pivot-sync` flag to disable if needed
 
-See [ADR-012: Bootstrap Checkpoints](docs/adr/012-bootstrap-checkpoints.md) for technical details.
+See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkpoints.md) for technical details.
 
 ### 🛡️ Production-Ready
 
@@ -277,7 +277,7 @@ When modifying code derived from Mantis, include a notice in the header of chang
 - ✅ Update to json4s 4.0.7 (Scala 3 compatible)
 - ✅ Scalanet vendored locally in the `scalanet/` directory
 
-For the rationale behind these decisions, see [ADR-001: Scala 3 Migration](docs/adr/001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
+For the rationale behind these decisions, see [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
 
 **Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 

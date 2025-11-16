@@ -317,7 +317,7 @@ The job running on runner has exceeded the maximum execution time of 10 minutes.
 ## References
 
 - **Issue:** Phase 3 Plan: Complete Test Suite Implementation
-- **ADR:** ADR-015 Ethereum/Tests Integration
+- **ADR:** TEST-001 Ethereum/Tests Integration
 - **Documentation:**
   - `ETHEREUM_TESTS_MIGRATION.md` - Migration guide
   - `GAS_CALCULATION_ISSUES.md` - Known gas calculation issues

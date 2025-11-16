@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes the implementation of the ScalaTest tagging system for the Fukuii project, as specified in ADR-015 and ADR-017.
+This document summarizes the implementation of the ScalaTest tagging system for the Fukuii project, as specified in TEST-001 and TEST-002.
 
 ## Implementation Date
 
@@ -16,7 +16,7 @@ November 16, 2025
 
 Created a comprehensive Tags object with 40+ tags organized into categories:
 
-#### Tier-Based Tags (ADR-017)
+#### Tier-Based Tags (TEST-002)
 - `UnitTest` - Fast unit tests (< 100ms)
 - `FastTest` - Ultra-fast tests (< 10ms)
 - `IntegrationTest` - Integration tests (< 5 seconds)
@@ -95,7 +95,7 @@ Key files in `src/test/scala/.../vm/`:
 
 Added comprehensive SBT command aliases for selective test execution:
 
-#### Tier-Based Commands (ADR-017)
+#### Tier-Based Commands (TEST-002)
 ```bash
 # Tier 1: Essential tests (< 5 minutes) - fast unit tests only
 sbt testEssential
@@ -141,7 +141,7 @@ Created comprehensive documentation including:
 ### Long-Term Benefits
 1. **Scalability**: Easy to add new tests with appropriate tags
 2. **Maintainability**: Clear guidelines for test categorization
-3. **Compliance**: Aligns with ADR-017 test suite strategy
+3. **Compliance**: Aligns with TEST-002 test suite strategy
 4. **Flexibility**: Multiple ways to filter and run tests
 
 ## How to Use
@@ -225,16 +225,16 @@ sbt "testOnly -- -n IntegrationTest"
 
 ## Compliance with ADRs
 
-### ADR-015 Compliance ✅
+### TEST-001 Compliance ✅
 - Ethereum/tests integration tests tagged with `EthereumTest`
 - Can selectively run ethereum/tests: `sbt testEthereum`
 - Integration tests properly categorized
 
-### ADR-017 Compliance ✅
+### TEST-002 Compliance ✅
 - Three-tier test strategy implemented
 - KPI-aligned test categorization
 - Module-specific tags for organized testing
-- SBT commands match ADR-017 recommendations
+- SBT commands match TEST-002 recommendations
 
 ## Files Modified
 
@@ -271,8 +271,8 @@ sbt "testOnly -- -n IntegrationTest"
 
 ## References
 
-- [ADR-015: Ethereum/Tests Adapter](docs/adr/015-ethereum-tests-adapter.md)
-- [ADR-017: Test Suite Strategy and KPIs](docs/adr/017-test-suite-strategy-and-kpis.md)
+- [TEST-001: Ethereum/Tests Adapter](docs/adr/testing/TEST-001-ethereum-tests-adapter.md)
+- [TEST-002: Test Suite Strategy and KPIs](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Test Tagging Guide](docs/testing/TEST_TAGGING_GUIDE.md)
 - [Tags Object Source](src/test/scala/com/chipprbots/ethereum/testing/Tags.scala)
 
