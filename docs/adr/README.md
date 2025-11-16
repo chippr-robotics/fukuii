@@ -38,6 +38,8 @@ Each ADR follows this structure:
 - [ADR-012: Bootstrap Checkpoints for Improved Initial Sync](012-bootstrap-checkpoints.md) - Accepted
 - [ADR-013: Block Sync Improvements - Enhanced Reliability and Performance](013-block-sync-improvements.md) - Accepted
 - [ADR-014: EIP-161 noEmptyAccounts Configuration Fix](014-eip-161-noemptyaccounts-fix.md) - Accepted
+- [ADR-015: Ethereum Tests Adapter](015-ethereum-tests-adapter.md) - Accepted
+- [ADR-016: MESS (Modified Exponential Subjective Scoring) Implementation](016-mess-implementation.md) - Accepted
 
 ## Creating a New ADR
 
