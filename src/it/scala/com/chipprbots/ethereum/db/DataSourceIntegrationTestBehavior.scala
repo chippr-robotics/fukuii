@@ -145,7 +145,11 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to be closed and then continuing using it" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
+    it should "be able to be closed and then continuing using it" taggedAs (
+      IntegrationTest,
+      DatabaseTest,
+      SlowTest
+    ) in {
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -183,7 +187,11 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to handle inserts to multiple namespaces with the same key" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
+    it should "be able to handle inserts to multiple namespaces with the same key" taggedAs (
+      IntegrationTest,
+      DatabaseTest,
+      SlowTest
+    ) in {
       val OtherNamespace2: IndexedSeq[Byte] = IndexedSeq[Byte]('h'.toByte)
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
@@ -208,7 +216,11 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to handle removals from multiple namespaces with the same key" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
+    it should "be able to handle removals from multiple namespaces with the same key" taggedAs (
+      IntegrationTest,
+      DatabaseTest,
+      SlowTest
+    ) in {
       val OtherNamespace2: IndexedSeq[Byte] = IndexedSeq[Byte]('h'.toByte)
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>

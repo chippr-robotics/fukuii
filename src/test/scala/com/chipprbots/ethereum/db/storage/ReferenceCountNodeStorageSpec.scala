@@ -19,7 +19,10 @@ import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
 
 class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
 
-  "ReferenceCountNodeStorage" should "not remove a key if no more references until pruning" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
+  "ReferenceCountNodeStorage" should "not remove a key if no more references until pruning" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
     val storage = new ReferenceCountNodeStorage(nodeStorage, 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
@@ -33,7 +36,10 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     storage.get(key1) shouldBe None
   }
 
-  it should "not remove a key that was inserted after deletion when pruning" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
+  it should "not remove a key that was inserted after deletion when pruning" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(1, storage)
@@ -65,7 +71,10 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
 
   }
 
-  it should "not remove a key that it's still referenced when pruning" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
+  it should "not remove a key that it's still referenced when pruning" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(1, storage)
@@ -89,7 +98,10 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     storage3.get(key1).get shouldEqual val1
   }
 
-  it should "not delete a key that's was referenced in later blocks when pruning" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
+  it should "not delete a key that's was referenced in later blocks when pruning" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
 
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)

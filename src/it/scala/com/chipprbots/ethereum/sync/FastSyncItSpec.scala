@@ -26,7 +26,11 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     // No need to shutdown IORuntime.global
   }
 
-  it should "sync blockchain without state nodes" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
+  it should "sync blockchain without state nodes" taggedAs (
+    IntegrationTest,
+    SyncTest,
+    SlowTest
+  ) in customTestCaseResourceM(
     FakePeer.start3FakePeersRes()
   ) { case (peer1, peer2, peer3) =>
     for {
@@ -47,7 +51,11 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     }
   }
 
-  it should "sync blockchain with state nodes" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
+  it should "sync blockchain with state nodes" taggedAs (
+    IntegrationTest,
+    SyncTest,
+    SlowTest
+  ) in customTestCaseResourceM(
     FakePeer.start3FakePeersRes()
   ) { case (peer1, peer2, peer3) =>
     for {
@@ -74,7 +82,11 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     }
   }
 
-  it should "sync blockchain with state nodes when peer do not response with full responses" taggedAs (IntegrationTest, SyncTest, SlowTest) in
+  it should "sync blockchain with state nodes when peer do not response with full responses" taggedAs (
+    IntegrationTest,
+    SyncTest,
+    SlowTest
+  ) in
     customTestCaseResourceM(
       FakePeer.start4FakePeersRes(
         fakePeerCustomConfig2 = FakePeerCustomConfig(HostConfig()),
@@ -107,7 +119,11 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
       }
     }
 
-  it should "sync blockchain with state nodes when one of the peers send empty state responses" taggedAs (IntegrationTest, SyncTest, SlowTest) in
+  it should "sync blockchain with state nodes when one of the peers send empty state responses" taggedAs (
+    IntegrationTest,
+    SyncTest,
+    SlowTest
+  ) in
     customTestCaseResourceM(
       FakePeer.start4FakePeersRes(
         fakePeerCustomConfig2 = FakePeerCustomConfig(HostConfig()),
@@ -140,7 +156,9 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
       }
     }
 
-  it should "update pivot block" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(FakePeer.start2FakePeersRes()) { case (peer1, peer2) =>
+  it should "update pivot block" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
+    FakePeer.start2FakePeersRes()
+  ) { case (peer1, peer2) =>
     for {
       _ <- peer2.importBlocksUntil(1000)(IdentityUpdate)
       _ <- peer1.connectToPeers(Set(peer2.node))
@@ -153,7 +171,11 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     )
   }
 
-  it should "update pivot block and sync this new pivot block state" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
+  it should "update pivot block and sync this new pivot block state" taggedAs (
+    IntegrationTest,
+    SyncTest,
+    SlowTest
+  ) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     for {
@@ -168,7 +190,11 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     )
   }
 
-  it should "sync state to peer from partially synced state" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
+  it should "sync state to peer from partially synced state" taggedAs (
+    IntegrationTest,
+    SyncTest,
+    SlowTest
+  ) in customTestCaseResourceM(
     FakePeer.start2FakePeersRes()
   ) { case (peer1, peer2) =>
     for {
@@ -218,7 +244,11 @@ class FastSyncItSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll {
     }
   }
 
-  it should "switch to regular sync once `safeDownloadTarget` is reached" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
+  it should "switch to regular sync once `safeDownloadTarget` is reached" taggedAs (
+    IntegrationTest,
+    SyncTest,
+    SlowTest
+  ) in customTestCaseResourceM(
     FakePeer.start3FakePeersRes()
   ) { case (peer1, peer2, peer3) =>
     for {

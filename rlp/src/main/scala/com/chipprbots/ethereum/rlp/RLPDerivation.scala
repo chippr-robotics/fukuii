@@ -189,7 +189,7 @@ object RLPDerivation {
     * you directly call the method. For automatic implicit derivation, use RLPImplicitDerivations.
     *
     * @example
-    *   {{{ val encoder = RLPDerivation.derivedEncoder[MyCase] }}}
+    *   {{{val encoder = RLPDerivation.derivedEncoder[MyCase]}}}
     */
   transparent inline def derivedEncoder[T](using
       m: Mirror.ProductOf[T],

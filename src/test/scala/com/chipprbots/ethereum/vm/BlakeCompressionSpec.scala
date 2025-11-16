@@ -50,7 +50,7 @@ class BlakeCompressionSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
     )
   )
 
-  "Blake2b compression function" should "handle all test vectors" taggedAs(UnitTest, VMTest) in {
+  "Blake2b compression function" should "handle all test vectors" taggedAs (UnitTest, VMTest) in {
     forAll(testVectors) { (value, expectedResult) =>
       val asBytes = Hex.decode(value)
       val result = Blake2bCompression.blake2bCompress(asBytes)
@@ -59,7 +59,7 @@ class BlakeCompressionSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
     }
   }
 
-  it should "handle empty input" taggedAs(UnitTest, VMTest) in {
+  it should "handle empty input" taggedAs (UnitTest, VMTest) in {
     val result = Blake2bCompression.blake2bCompress(Array())
     assert(result.isEmpty)
   }

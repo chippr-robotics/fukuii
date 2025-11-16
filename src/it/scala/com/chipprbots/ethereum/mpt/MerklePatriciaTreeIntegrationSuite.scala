@@ -63,7 +63,12 @@ class MerklePatriciaTreeIntegrationSuite
     }
   }
 
-  test("EthereumJ compatibility - Insert of the first 20000 numbers hashed and then remove half of them", IntegrationTest, MPTTest, SlowTest) {
+  test(
+    "EthereumJ compatibility - Insert of the first 20000 numbers hashed and then remove half of them",
+    IntegrationTest,
+    MPTTest,
+    SlowTest
+  ) {
     withRocksDbNodeStorage { ns =>
       val EmptyTrie = MerklePatriciaTrie[Array[Byte], Array[Byte]](ns)
       val keys = (0 to 20000).map(intByteArraySerializable.toBytes)
@@ -84,7 +89,12 @@ class MerklePatriciaTreeIntegrationSuite
     }
   }
 
-  test("EthereumJ compatibility - Insert of the first 20000 numbers hashed (with some sliced)", IntegrationTest, MPTTest, SlowTest) {
+  test(
+    "EthereumJ compatibility - Insert of the first 20000 numbers hashed (with some sliced)",
+    IntegrationTest,
+    MPTTest,
+    SlowTest
+  ) {
     withRocksDbNodeStorage { ns =>
       val EmptyTrie = MerklePatriciaTrie[Array[Byte], Array[Byte]](ns)
       val keys = (0 to 20000).map(intByteArraySerializable.toBytes)
