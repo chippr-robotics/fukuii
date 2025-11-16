@@ -497,7 +497,10 @@ addCommandAlias(
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l org.scalatest.tags.Slow -l IntegrationTest -l BenchmarkTest -l EthereumTest
+    |; testOnly -- -l SlowTest -l IntegrationTest
+    |; rlp / test
+    |; bytes / test
+    |; crypto / test
     |""".stripMargin
 )
 
