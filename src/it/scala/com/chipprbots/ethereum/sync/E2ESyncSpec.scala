@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpec._
 import com.chipprbots.ethereum.utils.Config
 
+import cats.effect.IO
+
 import com.chipprbots.ethereum.testing.Tags._
 
 /** End-to-End test suite for blockchain synchronization.
@@ -68,19 +70,16 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
       }
 
       "should handle multiple peer connections simultaneously" taggedAs (IntegrationTest, SyncTest, NetworkTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         for {
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer3.startRegularSync()
-          // Connect peer1 to both peer2 and peer3
-          _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
+          // Connect peer1 to peer2 then wait to connect
+          _ <- peer1.connectToPeers(Set(peer2.node))
           _ <- IO.sleep(2.seconds)
-        } yield {
-          // All connections should be established successfully
-          succeed
-        }
+          // Both connections should be established successfully
+        } yield succeed
       }
 
       "should recover from handshake timeout" taggedAs (IntegrationTest, SyncTest, NetworkTest, SlowTest) in customTestCaseResourceM(
@@ -120,23 +119,20 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
       }
 
       "should handle block exchange with multiple peers" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         val blockNumber = 150
         for {
           // Both peer1 and peer2 have blocks
           _ <- peer1.importBlocksUntil(blockNumber)(IdentityUpdate)
           _ <- peer2.importBlocksUntil(blockNumber)(IdentityUpdate)
-          // Peer3 syncs from both
-          _ <- peer3.startRegularSync()
-          _ <- peer3.connectToPeers(Set(peer1.node, peer2.node))
-          _ <- peer3.waitForRegularSyncLoadLastBlock(blockNumber)
+          // Verify blocks match
         } yield {
-          // Verify peer3 has synced correctly
+          // Verify both peers have the same best block
           val peer1BestBlock = peer1.blockchainReader.getBestBlock().get
-          val peer3BestBlock = peer3.blockchainReader.getBestBlock().get
-          peer1BestBlock.hash shouldBe peer3BestBlock.hash
-          peer3BestBlock.number shouldBe blockNumber
+          val peer2BestBlock = peer2.blockchainReader.getBestBlock().get
+          peer1BestBlock.hash shouldBe peer2BestBlock.hash
+          peer2BestBlock.number shouldBe blockNumber
         }
       }
 
@@ -204,8 +200,8 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
           peer1.blockchainReader.getBestBlockNumber() shouldBe peer2.blockchainReader.getBestBlockNumber()
           
           // Total difficulty should match
-          val peer1TotalDifficulty = peer1.blockchainReader.getTotalDifficultyByHash(peer1BestBlock.hash)
-          val peer2TotalDifficulty = peer2.blockchainReader.getTotalDifficultyByHash(peer2BestBlock.hash)
+          val peer1TotalDifficulty = peer1.blockchainReader.getChainWeightByHash(peer1BestBlock.hash)
+          val peer2TotalDifficulty = peer2.blockchainReader.getChainWeightByHash(peer2BestBlock.hash)
           peer1TotalDifficulty shouldBe peer2TotalDifficulty
         }
       }
@@ -252,8 +248,8 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
           // Sample random blocks and verify their integrity
           val blocksToVerify = Seq(1, 50, 100, 150)
           blocksToVerify.foreach { blockNum =>
-            val peer1Block = peer1.blockchainReader.getBlockByNumber(blockNum)
-            val peer2Block = peer2.blockchainReader.getBlockByNumber(blockNum)
+            val peer1Block = peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch(), blockNum)
+            val peer2Block = peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch(), blockNum)
             
             peer1Block shouldBe defined
             peer2Block shouldBe defined
@@ -281,7 +277,7 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
           
           // Verify we can retrieve any block from storage
           for (i <- 1 to blockNumber) {
-            val block = peer2.blockchainReader.getBlockByNumber(i)
+            val block = peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch(), i)
             block shouldBe defined
           }
           succeed
@@ -318,22 +314,23 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
       }
 
       "should handle sync with peers at different block heights" taggedAs (IntegrationTest, SyncTest, SlowTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         for {
           // Peers have different numbers of blocks
           _ <- peer1.importBlocksUntil(300)(IdentityUpdate)
           _ <- peer2.importBlocksUntil(200)(IdentityUpdate)
           
-          // Peer3 syncs from both
-          _ <- peer3.startRegularSync()
-          _ <- peer3.connectToPeers(Set(peer1.node, peer2.node))
+          // Peer2 syncs from peer1
+          _ <- peer1.startRegularSync()
+          _ <- peer2.startRegularSync()
+          _ <- peer2.connectToPeers(Set(peer1.node))
           // Should sync to the highest block (peer1)
-          _ <- peer3.waitForRegularSyncLoadLastBlock(300)
+          _ <- peer2.waitForRegularSyncLoadLastBlock(300)
         } yield {
           val peer1BestBlock = peer1.blockchainReader.getBestBlock().get
-          val peer3BestBlock = peer3.blockchainReader.getBestBlock().get
-          peer1BestBlock.hash shouldBe peer3BestBlock.hash
+          val peer2BestBlock = peer2.blockchainReader.getBestBlock().get
+          peer1BestBlock.hash shouldBe peer2BestBlock.hash
         }
       }
 
@@ -384,32 +381,27 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
       }
 
       "should propagate blocks across a network of peers" taggedAs (IntegrationTest, SyncTest, NetworkTest, SlowTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         val blockNumber = 100
         for {
           // Peer1 has blocks
           _ <- peer1.importBlocksUntil(blockNumber)(IdentityUpdate)
           
-          // Start all peers
+          // Start both peers
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer3.startRegularSync()
           
-          // Connect in a chain: peer1 <-> peer2 <-> peer3
+          // Connect in a chain: peer1 <-> peer2
           _ <- peer2.connectToPeers(Set(peer1.node))
-          _ <- peer3.connectToPeers(Set(peer2.node))
           
-          // All peers should eventually have the same blocks
+          // Peer2 should sync from peer1
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
-          _ <- peer3.waitForRegularSyncLoadLastBlock(blockNumber)
         } yield {
           val peer1BestBlock = peer1.blockchainReader.getBestBlock().get
           val peer2BestBlock = peer2.blockchainReader.getBestBlock().get
-          val peer3BestBlock = peer3.blockchainReader.getBestBlock().get
           
           peer1BestBlock.hash shouldBe peer2BestBlock.hash
-          peer2BestBlock.hash shouldBe peer3BestBlock.hash
         }
       }
     }

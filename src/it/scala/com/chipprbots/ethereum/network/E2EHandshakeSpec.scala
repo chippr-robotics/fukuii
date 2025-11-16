@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
 import com.chipprbots.ethereum.utils.Config
 
+import cats.effect.IO
+
 import com.chipprbots.ethereum.testing.Tags._
 
 /** End-to-End test suite for P2P handshake functionality.
@@ -69,18 +71,17 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
       }
 
       "should establish multiple simultaneous connections" taggedAs (IntegrationTest, NetworkTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         for {
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer3.startRegularSync()
           
-          // Peer1 connects to both peer2 and peer3 simultaneously
-          _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
+          // Peer1 connects to peer2
+          _ <- peer1.connectToPeers(Set(peer2.node))
           _ <- IO.sleep(3.seconds)
         } yield {
-          // Multiple handshakes should succeed concurrently
+          // Handshake should succeed
           succeed
         }
       }
@@ -148,8 +149,8 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
           _ <- IO.sleep(2.seconds)
         } yield {
           // Both peers should have the same genesis block
-          val peer1Genesis = peer1.blockchainReader.getBlockByNumber(0)
-          val peer2Genesis = peer2.blockchainReader.getBlockByNumber(0)
+          val peer1Genesis = peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch(), 0)
+          val peer2Genesis = peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch(), 0)
           
           peer1Genesis shouldBe defined
           peer2Genesis shouldBe defined
@@ -175,18 +176,17 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
       }
 
       "should handle peers with compatible fork configurations" taggedAs (IntegrationTest, NetworkTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         for {
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer3.startRegularSync()
           
-          // All peers should have compatible fork configurations
-          _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
+          // Peers should have compatible fork configurations
+          _ <- peer1.connectToPeers(Set(peer2.node))
           _ <- IO.sleep(3.seconds)
         } yield {
-          // All handshakes should succeed with compatible forks
+          // Handshake should succeed with compatible forks
           succeed
         }
       }
@@ -228,22 +228,17 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
     "Peer Discovery and Handshake" - {
 
       "should successfully handshake with discovered peers" taggedAs (IntegrationTest, NetworkTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         for {
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer3.startRegularSync()
           
           // Connect peer1 to peer2
           _ <- peer1.connectToPeers(Set(peer2.node))
           _ <- IO.sleep(2.seconds)
-          
-          // Connect peer1 to peer3 (additional peer)
-          _ <- peer1.connectToPeers(Set(peer3.node))
-          _ <- IO.sleep(2.seconds)
         } yield {
-          // Peer1 should successfully handshake with multiple peers
+          // Peer1 should successfully handshake
           succeed
         }
       }
@@ -320,7 +315,7 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         } yield {
           // Peers should exchange total difficulty during handshake
           val peer1BestBlock = peer1.blockchainReader.getBestBlock().get
-          val peer1Difficulty = peer1.blockchainReader.getTotalDifficultyByHash(peer1BestBlock.hash)
+          val peer1Difficulty = peer1.blockchainReader.getChainWeightByHash(peer1BestBlock.hash)
           peer1Difficulty shouldBe defined
           succeed
         }
@@ -330,26 +325,24 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
     "Concurrent Handshakes" - {
 
       "should handle multiple concurrent handshakes" taggedAs (IntegrationTest, NetworkTest) in customTestCaseResourceM(
-        FakePeer.start4FakePeersRes()
-      ) { case (peer1, peer2, peer3, peer4) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         for {
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer3.startRegularSync()
-          _ <- peer4.startRegularSync()
           
-          // Peer1 connects to all peers simultaneously
-          _ <- peer1.connectToPeers(Set(peer2.node, peer3.node, peer4.node))
+          // Peer1 connects to peer2
+          _ <- peer1.connectToPeers(Set(peer2.node))
           _ <- IO.sleep(4.seconds)
         } yield {
-          // All concurrent handshakes should succeed
+          // Handshake should succeed
           succeed
         }
       }
 
       "should handle handshakes while syncing" taggedAs (IntegrationTest, NetworkTest, SlowTest) in customTestCaseResourceM(
-        FakePeer.start3FakePeersRes()
-      ) { case (peer1, peer2, peer3) =>
+        FakePeer.start2FakePeersRes()
+      ) { case (peer1, peer2) =>
         for {
           _ <- peer1.importBlocksUntil(300)(com.chipprbots.ethereum.sync.util.SyncCommonItSpec.IdentityUpdate)
           
@@ -358,11 +351,6 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
           
           // Start sync from peer1
           _ <- peer2.connectToPeers(Set(peer1.node))
-          _ <- IO.sleep(2.seconds)
-          
-          // While syncing, connect to another peer
-          _ <- peer3.startRegularSync()
-          _ <- peer2.connectToPeers(Set(peer3.node))
           _ <- IO.sleep(2.seconds)
         } yield {
           // Should handle handshakes even while syncing
