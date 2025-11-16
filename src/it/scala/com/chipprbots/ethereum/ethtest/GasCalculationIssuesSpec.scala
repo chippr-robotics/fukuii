@@ -44,7 +44,11 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
       case result => result
     }
 
-  "GasCalculationIssues" should "flag add11 test gas calculation discrepancy" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
+  "GasCalculationIssues" should "flag add11 test gas calculation discrepancy" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
     info("Testing add11 (basic ADD opcode) - should use identical gas")
     val suite = loadTestSuite("/ethereum-tests/add11.json")
 
@@ -85,7 +89,11 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "provide detailed analysis of gas calculation patterns" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
+  it should "provide detailed analysis of gas calculation patterns" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
     info("Analyzing gas calculation patterns across multiple tests...")
 
     val testFiles = Seq(
@@ -129,7 +137,11 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "document known gas calculation issues for follow-up" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
+  it should "document known gas calculation issues for follow-up" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
     info("Documenting known gas calculation issues...")
     info("")
     info("KNOWN ISSUES:")

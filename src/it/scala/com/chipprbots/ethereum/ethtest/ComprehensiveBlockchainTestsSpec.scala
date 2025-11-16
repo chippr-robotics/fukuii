@@ -116,7 +116,11 @@ class ComprehensiveBlockchainTestsSpec extends EthereumTestsSpec {
     (passed, failed, skipped)
   }
 
-  "ComprehensiveBlockchainTests" should "run multiple tests from ValidBlocks/bcValidBlockTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
+  "ComprehensiveBlockchainTests" should "run multiple tests from ValidBlocks/bcValidBlockTest" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
     val testDir = "/home/runner/work/fukuii/fukuii/ets/tests/BlockchainTests/ValidBlocks/bcValidBlockTest"
 
     info(s"Running tests from ValidBlocks/bcValidBlockTest (max 10)...")
@@ -154,7 +158,11 @@ class ComprehensiveBlockchainTestsSpec extends EthereumTestsSpec {
     passed should be >= 0
   }
 
-  it should "achieve at least 50 passing tests across all categories" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
+  it should "achieve at least 50 passing tests across all categories" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
     var totalPassed = 0
     var totalFailed = 0
     var totalSkipped = 0

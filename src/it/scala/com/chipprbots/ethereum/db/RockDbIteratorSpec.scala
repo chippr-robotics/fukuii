@@ -94,7 +94,11 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
     } yield assert(finalCounter == largeNum)
   }
 
-  it should "iterate over keys and values from different namespaces" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in testCaseT { db =>
+  it should "iterate over keys and values from different namespaces" taggedAs (
+    IntegrationTest,
+    DatabaseTest,
+    SlowTest
+  ) in testCaseT { db =>
     val codeStorage = new EvmCodeStorage(db)
     val codeKeyValues = (1 to 10).map(i => (ByteString(i.toByte), ByteString(i.toByte))).toList
 
@@ -133,7 +137,11 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
     }
   }
 
-  it should "return empty list when iterating empty db" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in testCaseT { db =>
+  it should "return empty list when iterating empty db" taggedAs (
+    IntegrationTest,
+    DatabaseTest,
+    SlowTest
+  ) in testCaseT { db =>
     for {
       elems <- db.iterate().compile.toList
     } yield assert(elems.isEmpty)

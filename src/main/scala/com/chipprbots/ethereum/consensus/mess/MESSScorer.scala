@@ -9,9 +9,8 @@ import com.chipprbots.ethereum.domain.BlockHeader
 
 /** Calculator for MESS (Modified Exponential Subjective Scoring).
   *
-  * Applies time-based penalties to block difficulties based on when blocks
-  * were first seen by this node. This helps protect against long-range
-  * reorganization attacks.
+  * Applies time-based penalties to block difficulties based on when blocks were first seen by this node. This helps
+  * protect against long-range reorganization attacks.
   *
   * The scoring formula is:
   * {{{
@@ -57,25 +56,25 @@ class MESSScorer(
 
     val firstSeenTime = firstSeenStorage.get(blockHash).getOrElse(blockTimestamp)
     val currentTime = currentTimeMillis()
-    
+
     val timeDeltaMillis = max(0L, currentTime - firstSeenTime)
     // Convert to Double for exponential calculation
     // Note: This introduces minor floating-point precision loss for very large
     // time deltas, but the impact is negligible for the exponential decay calculation
     val timeDeltaSeconds = timeDeltaMillis / 1000.0
-    
+
     // Cap time delta to avoid numerical issues
     val cappedTimeDelta = min(timeDeltaSeconds, config.maxTimeDelta.toDouble)
-    
+
     // Calculate exponential decay: exp(-lambda * timeDelta)
     val decayFactor = exp(-config.decayConstant * cappedTimeDelta)
-    
+
     // Apply minimum multiplier to prevent weights from going to zero
     val multiplier = max(decayFactor, config.minWeightMultiplier)
-    
+
     // Apply multiplier to difficulty
     val adjustedDifficulty = (BigDecimal(difficulty) * multiplier).toBigInt
-    
+
     adjustedDifficulty
   }
 
@@ -109,13 +108,13 @@ class MESSScorer(
 
     val firstSeenTime = firstSeenStorage.get(blockHash).getOrElse(blockTimestamp)
     val currentTime = currentTimeMillis()
-    
+
     val timeDeltaMillis = max(0L, currentTime - firstSeenTime)
     val timeDeltaSeconds = timeDeltaMillis / 1000.0
-    
+
     val cappedTimeDelta = min(timeDeltaSeconds, config.maxTimeDelta.toDouble)
     val decayFactor = exp(-config.decayConstant * cappedTimeDelta)
-    
+
     max(decayFactor, config.minWeightMultiplier)
   }
 
@@ -126,12 +125,11 @@ class MESSScorer(
     * @return
     *   true if this is the first time seeing the block, false if already seen
     */
-  def recordFirstSeen(blockHash: ByteString): Boolean = {
+  def recordFirstSeen(blockHash: ByteString): Boolean =
     if (firstSeenStorage.contains(blockHash)) {
       false
     } else {
       firstSeenStorage.put(blockHash, currentTimeMillis())
       true
     }
-  }
 }
