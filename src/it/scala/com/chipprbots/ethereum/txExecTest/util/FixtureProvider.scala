@@ -69,6 +69,13 @@ object FixtureProvider {
         )
     }
 
+    // Pre-load ALL EVM code from fixtures into storage
+    // This is necessary because some fixtures have account codeHash values that don't match
+    // the actual code hash (they may have empty codeHash when they should have the real hash)
+    fixtures.evmCode.foreach { case (codeHash, code) =>
+      storages.evmCodeStorage.put(codeHash, code).commit()
+    }
+
     // Iterate through headers in block number order using original hash keys
     fixtures.blockHeaders.toSeq
       .sortBy { case (_, header) => header.number }
@@ -103,8 +110,12 @@ object FixtureProvider {
                 import AccountImplicits._
                 storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
                 Try(m.value.toArray[Byte].toAccount).toOption.foreach { account =>
+                  // Note: We've already saved all EVM code above, so this check is now redundant
+                  // but kept for backwards compatibility with fixtures that have correct codeHash
                   if (account.codeHash != DumpChainActor.emptyEvm) {
-                    storages.evmCodeStorage.put(account.codeHash, fixtures.evmCode(account.codeHash)).commit()
+                    fixtures.evmCode.get(account.codeHash).foreach { code =>
+                      storages.evmCodeStorage.put(account.codeHash, code).commit()
+                    }
                   }
                   if (account.storageRoot != DumpChainActor.emptyStorage) {
                     traverse(account.storageRoot)
