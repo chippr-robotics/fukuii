@@ -107,7 +107,7 @@ class EtcPeerManagerActor(
 
       // Ask for the highest block from the peer
       // Send GetBlockHeaders in format based on negotiated capability
-      val getBlockHeadersMsg =
+      val getBlockHeadersMsg: MessageSerializable =
         if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
           ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
         else

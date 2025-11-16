@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
+import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -83,8 +84,14 @@ class PeersClient(
             log.debug("Selected peer {} with address {} for request", peer.id, peer.remoteAddress.getHostString)
             // Adapt message format based on peer's negotiated capability
             val adaptedMessage = adaptMessageForPeer(peer, message)
+            // Create a type-safe conversion function for the adapted message
+            val adaptedToSerializable: Message => MessageSerializable = (msg: Message) =>
+              msg match {
+                case s: MessageSerializable => s
+                case _                      => toSerializable(message) // fallback to original
+              }
             val handler =
-              makeRequest(peer, adaptedMessage, responseMsgCode(adaptedMessage), toSerializable)(
+              makeRequest(peer, adaptedMessage, responseMsgCode(adaptedMessage), adaptedToSerializable)(
                 scheduler,
                 responseClassTag(adaptedMessage)
               )

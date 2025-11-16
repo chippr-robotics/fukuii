@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.network.handshaker
 
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.ForkResolver
@@ -24,7 +25,7 @@ case class EtcForkBlockExchangeState(
   import handshakerConfiguration._
 
   def nextMessage: NextMessage = {
-    val getBlockHeadersMsg =
+    val getBlockHeadersMsg: MessageSerializable =
       if (Capability.usesRequestId(remoteStatus.capability))
         ETH66GetBlockHeaders(0, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
       else

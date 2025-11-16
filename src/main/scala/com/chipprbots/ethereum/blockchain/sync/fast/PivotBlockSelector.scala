@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.PeerEventBusActor.Unsubscribe
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
@@ -245,7 +246,7 @@ class PivotBlockSelector(
     peerEventBus ! Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer)))
 
     // Get peer info to determine message format based on negotiated capability
-    val getBlockHeadersMsg = handshakedPeers.get(peer) match {
+    val getBlockHeadersMsg: MessageSerializable = handshakedPeers.get(peer) match {
       case Some(peerWithInfo) if Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability) =>
         ETH66GetBlockHeaders(0, Left(blockNumber), 1, 0, reverse = false)
       case _ =>
