@@ -228,7 +228,7 @@ C4Component
 
 - [Vendored Modules Integration Plan](VENDORED_MODULES_INTEGRATION_PLAN.md) - Detailed implementation plan
 - [Repository Structure](../REPOSITORY_STRUCTURE.md) - Current repository organization
-- [ADR-001: Scala 3 Migration](adr/001-scala-3-migration.md) - Context on why modules were vendored
+- [INF-001: Scala 3 Migration](adr/infrastructure/INF-001-scala-3-migration.md) - Context on why modules were vendored
 
 ## References
 

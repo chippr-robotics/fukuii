@@ -21,37 +21,74 @@ Each ADR follows this structure:
 - **Decision**: The choice that was made
 - **Consequences**: The results of the decision (positive and negative)
 
-## Index of ADRs
+## ADR Organization by Category
 
-- [ADR-001: Migration to Scala 3 and JDK 21](001-scala-3-migration.md) - Accepted
-  - [ADR-001a: Netty Channel Lifecycle with Cats Effect IO](001a-netty-cats-effect-integration.md) - Accepted (Addendum)
-- [ADR-002: EIP-3541 Implementation](002-eip-3541-implementation.md) - Accepted
-- [ADR-003: EIP-3529 Implementation](003-eip-3529-implementation.md) - Accepted
-- [ADR-004: EIP-3651 Implementation](004-eip-3651-implementation.md) - Accepted
-- [ADR-005: EIP-3855 Implementation](005-eip-3855-implementation.md) - Accepted
-- [ADR-006: EIP-3860 Implementation](006-eip-3860-implementation.md) - Accepted
-- [ADR-007: EIP-6049 Implementation](007-eip-6049-implementation.md) - Accepted
-- [ADR-008: Enhanced Console User Interface](008-console-ui.md) - Accepted
-- [ADR-009: Actor System Architecture - Untyped vs Typed Actors](009-actor-system-architecture.md) - Accepted
-- [ADR-010: Apache HttpClient Transport for JupnP UPnP Port Forwarding](010-jupnp-apache-httpclient-transport.md) - Accepted
-- [ADR-011: RLPx Protocol Deviations and Peer Bootstrap Challenge](011-rlpx-protocol-deviations-and-peer-bootstrap.md) - Accepted
-- [ADR-012: Bootstrap Checkpoints for Improved Initial Sync](012-bootstrap-checkpoints.md) - Accepted
-- [ADR-013: Block Sync Improvements - Enhanced Reliability and Performance](013-block-sync-improvements.md) - Accepted
-- [ADR-014: EIP-161 noEmptyAccounts Configuration Fix](014-eip-161-noemptyaccounts-fix.md) - Accepted
-- [ADR-015: Ethereum Tests Adapter](015-ethereum-tests-adapter.md) - Accepted
-- [ADR-016: MESS (Modified Exponential Subjective Scoring) Implementation](016-mess-implementation.md) - Accepted
-- [ADR-017: ETH66 Protocol Aware Message Formatting](017-eth66-protocol-aware-message-formatting.md) - Accepted
-- [ADR-018: Test Suite Strategy, KPIs, and Execution Benchmarks](018-test-suite-strategy-and-kpis.md) - Accepted
+To support parallel development and prevent naming collisions, ADRs are organized into categories:
+
+### Infrastructure (`infrastructure/`)
+Platform, language, runtime, and build system decisions.
+- [INF-001: Migration to Scala 3 and JDK 21](infrastructure/INF-001-scala-3-migration.md) - Accepted
+  - [INF-001a: Netty Channel Lifecycle with Cats Effect IO](infrastructure/INF-001a-netty-cats-effect-integration.md) - Accepted (Addendum)
+- [INF-002: Actor System Architecture - Untyped vs Typed Actors](infrastructure/INF-002-actor-system-architecture.md) - Accepted
+- [INF-003: Apache HttpClient Transport for JupnP UPnP Port Forwarding](infrastructure/INF-003-jupnp-apache-httpclient-transport.md) - Accepted
+
+[View all Infrastructure ADRs →](infrastructure/README.md)
+
+### VM (EVM) (`vm/`)
+EVM implementations, EIPs, and VM-specific features.
+- [VM-001: EIP-3541 Implementation](vm/VM-001-eip-3541-implementation.md) - Accepted
+- [VM-002: EIP-3529 Implementation](vm/VM-002-eip-3529-implementation.md) - Accepted
+- [VM-003: EIP-3651 Implementation](vm/VM-003-eip-3651-implementation.md) - Accepted
+- [VM-004: EIP-3855 Implementation](vm/VM-004-eip-3855-implementation.md) - Accepted
+- [VM-005: EIP-3860 Implementation](vm/VM-005-eip-3860-implementation.md) - Accepted
+- [VM-006: EIP-6049 Implementation](vm/VM-006-eip-6049-implementation.md) - Accepted
+- [VM-007: EIP-161 noEmptyAccounts Configuration Fix](vm/VM-007-eip-161-noemptyaccounts-fix.md) - Accepted
+
+[View all VM ADRs →](vm/README.md)
+
+### Consensus (`consensus/`)
+Consensus mechanisms, networking protocols, P2P communication, and blockchain synchronization.
+- [CON-001: RLPx Protocol Deviations and Peer Bootstrap Challenge](consensus/CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md) - Accepted
+- [CON-002: Bootstrap Checkpoints for Improved Initial Sync](consensus/CON-002-bootstrap-checkpoints.md) - Accepted
+- [CON-003: Block Sync Improvements - Enhanced Reliability and Performance](consensus/CON-003-block-sync-improvements.md) - Accepted
+- [CON-004: MESS (Modified Exponential Subjective Scoring) Implementation](consensus/CON-004-mess-implementation.md) - Accepted
+- [CON-005: ETH66 Protocol Aware Message Formatting](consensus/CON-005-eth66-protocol-aware-message-formatting.md) - Accepted
+
+[View all Consensus ADRs →](consensus/README.md)
+
+### Testing (`testing/`)
+Testing infrastructure, strategies, test suites, and quality assurance.
+- [TEST-001: Ethereum Tests Adapter](testing/TEST-001-ethereum-tests-adapter.md) - Accepted
+- [TEST-002: Test Suite Strategy, KPIs, and Execution Benchmarks](testing/TEST-002-test-suite-strategy-and-kpis.md) - Accepted
+
+[View all Testing ADRs →](testing/README.md)
+
+### Operations (`operations/`)
+Operational features, administration, monitoring, user interfaces, and deployment.
+- [OPS-001: Enhanced Console User Interface](operations/OPS-001-console-ui.md) - Accepted
+
+[View all Operations ADRs →](operations/README.md)
 
 ## Creating a New ADR
 
 When creating a new ADR:
 
-1. Use the next sequential number (e.g., `003-title.md`)
-2. Follow the template structure
-3. Link it in the index above
-4. Keep it concise but comprehensive
-5. Focus on the "why" not just the "what"
+1. Choose the appropriate category (infrastructure, vm, consensus, testing, operations)
+2. Use the next sequential number for that category (e.g., `VM-008-title.md`, `CON-006-title.md`)
+3. Follow the template structure
+4. Link it in both the category README and this main index
+5. Keep it concise but comprehensive
+6. Focus on the "why" not just the "what"
+
+### Category Naming Conventions
+
+- **Infrastructure**: `INF-NNN-title.md`
+- **VM**: `VM-NNN-title.md`
+- **Consensus**: `CON-NNN-title.md`
+- **Testing**: `TEST-NNN-title.md`
+- **Operations**: `OPS-NNN-title.md`
+
+This categorization allows different teams to work on ADRs in parallel without naming conflicts.
 
 ## References
 

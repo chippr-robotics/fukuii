@@ -2,17 +2,17 @@
 
 ## Executive Summary
 
-Successfully completed Phase 1 (JSON Parsing) and Phase 2 (Execution Infrastructure) of ADR-015, implementing a fully functional ethereum/tests adapter for the Fukuii Ethereum Classic client. All 4 validation tests passing with successful end-to-end block execution.
+Successfully completed Phase 1 (JSON Parsing) and Phase 2 (Execution Infrastructure) of TEST-001, implementing a fully functional ethereum/tests adapter for the Fukuii Ethereum Classic client. All 4 validation tests passing with successful end-to-end block execution.
 
 ## 1. Work Completed vs Initial Plan
 
-### Initial Plan (from ADR-015)
+### Initial Plan (from TEST-001)
 
 **Phase 1: Infrastructure** ✅ COMPLETE
 - [x] EthereumTestsAdapter.scala - JSON parsing
 - [x] TestConverter.scala - Domain conversion
 - [x] EthereumTestsSpec.scala - Test runner
-- [x] ADR-015 documentation
+- [x] TEST-001 documentation
 
 **Phase 2: Execution** ✅ COMPLETE
 - [x] Implement EthereumTestExecutor
@@ -46,7 +46,7 @@ Successfully completed Phase 1 (JSON Parsing) and Phase 2 (Execution Infrastruct
 5. Fixed MPT storage persistence issue (critical fix)
 
 **Documentation:**
-1. Updated ADR-015 with implementation status
+1. Updated TEST-001 with implementation status
 2. Removed empty `src/ets/` directory (consolidation)
 3. This implementation review document
 

@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Successfully implemented Phase 3 of the ethereum/tests integration per ADR-015, achieving **98+ passing tests** from the official ethereum/tests repository. This exceeds the minimum goal of 50 tests.
+Successfully implemented Phase 3 of the ethereum/tests integration per TEST-001, achieving **98+ passing tests** from the official ethereum/tests repository. This exceeds the minimum goal of 50 tests.
 
 **Update (2025-11-15):** Gas calculation issues have been resolved. CI integration is now complete with automated testing in place.
 

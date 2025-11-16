@@ -2,7 +2,7 @@
 
 **Status**: ✅ Active  
 **Date**: November 16, 2025  
-**Related Documents**: [KPI_BASELINES.md](KPI_BASELINES.md), [PERFORMANCE_BASELINES.md](PERFORMANCE_BASELINES.md), [ADR-017](../adr/017-test-suite-strategy-and-kpis.md)
+**Related Documents**: [KPI_BASELINES.md](KPI_BASELINES.md), [PERFORMANCE_BASELINES.md](PERFORMANCE_BASELINES.md), [TEST-002](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 
 ## Overview
 
@@ -179,7 +179,7 @@ Comprehensive:  90 minutes (target: < 3 hours)
   - Infinite loops
 
 **Common Causes of Degradation**:
-1. Actor systems not being cleaned up (see ADR-017 Phase 1 fix)
+1. Actor systems not being cleaned up (see TEST-002 Phase 1 fix)
 2. Database connections leaking
 3. Network tests with long timeouts
 4. Excessive compilation time
@@ -517,7 +517,7 @@ Recommendations:
 
 - [KPI Baselines](KPI_BASELINES.md)
 - [Performance Baselines](PERFORMANCE_BASELINES.md)
-- [ADR-017: Test Suite Strategy and KPIs](../adr/017-test-suite-strategy-and-kpis.md)
+- [TEST-002: Test Suite Strategy and KPIs](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Metrics and Monitoring](../operations/metrics-and-monitoring.md)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 

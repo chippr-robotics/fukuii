@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide documents the migration from custom test fixtures to the official ethereum/tests repository. This aligns with ADR-015 and provides better EVM validation coverage.
+This guide documents the migration from custom test fixtures to the official ethereum/tests repository. This aligns with TEST-001 and provides better EVM validation coverage.
 
 ## Current Status
 
@@ -247,7 +247,7 @@ jobs:
 ## References
 
 - [ethereum/tests Repository](https://github.com/ethereum/tests)
-- [ADR-015: Ethereum/Tests Adapter](../docs/adr/015-ethereum-tests-adapter.md)
+- [TEST-001: Ethereum/Tests Adapter](../docs/adr/testing/TEST-001-ethereum-tests-adapter.md)
 - [Gas Calculation Issues](./GAS_CALCULATION_ISSUES.md)
 - [EIP-2929 Specification](https://eips.ethereum.org/EIPS/eip-2929)
 

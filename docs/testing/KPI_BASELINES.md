@@ -2,7 +2,7 @@
 
 **Status**: ✅ Established  
 **Date**: November 16, 2025  
-**Related ADRs**: [ADR-015](../adr/015-ethereum-tests-adapter.md), [ADR-017](../adr/017-test-suite-strategy-and-kpis.md)
+**Related ADRs**: [TEST-001](../adr/testing/TEST-001-ethereum-tests-adapter.md), [TEST-002](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 
 ## Overview
 
@@ -125,7 +125,7 @@ Branch Coverage: 60-70% (target: > 70%)
 **Measurement**: (Actor systems shut down / Actor systems created) × 100
 
 **Current Baseline**:
-- Post-ADR-017 Phase 1: 100% (cleanup fixes implemented)
+- Post-TEST-002 Phase 1: 100% (cleanup fixes implemented)
 - Pre-Phase 1: ~80-90% (hanging tests issue)
 
 ## Ethereum/Tests Compliance KPI Baselines
@@ -370,8 +370,8 @@ Timeout:          5000ms
 
 ## References
 
-- [ADR-015: Ethereum/Tests Adapter Implementation](../adr/015-ethereum-tests-adapter.md)
-- [ADR-017: Test Suite Strategy, KPIs, and Execution Benchmarks](../adr/017-test-suite-strategy-and-kpis.md)
+- [TEST-001: Ethereum/Tests Adapter Implementation](../adr/testing/TEST-001-ethereum-tests-adapter.md)
+- [TEST-002: Test Suite Strategy, KPIs, and Execution Benchmarks](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Ethereum/Tests Repository](https://github.com/ethereum/tests)
 - [Ethereum Execution Specs](https://github.com/ethereum/execution-specs)
 - [ScalaTest Documentation](https://www.scalatest.org/)
@@ -381,7 +381,7 @@ Timeout:          5000ms
 
 | Date | Version | Changes | Author |
 |------|---------|---------|--------|
-| 2025-11-16 | 1.0 | Initial baseline establishment per ADR-015 and ADR-017 | GitHub Copilot |
+| 2025-11-16 | 1.0 | Initial baseline establishment per TEST-001 and TEST-002 | GitHub Copilot |
 
 ---
 

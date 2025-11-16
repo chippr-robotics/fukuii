@@ -157,7 +157,7 @@
    - Regenerate fixtures for ForksTest (blocks 1-11)
    - Regenerate fixtures for ContractTest (blocks 1-3)
    - Regenerate fixtures for ECIP1017Test (blocks 1-602)
-   - Use correct `noEmptyAccounts` EVM config per ADR-014
+   - Use correct `noEmptyAccounts` EVM config per VM-007
 
 2. **Run ECIP1017Test** (Priority: HIGH)
    - Currently not executing due to earlier failures
@@ -178,7 +178,7 @@
 2. **Adopt ethereum/tests**
    - Use official Ethereum test suite for blocks < 19.25M (pre-Spiral)
    - Reduces maintenance burden
-   - See ADR-014 Alternative Approach #2
+   - See VM-007 Alternative Approach #2
 
 3. **Improve Test Isolation**
    - Separate fixture-dependent tests from logic tests

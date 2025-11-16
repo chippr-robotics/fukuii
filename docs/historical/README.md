@@ -19,7 +19,7 @@ One-time rebranding script used to migrate the codebase from "Mantis" (IOHK) to 
 **Note**: If you need to understand what changed during the rebrand, refer to:
 1. This script
 2. Git history around the rebrand date
-3. [docs/adr/001-scala-3-migration.md](../adr/001-scala-3-migration.md) - Contains context about the overall migration
+3. [docs/adr/infrastructure/INF-001-scala-3-migration.md](../adr/infrastructure/INF-001-scala-3-migration.md) - Contains context about the overall migration
 
 ## Should I run these scripts?
 
@@ -28,5 +28,5 @@ One-time rebranding script used to migrate the codebase from "Mantis" (IOHK) to 
 ## Related Documentation
 
 - [docs/MIGRATION_HISTORY.md](../MIGRATION_HISTORY.md) - Detailed history of the Scala 3 migration
-- [docs/adr/001-scala-3-migration.md](../adr/001-scala-3-migration.md) - Architecture decision record
+- [docs/adr/infrastructure/INF-001-scala-3-migration.md](../adr/infrastructure/INF-001-scala-3-migration.md) - Architecture decision record
 - [CHANGELOG.md](../../CHANGELOG.md) - Version history and changes

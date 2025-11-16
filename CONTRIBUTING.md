@@ -182,7 +182,7 @@ sbt testAll      # Run all tests
 - The project is Scala 3 only (no cross-compilation)
 - All dependencies are Scala 3 compatible
 - CI pipeline tests on Scala 3.3.4 with JDK 21
-- See [ADR-001: Scala 3 Migration](docs/adr/001-scala-3-migration.md) for the architectural decision
+- See [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md) for the architectural decision
 - See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed migration
 
 ## Pre-commit Hooks
@@ -325,7 +325,7 @@ Always run tests before submitting your changes:
 sbt testAll
 ```
 
-**Run tests by tier (ADR-017):**
+**Run tests by tier (TEST-002):**
 ```bash
 # Tier 1: Essential tests (< 5 min)
 sbt testEssential
@@ -351,7 +351,7 @@ sbt "IntegrationTest / test"
 ```
 
 **For more information on test strategy and KPI baselines:**
-- [Test Suite Strategy and KPIs (ADR-017)](docs/adr/017-test-suite-strategy-and-kpis.md)
+- [Test Suite Strategy and KPIs (TEST-002)](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Testing Documentation](docs/testing/README.md)
 - [KPI Baselines](docs/testing/KPI_BASELINES.md)
 - [KPI Monitoring Guide](docs/testing/KPI_MONITORING_GUIDE.md)

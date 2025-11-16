@@ -1,6 +1,6 @@
 # Test Tagging Guide for Fukuii
 
-This document provides guidance on applying ScalaTest tags to test files in the Fukuii project, implementing the test categorization strategy defined in ADR-017.
+This document provides guidance on applying ScalaTest tags to test files in the Fukuii project, implementing the test categorization strategy defined in TEST-002.
 
 ## Overview
 
@@ -44,6 +44,6 @@ See the Tags.scala file for complete documentation of all available tags.
 
 ## References
 
-- [ADR-015](../adr/015-ethereum-tests-adapter.md)
-- [ADR-017](../adr/017-test-suite-strategy-and-kpis.md)
+- [TEST-001](../adr/testing/TEST-001-ethereum-tests-adapter.md)
+- [TEST-002](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Tags Source](../../src/test/scala/com/chipprbots/ethereum/testing/Tags.scala)

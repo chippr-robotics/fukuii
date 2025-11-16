@@ -865,7 +865,7 @@ This section documents significant architectural decisions made during the devel
 - Reduces coupling between modules
 - Requires discipline to maintain boundaries
 
-### ADR-003: Implementation of EIP-3529 (Reduction in Refunds)
+### VM-002: Implementation of EIP-3529 (Reduction in Refunds)
 
 **Date:** 2024-10-25  
 **Status:** Accepted  
@@ -877,7 +877,7 @@ This section documents significant architectural decisions made during the devel
 - Breaking change for contracts relying on refunds
 - Improved network security
 
-**See:** [Full ADR-003 documentation](adr/003-eip-3529-implementation.md)
+**See:** [Full VM-002 documentation](adr/vm/VM-002-eip-3529-implementation.md)
 
 ---
 

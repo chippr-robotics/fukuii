@@ -4,7 +4,7 @@
 
 MESS (Modified Exponential Subjective Scoring) is a consensus enhancement for Ethereum Classic that provides protection against long-range reorganization attacks by applying time-based penalties to blocks that are received late by the node.
 
-For detailed technical information, see [ADR-016: MESS Implementation](adr/016-mess-implementation.md).
+For detailed technical information, see [CON-004: MESS Implementation](adr/consensus/CON-004-mess-implementation.md).
 
 ## Quick Start
 
@@ -224,7 +224,7 @@ Planned improvements to MESS:
 
 ## References
 
-- [ADR-016: MESS Implementation](adr/016-mess-implementation.md)
+- [CON-004: MESS Implementation](adr/consensus/CON-004-mess-implementation.md)
 - [ECIP-1097/ECBP-1100](https://github.com/ethereumclassic/ECIPs/pull/373)
 - [core-geth MESS Implementation](https://github.com/etclabscore/core-geth)
 
@@ -232,5 +232,5 @@ Planned improvements to MESS:
 
 For issues or questions about MESS:
 - Create an issue on GitHub
-- Check ADR-016 for detailed technical information
+- Check CON-004 for detailed technical information
 - Review integration test examples in `src/it/scala/com/chipprbots/ethereum/consensus/mess/`

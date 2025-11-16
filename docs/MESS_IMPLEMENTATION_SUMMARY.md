@@ -6,7 +6,7 @@ This document summarizes the implementation of MESS (Modified Exponential Subjec
 
 ## What Was Implemented
 
-### 1. Architecture Documentation (ADR-016)
+### 1. Architecture Documentation (CON-004)
 
 Created comprehensive Architecture Decision Record documenting:
 - Context and problem statement
@@ -16,7 +16,7 @@ Created comprehensive Architecture Decision Record documenting:
 - Rollout strategy
 - Best practices from core-geth
 
-**File**: `docs/adr/016-mess-implementation.md`
+**File**: `docs/adr/consensus/CON-004-mess-implementation.md`
 
 ### 2. Core Infrastructure
 
@@ -88,7 +88,7 @@ Both default to `enabled = false` for backward compatibility.
 
 ### 6. Documentation
 
-- **ADR-016**: Comprehensive architectural decision record
+- **CON-004**: Comprehensive architectural decision record
 - **Configuration Guide**: User-facing documentation with:
   - Quick start guide
   - Configuration parameter reference
@@ -99,9 +99,9 @@ Both default to `enabled = false` for backward compatibility.
   - Security considerations
 
 **Files**:
-- `docs/adr/016-mess-implementation.md`
+- `docs/adr/consensus/CON-004-mess-implementation.md`
 - `docs/mess-configuration.md`
-- `docs/adr/README.md` (updated with ADR-016 reference)
+- `docs/adr/README.md` (updated with CON-004 reference)
 
 ## Design Highlights
 
@@ -129,7 +129,7 @@ Both default to `enabled = false` for backward compatibility.
 ### ✅ Completed
 
 1. **Research**: MESS best practices from core-geth and ECIP-373
-2. **Architecture**: ADR-016 documenting implementation plan
+2. **Architecture**: CON-004 documenting implementation plan
 3. **Core Infrastructure**: Storage, config, scorer implementation
 4. **Consensus Integration**: ChainWeight enhancement with MESS support
 5. **Configuration**: Added to BlockchainConfig and chain files
@@ -138,7 +138,7 @@ Both default to `enabled = false` for backward compatibility.
 
 ### ❌ Not Implemented (Future Work)
 
-These items are documented in ADR-016 but not yet implemented:
+These items are documented in CON-004 but not yet implemented:
 
 1. **CLI Flags**: `--enable-mess`, `--disable-mess`, `--mess-decay-constant`
    - **Status**: Not yet available in this release
@@ -286,7 +286,7 @@ To complete the MESS implementation:
 
 - **ECIP-1097/ECBP-1100**: https://github.com/ethereumclassic/ECIPs/pull/373
 - **core-geth**: https://github.com/etclabscore/core-geth
-- **ADR-016**: docs/adr/016-mess-implementation.md
+- **CON-004**: docs/adr/consensus/CON-004-mess-implementation.md
 - **Configuration Guide**: docs/mess-configuration.md
 
 ## Conclusion

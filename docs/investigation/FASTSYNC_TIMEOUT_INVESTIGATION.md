@@ -6,11 +6,11 @@
 
 ## Executive Summary
 
-Investigated the FastSyncSpec test timeout issue mentioned in ADR-014 and issue #422. The test is **currently passing consistently** in both local testing and CI runs. The failure cannot be reproduced despite multiple attempts.
+Investigated the FastSyncSpec test timeout issue mentioned in VM-007 and issue #422. The test is **currently passing consistently** in both local testing and CI runs. The failure cannot be reproduced despite multiple attempts.
 
 ## Background
 
-According to ADR-014, after fixing the noEmptyAccounts configuration bug (PR #421), one test remained failing:
+According to VM-007, after fixing the noEmptyAccounts configuration bug (PR #421), one test remained failing:
 
 - **Test:** FastSyncSpec - "returns Syncing with block progress once both header and body is fetched"
 - **Error:** TimeoutException after 30 seconds
@@ -109,7 +109,7 @@ Local Test Run #3:
 
 ## Related Documentation
 
-- **ADR-014:** `docs/adr/014-eip-161-noemptyaccounts-fix.md`
+- **VM-007:** `docs/adr/vm/VM-007-eip-161-noemptyaccounts-fix.md`
 - **PR #421:** Fix noEmptyAccounts EVM config and update test fixtures
 - **FastSync Test:** `src/test/scala/com/chipprbots/ethereum/blockchain/sync/FastSyncSpec.scala`
 - **FastSync Implementation:** `src/main/scala/com/chipprbots/ethereum/blockchain/sync/fast/FastSync.scala`

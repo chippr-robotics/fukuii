@@ -362,7 +362,7 @@ For every piece forged:
 - Never mix formats on same connection
 - Pattern match both formats defensively (different peers = different protocols)
 - Reference core-geth for protocol behavior alignment
-- See ADR-016 for detailed guidance
+- See CON-005 for detailed guidance
 
 ## Your Forge Report
 
@@ -488,7 +488,7 @@ Analyzed core-geth (https://github.com/etclabscore/core-geth) and found:
 1. **Reference implementations are critical** - Core-geth analysis revealed the correct approach
 2. **Type hierarchies matter** - Separate ETH62/ETH66 classes required careful import management
 3. **Runtime checks necessary** - Can't determine message format at compile time in distributed systems
-4. **Defensive layers stack** - Backward-compatible decoders (ADR-011 pattern) + dual pattern matching = robust
+4. **Defensive layers stack** - Backward-compatible decoders (CON-001 pattern) + dual pattern matching = robust
 5. **Integration tests reveal protocol issues** - Unit tests couldn't catch peer communication mismatches
 6. **Protocol consistency is consensus-critical** - Mixed formats break peer recognition and sync
 
@@ -502,9 +502,9 @@ Analyzed core-geth (https://github.com/etclabscore/core-geth) and found:
 - [x] Compiles successfully (forge agent)
 - [ ] Integration tests pass (pending)
 - [x] Protocol compliance verified vs core-geth
-- [x] ADR-016 documented
+- [x] CON-005 documented
 
-**Documented:** [ADR-016: ETH66+ Protocol-Aware Message Formatting](../../docs/adr/016-eth66-protocol-aware-message-formatting.md)
+**Documented:** [CON-005: ETH66+ Protocol-Aware Message Formatting](../../docs/adr/consensus/CON-005-eth66-protocol-aware-message-formatting.md)
 
 ---
 

@@ -97,7 +97,7 @@ See [ops/README.md](ops/README.md) and [docs/operations/metrics-and-monitoring.m
 
 #### `docs/`
 Comprehensive documentation:
-- `docs/adr/` - Architecture Decision Records (ADRs)
+- `docs/adr/` - Architecture Decision Records (ADRs), organized by category (infrastructure, vm, consensus, testing, operations)
 - `docs/runbooks/` - Operational runbooks for production
 - `docs/operations/` - Metrics, monitoring, and operational guides
 - `docs/images/` - Logo and other images
@@ -227,7 +227,7 @@ This repository is a continuation of the Mantis Ethereum Classic client original
    - Scala 2.13 → Scala 3.3.4 (LTS)
    - Akka → Apache Pekko
    - Monix → Cats Effect 3
-   - See [docs/adr/001-scala-3-migration.md](docs/adr/001-scala-3-migration.md)
+   - See [docs/adr/infrastructure/INF-001-scala-3-migration.md](docs/adr/infrastructure/INF-001-scala-3-migration.md)
 
 3. **Vendored Dependencies**
    - scalanet: Networking library (needed for Scala 3 compatibility)
