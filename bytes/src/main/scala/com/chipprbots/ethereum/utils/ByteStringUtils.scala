@@ -13,6 +13,35 @@ object ByteStringUtils {
   def string2hash(hash: String): ByteString =
     ByteString(Hex.decode(hash))
 
+  /** Converts a Long to ByteString (big-endian, 8 bytes). */
+  def longToByteString(l: Long): ByteString =
+    ByteString(
+      Array(
+        ((l >> 56) & 0xff).toByte,
+        ((l >> 48) & 0xff).toByte,
+        ((l >> 40) & 0xff).toByte,
+        ((l >> 32) & 0xff).toByte,
+        ((l >> 24) & 0xff).toByte,
+        ((l >> 16) & 0xff).toByte,
+        ((l >> 8) & 0xff).toByte,
+        (l & 0xff).toByte
+      )
+    )
+
+  /** Converts a ByteString to Long (big-endian, expects 8 bytes). */
+  def byteStringToLong(bs: ByteString): Long = {
+    val bytes = bs.toArray
+    require(bytes.length == 8, s"Expected 8 bytes for Long conversion, got ${bytes.length}")
+    ((bytes(0) & 0xffL) << 56) |
+      ((bytes(1) & 0xffL) << 48) |
+      ((bytes(2) & 0xffL) << 40) |
+      ((bytes(3) & 0xffL) << 32) |
+      ((bytes(4) & 0xffL) << 24) |
+      ((bytes(5) & 0xffL) << 16) |
+      ((bytes(6) & 0xffL) << 8) |
+      (bytes(7) & 0xffL)
+  }
+
   implicit class Padding(val bs: ByteString) extends AnyVal {
     def padToByteString(length: Int, b: Byte): ByteString =
       if (length <= bs.length) bs

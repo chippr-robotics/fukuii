@@ -61,5 +61,29 @@ class ByteStringUtilsTest extends AnyWordSpec with Matchers {
       bsu.padTo(6, 1) shouldEqual longSeq
     }
 
+    "convert Long to ByteString and back" in {
+      val testValues = Seq(0L, 1L, -1L, 255L, 1000L, Long.MaxValue, Long.MinValue)
+      
+      testValues.foreach { value =>
+        val byteString = longToByteString(value)
+        byteString.length shouldEqual 8
+        val recovered = byteStringToLong(byteString)
+        recovered shouldEqual value
+      }
+    }
+
+    "byteStringToLong should require exactly 8 bytes" in {
+      val tooShort = ByteString(Array[Byte](1, 2, 3))
+      val tooLong = ByteString(Array[Byte](1, 2, 3, 4, 5, 6, 7, 8, 9))
+      
+      assertThrows[IllegalArgumentException] {
+        byteStringToLong(tooShort)
+      }
+      
+      assertThrows[IllegalArgumentException] {
+        byteStringToLong(tooLong)
+      }
+    }
+
   }
 }
