@@ -9,6 +9,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.crypto.zksnark.FiniteField.Ops._
 import com.chipprbots.ethereum.crypto.zksnark._
+import com.chipprbots.ethereum.testing.Tags._
 
 abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckPropertyChecks {
   val bigIntGen: Gen[BigInteger] = for {
@@ -39,6 +40,7 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   implicit val config: PropertyCheckConfiguration = PropertyCheckConfiguration(minSuccessful = 100)
 
   test("a * b") {
+    taggedAs(UnitTest, CryptoTest)
 
     forAll(fpGen, fpGen) { (a: T, b: T) =>
       assert(a * b == b * a)
@@ -47,6 +49,7 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("a + b") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen, fpGen) { (a: T, b: T) =>
       assert(a + b == b + a)
       assert((a + b).isValid())
@@ -54,12 +57,14 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("a * a^-1 == one") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen) { (a: T) =>
       assert(a * a.inversed() == FiniteField[T].one)
     }
   }
 
   test("a + (-a) == a - a == zero") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen) { (a: T) =>
       assert(a + a.negated() == FiniteField[T].zero)
       assert(a - a == FiniteField[T].zero)
@@ -67,18 +72,21 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("a + (b + c) == (a + b) + c") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen, fpGen, fpGen) { (a: T, b: T, c: T) =>
       assert(a + (b + c) == (a + b) + c)
     }
   }
 
   test("a * (b + c) == (a * b) + (a * c)") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen, fpGen, fpGen) { (a: T, b: T, c: T) =>
       assert(a * (b + c) == a * b + a * c)
     }
   }
 
   test("0 as neutral element fo addition") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen) { (n1: T) =>
       assert(n1 + FiniteField[T].zero == n1)
       assert(FiniteField[T].zero + n1 == n1)
@@ -86,6 +94,7 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("1 as neutral element fo multiplication") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen) { (n1: T) =>
       assert(n1 * FiniteField[T].one == n1)
       assert(FiniteField[T].one * n1 == n1)
@@ -93,6 +102,7 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("multiply by 0") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen) { (n1: T) =>
       assert(n1 * FiniteField[T].zero == FiniteField[T].zero)
       assert(FiniteField[T].zero * n1 == FiniteField[T].zero)
@@ -101,6 +111,7 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("-(a * b) == (-a) * b == a * (-b)") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen, fpGen) { (a: T, b: T) =>
       assert((a * b).negated() == (a.negated()) * b)
       assert((a * b).negated() == a * (b.negated()))
@@ -108,12 +119,14 @@ abstract class FieldSpec[T: FiniteField] extends AnyFunSuite with ScalaCheckProp
   }
 
   test("a.doubled == a + a") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen) { (a: T) =>
       assert(a.doubled() == a + a)
     }
   }
 
   test("a.squared == a * a") {
+    taggedAs(UnitTest, CryptoTest)
     forAll(fpGen) { (a: T) =>
       assert(a.squared() == a * a)
     }
@@ -136,6 +149,7 @@ class Fp12FieldSpec extends FieldSpec[Fp12] {
   override def fpGen: Gen[Fp12] = fp12Generator
 
   test("cyclotomic exp on fp12") {
+    taggedAs(UnitTest, CryptoTest)
 
     val input = Fp12(
       Fp6(

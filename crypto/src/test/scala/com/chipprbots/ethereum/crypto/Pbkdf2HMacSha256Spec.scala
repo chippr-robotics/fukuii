@@ -9,9 +9,11 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class Pbkdf2HMacSha256Spec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
 
-  "pbkdf2HMacSha256" should "correctly evaluate for the test vectors" in {
+  "pbkdf2HMacSha256" should "correctly evaluate for the test vectors" taggedAs (UnitTest, CryptoTest) in {
 
     // https://stackoverflow.com/a/5136918
     val testVectors = Table[String, String, Int, Int, String](

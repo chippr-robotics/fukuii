@@ -6,9 +6,10 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.testing.Tags._
 
 class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
-  test("ChainWeightStorage insert") {
+  test("ChainWeightStorage insert".taggedAs(UnitTest, DatabaseTest)) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { blockByteArrayHashes =>
       val blockHashes = blockByteArrayHashes.distinct
       val weightList = Gen.listOf(chainWeightGen).sample.get
@@ -25,7 +26,7 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     }
   }
 
-  test("ChainWeightStorage delete") {
+  test("ChainWeightStorage delete".taggedAs(UnitTest, DatabaseTest)) {
     forAll(Gen.listOf(byteStringOfLengthNGen(32))) { blockByteArrayHashes =>
       val blockHashes = blockByteArrayHashes.distinct
       val weightList = Gen.listOf(chainWeightGen).sample.get

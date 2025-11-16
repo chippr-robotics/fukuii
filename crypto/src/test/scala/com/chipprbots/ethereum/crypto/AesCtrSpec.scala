@@ -7,9 +7,11 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class AesCtrSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
 
-  "AES_CTR" should "correctly evaluate for the test vectors" in {
+  "AES_CTR" should "correctly evaluate for the test vectors" taggedAs (UnitTest, CryptoTest) in {
 
     // http://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf Appendix F.5
     val testVectors = Table[String, String, String, String](
@@ -45,7 +47,7 @@ class AesCtrSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks
     }
   }
 
-  it should "decrypt encrypted random values" in {
+  it should "decrypt encrypted random values" taggedAs (UnitTest, CryptoTest) in {
     val keyGen = Generators.getByteStringGen(16, 16)
     val ivGen = Generators.getByteStringGen(16, 16)
     val plaintextGen = Generators.getByteStringGen(1, 256)
