@@ -98,7 +98,16 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
     val validR = r > 0 && r < secp256k1n
     val validS = s > 0 && s < (if (beforeHomestead) secp256k1n else secp256k1n / 2)
-    val validSigningSchema = if (beforeEIP155) !stx.isChainSpecific else true
+
+    // Validate signing schema based on transaction type
+    val validSigningSchema = stx.tx match {
+      case _: TransactionWithAccessList =>
+        // EIP-2930+ transactions use y-parity (0 or 1) for v
+        stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
+      case _: LegacyTransaction =>
+        // Legacy transactions: before EIP-155, must use unprotected signatures (v = 27 or 28)
+        if (beforeEIP155) !stx.isChainSpecific else true
+    }
 
     if (validR && validS && validSigningSchema) Right(SignedTransactionValid)
     else Left(TransactionSignatureError)

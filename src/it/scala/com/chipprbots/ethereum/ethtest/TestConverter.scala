@@ -79,7 +79,7 @@ object TestConverter {
     val r = ByteString(parseHex(testTx.r))
     val s = ByteString(parseHex(testTx.s))
 
-    // Parse transaction data
+    // Parse common transaction data
     val nonce = parseBigInt(testTx.nonce)
     val gasPrice = parseBigInt(testTx.gasPrice)
     val gasLimit = parseBigInt(testTx.gasLimit)
@@ -89,14 +89,38 @@ object TestConverter {
     val value = parseBigInt(testTx.value)
     val payload = ByteString(parseHex(testTx.data))
 
-    val tx = LegacyTransaction(
-      nonce = nonce,
-      gasPrice = gasPrice,
-      gasLimit = gasLimit,
-      receivingAddress = receivingAddress,
-      value = value,
-      payload = payload
-    )
+    // Determine transaction type and create appropriate transaction object
+    val tx: Transaction = testTx.txType match {
+      case Some("0x01") | Some("0x1") =>
+        // EIP-2930: Transaction with access list
+        val chainId = testTx.chainId.map(parseBigInt).getOrElse(BigInt(1))
+        val accessList = testTx.accessList.getOrElse(List.empty).map { item =>
+          AccessListItem(
+            address = Address(ByteString(parseHex(item.address))),
+            storageKeys = item.storageKeys.map(key => parseBigInt(key))
+          )
+        }
+        TransactionWithAccessList(
+          chainId = chainId,
+          nonce = nonce,
+          gasPrice = gasPrice,
+          gasLimit = gasLimit,
+          receivingAddress = receivingAddress,
+          value = value,
+          payload = payload,
+          accessList = accessList
+        )
+      case _ =>
+        // Legacy transaction (or unknown type, default to legacy)
+        LegacyTransaction(
+          nonce = nonce,
+          gasPrice = gasPrice,
+          gasLimit = gasLimit,
+          receivingAddress = receivingAddress,
+          value = value,
+          payload = payload
+        )
+    }
 
     SignedTransaction(tx, v, r, s)
   }
