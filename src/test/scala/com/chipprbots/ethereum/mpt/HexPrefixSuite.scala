@@ -4,10 +4,12 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
+import com.chipprbots.ethereum.testing.Tags._
 
 class HexPrefixSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
 
   test("HexPrefix encoding") {
+    taggedAs(UnitTest, MPTTest)
     forAll(hexPrefixDecodeParametersGen()) { (pair: (Array[Byte], Boolean)) =>
       val (bytes, t) = pair
       val nibbles = HexPrefix.bytesToNibbles(bytes = bytes)
@@ -20,30 +22,35 @@ class HexPrefixSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Obje
   }
 
   test("testCompactEncodeOddCompact") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](1, 2, 3, 4, 5)
     val expectedData: Array[Byte] = Array[Byte](0x11, 0x23, 0x45)
     assert(expectedData.sameElements(HexPrefix.encode(test, isLeaf = false)))
   }
 
   test("testCompactEncodeEvenCompact") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](0, 1, 2, 3, 4, 5)
     val expectedData: Array[Byte] = Array[Byte](0x00, 0x01, 0x23, 0x45)
     assert(expectedData.sameElements(HexPrefix.encode(test, isLeaf = false)))
   }
 
   test("testCompactEncodeEvenTerminated") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](0, 15, 1, 12, 11, 8)
     val expectedData: Array[Byte] = Array[Byte](0x20, 0x0f, 0x1c, 0xb8.toByte)
     assert(expectedData.sameElements(HexPrefix.encode(test, isLeaf = true)))
   }
 
   test("testCompactEncodeOddTerminated") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](15, 1, 12, 11, 8)
     val expectedData: Array[Byte] = Array[Byte](0x3f, 0x1c, 0xb8.toByte)
     assert(expectedData.sameElements(HexPrefix.encode(test, isLeaf = true)))
   }
 
   test("testCompactDecodeOddCompact") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](0x11, 0x23, 0x45)
     val expected: Array[Byte] = Array[Byte](1, 2, 3, 4, 5)
     val (obtained, t) = HexPrefix.decode(test)
@@ -52,6 +59,7 @@ class HexPrefixSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Obje
   }
 
   test("testCompactDecodeEvenCompact") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](0x00, 0x01, 0x23, 0x45)
     val expected: Array[Byte] = Array[Byte](0, 1, 2, 3, 4, 5)
     val (obtained, t) = HexPrefix.decode(test)
@@ -60,6 +68,7 @@ class HexPrefixSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Obje
   }
 
   test("testCompactDecodeEvenTerminated") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](0x20, 0x0f, 0x1c, 0xb8.toByte)
     val expected: Array[Byte] = Array[Byte](0, 15, 1, 12, 11, 8)
     val (obtained, t) = HexPrefix.decode(test)
@@ -68,6 +77,7 @@ class HexPrefixSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Obje
   }
 
   test("testCompactDecodeOddTerminated") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = Array[Byte](0x3f, 0x1c, 0xb8.toByte)
     val expected: Array[Byte] = Array[Byte](15, 1, 12, 11, 8)
     val (obtained, t) = HexPrefix.decode(test)
@@ -76,18 +86,21 @@ class HexPrefixSuite extends AnyFunSuite with ScalaCheckPropertyChecks with Obje
   }
 
   test("testCompactHexEncode_1") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = "stallion".getBytes
     val result: Array[Byte] = Array[Byte](7, 3, 7, 4, 6, 1, 6, 12, 6, 12, 6, 9, 6, 15, 6, 14)
     assert(result.sameElements(HexPrefix.bytesToNibbles(bytes = test)))
   }
 
   test("testCompactHexEncode_2") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = "verb".getBytes
     val result: Array[Byte] = Array[Byte](7, 6, 6, 5, 7, 2, 6, 2)
     assert(result.sameElements(HexPrefix.bytesToNibbles(bytes = test)))
   }
 
   test("testCompactHexEncode_3") {
+    taggedAs(UnitTest, MPTTest)
     val test: Array[Byte] = "puppy".getBytes
     val result: Array[Byte] = Array[Byte](7, 0, 7, 5, 7, 0, 7, 0, 7, 9)
     assert(result.sameElements(HexPrefix.bytesToNibbles(bytes = test)))

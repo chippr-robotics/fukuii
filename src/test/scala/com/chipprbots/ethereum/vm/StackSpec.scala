@@ -6,6 +6,7 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.testing.Tags._
 
 class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks {
 
@@ -19,6 +20,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
     Generators.getStackGen(maxElems = maxStackSize - 1, maxSize = maxStackSize, valueGen = uint256Gen)
 
   test("pop single element") {
+    taggedAs(UnitTest, VMTest)
     forAll(stackGen) { stack =>
       val (v, stack1) = stack.pop()
       if (stack.size > 0) {
@@ -32,6 +34,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
   }
 
   test("pop single element from an empty stack") {
+    taggedAs(UnitTest, VMTest)
     forAll(intGen.map(Stack.empty)) { emptyStack =>
       val (value, newStack) = emptyStack.pop()
       value shouldEqual UInt256.Zero
@@ -40,6 +43,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
   }
 
   test("pop multiple elements") {
+    taggedAs(UnitTest, VMTest)
     forAll(stackGen, intGen) { (stack, i) =>
       val (vs, stack1) = stack.pop(i)
       if (stack.size >= i) {
@@ -53,6 +57,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
   }
 
   test("push single element") {
+    taggedAs(UnitTest, VMTest)
     forAll(nonFullStackGen, uint256Gen) { (stack, v) =>
       val stack1 = stack.push(v)
 
@@ -61,6 +66,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
   }
 
   test("push single element to full stack") {
+    taggedAs(UnitTest, VMTest)
     forAll(fullStackGen, uint256Gen) { (stack, v) =>
       val newStack = stack.push(v)
 
@@ -69,6 +75,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
   }
 
   test("push multiple elements") {
+    taggedAs(UnitTest, VMTest)
     forAll(stackGen, uint256ListGen) { (stack, vs) =>
       val stack1 = stack.push(vs)
 
@@ -81,6 +88,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
   }
 
   test("duplicate element") {
+    taggedAs(UnitTest, VMTest)
     forAll(stackGen, intGen) { (stack, i) =>
       val stack1 = stack.dup(i)
 
@@ -94,6 +102,7 @@ class StackSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks 
   }
 
   test("swap elements") {
+    taggedAs(UnitTest, VMTest)
     forAll(stackGen, intGen) { (stack, i) =>
       val stack1 = stack.swap(i)
 

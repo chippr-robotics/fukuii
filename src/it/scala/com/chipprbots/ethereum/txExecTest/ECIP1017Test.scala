@@ -19,6 +19,8 @@ import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
 import com.chipprbots.ethereum.domain.BlockchainStorages
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class ECIP1017Test extends AnyFlatSpec with Matchers {
 
   val EraDuration = 3
@@ -54,7 +56,7 @@ class ECIP1017Test extends AnyFlatSpec with Matchers {
     * reaches zero at era 193 (which starts at block number 579), given an eraDuration of 3, a rewardReductionRate of
     * 0.2 and a firstEraBlockReward of 5 ether.
     */
-  "Ledger" should "execute blocks with respect to block reward changed by ECIP 1017" in new TestSetup {
+  "Ledger" should "execute blocks with respect to block reward changed by ECIP 1017" taggedAs (IntegrationTest, VMTest, SlowTest) in new TestSetup {
     val fixtures: FixtureProvider.Fixture = FixtureProvider.loadFixtures("/txExecTest/ecip1017Test")
 
     val startBlock = 1

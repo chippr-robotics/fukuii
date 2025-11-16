@@ -10,6 +10,8 @@ import org.scalatest.matchers.should.Matchers
 import scala.io.Source
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
+import com.chipprbots.ethereum.testing.Tags._
+
 /** Comprehensive test suite that runs multiple tests from ethereum/tests repository
   *
   * This test suite loads tests directly from the ets/tests submodule to validate broader EVM compliance.
@@ -114,7 +116,7 @@ class ComprehensiveBlockchainTestsSpec extends EthereumTestsSpec {
     (passed, failed, skipped)
   }
 
-  "ComprehensiveBlockchainTests" should "run multiple tests from ValidBlocks/bcValidBlockTest" in {
+  "ComprehensiveBlockchainTests" should "run multiple tests from ValidBlocks/bcValidBlockTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val testDir = "/home/runner/work/fukuii/fukuii/ets/tests/BlockchainTests/ValidBlocks/bcValidBlockTest"
 
     info(s"Running tests from ValidBlocks/bcValidBlockTest (max 10)...")
@@ -128,7 +130,7 @@ class ComprehensiveBlockchainTestsSpec extends EthereumTestsSpec {
     passed should be > failed
   }
 
-  it should "run multiple tests from ValidBlocks/bcStateTests" in {
+  it should "run multiple tests from ValidBlocks/bcStateTests" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val testDir = "/home/runner/work/fukuii/fukuii/ets/tests/BlockchainTests/ValidBlocks/bcStateTests"
 
     info(s"Running tests from ValidBlocks/bcStateTests (max 20)...")
@@ -140,7 +142,7 @@ class ComprehensiveBlockchainTestsSpec extends EthereumTestsSpec {
     passed should be > 0
   }
 
-  it should "run tests from ValidBlocks/bcUncleTest" in {
+  it should "run tests from ValidBlocks/bcUncleTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val testDir = "/home/runner/work/fukuii/fukuii/ets/tests/BlockchainTests/ValidBlocks/bcUncleTest"
 
     info(s"Running tests from ValidBlocks/bcUncleTest (max 5)...")
@@ -152,7 +154,7 @@ class ComprehensiveBlockchainTestsSpec extends EthereumTestsSpec {
     passed should be >= 0
   }
 
-  it should "achieve at least 50 passing tests across all categories" in {
+  it should "achieve at least 50 passing tests across all categories" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     var totalPassed = 0
     var totalFailed = 0
     var totalSkipped = 0

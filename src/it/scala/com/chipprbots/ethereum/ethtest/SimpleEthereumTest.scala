@@ -4,6 +4,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
+import com.chipprbots.ethereum.testing.Tags._
+
 /** Simple smoke test to validate ethereum/tests infrastructure
   *
   * Tests basic functionality:
@@ -13,7 +15,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   */
 class SimpleEthereumTest extends EthereumTestsSpec {
 
-  "EthereumTestsAdapter" should "parse SimpleTx test file" in {
+  "EthereumTestsAdapter" should "parse SimpleTx test file" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val testFile = "/ethereum-tests/SimpleTx.json"
 
     info("Loading test file...")
@@ -37,7 +39,7 @@ class SimpleEthereumTest extends EthereumTestsSpec {
     }
   }
 
-  it should "set up initial state from pre-state" in {
+  it should "set up initial state from pre-state" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val testFile = "/ethereum-tests/SimpleTx.json"
     val suite = loadTestSuite(testFile)
 
@@ -66,7 +68,7 @@ class SimpleEthereumTest extends EthereumTestsSpec {
     }
   }
 
-  it should "validate test structure for all test cases" in {
+  it should "validate test structure for all test cases" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val testFile = "/ethereum-tests/SimpleTx.json"
     val suite = loadTestSuite(testFile)
 
@@ -97,7 +99,7 @@ class SimpleEthereumTest extends EthereumTestsSpec {
     }
   }
 
-  it should "execute blocks and validate post-state" in {
+  it should "execute blocks and validate post-state" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val testFile = "/ethereum-tests/SimpleTx.json"
     val suite = loadTestSuite(testFile)
 
