@@ -13,10 +13,10 @@ import com.chipprbots.ethereum.domain.{BlockHeader, ChainWeight}
 /** Integration test for MESS (Modified Exponential Subjective Scoring).
   *
   * Tests the complete MESS workflow including:
-  * - Recording block first-seen times
-  * - Calculating MESS-adjusted difficulties
-  * - Using MESS scores in chain weight comparisons
-  * - Protection against late-arriving chains
+  *   - Recording block first-seen times
+  *   - Calculating MESS-adjusted difficulties
+  *   - Using MESS scores in chain weight comparisons
+  *   - Protection against late-arriving chains
   */
 class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
 
@@ -39,7 +39,7 @@ class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
       difficulty: BigInt,
       timestamp: Long,
       hash: ByteString = ByteString.empty
-  ): BlockHeader = {
+  ): BlockHeader =
     BlockHeader(
       parentHash = ByteString.empty,
       ommersHash = ByteString.empty,
@@ -57,7 +57,6 @@ class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
       mixHash = ByteString.empty,
       nonce = ByteString.empty
     )
-  }
 
   "MESS Integration" should "prefer recently seen chain over old chain with same difficulty" in {
     val config = MESSConfig(enabled = true, decayConstant = 0.0001)
@@ -209,10 +208,9 @@ class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
     storage.put(attack3.hash, currentTime)
 
     // Calculate weights
-    val canonicalWeight = List(canonical1, canonical2, canonical3).foldLeft(ChainWeight.zero) {
-      (weight, header) =>
-        val messAdjusted = scorer.calculateMessDifficulty(header)
-        weight.increase(header, Some(messAdjusted))
+    val canonicalWeight = List(canonical1, canonical2, canonical3).foldLeft(ChainWeight.zero) { (weight, header) =>
+      val messAdjusted = scorer.calculateMessDifficulty(header)
+      weight.increase(header, Some(messAdjusted))
     }
 
     val attackWeight = List(attack1, attack2, attack3).foldLeft(ChainWeight.zero) { (weight, header) =>

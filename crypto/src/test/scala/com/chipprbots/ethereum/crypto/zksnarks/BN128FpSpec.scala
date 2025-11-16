@@ -36,8 +36,7 @@ class BN128FpSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
     )
   )
 
-  test("P + P = 2 * P") {
-    taggedAs(UnitTest, CryptoTest)
+  test("P + P = 2 * P", UnitTest, CryptoTest) {
     forAll(testData) { (x: Fp, y: Fp, z: Fp) =>
       val point = Point(x, y, z)
       assert(BN128Fp.isOnCurve(point) && point.isValid)
@@ -45,8 +44,7 @@ class BN128FpSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("P + P + P = 3 * P") {
-    taggedAs(UnitTest, CryptoTest)
+  test("P + P + P = 3 * P", UnitTest, CryptoTest) {
     forAll(testData) { (x: Fp, y: Fp, z: Fp) =>
       val point = Point(x, y, z)
       val addingResult = BN128Fp.add(BN128Fp.add(point, point), point)

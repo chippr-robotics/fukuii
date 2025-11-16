@@ -33,8 +33,8 @@ class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder 
     val cryptogram = ECIESCoder.encrypt(pub, secureRandom, plainText)
     val result = ECIESCoder.decrypt(prv, cryptogram)
 
-    plainText shouldBe resultForProvidedCryptogram
-    plainText shouldBe result
+    plainText.sameElements(resultForProvidedCryptogram) shouldBe true
+    plainText.sameElements(result) shouldBe true
   }
 
   "ECIESCoder" should "past tests from ethereumJ - test1" taggedAs (UnitTest, CryptoTest) in {
@@ -58,6 +58,6 @@ class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder 
     val cipher = ECIESCoder.encrypt(pubKeyPoint, secureRandom, payload)
     val decryptedPayload = ECIESCoder.decrypt(privKey, cipher)
 
-    decryptedPayload shouldBe payload
+    decryptedPayload.sameElements(payload) shouldBe true
   }
 }

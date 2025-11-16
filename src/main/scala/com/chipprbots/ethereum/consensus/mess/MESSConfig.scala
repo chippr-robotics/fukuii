@@ -5,16 +5,13 @@ package com.chipprbots.ethereum.consensus.mess
   * @param enabled
   *   Whether MESS scoring is enabled
   * @param decayConstant
-  *   Lambda parameter in the exponential decay function (per second).
-  *   Higher values mean stronger penalties for delayed blocks.
-  *   Default: 0.0001 per second
+  *   Lambda parameter in the exponential decay function (per second). Higher values mean stronger penalties for delayed
+  *   blocks. Default: 0.0001 per second
   * @param maxTimeDelta
-  *   Maximum time difference to consider (in seconds).
-  *   Blocks older than this are treated as having this age.
-  *   Default: 30 days = 2,592,000 seconds
+  *   Maximum time difference to consider (in seconds). Blocks older than this are treated as having this age. Default:
+  *   30 days = 2,592,000 seconds
   * @param minWeightMultiplier
-  *   Minimum multiplier to prevent weights from going to zero.
-  *   Default: 0.0001 (0.01%)
+  *   Minimum multiplier to prevent weights from going to zero. Default: 0.0001 (0.01%)
   */
 case class MESSConfig(
     enabled: Boolean = false,

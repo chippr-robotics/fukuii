@@ -21,7 +21,7 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
   def positionsSetGen: Gen[Set[Int]] =
     getListGen(minSize = 0, maxSize = PositionsSize, genT = intGen(0, CodeSize)).map(_.toSet)
 
-  it should "detect all jump destinations if there are no push op" taggedAs(UnitTest, VMTest) in {
+  it should "detect all jump destinations if there are no push op" taggedAs (UnitTest, VMTest) in {
     forAll(positionsSetGen) { jumpDestLocations =>
       val code = ByteString((0 to CodeSize).map { i =>
         if (jumpDestLocations.contains(i)) JUMPDEST.code
@@ -32,7 +32,7 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
     }
   }
 
-  it should "detect all jump destinations if there are push op" taggedAs(UnitTest, VMTest) in {
+  it should "detect all jump destinations if there are push op" taggedAs (UnitTest, VMTest) in {
     forAll(positionsSetGen, positionsSetGen) { (jumpDestLocations, pushOpLocations) =>
       val code = ByteString((0 to CodeSize).map { i =>
         if (jumpDestLocations.contains(i)) JUMPDEST.code
@@ -58,7 +58,7 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
     }
   }
 
-  it should "detect all jump destinations if there are invalid ops" taggedAs(UnitTest, VMTest) in {
+  it should "detect all jump destinations if there are invalid ops" taggedAs (UnitTest, VMTest) in {
     forAll(positionsSetGen, positionsSetGen) { (jumpDestLocations, invalidOpLocations) =>
       val code = ByteString((0 to CodeSize).map { i =>
         if (jumpDestLocations.contains(i)) JUMPDEST.code
@@ -70,7 +70,7 @@ class ProgramSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyCheck
     }
   }
 
-  it should "detect all instructions as jump destinations if they are" taggedAs(UnitTest, VMTest) in {
+  it should "detect all instructions as jump destinations if they are" taggedAs (UnitTest, VMTest) in {
     val code = ByteString((0 to CodeSize).map(_ => JUMPDEST.code).toArray)
     val program = Program(code)
     program.validJumpDestinations shouldBe (0 to CodeSize).toSet

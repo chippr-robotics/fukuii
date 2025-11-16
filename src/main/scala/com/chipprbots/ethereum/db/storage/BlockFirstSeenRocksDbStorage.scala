@@ -9,15 +9,13 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 
 /** RocksDB-backed implementation of BlockFirstSeenStorage.
   *
-  * Stores block first-seen timestamps in a dedicated namespace to avoid conflicts
-  * with other blockchain data.
+  * Stores block first-seen timestamps in a dedicated namespace to avoid conflicts with other blockchain data.
   */
 class BlockFirstSeenRocksDbStorage(val dataSource: DataSource) extends BlockFirstSeenStorage {
 
-  /** Encodes a Long timestamp as bytes for storage. 
-    * Note: This creates an intermediate ByteString that is immediately converted
-    * to Array[Byte]. Could be optimized with direct Long-to-byte-array conversion
-    * to reduce allocation overhead in the hot path.
+  /** Encodes a Long timestamp as bytes for storage. Note: This creates an intermediate ByteString that is immediately
+    * converted to Array[Byte]. Could be optimized with direct Long-to-byte-array conversion to reduce allocation
+    * overhead in the hot path.
     */
   private def encodeTimestamp(timestamp: Long): Array[Byte] =
     ByteStringUtils.longToByteString(timestamp).toArray

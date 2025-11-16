@@ -23,7 +23,11 @@ class GeneralStateTestsSpec extends EthereumTestsSpec {
   // the same tests but in BlockchainTest format, which our adapter already supports.
   // Therefore, we run tests from BlockchainTests/GeneralStateTests instead.
 
-  "GeneralStateTests" should "pass basic arithmetic tests (add11)" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
+  "GeneralStateTests" should "pass basic arithmetic tests (add11)" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
     // Test from BlockchainTests/GeneralStateTests/stExample/add11.json
     // Tests basic ADD opcode: (add 1 1) = 2
     info("Loading add11 test...")
@@ -48,7 +52,11 @@ class GeneralStateTestsSpec extends EthereumTestsSpec {
     }
   }
 
-  it should "pass addNonConst test from stArgsZeroOneBalance category" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
+  it should "pass addNonConst test from stArgsZeroOneBalance category" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
     // Test from BlockchainTests/GeneralStateTests/stArgsZeroOneBalance/addNonConst.json
     // Tests ADD with non-constant values
     info("Loading addNonConst test...")

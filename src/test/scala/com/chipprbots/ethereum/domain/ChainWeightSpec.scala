@@ -11,7 +11,7 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
       number: BigInt,
       difficulty: BigInt,
       hasCheckpoint: Boolean = false
-  ): BlockHeader = {
+  ): BlockHeader =
     BlockHeader(
       parentHash = ByteString.empty,
       ommersHash = ByteString.empty,
@@ -29,7 +29,6 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
       mixHash = ByteString.empty,
       nonce = ByteString.empty
     )
-  }
 
   "ChainWeight without MESS" should "compare based on checkpoint and total difficulty" in {
     val weight1 = ChainWeight(lastCheckpointNumber = 0, totalDifficulty = 1000)
@@ -172,7 +171,7 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
   "ChainWeight test API" should "allow increasing total difficulty" in {
     val weight = ChainWeight.zero
     val increased = weight.increaseTotalDifficulty(100)
-    
+
     increased.totalDifficulty shouldBe BigInt(100)
     increased.messScore shouldBe None
   }
@@ -180,10 +179,10 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
   it should "allow increasing MESS score" in {
     val weight = ChainWeight.zero
     val increased = weight.increaseMessScore(50)
-    
+
     increased.messScore shouldBe Some(BigInt(50))
     increased.totalDifficulty shouldBe BigInt(0)
-    
+
     val increasedAgain = increased.increaseMessScore(30)
     increasedAgain.messScore shouldBe Some(BigInt(80))
   }

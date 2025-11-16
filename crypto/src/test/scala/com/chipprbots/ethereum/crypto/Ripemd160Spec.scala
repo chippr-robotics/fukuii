@@ -26,8 +26,7 @@ class Ripemd160Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Match
     ("a" * 1000000, "52783243c1697bdbe16d37f97f68f08325dc1528")
   )
 
-  test("RIPEMD-160") {
-    taggedAs(UnitTest, CryptoTest)
+  test("RIPEMD-160", UnitTest, CryptoTest) {
     forAll(examples) { (input, result) =>
       val inBytes = input.getBytes(StandardCharsets.US_ASCII)
       val hash = ripemd160(inBytes)

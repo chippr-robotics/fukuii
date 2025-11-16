@@ -100,7 +100,10 @@ class CachedReferenceCountedStorageSpec
     }
   }
 
-  "CachedReferenceCountedStorage" should "prune not referenced nodes " taggedAs (UnitTest, DatabaseTest) in new TestSetup {
+  "CachedReferenceCountedStorage" should "prune not referenced nodes " taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
     updateStorage(1) { stor =>
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }

@@ -49,7 +49,10 @@ class CachedNodeStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     }
   }
 
-  it should "persist elements to underlying data source when not cleared for long time" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
+  it should "persist elements to underlying data source when not cleared for long time" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
     val key: ByteString = ByteString(1)
     val value: Array[Byte] = Array(1.toByte)
     val cachedNodeStorageTiming = new CachedNodeStorage(nodeStorage, mapCacheTime)
