@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.db.storage
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.storage.Namespaces.BlockFirstSeenNamespace
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
@@ -28,16 +29,32 @@ class BlockFirstSeenRocksDbStorage(val dataSource: DataSource) extends BlockFirs
   override def put(blockHash: ByteString, timestamp: Long): Unit = {
     val key = blockHash.toArray
     val value = encodeTimestamp(timestamp)
-    dataSource.update(BlockFirstSeenNamespace, Seq(), Seq(key -> value))
+    dataSource.update(
+      Seq(
+        DataSourceUpdateOptimized(
+          namespace = BlockFirstSeenNamespace,
+          toRemove = Seq(),
+          toUpsert = Seq(key -> value)
+        )
+      )
+    )
   }
 
   override def get(blockHash: ByteString): Option[Long] = {
     val key = blockHash.toArray
-    dataSource.get(BlockFirstSeenNamespace, key).map(decodeTimestamp)
+    dataSource.getOptimized(BlockFirstSeenNamespace, key).map(decodeTimestamp)
   }
 
   override def remove(blockHash: ByteString): Unit = {
     val key = blockHash.toArray
-    dataSource.update(BlockFirstSeenNamespace, Seq(key), Seq())
+    dataSource.update(
+      Seq(
+        DataSourceUpdateOptimized(
+          namespace = BlockFirstSeenNamespace,
+          toRemove = Seq(key),
+          toUpsert = Seq()
+        )
+      )
+    )
   }
 }
