@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
@@ -80,8 +81,10 @@ class PeersClient(
         selectPeer(peerSelector) match {
           case Some(peer) =>
             log.debug("Selected peer {} with address {} for request", peer.id, peer.remoteAddress.getHostString)
+            // Adapt message format based on peer's negotiated capability
+            val adaptedMessage = adaptMessageForPeer(peer, message)
             val handler =
-              makeRequest(peer, message, responseMsgCode(message), toSerializable)(scheduler, responseClassTag(message))
+              makeRequest(peer, adaptedMessage, responseMsgCode(adaptedMessage), toSerializable)(scheduler, responseClassTag(adaptedMessage))
             val newRequesters = requesters + (handler -> requester)
             context.become(running(newRequesters))
           case None =>
@@ -129,16 +132,38 @@ class PeersClient(
         bestPeer(peersToDownloadFrom, log)
     }
 
+  /** Adapts message format based on peer's negotiated capability.
+    * ETH66+ peers use RequestId wrapper, earlier versions use ETH62 format.
+    */
+  private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: RequestMsg): Message = {
+    handshakedPeers.get(peer.id) match {
+      case Some(peerWithInfo) =>
+        val usesRequestId = Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability)
+        message match {
+          case eth66: ETH66GetBlockHeaders if !usesRequestId =>
+            // Convert ETH66 format to ETH62 format for older peers
+            ETH62.GetBlockHeaders(eth66.block, eth66.maxHeaders, eth66.skip, eth66.reverse)
+          case eth62: ETH62.GetBlockHeaders if usesRequestId =>
+            // Convert ETH62 format to ETH66 format for newer peers  
+            ETH66GetBlockHeaders(0, eth62.block, eth62.maxHeaders, eth62.skip, eth62.reverse)
+          case _ => message // Already in correct format or not a GetBlockHeaders message
+        }
+      case None =>
+        log.warning("Peer {} not found in handshaked peers, using message as-is", peer.id)
+        message
+    }
+  }
+
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {
-      case _: ETH66GetBlockHeaders => implicitly[ClassTag[ETH66BlockHeaders]]
+      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders => implicitly[ClassTag[ETH66BlockHeaders]]
       case _: GetBlockBodies  => implicitly[ClassTag[BlockBodies]]
       case _: GetNodeData     => implicitly[ClassTag[NodeData]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
     requestMsg match {
-      case _: ETH66GetBlockHeaders => Codes.BlockHeadersCode
+      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders => Codes.BlockHeadersCode
       case _: GetBlockBodies  => Codes.BlockBodiesCode
       case _: GetNodeData     => Codes.NodeDataCode
     }

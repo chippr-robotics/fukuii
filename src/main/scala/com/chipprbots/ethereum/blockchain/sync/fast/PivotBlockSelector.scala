@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.PeerEventBusActor.Unsubscribe
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
@@ -242,10 +243,16 @@ class PivotBlockSelector(
 
   private def obtainBlockHeaderFromPeer(peer: PeerId, blockNumber: BigInt): Unit = {
     peerEventBus ! Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer)))
-    etcPeerManager ! EtcPeerManagerActor.SendMessage(
-      ETH66GetBlockHeaders(0, Left(blockNumber), 1, 0, reverse = false),
-      peer
-    )
+    
+    // Get peer info to determine message format based on negotiated capability
+    val getBlockHeadersMsg = handshakedPeers.get(peer) match {
+      case Some(peerWithInfo) if Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability) =>
+        ETH66GetBlockHeaders(0, Left(blockNumber), 1, 0, reverse = false)
+      case _ =>
+        ETH62GetBlockHeaders(Left(blockNumber), 1, 0, reverse = false)
+    }
+    
+    etcPeerManager ! EtcPeerManagerActor.SendMessage(getBlockHeadersMsg, peer)
   }
 
   private def collectVoters(previousBestBlockNumber: Option[BigInt] = None): ElectionDetails = {

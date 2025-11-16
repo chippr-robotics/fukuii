@@ -106,9 +106,13 @@ class EtcPeerManagerActor(
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
       // Ask for the highest block from the peer
-      // Send GetBlockHeaders in ETH66 format with requestId=0 for compatibility
-      // This ensures consistent message format regardless of negotiated protocol version
-      peer.ref ! SendMessage(ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false))
+      // Send GetBlockHeaders in format based on negotiated capability
+      val getBlockHeadersMsg = 
+        if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
+          ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+        else
+          ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+      peer.ref ! SendMessage(getBlockHeadersMsg)
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
 

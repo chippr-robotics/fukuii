@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
@@ -188,16 +189,34 @@ class FastSyncBranchResolverActor(
   }
 
   private def sendGetBlockHeadersRequest(peer: Peer, fromBlock: BigInt, amount: BigInt): ActorRef = {
-    val handler = context.actorOf(
-      PeerRequestHandler.props[ETH66GetBlockHeaders, ETH66BlockHeaders](
-        peer,
-        syncConfig.peerResponseTimeout,
-        etcPeerManager,
-        peerEventBus,
-        requestMsg = ETH66GetBlockHeaders(0, Left(fromBlock), amount, skip = 0, reverse = false),
-        responseMsgCode = Codes.BlockHeadersCode
-      )
+    // Create message in correct format based on peer's negotiated capability
+    val usesRequestId = handshakedPeers.get(peer.id).exists(peerWithInfo =>
+      Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability)
     )
+
+    val handler = if (usesRequestId) {
+      context.actorOf(
+        PeerRequestHandler.props[ETH66GetBlockHeaders, ETH66BlockHeaders](
+          peer,
+          syncConfig.peerResponseTimeout,
+          etcPeerManager,
+          peerEventBus,
+          requestMsg = ETH66GetBlockHeaders(0, Left(fromBlock), amount, skip = 0, reverse = false),
+          responseMsgCode = Codes.BlockHeadersCode
+        )
+      )
+    } else {
+      context.actorOf(
+        PeerRequestHandler.props[ETH62GetBlockHeaders, ETH62BlockHeaders](
+          peer,
+          syncConfig.peerResponseTimeout,
+          etcPeerManager,
+          peerEventBus,
+          requestMsg = ETH62GetBlockHeaders(Left(fromBlock), amount, skip = 0, reverse = false),
+          responseMsgCode = Codes.BlockHeadersCode
+        )
+      )
+    }
     context.watch(handler)
     handler
   }

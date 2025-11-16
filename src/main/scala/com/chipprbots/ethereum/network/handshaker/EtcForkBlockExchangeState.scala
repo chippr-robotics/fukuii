@@ -6,6 +6,7 @@ import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
@@ -22,11 +23,18 @@ case class EtcForkBlockExchangeState(
 
   import handshakerConfiguration._
 
-  def nextMessage: NextMessage =
+  def nextMessage: NextMessage = {
+    val getBlockHeadersMsg = 
+      if (Capability.usesRequestId(remoteStatus.capability))
+        ETH66GetBlockHeaders(0, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
+      else
+        ETH62GetBlockHeaders(Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
+    
     NextMessage(
-      messageToSend = ETH66GetBlockHeaders(0, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false),
+      messageToSend = getBlockHeadersMsg,
       timeout = peerConfiguration.waitForChainCheckTimeout
     )
+  }
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
     case ETH62BlockHeaders(blockHeaders) =>
