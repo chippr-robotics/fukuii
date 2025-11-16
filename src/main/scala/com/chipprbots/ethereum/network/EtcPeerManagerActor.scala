@@ -24,9 +24,11 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.ByteStringUtils
@@ -104,7 +106,9 @@ class EtcPeerManagerActor(
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
       // Ask for the highest block from the peer
-      peer.ref ! SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false))
+      // Send GetBlockHeaders in ETH66 format with requestId=0 for compatibility
+      // This ensures consistent message format regardless of negotiated protocol version
+      peer.ref ! SendMessage(ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false))
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
 
@@ -195,7 +199,26 @@ class EtcPeerManagerActor(
     *   new peer info with the fork block accepted value updated
     */
   private def updateForkAccepted(message: Message, peer: Peer)(initialPeerInfo: PeerInfo): PeerInfo = message match {
-    case BlockHeaders(blockHeaders) =>
+    // Handle both ETH62 and ETH66+ BlockHeaders formats
+    case ETH62BlockHeaders(blockHeaders) =>
+      val newPeerInfoOpt: Option[PeerInfo] =
+        for {
+          forkResolver <- forkResolverOpt
+          forkBlockHeader <- blockHeaders.find(_.number == forkResolver.forkBlockNumber)
+        } yield {
+          val newFork = forkResolver.recognizeFork(forkBlockHeader)
+          log.debug("Received fork block header with fork: {}", newFork)
+
+          if (!forkResolver.isAccepted(newFork)) {
+            log.debug("Peer is not running the accepted fork, disconnecting")
+            peer.ref ! DisconnectPeer(Disconnect.Reasons.UselessPeer)
+            initialPeerInfo
+          } else
+            initialPeerInfo.withForkAccepted(true)
+        }
+      newPeerInfoOpt.getOrElse(initialPeerInfo)
+    
+    case ETH66BlockHeaders(_, blockHeaders) =>
       val newPeerInfoOpt: Option[PeerInfo] =
         for {
           forkResolver <- forkResolverOpt
@@ -241,7 +264,9 @@ class EtcPeerManagerActor(
       }
 
     message match {
-      case m: BlockHeaders =>
+      case m: ETH62BlockHeaders =>
+        update(m.headers.map(header => (header.number, header.hash)))
+      case m: ETH66BlockHeaders =>
         update(m.headers.map(header => (header.number, header.hash)))
       case m: BaseETH6XMessages.NewBlock =>
         update(Seq((m.block.header.number, m.block.header.hash)))
