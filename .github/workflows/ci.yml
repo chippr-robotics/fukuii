@@ -76,6 +76,18 @@ jobs:
         env:
           FUKUII_DEV: true
       
+      - name: Validate KPI Baselines
+        run: |
+          echo "=========================================="
+          echo "Validating KPI Baselines"
+          echo "=========================================="
+          echo ""
+          sbt "testOnly *KPIBaselinesSpec"
+          echo ""
+          echo "✅ KPI baselines validated successfully"
+        env:
+          FUKUII_DEV: true
+      
       - name: Run Ethereum/Tests Integration Tests
         run: |
           echo "Running ethereum/tests integration test suite..."
