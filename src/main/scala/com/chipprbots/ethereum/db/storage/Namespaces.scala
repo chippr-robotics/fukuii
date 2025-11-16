@@ -12,6 +12,7 @@ object Namespaces {
   val HeightsNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('i'.toByte)
   val FastSyncStateNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('f'.toByte)
   val TransactionMappingNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('l'.toByte)
+  val BlockFirstSeenNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('m'.toByte)
 
   val nsSeq: Seq[IndexedSeq[Byte]] = Seq(
     ReceiptsNamespace,
@@ -24,6 +25,7 @@ object Namespaces {
     KnownNodesNamespace,
     HeightsNamespace,
     FastSyncStateNamespace,
-    TransactionMappingNamespace
+    TransactionMappingNamespace,
+    BlockFirstSeenNamespace
   )
 }
