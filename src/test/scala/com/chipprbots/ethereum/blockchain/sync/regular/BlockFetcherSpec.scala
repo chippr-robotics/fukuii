@@ -12,6 +12,7 @@ import org.apache.pekko.testkit.TestProbe
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
+import org.scalatest.BeforeAndAfterEach
 import org.scalatest.freespec.AnyFreeSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -42,7 +43,22 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
-class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with SecureRandomBuilder {
+class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfterEach with SecureRandomBuilder {
+
+  // Track all actor systems created during tests for cleanup
+  private var actorSystems: List[ActorSystem] = List.empty
+
+  override def afterEach(): Unit = {
+    // Shutdown all actor systems to prevent hanging tests
+    actorSystems.foreach { as =>
+      try {
+        TestKit.shutdownActorSystem(as, verifySystemShutdown = false)
+      } catch {
+        case _: Exception => // Ignore errors during cleanup
+      }
+    }
+    actorSystems = List.empty
+  }
 
   "BlockFetcher" - {
 
@@ -279,16 +295,23 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with SecureRandomBu
 
       peersClient.expectMsgPF() { case PeersClient.Request(`firstGetBlockHeadersRequest`, _, _) => () }
 
-      // Request should timeout without any response from the peer
-      Thread.sleep((syncConfig.peerResponseTimeout + 2.seconds).toMillis)
+      // Verify no message arrives immediately
+      peersClient.expectNoMessage(500.millis)
 
-      peersClient.expectMsgPF() { case PeersClient.Request(`firstGetBlockHeadersRequest`, _, _) => () }
+      // Request should timeout and retry - wait for the timeout + retry interval
+      peersClient.expectMsgPF(syncConfig.peerResponseTimeout + 5.seconds) { 
+        case PeersClient.Request(`firstGetBlockHeadersRequest`, _, _) => () 
+      }
       shutdownActorSystem()
     }
   }
 
   trait TestSetup extends TestSyncConfig {
-    val as: ActorSystem = ActorSystem("BlockFetcherSpec_System")
+    val as: ActorSystem = {
+      val system = ActorSystem("BlockFetcherSpec_System")
+      actorSystems = system :: actorSystems
+      system
+    }
     val atks: ActorTestKit = ActorTestKit(as.toTyped)
 
     val peersClient: TestProbe = TestProbe()(as)
