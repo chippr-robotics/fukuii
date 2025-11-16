@@ -40,9 +40,13 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63._
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -216,7 +220,26 @@ class FastSync(
     }
 
     private def handleResponses: Receive = {
-      case ResponseReceived(peer, BlockHeaders(blockHeaders), timeTaken) =>
+      case ResponseReceived(peer, ETH62BlockHeaders(blockHeaders), timeTaken) =>
+        log.info(
+          "Received {} block headers from peer [{}] in {} ms",
+          blockHeaders.size,
+          peer.id,
+          timeTaken
+        )
+        FastSyncMetrics.setBlockHeadersDownloadTime(timeTaken)
+
+        requestedHeaders.get(peer).foreach { requestedNum =>
+          removeRequestHandler(sender())
+          requestedHeaders -= peer
+          if (
+            blockHeaders.nonEmpty && blockHeaders.size <= requestedNum && blockHeaders.head.number == syncState.bestBlockHeaderNumber + 1
+          )
+            handleBlockHeaders(peer, blockHeaders)
+          else
+            blacklist.add(peer.id, blacklistDuration, WrongBlockHeaders)
+        }
+      case ResponseReceived(peer, ETH66BlockHeaders(_, blockHeaders), timeTaken) =>
         log.info(
           "Received {} block headers from peer [{}] in {} ms",
           blockHeaders.size,
@@ -842,20 +865,44 @@ class FastSync(
         else
           syncState.safeDownloadTarget - syncState.bestBlockHeaderNumber
 
-      val handler = context.actorOf(
-        PeerRequestHandler.props[GetBlockHeaders, BlockHeaders](
-          peer,
-          peerResponseTimeout,
-          etcPeerManager,
-          peerEventBus,
-          requestMsg = GetBlockHeaders(Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
-          responseMsgCode = Codes.BlockHeadersCode
-        ),
-        BlockHeadersHandlerName
-      )
+      // Create message in correct format based on peer's negotiated capability
+      val usesRequestId = handshakedPeers
+        .get(peer.id)
+        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
 
-      context.watch(handler)
-      assignedHandlers += (handler -> peer)
+      if (usesRequestId) {
+        // Use ETH66 format for ETH66+ peers
+        val handler = context.actorOf(
+          PeerRequestHandler.props[ETH66.GetBlockHeaders, ETH66BlockHeaders](
+            peer,
+            peerResponseTimeout,
+            etcPeerManager,
+            peerEventBus,
+            requestMsg =
+              ETH66.GetBlockHeaders(0, Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
+            responseMsgCode = Codes.BlockHeadersCode
+          ),
+          BlockHeadersHandlerName
+        )
+        context.watch(handler)
+        assignedHandlers += (handler -> peer)
+      } else {
+        // Use ETH62 format for ETH63-65 peers
+        val handler = context.actorOf(
+          PeerRequestHandler.props[GetBlockHeaders, BlockHeaders](
+            peer,
+            peerResponseTimeout,
+            etcPeerManager,
+            peerEventBus,
+            requestMsg = GetBlockHeaders(Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
+            responseMsgCode = Codes.BlockHeadersCode
+          ),
+          BlockHeadersHandlerName
+        )
+        context.watch(handler)
+        assignedHandlers += (handler -> peer)
+      }
+
       requestedHeaders += (peer -> limit)
       peerRequestsTime += (peer -> Instant.now())
     }
