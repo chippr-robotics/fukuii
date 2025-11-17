@@ -333,7 +333,7 @@ class RegularSyncSpec
                 val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
                 sender ! PeersClient.Response(defaultPeer, BlockHeaders(responseHeaders))
                 Some(new BranchResolutionAutoPilot(true, alternativeBlocks))
-              // Handle ETH66 GetBlockHeaders  
+              // Handle ETH66 GetBlockHeaders
               case PeersClient.Request(ETH66GetBlockHeaders(_, Left(nr), maxHeaders, _, _), _, _)
                   if nr >= alternativeBranch.numberAtUnsafe(syncConfig.blocksBatchSize) && !didResponseWithNewBranch =>
                 val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
