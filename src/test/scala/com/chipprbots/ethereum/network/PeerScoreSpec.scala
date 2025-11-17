@@ -6,16 +6,18 @@ import scala.concurrent.duration._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class PeerScoreSpec extends AnyFlatSpec with Matchers {
 
-  "PeerScore" should "start with neutral score for empty metrics" in {
+  "PeerScore" should "start with neutral score for empty metrics" taggedAs (UnitTest, NetworkTest) in {
     val score = PeerScore.empty
     // Empty score has neutral values (0.5) for most metrics except recency (0.0)
     // (0.5 * 0.3) + (0.5 * 0.25) + (0.5 * 0.2) + (1.0 * 0.15) + (0.0 * 0.1) = 0.525
     score.score shouldBe 0.525 +- 0.01
   }
 
-  it should "have perfect score with all successful operations" in {
+  it should "have perfect score with all successful operations" taggedAs (UnitTest, NetworkTest) in {
     val score = PeerScore(
       successfulHandshakes = 10,
       failedHandshakes = 0,
@@ -29,7 +31,7 @@ class PeerScoreSpec extends AnyFlatSpec with Matchers {
     score.score should be > 0.8
   }
 
-  it should "have low score with many failures" in {
+  it should "have low score with many failures" taggedAs (UnitTest, NetworkTest) in {
     val score = PeerScore(
       successfulHandshakes = 1,
       failedHandshakes = 10,

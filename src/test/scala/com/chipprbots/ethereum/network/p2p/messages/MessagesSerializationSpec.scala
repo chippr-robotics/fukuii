@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages._
 import com.chipprbots.ethereum.network.p2p.messages.ETH61.BlockHashesFromNumber
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
+import com.chipprbots.ethereum.testing.Tags._
 
 class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
 

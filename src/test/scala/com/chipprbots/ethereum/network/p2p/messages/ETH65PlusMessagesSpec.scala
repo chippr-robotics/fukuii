@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
+import com.chipprbots.ethereum.testing.Tags._
 
 class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
 

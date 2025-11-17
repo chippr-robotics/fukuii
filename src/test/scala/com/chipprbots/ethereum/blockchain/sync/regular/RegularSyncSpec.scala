@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.ResourceFixtures
 import com.chipprbots.ethereum.WordSpecBase
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -97,7 +98,7 @@ class RegularSyncSpec
 
   "Regular Sync" when {
     "initializing" should {
-      "subscribe for new blocks, new hashes and new block headers" in sync(new Fixture(testSystem) {
+      "subscribe for new blocks, new hashes and new block headers" taggedAs(UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsg(
@@ -110,14 +111,14 @@ class RegularSyncSpec
         )
       })
 
-      "subscribe to handshaked peers list" in sync(new Fixture(testSystem) {
+      "subscribe to handshaked peers list" taggedAs(UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync // unlazy
         etcPeerManager.expectMsg(EtcPeerManagerActor.GetHandshakedPeers)
       })
     }
 
     "fetching blocks" should {
-      "fetch headers and bodies concurrently" in sync(new Fixture(testSystem) {
+      "fetch headers and bodies concurrently" taggedAs(UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
@@ -134,7 +135,7 @@ class RegularSyncSpec
         )
       })
 
-      "blacklist peer which caused failed request" in sync(new Fixture(testSystem) {
+      "blacklist peer which caused failed request" taggedAs(UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
         peersClient.expectMsgType[PeersClient.Request[GetBlockHeaders]]
@@ -146,7 +147,7 @@ class RegularSyncSpec
         )
       })
 
-      "blacklist peer which returns headers starting from one with higher number than expected" in sync(
+      "blacklist peer which returns headers starting from one with higher number than expected" taggedAs(UnitTest, SyncTest) in sync(
         new Fixture(testSystem) {
           var blockFetcher: ActorRef = _
 

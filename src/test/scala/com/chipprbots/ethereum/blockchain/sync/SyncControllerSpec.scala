@@ -23,6 +23,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks
 import com.chipprbots.ethereum.NormalPatience
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync.SyncState
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.mining.TestMining
@@ -57,7 +58,7 @@ class SyncControllerSpec
     with Eventually
     with NormalPatience {
 
-  "SyncController" should "download pivot block and request block headers" in withTestSetup() { testSetup =>
+  "SyncController" should "download pivot block and request block headers" taggedAs(UnitTest, SyncTest) in withTestSetup() { testSetup =>
     import testSetup._
     syncController ! SyncProtocol.Start
 
@@ -73,7 +74,7 @@ class SyncControllerSpec
     }
   }
 
-  it should "download better pivot block, request state, blocks and finish when downloaded" in withTestSetup() {
+  it should "download better pivot block, request state, blocks and finish when downloaded" taggedAs(UnitTest, SyncTest) in withTestSetup() {
     testSetup =>
       import testSetup._
       startWithState(defaultStateBeforeNodeRestart)
@@ -100,7 +101,7 @@ class SyncControllerSpec
       }
   }
 
-  it should "gracefully handle receiving empty receipts while syncing" in withTestSetup() { testSetup =>
+  it should "gracefully handle receiving empty receipts while syncing" taggedAs(UnitTest, SyncTest) in withTestSetup() { testSetup =>
     import testSetup._
     startWithState(defaultStateBeforeNodeRestart)
 
@@ -131,7 +132,7 @@ class SyncControllerSpec
     }
   }
 
-  it should "handle blocks that fail validation" in withTestSetup(
+  it should "handle blocks that fail validation" taggedAs(UnitTest, SyncTest) in withTestSetup(
     validators = new Mocks.MockValidatorsAlwaysSucceed {
       override val blockHeaderValidator: BlockHeaderValidator = new BlockHeaderValidator {
         override def validate(
@@ -176,7 +177,7 @@ class SyncControllerSpec
     }
   }
 
-  it should "rewind fast-sync state if received header have no known parent" in withTestSetup(
+  it should "rewind fast-sync state if received header have no known parent" taggedAs(UnitTest, SyncTest) in withTestSetup(
     validators = new Mocks.MockValidatorsAlwaysSucceed {
       override val blockHeaderValidator: BlockHeaderValidator = new BlockHeaderValidator {
         val invalidBlockNNumber = 399510

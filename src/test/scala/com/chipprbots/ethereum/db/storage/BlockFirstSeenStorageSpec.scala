@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.testing.Tags._
+
 import scala.collection.mutable
 
 class BlockFirstSeenStorageSpec extends AnyFlatSpec with Matchers {
@@ -23,7 +25,7 @@ class BlockFirstSeenStorageSpec extends AnyFlatSpec with Matchers {
       storage.remove(blockHash)
   }
 
-  "BlockFirstSeenStorage" should "store and retrieve timestamps" in {
+  "BlockFirstSeenStorage" should "store and retrieve timestamps" taggedAs (IntegrationTest, DatabaseTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val blockHash = ByteString("block1")
     val timestamp = 1234567890L
@@ -32,14 +34,14 @@ class BlockFirstSeenStorageSpec extends AnyFlatSpec with Matchers {
     storage.get(blockHash) shouldBe Some(timestamp)
   }
 
-  it should "return None for non-existent blocks" in {
+  it should "return None for non-existent blocks" taggedAs (IntegrationTest, DatabaseTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val blockHash = ByteString("nonexistent")
 
     storage.get(blockHash) shouldBe None
   }
 
-  it should "update existing timestamps" in {
+  it should "update existing timestamps" taggedAs (IntegrationTest, DatabaseTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val blockHash = ByteString("block1")
 
@@ -50,7 +52,7 @@ class BlockFirstSeenStorageSpec extends AnyFlatSpec with Matchers {
     storage.get(blockHash) shouldBe Some(2000L)
   }
 
-  it should "remove timestamps" in {
+  it should "remove timestamps" taggedAs (IntegrationTest, DatabaseTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val blockHash = ByteString("block1")
 
@@ -61,7 +63,7 @@ class BlockFirstSeenStorageSpec extends AnyFlatSpec with Matchers {
     storage.get(blockHash) shouldBe None
   }
 
-  it should "check if block exists using contains" in {
+  it should "check if block exists using contains" taggedAs (IntegrationTest, DatabaseTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val blockHash1 = ByteString("block1")
     val blockHash2 = ByteString("block2")
@@ -72,7 +74,7 @@ class BlockFirstSeenStorageSpec extends AnyFlatSpec with Matchers {
     storage.contains(blockHash2) shouldBe false
   }
 
-  it should "handle multiple blocks independently" in {
+  it should "handle multiple blocks independently" taggedAs (IntegrationTest, DatabaseTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val block1 = ByteString("block1")
     val block2 = ByteString("block2")
@@ -93,7 +95,7 @@ class BlockFirstSeenStorageSpec extends AnyFlatSpec with Matchers {
     storage.get(block3) shouldBe Some(3000L)
   }
 
-  it should "handle ByteString hashes correctly" in {
+  it should "handle ByteString hashes correctly" taggedAs (IntegrationTest, DatabaseTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
 
     // Create different ByteStrings with same content

@@ -38,6 +38,7 @@ import com.chipprbots.ethereum.network.PeerActor.StatusResponse
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network._
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.network.handshaker.EtcHandshaker
 import com.chipprbots.ethereum.network.handshaker.EtcHandshakerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status
