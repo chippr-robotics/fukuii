@@ -493,11 +493,12 @@ addCommandAlias(
 // These commands enable selective test execution based on ScalaTest tags
 
 // testEssential - Tier 1: Essential tests (< 5 minutes)
-// Runs fast unit tests, excludes integration and slow tests
+// Runs fast unit tests, excludes integration, slow, and sync tests
+// Sync tests are excluded because they involve complex actor choreography (ADR-017)
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l SlowTest -l IntegrationTest
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest
     |; rlp / test
     |; bytes / test
     |; crypto / test
