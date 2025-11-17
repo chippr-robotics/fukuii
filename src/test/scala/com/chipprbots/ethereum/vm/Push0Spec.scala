@@ -99,7 +99,13 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
   }
 
   test("PUSH0 should be cheaper than PUSH1 with zero", UnitTest, VMTest) {
-    val initialState = Generators.getProgramStateGen().sample.get
+    // Create state with empty stack and sufficient gas to ensure consistent execution
+    val initialState = Generators
+      .getProgramStateGen()
+      .sample
+      .get
+      .withStack(Stack.empty())
+      .copy(gas = 1000)
 
     // PUSH0 uses G_base (2 gas)
     val push0State = PUSH0.execute(initialState)
