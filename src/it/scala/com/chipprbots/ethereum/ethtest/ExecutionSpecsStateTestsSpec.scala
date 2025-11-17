@@ -8,9 +8,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Comprehensive state test suite using official Ethereum execution specs.
   *
-  * This test suite runs GeneralStateTests from the official ethereum/tests repository,
-  * which are generated from the Ethereum execution specifications at:
-  * https://github.com/ethereum/execution-specs
+  * This test suite runs GeneralStateTests from the official ethereum/tests repository, which are generated from the
+  * Ethereum execution specifications at: https://github.com/ethereum/execution-specs
   *
   * These tests validate:
   *   - EVM state transitions
@@ -110,17 +109,17 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
   ) in {
     // Run multiple tests to verify state root consistency
     val tests = Seq("/ethereum-tests/add11.json", "/ethereum-tests/addNonConst.json")
-    
+
     tests.foreach { testPath =>
       info(s"Validating state roots for: $testPath")
       val suite = loadTestSuite(testPath)
-      
+
       suite.tests.foreach { case (testName, test) =>
         val result = executeTest(test)
         result match {
           case Right(executionResult) =>
             info(s"  ✓ State root validated for $testName")
-            // State root is computed and validated automatically by executeTest
+          // State root is computed and validated automatically by executeTest
           case Left(error) =>
             fail(s"State root validation failed for $testName: $error")
         }
@@ -180,7 +179,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
       result match {
         case Right(executionResult) =>
           info(s"  ✓ Account state updated correctly for $testName")
-          // Post-state validation is done automatically by executeTest
+        // Post-state validation is done automatically by executeTest
         case Left(error) =>
           fail(s"Account state update failed: $error")
       }
@@ -195,7 +194,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
   ) in {
     info("Validating gas calculations from execution specs...")
     val tests = Seq("/ethereum-tests/add11.json", "/ethereum-tests/addNonConst.json")
-    
+
     tests.foreach { testPath =>
       val suite = loadTestSuite(testPath)
       suite.tests.foreach { case (testName, test) =>
