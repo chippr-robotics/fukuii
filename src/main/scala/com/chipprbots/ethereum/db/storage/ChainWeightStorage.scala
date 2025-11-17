@@ -21,10 +21,10 @@ class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyVal
   val valueSerializer: ChainWeight => IndexedSeq[Byte] = (Pickle.intoBytes[ChainWeight] _).andThen(compactPickledBytes)
   val valueDeserializer: IndexedSeq[Byte] => ChainWeight = { bytes =>
     val buffer = byteSequenceToBuffer(bytes)
-    try {
+    try
       // Try to deserialize as current format (with messScore field)
       Unpickle[ChainWeight].fromBytes(buffer)
-    } catch {
+    catch {
       case _: BufferUnderflowException =>
         // Handle legacy format (before messScore was added)
         // Rewind buffer to try deserializing as legacy format
@@ -53,8 +53,8 @@ class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyVal
 object ChainWeightStorage {
   type BlockHash = ByteString
 
-  /** Legacy ChainWeight format before messScore was added (MESS implementation).
-    * Used for backward-compatible deserialization of old database entries.
+  /** Legacy ChainWeight format before messScore was added (MESS implementation). Used for backward-compatible
+    * deserialization of old database entries.
     */
   private[storage] case class LegacyChainWeight(
       lastCheckpointNumber: BigInt,
