@@ -14,7 +14,7 @@ class ConsoleUIUpdater(
     syncController: Option[Any],
     networkName: String,
     shutdownHook: () => Unit
-)(implicit system: ActorSystem)
+)(implicit _system: ActorSystem)
     extends Logger {
 
   import ConsoleUI._

@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder.DecodingError
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
-import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
+
 import com.chipprbots.ethereum.utils.Logger
 
 object MessageCodec {

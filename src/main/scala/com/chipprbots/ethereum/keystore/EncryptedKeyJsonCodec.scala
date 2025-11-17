@@ -7,11 +7,6 @@ import org.apache.pekko.util.ByteString
 import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
-import org.json4s.CustomSerializer
-import org.json4s.DefaultFormats
-import org.json4s.Extraction
-import org.json4s.Formats
-import org.json4s.JField
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
