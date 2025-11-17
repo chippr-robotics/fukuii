@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.Fixtures.{Blocks => BlockFixtures}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.testing.Tags._
 
 import Fixtures.blockchainConfig
 
@@ -79,18 +80,18 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
 
     "configuration flag" should {
 
-      "be false for pre-Spiral forks" in {
+      "be false for pre-Spiral forks" taggedAs(UnitTest, VMTest) in {
         configPreEip6049.eip6049DeprecationEnabled shouldBe false
       }
 
-      "be true for Spiral fork and later" in {
+      "be true for Spiral fork and later" taggedAs(UnitTest, VMTest) in {
         configWithEip6049.eip6049DeprecationEnabled shouldBe true
       }
     }
 
     "helper method isEip6049DeprecationEnabled" should {
 
-      "return false for pre-Spiral forks" in {
+      "return false for pre-Spiral forks" taggedAs(UnitTest, VMTest) in {
         val mystiqueEtcFork = blockchainConfig.etcForkForBlockNumber(Fixtures.MystiqueBlockNumber)
         BlockchainConfigForEvm.isEip6049DeprecationEnabled(mystiqueEtcFork) shouldBe false
 
@@ -101,7 +102,7 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
         BlockchainConfigForEvm.isEip6049DeprecationEnabled(phoenixEtcFork) shouldBe false
       }
 
-      "return true for Spiral fork and later" in {
+      "return true for Spiral fork and later" taggedAs(UnitTest, VMTest) in {
         val spiralEtcFork = blockchainConfig.etcForkForBlockNumber(Fixtures.SpiralBlockNumber)
         BlockchainConfigForEvm.isEip6049DeprecationEnabled(spiralEtcFork) shouldBe true
       }
@@ -109,7 +110,7 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
 
     "SELFDESTRUCT behavior" should {
 
-      "remain unchanged before EIP-6049" in {
+      "remain unchanged before EIP-6049" taggedAs(UnitTest, VMTest) in {
         val context = createContext(
           codeWithSelfDestruct.code,
           fakeHeaderPreEip6049,
@@ -128,7 +129,7 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
         finalWorld.getBalance(beneficiaryAddr) shouldEqual UInt256(1500) // 500 + 1000
       }
 
-      "remain unchanged after EIP-6049 (behavior does not change)" in {
+      "remain unchanged after EIP-6049 (behavior does not change)" taggedAs(UnitTest, VMTest) in {
         val context = createContext(
           codeWithSelfDestruct.code,
           fakeHeaderWithEip6049,
@@ -147,7 +148,7 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
         finalWorld.getBalance(beneficiaryAddr) shouldEqual UInt256(1500) // 500 + 1000
       }
 
-      "have identical gas costs before and after EIP-6049" in {
+      "have identical gas costs before and after EIP-6049" taggedAs(UnitTest, VMTest) in {
         // Pre-EIP-6049
         val contextPre = createContext(
           codeWithSelfDestruct.code,
@@ -173,7 +174,7 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
         gasUsedPre shouldEqual gasUsedWith
       }
 
-      "have zero refund in both cases (due to EIP-3529 in Mystique fork)" in {
+      "have zero refund in both cases (due to EIP-3529 in Mystique fork)" taggedAs(UnitTest, VMTest) in {
         // Both Mystique and Spiral have EIP-3529, so refund should be 0 in both cases
         configPreEip6049.feeSchedule.R_selfdestruct shouldEqual 0
         configWithEip6049.feeSchedule.R_selfdestruct shouldEqual 0
@@ -182,7 +183,7 @@ class Eip6049Spec extends AnyWordSpec with Matchers {
 
     "documentation" should {
 
-      "indicate that EIP-6049 is informational only" in {
+      "indicate that EIP-6049 is informational only" taggedAs(UnitTest, VMTest) in {
         // This test verifies that the behavior is unchanged
         // EIP-6049 only deprecates SELFDESTRUCT but does not modify its behavior
         // Future EIPs (like EIP-6780 in Ethereum Cancun) may change behavior

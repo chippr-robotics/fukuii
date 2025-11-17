@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
+import com.chipprbots.ethereum.testing.Tags._
 
 class BranchResolutionSpec
     extends AnyWordSpec
@@ -36,14 +37,14 @@ class BranchResolutionSpec
 
   "BranchResolution" should {
 
-    "check if headers are from chain" in new BlockchainSetup {
+    "check if headers are from chain" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
       val branchResolution = new BranchResolution(blockchainReader)
       val parent: BlockHeader = defaultBlockHeader.copy(number = 1)
       val child: BlockHeader = defaultBlockHeader.copy(number = 2, parentHash = parent.hash)
       branchResolution.doHeadersFormChain(NonEmptyList.of(parent, child)) shouldBe true
     }
 
-    "check if headers are not from chain" in new BlockchainSetup {
+    "check if headers are not from chain" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
       val branchResolution = new BranchResolution(blockchainReader)
       val parent: BlockHeader = defaultBlockHeader.copy(number = 1)
       val otherParent: BlockHeader = defaultBlockHeader.copy(number = 3)

@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.vm.OutOfGas
 
 import org.scalatest.Ignore
+import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in LedgerTestSetup
 // scalastyle:off magic.number
@@ -45,7 +46,7 @@ class BlockExecutionSpec
 
     "correctly run executeBlocks" when {
 
-      "two blocks with txs (that first one has invalid tx)" in new BlockchainSetup {
+      "two blocks with txs (that first one has invalid tx)" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
         val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
         val block1BodyWithTxs: BlockBody = validBlockBodyWithNoTxs.copy(transactionList = Seq(invalidStx))
         val block1 = Block(validBlockHeader, block1BodyWithTxs)
@@ -88,7 +89,7 @@ class BlockExecutionSpec
         error.isDefined shouldBe true
       }
 
-      "two blocks with txs (that last one has invalid tx)" in new BlockchainSetup {
+      "two blocks with txs (that last one has invalid tx)" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
         val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
         val block1BodyWithTxs: BlockBody =
           validBlockBodyWithNoTxs.copy(transactionList = Seq(validStxSignedByOrigin))
@@ -131,7 +132,7 @@ class BlockExecutionSpec
         error.isDefined shouldBe true
       }
 
-      "executing a long branch where the last block is invalid" in new BlockchainSetup {
+      "executing a long branch where the last block is invalid" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
         val chain = BlockHelpers.generateChain(10, validBlockParentBlock)
 
         val mockVm = new MockVM(c =>
@@ -165,7 +166,7 @@ class BlockExecutionSpec
         error.isDefined shouldBe true
       }
 
-      "block with checkpoint and without txs" in new BlockchainSetup {
+      "block with checkpoint and without txs" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
         val checkpoint = ObjectGenerators.fakeCheckpointGen(2, 5).sample.get
         val blockWithCheckpoint =
           new CheckpointBlockGenerator().generate(Block(validBlockParentHeader, validBlockBodyWithNoTxs), checkpoint)
@@ -212,7 +213,7 @@ class BlockExecutionSpec
     }
 
     "correctly run executeBlockTransactions" when {
-      "block without txs" in new BlockExecutionTestSetup {
+      "block without txs" taggedAs(UnitTest, StateTest) in new BlockExecutionTestSetup {
         val block = Block(validBlockHeader, validBlockBodyWithNoTxs)
 
         val txsExecResult: Either[BlockExecutionError, BlockResult] =
@@ -225,7 +226,7 @@ class BlockExecutionSpec
         resultingReceipts shouldBe Nil
       }
 
-      "block with one tx (that produces OutOfGas)" in new BlockchainSetup {
+      "block with one tx (that produces OutOfGas)" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
 
         val blockBodyWithTxs: BlockBody = validBlockBodyWithNoTxs.copy(transactionList = Seq(validStxSignedByOrigin))
         val block = Block(validBlockHeader, blockBodyWithTxs)
@@ -286,7 +287,7 @@ class BlockExecutionSpec
         logsReceipt shouldBe Nil
       }
 
-      "block with one tx (that produces no errors)" in new BlockchainSetup {
+      "block with one tx (that produces no errors)" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
 
         val table: TableFor4[BigInt, Seq[TxLogEntry], Set[Address], Boolean] =
           Table[BigInt, Seq[TxLogEntry], Set[Address], Boolean](
@@ -367,7 +368,7 @@ class BlockExecutionSpec
         }
       }
 
-      "last one wasn't executed correctly" in new BlockExecutionTestSetup {
+      "last one wasn't executed correctly" taggedAs(UnitTest, StateTest) in new BlockExecutionTestSetup {
         val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
         val blockBodyWithTxs: BlockBody =
           validBlockBodyWithNoTxs.copy(transactionList = Seq(validStxSignedByOrigin, invalidStx))
@@ -379,7 +380,7 @@ class BlockExecutionSpec
         txsExecResult.isLeft shouldBe true
       }
 
-      "first one wasn't executed correctly" in new BlockExecutionTestSetup {
+      "first one wasn't executed correctly" taggedAs(UnitTest, StateTest) in new BlockExecutionTestSetup {
         val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
         val blockBodyWithTxs: BlockBody =
           validBlockBodyWithNoTxs.copy(transactionList = Seq(invalidStx, validStxSignedByOrigin))
@@ -394,7 +395,7 @@ class BlockExecutionSpec
 
     // migrated from old LedgerSpec
 
-    "correctly run executeBlock for a valid block without txs" in new BlockchainSetup {
+    "correctly run executeBlock for a valid block without txs" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
 
       val table: TableFor2[Int, BigInt] = Table[Int, BigInt](
         ("ommersSize", "ommersBlockDifference"),
@@ -449,7 +450,7 @@ class BlockExecutionSpec
       }
     }
 
-    "fail to run executeBlock if a block is invalid before executing it" in new BlockchainSetup {
+    "fail to run executeBlock if a block is invalid before executing it" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
       object validatorsOnlyFailsBlockValidator extends Mocks.MockValidatorsAlwaysSucceed {
         override val blockValidator: BlockValidator = Mocks.MockValidatorsAlwaysFail.blockValidator
       }
@@ -500,7 +501,7 @@ class BlockExecutionSpec
       })
     }
 
-    "fail to run executeBlock if a block is invalid after executing it" in new BlockchainSetup {
+    "fail to run executeBlock if a block is invalid after executing it" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
 
       object validatorsFailsBlockValidatorWithReceipts extends Mocks.MockValidatorsAlwaysSucceed {
         override val blockValidator: BlockValidator = new BlockValidator {
@@ -554,7 +555,7 @@ class BlockExecutionSpec
       }
     }
 
-    "correctly run a block with more than one tx" in new BlockchainSetup {
+    "correctly run a block with more than one tx" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
       val table: TableFor4[Address, Address, Address, Address] = Table[Address, Address, Address, Address](
         ("origin1Address", "receiver1Address", "origin2Address", "receiver2Address"),
         (originAddress, minerAddress, receiverAddress, minerAddress),
@@ -657,7 +658,7 @@ class BlockExecutionSpec
       }
     }
 
-    "drain DAO accounts and send the funds to refund address if Pro DAO Fork was configured" in new DaoForkTestSetup {
+    "drain DAO accounts and send the funds to refund address if Pro DAO Fork was configured" taggedAs(UnitTest, StateTest) in new DaoForkTestSetup {
 
       (worldState.getAccount _)
         .expects(supportDaoForkConfig.refundContract.get)
@@ -680,7 +681,7 @@ class BlockExecutionSpec
       )
     }
 
-    "neither drain DAO accounts nor send the funds to refund address if Pro DAO Fork was not configured" in new DaoForkTestSetup {
+    "neither drain DAO accounts nor send the funds to refund address if Pro DAO Fork was not configured" taggedAs(UnitTest, StateTest) in new DaoForkTestSetup {
       // Check we drain all the accounts and send the balance to refund contract
       supportDaoForkConfig.drainList.foreach { _ =>
         (worldState.transfer _).expects(*, *, *).never()
