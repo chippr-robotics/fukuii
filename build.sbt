@@ -354,6 +354,7 @@ lazy val node = {
       ),
       // protobuf API version file is now provided in src/main/resources/extvm/VERSION
       // Packaging
+      maintainer := "chippr-robotics@github.com",
       (Compile / mainClass) := Some("com.chipprbots.ethereum.App"),
       (Compile / discoveredMainClasses) := Seq(),
       (Universal / mappings) ++= directory((Compile / resourceDirectory).value / "conf"),
