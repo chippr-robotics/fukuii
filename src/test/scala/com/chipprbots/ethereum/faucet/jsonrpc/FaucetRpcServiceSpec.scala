@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.faucet.jsonrpc.FaucetDomain.SendFundsRequest
 import com.chipprbots.ethereum.faucet.jsonrpc.FaucetDomain.StatusRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.testing.ActorsTesting.simpleAutoPilot
+import com.chipprbots.ethereum.testing.Tags._
 
 class FaucetRpcServiceSpec
     extends TestKit(ActorSystem("ActorSystem_DebugFaucetRpcServiceSpec"))

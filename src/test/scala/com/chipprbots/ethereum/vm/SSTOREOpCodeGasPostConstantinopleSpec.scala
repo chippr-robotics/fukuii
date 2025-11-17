@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.vm.Fixtures.blockchainConfig
 import com.chipprbots.ethereum.vm.MockWorldState.PC
 import com.chipprbots.ethereum.vm.MockWorldState.TestVM
@@ -26,7 +27,7 @@ class StoreOpCodeGasPostConstantinopleSpec
   val defaultGaspool = 1000000
 
   // Spec https://eips.ethereum.org/EIPS/eip-1283
-  "Net gas metering for SSTORE after Constantinople hard fork (EIP-1283)" in {
+  "Net gas metering for SSTORE after Constantinople hard fork (EIP-1283)" taggedAs(UnitTest, VMTest) in {
     val eip1283table = Table[String, BigInt, BigInt, BigInt](
       ("code", "original", "gasUsed", "refund"),
       ("60006000556000600055", 0, 412, 0),
@@ -58,7 +59,7 @@ class StoreOpCodeGasPostConstantinopleSpec
   }
 
   // Spec https://eips.ethereum.org/EIPS/eip-2200
-  "Net gas metering for SSTORE after Phoenix hard fork (EIP-2200)" in {
+  "Net gas metering for SSTORE after Phoenix hard fork (EIP-2200)" taggedAs(UnitTest, VMTest) in {
     val eip2200table = Table[String, BigInt, BigInt, BigInt, BigInt, Option[ProgramError]](
       ("code", "original", "gasUsed", "refund", "gaspool", "error"),
       ("60006000556000600055", 0, 1612, 0, defaultGaspool, None),

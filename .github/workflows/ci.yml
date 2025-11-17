@@ -71,10 +71,27 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Run tests with coverage
-        run: sbt testCoverage
+      - name: Run Essential Tests (Tier 1)
+        run: |
+          echo "=========================================="
+          echo "Running Essential Tests (< 5 minutes)"
+          echo "=========================================="
+          sbt testEssential
         env:
           FUKUII_DEV: true
+        timeout-minutes: 10
+      
+      - name: Run Standard Tests with Coverage (Tier 2)
+        run: |
+          echo "=========================================="
+          echo "Running Standard Tests with Coverage (< 30 minutes)"
+          echo "=========================================="
+          sbt testStandard
+          sbt coverageReport
+          sbt coverageAggregate
+        env:
+          FUKUII_DEV: true
+        timeout-minutes: 45
       
       - name: Validate KPI Baselines
         run: |

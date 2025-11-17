@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 import NewBlock._
 
@@ -20,7 +21,7 @@ class NewBlockSpec extends AnyFunSuite with ScalaCheckPropertyChecks with Object
 
   val chainId: Byte = Hex.decode("3d").head
 
-  test("NewBlock v63 messages are encoded and decoded properly") {
+  test("NewBlock v63 messages are encoded and decoded properly") taggedAs (UnitTest, NetworkTest) {
     forAll(newBlockGen(secureRandom, Some(chainId))) { newBlock =>
       val encoded: Array[Byte] = newBlock.toBytes
       val decoded: NewBlock = encoded.toNewBlock
@@ -28,7 +29,7 @@ class NewBlockSpec extends AnyFunSuite with ScalaCheckPropertyChecks with Object
     }
   }
 
-  test("NewBlock v64 messages are encoded and decoded properly") {
+  test("NewBlock v64 messages are encoded and decoded properly") taggedAs (UnitTest, NetworkTest) {
     import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock._
     forAll(newBlock64Gen(secureRandom, Some(chainId))) { newBlock =>
       val encoded: Array[Byte] = newBlock.toBytes
@@ -37,7 +38,7 @@ class NewBlockSpec extends AnyFunSuite with ScalaCheckPropertyChecks with Object
     }
   }
 
-  test("NewBlock messages are properly encoded") {
+  test("NewBlock messages are properly encoded") taggedAs (UnitTest, NetworkTest) {
     val obtainEncoded = Hex.toHexString(newBlock.toBytes)
     val expectedEncoded =
       "f90200f901f9f901f4a00000000000000000000000000000000000000000000000000000000000000000a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347943333333333333333333333333333333333333333a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000830f0000808408000000808000a0000000000000000000000000000000000000000000000000000000000000000088deadbeefdeadbeefc0c0830f0000"

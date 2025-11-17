@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.testing.Tags._
 
 class ReceiptsSpec extends AnyFlatSpec with Matchers {
 

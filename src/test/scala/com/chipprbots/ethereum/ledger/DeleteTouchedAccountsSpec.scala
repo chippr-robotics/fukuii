@@ -16,20 +16,21 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm
 import com.chipprbots.ethereum.vm.EvmConfig
+import com.chipprbots.ethereum.testing.Tags._
 
 class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers {
 
   val blockchainConfig = Config.blockchains.blockchainConfig
   val syncConfig: SyncConfig = SyncConfig(Config.config)
 
-  it should "delete no accounts when there are no touched accounts" in new TestSetup {
+  it should "delete no accounts when there are no touched accounts" taggedAs(UnitTest, StateTest) in new TestSetup {
     val newWorld: InMemoryWorldStateProxy =
       InMemoryWorldStateProxy.persistState(mining.blockPreparator.deleteEmptyTouchedAccounts(worldStatePostEIP161))
     accountAddresses.foreach(a => assert(newWorld.getAccount(a).isDefined))
     newWorld.stateRootHash shouldBe worldStatePostEIP161.stateRootHash
   }
 
-  it should "delete no accounts when there are no empty touched accounts" in new TestSetup {
+  it should "delete no accounts when there are no empty touched accounts" taggedAs(UnitTest, StateTest) in new TestSetup {
     val worldAfterTransfer: InMemoryWorldStateProxy =
       worldStatePostEIP161.transfer(validAccountAddress, validAccountAddress2, transferBalance)
     worldAfterTransfer.touchedAccounts.size shouldEqual 2
@@ -39,7 +40,7 @@ class DeleteTouchedAccountsSpec extends AnyFlatSpec with Matchers {
     accountAddresses.foreach(a => assert(newWorld.getAccount(a).isDefined))
   }
 
-  it should "delete touched empty account" in new TestSetup {
+  it should "delete touched empty account" taggedAs(UnitTest, StateTest) in new TestSetup {
     val worldAfterTransfer: InMemoryWorldStateProxy =
       worldStatePostEIP161.transfer(validAccountAddress, validEmptyAccountAddress, zeroTransferBalance)
     worldAfterTransfer.touchedAccounts.size shouldEqual 2

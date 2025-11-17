@@ -13,11 +13,12 @@ import com.chipprbots.ethereum.crypto._
 import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.network.rlpx.AuthInitiateMessage
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.ByteUtils
 
 class AuthInitiateMessageSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
 
-  "AuthInitiateMessage" should "encode and decode itself" in {
+  "AuthInitiateMessage" should "encode and decode itself" taggedAs (UnitTest, NetworkTest) in {
     val keyPair = {
       val generator = new ECKeyPairGenerator
       generator.init(new ECKeyGenerationParameters(curve, secureRandom))

@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.crypto.pubKeyFromKeyPair
 import com.chipprbots.ethereum.domain.SignedTransaction.getSender
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
 

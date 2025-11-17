@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.FreeSpecBase
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.SpecFixtures
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
@@ -115,7 +116,7 @@ class FastSyncSpec
 
   "FastSync" - {
     "for reporting progress" - {
-      "returns NotSyncing until pivot block is selected and first data being fetched" in testCaseM {
+      "returns NotSyncing until pivot block is selected and first data being fetched" taggedAs(UnitTest, SyncTest) in testCaseM {
         (fixture: Fixture) =>
           import fixture._
 
@@ -125,7 +126,7 @@ class FastSyncSpec
           } yield assert(status === Status.NotSyncing)).timeout(timeout.duration)
       }
 
-      "returns Syncing when pivot block is selected and started fetching data" in testCaseM { (fixture: Fixture) =>
+      "returns Syncing when pivot block is selected and started fetching data" taggedAs(UnitTest, SyncTest) in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -145,7 +146,7 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with block progress once both header and body is fetched" in testCaseM { (fixture: Fixture) =>
+      "returns Syncing with block progress once both header and body is fetched" taggedAs(UnitTest, SyncTest) in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -167,7 +168,7 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with state nodes progress" in customTestCaseM(new Fixture {
+      "returns Syncing with state nodes progress" taggedAs(UnitTest, SyncTest) in customTestCaseM(new Fixture {
         override lazy val syncConfig: SyncConfig =
           defaultSyncConfig.copy(
             peersScanInterval = 1.second,

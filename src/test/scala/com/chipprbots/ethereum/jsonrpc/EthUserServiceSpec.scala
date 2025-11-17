@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils._
 
 class EthUserServiceSpec
