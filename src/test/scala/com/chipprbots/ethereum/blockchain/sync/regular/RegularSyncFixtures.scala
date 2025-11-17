@@ -163,13 +163,14 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def peerByNumber(number: Int): Peer = handshakedPeers.keys.toList.sortBy(_.id.value).apply(number)
 
-    def blockHeadersChunkRequest(fromChunk: Int): PeersClient.Request[GetBlockHeaders] = {
+    def blockHeadersChunkRequest(fromChunk: Int): PeersClient.Request[ETH66GetBlockHeaders] = {
       val block = testBlocksChunked(fromChunk).headNumberUnsafe
       blockHeadersRequest(block)
     }
 
-    def blockHeadersRequest(fromBlock: BigInt): PeersClient.Request[GetBlockHeaders] = PeersClient.Request.create(
-      GetBlockHeaders(
+    def blockHeadersRequest(fromBlock: BigInt): PeersClient.Request[ETH66GetBlockHeaders] = PeersClient.Request.create(
+      ETH66GetBlockHeaders(
+        requestId = 0,
         Left(fromBlock),
         syncConfig.blockHeadersPerRequest,
         skip = 0,
