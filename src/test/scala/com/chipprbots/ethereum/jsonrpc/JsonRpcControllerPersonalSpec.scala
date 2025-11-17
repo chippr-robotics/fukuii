@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.OptionNoneToJNullSerializer
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.QuantitiesSerializer
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.UnformattedDataJsonSerializer
+import com.chipprbots.ethereum.testing.Tags._
 
 class JsonRpcControllerPersonalSpec
     extends TestKit(ActorSystem("JsonRpcControllerPersonalSpec_System"))

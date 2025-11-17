@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.testing.ActorsTesting.simpleAutoPilot
+import com.chipprbots.ethereum.testing.Tags._
 
 class EthServiceSpec
     extends TestKit(ActorSystem("EthInfoServiceSpec_ActorSystem"))

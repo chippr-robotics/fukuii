@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.proof.ProofVerifyResult.ValidProof
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptNode
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockchainSpec
     extends AnyFlatSpec

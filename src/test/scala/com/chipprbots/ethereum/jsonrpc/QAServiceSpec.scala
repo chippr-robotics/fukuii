@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class QAServiceSpec
     extends TestKit(ActorSystem("QAServiceSpec_ActorSystem"))

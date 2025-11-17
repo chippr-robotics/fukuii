@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.keystore.KeyStore

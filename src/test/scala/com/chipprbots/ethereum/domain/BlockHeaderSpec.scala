@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators {
 
