@@ -173,8 +173,8 @@ addCommandAlias(
 |------------|-----------------|----------------|
 | **GeneralStateTests** (Berlin) | > 95% | ✅ Phase 2 Complete |
 | **BlockchainTests** (Berlin) | > 90% | ✅ Phase 2 Complete |
-| **TransactionTests** | > 95% | ⏳ Pending |
-| **VMTests** | > 95% | ⏳ Pending |
+| **TransactionTests** | > 95% | ✅ Integrated - Discovery Phase |
+| **VMTests** | > 95% | ✅ Integrated - Discovery Phase |
 
 Note: Post-Spiral tests (block > 19.25M) are excluded for ETC compatibility
 
@@ -520,28 +520,31 @@ case class BlockchainTest(
 | **Test Execution** | Reference implementation | ADR-015 adapter | None - aligned |
 | **State Tests** | Full suite | Phase 2 complete | None - aligned |
 | **Blockchain Tests** | Full suite | Phase 2 complete | None - aligned |
-| **VM Tests** | Opcode validation | Not integrated | Need Tier 3 suite |
-| **Transaction Tests** | TX validation | Not integrated | Need Tier 3 suite |
+| **VM Tests** | Opcode validation | Integrated - Discovery | Need execution validation |
+| **Transaction Tests** | TX validation | Integrated - Discovery | Need execution validation |
 | **Fork Tests** | All ETH forks | ETC forks only | Expected - chain divergence |
 | **Performance Tests** | Not specified | Benchmark suite | Fukuii-specific |
 | **Coverage Metrics** | Not specified | scoverage | Fukuii-specific |
 
 ### Recommendations for Full Spec Compliance
 
-1. **Add VMTests Integration** (Priority: High)
-   - Implement VMTests adapter similar to BlockchainTests
-   - Validate all 140+ EVM opcodes
-   - Add to Tier 3 comprehensive suite
+1. **Complete VMTests Execution** (Priority: High)
+   - ✅ Discovery and test suite integration complete
+   - ⏳ Add execution tests for all VM test categories
+   - ⏳ Validate all 140+ EVM opcodes
+   - ⏳ Add to Tier 3 comprehensive suite
 
-2. **Add TransactionTests Integration** (Priority: Medium)
-   - Validate transaction parsing, signing, and validation
-   - Test edge cases (invalid signatures, gas limits, etc.)
-   - Add to Tier 2 standard suite
+2. **Complete TransactionTests Execution** (Priority: Medium)
+   - ✅ Discovery and test suite integration complete
+   - ⏳ Implement transaction validation logic
+   - ⏳ Test edge cases (invalid signatures, gas limits, etc.)
+   - ⏳ Add to Tier 2 standard suite
 
 3. **Fork-Specific Test Filtering** (Priority: High)
-   - Implement network version filtering in adapter
-   - Auto-exclude post-Spiral ETH tests
-   - Generate ETC-specific post-Spiral tests
+   - ✅ Network version filtering implemented in VMTests and TransactionTests
+   - ✅ Pre-Spiral network support (Frontier through Berlin)
+   - ⏳ Auto-exclude post-Spiral ETH tests
+   - ⏳ Generate ETC-specific post-Spiral tests
 
 4. **Precompile Coverage** (Priority: Medium)
    - Validate all precompiled contracts (ecrecover, sha256, ripemd160, etc.)
@@ -568,6 +571,7 @@ case class BlockchainTest(
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-11-16 | 1.0 | Initial version with three-tier test strategy, KPIs, and ethereum/specs validation |
+| 2025-11-16 | 1.1 | VMTests and TransactionTests integrated into tiered tagged system (discovery phase) |
 
 ---
 
