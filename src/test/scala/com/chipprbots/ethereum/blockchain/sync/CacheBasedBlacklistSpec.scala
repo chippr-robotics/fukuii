@@ -30,7 +30,7 @@ class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers {
   }
 
   "CacheBasedBlacklist" should {
-    "add elements and respect max number of elements" taggedAs(UnitTest, SyncTest) in withBlacklist(3) { blacklist =>
+    "add elements and respect max number of elements" taggedAs (UnitTest, SyncTest) in withBlacklist(3) { blacklist =>
       blacklist.add(peer1, 1.minute, reason)
       blacklist.add(peer2, 1.minute, reason)
       blacklist.add(peer3, 1.minute, anotherReason)
@@ -40,7 +40,7 @@ class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers {
       val size = blacklist.keys.size
       assert(size <= 3 && size > 0)
     }
-    "should expire elements" taggedAs(UnitTest, SyncTest) in {
+    "should expire elements" taggedAs (UnitTest, SyncTest) in {
       val maxSize = 10
       val ticker = new FakeTicker()
       val cache = Scaffeine()
@@ -67,14 +67,14 @@ class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers {
       blacklist.cache.cleanUp()
       blacklist.keys must contain theSameElementsAs expected
     }
-    "check if given key is part of the list" taggedAs(UnitTest, SyncTest) in withBlacklist(3) { blacklist =>
+    "check if given key is part of the list" taggedAs (UnitTest, SyncTest) in withBlacklist(3) { blacklist =>
       blacklist.add(peer1, 1.minute, reason)
       blacklist.add(peer2, 1.minute, anotherReason)
       blacklist.add(peer3, 1.minute, reason)
       assert(blacklist.isBlacklisted(peer2) === true)
       assert(blacklist.isBlacklisted(PeerId("7")) === false)
     }
-    "remove id from blacklist" taggedAs(UnitTest, SyncTest) in withBlacklist(3) { blacklist =>
+    "remove id from blacklist" taggedAs (UnitTest, SyncTest) in withBlacklist(3) { blacklist =>
       blacklist.add(peer1, 1.minute, reason)
       blacklist.add(peer2, 1.minute, anotherReason)
       blacklist.add(peer3, 1.minute, reason)

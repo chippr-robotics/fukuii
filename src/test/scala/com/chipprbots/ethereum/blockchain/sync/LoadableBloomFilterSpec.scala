@@ -18,7 +18,7 @@ class LoadableBloomFilterSpec extends FlatSpecBase {
       Funnels.longFunnel().funnel(from, into)
   }
 
-  "LoadableBloomFilter" should "load all correct elements " taggedAs(UnitTest, SyncTest) in testCaseM {
+  "LoadableBloomFilter" should "load all correct elements " taggedAs (UnitTest, SyncTest) in testCaseM {
     for {
       source <- IO(Stream.emits(Seq(Right(1L), Right(2L), Right(3L))))
       filter = LoadableBloomFilter[Long](1000, source)
@@ -30,7 +30,7 @@ class LoadableBloomFilterSpec extends FlatSpecBase {
     }
   }
 
-  it should "load filter only once" taggedAs(UnitTest, SyncTest) in testCaseM[IO] {
+  it should "load filter only once" taggedAs (UnitTest, SyncTest) in testCaseM[IO] {
     for {
       source <- IO(Stream.emits(Seq(Right(1L), Right(2L), Right(3L))))
       filter = LoadableBloomFilter[Long](1000, source)
@@ -44,7 +44,7 @@ class LoadableBloomFilterSpec extends FlatSpecBase {
     }
   }
 
-  it should "report last error if encountered" taggedAs(UnitTest, SyncTest) in testCaseM[IO] {
+  it should "report last error if encountered" taggedAs (UnitTest, SyncTest) in testCaseM[IO] {
     for {
       error <- IO(IterationError(new RuntimeException("test")))
       source = Stream.emits(Seq(Right(1L), Right(2L), Right(3L), Left(error)))

@@ -39,7 +39,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
   "BlockPreparator" should {
 
     "correctly change the nonce" when {
-      "executing a tx that results in contract creation" taggedAs(UnitTest, StateTest) in new TestSetup {
+      "executing a tx that results in contract creation" taggedAs (UnitTest, StateTest) in new TestSetup {
 
         val tx: LegacyTransaction =
           defaultTx.copy(
@@ -64,7 +64,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         postTxWorld.getGuaranteedAccount(originAddress).nonce shouldBe UInt256(initialOriginNonce + 1)
       }
 
-      "executing a tx that results in a message call" taggedAs(UnitTest, StateTest) in new TestSetup {
+      "executing a tx that results in a message call" taggedAs (UnitTest, StateTest) in new TestSetup {
 
         val tx: LegacyTransaction = defaultTx.copy(
           gasPrice = defaultGasPrice,
@@ -90,7 +90,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     }
 
     "properly assign stateRootHash" when {
-      "before byzantium block (exclusive)" taggedAs(UnitTest, StateTest) in new TestSetup {
+      "before byzantium block (exclusive)" taggedAs (UnitTest, StateTest) in new TestSetup {
 
         val tx: LegacyTransaction = defaultTx.copy(
           gasPrice = defaultGasPrice,
@@ -114,7 +114,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         }
       }
 
-      "after byzantium block (inclusive) if operation is a success" taggedAs(UnitTest, StateTest) in new TestSetup {
+      "after byzantium block (inclusive) if operation is a success" taggedAs (UnitTest, StateTest) in new TestSetup {
 
         val tx: LegacyTransaction = defaultTx.copy(
           gasPrice = defaultGasPrice,
@@ -136,7 +136,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
         result.map(_.receipts.last.postTransactionStateHash shouldBe SuccessOutcome)
       }
 
-      "after byzantium block (inclusive) if operation is a failure" taggedAs(UnitTest, StateTest) in new TestSetup {
+      "after byzantium block (inclusive) if operation is a failure" taggedAs (UnitTest, StateTest) in new TestSetup {
 
         val defaultsLogs: Seq[TxLogEntry] = Seq(defaultLog)
 
@@ -169,7 +169,10 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
       }
     }
 
-    "correctly calculate the total gas refund to be returned to the sender and paying for gas to the miner" taggedAs(UnitTest, StateTest) in new TestSetup {
+    "correctly calculate the total gas refund to be returned to the sender and paying for gas to the miner" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new TestSetup {
 
       val table: TableFor4[BigInt, BigInt, Option[ProgramError], BigInt] =
         Table[BigInt, BigInt, Option[ProgramError], BigInt](
@@ -218,7 +221,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
 
   }
 
-  "clear logs only if vm execution results in an error" taggedAs(UnitTest, StateTest) in new TestSetup {
+  "clear logs only if vm execution results in an error" taggedAs (UnitTest, StateTest) in new TestSetup {
 
     val defaultsLogs: Seq[TxLogEntry] = Seq(defaultLog)
 
@@ -256,7 +259,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     }
   }
 
-  "create sender account if it does not exists" taggedAs(UnitTest, StateTest) in new TestSetup {
+  "create sender account if it does not exists" taggedAs (UnitTest, StateTest) in new TestSetup {
 
     val inputData: ByteString = ByteString("the payload")
 
@@ -282,7 +285,10 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     result.map(br => br.worldState.getAccount(newAccountAddress)) shouldBe Right(Some(Account(nonce = 1)))
   }
 
-  "remember executed transaction in case of many failures in the middle" taggedAs(UnitTest, StateTest) in new TestSetup {
+  "remember executed transaction in case of many failures in the middle" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup {
     val newAccountKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
     Address(kec256(newAccountKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail))
 
@@ -325,7 +331,7 @@ class BlockPreparatorSpec extends AnyWordSpec with Matchers with ScalaCheckPrope
     result match { case (_, executedTxs) => executedTxs shouldBe Seq(stx1, stx4) }
   }
 
-  "produce empty block if all txs fail" taggedAs(UnitTest, StateTest) in new TestSetup {
+  "produce empty block if all txs fail" taggedAs (UnitTest, StateTest) in new TestSetup {
     val newAccountKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
     Address(kec256(newAccountKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ.getEncoded(false).tail))
 

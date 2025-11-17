@@ -32,7 +32,7 @@ class BlockFetcherStateSpec
 
   "BlockFetcherState" when {
     "invalidating blocks" should {
-      "not allow to go to negative block number" taggedAs(UnitTest, SyncTest) in {
+      "not allow to go to negative block number" taggedAs (UnitTest, SyncTest) in {
         val (_, actual) =
           BlockFetcherState.initial(importer, validators.blockValidator, 10).invalidateBlocksFrom(-5, None)
 
@@ -41,7 +41,7 @@ class BlockFetcherStateSpec
     }
 
     "handling requested blocks" should {
-      "clear headers queue if got empty list of blocks" taggedAs(UnitTest, SyncTest) in {
+      "clear headers queue if got empty list of blocks" taggedAs (UnitTest, SyncTest) in {
         val headers = blocks.map(_.header)
 
         val result = BlockFetcherState
@@ -52,7 +52,7 @@ class BlockFetcherStateSpec
         assert(result.map(_.waitingHeaders) === Right(Queue.empty))
       }
 
-      "enqueue requested blocks" taggedAs(UnitTest, SyncTest) in {
+      "enqueue requested blocks" taggedAs (UnitTest, SyncTest) in {
 
         val result = BlockFetcherState
           .initial(importer, validators.blockValidator, 0)
@@ -66,7 +66,10 @@ class BlockFetcherStateSpec
         assert(result.map(_.knownTop) === Right(blocks.last.number))
       }
 
-      "enqueue requested blocks fails when ready blocks is not forming a sequence with given headers" taggedAs(UnitTest, SyncTest) in {
+      "enqueue requested blocks fails when ready blocks is not forming a sequence with given headers" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
 
         val result = BlockFetcherState
           .initial(importer, validators.blockValidator, 0)

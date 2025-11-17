@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class InMemorySimpleMapProxySpec extends AnyFlatSpec with Matchers {
 
-  "InMemoryTrieProxy" should "not write inserts until commit" taggedAs(UnitTest, StateTest) in new TestSetup {
+  "InMemoryTrieProxy" should "not write inserts until commit" taggedAs (UnitTest, StateTest) in new TestSetup {
     val updatedProxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
       InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](mpt).put(1, 1).put(2, 2)
 
@@ -30,7 +30,7 @@ class InMemorySimpleMapProxySpec extends AnyFlatSpec with Matchers {
     assertContains(commitedProxy.inner, 2, 2)
   }
 
-  "InMemoryTrieProxy" should "not perform removals until commit" taggedAs(UnitTest, StateTest) in new TestSetup {
+  "InMemoryTrieProxy" should "not perform removals until commit" taggedAs (UnitTest, StateTest) in new TestSetup {
     val preloadedMpt: MerklePatriciaTrie[Int, Int] = mpt.put(1, 1)
     val proxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
       InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](preloadedMpt)
@@ -47,7 +47,7 @@ class InMemorySimpleMapProxySpec extends AnyFlatSpec with Matchers {
     assertNotContainsKey(commitedProxy.inner, 1)
   }
 
-  "InMemoryTrieProxy" should "not write updates until commit" taggedAs(UnitTest, StateTest) in new TestSetup {
+  "InMemoryTrieProxy" should "not write updates until commit" taggedAs (UnitTest, StateTest) in new TestSetup {
     val preloadedMpt: MerklePatriciaTrie[Int, Int] = mpt.put(1, 1)
     val proxy: InMemorySimpleMapProxy[Int, Int, MerklePatriciaTrie[Int, Int]] =
       InMemorySimpleMapProxy.wrap[Int, Int, MerklePatriciaTrie[Int, Int]](preloadedMpt)

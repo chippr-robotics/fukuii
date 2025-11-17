@@ -25,7 +25,10 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
 
   import Peers._
 
-  "PeerClient" should "determine the best peer based on its latest checkpoint number and total difficulty" taggedAs(UnitTest, SyncTest) in {
+  "PeerClient" should "determine the best peer based on its latest checkpoint number and total difficulty" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val table: TableFor3[Map[PeerId, PeerWithInfo], Option[Peer], String] =
       Table[Map[PeerId, PeerWithInfo], Option[Peer], String](
         ("PeerInfo map", "Expected best peer", "Scenario info (selected peer)"),
