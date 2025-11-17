@@ -2,7 +2,7 @@
 
 **Date**: November 17, 2025  
 **Purpose**: End-to-end network testing to troubleshoot blockchain peer and sync systems  
-**Issue**: [network test](https://github.com/chippr-robotics/fukuii/issues/xxx)
+**Issue**: [network test](https://github.com/chippr-robotics/fukuii/issues/467)
 
 ## Executive Summary
 
@@ -363,8 +363,8 @@ sdk install java 21.0.5-tem
 sdk use java 21.0.5-tem
 
 # Install SBT
-echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
-curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | gpg --dearmor | sudo tee /usr/share/keyrings/sbt-archive-keyring.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/sbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
 sudo apt-get update
 sudo apt-get install sbt
 ```
