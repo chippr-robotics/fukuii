@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.sync
 
-import org.apache.pekko.util.ByteString
-
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
