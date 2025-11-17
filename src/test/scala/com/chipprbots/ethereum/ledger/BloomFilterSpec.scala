@@ -14,17 +14,17 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class BloomFilterSpec extends AnyFlatSpec with Matchers {
 
-  it should "properly create the bloom filter for without logs" taggedAs(UnitTest, StateTest) in {
+  it should "properly create the bloom filter for without logs" taggedAs (UnitTest, StateTest) in {
     val obtained = BloomFilter.create(receiptWithoutLogs.logs)
     obtained shouldBe receiptWithoutLogs.logsBloomFilter
   }
 
-  it should "properly create the bloom filter for with one log entry with one topic" taggedAs(UnitTest, StateTest) in {
+  it should "properly create the bloom filter for with one log entry with one topic" taggedAs (UnitTest, StateTest) in {
     val obtained = BloomFilter.create(receiptOneLogOneTopic.logs)
     obtained shouldBe receiptOneLogOneTopic.logsBloomFilter
   }
 
-  it should "properly create the bloom filter for with many logs" taggedAs(UnitTest, StateTest) in {
+  it should "properly create the bloom filter for with many logs" taggedAs (UnitTest, StateTest) in {
     val obtained = BloomFilter.create(receiptWithManyLogs.logs)
     obtained shouldBe receiptWithManyLogs.logsBloomFilter
   }

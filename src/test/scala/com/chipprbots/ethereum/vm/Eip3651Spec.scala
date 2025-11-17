@@ -113,7 +113,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
 
     "disabled (pre-fork)" should {
 
-      "treat COINBASE address as cold on first access" taggedAs(UnitTest, VMTest) in {
+      "treat COINBASE address as cold on first access" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseBalance.code,
           fakeHeaderPreEip3651,
@@ -131,7 +131,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         result.error shouldBe None
       }
 
-      "not include COINBASE in initial accessed addresses" taggedAs(UnitTest, VMTest) in {
+      "not include COINBASE in initial accessed addresses" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseBalance.code,
           fakeHeaderPreEip3651,
@@ -148,7 +148,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
 
     "enabled (post-fork)" should {
 
-      "treat COINBASE address as warm on first access" taggedAs(UnitTest, VMTest) in {
+      "treat COINBASE address as warm on first access" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseBalance.code,
           fakeHeaderWithEip3651,
@@ -166,7 +166,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         result.error shouldBe None
       }
 
-      "include COINBASE in initial accessed addresses" taggedAs(UnitTest, VMTest) in {
+      "include COINBASE in initial accessed addresses" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseBalance.code,
           fakeHeaderWithEip3651,
@@ -180,7 +180,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         initialState.accessedAddresses should contain(coinbaseAddr)
       }
 
-      "save 2500 gas compared to cold access" taggedAs(UnitTest, VMTest) in {
+      "save 2500 gas compared to cold access" taggedAs (UnitTest, VMTest) in {
         // Without EIP-3651
         val contextPreEip = createContext(
           codeReadCoinbaseBalance.code,
@@ -210,7 +210,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         gasSavings shouldEqual 2500 // Standard EIP-2929 difference
       }
 
-      "work with EXTCODESIZE opcode" taggedAs(UnitTest, VMTest) in {
+      "work with EXTCODESIZE opcode" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseCodeSize.code,
           fakeHeaderWithEip3651,
@@ -227,7 +227,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         result.error shouldBe None
       }
 
-      "work with EXTCODEHASH opcode" taggedAs(UnitTest, VMTest) in {
+      "work with EXTCODEHASH opcode" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseCodeHash.code,
           fakeHeaderWithEip3651,
@@ -244,7 +244,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         result.error shouldBe None
       }
 
-      "not affect other addresses (they remain cold)" taggedAs(UnitTest, VMTest) in {
+      "not affect other addresses (they remain cold)" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadOtherBalance.code,
           fakeHeaderWithEip3651,
@@ -262,7 +262,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         result.error shouldBe None
       }
 
-      "preserve COINBASE in accessed addresses after transaction" taggedAs(UnitTest, VMTest) in {
+      "preserve COINBASE in accessed addresses after transaction" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseBalance.code,
           fakeHeaderWithEip3651,
@@ -279,7 +279,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
 
     "interaction with access lists" should {
 
-      "work when COINBASE is also in transaction access list" taggedAs(UnitTest, VMTest) in {
+      "work when COINBASE is also in transaction access list" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseBalance.code,
           fakeHeaderWithEip3651,
@@ -298,7 +298,7 @@ class Eip3651Spec extends AnyWordSpec with Matchers {
         result.error shouldBe None
       }
 
-      "work when other addresses are in access list" taggedAs(UnitTest, VMTest) in {
+      "work when other addresses are in access list" taggedAs (UnitTest, VMTest) in {
         val context = createContext(
           codeReadCoinbaseBalance.code,
           fakeHeaderWithEip3651,

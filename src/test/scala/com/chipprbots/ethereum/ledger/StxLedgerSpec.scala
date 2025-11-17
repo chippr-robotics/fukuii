@@ -17,7 +17,10 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
 
-  "StxLedger" should "correctly estimate minimum gasLimit to run transaction which throws" taggedAs(UnitTest, StateTest) in new ScenarioSetup {
+  "StxLedger" should "correctly estimate minimum gasLimit to run transaction which throws" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new ScenarioSetup {
 
     /** Transaction requires gasLimit equal to 121825, but actual gas used due to refund is equal 42907. Our
       * simulateTransaction properly estimates gas usage to 42907, but requires at least 121825 gas to make that
@@ -58,7 +61,10 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
     errorExecResult.vmError shouldBe defined
   }
 
-  it should "correctly estimate gasLimit for value transfer transaction" taggedAs(UnitTest, StateTest) in new ScenarioSetup {
+  it should "correctly estimate gasLimit for value transfer transaction" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new ScenarioSetup {
     val transferValue = 2
 
     val tx: LegacyTransaction =
@@ -74,7 +80,10 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
     estimationResult shouldEqual executionResult.gasUsed
   }
 
-  it should "correctly simulate transaction on pending block when supplied prepared world" taggedAs(UnitTest, StateTest) in new ScenarioSetup {
+  it should "correctly simulate transaction on pending block when supplied prepared world" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new ScenarioSetup {
     val transferValue = 2
 
     val tx: LegacyTransaction =

@@ -116,17 +116,22 @@ class FastSyncSpec
 
   "FastSync" - {
     "for reporting progress" - {
-      "returns NotSyncing until pivot block is selected and first data being fetched" taggedAs(UnitTest, SyncTest) in testCaseM {
-        (fixture: Fixture) =>
-          import fixture._
+      "returns NotSyncing until pivot block is selected and first data being fetched" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in testCaseM { (fixture: Fixture) =>
+        import fixture._
 
-          (for {
-            _ <- startSync
-            status <- getSyncStatus
-          } yield assert(status === Status.NotSyncing)).timeout(timeout.duration)
+        (for {
+          _ <- startSync
+          status <- getSyncStatus
+        } yield assert(status === Status.NotSyncing)).timeout(timeout.duration)
       }
 
-      "returns Syncing when pivot block is selected and started fetching data" taggedAs(UnitTest, SyncTest) in testCaseM { (fixture: Fixture) =>
+      "returns Syncing when pivot block is selected and started fetching data" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -146,7 +151,10 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with block progress once both header and body is fetched" taggedAs(UnitTest, SyncTest) in testCaseM { (fixture: Fixture) =>
+      "returns Syncing with block progress once both header and body is fetched" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -168,7 +176,7 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with state nodes progress" taggedAs(UnitTest, SyncTest) in customTestCaseM(new Fixture {
+      "returns Syncing with state nodes progress" taggedAs (UnitTest, SyncTest) in customTestCaseM(new Fixture {
         override lazy val syncConfig: SyncConfig =
           defaultSyncConfig.copy(
             peersScanInterval = 1.second,

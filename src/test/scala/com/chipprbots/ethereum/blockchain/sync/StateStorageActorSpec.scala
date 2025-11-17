@@ -27,7 +27,7 @@ class StateStorageActorSpec
     with Eventually
     with NormalPatience {
 
-  "FastSyncStateActor" should "eventually persist a newest state of a fast sync" taggedAs(UnitTest, SyncTest) in {
+  "FastSyncStateActor" should "eventually persist a newest state of a fast sync" taggedAs (UnitTest, SyncTest) in {
     val dataSource = EphemDataSource()
     val syncStateActor = TestActorRef(new StateStorageActor)
     val maxN = 10

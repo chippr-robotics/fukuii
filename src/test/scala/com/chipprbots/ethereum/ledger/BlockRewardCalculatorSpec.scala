@@ -11,7 +11,7 @@ import com.chipprbots.ethereum.testing.Tags._
 // scalastyle:off magic.number
 class BlockRewardCalculatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
 
-  "BlockRewardCalculator" should "correctly calculate block and ommer rewards" taggedAs(UnitTest, StateTest) in {
+  "BlockRewardCalculator" should "correctly calculate block and ommer rewards" taggedAs (UnitTest, StateTest) in {
     val standardMP =
       MonetaryPolicyConfig(5000000, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L)
 
@@ -135,7 +135,10 @@ class BlockRewardCalculatorSpec extends AnyFlatSpec with Matchers with ScalaChec
     }
   }
 
-  it should "be compliant with ECIP1039 for block reward including zero, one or two, uncles until 50 era" taggedAs(UnitTest, StateTest) in {
+  it should "be compliant with ECIP1039 for block reward including zero, one or two, uncles until 50 era" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
 
     val standardEraDuration = 5000000
 
@@ -211,7 +214,10 @@ class BlockRewardCalculatorSpec extends AnyFlatSpec with Matchers with ScalaChec
     }
   }
 
-  it should "be compliant with ECIP1039 for block reward including two uncles until 200 era" taggedAs(UnitTest, StateTest) in {
+  it should "be compliant with ECIP1039 for block reward including two uncles until 200 era" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
 
     val standardEraDuration = 5000000
 

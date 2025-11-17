@@ -44,11 +44,11 @@ class StaticCallOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProp
         val call = fxt.ExecuteCall(op = CALL, context)
 
         s"Opcode $op" should {
-          "not modify world state" taggedAs(UnitTest, VMTest) in {
+          "not modify world state" taggedAs (UnitTest, VMTest) in {
             staticcall.world shouldEqual worldState
           }
 
-          "balance should be equal to initial balance" taggedAs(UnitTest, VMTest) in {
+          "balance should be equal to initial balance" taggedAs (UnitTest, VMTest) in {
             staticcall.ownBalance shouldEqual fxt.initialBalance
             staticcall.ownBalance should be > call.ownBalance
           }
@@ -71,7 +71,7 @@ class StaticCallOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProp
         val call = fxt.ExecuteCall(op = CALL, context)
 
         s"Opcode $op" should {
-          "should not append any logs" taggedAs(UnitTest, VMTest) in {
+          "should not append any logs" taggedAs (UnitTest, VMTest) in {
             call.stateOut.logs.size should be > 0
             staticcall.stateOut.logs.size shouldEqual 0
           }

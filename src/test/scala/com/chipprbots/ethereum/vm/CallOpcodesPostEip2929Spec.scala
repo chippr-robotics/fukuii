@@ -43,14 +43,14 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
 
       behave.like(callNormalTermination(fxt, call))
 
-      "consume correct gas (refund unused gas) (cold access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund unused gas) (cold access)" taggedAs (UnitTest, VMTest) in {
         val call = fxt.ExecuteCall(op = CALL)
         val expectedGas = fxt.requiredGas - G_callstipend + G_cold_account_access + G_callvalue + fxt.expectedMemCost
         call.stateOut.gasUsed shouldEqual expectedGas
         call.stateOut.accessedAddresses should contain(fxt.extAddr)
       }
 
-      "consume correct gas (refund unused gas) (warm access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund unused gas) (warm access)" taggedAs (UnitTest, VMTest) in {
         val call = fxt.ExecuteCall(op = CALL, toAlreadyAccessed = true)
         val expectedGas = fxt.requiredGas - G_callstipend + G_warm_storage_read + G_callvalue + fxt.expectedMemCost
         call.stateOut.gasUsed shouldEqual expectedGas
@@ -62,14 +62,14 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
       val call = fxt.ExecuteCall(op = CALL, context = fxt.context.copy(callDepth = EvmConfig.MaxCallDepth))
       behave.like(callDepthLimitReached(fxt, call))
 
-      "consume correct gas (refund call gas) (cold access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund call gas) (cold access)" taggedAs (UnitTest, VMTest) in {
         val expectedGas = G_cold_account_access + G_callvalue - G_callstipend + config.calcMemCost(32, 32, 16)
         call.stateOut.gasUsed shouldEqual expectedGas
         // if a scope reverts, the access lists should be in the state they were in before that scope was entered
         call.stateOut.accessedAddresses shouldNot contain(fxt.extAddr)
       }
 
-      "consume correct gas (refund call gas) (warm access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund call gas) (warm access)" taggedAs (UnitTest, VMTest) in {
         val call =
           fxt.ExecuteCall(
             op = CALL,
@@ -87,13 +87,13 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
       val call = fxt.ExecuteCall(op = CALL, value = fxt.initialBalance + 1)
       behave.like(callValueGreaterThanBalance(fxt, call))
 
-      "consume correct gas (refund call gas) (cold access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund call gas) (cold access)" taggedAs (UnitTest, VMTest) in {
         val expectedGas = G_cold_account_access + G_callvalue - G_callstipend + config.calcMemCost(32, 32, 16)
         call.stateOut.gasUsed shouldEqual expectedGas
         call.stateOut.accessedAddresses shouldNot contain(fxt.extAddr)
       }
 
-      "consume correct gas (refund call gas) (warm access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund call gas) (warm access)" taggedAs (UnitTest, VMTest) in {
         val call = fxt.ExecuteCall(op = CALL, toAlreadyAccessed = true, value = fxt.initialBalance + 1)
         val expectedGas = G_warm_storage_read + G_callvalue - G_callstipend + config.calcMemCost(32, 32, 16)
         call.stateOut.gasUsed shouldEqual expectedGas
@@ -102,14 +102,14 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
     }
 
     "call value is zero" should {
-      "adjust gas cost (cold access)" taggedAs(UnitTest, VMTest) in {
+      "adjust gas cost (cold access)" taggedAs (UnitTest, VMTest) in {
         val call = fxt.ExecuteCall(op = CALL, value = 0)
         val expectedGas = fxt.requiredGas + G_cold_account_access + fxt.expectedMemCost - (G_sset - G_sload)
         call.stateOut.gasUsed shouldEqual expectedGas
         call.stateOut.accessedAddresses should contain(fxt.extAddr)
       }
 
-      "adjust gas cost (warm access)" taggedAs(UnitTest, VMTest) in {
+      "adjust gas cost (warm access)" taggedAs (UnitTest, VMTest) in {
         val call = fxt.ExecuteCall(op = CALL, toAlreadyAccessed = true, value = 0)
         val expectedGas = fxt.requiredGas + G_warm_storage_read + fxt.expectedMemCost - (G_sset - G_sload)
         call.stateOut.gasUsed shouldEqual expectedGas
@@ -124,13 +124,13 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
 
       behave.like(callAbnormalTermination(fxt, call))
 
-      "consume all call gas (cold access)" taggedAs(UnitTest, VMTest) in {
+      "consume all call gas (cold access)" taggedAs (UnitTest, VMTest) in {
         val expectedGas = fxt.requiredGas + fxt.gasMargin + G_cold_account_access + G_callvalue + fxt.expectedMemCost
         call.stateOut.gasUsed shouldEqual expectedGas
         call.stateOut.accessedAddresses shouldNot contain(fxt.extAddr)
       }
 
-      "consume all call gas (warm access)" taggedAs(UnitTest, VMTest) in {
+      "consume all call gas (warm access)" taggedAs (UnitTest, VMTest) in {
         val call = fxt.ExecuteCall(op = CALL, context, toAlreadyAccessed = true)
         val expectedGas = fxt.requiredGas + fxt.gasMargin + G_warm_storage_read + G_callvalue + fxt.expectedMemCost
         call.stateOut.gasUsed shouldEqual expectedGas
@@ -145,13 +145,13 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
 
       behave.like(callNonExistent(fxt, call))
 
-      "consume correct gas (refund call gas, add new account modifier) (cold access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund call gas, add new account modifier) (cold access)" taggedAs (UnitTest, VMTest) in {
         val expectedGas = G_cold_account_access + G_callvalue + G_newaccount - G_callstipend + fxt.expectedMemCost
         call.stateOut.gasUsed shouldEqual expectedGas
         call.stateOut.accessedAddresses should contain(fxt.extAddr)
       }
 
-      "consume correct gas (refund call gas, add new account modifier) (warm access)" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas (refund call gas, add new account modifier) (warm access)" taggedAs (UnitTest, VMTest) in {
         val call = fxt.ExecuteCall(op = CALL, context, toAlreadyAccessed = true)
         val expectedGas = G_warm_storage_read + G_callvalue + G_newaccount - G_callstipend + fxt.expectedMemCost
         call.stateOut.gasUsed shouldEqual expectedGas
@@ -177,7 +177,7 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
 
       behave.like(callPrecompiled(fxt, call))
 
-      "consume correct gas" taggedAs(UnitTest, VMTest) in {
+      "consume correct gas" taggedAs (UnitTest, VMTest) in {
         val contractCost = UInt256(3000)
         val expectedGas = contractCost - G_callstipend + G_warm_storage_read + G_callvalue // memory not increased
         call.stateOut.gasUsed shouldEqual expectedGas
@@ -196,7 +196,7 @@ abstract class CallOpcodesPostEip2929Spec(config: EvmConfig)
       val context: PC = fxt.context.copy(world = fxt.worldWithSstoreWithClearProgram)
       val call = fxt.ExecuteCall(op = CALL, context)
 
-      "refund the correct amount of gas" taggedAs(UnitTest, VMTest) in {
+      "refund the correct amount of gas" taggedAs (UnitTest, VMTest) in {
         call.stateOut.gasRefund shouldBe (config.feeSchedule.R_sclear + config.feeSchedule.G_sreset - config.feeSchedule.G_sload)
         call.stateOut.accessedAddresses should contain(fxt.extAddr)
       }

@@ -82,7 +82,7 @@ class TransactionTestsSpec extends AnyFlatSpec with Matchers {
     * @return
     *   Parsed JSON object
     */
-  def loadTransactionTest(filePath: String): Json = {
+  def loadTransactionTest(filePath: String): Json =
     Using(Source.fromFile(filePath)) { source =>
       val jsonString = source.mkString
       parse(jsonString) match {
@@ -90,7 +90,6 @@ class TransactionTestsSpec extends AnyFlatSpec with Matchers {
         case Left(error) => throw new RuntimeException(s"Failed to parse JSON: $error")
       }
     }.fold(throw _, identity)
-  }
 
   /** Validate transaction test structure
     *
@@ -101,7 +100,7 @@ class TransactionTestsSpec extends AnyFlatSpec with Matchers {
     * @return
     *   True if test has valid structure
     */
-  def validateTestStructure(testJson: Json): Boolean = {
+  def validateTestStructure(testJson: Json): Boolean =
     testJson.asObject match {
       case Some(testObject) =>
         // Get the first (and usually only) test case
@@ -116,7 +115,6 @@ class TransactionTestsSpec extends AnyFlatSpec with Matchers {
         }
       case None => false
     }
-  }
 
   "TransactionTests" should "discover ttNonce tests" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val baseDir = new File(transactionTestsBasePath)
