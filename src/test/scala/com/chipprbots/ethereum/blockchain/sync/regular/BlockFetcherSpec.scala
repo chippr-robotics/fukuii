@@ -66,7 +66,10 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
   "BlockFetcher" - {
 
-    "should not requests headers upon invalidation while a request is already in progress, should resume after response" taggedAs(UnitTest, SyncTest) in new TestSetup {
+    "should not requests headers upon invalidation while a request is already in progress, should resume after response" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup {
       startFetcher()
 
       handleFirstBlockBatch()

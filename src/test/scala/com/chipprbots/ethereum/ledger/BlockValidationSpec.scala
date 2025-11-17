@@ -20,23 +20,23 @@ class BlockValidationSpec extends AnyWordSpec with Matchers with MockFactory {
 
   "BlockValidation" should {
     "validate block after execution" when {
-      "report valid results from execution as correct" taggedAs(UnitTest, StateTest) in {
+      "report valid results from execution as correct" taggedAs (UnitTest, StateTest) in {
         blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) shouldBe Right(
           BlockExecutionSuccess
         )
       }
 
-      "report as invalid a block that doesn't have the correct gas used" taggedAs(UnitTest, StateTest) in {
+      "report as invalid a block that doesn't have the correct gas used" taggedAs (UnitTest, StateTest) in {
         val invalidGasUsed: BigInt = gasUsed + 1
         blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, invalidGasUsed).isLeft shouldBe true
       }
 
-      "report as invalid a block that doesn't have the correct state root hash" taggedAs(UnitTest, StateTest) in {
+      "report as invalid a block that doesn't have the correct state root hash" taggedAs (UnitTest, StateTest) in {
         val invalidStateRootHash: ByteString = concatByteStrings((stateRootHash.head + 1).toByte, stateRootHash.tail)
         blockValidation.validateBlockAfterExecution(block, invalidStateRootHash, receipts, gasUsed).isLeft shouldBe true
       }
 
-      "report as invalid a block that doesn't have the correct receipts information" taggedAs(UnitTest, StateTest) in {
+      "report as invalid a block that doesn't have the correct receipts information" taggedAs (UnitTest, StateTest) in {
         val invalidReceipts: Seq[Receipt] = Seq.empty[Receipt]
         blockValidation.validateBlockAfterExecution(block, stateRootHash, invalidReceipts, gasUsed).isLeft shouldBe true
       }

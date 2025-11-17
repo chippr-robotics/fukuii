@@ -23,7 +23,7 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
 
-  "BlockQueue" should "ignore block if it's already in the queue" taggedAs(UnitTest, StateTest) in new TestConfig {
+  "BlockQueue" should "ignore block if it's already in the queue" taggedAs (UnitTest, StateTest) in new TestConfig {
     val block: Block = getBlock(1)
     val parentWeight = ChainWeight.zero
     setBestBlockNumber(1).twice()
@@ -34,7 +34,7 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
     blockQueue.isQueued(block.header.hash) shouldBe true
   }
 
-  it should "ignore blocks outside of range" taggedAs(UnitTest, StateTest) in new TestConfig {
+  it should "ignore blocks outside of range" taggedAs (UnitTest, StateTest) in new TestConfig {
     val block1: Block = getBlock(1)
     val block30: Block = getBlock(30)
     setBestBlockNumber(15).twice()
@@ -46,7 +46,7 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
     blockQueue.isQueued(block30.header.hash) shouldBe false
   }
 
-  it should "remove the blocks that fall out of range" taggedAs(UnitTest, StateTest) in new TestConfig {
+  it should "remove the blocks that fall out of range" taggedAs (UnitTest, StateTest) in new TestConfig {
     val block1: Block = getBlock(1)
     setBestBlockNumber(1)
     setChainWeightForParent(block1)
@@ -63,7 +63,10 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
     blockQueue.isQueued(block1.header.hash) shouldBe false
   }
 
-  it should "enqueue a block with parent on the main chain updating its total difficulty" taggedAs(UnitTest, StateTest) in new TestConfig {
+  it should "enqueue a block with parent on the main chain updating its total difficulty" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestConfig {
     val block1: Block = getBlock(1, 13)
     val parentWeight: ChainWeight = ChainWeight.totalDifficultyOnly(42)
     setBestBlockNumber(1)
@@ -72,7 +75,10 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory {
     blockQueue.enqueueBlock(block1) shouldEqual Some(Leaf(block1.header.hash, parentWeight.increase(block1.header)))
   }
 
-  it should "enqueue a block with queued ancestors rooted to the main chain updating its total difficulty" taggedAs(UnitTest, StateTest) in new TestConfig {
+  it should "enqueue a block with queued ancestors rooted to the main chain updating its total difficulty" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestConfig {
     val block1: Block = getBlock(1, 101)
     val block2a: Block = getBlock(2, 102, block1.header.hash)
     val block2b: Block = getBlock(2, 99, block1.header.hash)

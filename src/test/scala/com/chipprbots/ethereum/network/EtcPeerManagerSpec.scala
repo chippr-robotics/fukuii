@@ -146,7 +146,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "update the peer total difficulty when receiving a NewBlock" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "update the peer total difficulty when receiving a NewBlock" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -163,7 +166,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "update the peer chain weight when receiving a ETC64.NewBlock" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "update the peer chain weight when receiving a ETC64.NewBlock" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1InfoETC64)
 
@@ -250,7 +256,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(HandshakedPeers(Map.empty))
   }
 
-  it should "provide handshaked peers only with best block number determined" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "provide handshaked peers only with best block number determined" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, freshPeerInfo.copy(maxBlockNumber = 0))
@@ -271,7 +280,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "provide handshaked peers only with best block number determined even if peers best block is its genesis" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "provide handshaked peers only with best block number determined even if peers best block is its genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
 
     val genesisStatus: RemoteStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)

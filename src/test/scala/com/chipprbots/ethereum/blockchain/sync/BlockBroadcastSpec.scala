@@ -36,7 +36,10 @@ class BlockBroadcastSpec
     with WithActorSystemShutDown
     with Matchers {
 
-  it should "send a new block when it is not known by the peer (known by comparing chain weights)" taggedAs(UnitTest, SyncTest) in new TestSetup {
+  it should "send a new block when it is not known by the peer (known by comparing chain weights)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     // Block that should be sent as it's total difficulty is higher than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 3)
@@ -56,7 +59,10 @@ class BlockBroadcastSpec
     etcPeerManagerProbe.expectNoMessage()
   }
 
-  it should "send a new block when it is not known by the peer (known by comparing chain weights) (ETH63)" taggedAs(UnitTest, SyncTest) in new TestSetup {
+  it should "send a new block when it is not known by the peer (known by comparing chain weights) (ETH63)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     // Block that should be sent as it's total difficulty is higher than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 3)
@@ -79,7 +85,10 @@ class BlockBroadcastSpec
     etcPeerManagerProbe.expectNoMessage()
   }
 
-  it should "not send a new block when it is known by the peer (known by comparing total difficulties)" taggedAs(UnitTest, SyncTest) in new TestSetup {
+  it should "not send a new block when it is known by the peer (known by comparing total difficulties)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     // Block that shouldn't be sent as it's number and total difficulty is lower than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 2)
@@ -96,7 +105,10 @@ class BlockBroadcastSpec
     etcPeerManagerProbe.expectNoMessage()
   }
 
-  it should "send a new block when it is not known by the peer (known by comparing max block number)" taggedAs(UnitTest, SyncTest) in new TestSetup {
+  it should "send a new block when it is not known by the peer (known by comparing max block number)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber + 4)
     val newBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
@@ -115,7 +127,10 @@ class BlockBroadcastSpec
     etcPeerManagerProbe.expectNoMessage()
   }
 
-  it should "not send a new block only when it is known by the peer (known by comparing max block number)" taggedAs(UnitTest, SyncTest) in new TestSetup {
+  it should "not send a new block only when it is known by the peer (known by comparing max block number)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     // Block should already be known by the peer due to max block known
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 2)
@@ -132,7 +147,10 @@ class BlockBroadcastSpec
     etcPeerManagerProbe.expectNoMessage()
   }
 
-  it should "send block hashes to all peers while the blocks only to sqrt of them" taggedAs(UnitTest, SyncTest) in new TestSetup {
+  it should "send block hashes to all peers while the blocks only to sqrt of them" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber + 4)
     val firstBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(firstHeader.hash, firstHeader.number)))

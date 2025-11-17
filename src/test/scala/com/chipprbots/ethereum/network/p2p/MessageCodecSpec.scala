@@ -16,7 +16,10 @@ import com.chipprbots.ethereum.utils.Config
 
 class MessageCodecSpec extends AnyFlatSpec with Matchers {
 
-  it should "not compress messages when remote side advertises p2p version less than 5" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "not compress messages when remote side advertises p2p version less than 5" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV4)
     messageCodec.readMessages(remoteHello)
 
@@ -29,7 +32,10 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     assert(remoteReadNotCompressedStatus.head == Right(status))
   }
 
-  it should "compress messages when remote side advertises p2p version larger or equal 5" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "compress messages when remote side advertises p2p version larger or equal 5" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     override lazy val negotiatedRemoteP2PVersion: Long = 5L
     override lazy val negotiatedLocalP2PVersion: Long = 3L
 

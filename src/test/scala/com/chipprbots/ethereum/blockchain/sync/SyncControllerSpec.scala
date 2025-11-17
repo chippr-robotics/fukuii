@@ -58,7 +58,10 @@ class SyncControllerSpec
     with Eventually
     with NormalPatience {
 
-  "SyncController" should "download pivot block and request block headers" taggedAs(UnitTest, SyncTest) in withTestSetup() { testSetup =>
+  "SyncController" should "download pivot block and request block headers" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
     import testSetup._
     syncController ! SyncProtocol.Start
 
@@ -74,34 +77,39 @@ class SyncControllerSpec
     }
   }
 
-  it should "download better pivot block, request state, blocks and finish when downloaded" taggedAs(UnitTest, SyncTest) in withTestSetup() {
-    testSetup =>
-      import testSetup._
-      startWithState(defaultStateBeforeNodeRestart)
+  it should "download better pivot block, request state, blocks and finish when downloaded" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup._
+    startWithState(defaultStateBeforeNodeRestart)
 
-      syncController ! SyncProtocol.Start
+    syncController ! SyncProtocol.Start
 
-      val handshakedPeers = HandshakedPeers(singlePeer)
+    val handshakedPeers = HandshakedPeers(singlePeer)
 
-      val newBlocks =
-        getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
+    val newBlocks =
+      getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-      setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
+    setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
 
-      val watcher = TestProbe()
-      watcher.watch(syncController)
+    val watcher = TestProbe()
+    watcher.watch(syncController)
 
-      eventually {
-        someTimePasses()
-        // switch to regular download
-        val children = syncController.children
-        assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-        assert(children.exists(ref => ref.path.name == "regular-sync"))
-        assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
-      }
+    eventually {
+      someTimePasses()
+      // switch to regular download
+      val children = syncController.children
+      assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
+      assert(children.exists(ref => ref.path.name == "regular-sync"))
+      assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
+    }
   }
 
-  it should "gracefully handle receiving empty receipts while syncing" taggedAs(UnitTest, SyncTest) in withTestSetup() { testSetup =>
+  it should "gracefully handle receiving empty receipts while syncing" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
     import testSetup._
     startWithState(defaultStateBeforeNodeRestart)
 
@@ -132,7 +140,7 @@ class SyncControllerSpec
     }
   }
 
-  it should "handle blocks that fail validation" taggedAs(UnitTest, SyncTest) in withTestSetup(
+  it should "handle blocks that fail validation" taggedAs (UnitTest, SyncTest) in withTestSetup(
     validators = new Mocks.MockValidatorsAlwaysSucceed {
       override val blockHeaderValidator: BlockHeaderValidator = new BlockHeaderValidator {
         override def validate(
@@ -177,7 +185,10 @@ class SyncControllerSpec
     }
   }
 
-  it should "rewind fast-sync state if received header have no known parent" taggedAs(UnitTest, SyncTest) in withTestSetup(
+  it should "rewind fast-sync state if received header have no known parent" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup(
     validators = new Mocks.MockValidatorsAlwaysSucceed {
       override val blockHeaderValidator: BlockHeaderValidator = new BlockHeaderValidator {
         val invalidBlockNNumber = 399510

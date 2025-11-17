@@ -23,7 +23,7 @@ object RLPImplicits {
       case _ => throw RLPException("src is not an RLPValue", rlp)
     }
   }
-  
+
   given byteEncDec: (RLPEncoder[Byte] & RLPDecoder[Byte]) = byteCodec
   given RLPEncoder[Byte] = byteCodec
   given RLPDecoder[Byte] = byteCodec
@@ -43,7 +43,7 @@ object RLPImplicits {
       case _ => throw RLPException("src is not an RLPValue", rlp)
     }
   }
-  
+
   given shortEncDec: (RLPEncoder[Short] & RLPDecoder[Short]) = shortCodec
   given RLPEncoder[Short] = shortCodec
   given RLPDecoder[Short] = shortCodec
@@ -56,7 +56,7 @@ object RLPImplicits {
       case _               => throw RLPException("src is not an RLPValue", rlp)
     }
   }
-  
+
   given intEncDec: (RLPEncoder[Int] & RLPDecoder[Int]) = intCodec
   given RLPEncoder[Int] = intCodec
   given RLPDecoder[Int] = intCodec
@@ -74,7 +74,7 @@ object RLPImplicits {
       case _ => throw RLPException("src is not an RLPValue", rlp)
     }
   }
-  
+
   given bigIntEncDec: (RLPEncoder[BigInt] & RLPDecoder[BigInt]) = bigIntCodec
   given RLPEncoder[BigInt] = bigIntCodec
   given RLPDecoder[BigInt] = bigIntCodec
@@ -89,7 +89,7 @@ object RLPImplicits {
       case _               => throw RLPException(s"src is not an RLPValue", rlp)
     }
   }
-  
+
   given longEncDec: (RLPEncoder[Long] & RLPDecoder[Long]) = longCodec
   given RLPEncoder[Long] = longCodec
   given RLPDecoder[Long] = longCodec
@@ -102,7 +102,7 @@ object RLPImplicits {
       case _               => throw RLPException("src is not an RLPValue", rlp)
     }
   }
-  
+
   given stringEncDec: (RLPEncoder[String] & RLPDecoder[String]) = stringCodec
   given RLPEncoder[String] = stringCodec
   given RLPDecoder[String] = stringCodec
@@ -116,7 +116,7 @@ object RLPImplicits {
       case _               => throw RLPException("src is not an RLPValue", rlp)
     }
   }
-  
+
   given byteArrayEncDec: (RLPEncoder[Array[Byte]] & RLPDecoder[Array[Byte]]) = byteArrayCodec
   given RLPEncoder[Array[Byte]] = byteArrayCodec
   given RLPDecoder[Array[Byte]] = byteArrayCodec
@@ -126,12 +126,13 @@ object RLPImplicits {
 
     override def decode(rlp: RLPEncodeable): ByteString = ByteString(byteArrayCodec.decode(rlp))
   }
-  
+
   given byteStringEncDec: (RLPEncoder[ByteString] & RLPDecoder[ByteString]) = byteStringCodec
   given RLPEncoder[ByteString] = byteStringCodec
   given RLPDecoder[ByteString] = byteStringCodec
 
-  private def seqCodec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]) = new RLPEncoder[Seq[T]] with RLPDecoder[Seq[T]] {
+  private def seqCodec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]) = new RLPEncoder[Seq[T]]
+    with RLPDecoder[Seq[T]] {
     override def encode(obj: Seq[T]): RLPEncodeable = RLPList(obj.map(enc.encode): _*)
 
     override def decode(rlp: RLPEncodeable): Seq[T] = rlp match {
@@ -139,8 +140,9 @@ object RLPImplicits {
       case _          => throw RLPException("src is not a Seq", rlp)
     }
   }
-  
-  given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): (RLPEncoder[Seq[T]] & RLPDecoder[Seq[T]]) = seqCodec[T]
+
+  given seqEncDec[T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): (RLPEncoder[Seq[T]] & RLPDecoder[Seq[T]]) =
+    seqCodec[T]
   given [T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPEncoder[Seq[T]] = seqCodec[T]
   given [T](using enc: RLPEncoder[T], dec: RLPDecoder[T]): RLPDecoder[Seq[T]] = seqCodec[T]
 
@@ -172,7 +174,7 @@ object RLPImplicits {
       else throw RLPException(s"$rlp should be 1 or 0", rlp)
     }
   }
-  
+
   given booleanEncDec: (RLPEncoder[Boolean] & RLPDecoder[Boolean]) = booleanCodec
   given RLPEncoder[Boolean] = booleanCodec
   given RLPDecoder[Boolean] = booleanCodec
