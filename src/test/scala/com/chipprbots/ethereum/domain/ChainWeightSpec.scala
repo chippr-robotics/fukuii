@@ -32,7 +32,7 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
       mixHash = ByteString.empty,
       nonce = ByteString.empty,
       extraFields =
-        if (hasCheckpoint) HefPostEcip1097(Some(Checkpoint(Seq.empty))) else BlockHeader.HeaderExtraFields.HefEmpty
+        if (hasCheckpoint) HefPostEcip1097(Some(Checkpoint.empty)) else BlockHeader.HeaderExtraFields.HefEmpty
     )
 
   "ChainWeight without MESS" should "compare based on checkpoint and total difficulty" taggedAs (UnitTest) in {
