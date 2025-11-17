@@ -61,6 +61,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import org.apache.pekko.actor.ActorRef
@@ -325,12 +327,27 @@ class RegularSyncSpec
           class BranchResolutionAutoPilot(didResponseWithNewBranch: Boolean, blocks: List[Block])
               extends PeersClientAutoPilot(blocks) {
             override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+              // Handle ETH62 GetBlockHeaders
               case PeersClient.Request(GetBlockHeaders(Left(nr), maxHeaders, _, _), _, _)
                   if nr >= alternativeBranch.numberAtUnsafe(syncConfig.blocksBatchSize) && !didResponseWithNewBranch =>
                 val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
                 sender ! PeersClient.Response(defaultPeer, BlockHeaders(responseHeaders))
                 Some(new BranchResolutionAutoPilot(true, alternativeBlocks))
+              // Handle ETH66 GetBlockHeaders
+              case PeersClient.Request(ETH66GetBlockHeaders(_, Left(nr), maxHeaders, _, _), _, _)
+                  if nr >= alternativeBranch.numberAtUnsafe(syncConfig.blocksBatchSize) && !didResponseWithNewBranch =>
+                val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
+                sender ! PeersClient.Response(defaultPeer, BlockHeaders(responseHeaders))
+                Some(new BranchResolutionAutoPilot(true, alternativeBlocks))
+              // Handle ETH62 GetBlockBodies
               case PeersClient.Request(GetBlockBodies(hashes), _, _)
+                  if !hashes.toSet.subsetOf(blocks.hashes.toSet) &&
+                    hashes.toSet.subsetOf(testBlocks.hashes.toSet) =>
+                val matchingBodies = hashes.flatMap(hash => testBlocks.find(_.hash == hash)).map(_.body)
+                sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
+                None
+              // Handle ETH66 GetBlockBodies
+              case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _)
                   if !hashes.toSet.subsetOf(blocks.hashes.toSet) &&
                     hashes.toSet.subsetOf(testBlocks.hashes.toSet) =>
                 val matchingBodies = hashes.flatMap(hash => testBlocks.find(_.hash == hash)).map(_.body)
