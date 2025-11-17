@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.mpt
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.{ArchiveNodeStorage, MptStorage, NodeStorage, SerializingMptStorage}
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.{ObjectGenerators, crypto}
 import org.bouncycastle.util.encoders.Hex
@@ -16,7 +17,7 @@ class MerklePatriciaTreeSpeedSpec
     with Logger
     with PersistentStorage {
 
-  test("Performance test (From: https://github.com/ethereum/wiki/wiki/Benchmarks)") {
+  test("Performance test (From: https://github.com/ethereum/wiki/wiki/Benchmarks)", BenchmarkTest) {
     val Rounds = 1000
     val Symmetric = true
 
@@ -45,7 +46,7 @@ class MerklePatriciaTreeSpeedSpec
     else assert(rootHash.take(4) == "da8a" && rootHash.drop(rootHash.length - 4) == "0ca4")
   }
 
-  test("MPT benchmark with RocksDb") {
+  test("MPT benchmark with RocksDb", BenchmarkTest) {
     withRocksDbNodeStorage { ns =>
       mptBenchmarkTest(ns)
     }

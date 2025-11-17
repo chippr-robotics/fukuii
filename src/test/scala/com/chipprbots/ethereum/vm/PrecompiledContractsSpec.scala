@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks
@@ -63,7 +64,7 @@ class PrecompiledContractsSpec
     )
   }
 
-  test("ECDSARECOVER") {
+  test("ECDSARECOVER", UnitTest, VMTest) {
     val keyPair = generateKeyPair(secureRandom)
     val bytesGen = Generators.getByteStringGen(1, 128)
 
@@ -92,7 +93,7 @@ class PrecompiledContractsSpec
     gasUsedFailedRecover shouldEqual 3000
   }
 
-  test("ECDSARECOVER_Malformed_Recovery_ID_V") {
+  test("ECDSARECOVER_Malformed_Recovery_ID_V", UnitTest, VMTest) {
     val validAddress = ByteString(Hex.decode("000000000000000000000000a94f5374fce5edbc8e2a8697c15331677e6ebf0b"))
 
     val validH = ByteString(Hex.decode("18c547e4f7b0f325ad1e56f57e26c745b09a3e503d86e00e5255ff7f715d3d1c"))

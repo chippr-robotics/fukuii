@@ -15,19 +15,20 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.Generators
 import org.scalatest.compatible.Assertion
+import com.chipprbots.ethereum.testing.Tags._
 
 class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
 
-  "InMemoryWorldStateProxy" should "allow to create and retrieve an account" in new TestSetup {
+  "InMemoryWorldStateProxy" should "allow to create and retrieve an account" taggedAs(UnitTest, StateTest) in new TestSetup {
     worldState.newEmptyAccount(address1).accountExists(address1) shouldBe true
   }
 
-  it should "allow to save and retrieve code" in new TestSetup {
+  it should "allow to save and retrieve code" taggedAs(UnitTest, StateTest) in new TestSetup {
     val code: ByteString = Generators.getByteStringGen(1, 100).sample.get
     worldState.saveCode(address1, code).getCode(address1) shouldEqual code
   }
 
-  it should "allow to save and get storage" in new TestSetup {
+  it should "allow to save and get storage" taggedAs(UnitTest, StateTest) in new TestSetup {
     val addr: BigInt = Generators.getUInt256Gen().sample.getOrElse(UInt256.MaxValue).toBigInt
     val value: BigInt = Generators.getUInt256Gen().sample.getOrElse(UInt256.MaxValue).toBigInt
 
@@ -38,7 +39,7 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
     worldState.saveStorage(address1, storage).getStorage(address1).load(addr) shouldEqual value
   }
 
-  it should "allow to transfer value to other address" in new TestSetup {
+  it should "allow to transfer value to other address" taggedAs(UnitTest, StateTest) in new TestSetup {
     val account: Account = Account(0, 100)
     val toTransfer: UInt256 = account.balance - 20
     val finalWorldState: InMemoryWorldStateProxy = worldState

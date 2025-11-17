@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class ChainWeightSpec extends AnyFlatSpec with Matchers {
 
   def createHeader(
@@ -30,7 +32,7 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
       nonce = ByteString.empty
     )
 
-  "ChainWeight without MESS" should "compare based on checkpoint and total difficulty" in {
+  "ChainWeight without MESS" should "compare based on checkpoint and total difficulty" taggedAs(UnitTest) in {
     val weight1 = ChainWeight(lastCheckpointNumber = 0, totalDifficulty = 1000)
     val weight2 = ChainWeight(lastCheckpointNumber = 0, totalDifficulty = 2000)
 
@@ -38,14 +40,14 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
     weight2 should be > weight1
   }
 
-  it should "prioritize checkpoint number over difficulty" in {
+  it should "prioritize checkpoint number over difficulty" taggedAs(UnitTest) in {
     val weight1 = ChainWeight(lastCheckpointNumber = 1, totalDifficulty = 1000)
     val weight2 = ChainWeight(lastCheckpointNumber = 0, totalDifficulty = 9000)
 
     weight1 should be > weight2 // Checkpoint wins despite lower difficulty
   }
 
-  it should "increase weight correctly when adding blocks" in {
+  it should "increase weight correctly when adding blocks" taggedAs(UnitTest) in {
     val initialWeight = ChainWeight.zero
     val header = createHeader(number = 1, difficulty = 100)
 
@@ -55,7 +57,7 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
     newWeight.lastCheckpointNumber shouldBe BigInt(0)
   }
 
-  it should "update checkpoint number when adding checkpoint block" in {
+  it should "update checkpoint number when adding checkpoint block" taggedAs(UnitTest) in {
     val initialWeight = ChainWeight.zero
     val checkpointHeader = createHeader(number = 100, difficulty = 100, hasCheckpoint = true)
 
@@ -65,7 +67,7 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
     newWeight.lastCheckpointNumber shouldBe BigInt(100)
   }
 
-  "ChainWeight with MESS" should "compare using MESS scores when both have them" in {
+  "ChainWeight with MESS" should "compare using MESS scores when both have them" taggedAs(UnitTest) in {
     val weight1 = ChainWeight(
       lastCheckpointNumber = 0,
       totalDifficulty = 2000,
@@ -81,7 +83,7 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
     weight1 should be > weight2
   }
 
-  it should "fall back to total difficulty when only one has MESS score" in {
+  it should "fall back to total difficulty when only one has MESS score" taggedAs(UnitTest) in {
     val weight1 = ChainWeight(
       lastCheckpointNumber = 0,
       totalDifficulty = 2000,

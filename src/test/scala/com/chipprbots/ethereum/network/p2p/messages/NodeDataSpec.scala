@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.rlp.encode
+import com.chipprbots.ethereum.testing.Tags._
 
 class NodeDataSpec extends AnyFlatSpec with Matchers {
 

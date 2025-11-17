@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.domain
 
 import org.scalatest.flatspec.AnyFlatSpec
 
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.vm.Generators
 
 class SignedTransactionWithAccessListSpec extends AnyFlatSpec with SignedTransactionBehavior {

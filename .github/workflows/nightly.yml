@@ -149,3 +149,62 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image.name }}-nightly
           cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-nightly
+
+  nightly-comprehensive-tests:
+    name: Nightly Comprehensive Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'sbt'
+      
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-21-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-21-
+            ${{ runner.os }}-sbt-
+      
+      - name: Set up SBT
+        run: |
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          sudo apt-get update
+          sudo apt-get install sbt
+      
+      - name: Run Comprehensive Test Suite
+        run: |
+          echo "=========================================="
+          echo "Running Comprehensive Test Suite (< 3 hours)"
+          echo "=========================================="
+          sbt testComprehensive
+        env:
+          FUKUII_DEV: true
+      
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comprehensive-test-results-${{ github.run_number }}
+          path: |
+            **/target/test-reports/**
+            **/target/scala-*/test-classes/**/*.log
+          retention-days: 30
+          if-no-files-found: warn

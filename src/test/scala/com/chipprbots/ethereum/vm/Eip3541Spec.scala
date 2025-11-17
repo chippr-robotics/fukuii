@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.testing.Tags._
 
 import Fixtures.blockchainConfig
 
@@ -155,20 +156,20 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
   }
 
   "EIP-3541" should {
-    "be disabled before Mystique fork" in {
+    "be disabled before Mystique fork" taggedAs(UnitTest, VMTest) in {
       configPreMystique.eip3541Enabled shouldBe false
     }
 
-    "be enabled at Mystique fork" in {
+    "be enabled at Mystique fork" taggedAs(UnitTest, VMTest) in {
       configMystique.eip3541Enabled shouldBe true
     }
 
-    "isEip3541Enabled should return true for Mystique fork" in {
+    "isEip3541Enabled should return true for Mystique fork" taggedAs(UnitTest, VMTest) in {
       val etcFork = blockchainConfig.etcForkForBlockNumber(Fixtures.MystiqueBlockNumber)
       BlockchainConfigForEvm.isEip3541Enabled(etcFork) shouldBe true
     }
 
-    "isEip3541Enabled should return false for pre-Mystique forks" in {
+    "isEip3541Enabled should return false for pre-Mystique forks" taggedAs(UnitTest, VMTest) in {
       val magnetoFork = blockchainConfig.etcForkForBlockNumber(Fixtures.MagnetoBlockNumber)
       BlockchainConfigForEvm.isEip3541Enabled(magnetoFork) shouldBe false
 
@@ -179,7 +180,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
 
   "EIP-3541: Contract creation with CREATE" when {
     "pre-Mystique fork" should {
-      "allow deploying contract starting with 0xEF byte" in {
+      "allow deploying contract starting with 0xEF byte" taggedAs(UnitTest, VMTest) in {
         val context =
           fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF.code, fxt.fakeHeaderPreMystique, configPreMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
@@ -189,7 +190,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
     }
 
     "post-Mystique fork (EIP-3541 enabled)" should {
-      "reject contract with one byte 0xEF" in {
+      "reject contract with one byte 0xEF" taggedAs(UnitTest, VMTest) in {
         val context =
           fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
@@ -198,7 +199,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         result.world.getCode(fxt.newAddr) shouldBe ByteString.empty
       }
 
-      "reject contract with two bytes 0xEF00" in {
+      "reject contract with two bytes 0xEF00" taggedAs(UnitTest, VMTest) in {
         val context =
           fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF00.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
@@ -207,7 +208,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         result.world.getCode(fxt.newAddr) shouldBe ByteString.empty
       }
 
-      "reject contract with three bytes 0xEF0000" in {
+      "reject contract with three bytes 0xEF0000" taggedAs(UnitTest, VMTest) in {
         val context =
           fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF0000.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
@@ -216,7 +217,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         result.world.getCode(fxt.newAddr) shouldBe ByteString.empty
       }
 
-      "reject contract with 32 bytes starting with 0xEF" in {
+      "reject contract with 32 bytes starting with 0xEF" taggedAs(UnitTest, VMTest) in {
         val context =
           fxt.createContext(fxt.initWorld, fxt.initCodeReturningEF32Bytes.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
@@ -225,7 +226,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         result.world.getCode(fxt.newAddr) shouldBe ByteString.empty
       }
 
-      "allow deploying contract starting with 0xFE byte" in {
+      "allow deploying contract starting with 0xFE byte" taggedAs(UnitTest, VMTest) in {
         val context =
           fxt.createContext(fxt.initWorld, fxt.initCodeReturningFE.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
@@ -233,7 +234,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
         result.gasRemaining should be > BigInt(0)
       }
 
-      "allow deploying contract with empty code" in {
+      "allow deploying contract with empty code" taggedAs(UnitTest, VMTest) in {
         val context =
           fxt.createContext(fxt.initWorld, fxt.initCodeReturningEmpty.code, fxt.fakeHeaderMystique, configMystique)
         val result = new VM[MockWorldState, MockStorage].run(context)
@@ -245,7 +246,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
 
   "EIP-3541: Contract creation with CREATE opcode" when {
     "post-Mystique fork (EIP-3541 enabled)" should {
-      "reject contract deployment via CREATE starting with 0xEF" in {
+      "reject contract deployment via CREATE starting with 0xEF" taggedAs(UnitTest, VMTest) in {
         // Note: Testing via CREATE opcode is complex due to init code assembly.
         // The core validation is already tested via create transaction (recipientAddr=None).
         // This test verifies that the EIP-3541 check applies to CREATE opcode as well.
@@ -261,7 +262,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
 
   "EIP-3541: Contract creation with CREATE2 opcode" when {
     "post-Mystique fork (EIP-3541 enabled)" should {
-      "reject contract deployment via CREATE2 starting with 0xEF" in {
+      "reject contract deployment via CREATE2 starting with 0xEF" taggedAs(UnitTest, VMTest) in {
         // Note: Testing via CREATE2 opcode is complex due to init code assembly.
         // The core validation is already tested via create transaction (recipientAddr=None).
         // This test verifies that the EIP-3541 check applies to CREATE2 opcode as well.
@@ -276,7 +277,7 @@ class Eip3541Spec extends AnyWordSpec with Matchers {
   }
 
   "EIP-3541: Gas consumption" should {
-    "consume all gas when rejecting 0xEF contract" in {
+    "consume all gas when rejecting 0xEF contract" taggedAs(UnitTest, VMTest) in {
       val context = fxt.createContext(
         fxt.initWorld,
         fxt.initCodeReturningEF.code,

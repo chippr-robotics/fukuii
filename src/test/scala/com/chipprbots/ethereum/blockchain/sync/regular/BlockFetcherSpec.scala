@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.Fixtures.{Blocks => FixtureBlocks}
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.Mocks.MockValidatorsFailingOnBlockBodies
 import com.chipprbots.ethereum.Timeouts
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BlacklistPeer
@@ -65,7 +66,7 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
   "BlockFetcher" - {
 
-    "should not requests headers upon invalidation while a request is already in progress, should resume after response" in new TestSetup {
+    "should not requests headers upon invalidation while a request is already in progress, should resume after response" taggedAs(UnitTest, SyncTest) in new TestSetup {
       startFetcher()
 
       handleFirstBlockBatch()

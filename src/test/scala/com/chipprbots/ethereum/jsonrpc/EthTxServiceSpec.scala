@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthTxService._
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.utils._

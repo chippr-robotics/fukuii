@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config
 

@@ -5,6 +5,7 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.vm.Fixtures.blockchainConfig
 
 class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaCheckPropertyChecks {
@@ -14,11 +15,11 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
   // Use Spiral config which includes PUSH0
   override val config: EvmConfig = EvmConfig.SpiralConfigBuilder(blockchainConfig)
 
-  test("PUSH0 opcode is available in Spiral fork") {
+  test("PUSH0 opcode is available in Spiral fork", UnitTest, VMTest) {
     config.byteToOpCode.get(0x5f.toByte) shouldBe Some(PUSH0)
   }
 
-  test("PUSH0 should push zero onto the stack") {
+  test("PUSH0 should push zero onto the stack", UnitTest, VMTest) {
     forAll(Generators.getProgramStateGen()) { stateIn =>
       val stateOut = PUSH0.execute(stateIn)
 
@@ -33,7 +34,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     }
   }
 
-  test("PUSH0 should use 2 gas (G_base)") {
+  test("PUSH0 should use 2 gas (G_base)", UnitTest, VMTest) {
     forAll(Generators.getProgramStateGen()) { stateIn =>
       // Only test when we have enough gas
       if (stateIn.gas >= 2 && stateIn.stack.size < stateIn.stack.maxSize) {
@@ -44,7 +45,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     }
   }
 
-  test("PUSH0 should fail with StackOverflow when stack is full") {
+  test("PUSH0 should fail with StackOverflow when stack is full", UnitTest, VMTest) {
     // Create a full stack by pushing 1024 items
     val fullStack = (1 to 1024).foldLeft(Stack.empty(1024))((stack, _) => stack.push(UInt256.One))
     val stateIn = Generators.getProgramStateGen().sample.get.withStack(fullStack)
@@ -53,7 +54,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     stateOut.error shouldBe Some(StackOverflow)
   }
 
-  test("PUSH0 should fail with OutOfGas when not enough gas") {
+  test("PUSH0 should fail with OutOfGas when not enough gas", UnitTest, VMTest) {
     // Create state with gas=1 and ensure stack has room (to test gas check, not stack overflow)
     val lowGasState = Generators
       .getProgramStateGen()
@@ -67,7 +68,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     stateOut.gas shouldBe 0
   }
 
-  test("PUSH0 multiple times should push multiple zeros") {
+  test("PUSH0 multiple times should push multiple zeros", UnitTest, VMTest) {
     // Create state with an empty stack to ensure room for multiple pushes
     val initialState = Generators
       .getProgramStateGen()
@@ -91,13 +92,13 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     top2 shouldEqual UInt256.Zero
   }
 
-  test("PUSH0 has correct opcode properties") {
+  test("PUSH0 has correct opcode properties", UnitTest, VMTest) {
     PUSH0.code shouldBe 0x5f.toByte
     PUSH0.delta shouldBe 0 // pops 0 items
     PUSH0.alpha shouldBe 1 // pushes 1 item
   }
 
-  test("PUSH0 should be cheaper than PUSH1 with zero") {
+  test("PUSH0 should be cheaper than PUSH1 with zero", UnitTest, VMTest) {
     val initialState = Generators.getProgramStateGen().sample.get
 
     // PUSH0 uses G_base (2 gas)
@@ -113,7 +114,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     push0GasUsed should be < push1GasUsed
   }
 
-  test("EIP-3855 test case: single PUSH0 execution") {
+  test("EIP-3855 test case: single PUSH0 execution", UnitTest, VMTest) {
     // Test case from EIP-3855: 5F – successful execution, stack consist of a single item, set to zero
     val state = Generators
       .getProgramStateGen()
@@ -130,7 +131,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     value shouldEqual UInt256.Zero
   }
 
-  test("EIP-3855 test case: 1024 PUSH0 operations") {
+  test("EIP-3855 test case: 1024 PUSH0 operations", UnitTest, VMTest) {
     // Test case from EIP-3855: 5F5F..5F (1024 times) – successful execution,
     // stack consists of 1024 items, all set to zero
     var state = Generators
@@ -157,7 +158,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     }
   }
 
-  test("EIP-3855 test case: 1025 PUSH0 operations should fail") {
+  test("EIP-3855 test case: 1025 PUSH0 operations should fail", UnitTest, VMTest) {
     // Test case from EIP-3855: 5F5F..5F (1025 times) – execution aborts due to out of stack
     var state = Generators
       .getProgramStateGen()
