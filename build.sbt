@@ -354,6 +354,7 @@ lazy val node = {
       ),
       // protobuf API version file is now provided in src/main/resources/extvm/VERSION
       // Packaging
+      maintainer := "chippr-robotics@github.com",
       (Compile / mainClass) := Some("com.chipprbots.ethereum.App"),
       (Compile / discoveredMainClasses) := Seq(),
       (Universal / mappings) ++= directory((Compile / resourceDirectory).value / "conf"),
@@ -361,7 +362,27 @@ lazy val node = {
       bashScriptExtraDefines += """addJava "-Dconfig.file=${app_home}/../conf/app.conf"""",
       bashScriptExtraDefines += """addJava "-Dlogback.configurationFile=${app_home}/../conf/logback.xml"""",
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
-      batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml""""
+      batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml"""",
+      // Assembly configuration
+      (assembly / mainClass) := Some("com.chipprbots.ethereum.App"),
+      (assembly / assemblyJarName) := s"fukuii-assembly-${version.value}.jar",
+      (assembly / assemblyMergeStrategy) := {
+        case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".SF")) => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".DSA")) => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".RSA")) => MergeStrategy.discard
+        case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.first
+        case PathList("META-INF", "native", xs @ _*) => MergeStrategy.first
+        case PathList("META-INF", "native-image", xs @ _*) => MergeStrategy.first
+        case PathList("META-INF", "versions", xs @ _*) => MergeStrategy.first
+        case "module-info.class" => MergeStrategy.discard
+        case "reference.conf" => MergeStrategy.concat
+        case "application.conf" => MergeStrategy.concat
+        case x if x.endsWith(".proto") => MergeStrategy.first
+        case x if x.contains("pekko") => MergeStrategy.first
+        case x if x.contains("akka") => MergeStrategy.first
+        case _ => MergeStrategy.first
+      }
     )
 
   if (!nixBuild)
