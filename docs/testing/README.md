@@ -10,6 +10,7 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 
 ### Implementation Verification
 - **[TESTING_TAGS_VERIFICATION_REPORT.md](TESTING_TAGS_VERIFICATION_REPORT.md)** - Comprehensive verification report for testing tags ADR implementation (November 17, 2025)
+- **[NEXT_STEPS.md](NEXT_STEPS.md)** - Action plan for completing remaining testing tags work (35% remaining)
 
 ### KPI Baseline Documentation
 - **[KPI_BASELINES.md](KPI_BASELINES.md)** - Comprehensive KPI baseline definitions and targets
