@@ -25,7 +25,9 @@ logging {
   # Logs filename
   logs-file = "fukuii"
 
-  # Logs level (DEBUG, INFO, WARN, ERROR)
+  # Logs level (INFO, DEBUG, WARN, ERROR)
+  # Defaults to INFO for production use
+  # Set to DEBUG for detailed troubleshooting
   logs-level = "INFO"
 }
 
@@ -147,6 +149,54 @@ To enable DEBUG for specific components without flooding all logs, edit `logback
 ```
 
 Then restart the application. Remember to change it back to INFO when done debugging.
+
+## Module-Specific Logging
+
+Fukuii configures different log levels for different modules to reduce noise. Here are the key modules and their default levels:
+
+### Network and P2P Communication
+
+These modules are set to **INFO** by default to reduce verbose connection logging:
+
+- `com.chipprbots.scalanet.*` - Core networking layer
+- `com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup` - UDP peer groups
+- `com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService` - Node discovery
+- `com.chipprbots.ethereum.network.PeerActor` - Peer connection management
+- `com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler` - RLPx protocol handler
+- `com.chipprbots.ethereum.network.discovery` - Discovery protocol
+
+**To enable verbose network debugging**, edit `logback.xml`:
+
+```xml
+<logger name="com.chipprbots.scalanet" level="DEBUG" />
+<logger name="com.chipprbots.ethereum.network.PeerActor" level="DEBUG" />
+<logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
+```
+
+### Blockchain Sync
+
+- `com.chipprbots.ethereum.blockchain.sync.SyncController` - INFO by default
+
+### Virtual Machine
+
+- `com.chipprbots.ethereum.vm.VM` - **OFF** by default for performance (VM execution is extremely verbose)
+
+**To enable VM debugging** (warning: very verbose):
+
+```xml
+<logger name="com.chipprbots.ethereum.vm.VM" level="DEBUG" />
+```
+
+### Quick Reference: Enabling Debug for Troubleshooting
+
+| Issue | Logger to Enable | Level |
+|-------|-----------------|-------|
+| Peer connection problems | `com.chipprbots.ethereum.network.PeerActor` | DEBUG |
+| RLPx handshake failures | `com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler` | DEBUG |
+| Node discovery issues | `com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService` | DEBUG |
+| Block sync problems | `com.chipprbots.ethereum.blockchain.sync` | DEBUG |
+| VM execution issues | `com.chipprbots.ethereum.vm.VM` | DEBUG |
+| All network issues | `com.chipprbots.scalanet` | DEBUG |
 
 ## Technical Details
 
