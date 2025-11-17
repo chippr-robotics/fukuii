@@ -90,16 +90,24 @@
     </root>
 
     <!-- NB. be aware you might want to adjust akka.loglevel if you set any level to DEBUG -->
+    
+    <!-- External libraries - reduce noise -->
     <logger name="io.netty" level="WARN"/>
-    <logger name="com.chipprbots.scalanet" level="DEBUG" />
-    <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="DEBUG" />
-    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerActor" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.discovery" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
     <logger name="org.jupnp.QueueingThreadPoolExecutor" level="WARN" />
     <logger name="org.jupnp.util.SpecificationViolationReporter" level="ERROR" />
     <logger name="org.jupnp.protocol.RetrieveRemoteDescriptors" level="ERROR" />
+    
+    <!-- Scalanet modules - INFO by default, set to DEBUG for detailed network diagnostics -->
+    <logger name="com.chipprbots.scalanet" level="INFO" />
+    <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="INFO" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="INFO" />
+    
+    <!-- Network and sync modules - INFO by default, set to DEBUG for detailed troubleshooting -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.discovery" level="INFO" />
+    
+    <!-- VM execution - disabled by default for performance -->
+    <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
 </configuration>
