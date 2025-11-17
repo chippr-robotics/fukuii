@@ -16,8 +16,6 @@ import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
 import com.chipprbots.ethereum.utils.Config
 
-import cats.effect.IO
-
 import com.chipprbots.ethereum.testing.Tags._
 
 /** End-to-End test suite for P2P handshake functionality.

@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.sync
 
+import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration._
@@ -15,8 +16,6 @@ import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpec._
 import com.chipprbots.ethereum.utils.Config
-
-import cats.effect.IO
 
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -368,10 +367,12 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll {
           
           // Peer2 mines new blocks
           _ <- peer2.mineNewBlocks(100.milliseconds, 5)(IdentityUpdate)
+          // Wait for peer1 to sync peer2's new blocks before peer1 starts mining
           _ <- peer1.waitForRegularSyncLoadLastBlock(initialBlocks + 5)
           
           // Peer1 mines new blocks
           _ <- peer1.mineNewBlocks(100.milliseconds, 5)(IdentityUpdate)
+          // Wait for peer2 to sync peer1's new blocks before assertions
           _ <- peer2.waitForRegularSyncLoadLastBlock(initialBlocks + 10)
         } yield {
           val peer1BestBlock = peer1.blockchainReader.getBestBlock().get
