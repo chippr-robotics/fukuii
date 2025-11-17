@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.blockchain.data
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
-import scala.util.{Failure, Success}
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.scaladsl.Http
@@ -143,7 +142,7 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     * }
     * }}}
     */
-  private def parseSimpleJson(json: String): Seq[BootstrapCheckpoint] = {
+  private def parseSimpleJson(_json: String): Seq[BootstrapCheckpoint] = {
     log.warn(
       "JSON parsing not implemented - returning empty checkpoint list. " +
         "Implement parseSimpleJson with circe or play-json before using in production."

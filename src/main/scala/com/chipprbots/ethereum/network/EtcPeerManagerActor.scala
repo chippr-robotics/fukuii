@@ -159,7 +159,7 @@ class EtcPeerManagerActor(
     * @return
     *   new updated peer info
     */
-  private def handleSentMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo =
+  private def handleSentMessage(_message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo =
     initialPeerWithInfo.peerInfo
 
   /** Processes the message and the old peer info and returns the peer info

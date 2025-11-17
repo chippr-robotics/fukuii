@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
+
 import com.chipprbots.ethereum.utils.ByteUtils
 
 /** This actors takes care of initiating a secure connection (auth handshake) between peers. Once such connection is

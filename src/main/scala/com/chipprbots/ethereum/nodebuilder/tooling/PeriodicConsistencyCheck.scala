@@ -9,6 +9,7 @@ import scala.concurrent.duration.DurationInt
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
+
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck.ConsistencyCheck
 import com.chipprbots.ethereum.utils.Logger
 

@@ -240,6 +240,11 @@ class PeerDiscoveryManagerSpec
         .returning(IO.raiseError(new RuntimeException("Oh no!") with NoStackTrace))
         .atLeastOnce()
 
+      (() => discoveryService.getNodes)
+        .expects()
+        .returning(IO.raiseError(new RuntimeException("Oh no!") with NoStackTrace))
+        .atLeastOnce()
+
       override def test(): Unit = {
         peerDiscoveryManager ! PeerDiscoveryManager.Start
         eventually {

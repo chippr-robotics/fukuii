@@ -15,7 +15,7 @@ import com.typesafe.config.Config
   * Configuration: <pre> pekko.actor.default-mailbox { mailbox-type =
   * org.apache.pekko.contrib.mailbox.LoggingMailboxType size-limit \= 20 } </pre>
   */
-class LoggingMailboxType(settings: ActorSystem.Settings, config: Config)
+class LoggingMailboxType(_settings: ActorSystem.Settings, config: Config)
     extends MailboxType
     with ProducesMessageQueue[UnboundedMailbox.MessageQueue] {
   override def create(owner: Option[ActorRef], system: Option[ActorSystem]): LoggingMailbox = (owner, system) match {
