@@ -39,7 +39,7 @@ class HeadersFetcher(
   val log: Logger = context.log
   implicit val runtime: IORuntime = IORuntime.global
 
-  import HeadersFetcher._
+  import HeadersFetcher.{FetchHeadersByNumber, FetchHeadersByHash, AdaptedMessage}
 
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): HeadersFetcherCommand = AdaptedMessage(peer, msg)
 
