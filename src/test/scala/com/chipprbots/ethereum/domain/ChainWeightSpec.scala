@@ -6,6 +6,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostEcip1097
 
 class ChainWeightSpec extends AnyFlatSpec with Matchers {
 
@@ -27,9 +28,11 @@ class ChainWeightSpec extends AnyFlatSpec with Matchers {
       gasLimit = 0,
       gasUsed = 0,
       unixTimestamp = 0,
-      extraData = if (hasCheckpoint) ByteString("ECIP-1066") else ByteString.empty,
+      extraData = ByteString.empty,
       mixHash = ByteString.empty,
-      nonce = ByteString.empty
+      nonce = ByteString.empty,
+      extraFields =
+        if (hasCheckpoint) HefPostEcip1097(Some(Checkpoint.empty)) else BlockHeader.HeaderExtraFields.HefEmpty
     )
 
   "ChainWeight without MESS" should "compare based on checkpoint and total difficulty" taggedAs (UnitTest) in {
