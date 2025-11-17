@@ -610,7 +610,7 @@ class RegularSyncSpec
         blockFetcher !
           MessageFromPeer(NewBlockHashes(List(BlockHash(newBlock.hash, newBlock.number))), defaultPeer.id)
 
-        peersClient.expectMsgPF() { case PeersClient.Request(GetBlockHeaders(_, _, _, _), _, _) =>
+        peersClient.expectMsgPF() { case PeersClient.Request(ETH66GetBlockHeaders(_, _, _, _, _), _, _) =>
           true
         }
       })
