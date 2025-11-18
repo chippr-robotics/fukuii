@@ -144,7 +144,7 @@ docker run -d \
 - ✅ Include SLSA provenance attestations for supply chain verification
 - ✅ Include Software Bill of Materials (SBOM)
 
-See [docker/README.md](docker/README.md) for detailed Docker documentation, including:
+See [Docker Documentation](docs/deployment/docker.md) for detailed Docker documentation, including:
 - Available image variants (production, development, distroless)
 - Health checks and monitoring
 - Security considerations and signature verification

@@ -228,7 +228,7 @@ src/main/scala/com/chipprbots/ethereum/console/
 
 ### Documentation
 
-- `docs/console-ui.md`: Comprehensive user guide
+- `docs/architecture/console-ui.md`: Comprehensive user guide
 - `docs/adr/008-console-ui.md`: This ADR
 - Updated README.md with console UI information
 - Help text with `--tui` flag

@@ -87,7 +87,7 @@ Docker and Docker Compose configurations:
 - `docker/scripts/` - Helper scripts
 - `Dockerfile*` - Various Dockerfile variants (prod, dev, distroless, etc.)
 
-See [docker/README.md](docker/README.md) for comprehensive Docker documentation.
+See [Docker Documentation](../deployment/docker.md) for comprehensive Docker documentation.
 
 #### `ops/`
 Operational configurations for production deployments:
