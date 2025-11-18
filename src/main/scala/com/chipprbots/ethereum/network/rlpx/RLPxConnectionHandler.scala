@@ -57,7 +57,26 @@ class RLPxConnectionHandler(
 
   override def receive: Receive = waitingForCommand
 
+  override def postStop(): Unit = {
+    log.debug("[RLPx] Connection handler for peer {} stopped", peerId)
+    super.postStop()
+  }
+
   def tcpActor: ActorRef = IO(Tcp)
+
+  /** State to handle graceful shutdown, preventing dead letters by accepting and dropping messages */
+  def stopping: Receive = {
+    case _: SendMessage =>
+      log.debug("[RLPx] Ignoring SendMessage during shutdown for peer {}", peerId)
+    case msg =>
+      log.debug("[RLPx] Ignoring message {} during shutdown for peer {}", msg.getClass.getSimpleName, peerId)
+  }
+
+  /** Transition to stopping state before terminating the actor to prevent dead letters */
+  private def gracefulStop(): Unit = {
+    context.become(stopping)
+    context.stop(self)
+  }
 
   def waitingForCommand: Receive = {
     case ConnectTo(uri) =>
@@ -87,7 +106,7 @@ class RLPxConnectionHandler(
     case CommandFailed(_: Connect) =>
       log.error("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
       context.parent ! ConnectionFailed
-      context.stop(self)
+      gracefulStop()
   }
 
   class ConnectedHandler(connection: ActorRef) {
@@ -95,7 +114,7 @@ class RLPxConnectionHandler(
     val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
       log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
-      context.stop(self)
+      gracefulStop()
     }
 
     def waitingForAuthHandshakeInit(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
@@ -128,7 +147,7 @@ class RLPxConnectionHandler(
                 ex
               )
               context.parent ! ConnectionFailed
-              context.stop(self)
+              gracefulStop()
           }
       }
 
@@ -164,7 +183,7 @@ class RLPxConnectionHandler(
                 ex
               )
               context.parent ! ConnectionFailed
-              context.stop(self)
+              gracefulStop()
           }
       }
 
@@ -188,7 +207,7 @@ class RLPxConnectionHandler(
         rlpxConfiguration.waitForHandshakeTimeout.toMillis
       )
       context.parent ! ConnectionFailed
-      context.stop(self)
+      gracefulStop()
     }
 
     def processHandshakeResult(result: AuthHandshakeResult, remainingData: ByteString): Unit =
@@ -206,7 +225,7 @@ class RLPxConnectionHandler(
         case AuthHandshakeError =>
           log.error("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
           context.parent ! ConnectionFailed
-          context.stop(self)
+          gracefulStop()
       }
 
     def awaitInitialHello(
@@ -240,7 +259,7 @@ class RLPxConnectionHandler(
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
           log.error("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
-          context.stop(self)
+          gracefulStop()
         case Received(data) =>
           extractHello(extractor, data, cancellableAckTimeout, seqNumber)
       }
@@ -279,7 +298,7 @@ class RLPxConnectionHandler(
             case None =>
               log.error("[Stopping Connection] Unable to negotiate protocol with peer {}", peerId)
               context.parent ! ConnectionFailed
-              context.stop(self)
+              gracefulStop()
           }
         case None =>
           log.warning("[RLPx] Did not find 'Hello' in message from peer {}, continuing to await", peerId)
@@ -366,7 +385,7 @@ class RLPxConnectionHandler(
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
           log.debug("[Stopping Connection] Write to {} failed", peerId)
-          context.stop(self)
+          gracefulStop()
       }
 
     /** Sends an encoded message through the TCP connection, an Ack will be received when the message was successfully
@@ -420,7 +439,7 @@ class RLPxConnectionHandler(
         peerId,
         Hex.toHexString(cmd.data.toArray[Byte])
       )
-      context.stop(self)
+      gracefulStop()
     }
 
     def handleConnectionClosed: Receive = { case msg: ConnectionClosed =>
@@ -431,7 +450,7 @@ class RLPxConnectionHandler(
         log.debug("[Stopping Connection] Connection with {} closed because of error {}", peerId, msg.getErrorCause)
       }
 
-      context.stop(self)
+      gracefulStop()
     }
   }
 }
