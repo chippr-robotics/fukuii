@@ -188,6 +188,29 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
+  it should "handle SendMessage gracefully during shutdown without dead letters" in new TestSetup {
+    // Start setting up connection
+    rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
+    connection.expectMsgClass(classOf[Tcp.Register])
+
+    // AuthHandshaker handles initial message and fails (simulating auth failure scenario)
+    val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
+    
+    // Configure the test double to fail authentication
+    mockHandshaker.handleInitialMessageHandler = Some(_ => throw new Exception("Auth failed"))
+    mockHandshaker.handleInitialMessageV4Handler = Some(_ => throw new Exception("Auth failed"))
+
+    // Send the auth data which will trigger shutdown
+    rlpxConnection ! Tcp.Received(data)
+    
+    // Immediately send a SendMessage during the shutdown window
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    
+    // The actor should gracefully handle the message and terminate without dead letters
+    rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
+    rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
+  }
+
   // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
   // Using lazy val for mocks ensures they're created when accessed within MockFactory context.
   trait TestSetup extends SecureRandomBuilder {
