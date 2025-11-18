@@ -194,10 +194,10 @@ After updating configuration:
 
 ## Related Documentation
 
-- [Issue 14: ETH68 Peer Connection Failures](docs/runbooks/known-issues.md#issue-14-eth68-peer-connection-failures)
+- [Issue 14: ETH68 Peer Connection Failures](../runbooks/known-issues.md#issue-14-eth68-peer-connection-failures)
 - [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124)
-- [Peering Runbook](docs/runbooks/peering.md)
-- [Log Triage Runbook](docs/runbooks/log-triage.md)
+- [Peering Runbook](../runbooks/peering.md)
+- [Log Triage Runbook](../runbooks/log-triage.md)
 
 ## Additional Notes
 
@@ -270,4 +270,4 @@ fork-id-report-latest-when-unsynced = false
 
 For additional support or if this guide doesn't resolve the issue:
 - Open an issue at https://github.com/chippr-robotics/fukuii/issues
-- Check the [Known Issues](docs/runbooks/known-issues.md) documentation
+- Check the [Known Issues](../runbooks/known-issues.md) documentation

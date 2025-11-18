@@ -69,7 +69,7 @@ Ethereum Test Suite (ETS) integration:
 - `ets/retesteth` - Wrapper script for running tests
 - `test-ets.sh` - CI script for running the full test suite
 
-See [ets/README.md](ets/README.md) for details on running ETS tests.
+See [ets/README.md](../../ets/README.md) for details on running ETS tests.
 
 #### `tls/`
 TLS certificates and scripts for secure RPC testing:
@@ -93,7 +93,7 @@ See [Docker Documentation](../deployment/docker.md) for comprehensive Docker doc
 Operational configurations for production deployments:
 - `ops/grafana/` - Pre-configured Grafana dashboards for monitoring Fukuii nodes
 
-See [ops/README.md](ops/README.md) and [docs/operations/metrics-and-monitoring.md](docs/operations/metrics-and-monitoring.md) for details.
+See [ops/README.md](../../ops/README.md) and [metrics-and-monitoring.md](../operations/metrics-and-monitoring.md) for details.
 
 #### `docs/`
 Comprehensive documentation:
@@ -236,12 +236,12 @@ This repository is a continuation of the Mantis Ethereum Classic client original
 ## Related Documentation
 
 - [README.md](README.md) - Getting started and features
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-- [CHANGELOG.md](CHANGELOG.md) - Version history
+- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Contribution guidelines
+- [CHANGELOG.md](../../CHANGELOG.md) - Version history
 - [ARCHITECTURE_DIAGRAMS.md](../architecture/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
 - [VENDORED_MODULES_INTEGRATION_PLAN.md](VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
-- [LICENSE](LICENSE) - Apache 2.0 license
-- [NOTICE](NOTICE) - Attribution and notices
+- [LICENSE](../../LICENSE) - Apache 2.0 license
+- [NOTICE](../../NOTICE) - Attribution and notices
 
 ## Questions?
 
@@ -249,5 +249,5 @@ For questions about the repository structure or where to add new code:
 
 1. Check existing code for similar functionality
 2. Follow the package structure in `src/main/scala/`
-3. Refer to [CONTRIBUTING.md](CONTRIBUTING.md)
+3. Refer to [CONTRIBUTING.md](../../CONTRIBUTING.md)
 4. Ask in GitHub Discussions or open an issue

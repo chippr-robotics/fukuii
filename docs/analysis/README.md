@@ -62,7 +62,7 @@ These analysis reports provide:
 
 ## Related Documentation
 
-- [Block Sync Troubleshooting Guide](../BLOCK_SYNC_TROUBLESHOOTING.md) - Comprehensive sync issue resolution
+- [Block Sync Troubleshooting Guide](../troubleshooting/BLOCK_SYNC_TROUBLESHOOTING.md) - Comprehensive sync issue resolution
 - [Log Triage Runbook](../runbooks/log-triage.md) - General log analysis procedures
 - [Peering Runbook](../runbooks/peering.md) - Network connectivity troubleshooting
 - [Known Issues](../runbooks/known-issues.md) - Common problems and solutions
