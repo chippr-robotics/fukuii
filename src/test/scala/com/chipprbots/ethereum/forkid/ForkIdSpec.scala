@@ -132,6 +132,22 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(20000000) shouldBe ForkId(0xbe46d57cL, None)
     }
 
+    // Here's a couple of tests to verify the proper RLP encoding (since FORK_HASH is a 4 byte binary but FORK_NEXT is an 8 byte quantity):
+    "be correctly encoded via rlp" in {
+      roundTrip(ForkId(0, None), "c6840000000080")
+      roundTrip(ForkId(0xdeadbeefL, Some(0xbaddcafeL)), "ca84deadbeef84baddcafe")
+
+      val maxUInt64 = (BigInt(0x7fffffffffffffffL) << 1) + 1
+      maxUInt64.toByteArray shouldBe Array(0, -1, -1, -1, -1, -1, -1, -1, -1)
+      val maxUInt32 = BigInt(0xffffffffL)
+      maxUInt32.toByteArray shouldBe Array(0, -1, -1, -1, -1)
+
+      roundTrip(ForkId(maxUInt32, Some(maxUInt64)), "ce84ffffffff88ffffffffffffffff")
+    }
+  }
+
+  private def roundTrip(forkId: ForkId, hex: String) = {
+    encode(forkId.toRLPEncodable) shouldBe Hex.decode(hex)
     decode[ForkId](Hex.decode(hex)) shouldBe forkId
   }
 }
