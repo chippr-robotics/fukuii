@@ -211,6 +211,8 @@ object OpCode {
   *   number of words to be popped from stack
   * @param alpha
   *   number of words to be pushed to stack
+  * @param baseGasFn
+  *   function to compute base gas cost from fee schedule
   */
 abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGasFn: FeeSchedule => BigInt)
     extends Product
