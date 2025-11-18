@@ -51,6 +51,30 @@ The disconnect is happening on the **peer's side**, not ours. Peers running stan
 3. Investigate core-geth peer behavior
 4. Community engagement for peer compatibility
 
+### [Peer Connection Timeout Analysis](2025-11-18-peer-timeout-analysis.md)
+
+**Date**: 2025-11-18  
+**Type**: Follow-up Analysis  
+**Severity**: High
+
+Latest analysis showing **significant progress** on the ForkId issue but revealing a **new timeout problem**. This log shows the node successfully resolving the ForkId rejection issue from previous logs.
+
+**Key Findings**:
+- ✅ **ForkId issue RESOLVED**: Now sending correct ForkId `0xbe46d57c` (synced state)
+- ✅ **Peer acceptance improved**: Peers no longer reject us with 0x10 disconnect
+- ✅ **Handshake completion**: Full RLPx and Hello exchange succeeds
+- ❌ **New issue**: All peer connections timeout after exactly 15 seconds
+- ❌ **Root cause**: State inconsistency - bestBlock=0 but ForkId implies block 19.25M+
+
+**Critical Insight**:
+The node reports contradictory state (genesis bestBlock/totalDifficulty but synced ForkId), causing peers to expect messages we don't send, resulting in 15-second timeouts.
+
+**Recommended Actions**:
+1. Fix state consistency - ensure ForkId matches bestBlock and totalDifficulty
+2. Investigate bootstrap checkpoint implementation
+3. Add detailed peer message flow logging
+4. Increase timeout duration for diagnostic purposes
+
 ## Purpose
 
 These analysis reports provide:
