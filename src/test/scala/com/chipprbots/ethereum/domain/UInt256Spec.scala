@@ -32,7 +32,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
   /** For each operation (op) tests check a following property: For two BigInts (n1, n2): UInt256(n1) op UInt256(n2) ==
     * UInt256(n1 op n2)
     */
-  test("&", UnitTest) {
+  test("  test("&", UnitTest) {" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert((UInt256(n1) & UInt256(n2)) == UInt256(n1 & n2))
     }
@@ -50,7 +50,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("^", UnitTest) {
+  test("^" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert((UInt256(n1) ^ UInt256(n2)) == UInt256(n1 ^ n2))
     }
@@ -59,7 +59,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("~", UnitTest) {
+  test("~" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen) { (n: BigInt) =>
       assert(~UInt256(n) == UInt256(~n))
     }
@@ -68,7 +68,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("negation", UnitTest) {
+  test("negation" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen) { (n: BigInt) =>
       assert(-UInt256(n) == UInt256(-n))
     }
@@ -80,7 +80,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert(-UInt256.Zero == UInt256.Zero)
   }
 
-  test("+", UnitTest) {
+  test("+" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert(UInt256(n1) + UInt256(n2) == UInt256(n1 + n2))
     }
@@ -89,7 +89,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("-", UnitTest) {
+  test("-" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert(UInt256(n1) - UInt256(n2) == UInt256(n1 - n2))
     }
@@ -98,7 +98,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("*", UnitTest) {
+  test("*" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert(UInt256(n1) * UInt256(n2) == UInt256(n1 * n2))
     }
@@ -107,7 +107,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("/", UnitTest) {
+  test("/" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert(UInt256(n1) * UInt256(n2) == UInt256(n1 * n2))
     }
@@ -116,7 +116,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("div", UnitTest) {
+  test("div" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       whenever(n2 != 0) {
         assert((UInt256(n1).div(UInt256(n2))) == UInt256(n1 / n2))
@@ -130,7 +130,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert((UInt256(1).div(Zero)) == Zero)
   }
 
-  test("sdiv", UnitTest) {
+  test("sdiv" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       whenever(n2 != 0) {
         val expected: BigInt = toUnsignedBigInt(toSignedBigInt(n1) / toSignedBigInt(n2))
@@ -141,7 +141,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert((UInt256(-1).sdiv(Zero)) == Zero)
   }
 
-  test("mod", UnitTest) {
+  test("mod" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       whenever(n2 != 0) {
         assert((UInt256(n1).mod(UInt256(n2))) == UInt256(n1.mod(n2)))
@@ -151,13 +151,13 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert((UInt256(1).mod(Zero)) == Zero)
   }
 
-  test("smod", UnitTest) {
+  test("smod" taggedAs (UnitTest) in UnitTest) {
     assert((UInt256(Modulus - 1).smod(UInt256(3))) == UInt256(Modulus - 1))
     assert((UInt256(-1).smod(UInt256(MaxValue.toBigInt))) == Zero)
     assert((UInt256(1).smod(Zero)) == Zero)
   }
 
-  test("addmod", UnitTest) {
+  test("addmod" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt, n3: BigInt) =>
       whenever(n3 != 0) {
         assert(UInt256(n1).addmod(UInt256(n2), UInt256(n3)) == UInt256((n1 + n2).mod(n3)))
@@ -166,7 +166,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert(UInt256(42).addmod(UInt256(42), Zero) == Zero)
   }
 
-  test("mulmod", UnitTest) {
+  test("mulmod" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt, n3: BigInt) =>
       whenever(n3 != 0) {
         assert(UInt256(n1).mulmod(UInt256(n2), UInt256(n3)) == UInt256((n1 * n2).mod(n3)))
@@ -175,13 +175,13 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert(UInt256(42).mulmod(UInt256(42), Zero) == Zero)
   }
 
-  test("**", UnitTest) {
+  test("**" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert(UInt256(n1) ** UInt256(n2) == UInt256(n1.modPow(n2, Modulus)))
     }
   }
 
-  test("signExtend", UnitTest) {
+  test("signExtend" taggedAs (UnitTest) in UnitTest) {
     val testData = Table[UInt256, UInt256, UInt256](
       ("value", "extension", "result"),
       (42, 3, 42),
@@ -205,7 +205,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("fillingAdd", UnitTest) {
+  test("fillingAdd" taggedAs (UnitTest) in UnitTest) {
     val testData = Table[UInt256, UInt256, UInt256](
       ("value", "extension", "result"),
       (-9, 10, UInt256.MaxValue),
@@ -224,7 +224,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("slt", UnitTest) {
+  test("slt" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert((UInt256(n1).slt(UInt256(n2))) == (toSignedBigInt(n1) < toSignedBigInt(n2)))
     }
@@ -236,7 +236,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("sgt", UnitTest) {
+  test("sgt" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen, bigIntGen) { (n1: BigInt, n2: BigInt) =>
       assert((UInt256(n1).sgt(UInt256(n2))) == (toSignedBigInt(n1) > toSignedBigInt(n2)))
     }
@@ -249,7 +249,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("getByte", UnitTest) {
+  test("getByte" taggedAs (UnitTest) in UnitTest) {
     val v1 = UInt256(ByteString((100 to 131).map(_.toByte).toArray))
 
     val testData = Table[UInt256, UInt256, UInt256](
@@ -270,11 +270,11 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("intValue", UnitTest) {
+  test("intValue" taggedAs (UnitTest) in UnitTest) {
     assert(specialNumbers.map(UInt256(_).toInt) == Seq(Int.MaxValue, 0, 1, Int.MaxValue, 1, 2))
   }
 
-  test("comparison", UnitTest) {
+  test("comparison" taggedAs (UnitTest) in UnitTest) {
     type CFUI = (UInt256, UInt256) => Boolean
     type CFBI = (BigInt, BigInt) => Boolean
     case class Cmp(uint: CFUI, bi: CFBI)
@@ -297,13 +297,13 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("Passing too long ByteString should throw an exception", UnitTest) {
+  test("Passing too long ByteString should throw an exception" taggedAs (UnitTest) in UnitTest) {
     assertThrows[IllegalArgumentException] {
       UInt256(ByteString(Array.fill(Size + 1)(1.toByte)))
     }
   }
 
-  test("UInt256 converted to a byte array should always have length 32 bytes", UnitTest) {
+  test("UInt256 converted to a byte array should always have length 32 bytes" taggedAs (UnitTest) in UnitTest) {
     forAll(bigIntGen) { n =>
       assert(UInt256(n).bytes.size == 32)
     }
@@ -313,7 +313,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     )
   }
 
-  test("2-way bytes conversion", UnitTest) {
+  test("2-way bytes conversion" taggedAs (UnitTest) in UnitTest) {
     forAll(getUInt256Gen()) { x =>
       val y = UInt256(x.bytes)
       assert(x === y)
@@ -325,7 +325,7 @@ class UInt256Spec extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
   }
 
-  test("byteSize", UnitTest) {
+  test("byteSize" taggedAs (UnitTest) in UnitTest) {
     val table = Table[BigInt, Int](
       ("x", "expected"),
       (0, 0),

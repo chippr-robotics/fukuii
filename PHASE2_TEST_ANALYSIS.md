@@ -448,3 +448,37 @@ The `build.sbt` file shows:
 4. Database tests
 5. Network tests
 
+
+### Session 1 Update (continued)
+
+#### Additional Tests Tagged:
+
+**Domain Tests (9 files, 70+ tests):**
+- ✅ BlockchainSpec.scala - 12 tests (UnitTest, StateTest, MPTTest)
+- ✅ TransactionSpec.scala - 5 tests (UnitTest)
+- ✅ ArbitraryIntegerMptSpec.scala - 8 tests (UnitTest, MPTTest)
+- ✅ BigIntSerializationSpec.scala - 22 tests (UnitTest)
+- ✅ BlockHeaderSpec.scala - Tagged (UnitTest, StateTest)
+- ✅ BlockchainReaderSpec.scala - 1 test (UnitTest)
+- ✅ SignedLegacyTransactionSpec.scala - 2 tests (UnitTest)
+- ✅ SignedTransactionWithAccessListSpec.scala - Tagged (UnitTest)
+- ✅ UInt256Spec.scala - 27 tests (UnitTest)
+
+**Consensus Tests (4 files):**
+- ✅ BlockGeneratorSpec.scala - Tagged (UnitTest, ConsensusTest)
+- ✅ CheckpointBlockGeneratorSpec.scala - Tagged (UnitTest, ConsensusTest)
+- ✅ EthashUtilsSpec.scala - Tagged (UnitTest, ConsensusTest)
+- ✅ StdBlockValidatorSpec.scala - Tagged (UnitTest, ConsensusTest)
+
+#### Summary:
+- **Files tagged this session:** 14 files
+- **Tests tagged:** ~120+ individual test cases
+- **Categories covered:** Consensus, Domain (data structures, transactions, blockchain)
+
+#### Remaining High-Priority Untagged:
+- JSON-RPC tests (~30 files)
+- Network tests (~20 untagged)
+- Database tests (~5 untagged)
+- Additional consensus/mining tests
+- Ledger tests
+

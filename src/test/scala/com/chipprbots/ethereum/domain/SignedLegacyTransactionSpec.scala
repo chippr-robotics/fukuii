@@ -22,7 +22,7 @@ class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBeha
     SignedTransactionBehavior(Generators.legacyTransactionGen, allowedPointSigns)
   )
 
-  "Legacy transaction sender" should "be properly recoverable from rlp encoded values" in {
+  "Legacy transaction sender" should "be properly recoverable from rlp encoded values" taggedAs (UnitTest) in {
 
     implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig.copy(chainId = 1)
 
@@ -81,7 +81,7 @@ class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBeha
     }
   }
 
-  "Legacy transaction signature" should "respect EIP155 example" in {
+  "Legacy transaction signature" should "respect EIP155 example" taggedAs (UnitTest) in {
     // values have been taken directly from the EIP-155 document
     // https://eips.ethereum.org/EIPS/eip-155
     val legacyTransaction = LegacyTransaction(

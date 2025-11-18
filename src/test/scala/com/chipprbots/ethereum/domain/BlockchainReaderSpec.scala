@@ -15,7 +15,7 @@ class BlockchainReaderSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
 
   val chainId: Option[Byte] = Hex.decode("3d").headOption
 
-  "BlockchainReader" should "be able to get the best block after it was stored by BlockchainWriter" in new EphemBlockchainTestSetup {
+  "BlockchainReader" should "be able to get the best block after it was stored by BlockchainWriter" taggedAs (UnitTest, StateTest) in new EphemBlockchainTestSetup {
     forAll(ObjectGenerators.newBlockGen(secureRandom, chainId)) { case NewBlock(block, weight) =>
       blockchainWriter.save(block, Nil, ChainWeight(0, weight), true)
 
