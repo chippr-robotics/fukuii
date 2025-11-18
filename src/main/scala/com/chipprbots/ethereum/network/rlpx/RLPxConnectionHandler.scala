@@ -75,7 +75,7 @@ class RLPxConnectionHandler(
   /** Transition to stopping state before terminating the actor to prevent dead letters */
   private def gracefulStop(): Unit = {
     context.become(stopping)
-    context.stop(self)
+    self ! PoisonPill
   }
 
   def waitingForCommand: Receive = {

@@ -189,19 +189,25 @@ class RLPxConnectionHandlerSpec
   }
 
   it should "handle SendMessage gracefully during shutdown without dead letters" in new TestSetup {
-    setupIncomingRLPxConnection()
-    
-    // Consume the InitialHelloReceived message from setup
-    rlpxConnectionParent.expectMsgClass(classOf[RLPxConnectionHandler.InitialHelloReceived])
+    // Start setting up connection
+    rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
+    connection.expectMsgClass(classOf[Tcp.Register])
 
-    // Simulate a scenario where connection fails and actor is stopping
-    connection.ref ! org.apache.pekko.io.Tcp.Close
+    // AuthHandshaker handles initial message and fails (simulating auth failure scenario)
+    val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
     
-    // Send a message during the shutdown process
+    // Configure the test double to fail authentication
+    mockHandshaker.handleInitialMessageHandler = Some(_ => throw new Exception("Auth failed"))
+    mockHandshaker.handleInitialMessageV4Handler = Some(_ => throw new Exception("Auth failed"))
+
+    // Send the auth data which will trigger shutdown
+    rlpxConnection ! Tcp.Received(data)
+    
+    // Immediately send a SendMessage during the shutdown window
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     
-    // The message should be gracefully ignored, not cause dead letters
-    // The actor should terminate cleanly
+    // The actor should gracefully handle the message and terminate without dead letters
+    rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
     rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
   }
 
