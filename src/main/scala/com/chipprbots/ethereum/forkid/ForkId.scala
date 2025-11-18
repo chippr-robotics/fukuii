@@ -24,20 +24,13 @@ object ForkId {
     crc.update(genesisHash.asByteBuffer)
     val forks = gatherForks(config)
 
-    // Special handling for block-0 nodes when configured to report latest fork
-    // This helps avoid peer rejection when starting sync from genesis
-    val effectiveHead = if (head == 0 && config.forkIdReportLatestWhenUnsynced && forks.nonEmpty) {
-      // Report as if we're at the latest known fork to match peer expectations
-      forks.max
-    } else {
-      head
-    }
-
+    // Calculate ForkId based on actual head per EIP-2124
+    // The validation rules (2 & 3) handle sync state differences naturally
     val next = forks.find { fork =>
-      if (fork <= effectiveHead) {
+      if (fork <= head) {
         crc.update(bigIntToBytes(fork, 8))
       }
-      fork > effectiveHead
+      fork > head
     }
     new ForkId(crc.getValue(), next)
   }

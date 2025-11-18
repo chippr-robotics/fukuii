@@ -35,7 +35,6 @@ case class BlockchainConfig(
     capabilities: List[Capability] = List.empty,
     bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
     useBootstrapCheckpoints: Boolean = true,
-    forkIdReportLatestWhenUnsynced: Boolean = false,
     messConfig: MESSConfig = MESSConfig()
 ) {
   val minRequireSignatures: Int = (Math.floor(checkpointPubKeys.size.toDouble / 2) + 1).toInt
@@ -255,8 +254,6 @@ object BlockchainConfig {
       capabilities = capabilities,
       bootstrapCheckpoints = bootstrapCheckpoints,
       useBootstrapCheckpoints = useBootstrapCheckpoints,
-      forkIdReportLatestWhenUnsynced =
-        Try(blockchainConfig.getBoolean("fork-id-report-latest-when-unsynced")).getOrElse(false),
       messConfig = messConfig
     )
   }
