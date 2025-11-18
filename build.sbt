@@ -295,46 +295,46 @@ lazy val node = {
         val base = (Test / excludeFilter).value
         base ||
           // FIXED - using abstract mock members pattern:
-          // "BranchResolutionSpec.scala" ||
-          // "ConsensusAdapterSpec.scala" ||
-          
+          // FileFilter("BranchResolutionSpec.scala") ||
+          // FileFilter("ConsensusAdapterSpec.scala") ||
+
           // DISABLED - Self-type conflicts with MockFactory (requires trait-based mocking refactor):
-          "BlockExecutionSpec.scala" ||         // Reason: DaoForkTestSetup has self-type requiring DAO fork configuration
-                                                 // Remediation: Replace MockFactory with mockito-scala or refactor to composition
-          "JsonRpcHttpServerSpec.scala" ||      // Reason: TestSetup has self-type requiring HTTP server dependencies  
-                                                 // Remediation: Replace MockFactory with mockito-scala or abstract mocks
-          
+          FileFilter("BlockExecutionSpec.scala") || // Reason: DaoForkTestSetup has self-type requiring DAO fork configuration
+                                                    // Remediation: Replace MockFactory with mockito-scala or refactor to composition
+          FileFilter("JsonRpcHttpServerSpec.scala") || // Reason: TestSetup has self-type requiring HTTP server dependencies
+                                                       // Remediation: Replace MockFactory with mockito-scala or abstract mocks
+
           // DISABLED - Complex actor mocking incompatible with Scala 3 MockFactory:
-          "ConsensusImplSpec.scala" ||          // Reason: MockFactory incompatible with Scala 3 for actor system mocking
-                                                 // Remediation: Migrate to cats-effect TestControl or akka-testkit patterns
-          "FastSyncBranchResolverActorSpec.scala" || // Reason: Actor choreography mocking fails in Scala 3
-                                                 // Remediation: Use akka-testkit TestProbe or refactor to testable functions
-          
+          FileFilter("ConsensusImplSpec.scala") || // Reason: MockFactory incompatible with Scala 3 for actor system mocking
+                                                   // Remediation: Migrate to cats-effect TestControl or akka-testkit patterns
+          FileFilter("FastSyncBranchResolverActorSpec.scala") || // Reason: Actor choreography mocking fails in Scala 3
+                                                                 // Remediation: Use akka-testkit TestProbe or refactor to testable functions
+
           // DISABLED - Mining coordinator mocking issues (SlowTest alternatives exist):
-          "PoWMiningCoordinatorSpec.scala" ||   // Reason: Mining coordinator actor mocking incompatible with Scala 3
-                                                 // Remediation: Migrate to integration tests or mockito-scala
-          "PoWMiningSpec.scala" ||              // Reason: Mining process mocking fails with Scala 3 MockFactory
-                                                 // Remediation: Use integration tests with test mining difficulty
-          
+          FileFilter("PoWMiningCoordinatorSpec.scala") || // Reason: Mining coordinator actor mocking incompatible with Scala 3
+                                                          // Remediation: Migrate to integration tests or mockito-scala
+          FileFilter("PoWMiningSpec.scala") || // Reason: Mining process mocking fails with Scala 3 MockFactory
+                                               // Remediation: Use integration tests with test mining difficulty
+
           // DISABLED - Miner implementations (covered by integration tests, marked SlowTest):
-          "EthashMinerSpec.scala" ||            // Reason: Ethash PoW mining MockFactory incompatibility
+          FileFilter("EthashMinerSpec.scala") || // Reason: Ethash PoW mining MockFactory incompatibility
                                                  // Remediation: Use integration tests or migrate to mockito-scala
-          "KeccakMinerSpec.scala" ||            // Reason: Keccak mining MockFactory incompatibility
+          FileFilter("KeccakMinerSpec.scala") || // Reason: Keccak mining MockFactory incompatibility
                                                  // Remediation: Use integration tests or migrate to mockito-scala
-          "MockedMinerSpec.scala" ||            // Reason: Test miner MockFactory incompatibility
+          FileFilter("MockedMinerSpec.scala") || // Reason: Test miner MockFactory incompatibility
                                                  // Remediation: Migrate to mockito-scala for mock verification
-          
+
           // DISABLED - ExtVM mocking issues (external VM integration):
-          "MessageHandlerSpec.scala" ||         // Reason: External VM message handling mocking fails in Scala 3
-                                                 // Remediation: Replace MockFactory with mockito-scala
-          
+          FileFilter("MessageHandlerSpec.scala") || // Reason: External VM message handling mocking fails in Scala 3
+                                                    // Remediation: Replace MockFactory with mockito-scala
+
           // DISABLED - JSON-RPC service mocking incompatibilities:
-          "QaJRCSpec.scala" ||                  // Reason: QA JSON-RPC controller MockFactory incompatibility
+          FileFilter("QaJRCSpec.scala") ||       // Reason: QA JSON-RPC controller MockFactory incompatibility
                                                  // Remediation: Migrate to mockito-scala
-          "EthProofServiceSpec.scala" ||        // Reason: Ethereum proof service mocking fails in Scala 3
-                                                 // Remediation: Replace MockFactory with mockito-scala
-          "LegacyTransactionHistoryServiceSpec.scala" // Reason: Transaction history service MockFactory incompatibility
-                                                 // Remediation: Migrate to mockito-scala
+          FileFilter("EthProofServiceSpec.scala") || // Reason: Ethereum proof service mocking fails in Scala 3
+                                                     // Remediation: Replace MockFactory with mockito-scala
+          FileFilter("LegacyTransactionHistoryServiceSpec.scala") // Reason: Transaction history service MockFactory incompatibility
+                                                                  // Remediation: Migrate to mockito-scala
       }
     )
     .settings(commonSettings("fukuii"): _*)
