@@ -7,10 +7,11 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.domain.Transaction
+import com.chipprbots.ethereum.testing.Tags._
 
 class RLPSpec extends AnyFlatSpec with ScalaCheckPropertyChecks with Matchers {
 
-  "PrefixedRLPEncodable" should "reject invalid transaction type outside of [0, 0x7f]" in {
+  "PrefixedRLPEncodable" should "reject invalid transaction type outside of [0, 0x7f]" taggedAs (UnitTest, RLPTest) in {
     forAll(Arbitrary.arbitrary[Byte].suchThat(b => b < Transaction.MinAllowedType || b > Transaction.MaxAllowedType)) {
       transactionType =>
         an[RuntimeException] shouldBe thrownBy(PrefixedRLPEncodable(transactionType, RLPList()))
@@ -18,7 +19,7 @@ class RLPSpec extends AnyFlatSpec with ScalaCheckPropertyChecks with Matchers {
 
   }
 
-  "PrefixedRLPEncodable" should "accept valid transaction type [0, 0x7f]" in {
+  "PrefixedRLPEncodable" should "accept valid transaction type [0, 0x7f]" taggedAs (UnitTest, RLPTest) in {
     forAll(Gen.choose[Byte](Transaction.MinAllowedType, Transaction.MaxAllowedType)) { transactionType =>
       PrefixedRLPEncodable(transactionType, RLPList())
     }

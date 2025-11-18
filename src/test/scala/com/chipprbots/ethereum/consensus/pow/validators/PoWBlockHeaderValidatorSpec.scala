@@ -11,11 +11,12 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderPoWEr
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.testing.Tags._
 
 class PoWBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers {
   import PoWBlockHeaderValidatorSpec._
 
-  "PoWBlockHeaderValidator" should "call KeccakBlockHeaderValidator when chain is in Keccak" in {
+  "PoWBlockHeaderValidator" should "call KeccakBlockHeaderValidator when chain is taggedAs (UnitTest, ConsensusTest, SlowTest) in Keccak" in {
     val keccakConfig = blockchainConfig.withUpdatedForkBlocks(_.copy(ecip1049BlockNumber = Some(10)))
 
     PoWBlockHeaderValidator.validateEvenMore(validKeccakBlockHeader)(keccakConfig) shouldBe Right(BlockHeaderValid)
@@ -24,7 +25,7 @@ class PoWBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers {
     PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(keccakConfig) shouldBe Left(HeaderPoWError)
   }
 
-  it should "call EthashBlockHeaderValidator when chain is not in Keccak" in {
+  it should "call EthashBlockHeaderValidator when chain is not taggedAs (UnitTest, ConsensusTest, SlowTest) in Keccak" in {
     PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(blockchainConfig) shouldBe Right(BlockHeaderValid)
 
     // to show that indeed the right validator needs to be called

@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.testing
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scala.concurrent.duration.*
+import com.chipprbots.ethereum.testing.Tags._
 
 /** Test suite to validate KPI baselines are properly defined and accessible.
   *
@@ -14,12 +15,12 @@ import scala.concurrent.duration.*
   */
 class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
 
-  "KPIBaselines" should "have a valid baseline date" in {
+  "KPIBaselines" should "have a valid baseline date" taggedAs (UnitTest) in {
     KPIBaselines.baselineDate should not be empty
     (KPIBaselines.baselineDate should fullyMatch).regex("""\d{4}-\d{2}-\d{2}""")
   }
 
-  "Test Execution Time baselines" should "be defined for all tiers" in {
+  "Test Execution Time baselines" should "be defined for all tiers" taggedAs (UnitTest) in {
     KPIBaselines.TestExecutionTime.Essential.target shouldBe 5.minutes
     KPIBaselines.TestExecutionTime.Essential.warningThreshold shouldBe 7.minutes
     KPIBaselines.TestExecutionTime.Essential.failureThreshold shouldBe 10.minutes
@@ -36,7 +37,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     KPIBaselines.TestExecutionTime.Comprehensive.baseline should be <= 3.hours
   }
 
-  "Test Health baselines" should "be defined with valid percentages" in {
+  "Test Health baselines" should "be defined with valid percentages" taggedAs (UnitTest) in {
     KPIBaselines.TestHealth.successRateTarget shouldBe 99.0
     KPIBaselines.TestHealth.successRateBaseline should be >= 99.0
 
@@ -53,7 +54,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     KPIBaselines.TestHealth.actorCleanupBaseline shouldBe 100.0
   }
 
-  "Ethereum/Tests Compliance baselines" should "be defined with targets" in {
+  "Ethereum/Tests Compliance baselines" should "be defined with targets" taggedAs (UnitTest) in {
     KPIBaselines.EthereumTestsCompliance.GeneralStateTests.target shouldBe 95.0
     KPIBaselines.EthereumTestsCompliance.GeneralStateTests.baseline shouldBe 100.0
 
@@ -67,7 +68,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     KPIBaselines.EthereumTestsCompliance.VMTests.baseline shouldBe None
   }
 
-  "Performance Benchmark baselines" should "be defined for block validation" in {
+  "Performance Benchmark baselines" should "be defined for block validation" taggedAs (UnitTest) in {
     val blockValidation = KPIBaselines.PerformanceBenchmarks.BlockValidation
 
     blockValidation.target shouldBe 100.millis
@@ -78,7 +79,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     blockValidation.fullBlock.p50 should be <= 100.millis
   }
 
-  it should "be defined for transaction execution" in {
+  it should "be defined for transaction execution" taggedAs (UnitTest) in {
     val txExecution = KPIBaselines.PerformanceBenchmarks.TransactionExecution
 
     txExecution.simpleTransferTarget shouldBe 1.millis
@@ -89,7 +90,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     txExecution.contractCallSimple.p50 should be <= 10.millis
   }
 
-  it should "be defined for state root calculation" in {
+  it should "be defined for state root calculation" taggedAs (UnitTest) in {
     val stateRoot = KPIBaselines.PerformanceBenchmarks.StateRootCalculation
 
     stateRoot.target shouldBe 50.millis
@@ -99,7 +100,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     stateRoot.mediumState.p50 should be <= 50.millis
   }
 
-  it should "be defined for RLP operations" in {
+  it should "be defined for RLP operations" taggedAs (UnitTest) in {
     val rlp = KPIBaselines.PerformanceBenchmarks.RLPOperations
 
     rlp.target shouldBe 100.micros
@@ -109,7 +110,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     rlp.smallPayload.p50 should be <= 100.micros
   }
 
-  it should "be defined for crypto operations" in {
+  it should "be defined for crypto operations" taggedAs (UnitTest) in {
     val crypto = KPIBaselines.PerformanceBenchmarks.CryptoOperations
 
     crypto.target shouldBe 1.millis
@@ -119,7 +120,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     crypto.ecdsaVerify.p50 should be <= 1.5.millis
   }
 
-  it should "be defined for network operations" in {
+  it should "be defined for network operations" taggedAs (UnitTest) in {
     val network = KPIBaselines.PerformanceBenchmarks.NetworkOperations
 
     network.handshakeTarget shouldBe 500.millis
@@ -128,7 +129,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     network.peerHandshakeLocal.p50 should be <= 500.millis
   }
 
-  it should "be defined for database operations" in {
+  it should "be defined for database operations" taggedAs (UnitTest) in {
     val db = KPIBaselines.PerformanceBenchmarks.DatabaseOperations
 
     db.target shouldBe 1.millis
@@ -138,7 +139,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     db.singlePut.p50 should be <= 1.millis
   }
 
-  "Memory baselines" should "be defined with valid thresholds" in {
+  "Memory baselines" should "be defined with valid thresholds" taggedAs (UnitTest) in {
     KPIBaselines.MemoryBaselines.heapTarget shouldBe 2048
     KPIBaselines.MemoryBaselines.regressionThreshold shouldBe 2400
 
@@ -151,14 +152,14 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     KPIBaselines.MemoryBaselines.gcOverheadThreshold shouldBe 6.0
   }
 
-  "Validation helpers" should "correctly check if duration is within target" in {
+  "Validation helpers" should "correctly check if duration is within target" taggedAs (UnitTest) in {
     val validation = KPIBaselines.Validation
 
     validation.isWithinTarget(4.minutes, 5.minutes) shouldBe true
     validation.isWithinTarget(6.minutes, 5.minutes) shouldBe false
   }
 
-  it should "correctly detect regressions" in {
+  it should "correctly detect regressions" taggedAs (UnitTest) in {
     val validation = KPIBaselines.Validation
 
     // 10% increase - not a regression (threshold is 20% = 1.2)
@@ -168,7 +169,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     validation.isRegression(125.millis, 100.millis, 1.2) shouldBe true
   }
 
-  it should "correctly calculate percentage difference" in {
+  it should "correctly calculate percentage difference" taggedAs (UnitTest) in {
     val validation = KPIBaselines.Validation
 
     validation.percentageDifference(110.millis, 100.millis) shouldBe 10.0
@@ -176,7 +177,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     validation.percentageDifference(90.millis, 100.millis) shouldBe -10.0
   }
 
-  it should "correctly check percentage within target" in {
+  it should "correctly check percentage within target" taggedAs (UnitTest) in {
     val validation = KPIBaselines.Validation
 
     validation.isPercentageWithinTarget(98.0, 99.0, 5.0) shouldBe true
@@ -184,7 +185,7 @@ class KPIBaselinesSpec extends AnyFlatSpec with Matchers {
     validation.isPercentageWithinTarget(93.0, 99.0, 5.0) shouldBe false
   }
 
-  "Summary" should "generate a formatted summary string" in {
+  "Summary" should "generate a formatted summary string" taggedAs (UnitTest) in {
     val summary = KPIBaselines.summary
 
     summary should not be empty

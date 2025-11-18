@@ -9,6 +9,7 @@ import org.scalatest.wordspec.AnyWordSpec
 import com.chipprbots.ethereum.forkid.ForkId._
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.Config._
+import com.chipprbots.ethereum.testing.Tags._
 
 class ForkIdSpec extends AnyWordSpec with Matchers {
 

@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.extvm.msg.VMQuery
 import com.chipprbots.ethereum.extvm.msg.VMQuery
 import com.chipprbots.ethereum.extvm.msg.VMQuery
 import com.chipprbots.ethereum.extvm.msg.VMQuery
+import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for MessageHandler
 // Note: Test may still be ignored if extvm is hibernated
@@ -24,7 +25,7 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   import Implicits._
 
-  "World" should "request and cache code" in new TestSetup {
+  "World" should "request and cache code" taggedAs (UnitTest, VMTest) in new TestSetup {
     val code: ByteString = ByteString(Hex.decode("1122334455FFCC"))
 
     val expectedCodeQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.GetCode(msg.GetCode(addr)))
@@ -35,7 +36,7 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
     world.getCode(addr) shouldBe code
   }
 
-  it should "request and cache account" in new TestSetup {
+  it should "request and cache account" taggedAs (UnitTest, VMTest) in new TestSetup {
     val account: Account = Account(0, 123)
 
     val expectedAccountQueryMsg: VMQuery = msg.VMQuery(query = msg.VMQuery.Query.GetAccount(msg.GetAccount(addr)))
@@ -50,7 +51,7 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
     world.getAccount(addr) shouldBe Some(account)
   }
 
-  it should "request and cache blockhash" in new TestSetup {
+  it should "request and cache blockhash" taggedAs (UnitTest, VMTest) in new TestSetup {
     val offset = 10
     val blockhash: UInt256 = UInt256(123123123)
 
@@ -67,7 +68,7 @@ class WorldSpec extends AnyFlatSpec with Matchers with MockFactory {
     world.getBlockHash(offset) shouldBe Some(blockhash)
   }
 
-  it should "request and cache storage data" in new TestSetup {
+  it should "request and cache storage data" taggedAs (UnitTest, VMTest) in new TestSetup {
     val offset: UInt256 = UInt256(1024)
     val storageData: UInt256 = UInt256(901919239123L)
 

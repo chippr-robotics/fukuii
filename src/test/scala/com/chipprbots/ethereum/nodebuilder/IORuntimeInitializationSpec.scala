@@ -8,6 +8,7 @@ import cats.effect.unsafe.IORuntime
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
+import com.chipprbots.ethereum.testing.Tags._
 
 /** Tests to validate that IORuntime is properly initialized in the NodeBuilder trait hierarchy to prevent null pointer
   * exceptions during actor creation.
@@ -30,7 +31,7 @@ class IORuntimeInitializationSpec
 
   behavior.of("IORuntime initialization in NodeBuilder traits")
 
-  it should "ensure IORuntime is lazy to avoid initialization order issues" in {
+  it should "ensure IORuntime is lazy to avoid initialization order issues" taggedAs (UnitTest) in {
     // This test validates that the implicit val is actually lazy
     // If it's not lazy, initialization order issues can occur when traits are mixed
 
@@ -70,7 +71,7 @@ class IORuntimeInitializationSpec
     runtime.compute should not be null
   }
 
-  it should "have IORuntime available when accessed from mixed traits" in {
+  it should "have IORuntime available when accessed from mixed traits" taggedAs (UnitTest) in {
     // This test validates that the IORuntime is available during lazy val initialization
     trait TestBuilderWithRuntime {
       implicit lazy val ioRuntime: IORuntime = IORuntime.global
@@ -86,7 +87,7 @@ class IORuntimeInitializationSpec
     runtime.compute should not be null
   }
 
-  it should "properly initialize IORuntime with multiple trait overrides" in {
+  it should "properly initialize IORuntime with multiple trait overrides" taggedAs (UnitTest) in {
     // This test simulates the actual Node trait structure with multiple overrides
     trait Base {
       implicit lazy val ioRuntime: IORuntime = IORuntime.global
@@ -111,7 +112,7 @@ class IORuntimeInitializationSpec
     node.ioRuntime.compute should not be null
   }
 
-  it should "ensure lazy val IORuntime is thread-safe during initialization" in {
+  it should "ensure lazy val IORuntime is thread-safe during initialization" taggedAs (UnitTest) in {
     // This test validates thread-safety of lazy val initialization
     // Note: Due to JVM implementation details, lazy vals may be initialized multiple times
     // in extreme race conditions, but the final value is always consistent
@@ -146,7 +147,7 @@ class IORuntimeInitializationSpec
     initCount should be >= 1
   }
 
-  it should "validate that non-lazy val would cause initialization issues" in {
+  it should "validate that non-lazy val would cause initialization issues" taggedAs (UnitTest) in {
     // This test documents the problem: non-lazy vals can be null during mixed trait initialization
     @volatile var eagerInitOrder = scala.collection.mutable.ListBuffer[String]()
 
