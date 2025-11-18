@@ -8,6 +8,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.consensus.pow.KeccakCalculation.KeccakMixHash
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.testing.Tags._
 
 class KeccakCalculationSpec extends AnyFlatSpecLike with Matchers {
   import KeccakDataUtils._
@@ -26,7 +27,7 @@ class KeccakCalculationSpec extends AnyFlatSpecLike with Matchers {
       )
     }
 
-  it should "compare the mixhash with the block difficulty (ECIP-1049 example)" in {
+  it should "compare the mixhash with the block difficulty (ECIP-1049 example)" taggedAs (UnitTest, ConsensusTest) in {
     val hash =
       KeccakMixHash(ByteString(Hex.decode("0116ad248e0dc3f7f843f73a62803c5f6b7c0427700b70c8b1aab39db404089f")))
     val blockDifficulty = 100L

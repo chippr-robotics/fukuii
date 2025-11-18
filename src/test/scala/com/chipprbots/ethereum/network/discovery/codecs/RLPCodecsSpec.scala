@@ -31,6 +31,7 @@ import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.FindNode
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Neighbors
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.ENRRequest
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.ENRResponse
+import com.chipprbots.ethereum.testing.Tags._
 
 class RLPCodecsSpec extends AnyFlatSpec with Matchers {
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
@@ -53,7 +54,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
 
   behavior.of("RLPCodecs")
 
-  it should "encode a Ping with an ENR as 5 items" in {
+  it should "encode a Ping with an ENR as 5 items" taggedAs (UnitTest, NetworkTest) in {
     val ping = Payload.Ping(
       version = 4,
       from = Node.Address(localhost, 30000, 40000),
@@ -75,7 +76,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
     RLPDecoder.decode[Payload.Ping](rlp) shouldBe ping
   }
 
-  it should "encode a Ping without an ENR as 4 items" in {
+  it should "encode a Ping without an ENR as 4 items" taggedAs (UnitTest, NetworkTest) in {
     val ping = Payload.Ping(
       version = 4,
       from = Node.Address(localhost, 30000, 40000),
@@ -96,7 +97,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
     RLPDecoder.decode[Payload.Ping](rlp) shouldBe ping
   }
 
-  it should "reject a Node.Address with more than 3 fields" in {
+  it should "reject a Node.Address with more than 3 fields" taggedAs (UnitTest, NetworkTest) in {
     val rlp = RLPList(
       localhost,
       123,
@@ -109,7 +110,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "reject a Node with more than 4 fields" in {
+  it should "reject a Node with more than 4 fields" taggedAs (UnitTest, NetworkTest) in {
     val rlp = RLPList(
       localhost,
       123,
@@ -259,11 +260,11 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
   )
 
   examples.foreach { example =>
-    it should s"encode the example ${example.name}" in {
+    it should s"encode the example ${example.name}" taggedAs (UnitTest, NetworkTest) in {
       example.testEncode
     }
 
-    it should s"decode the example ${example.name}" in {
+    it should s"decode the example ${example.name}" taggedAs (UnitTest, NetworkTest) in {
       example.testDecode
     }
   }

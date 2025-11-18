@@ -17,6 +17,7 @@ import org.scalatest.time.Seconds
 import org.scalatest.time.Span
 
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
+import com.chipprbots.ethereum.testing.Tags._
 
 /** Tests for the PortForwardingBuilder trait to validate correct port forwarding initialization and prevent multiple
   * UPnP service allocations.
@@ -39,7 +40,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
 
   behavior.of("PortForwardingBuilder")
 
-  it should "allocate port forwarding exactly once on first call" in {
+  it should "allocate port forwarding exactly once on first call" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
@@ -53,7 +54,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     }
   }
 
-  it should "not re-allocate on subsequent calls to startPortForwarding" in {
+  it should "not re-allocate on subsequent calls to startPortForwarding" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
@@ -80,7 +81,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     }
   }
 
-  it should "handle concurrent calls to startPortForwarding safely" in {
+  it should "handle concurrent calls to startPortForwarding safely" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
@@ -102,7 +103,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     }
   }
 
-  it should "properly store and invoke cleanup function on stopPortForwarding" in {
+  it should "properly store and invoke cleanup function on stopPortForwarding" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
@@ -123,7 +124,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     }
   }
 
-  it should "allow stopPortForwarding to be called multiple times safely" in {
+  it should "allow stopPortForwarding to be called multiple times safely" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
@@ -148,7 +149,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     }
   }
 
-  it should "allow restart after stop" in {
+  it should "allow restart after stop" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
@@ -171,7 +172,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     }
   }
 
-  it should "handle stopPortForwarding before startPortForwarding gracefully" in {
+  it should "handle stopPortForwarding before startPortForwarding gracefully" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
@@ -192,7 +193,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     }
   }
 
-  it should "prevent the buggy behavior of multiple allocations on repeated calls" in {
+  it should "prevent the buggy behavior of multiple allocations on repeated calls" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 

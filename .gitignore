@@ -33,3 +33,8 @@ actionlint
 sbt-bin
 sbt/
 cs
+
+# Test coverage reports
+coverage-reports/
+target/scala-*/scoverage-data/
+target/scala-*/scoverage-report/

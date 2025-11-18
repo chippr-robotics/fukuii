@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.testing.Tags._
 
 class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFactory {
 

@@ -10,6 +10,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.SuperSlow
 import com.chipprbots.ethereum.utils.ByteStringUtils
+import com.chipprbots.ethereum.testing.Tags._
 
 class EthashUtilsSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with SuperSlow {
 
@@ -17,7 +18,7 @@ class EthashUtilsSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
 
   val ecip1099forkBlockNumber: Long = 11460000
 
-  "Ethash" should "generate correct hash" in {
+  "Ethash" should "generate correct hash" taggedAs (UnitTest, ConsensusTest) in {
     val seedEpoch0 = ByteStringUtils.string2hash("0000000000000000000000000000000000000000000000000000000000000000")
     val seedEpoch1 = ByteStringUtils.string2hash("290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563")
     val seedEpoch382 = ByteStringUtils.string2hash("d3d0aa11197dcdcfcb3ad3c73d415af47299bddb47fda6081d31d9dd06462f6a")
@@ -36,14 +37,14 @@ class EthashUtilsSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     }
   }
 
-  it should "calculate cache size" in {
+  it should "calculate cache size" taggedAs (UnitTest, ConsensusTest) in {
     val cacheSizes = Seq(16776896, 16907456, 17039296, 17170112, 17301056, 17432512, 17563072)
     cacheSizes.zipWithIndex.foreach { case (referenceSize, epoch) =>
       cacheSize(epoch) shouldBe referenceSize
     }
   }
 
-  it should "calculate epoch" in {
+  it should "calculate epoch" taggedAs (UnitTest, ConsensusTest) in {
     val table = Table(
       ("blockNUmber", "epoch", "ecip1099ActivationBlockNumber"),
       (11459999, 381, Long.MaxValue),
@@ -56,7 +57,7 @@ class EthashUtilsSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     }
   }
 
-  it should "compute proof of work using cache" in {
+  it should "compute proof of work using cache" taggedAs (UnitTest, ConsensusTest) in {
     val hash = Array(0xf5, 0x7e, 0x6f, 0x3a, 0xcf, 0xc0, 0xdd, 0x4b, 0x5b, 0xf2, 0xbe, 0xe4, 0x0a, 0xb3, 0x35, 0x8a,
       0xa6, 0x87, 0x73, 0xa8, 0xd0, 0x9f, 0x5e, 0x59, 0x5e, 0xab, 0x55, 0x94, 0x05, 0x52, 0x7d, 0x72).map(_.toByte)
     val nonce = Array(0xd7, 0xb3, 0xac, 0x70, 0xa3, 0x01, 0xa2, 0x49).map(_.toByte)

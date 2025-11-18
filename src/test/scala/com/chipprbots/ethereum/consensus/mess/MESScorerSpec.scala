@@ -9,10 +9,11 @@ import scala.collection.mutable
 
 import com.chipprbots.ethereum.db.storage.BlockFirstSeenStorage
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.testing.Tags._
 
 class MESSConfigSpec extends AnyFlatSpec with Matchers {
 
-  "MESSConfig" should "have valid default values" in {
+  "MESSConfig" should "have valid default values" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig()
 
     config.enabled shouldBe false
@@ -21,13 +22,13 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
     config.minWeightMultiplier shouldBe 0.0001
   }
 
-  it should "validate decayConstant is non-negative" in {
+  it should "validate decayConstant is non-negative" taggedAs (UnitTest, ConsensusTest) in {
     assertThrows[IllegalArgumentException] {
       MESSConfig(decayConstant = -0.1)
     }
   }
 
-  it should "validate maxTimeDelta is positive" in {
+  it should "validate maxTimeDelta is positive" taggedAs (UnitTest, ConsensusTest) in {
     assertThrows[IllegalArgumentException] {
       MESSConfig(maxTimeDelta = 0)
     }
@@ -37,7 +38,7 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "validate minWeightMultiplier is in range (0, 1]" in {
+  it should "validate minWeightMultiplier is taggedAs (UnitTest, ConsensusTest) in range (0, 1]" in {
     assertThrows[IllegalArgumentException] {
       MESSConfig(minWeightMultiplier = 0.0)
     }
@@ -84,7 +85,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
   ): MESSScorer =
     new MESSScorer(config, storage, () => currentTime)
 
-  "MESSScorer" should "return original difficulty when MESS is disabled" in {
+  "MESSScorer" should "return original difficulty when MESS is disabled" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig(enabled = false)
     val scorer = createScorer(config = config)
 
@@ -96,7 +97,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     result shouldBe difficulty
   }
 
-  it should "return original difficulty for blocks seen immediately" in {
+  it should "return original difficulty for blocks seen immediately" taggedAs (UnitTest, ConsensusTest) in {
     val scorer = createScorer(currentTime = 1000000L)
     val storage = new InMemoryBlockFirstSeenStorage()
     val scorerWithStorage = createScorer(storage = storage, currentTime = 1000000L)
@@ -115,7 +116,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     result shouldBe <=(BigInt(1000100))
   }
 
-  it should "apply penalty for blocks seen 1 hour late" in {
+  it should "apply penalty for blocks seen 1 hour late" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig(enabled = true, decayConstant = 0.0001)
     val storage = new InMemoryBlockFirstSeenStorage()
     val currentTime = 1000000L
@@ -136,7 +137,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     result should be < BigInt(750000)
   }
 
-  it should "apply strong penalty for blocks seen 24 hours late" in {
+  it should "apply strong penalty for blocks seen 24 hours late" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig(enabled = true, decayConstant = 0.0001)
     val storage = new InMemoryBlockFirstSeenStorage()
     val currentTime = 1000000L
@@ -156,7 +157,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     result should be < BigInt(1000) // Less than 0.1% of original
   }
 
-  it should "enforce minimum weight multiplier" in {
+  it should "enforce minimum weight multiplier" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig(enabled = true, decayConstant = 0.0001, minWeightMultiplier = 0.01)
     val storage = new InMemoryBlockFirstSeenStorage()
     val currentTime = 10000000L
@@ -174,7 +175,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     result should be >= BigInt(10000) // At least 1%
   }
 
-  it should "cap time delta at maxTimeDelta" in {
+  it should "cap time delta at maxTimeDelta" taggedAs (UnitTest, ConsensusTest) in {
     val maxTimeDelta = 1000L // 1000 seconds
     val config = MESSConfig(
       enabled = true,
@@ -202,7 +203,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     result1 shouldBe result2
   }
 
-  it should "use block timestamp when no first-seen time exists" in {
+  it should "use block timestamp when no first-seen time exists" taggedAs (UnitTest, ConsensusTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val currentTime = 1000000L
     val scorer = createScorer(storage = storage, currentTime = currentTime)
@@ -221,7 +222,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     result should be < BigInt(1000000)
   }
 
-  it should "record first-seen time correctly" in {
+  it should "record first-seen time correctly" taggedAs (UnitTest, ConsensusTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val currentTime = 1000000L
     val scorer = createScorer(storage = storage, currentTime = currentTime)
@@ -241,7 +242,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     isFirstAgain shouldBe false
   }
 
-  it should "calculate multiplier correctly" in {
+  it should "calculate multiplier correctly" taggedAs (UnitTest, ConsensusTest) in {
     val storage = new InMemoryBlockFirstSeenStorage()
     val currentTime = 1000000L
     val scorer = createScorer(storage = storage, currentTime = currentTime)
@@ -258,7 +259,7 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
     multiplier should be < 1.0
   }
 
-  it should "return multiplier of 1.0 when MESS is disabled" in {
+  it should "return multiplier of 1.0 when MESS is disabled" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig(enabled = false)
     val scorer = createScorer(config = config)
 

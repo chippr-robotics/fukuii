@@ -61,7 +61,7 @@ class EthMiningServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "MiningServiceSpec" should "return if node is mining base on getWork" in new TestSetup {
+  "MiningServiceSpec" should "return if node is mining base on getWork" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
 
@@ -97,7 +97,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(true))
   }
 
-  it should "return if node is mining base on submitWork" in new TestSetup {
+  it should "return if node is mining base on submitWork" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
 
@@ -113,7 +113,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(true))
   }
 
-  it should "return if node is mining base on submitHashRate" in new TestSetup {
+  it should "return if node is mining base on submitHashRate" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
     ethMiningService.submitHashRate(SubmitHashRateRequest(42, ByteString("id")))
@@ -123,7 +123,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(true))
   }
 
-  it should "return if node is mining after time out" in new TestSetup {
+  it should "return if node is mining after time out" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (blockGenerator
       .generateBlock(
@@ -161,7 +161,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
   }
 
-  it should "return requested work" in new TestSetup {
+  it should "return requested work" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (blockGenerator
       .generateBlock(
@@ -194,7 +194,7 @@ class EthMiningServiceSpec
     response shouldEqual Right(GetWorkResponse(powHash, seedHash, target))
   }
 
-  it should "generate and submit work when generating block for mining with restricted ethash generator" in new TestSetup {
+  it should "generate and submit work when generating block for mining with restricted ethash generator" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val testMining: TestMining = buildTestMining()
     override lazy val restrictedGenerator = new RestrictedPoWBlockGeneratorImpl(
       evmCodeStorage = storagesInstance.storages.evmCodeStorage,
@@ -225,7 +225,7 @@ class EthMiningServiceSpec
     response1 shouldEqual Right(SubmitWorkResponse(true))
   }
 
-  it should "accept submitted correct PoW" in new TestSetup {
+  it should "accept submitted correct PoW" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val headerHash: ByteString = ByteString(Hex.decode("01" * 32))
 
@@ -237,7 +237,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(SubmitWorkResponse(true))
   }
 
-  it should "reject submitted correct PoW when header is no longer in cache" in new TestSetup {
+  it should "reject submitted correct PoW when header is no longer taggedAs (UnitTest, RPCTest) in cache" in new TestSetup {
 
     val headerHash: ByteString = ByteString(Hex.decode("01" * 32))
 
@@ -249,13 +249,13 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(SubmitWorkResponse(false))
   }
 
-  it should "return correct coinbase" in new TestSetup {
+  it should "return correct coinbase" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val response: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
     response.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(miningConfig.coinbase))
   }
 
-  it should "accept and report hashrate" in new TestSetup {
+  it should "accept and report hashrate" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val rate: BigInt = 42
     val id: ByteString = ByteString("id")
@@ -271,7 +271,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
   }
 
-  it should "combine hashrates from many miners and remove timed out rates" in new TestSetup {
+  it should "combine hashrates from many miners and remove timed out rates" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val rate: BigInt = 42
     val id1: ByteString = ByteString("id1")

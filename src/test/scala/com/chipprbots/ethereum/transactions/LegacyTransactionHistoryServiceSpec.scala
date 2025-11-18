@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTr
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
 import com.chipprbots.ethereum.transactions.testing.PendingTransactionsManagerAutoPilot
 import com.chipprbots.ethereum.{blockchain => _, _}
+import com.chipprbots.ethereum.testing.Tags._
 
 class LegacyTransactionHistoryServiceSpec
     extends TestKit(ActorSystem("TransactionHistoryServiceSpec-system"))

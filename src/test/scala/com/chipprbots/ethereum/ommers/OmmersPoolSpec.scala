@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.ommers.OmmersPool.GetOmmers
+import com.chipprbots.ethereum.testing.Tags._
 
 class OmmersPoolSpec
     extends TestKit(ActorSystem("OmmersPoolSpec_System"))

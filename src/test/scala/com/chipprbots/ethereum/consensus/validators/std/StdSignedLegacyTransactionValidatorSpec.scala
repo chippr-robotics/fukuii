@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.vm.EvmConfig
+import com.chipprbots.ethereum.testing.Tags._
 
 class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers {
 
@@ -92,21 +93,21 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     )
   }
 
-  it should "report as valid a tx from before homestead" in {
+  it should "report as valid a tx from before homestead" taggedAs (UnitTest, ConsensusTest) in {
     validateStx(signedTxBeforeHomestead, fromBeforeHomestead = true) match {
       case Right(_) => succeed
       case _        => fail()
     }
   }
 
-  it should "report as valid a tx from after homestead" in {
+  it should "report as valid a tx from after homestead" taggedAs (UnitTest, ConsensusTest) in {
     validateStx(signedTxAfterHomestead, fromBeforeHomestead = false) match {
       case Right(_) => succeed
       case _        => fail()
     }
   }
 
-  it should "report as syntactic invalid a tx with long nonce" in {
+  it should "report as syntactic invalid a tx with long nonce" taggedAs (UnitTest, ConsensusTest) in {
     val invalidNonce = (0 until LegacyTransaction.NonceLength + 1).map(_ => 1.toByte).toArray
     val signedTxWithInvalidNonce =
       signedTxBeforeHomestead.copy(tx = txBeforeHomestead.copy(nonce = BigInt(invalidNonce)))
@@ -116,7 +117,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as syntactic invalid a tx with long gas limit" in {
+  it should "report as syntactic invalid a tx with long gas limit" taggedAs (UnitTest, ConsensusTest) in {
     val invalidGasLimit = (0 until LegacyTransaction.GasLength + 1).map(_ => 1.toByte).toArray
     val signedTxWithInvalidGasLimit =
       signedTxBeforeHomestead.copy(tx = txBeforeHomestead.copy(gasLimit = BigInt(invalidGasLimit)))
@@ -126,7 +127,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as syntactic invalid a tx with long gas price" in {
+  it should "report as syntactic invalid a tx with long gas price" taggedAs (UnitTest, ConsensusTest) in {
     val invalidGasPrice = (0 until LegacyTransaction.GasLength + 1).map(_ => 1.toByte).toArray
     val signedTxWithInvalidGasPrice =
       signedTxBeforeHomestead.copy(tx = txBeforeHomestead.copy(gasPrice = BigInt(invalidGasPrice)))
@@ -136,7 +137,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as syntactic invalid a tx with long value" in {
+  it should "report as syntactic invalid a tx with long value" taggedAs (UnitTest, ConsensusTest) in {
     val invalidValue = (0 until LegacyTransaction.ValueLength + 1).map(_ => 1.toByte).toArray
     val signedTxWithInvalidValue =
       signedTxBeforeHomestead.copy(tx = txBeforeHomestead.copy(value = BigInt(invalidValue)))
@@ -146,7 +147,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as syntactic invalid a tx with long s" in {
+  it should "report as syntactic invalid a tx with long s" taggedAs (UnitTest, ConsensusTest) in {
     val signatureWithInvalidS = signedTxBeforeHomestead.signature.copy(s =
       new BigInteger(1, (0 until ECDSASignature.SLength + 1).map(_ => 1.toByte).toArray)
     )
@@ -157,7 +158,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as syntactic invalid a tx with long r" in {
+  it should "report as syntactic invalid a tx with long r" taggedAs (UnitTest, ConsensusTest) in {
     val signatureWithInvalidR = signedTxBeforeHomestead.signature.copy(r =
       new BigInteger(1, (0 until ECDSASignature.RLength + 1).map(_ => 1.toByte).toArray)
     )
@@ -168,7 +169,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report a tx with invalid r as having invalid signature" in {
+  it should "report a tx with invalid r as having invalid signature" taggedAs (UnitTest, ConsensusTest) in {
     val signatureWithInvalidR = signedTxBeforeHomestead.signature.copy(r = new BigInteger("0"))
     val signedTxWithInvalidSignatureRandom = signedTxAfterHomestead.copy(signature = signatureWithInvalidR)
     validateStx(signedTxWithInvalidSignatureRandom, fromBeforeHomestead = false) match {
@@ -177,7 +178,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report a tx with invalid s as having invalid signature" in {
+  it should "report a tx with invalid s as having invalid signature" taggedAs (UnitTest, ConsensusTest) in {
     val signatureWithInvalidS =
       signedTxAfterHomestead.signature.copy(s = (StdSignedTransactionValidator.secp256k1n / 2 + 1).bigInteger)
     val signedTxWithInvalidSignature = signedTxAfterHomestead.copy(signature = signatureWithInvalidS)
@@ -187,7 +188,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as invalid a tx with invalid nonce" in {
+  it should "report as invalid a tx with invalid nonce" taggedAs (UnitTest, ConsensusTest) in {
     val txWithInvalidNonce = txAfterHomestead.copy(nonce = txAfterHomestead.nonce + 1)
     val signedTxWithInvalidNonce = signedTxAfterHomestead.copy(tx = txWithInvalidNonce)
     validateStx(signedTxWithInvalidNonce, fromBeforeHomestead = false) match {
@@ -196,7 +197,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as invalid a tx with too low gas limit for intrinsic gas" in {
+  it should "report as invalid a tx with too low gas limit for intrinsic gas" taggedAs (UnitTest, ConsensusTest) in {
     val txIntrinsicGas = EvmConfig
       .forBlock(blockHeaderAfterHomestead.number, blockchainConfig)
       .calcTransactionIntrinsicGas(txAfterHomestead.payload, txAfterHomestead.isContractInit, Nil)
@@ -208,7 +209,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as invalid a tx with upfront cost higher than the sender's balance" in {
+  it should "report as invalid a tx with upfront cost higher than the sender's balance" taggedAs (UnitTest, ConsensusTest) in {
     val senderAccountWithLowBalance = senderAccountAfterHomestead.copy(balance = upfrontGasCost / 2)
     StdSignedTransactionValidator.validate(
       stx = signedTxAfterHomestead,
@@ -222,7 +223,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as invalid a tx with too high gas limit for block gas limit" in {
+  it should "report as invalid a tx with too high gas limit for block gas limit" taggedAs (UnitTest, ConsensusTest) in {
     val txWithInvalidGasLimit = txAfterHomestead.copy(gasLimit = blockHeaderAfterHomestead.gasLimit + 1)
     val signedTxWithInvalidGasLimit = signedTxAfterHomestead.copy(tx = txWithInvalidGasLimit)
     validateStx(signedTxWithInvalidGasLimit, fromBeforeHomestead = false) match {
@@ -231,7 +232,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as invalid a chain specific tx before eip155" in {
+  it should "report as invalid a chain specific tx before eip155" taggedAs (UnitTest, ConsensusTest) in {
     val keyPair = crypto.generateKeyPair(new SecureRandom)
     val stx = SignedTransaction.sign(txBeforeHomestead, keyPair, Some(0x03.toByte))
     StdSignedTransactionValidator.validate(
@@ -246,7 +247,7 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as valid a chain specific tx after eip155" in {
+  it should "report as valid a chain specific tx after eip155" taggedAs (UnitTest, ConsensusTest) in {
     val keyPair = crypto.generateKeyPair(new SecureRandom)
     val stx = SignedTransaction.sign(txAfterHomestead, keyPair, Some(0x03.toByte))
     StdSignedTransactionValidator.validate(

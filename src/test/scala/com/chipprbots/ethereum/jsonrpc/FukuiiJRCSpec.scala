@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.testing.Tags._
 
 class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory with JRCMatchers {
   import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.formats

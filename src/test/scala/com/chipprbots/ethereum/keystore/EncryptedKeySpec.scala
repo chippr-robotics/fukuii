@@ -6,6 +6,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class EncryptedKeySpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
 
@@ -57,7 +58,7 @@ class EncryptedKeySpec extends AnyFlatSpec with Matchers with SecureRandomBuilde
       |  "meta": "{}"
       |}""".stripMargin
 
-  "EncryptedKey" should "securely store private keys" in {
+  "EncryptedKey" should "securely store private keys" taggedAs (UnitTest) in {
     val prvKey = crypto.secureRandomByteString(secureRandom, 32)
     val passphrase = "P4S5W0rd"
     val encKey = EncryptedKey(prvKey, passphrase, secureRandom)
@@ -69,14 +70,14 @@ class EncryptedKeySpec extends AnyFlatSpec with Matchers with SecureRandomBuilde
     decoded.flatMap(_.decrypt(passphrase)) shouldEqual Right(prvKey)
   }
 
-  it should "decrypt a key encrypted by Geth" in {
+  it should "decrypt a key encrypted by Geth" taggedAs (UnitTest) in {
     val encKey = EncryptedKeyJsonCodec.fromJson(gethKey)
     val prvKey = encKey.flatMap(_.decrypt("qwerty"))
     val address = prvKey.map(k => Address(crypto.kec256(crypto.pubKeyFromPrvKey(k))))
     address shouldEqual Right(Address("932245e1c40ec2026a2c7acc80befb68816cdba4"))
   }
 
-  it should "decrypt a key encrypted by Parity" in {
+  it should "decrypt a key encrypted by Parity" taggedAs (UnitTest) in {
     val encKey = EncryptedKeyJsonCodec.fromJson(parityKey)
     val prvKey = encKey.flatMap(_.decrypt("qwerty"))
     val address = prvKey.map(k => Address(crypto.kec256(crypto.pubKeyFromPrvKey(k))))

@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync.fast
 
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
+import com.chipprbots.ethereum.testing.Tags._
 
 class HeaderSkeletonSpec extends AnyWordSpec with Matchers {
 

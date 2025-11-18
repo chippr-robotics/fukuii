@@ -30,7 +30,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
       "f842a0fccdbfe911f9df0a6cc0107d1240f76dfdd1d301b65fdc3cd2ae62752affbef6a0fccdbfe911f9df0a6cc0107d1240f76dfdd1d301b65fdc3cd2ae62752affbef6"
     )
 
-  "MessageDecoders" should "decode wire protocol message for all versions of protocol" in {
+  "MessageDecoders" should "decode wire protocol message for all versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val helloBytes: Array[Byte] =
       Hex.decode(
         "f854048666756b756969c6c5836574683f820d05b840a13f3f0555b5037827c743e40fce29139fcf8c3f2a8f12753872fe906a77ff70f6a7f517be995805ff39ab73af1d53dac1a6c9786eebc5935fc455ac8f41ba67"
@@ -49,7 +49,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     NetworkMessageDecoder.fromBytes(WireProtocol.Hello.code, helloBytes) shouldBe Right(hello)
   }
 
-  it should "decode NewBlockHashes message for all supported versions of protocol" in {
+  it should "decode NewBlockHashes message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val NewBlockHashesETH62bytes: Array[Byte] =
       Hex.decode(
         "f846e2a0fccdbfe911f9df0a6cc0107d1240f76dfdd1d301b65fdc3cd2ae62752affbef601e2a0fccdbfe911f9df0a6cc0107d1240f76dfdd1d301b65fdc3cd2ae62752affbef602"
@@ -65,7 +65,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
       .fromBytes(Codes.NewBlockHashesCode, NewBlockHashesETH62bytes) shouldBe Right(newBlockHashesETH62)
   }
 
-  it should "decode BlockHashesFromNumber message for all supported versions of protocol" in {
+  it should "decode BlockHashesFromNumber message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val blockHashesFromNumber = ETH61.BlockHashesFromNumber(12, 40)
     decode(Capability.ETH63).fromBytes(
       Codes.BlockHashesFromNumberCode,
@@ -73,7 +73,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     ) shouldBe Right(blockHashesFromNumber)
   }
 
-  it should "decode GetBlockHeaders message for all supported versions of protocol" in {
+  it should "decode GetBlockHeaders message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val getBlockHeaders = ETH62.GetBlockHeaders(Left(1), 1, 1, false)
     val getBlockHeadersBytes: Array[Byte] = getBlockHeaders.toBytes
 
@@ -88,7 +88,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     )
   }
 
-  it should "decode BlockHeaders message for all supported versions of protocol" in {
+  it should "decode BlockHeaders message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val blockHeaders = ETH62.BlockHeaders(ObjectGenerators.seqBlockHeaderGen.sample.get)
     val blockHeadersBytes: Array[Byte] = blockHeaders.toBytes
 
@@ -97,7 +97,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.BlockHeadersCode, blockHeadersBytes) shouldBe Right(blockHeaders)
   }
 
-  it should "decode GetBlockBodies message for all supported versions of protocol" in {
+  it should "decode GetBlockBodies message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val getBlockBodies = ETH62.GetBlockBodies(Seq(exampleHash))
     val getBlockBodiesBytes: Array[Byte] = getBlockBodies.toBytes
 
@@ -112,7 +112,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     )
   }
 
-  it should "decode BlockBodies message for all supported versions of protocol" in {
+  it should "decode BlockBodies message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val blockBodies = ETH62.BlockBodies(Seq(Fixtures.Blocks.Block3125369.body, Fixtures.Blocks.DaoForkBlock.body))
     val blockBodiesBytes: Array[Byte] = blockBodies.toBytes
 
@@ -121,7 +121,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.BlockBodiesCode, blockBodiesBytes) shouldBe Right(blockBodies)
   }
 
-  it should "decode GetNodeData message for all supported versions of protocol" in {
+  it should "decode GetNodeData message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val getNodeData = ETH63.GetNodeData(Seq(exampleHash))
     val getNodeDataBytes: Array[Byte] = getNodeData.toBytes
 
@@ -130,7 +130,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.GetNodeDataCode, getNodeDataBytes) shouldBe Right(getNodeData)
   }
 
-  it should "decode NodeData message for all supported versions of protocol" in {
+  it should "decode NodeData message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val nodeData = ETH63.NodeData(Seq(exampleHash))
     val nodeDataBytes: Array[Byte] = nodeData.toBytes
 
@@ -139,7 +139,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.NodeDataCode, nodeDataBytes) shouldBe Right(nodeData)
   }
 
-  it should "decode GetReceipts message for all supported versions of protocol" in {
+  it should "decode GetReceipts message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val getReceipts = ETH63.GetReceipts(Seq(exampleHash))
     val getReceiptsBytes: Array[Byte] = getReceipts.toBytes
 
@@ -148,7 +148,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.GetReceiptsCode, getReceiptsBytes) shouldBe Right(getReceipts)
   }
 
-  it should "decode Receipts message for all supported versions of protocol" in {
+  it should "decode Receipts message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val receipts = ETH63.Receipts(ObjectGenerators.receiptsGen(3).sample.get)
     val receiptsBytes: Array[Byte] = receipts.toBytes
 
@@ -157,7 +157,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.ReceiptsCode, receiptsBytes) shouldBe Right(receipts)
   }
 
-  it should "decode Status message for all supported versions of protocol" in {
+  it should "decode Status message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val status63 = BaseETH6XMessages.Status(Capability.ETH63.version, 1, BigInt(100), exampleHash, exampleHash)
     val status63Bytes: Array[Byte] = status63.toBytes
     val statusEtc64 =
@@ -170,7 +170,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.StatusCode, statusEtc64.toBytes) shouldBe Right(statusEtc64)
   }
 
-  it should "decode NewBlock message for all supported versions of protocol" in {
+  it should "decode NewBlock message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val newBlock63 = ObjectGenerators.newBlockGen(secureRandom, None).sample.get
     val newBlock63Bytes: Array[Byte] = newBlock63.toBytes
     val newBlock64 = ObjectGenerators.newBlock64Gen(secureRandom, None).sample.get
@@ -180,7 +180,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.NewBlockCode, newBlock64.toBytes) shouldBe Right(newBlock64)
   }
 
-  it should "decode SignedTransactions message for all supported versions of protocol" in {
+  it should "decode SignedTransactions message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
     val signedTransactions = SignedTransactions(ObjectGenerators.signedTxSeqGen(3, secureRandom, None).sample.get)
     val signedTransactionsBytes: Array[Byte] = signedTransactions.toBytes
 
@@ -192,7 +192,7 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
       .fromBytes(Codes.SignedTransactionsCode, signedTransactionsBytes) shouldBe Right(signedTransactions)
   }
 
-  it should "not decode message not existing in given protocol" in {
+  it should "not decode message not existing taggedAs (UnitTest, NetworkTest) in given protocol" in {
     decode(Capability.ETH63)
       .fromBytes(Codes.SignedTransactionsCode, blockHashesFromNumberBytes) shouldBe a[Left[_, Message]]
 

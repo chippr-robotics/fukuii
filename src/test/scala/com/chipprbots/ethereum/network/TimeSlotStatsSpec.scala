@@ -26,13 +26,13 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
 
   behavior.of("TimeSlotStats")
 
-  it should "add new keys to the last timeslot" in test {
+  it should "add new keys to the last timeslot" taggedAs (UnitTest, NetworkTest) in test {
     for {
       stats <- add("foo", 1)
     } yield stats.buffer(0).slotStats("foo") shouldBe 1
   }
 
-  it should "merge keys in the last timeslot" in test {
+  it should "merge keys taggedAs (UnitTest, NetworkTest) in the last timeslot" in test {
     for {
       _ <- add("foo", 1)
       _ <- add("foo", 2)
@@ -45,7 +45,7 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     }
   }
 
-  it should "ignore updates for earlier timeslots" in test {
+  it should "ignore updates for earlier timeslots" taggedAs (UnitTest, NetworkTest) in test {
     for {
       stats0 <- add("foo", 1)
       _ <- windClock(-defaultSlotDuration - 1.millis)
@@ -53,7 +53,7 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     } yield stats0.buffer shouldBe stats1.buffer
   }
 
-  it should "add new slots for the next timeslot" in test {
+  it should "add new slots for the next timeslot" taggedAs (UnitTest, NetworkTest) in test {
     for {
       _ <- add("foo", 1)
       _ <- windClock(defaultSlotDuration + 1.millis)
@@ -65,7 +65,7 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     }
   }
 
-  it should "remove keys from all slots" in test {
+  it should "remove keys from all slots" taggedAs (UnitTest, NetworkTest) in test {
     for {
       _ <- add("foo", 1)
       _ <- add("bar", 2)
@@ -85,7 +85,7 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     }
   }
 
-  it should "turn around and overwrite the first slot after all of them have been written to" in test {
+  it should "turn around and overwrite the first slot after all of them have been written to" taggedAs (UnitTest, NetworkTest) in test {
     for {
       _ <- Range
         .inclusive(0, defaultSlotCount)
@@ -118,7 +118,7 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     setup >> f
   }
 
-  it should "aggregate the stats of a given key" in testAggregate {
+  it should "aggregate the stats of a given key" taggedAs (UnitTest, NetworkTest) in testAggregate {
     for {
       stats <- getStats
     } yield {
@@ -128,27 +128,27 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     }
   }
 
-  it should "aggregate all stats" in testAggregate {
+  it should "aggregate all stats" taggedAs (UnitTest, NetworkTest) in testAggregate {
     for {
       stats <- getStats
     } yield stats.getAll() shouldBe Map("foo" -> 3, "bar" -> 6)
   }
 
-  it should "aggregate stats that still fall in the window" in testAggregate {
+  it should "aggregate stats that still fall taggedAs (UnitTest, NetworkTest) in the window" in testAggregate {
     for {
       _ <- windClock(defaultSlotDuration * 2)
       stats <- getStats
     } yield stats.getAll() should not be empty
   }
 
-  it should "not aggregate beyond the window" in testAggregate {
+  it should "not aggregate beyond the window" taggedAs (UnitTest, NetworkTest) in testAggregate {
     for {
       _ <- windClock(defaultSlotDuration * (defaultSlotCount + 1))
       stats <- getStats
     } yield stats.getAll() shouldBe empty
   }
 
-  it should "handle 0 in configuration" in {
+  it should "handle 0 taggedAs (UnitTest, NetworkTest) in configuration" in {
     // This might happen if we base the values on something which can be 0.
     implicit val clock: Clock = Clock.systemUTC()
 
@@ -161,21 +161,21 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     }
   }
 
-  it should "aggregate Int" in {
+  it should "aggregate Int" taggedAs (UnitTest, NetworkTest) in {
     testRandomAggregation[String, Int](_ + _)
   }
 
-  it should "aggregate Boolean" in {
+  it should "aggregate Boolean" taggedAs (UnitTest, NetworkTest) in {
     implicit val boolMonoid: Monoid[Boolean] =
       Monoid.instance[Boolean](false, _ || _)
     testRandomAggregation[Int, Boolean](_ || _)
   }
 
-  it should "aggregate Set" in {
+  it should "aggregate Set" taggedAs (UnitTest, NetworkTest) in {
     testRandomAggregation[Int, Set[Int]](_ union _)
   }
 
-  it should "aggregate Vector" in {
+  it should "aggregate Vector" taggedAs (UnitTest, NetworkTest) in {
     testRandomAggregation[Int, Vector[Int]](_ ++ _)
   }
 

@@ -48,6 +48,7 @@ import com.chipprbots.ethereum.jsonrpc.FilterManager.NewFilterResponse
 import scala.concurrent.Future
 import com.chipprbots.ethereum.jsonrpc.FilterManager.PendingTransactionFilterLogs
 import com.chipprbots.ethereum.jsonrpc.FilterManager.FilterLogs
+import com.chipprbots.ethereum.testing.Tags._
 
 class FilterManagerSpec
     extends TestKit(
@@ -65,7 +66,7 @@ class FilterManagerSpec
     with NormalPatience
     with org.scalamock.scalatest.MockFactory {
 
-  "FilterManager" should "handle log filter logs and changes" in new TestSetup {
+  "FilterManager" should "handle log filter logs and changes" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val address: Address = Address("0x1234")
     val topics: Seq[Seq[ByteString]] = Seq(Seq(), Seq(ByteString(Hex.decode("4567"))))
@@ -237,7 +238,7 @@ class FilterManagerSpec
     changesResp2.logs.size shouldBe 1
   }
 
-  it should "handle pending block filter" in new TestSetup {
+  it should "handle pending block filter" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val address: Address = Address("0x1234")
     val topics: Seq[Seq[ByteString]] = Seq(Seq(), Seq(ByteString(Hex.decode("4567"))))
@@ -367,7 +368,7 @@ class FilterManagerSpec
     )
   }
 
-  it should "handle block filter" in new TestSetup {
+  it should "handle block filter" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (blockchainReader.getBestBlockNumber _).expects().returning(3).twice()
 
@@ -403,7 +404,7 @@ class FilterManagerSpec
     getChangesRes.blockHashes shouldBe Seq(bh4.hash, bh5.hash, bh6.hash)
   }
 
-  it should "handle pending transactions filter" in new TestSetup {
+  it should "handle pending transactions filter" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (blockchainReader.getBestBlockNumber _).expects().returning(3).twice()
 
@@ -443,7 +444,7 @@ class FilterManagerSpec
     getLogsRes.txHashes shouldBe pendingTxs.map(_.tx.hash)
   }
 
-  it should "timeout unused filter" in new TestSetup {
+  it should "timeout unused filter" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (blockchainReader.getBestBlockNumber _).expects().returning(3).twice()
 

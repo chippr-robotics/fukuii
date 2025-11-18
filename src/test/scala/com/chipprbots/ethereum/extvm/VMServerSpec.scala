@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.extvm.msg.VMQuery
 import com.chipprbots.ethereum.extvm.msg.BlockHeader
 import com.chipprbots.ethereum.extvm.msg.ModifiedAccount
 import com.chipprbots.ethereum.extvm.msg.ModifiedAccount
+import com.chipprbots.ethereum.testing.Tags._
 
 /** HIBERNATED: External VM features are currently in hibernation. These features are experimental and not core to
   * fukuii's functioning. Tests are ignored to prevent blocking development until the feature is fully developed.
@@ -27,7 +28,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
   import com.chipprbots.ethereum.Fixtures.Blocks._
   import Implicits._
 
-  "VMServer" should "start and await hello message" in new TestSetup {
+  "VMServer" should "start and await hello message" taggedAs (UnitTest, VMTest) in new TestSetup {
     inSequence {
       (messageHandler.awaitMessage(_: GeneratedMessageCompanion[msg.Hello])).expects(*).returns(helloMsg)
       (messageHandler
@@ -40,7 +41,7 @@ class VMServerSpec extends AnyFlatSpec with Matchers with MockFactory {
     vmServer.processingThread.join()
   }
 
-  it should "handle incoming call context msg and respond with a call result" in new TestSetup {
+  it should "handle incoming call context msg and respond with a call result" taggedAs (UnitTest, VMTest) in new TestSetup {
     val blockHeader = Block3125369.header
     val blockHeaderMsg: BlockHeader = msg.BlockHeader(
       beneficiary = blockHeader.beneficiary,

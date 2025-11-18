@@ -14,71 +14,72 @@ import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BloomFilter
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class StdBlockValidatorSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
 
-  "Block based on valid data" should "pass validation" in {
+  "Block based on valid data" should "pass validation" taggedAs (UnitTest, ConsensusTest) in {
     val block = Block(validBlockHeader, validBlockBody)
     val blockWithCheckpoint = Block(validBlockHeaderWithCheckpoint, BlockBody(Nil, Nil))
     StdBlockValidator.validate(block, validReceipts) shouldBe Right(BlockValid)
     StdBlockValidator.validate(blockWithCheckpoint, Nil) shouldBe Right(BlockValid)
   }
 
-  it should "correctly handle the case where a block has no receipts" in {
+  it should "correctly handle the case where a block has no receipts" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validate(blockWithOutReceipts, Nil) match {
       case Right(_) => succeed
       case _        => fail()
     }
   }
 
-  "Invalid block" should "return a failure if block with checkpoint body has a tx" in {
+  "Invalid block" should "return a failure if block with checkpoint body has a tx" taggedAs (UnitTest, ConsensusTest) in {
     val block = Block(validBlockHeaderWithCheckpoint, validBlockBody)
     StdBlockValidator
       .validate(block, Nil) shouldBe Left(CheckpointBlockTransactionsNotEmptyError)
   }
 
-  it should "return a failure if block with checkpoint body has a ommers" in {
+  it should "return a failure if block with checkpoint body has a ommers" taggedAs (UnitTest, ConsensusTest) in {
     val block = Block(validBlockHeaderWithCheckpoint, BlockBody(Nil, Seq(validBlockHeader)))
     StdBlockValidator
       .validate(block, Nil) shouldBe Left(CheckpointBlockOmmersNotEmptyError)
   }
 
-  it should "return a failure if created based on invalid transactions header" in {
+  it should "return a failure if created based on invalid transactions header" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validate(Block(wrongTransactionsRootHeader, validBlockBody), validReceipts) match {
       case Left(BlockTransactionsHashError) => succeed
       case _                                => fail()
     }
   }
 
-  it should "return a failure if created based on invalid ommers header" in {
+  it should "return a failure if created based on invalid ommers header" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validate(Block(wrongOmmersHashHeader, validBlockBody), validReceipts) match {
       case Left(BlockOmmersHashError) => succeed
       case _                          => fail()
     }
   }
 
-  it should "return a failure if created based on invalid receipts header" in {
+  it should "return a failure if created based on invalid receipts header" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validate(Block(wrongReceiptsHeader, validBlockBody), validReceipts) match {
       case Left(BlockReceiptsHashError) => succeed
       case _                            => fail()
     }
   }
 
-  it should "return a failure if created based on invalid log bloom header" in {
+  it should "return a failure if created based on invalid log bloom header" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validate(Block(wrongLogBloomBlockHeader, validBlockBody), validReceipts) match {
       case Left(BlockLogBloomError) => succeed
       case _                        => fail()
     }
   }
 
-  it should "return a failure if a block body doesn't corresponds to a block header due to wrong tx hash" in {
+  it should "return a failure if a block body doesn't corresponds to a block header due to wrong tx hash" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validateHeaderAndBody(wrongTransactionsRootHeader, validBlockBody) match {
       case Left(BlockTransactionsHashError) => succeed
       case _                                => fail()
     }
   }
 
-  it should "return a failure if a block body doesn't corresponds to a block header due to wrong ommers hash" in {
+  it should "return a failure if a block body doesn't corresponds to a block header due to wrong ommers hash" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validateHeaderAndBody(wrongOmmersHashHeader, validBlockBody) match {
       case Left(BlockOmmersHashError) => succeed
       case _                          => fail()
