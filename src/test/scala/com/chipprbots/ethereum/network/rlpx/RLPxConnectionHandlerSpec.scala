@@ -188,6 +188,23 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
+  it should "handle SendMessage gracefully during shutdown without dead letters" in new TestSetup {
+    setupIncomingRLPxConnection()
+    
+    // Consume the InitialHelloReceived message from setup
+    rlpxConnectionParent.expectMsgClass(classOf[RLPxConnectionHandler.InitialHelloReceived])
+
+    // Simulate a scenario where connection fails and actor is stopping
+    connection.ref ! org.apache.pekko.io.Tcp.Close
+    
+    // Send a message during the shutdown process
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    
+    // The message should be gracefully ignored, not cause dead letters
+    // The actor should terminate cleanly
+    rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
+  }
+
   // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
   // Using lazy val for mocks ensures they're created when accessed within MockFactory context.
   trait TestSetup extends SecureRandomBuilder {
