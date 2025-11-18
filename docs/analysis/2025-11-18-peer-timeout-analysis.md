@@ -344,6 +344,95 @@ test-fukuii | ...  (Docker container prefix)
 - Port forwarding incomplete (UPnP may not work in Docker)
 - Peers can send initial messages but ongoing communication fails
 
+## EIP-2124 Compliance Analysis
+
+**Investigation Date**: 2025-11-18 (post-analysis)
+
+Following @realcodywburns' request to examine core-geth and execution specs, I've verified our implementation against the standards:
+
+### EIP-2124 Specification Requirements
+
+From [EIP-2124](https://eips.ethereum.org/EIPS/eip-2124):
+
+**ForkId Definition**:
+- `FORK_HASH`: CRC32 checksum of genesis hash + **fork blocks that already passed** (based on current head)
+- `FORK_NEXT`: Block number of next upcoming fork
+
+**Test Cases** (from EIP-2124):
+```
+{0, ID{Hash: 0xfc64ec04, Next: 1150000}},  // Unsynced at block 0
+{1149999, ID{Hash: 0xfc64ec04, Next: 1150000}},  // Last Frontier block
+{1150000, ID{Hash: 0x97c2c34c, Next: 1920000}},  // First Homestead block
+```
+
+**Validation Rules**:
+1. If hashes match, compare head to FORK_NEXT
+2. **If remote hash is subset of local past forks**, and next matches, connect (remote syncing)
+3. **If remote hash is superset of local past forks**, connect (local syncing)
+4. Otherwise reject
+
+### Core-geth Implementation
+
+From [core-geth forkid.go](https://github.com/etclabscore/core-geth/blob/master/core/forkid/forkid.go):
+
+```go
+func NewID(config ctypes.ChainConfigurator, genesis *types.Block, head, time uint64) ID {
+    hash := crc32.ChecksumIEEE(genesis.Hash().Bytes())
+    forksByBlock, forksByTime := gatherForks(config, genesis.Time())
+    for _, fork := range forksByBlock {
+        if fork <= head {  // ← Based on ACTUAL head, not modified
+            hash = checksumUpdate(hash, fork)
+            continue
+        }
+        return ID{Hash: checksumToBytes(hash), Next: fork}
+    }
+    // ...
+}
+```
+
+**Key Point**: Core-geth calculates ForkId based on **actual current head**, not a modified/future block.
+
+### Our Implementation Analysis
+
+**Current Behavior** (with `fork-id-report-latest-when-unsynced = true`):
+```scala
+// ForkId.scala lines 29-34
+val effectiveHead = if (head == 0 && config.forkIdReportLatestWhenUnsynced && forks.nonEmpty) {
+  forks.max  // Returns 19250000 for ETC ← VIOLATES EIP-2124
+} else {
+  head
+}
+```
+
+**Validator Implementation**: Our `ForkIdValidator.scala` **correctly implements** all 3 EIP-2124 validation rules.
+
+### Compliance Status
+
+| Component | EIP-2124 Compliant | Core-geth Compatible | Notes |
+|-----------|-------------------|---------------------|-------|
+| **ForkId Calculation** | ❌ NO | ❌ NO | Modified head violates spec |
+| **Validation Rules** | ✅ YES | ✅ YES | All 3 rules correctly implemented |
+| **Test Cases** | ⚠️ PARTIAL | N/A | Tests exist for both modes |
+
+### Why This Matters
+
+**EIP-2124 Validation Rules 2 & 3** are **specifically designed** to handle sync state differences:
+
+- **Rule 2**: Allows synced nodes to accept connections from unsynced nodes (remote syncing)
+- **Rule 3**: Allows unsynced nodes to accept connections from synced nodes (local syncing)
+
+**The specification does NOT require** modifying ForkId for unsynced nodes. The validation rules handle this case naturally.
+
+### Conclusion on Standards Compliance
+
+The `fork-id-report-latest-when-unsynced` feature:
+- ❌ Violates EIP-2124 specification
+- ❌ Differs from core-geth implementation  
+- ❌ Creates state inconsistency (ForkId doesn't match actual state)
+- ⚠️ May have been added to work around buggy peer implementations
+
+**Recommendation**: Follow the standard (EIP-2124 + core-geth). If peers reject valid block-0 ForkId, that's a bug in their implementation, not ours.
+
 ## Impact Assessment
 
 ### Severity: **HIGH** 🟧
