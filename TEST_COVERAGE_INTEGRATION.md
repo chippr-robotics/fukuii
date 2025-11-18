@@ -1,142 +1,150 @@
 # Test Coverage Integration Guide
 
-**Generated:** 2025-11-18  
-**Phase 2 Complete:** Sessions 1-2
+**Quick Reference for Coverage Reporting and Test Execution**
 
 ---
 
-## Overview
+## Quick Commands
 
-This document explains how the systematic test tagging integrates with test coverage reporting and execution strategies in the Fukuii project.
-
-## Tag-Based Test Execution
-
-### Module-Specific Test Execution
-
-All tagged tests can be executed by functional system using SBT commands defined in `build.sbt`:
+### Generate Coverage Reports
 
 ```bash
-# Execute tests by functional system
-sbt testCrypto      # Runs all CryptoTest tagged tests
-sbt testVM          # Runs all VMTest tagged tests
-sbt testNetwork     # Runs all NetworkTest tagged tests
-sbt testDatabase    # Runs all DatabaseTest tagged tests
-sbt testRLP         # Runs all RLPTest tagged tests
-sbt testMPT         # Runs all MPTTest tagged tests
-sbt testEthereum    # Runs all EthereumTest tagged tests
-```
-
-### Custom Tag Filtering
-
-ScalaTest supports flexible tag-based filtering:
-
-```bash
-# Include specific tags
-sbt "testOnly -- -n VMTest"                    # Only VM tests
-sbt "testOnly -- -n CryptoTest -n RLPTest"     # Crypto OR RLP tests
-
-# Exclude specific tags
-sbt "testOnly -- -l SlowTest"                  # Exclude slow tests
-sbt "testOnly -- -l IntegrationTest"           # Exclude integration tests
-
-# Combine include and exclude
-sbt "testOnly -- -n VMTest -l SlowTest"        # VM tests, but not slow ones
-sbt "testOnly -- -n NetworkTest -n RPCTest -l IntegrationTest"  # Network or RPC, but not integration
-```
-
-### Tier-Based Test Execution
-
-The project uses a 3-tier testing strategy (ADR-017):
-
-```bash
-# Tier 1: Essential (< 5 minutes) - Fast feedback
-sbt testEssential
-# Excludes: SlowTest, IntegrationTest, SyncTest
-
-# Tier 2: Standard (< 30 minutes) - Comprehensive validation
-sbt testStandard
-# Excludes: BenchmarkTest, EthereumTest
-
-# Tier 3: Comprehensive (< 3 hours) - Full compliance
-sbt testComprehensive
-# Runs all tests including ethereum/tests suite
-```
-
-## Test Coverage Reporting
-
-### Generating Coverage Reports
-
-The project uses scoverage for code coverage analysis:
-
-```bash
-# Generate coverage report for all tests
-sbt clean coverage testAll coverageReport
-
-# Generate coverage for specific module
-sbt clean coverage "crypto/test" coverageReport
-
-# Generate coverage with tag filtering
-sbt clean coverage "testOnly -- -n VMTest" coverageReport
-```
-
-### Coverage Reports by Functional System
-
-You can generate isolated coverage reports for each functional system:
-
-```bash
-# VM & Execution coverage
+# Per-system coverage (recommended for targeted improvements)
 sbt clean coverage testVM coverageReport
-# Report: target/scala-3.3.4/scoverage-report/
-
-# Crypto coverage
 sbt clean coverage testCrypto coverageReport
-
-# Network coverage
 sbt clean coverage testNetwork coverageReport
-
-# RPC coverage
 sbt clean coverage "testOnly -- -n RPCTest" coverageReport
-
-# Database coverage
+sbt clean coverage "testOnly -- -n ConsensusTest" coverageReport
 sbt clean coverage testDatabase coverageReport
-```
 
-### Coverage Report Aggregation
-
-To aggregate coverage across all modules:
-
-```bash
 # Full coverage with aggregation
 sbt clean coverage testAll coverageReport coverageAggregate
-# Aggregated report: target/scala-3.3.4/scoverage-report/
+
+# View HTML report
+open target/scala-3.3.4/scoverage-report/index.html
 ```
 
-## Tag Mapping to Functional Systems
+### Run Tests by System
 
-### Current Tag Distribution (Phase 2 Sessions 1-2)
+```bash
+# Single system
+sbt testVM          # All VM tests
+sbt testCrypto      # All Crypto tests
+sbt testNetwork     # All Network tests
+sbt testDatabase    # All Database tests
+sbt testRLP         # All RLP tests
+sbt testMPT         # All MPT tests
 
-| Functional System | Tag | Files Tagged | Test Cases | Coverage Command |
-|-------------------|-----|--------------|------------|------------------|
-| VM & Execution | `VMTest` | ~25 | ~150+ | `sbt testVM` |
-| Cryptography | `CryptoTest` | ~12 | ~50+ | `sbt testCrypto` |
-| RLP Encoding | `RLPTest` | ~5 | ~30+ | `sbt testRLP` |
-| Merkle Patricia Trie | `MPTTest` | ~8 | ~40+ | `sbt testMPT` |
-| Network & P2P | `NetworkTest` | 21 | ~100+ | `sbt testNetwork` |
-| Database & Storage | `DatabaseTest` | ~15 | ~60+ | `sbt testDatabase` |
-| JSON-RPC API | `RPCTest` | 23 | ~150+ | `sbt "testOnly -- -n RPCTest"` |
-| Blockchain State | `StateTest` | ~15 | ~70+ | `sbt "testOnly -- -n StateTest"` |
-| Consensus | `ConsensusTest` | ~20 | ~100+ | `sbt "testOnly -- -n ConsensusTest"` |
-| Synchronization | `SyncTest` | ~25 | ~120+ | `sbt "testOnly -- -n SyncTest"` |
+# Multiple systems
+sbt testVM testCrypto testNetwork
 
-### Total Coverage
+# Tag-based filtering
+sbt "testOnly -- -n RPCTest"                    # Include RPCTest
+sbt "testOnly -- -n NetworkTest -n RPCTest"     # Include Network OR RPC
+sbt "testOnly -- -n VMTest -l SlowTest"         # Include VM, exclude Slow
+```
 
-- **Files Tagged:** 66 in Phase 2 + existing tagged files = ~150+ total
-- **Test Cases Tagged:** ~1030+ individual test cases
-- **Coverage:** ~90% of critical tests, ~80% overall
+### Tier-based Execution
 
-## Integration with CI/CD
+```bash
+sbt testEssential       # <5 min  - excludes SlowTest, IntegrationTest, SyncTest
+sbt testStandard        # <30 min - excludes BenchmarkTest, EthereumTest
+sbt testComprehensive   # <3 hrs  - all tests including ethereum/tests
+```
 
-### Example GitHub Actions Workflow
+---
+
+## Tag-to-System Mapping
+
+| Tag | System | Files | Command |
+|-----|--------|-------|---------|
+| VMTest | VM & Execution | ~29 | `sbt testVM` |
+| CryptoTest | Cryptography | ~12 | `sbt testCrypto` |
+| NetworkTest | Network & P2P | 21 | `sbt testNetwork` |
+| RPCTest | JSON-RPC API | 26 | `testOnly -n RPCTest` |
+| ConsensusTest | Consensus & Mining | 20 | `testOnly -n ConsensusTest` |
+| DatabaseTest | Database & Storage | ~15 | `sbt testDatabase` |
+| StateTest | Blockchain State | ~15 | `testOnly -n StateTest` |
+| SyncTest | Synchronization | ~33 | `testOnly -n SyncTest` |
+| RLPTest | RLP Encoding | ~6 | `sbt testRLP` |
+| MPTTest | Merkle Patricia Trie | ~8 | `sbt testMPT` |
+
+---
+
+## Coverage Report Structure
+
+When generating per-system coverage, organize reports as:
+
+```
+coverage-reports/
+├── vm-coverage/
+│   ├── index.html          # Main HTML report
+│   └── scoverage.xml       # XML for CI tools
+├── crypto-coverage/
+├── network-coverage/
+├── rpc-coverage/
+├── consensus-coverage/
+├── database-coverage/
+└── aggregate-coverage/     # Full system coverage
+```
+
+### Script to Generate All Reports
+
+Create `scripts/generate_coverage_baseline.sh`:
+
+```bash
+#!/bin/bash
+set -e
+
+REPORT_DIR="coverage-reports"
+mkdir -p "$REPORT_DIR"
+
+echo "Generating per-system coverage reports..."
+
+# VM Coverage
+echo "VM & Execution..."
+sbt clean coverage testVM coverageReport
+cp -r target/scala-3.3.4/scoverage-report "$REPORT_DIR/vm-coverage"
+
+# Crypto Coverage
+echo "Cryptography..."
+sbt clean coverage testCrypto coverageReport
+cp -r target/scala-3.3.4/scoverage-report "$REPORT_DIR/crypto-coverage"
+
+# Network Coverage
+echo "Network & P2P..."
+sbt clean coverage testNetwork coverageReport
+cp -r target/scala-3.3.4/scoverage-report "$REPORT_DIR/network-coverage"
+
+# RPC Coverage
+echo "JSON-RPC API..."
+sbt clean coverage "testOnly -- -n RPCTest" coverageReport
+cp -r target/scala-3.3.4/scoverage-report "$REPORT_DIR/rpc-coverage"
+
+# Consensus Coverage
+echo "Consensus & Mining..."
+sbt clean coverage "testOnly -- -n ConsensusTest" coverageReport
+cp -r target/scala-3.3.4/scoverage-report "$REPORT_DIR/consensus-coverage"
+
+# Database Coverage
+echo "Database & Storage..."
+sbt clean coverage testDatabase coverageReport
+cp -r target/scala-3.3.4/scoverage-report "$REPORT_DIR/database-coverage"
+
+# Aggregate Coverage
+echo "Full system aggregate..."
+sbt clean coverage testAll coverageReport coverageAggregate
+cp -r target/scala-3.3.4/scoverage-report "$REPORT_DIR/aggregate-coverage"
+
+echo "✅ Coverage reports generated in $REPORT_DIR/"
+echo "View reports: open $REPORT_DIR/*/index.html"
+```
+
+---
+
+## CI/CD Integration
+
+### GitHub Actions Example
 
 ```yaml
 name: Test Coverage by System
@@ -144,252 +152,216 @@ name: Test Coverage by System
 on: [push, pull_request]
 
 jobs:
-  vm-coverage:
+  coverage-vm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Scala
-        uses: olafurpg/setup-scala@v13
-      - name: VM Test Coverage
+      - uses: olafurpg/setup-scala@v13
+      - name: VM Coverage
         run: sbt clean coverage testVM coverageReport
-      - name: Upload Coverage
-        uses: codecov/codecov-action@v3
+      - uses: codecov/codecov-action@v3
         with:
           files: target/scala-3.3.4/scoverage-report/scoverage.xml
           flags: vm-tests
 
-  network-coverage:
+  coverage-crypto:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Scala
-        uses: olafurpg/setup-scala@v13
-      - name: Network Test Coverage
+      - uses: olafurpg/setup-scala@v13
+      - name: Crypto Coverage
+        run: sbt clean coverage testCrypto coverageReport
+      - uses: codecov/codecov-action@v3
+        with:
+          files: target/scala-3.3.4/scoverage-report/scoverage.xml
+          flags: crypto-tests
+
+  coverage-network:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: olafurpg/setup-scala@v13
+      - name: Network Coverage
         run: sbt clean coverage testNetwork coverageReport
-      - name: Upload Coverage
-        uses: codecov/codecov-action@v3
+      - uses: codecov/codecov-action@v3
         with:
           files: target/scala-3.3.4/scoverage-report/scoverage.xml
           flags: network-tests
 
-  rpc-coverage:
+  coverage-aggregate:
     runs-on: ubuntu-latest
+    needs: [coverage-vm, coverage-crypto, coverage-network]
     steps:
       - uses: actions/checkout@v3
-      - name: Setup Scala
-        uses: olafurpg/setup-scala@v13
-      - name: RPC Test Coverage
-        run: sbt clean coverage "testOnly -- -n RPCTest" coverageReport
-      - name: Upload Coverage
-        uses: codecov/codecov-action@v3
+      - uses: olafurpg/setup-scala@v13
+      - name: Full Coverage
+        run: sbt clean coverage testAll coverageReport coverageAggregate
+      - uses: codecov/codecov-action@v3
         with:
           files: target/scala-3.3.4/scoverage-report/scoverage.xml
-          flags: rpc-tests
+          flags: aggregate
 ```
 
-## Coverage Report Structure
+---
 
-### Per-System Coverage Reports
+## Isolated Logging Configuration
 
-With the systematic tagging, you can now generate coverage reports organized by functional system:
+### logback-test.xml Setup
 
+Create `src/test/resources/logback-test.xml`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <!-- Console appender for test feedback -->
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+    <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+      <level>WARN</level>
+    </filter>
+  </appender>
+
+  <!-- VM & Execution tests -->
+  <appender name="VM_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>target/test-logs/vm-tests.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>target/test-logs/vm-tests-%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Network & P2P tests -->
+  <appender name="NETWORK_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>target/test-logs/network-tests.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>target/test-logs/network-tests-%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- RPC tests -->
+  <appender name="RPC_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>target/test-logs/rpc-tests.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>target/test-logs/rpc-tests-%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Logger mappings -->
+  <logger name="com.chipprbots.ethereum.vm" level="INFO" additivity="false">
+    <appender-ref ref="VM_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <logger name="com.chipprbots.ethereum.network" level="INFO" additivity="false">
+    <appender-ref ref="NETWORK_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <logger name="com.chipprbots.ethereum.jsonrpc" level="INFO" additivity="false">
+    <appender-ref ref="RPC_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <!-- Root logger -->
+  <root level="WARN">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>
 ```
-coverage-reports/
-├── vm-coverage/
-│   ├── index.html
-│   └── scoverage.xml
-├── network-coverage/
-│   ├── index.html
-│   └── scoverage.xml
-├── rpc-coverage/
-│   ├── index.html
-│   └── scoverage.xml
-├── database-coverage/
-│   ├── index.html
-│   └── scoverage.xml
-└── aggregate-coverage/
-    ├── index.html
-    └── scoverage.xml
-```
 
-### Script to Generate All Reports
+---
 
-```bash
-#!/bin/bash
-# generate_all_coverage.sh
+## Coverage Goals by System
 
-mkdir -p coverage-reports
+| System | Current | Goal | Priority |
+|--------|---------|------|----------|
+| VM & Execution | TBD | 90% | Critical |
+| Cryptography | TBD | 95% | Critical |
+| Network & P2P | TBD | 80% | High |
+| JSON-RPC API | TBD | 85% | High |
+| Consensus & Mining | TBD | 85% | High |
+| Database & Storage | TBD | 80% | Medium |
+| State Management | TBD | 85% | High |
+| Synchronization | TBD | 75% | Medium |
 
-echo "Generating VM coverage..."
-sbt clean coverage testVM coverageReport
-cp -r target/scala-3.3.4/scoverage-report coverage-reports/vm-coverage
+**Action:** Run baseline coverage generation to populate "Current" column
 
-echo "Generating Crypto coverage..."
-sbt clean coverage testCrypto coverageReport
-cp -r target/scala-3.3.4/scoverage-report coverage-reports/crypto-coverage
+---
 
-echo "Generating Network coverage..."
-sbt clean coverage testNetwork coverageReport
-cp -r target/scala-3.3.4/scoverage-report coverage-reports/network-coverage
+## Common Coverage Patterns
 
-echo "Generating RPC coverage..."
-sbt clean coverage "testOnly -- -n RPCTest" coverageReport
-cp -r target/scala-3.3.4/scoverage-report coverage-reports/rpc-coverage
+### Exclude Generated Code
 
-echo "Generating Database coverage..."
-sbt clean coverage testDatabase coverageReport
-cp -r target/scala-3.3.4/scoverage-report coverage-reports/database-coverage
-
-echo "Generating aggregate coverage..."
-sbt clean coverage testAll coverageReport coverageAggregate
-cp -r target/scala-3.3.4/scoverage-report coverage-reports/aggregate-coverage
-
-echo "All coverage reports generated in coverage-reports/"
-```
-
-## Coverage Metrics and Goals
-
-### Current Coverage Baseline
-
-From `build.sbt`:
 ```scala
+// In build.sbt
+coverageExcludedPackages := Seq(
+  "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*",      // Protobuf
+  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo",  // BuildInfo
+  ".*\\.protobuf\\..*"                                // All protobuf
+).mkString(";")
+
+coverageExcludedFiles := Seq(
+  ".*/src_managed/.*",
+  ".*/target/.*/src_managed/.*"
+).mkString(";")
+```
+
+### Coverage Thresholds
+
+```scala
+// In build.sbt
 coverageMinimumStmtTotal := 70
 coverageFailOnMinimum := true
 ```
 
-### Per-System Coverage Goals
+---
 
-| System | Current Goal | Recommended Goal | Priority |
-|--------|--------------|------------------|----------|
-| VM & Execution | 70% | 90% | High (security critical) |
-| Cryptography | 70% | 95% | Critical (security) |
-| Network | 70% | 80% | High |
-| RPC | 70% | 85% | High (API contracts) |
-| Database | 70% | 80% | Medium |
-| Consensus | 70% | 85% | High |
-| State Management | 70% | 85% | High |
-| Sync | 70% | 75% | Medium |
+## Troubleshooting
 
-### Monitoring Coverage Trends
-
-With systematic tagging, you can track coverage trends per system over time:
+### Coverage Reports Not Generating
 
 ```bash
-# Generate coverage history
-for tag in VMTest CryptoTest NetworkTest RPCTest; do
-    echo "Coverage for $tag:"
-    sbt clean coverage "testOnly -- -n $tag" coverageReport | grep "Statement coverage"
-done
+# Clean and try again
+sbt clean cleanCoverage
+sbt coverage testVM coverageReport
 ```
 
-## Excluded Packages from Coverage
-
-From `build.sbt`, these are excluded from coverage analysis:
-
-```scala
-coverageExcludedPackages := Seq(
-  "com\\.chipprbots\\.ethereum\\.extvm\\.msg.*",      // Protobuf generated
-  "com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo",  // BuildInfo generated
-  ".*\\.protobuf\\..*"                                // All protobuf packages
-).mkString(";")
-
-coverageExcludedFiles := Seq(
-  ".*/src_managed/.*",                    // All managed sources
-  ".*/target/.*/src_managed/.*"           // Target managed sources
-).mkString(";")
-```
-
-## Best Practices
-
-### Writing Coverage-Friendly Tests
-
-1. **Tag all tests appropriately**
-   ```scala
-   "Feature" should "work correctly" taggedAs (UnitTest, VMTest) in { ... }
-   ```
-
-2. **Use descriptive test names**
-   ```scala
-   "VM" should "execute PUSH0 opcode correctly" taggedAs (UnitTest, VMTest) in { ... }
-   ```
-
-3. **Test edge cases explicitly**
-   ```scala
-   it should "handle empty stack" taggedAs (UnitTest, VMTest) in { ... }
-   it should "handle full stack" taggedAs (UnitTest, VMTest) in { ... }
-   ```
-
-4. **Group related tests**
-   ```scala
-   "Arithmetic opcodes" when {
-     "adding numbers" should "wrap on overflow" taggedAs (UnitTest, VMTest) in { ... }
-     "subtracting numbers" should "wrap on underflow" taggedAs (UnitTest, VMTest) in { ... }
-   }
-   ```
-
-### Analyzing Coverage Reports
-
-1. **Identify uncovered code**
-   - Open `coverage-reports/system-name/index.html`
-   - Look for red-highlighted lines (uncovered)
-   - Write tests to cover critical paths
-
-2. **Focus on critical systems first**
-   - VM & Crypto (security critical)
-   - RPC (API contracts)
-   - Consensus (correctness critical)
-
-3. **Track coverage trends**
-   - Run coverage before and after changes
-   - Ensure coverage doesn't decrease
-   - Aim for gradual improvement
-
-## Quick Reference
-
-### Common Coverage Commands
+### Tags Not Working
 
 ```bash
-# Full test coverage
-sbt testCoverage
+# Verify tags are imported
+grep -r "import.*Tags\._" src/test/scala/
 
-# System-specific coverage
-sbt clean coverage testVM coverageReport
-sbt clean coverage testCrypto coverageReport
-sbt clean coverage testNetwork coverageReport
-
-# Coverage with tag filtering
-sbt clean coverage "testOnly -- -n VMTest -n CryptoTest" coverageReport
-
-# View coverage report
-open target/scala-3.3.4/scoverage-report/index.html
-
-# Check coverage threshold
-sbt coverageReport  # Fails if < 70%
+# Verify tag usage
+grep -r "taggedAs" src/test/scala/
 ```
 
-### Coverage Report Files
+### Module Tests Not Running
 
-- **HTML Report:** `target/scala-3.3.4/scoverage-report/index.html`
-- **XML Report:** `target/scala-3.3.4/scoverage-report/scoverage.xml`
-- **Statement Coverage:** Percentage of statements executed
-- **Branch Coverage:** Percentage of branches taken
+```bash
+# Check module structure
+sbt projects
 
-## Summary
-
-The systematic test tagging completed in Phase 2 enables:
-
-✅ **Modular test execution** by functional system  
-✅ **Isolated coverage reporting** per system  
-✅ **CI/CD integration** for parallel coverage analysis  
-✅ **Trend tracking** for coverage metrics over time  
-✅ **Focused testing** for critical security/correctness areas  
-
-**Total Integration:** ~1030 test cases tagged and integrated with coverage reporting infrastructure.
+# Run specific module
+sbt "bytes/test"
+sbt "crypto/test"
+sbt "rlp/test"
+```
 
 ---
 
-**See Also:**
-- TEST_INVENTORY.md - Complete test catalog
-- PHASE2_TEST_ANALYSIS.md - Quality analysis and tagging progress
-- TEST_TAGGING_ACTION_PLAN.md - Implementation strategy
-- build.sbt - Coverage configuration and test commands
+**Last Updated:** 2025-11-18  
+**See Also:** TEST_AUDIT_SUMMARY.md for next actions and priorities
