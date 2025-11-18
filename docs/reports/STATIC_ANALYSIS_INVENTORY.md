@@ -47,7 +47,7 @@ The Fukuii project uses a comprehensive static analysis toolchain for Scala deve
 - ✅ Scala 3 only (no cross-compilation)
 - ✅ All Scala 2-specific code and configuration removed
 
-See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed Scala 2 to 3 migration and Phase 5 cleanup.
+See [Migration History](../historical/MIGRATION_HISTORY.md) for details on the completed Scala 2 to 3 migration and Phase 5 cleanup.
 
 ---
 

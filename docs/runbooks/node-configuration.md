@@ -1026,7 +1026,7 @@ bootstrap-nodes = [
 - [Peering Runbook](peering.md) - Network connectivity and peer management
 - [Security Runbook](security.md) - Security configuration and best practices
 - [Disk Management](disk-management.md) - Storage configuration and optimization
-- [Docker Documentation](../../docker/README.md) - Docker-based deployment
+- [Docker Documentation](../deployment/docker.md) - Docker-based deployment
 
 ## Additional Resources
 

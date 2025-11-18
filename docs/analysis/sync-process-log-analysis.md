@@ -374,7 +374,7 @@ watch -n 5 'grep "suitable peer" fukuii.log | tail -5'
 
 This analysis relates to the following existing documentation:
 
-1. **[Block Sync Troubleshooting Guide](../BLOCK_SYNC_TROUBLESHOOTING.md)**
+1. **[Block Sync Troubleshooting Guide](../troubleshooting/BLOCK_SYNC_TROUBLESHOOTING.md)**
    - Contains detailed ForkId analysis
    - Includes core-geth comparison
    - Provides step-by-step resolution guide

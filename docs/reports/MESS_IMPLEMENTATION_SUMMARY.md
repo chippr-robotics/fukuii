@@ -100,7 +100,7 @@ Both default to `enabled = false` for backward compatibility.
 
 **Files**:
 - `docs/adr/consensus/CON-004-mess-implementation.md`
-- `docs/mess-configuration.md`
+- `docs/guides/mess-configuration.md`
 - `docs/adr/README.md` (updated with CON-004 reference)
 
 ## Design Highlights
@@ -287,7 +287,7 @@ To complete the MESS implementation:
 - **ECIP-1097/ECBP-1100**: https://github.com/ethereumclassic/ECIPs/pull/373
 - **core-geth**: https://github.com/etclabscore/core-geth
 - **CON-004**: docs/adr/consensus/CON-004-mess-implementation.md
-- **Configuration Guide**: docs/mess-configuration.md
+- **Configuration Guide**: docs/guides/mess-configuration.md
 
 ## Conclusion
 

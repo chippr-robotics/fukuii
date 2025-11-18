@@ -224,7 +224,7 @@ Planned improvements to MESS:
 
 ## References
 
-- [CON-004: MESS Implementation](adr/consensus/CON-004-mess-implementation.md)
+- [CON-004: MESS Implementation](../adr/consensus/CON-004-mess-implementation.md)
 - [ECIP-1097/ECBP-1100](https://github.com/ethereumclassic/ECIPs/pull/373)
 - [core-geth MESS Implementation](https://github.com/etclabscore/core-geth)
 

@@ -8,7 +8,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[First Start](first-start.md)** - Initial node setup, configuration, and first-time startup procedures
 - **[Operating Modes](operating-modes.md)** - Comprehensive guide to full nodes, archive nodes, boot nodes, and mining nodes
 - **[Node Configuration](node-configuration.md)** - Chain configs, node configs, and command line options
-- **[Configuration Tool](../fukuii-configurator.html)** - Interactive web-based configuration generator (open in browser)
+- **[Configuration Tool](../tools/fukuii-configurator.html)** - Interactive web-based configuration generator (open in browser)
 - **[Security](security.md)** - Node security, firewall configuration, and security best practices
 - **[TLS Operations](tls-operations.md)** - TLS/HTTPS configuration for secure JSON-RPC connections
 
@@ -55,7 +55,7 @@ tail -f ~/.fukuii/etc/logs/fukuii.log
 
 An interactive web-based configuration generator is available to help create custom node configurations:
 
-**[Open Fukuii Configurator](../fukuii-configurator.html)**
+**[Open Fukuii Configurator](../tools/fukuii-configurator.html)**
 
 Features:
 - 🎯 **Visual Configuration** - Configure all node settings through an intuitive web interface
@@ -65,7 +65,7 @@ Features:
 - 🚀 **Quick Setup** - Perfect for mining nodes, archive nodes, or custom configurations
 
 Usage:
-1. Open `docs/fukuii-configurator.html` in your web browser
+1. Open `docs/tools/fukuii-configurator.html` in your web browser
 2. Configure your node settings using the tabs
 3. Click "Generate Configuration"
 4. Download or copy the generated config

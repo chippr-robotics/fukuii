@@ -208,13 +208,13 @@ The testing tags infrastructure is **substantially complete** with excellent qua
 
 ## Documentation Created
 
-1. **[TESTING_TAGS_VERIFICATION_REPORT.md](docs/testing/TESTING_TAGS_VERIFICATION_REPORT.md)**
+1. **[TESTING_TAGS_VERIFICATION_REPORT.md](../testing/TESTING_TAGS_VERIFICATION_REPORT.md)**
    - 8-section comprehensive verification report
    - Detailed analysis of all ADR components
    - Gap analysis and recommendations
    - 22KB, production-quality documentation
 
-2. **[NEXT_STEPS.md](docs/testing/NEXT_STEPS.md)**
+2. **[NEXT_STEPS.md](../testing/NEXT_STEPS.md)**
    - Action plan for remaining work
    - Detailed steps for each task
    - Success criteria and timelines
@@ -264,4 +264,4 @@ This work is ready to begin immediately - all infrastructure is in place.
 **Confidence**: High  
 **Recommendation**: Proceed with Phase 3 execution
 
-**For Questions**: See [TESTING_TAGS_VERIFICATION_REPORT.md](docs/testing/TESTING_TAGS_VERIFICATION_REPORT.md) for detailed analysis.
+**For Questions**: See [TESTING_TAGS_VERIFICATION_REPORT.md](../testing/TESTING_TAGS_VERIFICATION_REPORT.md) for detailed analysis.

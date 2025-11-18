@@ -69,7 +69,7 @@ Ethereum Test Suite (ETS) integration:
 - `ets/retesteth` - Wrapper script for running tests
 - `test-ets.sh` - CI script for running the full test suite
 
-See [ets/README.md](ets/README.md) for details on running ETS tests.
+See [ets/README.md](../../ets/README.md) for details on running ETS tests.
 
 #### `tls/`
 TLS certificates and scripts for secure RPC testing:
@@ -87,13 +87,13 @@ Docker and Docker Compose configurations:
 - `docker/scripts/` - Helper scripts
 - `Dockerfile*` - Various Dockerfile variants (prod, dev, distroless, etc.)
 
-See [docker/README.md](docker/README.md) for comprehensive Docker documentation.
+See [Docker Documentation](../deployment/docker.md) for comprehensive Docker documentation.
 
 #### `ops/`
 Operational configurations for production deployments:
 - `ops/grafana/` - Pre-configured Grafana dashboards for monitoring Fukuii nodes
 
-See [ops/README.md](ops/README.md) and [docs/operations/metrics-and-monitoring.md](docs/operations/metrics-and-monitoring.md) for details.
+See [ops/README.md](../../ops/README.md) and [metrics-and-monitoring.md](../operations/metrics-and-monitoring.md) for details.
 
 #### `docs/`
 Comprehensive documentation:
@@ -103,9 +103,9 @@ Comprehensive documentation:
 - `docs/images/` - Logo and other images
 
 Key documents:
-- [docs/adr/README.md](docs/adr/README.md) - Index of architecture decisions
-- [docs/runbooks/README.md](docs/runbooks/README.md) - Index of operational runbooks
-- [docs/architecture-overview.md](docs/architecture-overview.md) - System architecture
+- [../adr/README.md](../adr/README.md) - Index of architecture decisions
+- [../runbooks/README.md](../runbooks/README.md) - Index of operational runbooks
+- [architecture-overview.md](../architecture/architecture-overview.md) - System architecture
 
 ### Build System
 
@@ -236,12 +236,12 @@ This repository is a continuation of the Mantis Ethereum Classic client original
 ## Related Documentation
 
 - [README.md](README.md) - Getting started and features
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-- [CHANGELOG.md](CHANGELOG.md) - Version history
-- [docs/ARCHITECTURE_DIAGRAMS.md](docs/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
-- [docs/VENDORED_MODULES_INTEGRATION_PLAN.md](docs/VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
-- [LICENSE](LICENSE) - Apache 2.0 license
-- [NOTICE](NOTICE) - Attribution and notices
+- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Contribution guidelines
+- [CHANGELOG.md](../../CHANGELOG.md) - Version history
+- [ARCHITECTURE_DIAGRAMS.md](../architecture/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
+- [VENDORED_MODULES_INTEGRATION_PLAN.md](VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
+- [LICENSE](../../LICENSE) - Apache 2.0 license
+- [NOTICE](../../NOTICE) - Attribution and notices
 
 ## Questions?
 
@@ -249,5 +249,5 @@ For questions about the repository structure or where to add new code:
 
 1. Check existing code for similar functionality
 2. Follow the package structure in `src/main/scala/`
-3. Refer to [CONTRIBUTING.md](CONTRIBUTING.md)
+3. Refer to [CONTRIBUTING.md](../../CONTRIBUTING.md)
 4. Ask in GitHub Discussions or open an issue

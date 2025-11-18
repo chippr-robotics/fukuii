@@ -276,7 +276,7 @@ These can be done incrementally without urgent timeline.
 
 ## Architecture Diagrams
 
-See [Architecture Diagrams](ARCHITECTURE_DIAGRAMS.md) for:
+See [Architecture Diagrams](../architecture/ARCHITECTURE_DIAGRAMS.md) for:
 - System Context (C4 Level 1)
 - Container Diagram (C4 Level 2)
 - Component Diagram - Current State (C4 Level 3)

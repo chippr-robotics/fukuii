@@ -46,11 +46,12 @@ This project uses GitHub Actions for continuous integration and delivery:
 - Milestone tracking and automatic closure
 
 **Quick Links:**
-- [Repository Structure](REPOSITORY_STRUCTURE.md) - Understand the codebase layout
+- [📚 Documentation Index](docs/README.md) - Complete documentation guide
+- [Repository Structure](docs/development/REPOSITORY_STRUCTURE.md) - Understand the codebase layout
 - [Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
-- [Docker Documentation](docker/README.md)
+- [Docker Documentation](docs/deployment/docker.md)
 - [Operations Runbooks](docs/runbooks/README.md) - Production operation guides
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
@@ -143,7 +144,7 @@ docker run -d \
 - ✅ Include SLSA provenance attestations for supply chain verification
 - ✅ Include Software Bill of Materials (SBOM)
 
-See [docker/README.md](docker/README.md) for detailed Docker documentation, including:
+See [Docker Documentation](docs/deployment/docker.md) for detailed Docker documentation, including:
 - Available image variants (production, development, distroless)
 - Health checks and monitoring
 - Security considerations and signature verification
@@ -217,7 +218,7 @@ The console UI provides:
 
 **Note**: The console UI is currently disabled by default while under further development.
 
-See [Console UI Documentation](docs/console-ui.md) for detailed information.
+See [Console UI Documentation](docs/architecture/console-ui.md) for detailed information.
 
 
 Command line interface (CLI)
@@ -277,7 +278,7 @@ When modifying code derived from Mantis, include a notice in the header of chang
 - ✅ Update to json4s 4.0.7 (Scala 3 compatible)
 - ✅ Scalanet vendored locally in the `scalanet/` directory
 
-For the rationale behind these decisions, see [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
+For the rationale behind these decisions, see [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/historical/MIGRATION_HISTORY.md).
 
 **Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 
