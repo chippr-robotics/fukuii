@@ -229,42 +229,101 @@ Full fork list comparison with core-geth `params/config_classic.go`:
 
 **Result**: Configuration matches core-geth perfectly. ForkId calculation is correct.
 
-## Solution Implemented: Alternative ForkId Reporting for Unsynced Nodes
+## Current Status and Recommended Solutions
 
-As of v1.1.0+, Fukuii includes a workaround for the peer rejection issue when starting at block 0. When enabled via configuration, the node will report the latest known fork in its ForkId instead of the technically-correct block-0 fork.
+### Understanding the Issue
 
-### How It Works
+The ForkId mismatch issue occurs because:
+1. **Our node** (at block 0) correctly reports ForkId `0xfc64ec04, next: 1150000` per EIP-2124
+2. **Peer nodes** (at block 19,250,000+) report ForkId `0xbe46d57c, next: None`
+3. **Peers disconnect** with reason code 0x10 because they perceive incompatibility
 
-- **Configuration Option**: `fork-id-report-latest-when-unsynced = true` (enabled by default for ETC mainnet and Mordor)
-- **Behavior**: When the node is at block 0 and this option is enabled, it reports ForkId `0xbe46d57c, next: None` (matching Spiral fork) instead of `0xfc64ec04, next: 1150000`
-- **Result**: Peers running at the latest block see a compatible ForkId and accept the connection
-- **Safety**: Once the node advances past block 0, normal ForkId reporting resumes
+This is a **peer-side strictness issue**, not a configuration error. Our ForkId is technically correct for an unsynced node.
 
-### Why This Works
+### Workaround Options
 
-Peers running Core-Geth and similar clients at block 19,250,000+ have strict ForkId validation that rejects nodes reporting very old fork values, even when technically correct. By reporting the latest known fork when at block 0, we match peer expectations and avoid immediate disconnection.
+Since the ideal solution (allowing unsynced nodes to report latest fork) is not yet implemented, use these workarounds:
 
-This is safe because:
-1. Our node knows all fork configurations up to Spiral (block 19,250,000)
-2. We accept any valid historical blocks from peers
-3. Normal ForkId validation resumes once we advance past block 0
-4. The feature can be disabled by setting `fork-id-report-latest-when-unsynced = false`
+#### Option 1: Use Bootstrap Checkpoints (Recommended)
 
-### Configuration
-
-To enable this feature (default for ETC mainnet):
+The node already has bootstrap checkpoints configured in `etc-chain.conf`. Ensure they are enabled:
 
 ```hocon
-# In etc-chain.conf
-fork-id-report-latest-when-unsynced = true
+# In etc-chain.conf (should already be set)
+use-bootstrap-checkpoints = true
+
+bootstrap-checkpoints = [
+  "19250000:0xf302cfb92fd618dac5c69ba85acc945e55d1df63ad60b02d58e217af2b909a68",
+  "14525000:0x79a52036a05a0248b6bc449544c23b48994582a59f6f7451891246afc67ac3af",
+  "13189133:0x85f67d6db616637bd8b3bf32cea92873f91bac977859e387ad341c1726c14b45",
+  "10500839:0x85f67d6db616637bd8b3bf32cea92873f91bac977859e387ad341c1726c14b45",
+]
 ```
 
-To disable (use traditional block-0 ForkId):
+**Note**: The current implementation may not automatically advance ForkId based on checkpoints. This is a known limitation.
+
+#### Option 2: Manual Peer Connections
+
+Add known-compatible peers to your configuration:
 
 ```hocon
-# In etc-chain.conf
-fork-id-report-latest-when-unsynced = false
+# In application.conf
+fukuii.network.peer {
+  manual-connections = [
+    # Add stable ETC nodes that accept unsynced peers
+    "enode://fbcd6fc04fa7ea897558c3f5edf1cd192e3b2c3b5b9b3d00be179b2e9d04e623e017ed6ce6a1369fff126661afa1c5caa12febce92dcb70ff1352b86e9ebb44f@18.193.251.235:9076?discport=30303",
+    "enode://1619217a01fb87a745bb104872aa84314a2d42d99c7b915cd187245bfd898d679cbf78b3ea950c32051db860e2c4e3fe7d6329107587be33ab37541ca65046f91@18.198.165.189:9076?discport=30303",
+  ]
+}
 ```
+
+#### Option 3: Wait for Improved ForkId Handling (Future Enhancement)
+
+A proper solution would involve:
+1. Implementing `fork-id-report-latest-when-unsynced` configuration option
+2. Allowing nodes at block 0 with bootstrap checkpoints to report the checkpoint's ForkId
+3. More lenient peer acceptance logic that tolerates unsynced nodes
+
+**Tracking**: This enhancement should be tracked in a GitHub issue for future implementation.
+
+### Current Recommendations (v0.1.4)
+
+For users experiencing this issue:
+
+1. **Verify bootstrap checkpoints are enabled** (they should be by default)
+2. **Try manual peer connections** to known-stable nodes
+3. **Monitor for successful connections** - some peers may accept the connection
+4. **Be patient** - the node may eventually find compatible peers
+5. **Report persistent issues** - open a GitHub issue with logs if sync remains stuck
+
+### For Developers: Future Enhancement
+
+The following enhancement should be implemented in a future version:
+
+```scala
+// In ForkId.create() method
+def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt): ForkId = {
+  // Check if fork-id-report-latest-when-unsynced is enabled
+  val reportLatestWhenUnsynced = config.forkIdReportLatestWhenUnsynced.getOrElse(false)
+  
+  if (head == 0 && reportLatestWhenUnsynced) {
+    // Report latest known fork instead of block-0 fork
+    val allForks = sortedForks(config).filter(_ > 0)
+    if (allForks.nonEmpty) {
+      val latestFork = allForks.last
+      // Calculate ForkId as if at the latest fork
+      create(genesisHash, config)(latestFork)
+    } else {
+      // Fallback to normal calculation
+      calculateForkId(genesisHash, config, head)
+    }
+  } else {
+    calculateForkId(genesisHash, config, head)
+  }
+}
+```
+
+This would allow unsynced nodes to match peer expectations while maintaining security.
 
 ## Contact
 

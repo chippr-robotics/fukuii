@@ -1,5 +1,58 @@
 # Sync Process Log Analysis
 
+## Latest Analysis: 2025-11-18
+
+**Date**: 2025-11-18  
+**Log Duration**: ~1 minute (13:17:18 - 13:18:23)  
+**Node**: Production environment  
+**Network**: Ethereum Classic (etc)  
+**Version**: fukuii/v0.1.4-3fa6d08/linux-amd64
+
+### Current Status
+
+**Issue Persists**: The ForkId mismatch issue identified in the 2025-11-10 analysis continues in the latest logs.
+
+### Key Observations from 2025-11-18 Log
+
+1. **Identical Behavior Pattern**:
+   - Node sends ForkId: `0xfc64ec04, Some(1150000)` (correct for block 0)
+   - Peers respond with ForkId: `0xbe46d57c, None` (Spiral fork, block 19,250,000+)
+   - Peers disconnect with reason code 0x10 immediately after status exchange
+   - Pattern repeats with retry attempts every ~30 seconds
+
+2. **Affected Peers** (still disconnecting):
+   - 64.225.0.245:30303
+   - 164.90.144.106:30303
+   - 157.245.77.211:30303
+
+3. **Version Progress**:
+   - Previous analysis: v0.1.0-4824af4 (2025-11-10)
+   - Current log: v0.1.4-3fa6d08 (2025-11-18)
+   - **No fix implemented yet** for the ForkId reporting issue
+
+### Updated Recommendations
+
+Based on persistent failures across multiple versions:
+
+1. **Immediate Action Required**: 
+   - The troubleshooting documentation has been updated to reflect actual current state
+   - The previously documented "v1.1.0+ solution" does not exist in the codebase
+   - Users need realistic workarounds, not references to non-existent features
+
+2. **Required Code Changes**:
+   - Implement `fork-id-report-latest-when-unsynced` configuration option
+   - Modify `ForkId.create()` to optionally report latest fork when at block 0
+   - Add configuration to blockchain config schema
+
+3. **Testing Needed**:
+   - Verify that reporting latest ForkId doesn't break sync logic
+   - Ensure bootstrap checkpoints work with modified ForkId reporting
+   - Test against multiple peer implementations (Core-Geth, etc.)
+
+---
+
+## Original Analysis: 2025-11-10
+
 **Date**: 2025-11-10  
 **Log Duration**: ~20 seconds (14:05:25 - 14:05:45)  
 **Node**: chipprbots (Production environment)  
@@ -410,13 +463,19 @@ The **immediate priority** is to:
 1. Verify bootstrap checkpoint activation
 2. Add manual peer connections to known-stable nodes
 3. Enable fast sync mode if available
-4. Consider temporary ForkId bypass for initial sync (if safe)
+4. **Implement the `fork-id-report-latest-when-unsynced` feature** (see BLOCK_SYNC_TROUBLESHOOTING.md)
 
 This issue requires urgent attention as the node is completely non-functional for its primary purpose of blockchain synchronization.
+
+## Update 2025-11-18
+
+The issue persists in version v0.1.4. The solution described in BLOCK_SYNC_TROUBLESHOOTING.md (alternative ForkId reporting) has been identified as **not yet implemented**. The troubleshooting documentation has been corrected to reflect the actual current state and provide realistic workarounds.
 
 ---
 
 **Analyst**: GitHub Copilot  
-**Date**: 2025-11-10  
-**Log File**: log.txt (760 lines)  
-**Analysis Duration**: ~30 minutes
+**Date**: 2025-11-10 (Updated 2025-11-18)  
+**Log Files Analyzed**: 
+- log.txt (760 lines, 2025-11-10)
+- fukuii.2025.11.18.txt (318 lines, 2025-11-18)  
+**Analysis Duration**: ~30 minutes per log
