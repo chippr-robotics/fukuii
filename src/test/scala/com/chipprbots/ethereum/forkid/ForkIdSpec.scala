@@ -121,12 +121,12 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
 
       // Per EIP-2124 test cases, unsynced node at block 0 should report genesis ForkId
       create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000))
-      
+
       // Verify that ForkId changes only when actually passing fork blocks
       create(1) shouldBe ForkId(0xfc64ec04L, Some(1150000))
       create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000))
       create(1150000) shouldBe ForkId(0x97c2c34cL, Some(2500000))
-      
+
       // Latest fork should have None for next
       create(19250000) shouldBe ForkId(0xbe46d57cL, None)
       create(20000000) shouldBe ForkId(0xbe46d57cL, None)
