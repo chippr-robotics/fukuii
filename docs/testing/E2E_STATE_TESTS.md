@@ -234,5 +234,5 @@ Potential expansions of the state test suite:
 
 - [ETS README](../ets/README.md) - Ethereum Test Suite integration
 - [Ethereum Tests CI Integration](docs/ETHEREUM_TESTS_CI_INTEGRATION.md)
-- [Repository Structure](REPOSITORY_STRUCTURE.md)
+- [Repository Structure](../../development/REPOSITORY_STRUCTURE.md)
 - [Contributing Guide](CONTRIBUTING.md)

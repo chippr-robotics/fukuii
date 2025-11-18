@@ -68,4 +68,4 @@ Example Prometheus configuration files can be found in:
 
 - [Operations Runbooks](../docs/runbooks/README.md)
 - [Docker Documentation](../docker/README.md)
-- [Architecture Overview](../docs/architecture-overview.md)
+- [Architecture Overview](../docs/architecture/architecture-overview.md)

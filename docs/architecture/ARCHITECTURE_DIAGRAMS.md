@@ -226,8 +226,8 @@ C4Component
 
 ## Related Documentation
 
-- [Vendored Modules Integration Plan](VENDORED_MODULES_INTEGRATION_PLAN.md) - Detailed implementation plan
-- [Repository Structure](../REPOSITORY_STRUCTURE.md) - Current repository organization
+- [Vendored Modules Integration Plan](../development/VENDORED_MODULES_INTEGRATION_PLAN.md) - Detailed implementation plan
+- [Repository Structure](../development/REPOSITORY_STRUCTURE.md) - Current repository organization
 - [INF-001: Scala 3 Migration](adr/infrastructure/INF-001-scala-3-migration.md) - Context on why modules were vendored
 
 ## References

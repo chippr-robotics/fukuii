@@ -103,9 +103,9 @@ Comprehensive documentation:
 - `docs/images/` - Logo and other images
 
 Key documents:
-- [docs/adr/README.md](docs/adr/README.md) - Index of architecture decisions
-- [docs/runbooks/README.md](docs/runbooks/README.md) - Index of operational runbooks
-- [docs/architecture-overview.md](docs/architecture-overview.md) - System architecture
+- [../adr/README.md](../adr/README.md) - Index of architecture decisions
+- [../runbooks/README.md](../runbooks/README.md) - Index of operational runbooks
+- [architecture-overview.md](../architecture/architecture-overview.md) - System architecture
 
 ### Build System
 
@@ -238,8 +238,8 @@ This repository is a continuation of the Mantis Ethereum Classic client original
 - [README.md](README.md) - Getting started and features
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
 - [CHANGELOG.md](CHANGELOG.md) - Version history
-- [docs/ARCHITECTURE_DIAGRAMS.md](docs/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
-- [docs/VENDORED_MODULES_INTEGRATION_PLAN.md](docs/VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
+- [ARCHITECTURE_DIAGRAMS.md](../architecture/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
+- [VENDORED_MODULES_INTEGRATION_PLAN.md](VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
 - [LICENSE](LICENSE) - Apache 2.0 license
 - [NOTICE](NOTICE) - Attribution and notices
 
