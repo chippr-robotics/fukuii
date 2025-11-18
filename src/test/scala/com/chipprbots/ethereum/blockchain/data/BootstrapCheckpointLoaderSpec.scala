@@ -8,10 +8,11 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.testing.Tags._
 
 class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockFactory {
 
-  "BootstrapCheckpointLoader.loadBootstrapCheckpoints" should "return false when checkpoints are disabled" in {
+  "BootstrapCheckpointLoader.loadBootstrapCheckpoints" should "return false when checkpoints are disabled" taggedAs (UnitTest, SyncTest) in {
     val mockReader = mock[BlockchainReader]
     val loader = new BootstrapCheckpointLoader(mockReader)
 
@@ -25,7 +26,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
     result shouldBe false
   }
 
-  it should "return false when no checkpoints are configured" in {
+  it should "return false when no checkpoints are configured" taggedAs (UnitTest, SyncTest) in {
     val mockReader = mock[BlockchainReader]
     val loader = new BootstrapCheckpointLoader(mockReader)
 
@@ -39,7 +40,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
     result shouldBe false
   }
 
-  it should "return false when blockchain already has blocks beyond genesis" in {
+  it should "return false when blockchain already has blocks beyond genesis" taggedAs (UnitTest, SyncTest) in {
     val mockReader = mock[BlockchainReader]
     val loader = new BootstrapCheckpointLoader(mockReader)
 
@@ -57,7 +58,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
     result shouldBe false
   }
 
-  it should "return true when checkpoints are loaded successfully" in {
+  it should "return true when checkpoints are loaded successfully" taggedAs (UnitTest, SyncTest) in {
     val mockReader = mock[BlockchainReader]
     val loader = new BootstrapCheckpointLoader(mockReader)
 
@@ -77,7 +78,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
     result shouldBe true
   }
 
-  it should "handle single checkpoint" in {
+  it should "handle single checkpoint" taggedAs (UnitTest, SyncTest) in {
     val mockReader = mock[BlockchainReader]
     val loader = new BootstrapCheckpointLoader(mockReader)
 

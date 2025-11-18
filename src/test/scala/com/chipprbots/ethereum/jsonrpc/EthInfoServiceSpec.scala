@@ -46,7 +46,7 @@ class EthServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "EthInfoService" should "return ethereum protocol version" in new TestSetup {
+  "EthInfoService" should "return ethereum protocol version" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val response: Either[JsonRpcError, ProtocolVersionResponse] =
       ethService.protocolVersion(ProtocolVersionRequest()).unsafeRunSync()
     val protocolVersion = response.toOption.get.value
@@ -54,13 +54,13 @@ class EthServiceSpec
     Integer.parseInt(protocolVersion.drop(2), 16) shouldEqual currentProtocolVersion
   }
 
-  it should "return configured chain id" in new TestSetup {
+  it should "return configured chain id" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val response: ChainIdResponse = ethService.chainId(ChainIdRequest()).unsafeRunSync().toOption.get
 
     assert(response === ChainIdResponse(blockchainConfig.chainId))
   }
 
-  it should "return syncing info if the peer is syncing" in new TestSetup {
+  it should "return syncing info if the peer is syncing" taggedAs (UnitTest, RPCTest) in new TestSetup {
     syncingController.setAutoPilot(simpleAutoPilot { case SyncProtocol.GetStatus =>
       SyncProtocol.Status.Syncing(999, Progress(200, 10000), Some(Progress(100, 144)))
     })
@@ -81,7 +81,7 @@ class EthServiceSpec
   }
 
   // scalastyle:off magic.number
-  it should "return no syncing info if the peer is not syncing" in new TestSetup {
+  it should "return no syncing info if the peer is not syncing" taggedAs (UnitTest, RPCTest) in new TestSetup {
     syncingController.setAutoPilot(simpleAutoPilot { case SyncProtocol.GetStatus =>
       SyncProtocol.Status.NotSyncing
     })
@@ -91,7 +91,7 @@ class EthServiceSpec
     response shouldEqual Right(SyncingResponse(None))
   }
 
-  it should "return no syncing info if sync is done" in new TestSetup {
+  it should "return no syncing info if sync is done" taggedAs (UnitTest, RPCTest) in new TestSetup {
     syncingController.setAutoPilot(simpleAutoPilot { case SyncProtocol.GetStatus =>
       SyncProtocol.Status.SyncDone
     })
@@ -101,7 +101,7 @@ class EthServiceSpec
     response shouldEqual Right(SyncingResponse(None))
   }
 
-  it should "execute call and return a value" in new TestSetup {
+  it should "execute call and return a value" taggedAs (UnitTest, RPCTest) in new TestSetup {
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 
@@ -131,7 +131,7 @@ class EthServiceSpec
     response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
   }
 
-  it should "execute estimateGas and return a value" in new TestSetup {
+  it should "execute estimateGas and return a value" taggedAs (UnitTest, RPCTest) in new TestSetup {
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 

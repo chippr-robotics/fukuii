@@ -482,3 +482,95 @@ The `build.sbt` file shows:
 - Additional consensus/mining tests
 - Ledger tests
 
+
+### Session 2 Update
+
+#### Tests Tagged (Continuation):
+
+**JSON-RPC Tests (23 files, ~150+ tests):**
+All JSON-RPC service and controller tests now tagged with (UnitTest, RPCTest):
+- ✅ EthInfoServiceSpec.scala
+- ✅ EthBlocksServiceSpec.scala  
+- ✅ EthTxServiceSpec.scala
+- ✅ EthUserServiceSpec.scala
+- ✅ EthMiningServiceSpec.scala
+- ✅ EthFilterServiceSpec.scala
+- ✅ NetServiceSpec.scala
+- ✅ PersonalServiceSpec.scala
+- ✅ DebugServiceSpec.scala
+- ✅ FilterManagerSpec.scala
+- ✅ ExpiringMapSpec.scala
+- ✅ CheckpointingServiceSpec.scala
+- ✅ FukuiiServiceSpec.scala
+- ✅ QAServiceSpec.scala
+- ✅ JsonRpcControllerSpec.scala
+- ✅ JsonRpcControllerEthSpec.scala
+- ✅ JsonRpcControllerPersonalSpec.scala
+- ✅ JsonRpcControllerEthLegacyTransactionSpec.scala
+- ✅ CheckpointingJRCSpec.scala
+- ✅ FukuiiJRCSpec.scala
+- ✅ QaJRCSpec.scala
+- ✅ EthProofServiceSpec.scala
+- ✅ JsonRpcHttpServerSpec.scala
+
+**Network Tests (21 files, ~100+ tests):**
+All network and P2P tests now tagged with (UnitTest, NetworkTest):
+- ✅ PeerManagerSpec.scala
+- ✅ PeerEventBusActorSpec.scala
+- ✅ PeerStatisticsSpec.scala
+- ✅ KnownNodesManagerSpec.scala
+- ✅ TimeSlotStatsSpec.scala
+- ✅ AuthHandshakerSpec.scala
+- ✅ AsymmetricCipherKeyPairLoaderSpec.scala
+- ✅ PeerActorSpec.scala
+- ✅ ETH65PlusMessagesSpec.scala
+- ✅ ReceiptsSpec.scala
+- ✅ NodeDataSpec.scala
+- ✅ LegacyTransactionSpec.scala
+- ✅ MessagesSerializationSpec.scala
+- ✅ MessageDecodersSpec.scala
+- ✅ PeerDiscoveryManagerSpec.scala
+- ✅ Secp256k1SigAlgSpec.scala
+- ✅ ENRCodecsSpec.scala
+- ✅ RLPCodecsSpec.scala
+- ✅ EIP8CodecsSpec.scala
+- ✅ RLPxConnectionHandlerSpec.scala
+- ✅ MessageCompressionSpec.scala
+
+**Database & Sync Tests (8 files):**
+- ✅ RocksDbDataSourceTest.scala - Tagged (UnitTest, DatabaseTest)
+- ✅ FastSyncBranchResolverSpec.scala - Tagged (UnitTest, SyncTest)
+- ✅ HeaderSkeletonSpec.scala - Tagged (UnitTest, SyncTest)
+- ✅ StateSyncSpec.scala - Tagged (UnitTest, SyncTest)
+- ✅ SchedulerStateSpec.scala - Tagged (UnitTest, SyncTest)
+- ✅ PivotBlockSelectorSpec.scala - Tagged (UnitTest, SyncTest)
+- ✅ BootstrapCheckpointSpec.scala - Tagged (UnitTest, SyncTest)
+- ✅ BootstrapCheckpointLoaderSpec.scala - Tagged (UnitTest, SyncTest)
+
+#### Session 2 Summary:
+- **Files tagged:** 52 files (JSON-RPC: 23, Network: 21, Database/Sync: 8)
+- **Tests tagged:** ~270+ individual test cases
+- **Categories:** RPC (API contracts), Network (P2P), Database, Sync
+
+#### Cumulative Progress:
+- **Session 1:** 14 files, ~120 tests (Consensus, Domain)
+- **Session 2:** 52 files, ~270 tests (RPC, Network, DB, Sync)
+- **Total Tagged:** 66 files, ~390 individual test cases
+- **Overall test cases:** ~640 baseline + 390 new = ~1030 test cases tagged
+
+#### Note on Tag Syntax:
+Some tests use alternative ScalaTest tag syntax:
+- FlatSpec/WordSpec: `"test" should "do something" taggedAs (Tag1, Tag2) in {...}`
+- FunSuite: `test("name", Tag1, Tag2) {...}` (already tagged in many VM/crypto tests)
+
+Both syntaxes are valid and work with SBT tag-based test filtering.
+
+#### Remaining Untagged (Lower Priority):
+- Consensus validators (~15 files) - Some already tagged in Session 1
+- Utility tests (config, keystore, etc.) - ~10 files
+- ExtVM tests - 4 files
+- Faucet tests - 3 files
+- Remaining misc tests - ~20 files
+
+Total remaining: ~50 files (mostly lower priority utility and specialized tests)
+

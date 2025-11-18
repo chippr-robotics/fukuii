@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.network.PeerEventBusActor._
 import com.chipprbots.ethereum.network.p2p.messages.ETH61.NewBlockHashes
 import com.chipprbots.ethereum.utils.MockClock
+import com.chipprbots.ethereum.testing.Tags._
 
 class PeerStatisticsSpec
     extends TestKit(ActorSystem("PeerStatisticsSpec_System"))
@@ -32,23 +33,23 @@ class PeerStatisticsSpec
 
   behavior.of("PeerStatisticsActor")
 
-  it should "subscribe to peer events" in new Fixture {
+  it should "subscribe to peer events" taggedAs (UnitTest, NetworkTest) in new Fixture {
     peerEventBus.expectMsg(Subscribe(PeerStatisticsActor.MessageSubscriptionClassifier))
     peerEventBus.expectMsg(Subscribe(SubscriptionClassifier.PeerDisconnectedClassifier(PeerSelector.AllPeers)))
   }
 
-  it should "initially return default stats for unknown peers" in new Fixture {
+  it should "initially return default stats for unknown peers" taggedAs (UnitTest, NetworkTest) in new Fixture {
     val peerId: PeerId = PeerId("Alice")
     peerStatistics ! GetStatsForPeer(1.minute, peerId)
     sender.expectMsg(StatsForPeer(peerId, PeerStat.empty))
   }
 
-  it should "initially return default stats when there are no peers" in new Fixture {
+  it should "initially return default stats when there are no peers" taggedAs (UnitTest, NetworkTest) in new Fixture {
     peerStatistics ! GetStatsForAll(1.minute)
     sender.expectMsg(StatsForAll(Map.empty))
   }
 
-  it should "count received messages" in new Fixture {
+  it should "count received messages" taggedAs (UnitTest, NetworkTest) in new Fixture {
     val alice: PeerId = PeerId("Alice")
     val bob: PeerId = PeerId("Bob")
     peerStatistics ! PeerEvent.MessageFromPeer(NewBlockHashes(Seq.empty), alice)

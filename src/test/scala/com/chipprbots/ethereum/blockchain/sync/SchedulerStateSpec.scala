@@ -8,15 +8,16 @@ import org.scalatest.matchers.must.Matchers
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SchedulerState
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.StateNode
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.StateNodeRequest
+import com.chipprbots.ethereum.testing.Tags._
 
 class SchedulerStateSpec extends AnyFlatSpec with Matchers {
-  "SchedulerState" should "schedule node hashes for retrieval" in new TestSetup {
+  "SchedulerState" should "schedule node hashes for retrieval" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val stateWithRequest: SchedulerState = schedulerState.schedule(request1)
     assert(stateWithRequest != schedulerState)
     assert(stateWithRequest.getPendingRequestByHash(request1.nodeHash).contains(request1))
   }
 
-  it should "return enqueued elements in depth order" in new TestSetup {
+  it should "return enqueued elements taggedAs (UnitTest, SyncTest) in depth order" in new TestSetup {
     val stateWithRequests: SchedulerState =
       schedulerState.schedule(request2).schedule(request3).schedule(request1).schedule(request4)
     assert(stateWithRequests != schedulerState)
@@ -26,7 +27,7 @@ class SchedulerStateSpec extends AnyFlatSpec with Matchers {
     assert(allMissingElements1.isEmpty)
   }
 
-  it should "return at most n enqueued elements in depth order" in new TestSetup {
+  it should "return at most n enqueued elements taggedAs (UnitTest, SyncTest) in depth order" in new TestSetup {
     val stateWithRequests: SchedulerState =
       schedulerState.schedule(request2).schedule(request3).schedule(request1).schedule(request4)
     assert(stateWithRequests != schedulerState)

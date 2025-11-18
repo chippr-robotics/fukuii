@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfigurat
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for AuthHandshaker
 // @Ignore - Un-ignored per issue to identify test failures
@@ -41,7 +42,7 @@ class RLPxConnectionHandlerSpec
     with Matchers
     with MockFactory {
 
-  it should "write messages send to TCP connection" in new TestSetup {
+  it should "write messages send to TCP connection" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     setupIncomingRLPxConnection()
 
@@ -51,7 +52,7 @@ class RLPxConnectionHandlerSpec
 
   }
 
-  it should "write messages to TCP connection once all previous ACK were received" in new TestSetup {
+  it should "write messages to TCP connection once all previous ACK were received" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
@@ -73,7 +74,7 @@ class RLPxConnectionHandlerSpec
     connection.expectNoMessage()
   }
 
-  it should "accummulate messages and write them when receiving ACKs" in new TestSetup {
+  it should "accummulate messages and write them when receiving ACKs" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
@@ -102,7 +103,7 @@ class RLPxConnectionHandlerSpec
     connection.expectNoMessage()
   }
 
-  it should "close the connection when Ack timeout happens" in new TestSetup {
+  it should "close the connection when Ack timeout happens" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
       .returning(ByteString("ping encoded"))
@@ -123,7 +124,7 @@ class RLPxConnectionHandlerSpec
     )
   }
 
-  it should "ignore timeout of old messages" in new TestSetup {
+  it should "ignore timeout of old messages" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
       .returning(ByteString("ping encoded"))
@@ -150,7 +151,7 @@ class RLPxConnectionHandlerSpec
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
   }
 
-  it should "close the connection if the AuthHandshake init message's MAC is invalid" in new TestSetup {
+  it should "close the connection if the AuthHandshake init message's MAC is invalid" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     // Incomming connection arrives
     rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
     connection.expectMsgClass(classOf[Tcp.Register])
@@ -165,7 +166,7 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
-  it should "close the connection if the AuthHandshake response message's MAC is invalid" in new TestSetup {
+  it should "close the connection if the AuthHandshake response message's MAC is invalid" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     // Outgoing connection request arrives
     rlpxConnection ! RLPxConnectionHandler.ConnectTo(uri)
     tcpActorProbe.expectMsg(Tcp.Connect(inetAddress))

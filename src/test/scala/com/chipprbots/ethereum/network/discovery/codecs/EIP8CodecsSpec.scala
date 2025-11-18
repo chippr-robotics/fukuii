@@ -13,6 +13,7 @@ import scodec.Codec
 import scodec.bits._
 
 import com.chipprbots.ethereum.network.discovery.Secp256k1SigAlg
+import com.chipprbots.ethereum.testing.Tags._
 
 class EIP8CodecsSpec extends AnyFlatSpec with Matchers {
 
@@ -111,7 +112,7 @@ class EIP8CodecsSpec extends AnyFlatSpec with Matchers {
 
   // Test the RLP decoders in isolation, without crypto.
   EIP8TestVectors.foreach { case EIP8TestVector(description, data, test) =>
-    it should s"decode/encode a ${description}" in {
+    it should s"decode/encode a ${description}" taggedAs (UnitTest, NetworkTest) in {
       val bits = BitVector.fromHex(data).get
       val packet = Codec[Packet].decodeValue(bits).require
       val payload = Codec[Payload].decodeValue(packet.data).require
@@ -130,7 +131,7 @@ class EIP8CodecsSpec extends AnyFlatSpec with Matchers {
 
   // Test the whole Packet unpack function, with RLP and crypto.
   EIP8TestVectors.foreach { case EIP8TestVector(description, data, test) =>
-    it should s"unpack/pack a ${description}" in {
+    it should s"unpack/pack a ${description}" taggedAs (UnitTest, NetworkTest) in {
       val privateKey = PrivateKey(
         BitVector.fromHex("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291").get
       )

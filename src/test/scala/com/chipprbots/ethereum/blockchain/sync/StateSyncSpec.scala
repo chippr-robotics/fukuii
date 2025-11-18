@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData.GetNodeDataEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.testing.Tags._
 
 class StateSyncSpec
     extends TestKit(ActorSystem("StateSyncSpec"))
@@ -56,7 +57,7 @@ class StateSyncSpec
   implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
     PropertyCheckConfiguration(minSuccessful = PosInt(3))
 
-  "StateSync" should "sync state to different tries" in new TestSetup() {
+  "StateSync" should "sync state to different tries" taggedAs (UnitTest, SyncTest) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()
       initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
@@ -68,7 +69,7 @@ class StateSyncSpec
     }
   }
 
-  it should "sync state to different tries when peers provide different set of data each time" in new TestSetup() {
+  it should "sync state to different tries when peers provide different set of data each time" taggedAs (UnitTest, SyncTest) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()
       initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
@@ -80,7 +81,7 @@ class StateSyncSpec
     }
   }
 
-  it should "sync state to different tries when peer provide mixed responses" in new TestSetup() {
+  it should "sync state to different tries when peer provide mixed responses" taggedAs (UnitTest, SyncTest) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()
       initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
@@ -92,7 +93,7 @@ class StateSyncSpec
     }
   }
 
-  it should "restart state sync when requested" in new TestSetup() {
+  it should "restart state sync when requested" taggedAs (UnitTest, SyncTest) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()
       val trieProvider1 = TrieProvider()
@@ -107,7 +108,7 @@ class StateSyncSpec
     }
   }
 
-  it should "start state sync when receiving start signal while bloom filter is loading" in new TestSetup() {
+  it should "start state sync when receiving start signal while bloom filter is loading" taggedAs (UnitTest, SyncTest) in new TestSetup() {
     override def buildBlockChain(): (BlockchainReader, BlockchainImpl) = {
       val storages = getNewStorages.storages
       val blockchainReader = BlockchainReader(storages)

@@ -16,10 +16,11 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.network.KnownNodesManager.KnownNodesManagerConfig
+import com.chipprbots.ethereum.testing.Tags._
 
 class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
 
-  "KnownNodesManager" should "keep a list of nodes and persist changes" in new TestSetup {
+  "KnownNodesManager" should "keep a list of nodes and persist changes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     knownNodesManager.tell(KnownNodesManager.GetKnownNodes, client.ref)
     client.expectMsg(KnownNodesManager.KnownNodes(Set.empty))
 
@@ -48,7 +49,7 @@ class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
     storagesInstance.storages.knownNodesStorage.getKnownNodes() shouldBe Set(uri(2), uri(3))
   }
 
-  it should "respect max nodes limit" in new TestSetup {
+  it should "respect max nodes limit" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     knownNodesManager.tell(KnownNodesManager.GetKnownNodes, client.ref)
     client.expectMsg(KnownNodesManager.KnownNodes(Set.empty))
 

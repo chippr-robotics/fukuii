@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.LongPatience
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.testing.Tags._
 
 class PeerDiscoveryManagerSpec
     extends AnyFlatSpecLike
@@ -103,7 +104,7 @@ class PeerDiscoveryManagerSpec
 
   behavior.of("PeerDiscoveryManager")
 
-  it should "serve no peers if discovery is disabled and known peers are disabled and the manager isn't started" in test {
+  it should "serve no peers if discovery is disabled and known peers are disabled and the manager isn't started" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = false)
@@ -113,7 +114,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "serve the bootstrap nodes if known peers are reused even discovery isn't enabled and the manager isn't started" in test {
+  it should "serve the bootstrap nodes if known peers are reused even discovery isn't enabled and the manager isn't started" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = true, bootstrapNodes = sampleNodes)
@@ -123,7 +124,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "serve the known peers if discovery is enabled and the manager isn't started" in test {
+  it should "serve the known peers if discovery is enabled and the manager isn't started" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
@@ -138,7 +139,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "merge the known peers with the service if it's started" in test {
+  it should "merge the known peers with the service if it's started" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
@@ -169,7 +170,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "keep serving the known peers if the service fails to start" in test {
+  it should "keep serving the known peers if the service fails to start" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
@@ -197,7 +198,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "stop using the service after it is stopped" in test {
+  it should "stop using the service after it is stopped" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)
@@ -230,7 +231,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "propagate any error from the service to the caller" in test {
+  it should "propagate any error from the service to the caller" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = false)
@@ -254,7 +255,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "do lookups in the background as it's asked for random nodes" in test {
+  it should "do lookups taggedAs (UnitTest, NetworkTest) in the background as it's asked for random nodes" in test {
     new Fixture {
       val bufferCapacity = 3
       val randomNodes: Set[Node] = sampleNodes.take(2)
@@ -293,7 +294,7 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "not send any random node if discovery isn't started" in test {
+  it should "not send any random node if discovery isn't started" taggedAs (UnitTest, NetworkTest) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(reuseKnownNodes = true)

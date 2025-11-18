@@ -86,27 +86,27 @@ class LegacyTransactionSpec extends AnyFlatSpec with Matchers {
     signature = ByteString(Hex.decode("57db8998114fae3c337e99dbd8573d4085691880f4576c6c1f6c5bbfe67d6cf0"))
   )
 
-  it should "not recover sender public key for new sign encoding schema if there is no chain_id in signed data" in {
+  it should "not recover sender public key for new sign encoding schema if there is no chain_id taggedAs (UnitTest, NetworkTest) in signed data" in {
     SignedTransaction.getSender(invalidTransactionSignatureNewSchema) shouldNot be(Some(address))
   }
 
-  it should "recover sender address" in {
+  it should "recover sender address" taggedAs (UnitTest, NetworkTest) in {
     SignedTransaction.getSender(validTransactionSignatureOldSchema) shouldEqual Some(address)
   }
 
-  it should "recover sender for new sign encoding schema if there is chain_id in signed data" in {
+  it should "recover sender for new sign encoding schema if there is chain_id taggedAs (UnitTest, NetworkTest) in signed data" in {
     SignedTransaction.getSender(validSignedTransactionForNewSigningScheme) shouldBe Some(addreesForNewSigningScheme)
   }
 
-  it should "recover false sender address for invalid transaction" in {
+  it should "recover false sender address for invalid transaction" taggedAs (UnitTest, NetworkTest) in {
     SignedTransaction.getSender(invalidStx) shouldNot be(Some(address))
   }
 
-  it should "not recover a sender address for transaction with invalid point sign" in {
+  it should "not recover a sender address for transaction with invalid point sign" taggedAs (UnitTest, NetworkTest) in {
     SignedTransaction.getSender(stxWithInvalidPointSign) shouldBe None
   }
 
-  it should "recover the correct sender for tx in block 46147" in {
+  it should "recover the correct sender for tx taggedAs (UnitTest, NetworkTest) in block 46147" in {
     val stx: SignedTransaction = SignedTransaction(
       tx = LegacyTransaction(
         nonce = BigInt(0),

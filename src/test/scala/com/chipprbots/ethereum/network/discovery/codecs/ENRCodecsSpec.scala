@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.testing.Tags._
 
 class ENRCodecsSpec extends AnyFlatSpec with Matchers {
 
@@ -58,14 +59,14 @@ class ENRCodecsSpec extends AnyFlatSpec with Matchers {
     hex"765f"
   )
 
-  it should "encode the test ENR RLP to the expected bytes" in {
+  it should "encode the test ENR RLP to the expected bytes" taggedAs (UnitTest, NetworkTest) in {
     // https://github.com/ethereum/devp2p/blob/master/enr.md#text-encoding
     val enrBytes = ByteVector.fromBase64(enrString.stripPrefix("enr:"), scodec.bits.Bases.Alphabets.Base64Url).get
     // Check that the RLP really serializes to that string representation.
     ByteVector(rlp.encode(enrRLP)) shouldBe enrBytes
   }
 
-  it should "encode a Node to the expected RLP structure" in {
+  it should "encode a Node to the expected RLP structure" taggedAs (UnitTest, NetworkTest) in {
     // Construct a Node which should give us the same results.
     // Unfortunately there's no option to omit the TCP port from it :(
     val node = Node(
@@ -116,7 +117,7 @@ class ENRCodecsSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "decode the address from the example ENR" in {
+  it should "decode the address from the example ENR" taggedAs (UnitTest, NetworkTest) in {
     // We need the TCP port, so let's inject one.
     val enrRLPWithTCP = enrRLP ++ RLPList("tcp", hex"7660")
     val enr = RLPDecoder.decode[EthereumNodeRecord](enrRLPWithTCP)
@@ -131,19 +132,19 @@ class ENRCodecsSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "verify the signature of the example ENR" in {
+  it should "verify the signature of the example ENR" taggedAs (UnitTest, NetworkTest) in {
     val publicKey = sigalg.toPublicKey(privateKey)
     val enr = RLPDecoder.decode[EthereumNodeRecord](enrRLP)
     EthereumNodeRecord.validateSignature(enr, publicKey).require shouldBe true
   }
 
-  it should "verify that the node ID in the example is the hash of the public key" in {
+  it should "verify that the node ID taggedAs (UnitTest, NetworkTest) in the example is the hash of the public key" in {
     // This is what we use in Kademlia, but the node ID in the wire protocol
     // should be the 64 byte public key, at least I thought so based on the spec.
     Keccak256(publicKey.value) shouldBe nodeId
   }
 
-  it should "handle arbitrary key-value pairs" in {
+  it should "handle arbitrary key-value pairs" taggedAs (UnitTest, NetworkTest) in {
     implicit def `BitVector => Array[Byte]`(b: ByteVector): Array[Byte] = b.toArray
 
     // This is a record returned by one of the nodes on the mordor testnet.

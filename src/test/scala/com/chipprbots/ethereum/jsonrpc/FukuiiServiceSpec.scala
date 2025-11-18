@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTr
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.testing.Tags._
 
 class FukuiiServiceSpec
     extends TestKit(ActorSystem("FukuiiServiceSpec"))

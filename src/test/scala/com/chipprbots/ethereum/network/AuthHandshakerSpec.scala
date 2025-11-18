@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.network.rlpx.AuthResponseMessage
 import com.chipprbots.ethereum.network.rlpx.Secrets
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class AuthHandshakerSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
 
@@ -88,7 +89,7 @@ class AuthHandshakerSpec extends AnyFlatSpec with Matchers with SecureRandomBuil
 
   val nonce: ByteString = ByteString(Array.fill[Byte](AuthHandshaker.NonceSize)(1.toByte))
 
-  "AuthHandshaker" should "handle init response" in {
+  "AuthHandshaker" should "handle init response" taggedAs (UnitTest, NetworkTest) in {
     val (_, authHandshaker) = AuthHandshaker(nodeKey, nonce, ephemeralKey, secureRandom).initiate(remoteUri)
 
     val response = AuthResponseMessage(
@@ -116,7 +117,7 @@ class AuthHandshakerSpec extends AnyFlatSpec with Matchers with SecureRandomBuil
     secrets.aes shouldBe expectedAesSecret
   }
 
-  it should "handle both incoming packet and a response" in {
+  it should "handle both incoming packet and a response" taggedAs (UnitTest, NetworkTest) in {
     val thisHandshaker = AuthHandshaker(nodeKey, nonce, ephemeralKey, secureRandom)
     val remoteHandshaker = AuthHandshaker(remoteNodeKey, remoteNonce, remoteEphemeralKey, secureRandom)
 

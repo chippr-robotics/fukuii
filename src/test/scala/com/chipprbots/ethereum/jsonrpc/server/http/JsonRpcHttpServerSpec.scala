@@ -51,7 +51,7 @@ class JsonRpcHttpServerSpec
 
   import JsonRpcHttpServerSpec._
 
-  it should "respond to healthcheck" in new TestSetup {
+  it should "respond to healthcheck" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(IO.pure(HealthcheckResponse(List(HealthcheckResult.ok("peerCount", Some("2"))))))
@@ -68,7 +68,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "respond to healthcheck with an error if one healthcheck fails" in new TestSetup {
+  it should "respond to healthcheck with an error if one healthcheck fails" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(
@@ -95,7 +95,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "respond to buildinfo" in new TestSetup {
+  it should "respond to buildinfo" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val buildInfoRequest = HttpRequest(HttpMethods.GET, uri = "/buildinfo")
 
     buildInfoRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
@@ -111,7 +111,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "pass valid json request to controller" in new TestSetup {
+  it should "pass valid json request to controller" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -128,7 +128,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "pass valid batch json request to controller" in new TestSetup {
+  it should "pass valid batch json request to controller" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -145,7 +145,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return BadRequest when malformed request is received" in new TestSetup {
+  it should "return BadRequest when malformed request is received" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val jsonRequestInvalid = ByteString("""{"jsonrpc":"2.0", "method": "this is not a valid json""")
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequestInvalid))
@@ -155,7 +155,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return a CORS Error" in new TestSetup {
+  it should "return a CORS Error" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val postRequest = HttpRequest(
       HttpMethods.POST,
       uri = "/",
@@ -169,7 +169,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "accept CORS Requests" in new TestSetup {
+  it should "accept CORS Requests" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -187,7 +187,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "accept json request with ip restriction and only one request" in new TestSetup {
+  it should "accept json request with ip restriction and only one request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -204,7 +204,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return too many requests error with ip-restriction enabled and two requests executed in a row" in new TestSetup {
+  it should "return too many requests error with ip-restriction enabled and two requests executed taggedAs (UnitTest, RPCTest) in a row" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -224,7 +224,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return method not allowed error for batch request with ip-restriction enabled" in new TestSetup {
+  it should "return method not allowed error for batch request with ip-restriction enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -240,7 +240,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "accept json request after rejected request with ip-restriction enabled once time has passed" in new TestSetup {
+  it should "accept json request after rejected request with ip-restriction enabled once time has passed" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -271,7 +271,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "accept json requests from different IPs with ip-restriction enabled" in new TestSetup {
+  it should "accept json requests from different IPs with ip-restriction enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -304,7 +304,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return status code OK when throw LogicError" in new TestSetup {
+  it should "return status code OK when throw LogicError" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val jsonRpcError = JsonRpcError.LogicError("Faucet error: Connection not established")
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -331,7 +331,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return status code BadRequest when request invalid is received" in new TestSetup {
+  it should "return status code BadRequest when request invalid is received" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
@@ -363,7 +363,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return status code BadRequest when parser request failure" in new TestSetup {
+  it should "return status code BadRequest when parser request failure" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
@@ -391,7 +391,7 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return status code BadRequest when the request has invalid params" in new TestSetup {
+  it should "return status code BadRequest when the request has invalid params" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val error = JsonRpcError.InvalidParams()
     (mockJsonRpcController.handleRequest _)
       .expects(*)

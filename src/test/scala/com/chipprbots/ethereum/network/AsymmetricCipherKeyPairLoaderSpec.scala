@@ -45,7 +45,7 @@ class AsymmetricCipherKeyPairLoaderSpec extends AnyFlatSpec with Matchers with S
     equalPrivateKey && equalPublicKey
   }
 
-  it should "correctly save the AsymmetricCipherKeyPairLoader" in {
+  it should "correctly save the AsymmetricCipherKeyPairLoader" taggedAs (UnitTest, NetworkTest) in {
     withFilePath { path =>
       // Create key pair
       val newKeyPair = network.loadAsymmetricCipherKeyPair(path, secureRandom)
