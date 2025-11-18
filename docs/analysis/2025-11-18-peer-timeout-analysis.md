@@ -1,6 +1,28 @@
 
 # Peer Connection Timeout Analysis - November 18, 2025
 
+> **⚠️ IMPORTANT NOTICE - DOCUMENT STATUS CORRECTION**  
+> **Date**: 2025-11-18 (Updated)
+> 
+> This document references a `fork-id-report-latest-when-unsynced` feature and implementation that **does not exist** in the current codebase (v0.1.4). The analysis below appears to be either:
+> 1. Based on a development/test branch that was never merged
+> 2. Written speculatively about a planned feature
+> 3. Describing a configuration that was later removed
+> 
+> **Current Reality (v0.1.4)**:
+> - The `fork-id-report-latest-when-unsynced` configuration option does NOT exist in `etc-chain.conf`
+> - The `ForkId.create()` method does NOT have the special handling described in this document
+> - Nodes at block 0 correctly report `ForkId(0xfc64ec04, Some(1150000))` per EIP-2124
+> - The ForkId mismatch issue (0x10 disconnect) remains **unresolved** in v0.1.4
+> 
+> For accurate current status and workarounds, see:
+> - [BLOCK_SYNC_TROUBLESHOOTING.md](../troubleshooting/BLOCK_SYNC_TROUBLESHOOTING.md)
+> - [sync-process-log-analysis.md](sync-process-log-analysis.md) (updated 2025-11-18)
+> 
+> The analysis below is preserved for historical context but should be read with this correction in mind.
+
+---
+
 **Date**: 2025-11-18  
 **Log Duration**: ~78 seconds (15:49:55 - 15:51:13)  
 **Node**: test-fukuii (Test/Development environment)  
