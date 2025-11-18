@@ -4,7 +4,7 @@ This directory contains Dockerfiles for building and running Fukuii Ethereum Cli
 
 ## Kong API Gateway
 
-For production deployments with load balancing, authentication, and monitoring, see the [Kong API Gateway setup](kong/README.md) which provides:
+For production deployments with load balancing, authentication, and monitoring, see the [Kong API Gateway setup](kong.md) which provides:
 
 - **API Gateway**: Kong Gateway for routing and managing all traffic
 - **High Availability**: Load balancing across multiple Fukuii instances
@@ -14,7 +14,7 @@ For production deployments with load balancing, authentication, and monitoring, 
 
 Quick start: `cd kong && ./setup.sh`
 
-Full documentation: [kong/README.md](kong/README.md)
+Full documentation: [kong.md](kong.md)
 
 ## Container Registries
 

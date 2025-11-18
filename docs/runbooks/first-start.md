@@ -102,7 +102,7 @@ docker run -d \
 docker logs -f fukuii
 ```
 
-For more Docker options, see [docker/README.md](../../docker/README.md).
+For more Docker options, see [Docker Documentation](../deployment/docker.md).
 
 ### Method 2: GitHub Codespaces (Recommended for Development)
 

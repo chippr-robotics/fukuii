@@ -379,5 +379,5 @@ sbt "IntegrationTest / testOnly *E2EHandshakeSpec"
 
 - [E2E Handshake Spec](src/it/scala/com/chipprbots/ethereum/network/E2EHandshakeSpec.scala)
 - [Test Tags](src/test/scala/com/chipprbots/ethereum/testing/Tags.scala)
-- [Docker Test Network README](docker/test-network/README.md)
+- [Docker Test Network README](../deployment/test-network.md)
 - [Network Configuration](src/universal/conf/base.conf)
