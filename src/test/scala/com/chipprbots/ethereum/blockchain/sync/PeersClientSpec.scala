@@ -11,6 +11,8 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableFor3
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.testing.Tags._
+
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
@@ -23,7 +25,10 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
 
   import Peers._
 
-  "PeerClient" should "determine the best peer based on its latest checkpoint number and total difficulty" in {
+  "PeerClient" should "determine the best peer based on its latest checkpoint number and total difficulty" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val table: TableFor3[Map[PeerId, PeerWithInfo], Option[Peer], String] =
       Table[Map[PeerId, PeerWithInfo], Option[Peer], String](
         ("PeerInfo map", "Expected best peer", "Scenario info (selected peer)"),

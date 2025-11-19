@@ -15,6 +15,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Timeouts
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -39,7 +40,7 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfigurat
 
 class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
 
-  it should "return Receipts for block hashes" in new TestSetup {
+  it should "return Receipts for block hashes" taggedAs (UnitTest, SyncTest) in new TestSetup {
     peerEventBus.expectMsg(
       Subscribe(
         MessageClassifier(
@@ -69,7 +70,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(Receipts(receipts), peerId))
   }
 
-  it should "return BlockBodies for block hashes" in new TestSetup {
+  it should "return BlockBodies for block hashes" taggedAs (UnitTest, SyncTest) in new TestSetup {
     // given
     val blockBodiesHashes: Seq[ByteString] = Seq(
       ByteString(Hex.decode("a218e2c611f21232d857e3c8cecdcdf1f65f25a4477f98f6f47e4063807f2308")),
@@ -90,7 +91,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockBodies(blockBodies), peerId))
   }
 
-  it should "return block headers by block number" in new TestSetup {
+  it should "return block headers by block number" taggedAs (UnitTest, SyncTest) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 4)
@@ -109,7 +110,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
-  it should "return block headers by block number when response is shorter then what was requested" in new TestSetup {
+  it should "return block headers by block number when response is shorter then what was requested" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 4)
@@ -126,7 +130,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
-  it should "return block headers by block number in reverse order" in new TestSetup {
+  it should "return block headers by block number in reverse order" taggedAs (UnitTest, SyncTest) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 2)
@@ -144,7 +148,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
-  it should "return block headers by block hash" in new TestSetup {
+  it should "return block headers by block hash" taggedAs (UnitTest, SyncTest) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 4)
@@ -163,7 +167,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
-  it should "return block headers by block hash when skipping headers" in new TestSetup {
+  it should "return block headers by block hash when skipping headers" taggedAs (UnitTest, SyncTest) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 5)
@@ -186,7 +190,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
-  it should "return block headers in reverse when there are skipped blocks" in new TestSetup {
+  it should "return block headers in reverse when there are skipped blocks" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 1)
@@ -203,7 +210,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
-  it should "return block headers in reverse when there are skipped blocks and we are asking for blocks before genesis" in new TestSetup {
+  it should "return block headers in reverse when there are skipped blocks and we are asking for blocks before genesis" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 3)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 1)
@@ -220,7 +230,10 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(BlockHeaders(Seq(firstHeader, secondHeader)), peerId))
   }
 
-  it should "return block headers in reverse when there are skipped blocks ending at genesis" in new TestSetup {
+  it should "return block headers in reverse when there are skipped blocks ending at genesis" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = 4)
     val secondHeader: BlockHeader = baseBlockHeader.copy(number = 2)
@@ -242,7 +255,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "return evm code for hash" in new TestSetup {
+  it should "return evm code for hash" taggedAs (UnitTest, SyncTest) in new TestSetup {
     // given
     val fakeEvmCode: ByteString = ByteString(Hex.decode("ffddaaffddaaffddaaffddaaffddaa"))
     val evmCodeHash: ByteString = ByteString(crypto.kec256(fakeEvmCode.toArray[Byte]))
@@ -256,7 +269,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     etcPeerManager.expectMsg(EtcPeerManagerActor.SendMessage(NodeData(Seq(fakeEvmCode)), peerId))
   }
 
-  it should "return mptNode for hash" in new TestSetup {
+  it should "return mptNode for hash" taggedAs (UnitTest, SyncTest) in new TestSetup {
     // given
     val exampleNibbles: ByteString = ByteString(HexPrefix.bytesToNibbles(Hex.decode("ffddaa")))
     val exampleHash: ByteString = ByteString(Hex.decode("ab" * 32))

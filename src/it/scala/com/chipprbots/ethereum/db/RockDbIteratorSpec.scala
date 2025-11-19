@@ -24,6 +24,8 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.NodeStorage
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matchers {
   type Fixture = RocksDbDataSource
 
@@ -47,7 +49,7 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
       .compile
       .drain
 
-  it should "cancel ongoing iteration" in testCaseT { db =>
+  it should "cancel ongoing iteration" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in testCaseT { db =>
     val largeNum = 1000000
     val finishMark = 20000
     for {
@@ -75,7 +77,7 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
     } yield assert(finalCounter < largeNum)
   }
 
-  it should "read all key values in db" in testCaseT { db =>
+  it should "read all key values in db" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in testCaseT { db =>
     val largeNum = 100000
     for {
       counter <- Ref.of[IO, Int](0)
@@ -92,7 +94,11 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
     } yield assert(finalCounter == largeNum)
   }
 
-  it should "iterate over keys and values from different namespaces" in testCaseT { db =>
+  it should "iterate over keys and values from different namespaces" taggedAs (
+    IntegrationTest,
+    DatabaseTest,
+    SlowTest
+  ) in testCaseT { db =>
     val codeStorage = new EvmCodeStorage(db)
     val codeKeyValues = (1 to 10).map(i => (ByteString(i.toByte), ByteString(i.toByte))).toList
 
@@ -113,7 +119,7 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
     }
   }
 
-  it should "iterate over keys and values " in testCaseT { db =>
+  it should "iterate over keys and values " taggedAs (IntegrationTest, DatabaseTest, SlowTest) in testCaseT { db =>
     val keyValues = (1 to 100).map(i => (ByteString(i.toByte), ByteString(i.toByte))).toList
     for {
       _ <- IO(
@@ -131,7 +137,11 @@ class RockDbIteratorSpec extends FlatSpecBase with ResourceFixtures with Matcher
     }
   }
 
-  it should "return empty list when iterating empty db" in testCaseT { db =>
+  it should "return empty list when iterating empty db" taggedAs (
+    IntegrationTest,
+    DatabaseTest,
+    SlowTest
+  ) in testCaseT { db =>
     for {
       elems <- db.iterate().compile.toList
     } yield assert(elems.isEmpty)

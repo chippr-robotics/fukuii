@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.ResourceFixtures
 import com.chipprbots.ethereum.WordSpecBase
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -60,6 +61,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import org.apache.pekko.actor.ActorRef
@@ -97,27 +100,29 @@ class RegularSyncSpec
 
   "Regular Sync" when {
     "initializing" should {
-      "subscribe for new blocks, new hashes and new block headers" in sync(new Fixture(testSystem) {
-        regularSync ! SyncProtocol.Start
+      "subscribe for new blocks, new hashes and new block headers" taggedAs (UnitTest, SyncTest) in sync(
+        new Fixture(testSystem) {
+          regularSync ! SyncProtocol.Start
 
-        peerEventBus.expectMsg(
-          PeerEventBusActor.Subscribe(
-            MessageClassifier(
-              Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode),
-              PeerSelector.AllPeers
+          peerEventBus.expectMsg(
+            PeerEventBusActor.Subscribe(
+              MessageClassifier(
+                Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode),
+                PeerSelector.AllPeers
+              )
             )
           )
-        )
-      })
+        }
+      )
 
-      "subscribe to handshaked peers list" in sync(new Fixture(testSystem) {
+      "subscribe to handshaked peers list" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync // unlazy
         etcPeerManager.expectMsg(EtcPeerManagerActor.GetHandshakedPeers)
       })
     }
 
     "fetching blocks" should {
-      "fetch headers and bodies concurrently" in sync(new Fixture(testSystem) {
+      "fetch headers and bodies concurrently" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
@@ -134,7 +139,7 @@ class RegularSyncSpec
         )
       })
 
-      "blacklist peer which caused failed request" in sync(new Fixture(testSystem) {
+      "blacklist peer which caused failed request" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
         peersClient.expectMsgType[PeersClient.Request[GetBlockHeaders]]
@@ -146,7 +151,10 @@ class RegularSyncSpec
         )
       })
 
-      "blacklist peer which returns headers starting from one with higher number than expected" in sync(
+      "blacklist peer which returns headers starting from one with higher number than expected" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
         new Fixture(testSystem) {
           var blockFetcher: ActorRef = _
 
@@ -319,12 +327,27 @@ class RegularSyncSpec
           class BranchResolutionAutoPilot(didResponseWithNewBranch: Boolean, blocks: List[Block])
               extends PeersClientAutoPilot(blocks) {
             override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+              // Handle ETH62 GetBlockHeaders
               case PeersClient.Request(GetBlockHeaders(Left(nr), maxHeaders, _, _), _, _)
                   if nr >= alternativeBranch.numberAtUnsafe(syncConfig.blocksBatchSize) && !didResponseWithNewBranch =>
                 val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
                 sender ! PeersClient.Response(defaultPeer, BlockHeaders(responseHeaders))
                 Some(new BranchResolutionAutoPilot(true, alternativeBlocks))
+              // Handle ETH66 GetBlockHeaders
+              case PeersClient.Request(ETH66GetBlockHeaders(_, Left(nr), maxHeaders, _, _), _, _)
+                  if nr >= alternativeBranch.numberAtUnsafe(syncConfig.blocksBatchSize) && !didResponseWithNewBranch =>
+                val responseHeaders = alternativeBranch.headers.filter(_.number >= nr).take(maxHeaders.toInt)
+                sender ! PeersClient.Response(defaultPeer, BlockHeaders(responseHeaders))
+                Some(new BranchResolutionAutoPilot(true, alternativeBlocks))
+              // Handle ETH62 GetBlockBodies
               case PeersClient.Request(GetBlockBodies(hashes), _, _)
+                  if !hashes.toSet.subsetOf(blocks.hashes.toSet) &&
+                    hashes.toSet.subsetOf(testBlocks.hashes.toSet) =>
+                val matchingBodies = hashes.flatMap(hash => testBlocks.find(_.hash == hash)).map(_.body)
+                sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
+                None
+              // Handle ETH66 GetBlockBodies
+              case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _)
                   if !hashes.toSet.subsetOf(blocks.hashes.toSet) &&
                     hashes.toSet.subsetOf(testBlocks.hashes.toSet) =>
                 val matchingBodies = hashes.flatMap(hash => testBlocks.find(_.hash == hash)).map(_.body)
@@ -587,7 +610,7 @@ class RegularSyncSpec
         blockFetcher !
           MessageFromPeer(NewBlockHashes(List(BlockHash(newBlock.hash, newBlock.number))), defaultPeer.id)
 
-        peersClient.expectMsgPF() { case PeersClient.Request(GetBlockHeaders(_, _, _, _), _, _) =>
+        peersClient.expectMsgPF() { case PeersClient.Request(ETH66GetBlockHeaders(_, _, _, _, _), _, _) =>
           true
         }
       })
@@ -609,9 +632,11 @@ class RegularSyncSpec
 
         awaitCond(didTryToImportBlock(testBlocks.head))
         regularSync ! SyncProtocol.MinedBlock(minedBlock)
-        headPromise.success(BlockImportedToTop(Nil))
-        Thread.sleep(remainingOrDefault.toMillis)
+        // Give RegularSync time to process the MinedBlock message while still importing
+        Thread.sleep(remainingOrDefault.toMillis / 2)
         didTryToImportBlock(minedBlock) shouldBe false
+        // Clean up by completing the promise
+        headPromise.success(BlockImportedToTop(Nil))
       })
 
       "import when on top" in sync(new OnTopFixture(testSystem) {

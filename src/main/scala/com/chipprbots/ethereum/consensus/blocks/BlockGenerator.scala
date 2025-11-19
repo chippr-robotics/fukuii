@@ -7,12 +7,13 @@ import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** We use a `BlockGenerator` to create the next block. In a PoW setting, this is what a miner typically does. In
-  * general, a [[BlockGenerator]] depends on and is provided by the [[Mining]].
+  * general, a [[BlockGenerator]] depends on and is provided by the [[com.chipprbots.ethereum.consensus.mining.Mining]].
   *
   * @note
   *   This is generally a stateful object.
   * @see
-  *   [[Mining#blockGenerator]], [[com.chipprbots.ethereum.ledger.BlockPreparator BlockPreparator]]
+  *   [[com.chipprbots.ethereum.consensus.mining.Mining.blockGenerator]],
+  *   [[com.chipprbots.ethereum.ledger.BlockPreparator BlockPreparator]]
   */
 trait BlockGenerator {
 

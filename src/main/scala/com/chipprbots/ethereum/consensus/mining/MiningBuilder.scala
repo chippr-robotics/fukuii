@@ -18,7 +18,7 @@ trait MiningBuilder {
   def mining: Mining
 }
 
-/** A mining builder is responsible to instantiate the consensus protocol. This is done dynamically when Mantis boots,
+/** A mining builder is responsible to instantiate the consensus protocol. This is done dynamically when Fukuii boots,
   * based on its configuration.
   *
   * @see
@@ -33,7 +33,7 @@ trait StdMiningBuilder extends MiningBuilder {
     with NodeKeyBuilder
     with Logger =>
 
-  private lazy val mantisConfig = Config.config
+  private lazy val fukuiiConfig = Config.config
 
   private def newConfig[C <: AnyRef](c: C): FullMiningConfig[C] =
     FullMiningConfig(miningConfig, c)
@@ -41,7 +41,7 @@ trait StdMiningBuilder extends MiningBuilder {
   // TODO [ETCM-397] refactor configs to avoid possibility of running mocked or
   // restricted-pow mining on real network like ETC or Mordor
   protected def buildPoWMining(): PoWMining = {
-    val specificConfig = EthashConfig(mantisConfig)
+    val specificConfig = EthashConfig(fukuiiConfig)
 
     val fullConfig = newConfig(specificConfig)
 

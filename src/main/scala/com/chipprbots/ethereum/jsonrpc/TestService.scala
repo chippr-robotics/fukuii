@@ -189,7 +189,7 @@ class TestService(
 
     // remove current genesis (Try because it may not exist)
     Try(blockchain.removeBlock(blockchainReader.genesisHeader.hash))
-    // TODO clear the storage ? When relaunching some tests on the same running test mantis client,
+    // TODO clear the storage ? When relaunching some tests on the same running test fukuii client,
     // we end up with duplicate blocks because they are still present in the storage layer
     // for example: bcMultiChainTest/ChainAtoChainB_BlockHash_Istanbul
 
@@ -419,7 +419,7 @@ class TestService(
     * the next key hash if any key left in the state, or 0x00 otherwise.
     *
     * Normally, this RPC method is supposed to also be able to look up the state after after transaction _txIndex is
-    * executed. This is currently not supported in mantis.
+    * executed. This is currently not supported in fukuii.
     * @see
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
     */

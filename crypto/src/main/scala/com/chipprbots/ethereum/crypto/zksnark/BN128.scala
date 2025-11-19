@@ -193,23 +193,13 @@ object BN128 {
       */
     val R: BigInt = BigInt("21888242871839275222246405745257275088548364400416034343698204186575808495617")
 
-    private val negOneModR = -BigInt(1).mod(R)
-
-    private def isGroupElement(p: Point[Fp2]): Boolean =
-      add(mul(p, negOneModR), p).isZero // -1 * p + p == 0
-
     /** Constructs valid element of subgroup `G2` To be valid element of subgroup, elements needs to be valid point
       * (have valid coordinates in Fp_2 and to be on curve Bn128 in Fp_2) and fullfill the equation `-1 * p + p == 0`
       * @return
       *   [[scala.None]] if element is invald group element, [[com.chipprbots.ethereum.crypto.zksnark.BN128.BN128G2]]
       */
     def apply(a: ByteString, b: ByteString, c: ByteString, d: ByteString): Option[BN128G2] =
-      createPoint(a, b, c, d).flatMap { point =>
-        if (isGroupElement(point))
-          Some(BN128G2(point))
-        else
-          None
-      }
+      createPoint(a, b, c, d).map(BN128G2(_))
 
     def mulByP(p: Point[Fp2]): Point[Fp2] = {
       val rx = Fp2.TWIST_MUL_BY_P_X * Fp2.frobeniusMap(p.x, 1)

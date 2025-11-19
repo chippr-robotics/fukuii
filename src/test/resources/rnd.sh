@@ -1,5 +1,5 @@
-# Simple script to randomly kill running mantis instance
-# Just copy it to unzipped mantis cli dir and call ./rnd.sh
+# Simple script to randomly kill running fukuii instance
+# Just copy it to unzipped fukuii cli dir and call ./rnd.sh
 
 signal=KILL
 
@@ -13,7 +13,7 @@ sleep_some () {
 
 while true; do
     # Note: command launched in background:
-    bin/mantis & 
+    bin/fukuii & 
 
     # Save PID of command just launched:
     last_pid=$!
@@ -22,7 +22,7 @@ while true; do
     sleep_a_while
 
     # See if the command is still running, and kill it and sleep more if it is:
-    if jps| grep 'mantis'; then
+    if jps| grep 'fukuii'; then
         kill -$signal $last_pid 2> /dev/null
         sleep_some
     fi

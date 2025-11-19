@@ -52,7 +52,7 @@ object Fp {
     }
 
     override def neg(a: Fp): Fp = Fp {
-      (-a.inner).mod(P)
+      (P - a.inner).mod(P)
     }
 
     override def isValid(a: Fp): Boolean =

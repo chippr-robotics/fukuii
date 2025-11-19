@@ -173,7 +173,7 @@ abstract class BlockGeneratorSkeleton(
   /*
         Returns the same gas limit as the parent block
 
-        In Mantis only testnets (and without this changed), this means that all blocks will have the same gasLimit as
+        In Fukuii only testnets (and without this changed), this means that all blocks will have the same gasLimit as
         the genesis block
    */
   protected def calculateGasLimit(parentGas: BigInt): BigInt = parentGas

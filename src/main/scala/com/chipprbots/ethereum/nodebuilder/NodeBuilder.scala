@@ -7,6 +7,8 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.util.ByteString
 
+import com.typesafe.config.ConfigFactory
+
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits._
@@ -99,7 +101,7 @@ trait AsyncConfigBuilder {
 }
 
 trait ActorSystemBuilder {
-  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system")
+  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system", ConfigFactory.load())
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {
@@ -136,7 +138,7 @@ trait PeerDiscoveryManagerBuilder {
     with DiscoveryServiceBuilder
     with StorageBuilder =>
 
-  implicit val ioRuntime: IORuntime = IORuntime.global
+  implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
   lazy val peerDiscoveryManager: ActorRef = system.actorOf(
     PeerDiscoveryManager.props(
@@ -575,10 +577,10 @@ trait CheckpointingServiceBuilder {
     )
 }
 
-trait MantisServiceBuilder {
+trait FukuiiServiceBuilder {
   self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder =>
 
-  lazy val mantisService = new MantisService(transactionHistoryService, jsonRpcConfig)
+  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 }
 
 trait KeyStoreBuilder {
@@ -592,7 +594,7 @@ trait ApisBuilder extends ApisBase {
     val Web3 = "web3"
     val Net = "net"
     val Personal = "personal"
-    val Mantis = "mantis"
+    val Fukuii = "fukuii"
     val Debug = "debug"
     val Rpc = "rpc"
     val Test = "test"
@@ -602,7 +604,7 @@ trait ApisBuilder extends ApisBase {
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Mantis, Debug, Test, Iele, Qa, Checkpointing)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Debug, Test, Iele, Qa, Checkpointing)
 }
 
 trait JSONRpcConfigBuilder {
@@ -627,7 +629,7 @@ trait JSONRpcControllerBuilder {
     with JSONRpcConfigBuilder
     with QaServiceBuilder
     with CheckpointingServiceBuilder
-    with MantisServiceBuilder =>
+    with FukuiiServiceBuilder =>
 
   protected def testService: Option[TestService] = None
 
@@ -646,7 +648,7 @@ trait JSONRpcControllerBuilder {
       debugService,
       qaService,
       checkpointingService,
-      mantisService,
+      fukuiiService,
       ethProofService,
       jsonRpcConfig
     )
@@ -682,8 +684,7 @@ trait JSONRpcHttpServerBuilder {
       jsonRpcController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
-      secureRandom,
-      () => sslContext("mantis.network.rpc.http")
+      () => sslContext("fukuii.network.rpc.http")
     )
 }
 
@@ -776,9 +777,10 @@ trait SyncControllerBuilder {
 trait PortForwardingBuilder {
   self: DiscoveryConfigBuilder =>
 
-  implicit val ioRuntime: IORuntime = IORuntime.global
+  implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
-  private val portForwarding = PortForwarder
+  // protected for testing purposes - allows test fixtures to override with mock implementation
+  protected lazy val portForwarding: IO[IO[Unit]] = PortForwarder
     .openPorts(
       Seq(Config.Network.Server.port),
       Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled)
@@ -787,17 +789,32 @@ trait PortForwardingBuilder {
     .allocated
     .map(_._2)
 
-  // reference to an IO that produces the release IO,
+  // reference to the cleanup IO for the port forwarding resource,
   // memoized to prevent running multiple port forwarders at once
-  private val portForwardingRelease = new AtomicReference(Option.empty[IO[IO[Unit]]])
+  private val portForwardingRelease = new AtomicReference(Option.empty[IO[Unit]])
 
   def startPortForwarding(): Future[Unit] = {
-    portForwardingRelease.compareAndSet(None, Some(portForwarding))
-    portForwardingRelease.get().fold(Future.unit)(_.flatMap(identity).unsafeToFuture()(ioRuntime))
+    // Only allocate the resource if it hasn't been started yet
+    // Use a placeholder to ensure only one thread performs the allocation
+    val placeholder = IO.unit
+    if (portForwardingRelease.compareAndSet(None, Some(placeholder))) {
+      // We won the race - allocate the resource and store the cleanup function
+      portForwarding
+        .flatMap { cleanup =>
+          IO {
+            portForwardingRelease.set(Some(cleanup))
+            ()
+          }
+        }
+        .unsafeToFuture()(ioRuntime)
+    } else {
+      // Resource was already started by another thread
+      Future.unit
+    }
   }
 
   def stopPortForwarding(): Future[Unit] =
-    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.flatten.unsafeToFuture()(ioRuntime))
+    portForwardingRelease.getAndSet(None).fold(Future.unit)(_.unsafeToFuture()(ioRuntime))
 }
 
 trait ShutdownHookBuilder {
@@ -837,11 +854,21 @@ trait GenesisDataLoaderBuilder {
 
 }
 
+trait BootstrapCheckpointLoaderBuilder {
+  self: BlockchainBuilder =>
+
+  lazy val bootstrapCheckpointLoader =
+    new com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader(
+      blockchainReader
+    )
+}
+
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
   * configuration.
   *
   * @see
-  *   [[MiningBuilder MiningBuilder]], [[MiningConfigBuilder ConsensusConfigBuilder]]
+  *   [[com.chipprbots.ethereum.consensus.mining.MiningBuilder MiningBuilder]],
+  *   [[com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder ConsensusConfigBuilder]]
   */
 trait Node
     extends SecureRandomBuilder
@@ -871,7 +898,7 @@ trait Node
     with DebugServiceBuilder
     with QaServiceBuilder
     with CheckpointingServiceBuilder
-    with MantisServiceBuilder
+    with FukuiiServiceBuilder
     with KeyStoreBuilder
     with ApisBuilder
     with JSONRpcConfigBuilder
@@ -883,6 +910,7 @@ trait Node
     with ShutdownHookBuilder
     with Logger
     with GenesisDataLoaderBuilder
+    with BootstrapCheckpointLoaderBuilder
     with BlockchainConfigBuilder
     with VmConfigBuilder
     with PeerEventBusBuilder
@@ -911,5 +939,5 @@ trait Node
     with PortForwardingBuilder
     with BlacklistBuilder {
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
-  implicit override val ioRuntime: IORuntime = IORuntime.global
+  implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 }

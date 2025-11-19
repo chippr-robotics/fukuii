@@ -30,10 +30,11 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.InitialHelloRe
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 
-import org.scalatest.Ignore
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for AuthHandshaker
-@Ignore
+// @Ignore - Un-ignored per issue to identify test failures
 class RLPxConnectionHandlerSpec
     extends TestKit(ActorSystem("RLPxConnectionHandlerSpec_System"))
     with AnyFlatSpecLike
@@ -41,7 +42,7 @@ class RLPxConnectionHandlerSpec
     with Matchers
     with MockFactory {
 
-  it should "write messages send to TCP connection" in new TestSetup {
+  it should "write messages send to TCP connection" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     setupIncomingRLPxConnection()
 
@@ -51,7 +52,7 @@ class RLPxConnectionHandlerSpec
 
   }
 
-  it should "write messages to TCP connection once all previous ACK were received" in new TestSetup {
+  it should "write messages to TCP connection once all previous ACK were received" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
@@ -73,7 +74,7 @@ class RLPxConnectionHandlerSpec
     connection.expectNoMessage()
   }
 
-  it should "accummulate messages and write them when receiving ACKs" in new TestSetup {
+  it should "accummulate messages and write them when receiving ACKs" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
@@ -102,7 +103,7 @@ class RLPxConnectionHandlerSpec
     connection.expectNoMessage()
   }
 
-  it should "close the connection when Ack timeout happens" in new TestSetup {
+  it should "close the connection when Ack timeout happens" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
       .returning(ByteString("ping encoded"))
@@ -123,7 +124,7 @@ class RLPxConnectionHandlerSpec
     )
   }
 
-  it should "ignore timeout of old messages" in new TestSetup {
+  it should "ignore timeout of old messages" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
       .returning(ByteString("ping encoded"))
@@ -150,16 +151,14 @@ class RLPxConnectionHandlerSpec
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
   }
 
-  it should "close the connection if the AuthHandshake init message's MAC is invalid" in new TestSetup {
+  it should "close the connection if the AuthHandshake init message's MAC is invalid" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     // Incomming connection arrives
     rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
     connection.expectMsgClass(classOf[Tcp.Register])
 
     // AuthHandshaker throws exception on initial message
-    (mockHandshaker.handleInitialMessage _).expects(*).onCall((_: ByteString) => throw new Exception("MAC invalid"))
-    (mockHandshaker.handleInitialMessageV4 _).expects(*).onCall { (_: ByteString) =>
-      throw new Exception("MAC invalid")
-    }
+    mockHandshaker.handleInitialMessageHandler = Some(_ => throw new Exception("MAC invalid"))
+    mockHandshaker.handleInitialMessageV4Handler = Some(_ => throw new Exception("MAC invalid"))
 
     val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
     rlpxConnection ! Tcp.Received(data)
@@ -167,24 +166,22 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
-  it should "close the connection if the AuthHandshake response message's MAC is invalid" in new TestSetup {
+  it should "close the connection if the AuthHandshake response message's MAC is invalid" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     // Outgoing connection request arrives
     rlpxConnection ! RLPxConnectionHandler.ConnectTo(uri)
     tcpActorProbe.expectMsg(Tcp.Connect(inetAddress))
 
     // The TCP connection results are handled
     val initPacket = ByteString("Init packet")
-    (mockHandshaker.initiate _).expects(uri).returning(initPacket -> mockHandshaker)
+    mockHandshaker.initiateHandler = Some(_ => initPacket -> mockHandshaker)
 
     tcpActorProbe.reply(Tcp.Connected(inetAddress, inetAddress))
     tcpActorProbe.expectMsg(Tcp.Register(rlpxConnection))
-    tcpActorProbe.expectMsg(Tcp.Write(initPacket))
+    tcpActorProbe.expectMsg(Tcp.Write(initPacket, RLPxConnectionHandler.Ack))
 
     // AuthHandshaker handles the response message (that throws an invalid MAC)
-    (mockHandshaker.handleResponseMessage _).expects(*).onCall((_: ByteString) => throw new Exception("MAC invalid"))
-    (mockHandshaker.handleResponseMessageV4 _).expects(*).onCall { (_: ByteString) =>
-      throw new Exception("MAC invalid")
-    }
+    mockHandshaker.handleResponseMessageHandler = Some(_ => throw new Exception("MAC invalid"))
+    mockHandshaker.handleResponseMessageV4Handler = Some(_ => throw new Exception("MAC invalid"))
 
     val data = ByteString((0 until AuthHandshaker.ResponsePacketLength).map(_.toByte).toArray)
     rlpxConnection ! Tcp.Received(data)
@@ -192,8 +189,32 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
+  it should "handle SendMessage gracefully during shutdown without dead letters" in new TestSetup {
+    // Start setting up connection
+    rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
+    connection.expectMsgClass(classOf[Tcp.Register])
+
+    // AuthHandshaker handles initial message and fails (simulating auth failure scenario)
+    val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
+    
+    // Configure the test double to fail authentication
+    mockHandshaker.handleInitialMessageHandler = Some(_ => throw new Exception("Auth failed"))
+    mockHandshaker.handleInitialMessageV4Handler = Some(_ => throw new Exception("Auth failed"))
+
+    // Send the auth data which will trigger shutdown
+    rlpxConnection ! Tcp.Received(data)
+    
+    // Immediately send a SendMessage during the shutdown window
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    
+    // The actor should gracefully handle the message and terminate without dead letters
+    rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
+    rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
+  }
+
+  // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
+  // Using lazy val for mocks ensures they're created when accessed within MockFactory context.
   trait TestSetup extends SecureRandomBuilder {
-    this: org.scalamock.scalatest.MockFactory =>
 
     // Mock parameters for RLPxConnectionHandler
     val mockMessageDecoder: MessageDecoder = new MessageDecoder {
@@ -201,27 +222,53 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    val mockHandshaker: AuthHandshaker = createStubAuthHandshaker()
-    val connection: TestProbe = TestProbe()
-    val mockMessageCodec: MessageCodec = mock[MessageCodec]
-    val mockHelloExtractor: HelloCodec = mock[HelloCodec]
-    
-    private def createStubAuthHandshaker(): AuthHandshaker = {
-      import java.security.SecureRandom
-      import com.chipprbots.ethereum.crypto.generateKeyPair
-      
-      val sr = new SecureRandom()
-      
-      AuthHandshaker(
-        nodeKey = generateKeyPair(sr),
-        nonce = ByteString.empty,
-        ephemeralKey = generateKeyPair(sr),
-        secureRandom = sr,
-        isInitiator = false,
-        initiatePacketOpt = None,
-        responsePacketOpt = None,
-        remotePubKeyOpt = None
-      )
+    // SCALA 3 MIGRATION: Using configurable test double instead of mock because
+    // AuthHandshaker with Selectable cannot be properly mocked in Scala 3
+    lazy val mockHandshaker: ConfigurableAuthHandshaker = new ConfigurableAuthHandshaker()
+    lazy val connection: TestProbe = TestProbe()
+    lazy val mockMessageCodec: MessageCodec = mock[MessageCodec]
+    lazy val mockHelloExtractor: HelloCodec = mock[HelloCodec]
+
+    // Configurable test double for AuthHandshaker that can be set up for different test scenarios
+    class ConfigurableAuthHandshaker
+        extends AuthHandshaker(
+          nodeKey = ConfigurableAuthHandshaker.generateKeyPairHelper(),
+          nonce = ByteString.empty,
+          ephemeralKey = ConfigurableAuthHandshaker.generateKeyPairHelper(),
+          secureRandom = new java.security.SecureRandom(),
+          isInitiator = false,
+          initiatePacketOpt = None,
+          responsePacketOpt = None,
+          remotePubKeyOpt = None
+        ) {
+      var initiateHandler: Option[URI => (ByteString, AuthHandshaker)] = None
+      var handleInitialMessageHandler: Option[ByteString => (ByteString, AuthHandshakeResult)] = None
+      var handleInitialMessageV4Handler: Option[ByteString => (ByteString, AuthHandshakeResult)] = None
+      var handleResponseMessageHandler: Option[ByteString => AuthHandshakeResult] = None
+      var handleResponseMessageV4Handler: Option[ByteString => AuthHandshakeResult] = None
+
+      override def initiate(uri: URI): (ByteString, AuthHandshaker) =
+        initiateHandler.map(_(uri)).getOrElse(super.initiate(uri))
+
+      override def handleInitialMessage(data: ByteString): (ByteString, AuthHandshakeResult) =
+        handleInitialMessageHandler.map(_(data)).getOrElse(super.handleInitialMessage(data))
+
+      override def handleInitialMessageV4(data: ByteString): (ByteString, AuthHandshakeResult) =
+        handleInitialMessageV4Handler.map(_(data)).getOrElse(super.handleInitialMessageV4(data))
+
+      override def handleResponseMessage(data: ByteString): AuthHandshakeResult =
+        handleResponseMessageHandler.map(_(data)).getOrElse(super.handleResponseMessage(data))
+
+      override def handleResponseMessageV4(data: ByteString): AuthHandshakeResult =
+        handleResponseMessageV4Handler.map(_(data)).getOrElse(super.handleResponseMessageV4(data))
+    }
+
+    object ConfigurableAuthHandshaker {
+      private def generateKeyPairHelper(): AsymmetricCipherKeyPair = {
+        import java.security.SecureRandom
+        import com.chipprbots.ethereum.crypto.generateKeyPair
+        generateKeyPair(new SecureRandom())
+      }
     }
 
     val uri = new URI(
@@ -236,9 +283,9 @@ class RLPxConnectionHandlerSpec
       override val waitForHandshakeTimeout: FiniteDuration = Timeouts.veryLongTimeout
     }
 
-    val tcpActorProbe: TestProbe = TestProbe()
-    val rlpxConnectionParent: TestProbe = TestProbe()
-    val rlpxConnection: TestActorRef[Nothing] = TestActorRef(
+    lazy val tcpActorProbe: TestProbe = TestProbe()
+    lazy val rlpxConnectionParent: TestProbe = TestProbe()
+    lazy val rlpxConnection: TestActorRef[Nothing] = TestActorRef(
       Props(
         new RLPxConnectionHandler(
           protocolVersion :: Nil,
@@ -264,15 +311,24 @@ class RLPxConnectionHandlerSpec
       val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
       val hello = ByteString((1 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
       val response = ByteString("response data")
-      (mockHandshaker.handleInitialMessage _)
-        .expects(data)
-        // MIGRATION: Scala 3 requires explicit type ascription for mock with complex parameterized types
-        // Create a minimal Secrets instance for test purposes
-        .returning((response, AuthHandshakeSuccess(
-          new Secrets(Array.emptyByteArray, Array.emptyByteArray, Array.emptyByteArray, 
-            new org.bouncycastle.crypto.digests.KeccakDigest(256), 
-            new org.bouncycastle.crypto.digests.KeccakDigest(256)), 
-          ByteString())))
+
+      // Configure the test double to return specific responses
+      mockHandshaker.handleInitialMessageHandler = Some { _ =>
+        (
+          response,
+          AuthHandshakeSuccess(
+            new Secrets(
+              Array.emptyByteArray,
+              Array.emptyByteArray,
+              Array.emptyByteArray,
+              new org.bouncycastle.crypto.digests.KeccakDigest(256),
+              new org.bouncycastle.crypto.digests.KeccakDigest(256)
+            ),
+            ByteString()
+          )
+        )
+      }
+
       (mockHelloExtractor.readHello _)
         .expects(ByteString.empty)
         .returning(Some((Hello(5, "", Capability.ETH63 :: Nil, 30303, ByteString("abc")), Seq.empty)))
@@ -281,7 +337,7 @@ class RLPxConnectionHandlerSpec
         .returning(Nil) // For processing of messages after handshaking finishes
 
       rlpxConnection ! Tcp.Received(data)
-      connection.expectMsg(Tcp.Write(response))
+      connection.expectMsg(Tcp.Write(response, RLPxConnectionHandler.Ack))
 
       rlpxConnection ! Tcp.Received(hello)
 

@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.jsonrpc.EthInfoService._
 import com.chipprbots.ethereum.jsonrpc.EthMiningService._
 import com.chipprbots.ethereum.jsonrpc.EthTxService._
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
-import com.chipprbots.ethereum.jsonrpc.MantisService.GetAccountTransactionsRequest
-import com.chipprbots.ethereum.jsonrpc.MantisService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
@@ -44,7 +44,7 @@ case class JsonRpcController(
     debugService: DebugService,
     qaService: QAService,
     checkpointingService: CheckpointingService,
-    mantisService: MantisService,
+    fukuiiService: FukuiiService,
     proofService: ProofService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
@@ -64,14 +64,14 @@ case class JsonRpcController(
   import JsonMethodsImplicits._
   import QAJsonMethodsImplicits._
   import TestJsonMethodsImplicits._
-  import MantisJsonMethodImplicits._
+  import FukuiiJsonMethodImplicits._
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
     Apis.Web3 -> handleWeb3Request,
     Apis.Net -> handleNetRequest,
     Apis.Personal -> handlePersonalRequest,
-    Apis.Mantis -> handleMantisRequest,
+    Apis.Fukuii -> handleFukuiiRequest,
     Apis.Rpc -> handleRpcRequest,
     Apis.Debug -> handleDebugRequest,
     Apis.Test -> handleTestRequest,
@@ -296,9 +296,9 @@ case class JsonRpcController(
       handle[EcRecoverRequest, EcRecoverResponse](personalService.ecRecover, req)
   }
 
-  private def handleMantisRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
-    case req @ JsonRpcRequest(_, "mantis_getAccountTransactions", _, _) =>
-      handle[GetAccountTransactionsRequest, GetAccountTransactionsResponse](mantisService.getAccountTransactions, req)
+  private def handleFukuiiRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "fukuii_getAccountTransactions", _, _) =>
+      handle[GetAccountTransactionsRequest, GetAccountTransactionsResponse](fukuiiService.getAccountTransactions, req)
   }
 
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

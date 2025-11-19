@@ -15,6 +15,7 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.must.Matchers
 
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.fast.DownloaderState
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncResponse
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.NoUsefulDataInResponse
@@ -33,14 +34,17 @@ class SyncStateDownloaderStateSpec
     with BeforeAndAfterAll
     with WithActorSystemShutDown {
 
-  "DownloaderState" should "schedule requests for retrieval" in new TestSetup {
+  "DownloaderState" should "schedule requests for retrieval" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
     assert(newState.nodesToGet.size == potentialNodesHashes.size)
     assert(newState.nonDownloadedNodes.size == potentialNodesHashes.size)
     assert(potentialNodesHashes.forall(h => newState.nodesToGet.contains(h)))
   }
 
-  it should "assign request to peers from already scheduled nodes to a max capacity" in new TestSetup {
+  it should "assign request to peers from already scheduled nodes to a max capacity" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     val perPeerCapacity = 20
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
     val (requests, newState1) = newState.assignTasksToPeers(peers, None, nodesPerPeerCapacity = perPeerCapacity)
@@ -53,7 +57,10 @@ class SyncStateDownloaderStateSpec
     )
   }
 
-  it should "favour already existing requests when assigning tasks with new requests" in new TestSetup {
+  it should "favour already existing requests when assigning tasks with new requests" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     val perPeerCapacity = 20
     val (alreadyExistingTasks, newTasks) = potentialNodesHashes.splitAt(2 * perPeerCapacity)
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(alreadyExistingTasks)
@@ -75,7 +82,7 @@ class SyncStateDownloaderStateSpec
     )
   }
 
-  it should "correctly handle incoming responses" in new TestSetup {
+  it should "correctly handle incoming responses" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val perPeerCapacity = 20
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
     val (requests, newState1) = newState.assignTasksToPeers(peers, None, nodesPerPeerCapacity = perPeerCapacity)
@@ -106,7 +113,7 @@ class SyncStateDownloaderStateSpec
     assert(newState4.activeRequests.isEmpty)
   }
 
-  it should "ignore responses from not requested peers" in new TestSetup {
+  it should "ignore responses from not requested peers" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val perPeerCapacity = 20
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
     val (requests, newState1) = newState.assignTasksToPeers(peers, None, nodesPerPeerCapacity = perPeerCapacity)
@@ -123,7 +130,7 @@ class SyncStateDownloaderStateSpec
     })
   }
 
-  it should "handle empty responses from from peers" in new TestSetup {
+  it should "handle empty responses from from peers" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val perPeerCapacity = 20
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
     val (requests, newState1) = newState.assignTasksToPeers(peers, None, nodesPerPeerCapacity = perPeerCapacity)
@@ -137,7 +144,10 @@ class SyncStateDownloaderStateSpec
     assert(requests(0).nodes.forall(h => newState2.nodesToGet(h).isEmpty))
   }
 
-  it should "handle response where part of data is malformed (bad hashes)" in new TestSetup {
+  it should "handle response where part of data is malformed (bad hashes)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     val perPeerCapacity = 20
     val goodResponseCap: Int = perPeerCapacity / 2
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
@@ -163,7 +173,10 @@ class SyncStateDownloaderStateSpec
     assert(peerRequest.nodes.toList.drop(goodResponseCap).forall(h => newState2.nodesToGet(h).isEmpty))
   }
 
-  it should "handle response when there are spaces between delivered values" in new TestSetup {
+  it should "handle response when there are spaces between delivered values" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
     val values: List[ByteString] = List(ByteString(1), ByteString(2), ByteString(3), ByteString(4), ByteString(5))
     val hashes: List[ByteString] = values.map(kec256)
     val responses: List[SyncResponse] = hashes.zip(values).map(s => SyncResponse(s._1, s._2))
@@ -176,7 +189,7 @@ class SyncStateDownloaderStateSpec
     assert(delivered == List(responses(1), responses(3)))
   }
 
-  it should "handle response when there is larger gap between values" in new TestSetup {
+  it should "handle response when there is larger gap between values" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val values: List[ByteString] = List(ByteString(1), ByteString(2), ByteString(3), ByteString(4), ByteString(5))
     val hashes: List[ByteString] = values.map(kec256)
     val responses: List[SyncResponse] = hashes.zip(values).map(s => SyncResponse(s._1, s._2))
@@ -189,7 +202,7 @@ class SyncStateDownloaderStateSpec
     assert(delivered == List(responses(0), responses(4)))
   }
 
-  it should "handle response when only last value is delivered" in new TestSetup {
+  it should "handle response when only last value is delivered" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val values: List[ByteString] = List(ByteString(1), ByteString(2), ByteString(3), ByteString(4), ByteString(5))
     val hashes: List[ByteString] = values.map(kec256)
     val responses: List[SyncResponse] = hashes.zip(values).map(s => SyncResponse(s._1, s._2))
@@ -202,7 +215,7 @@ class SyncStateDownloaderStateSpec
     assert(delivered == List(responses.last))
   }
 
-  it should "handle response when only first value is delivered" in new TestSetup {
+  it should "handle response when only first value is delivered" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val values: List[ByteString] = List(ByteString(1), ByteString(2), ByteString(3), ByteString(4), ByteString(5))
     val hashes: List[ByteString] = values.map(kec256)
     val responses: List[SyncResponse] = hashes.zip(values).map(s => SyncResponse(s._1, s._2))
@@ -214,7 +227,7 @@ class SyncStateDownloaderStateSpec
     assert(delivered == List(responses.head))
   }
 
-  it should "handle response when only middle values are delivered" in new TestSetup {
+  it should "handle response when only middle values are delivered" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val values: List[ByteString] = List(ByteString(1), ByteString(2), ByteString(3), ByteString(4), ByteString(5))
     val hashes: List[ByteString] = values.map(kec256)
     val responses: List[SyncResponse] = hashes.zip(values).map(s => SyncResponse(s._1, s._2))

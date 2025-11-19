@@ -27,7 +27,7 @@ import ConfigUtils._
 
 object Config {
 
-  val config: TypesafeConfig = ConfigFactory.load().getConfig("mantis")
+  val config: TypesafeConfig = ConfigFactory.load().getConfig("fukuii")
 
   val testmode: Boolean = config.getBoolean("testmode")
 
@@ -239,8 +239,8 @@ object Config {
 
 case class AsyncConfig(askTimeout: Timeout)
 object AsyncConfig {
-  def apply(mantisConfig: TypesafeConfig): AsyncConfig =
-    AsyncConfig(mantisConfig.getConfig("async").getDuration("ask-timeout").toMillis.millis)
+  def apply(fukuiiConfig: TypesafeConfig): AsyncConfig =
+    AsyncConfig(fukuiiConfig.getConfig("async").getDuration("ask-timeout").toMillis.millis)
 }
 
 trait KeyStoreConfig {
@@ -423,10 +423,10 @@ object VmConfig {
   object ExternalConfig {
     val VmTypeIele = "iele"
     val VmTypeKevm = "kevm"
-    val VmTypeMantis = "mantis"
+    val VmTypeFukuii = "fukuii"
     val VmTypeNone = "none"
 
-    val supportedVmTypes: Set[String] = Set(VmTypeIele, VmTypeKevm, VmTypeMantis, VmTypeNone)
+    val supportedVmTypes: Set[String] = Set(VmTypeIele, VmTypeKevm, VmTypeFukuii, VmTypeNone)
   }
 
   case class ExternalConfig(vmType: String, executablePath: Option[String], host: String, port: Int)

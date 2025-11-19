@@ -27,8 +27,9 @@ import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor._
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
-import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
+import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
+
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
@@ -209,7 +210,11 @@ class PeerManagerActor(
     import Disconnect.Reasons._
     reason match {
       case TooManyPeers | AlreadyConnected | ClientQuitting => peerConfiguration.shortBlacklistDuration
-      case _                                                => peerConfiguration.longBlacklistDuration
+      // Use short blacklist for 0x10 (Other) disconnects - these are often due to peer selection
+      // policies (e.g., rejecting nodes at genesis) rather than actual protocol issues.
+      // Peers may be willing to connect later once we've synced past genesis.
+      case Other => peerConfiguration.shortBlacklistDuration
+      case _     => peerConfiguration.longBlacklistDuration
     }
   }
 

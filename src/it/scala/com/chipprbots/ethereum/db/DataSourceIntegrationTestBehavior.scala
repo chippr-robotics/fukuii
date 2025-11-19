@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.db.dataSource.DataSource.Value
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
 import com.chipprbots.ethereum.utils.ByteStringUtils._
 
+import com.chipprbots.ethereum.testing.Tags._
+
 trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with ObjectGenerators {
 
   this: AnyFlatSpec =>
@@ -54,7 +56,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
 
   // scalastyle:off
   def dataSource(createDataSource: => String => DataSource): Unit = {
-    it should "be able to insert keys in separate updates" in {
+    it should "be able to insert keys in separate updates" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -72,7 +74,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to insert keys in a single update" in {
+    it should "be able to insert keys in a single update" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -88,7 +90,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to update keys in separate updates" in {
+    it should "be able to update keys in separate updates" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -107,7 +109,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to update keys in a single update" in {
+    it should "be able to update keys in a single update" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -126,7 +128,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be cleared" in {
+    it should "be cleared" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -143,7 +145,11 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to be closed and then continuing using it" in {
+    it should "be able to be closed and then continuing using it" taggedAs (
+      IntegrationTest,
+      DatabaseTest,
+      SlowTest
+    ) in {
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -161,7 +167,7 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be destroyed" in {
+    it should "be destroyed" taggedAs (IntegrationTest, DatabaseTest, SlowTest) in {
       withDir { path =>
         forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
           val keyList = unFilteredKeyList.take(KeyNumberLimit)
@@ -181,7 +187,11 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to handle inserts to multiple namespaces with the same key" in {
+    it should "be able to handle inserts to multiple namespaces with the same key" taggedAs (
+      IntegrationTest,
+      DatabaseTest,
+      SlowTest
+    ) in {
       val OtherNamespace2: IndexedSeq[Byte] = IndexedSeq[Byte]('h'.toByte)
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>
@@ -206,7 +216,11 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
       }
     }
 
-    it should "be able to handle removals from multiple namespaces with the same key" in {
+    it should "be able to handle removals from multiple namespaces with the same key" taggedAs (
+      IntegrationTest,
+      DatabaseTest,
+      SlowTest
+    ) in {
       val OtherNamespace2: IndexedSeq[Byte] = IndexedSeq[Byte]('h'.toByte)
       forAll(seqByteStringOfNItemsGen(KeySizeWithoutPrefix)) { (unFilteredKeyList: Seq[ByteString]) =>
         withDir { path =>

@@ -18,17 +18,18 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.StateStorage.GenesisDataLoad
 import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
 
 class ReadOnlyNodeStorageSpec extends AnyFlatSpec with Matchers {
 
-  "ReadOnlyNodeStorage" should "not update dataSource" in new TestSetup {
+  "ReadOnlyNodeStorage" should "not update dataSource" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     val readOnlyNodeStorage = archiveStateStorage.getReadOnlyStorage
     readOnlyNodeStorage.updateNodesInStorage(Some(newLeaf), Nil)
     dataSource.storage.size shouldEqual 0
   }
 
-  it should "be able to persist to underlying storage when needed" in new TestSetup {
+  it should "be able to persist to underlying storage when needed" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     val (nodeKey, _) = MptStorage.collapseNode(Some(newLeaf))._2.head
     val readOnlyNodeStorage = archiveStateStorage.getReadOnlyStorage
 

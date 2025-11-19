@@ -6,6 +6,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.keystore.EncryptedKeyJsonCodec
 import com.chipprbots.ethereum.utils.ByteStringUtils
+import com.chipprbots.ethereum.testing.Tags._
 
 class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
 
@@ -13,21 +14,21 @@ class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
   import Fixture._
 
   behavior.of(generatePrivateKeyCommand)
-  it should "generate correct private key" in {
+  it should "generate correct private key" taggedAs (UnitTest) in {
     api.parse(Seq(generatePrivateKeyCommand)) shouldBe a[Right[_, _]]
   }
 
   behavior.of(deriveAddressCommand)
-  it should "derive address from private key" in {
+  it should "derive address from private key" taggedAs (UnitTest) in {
     api.parse(Seq(deriveAddressCommand, privateKey)).value shouldBe address
   }
 
-  it should "return an error when called without private key" in {
+  it should "return an error when called without private key" taggedAs (UnitTest) in {
     api.parse(Seq(deriveAddressCommand)) shouldBe a[Left[_, _]]
   }
 
   behavior.of(generateAllocsCommand)
-  it should "generate correct alloc using private key" in {
+  it should "generate correct alloc using private key" taggedAs (UnitTest) in {
     api
       .parse(
         Seq(
@@ -39,7 +40,7 @@ class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
       .value shouldBe s""""alloc": {$address: { "balance": $requestedBalance }}"""
   }
 
-  it should "generate more than one alloc" in {
+  it should "generate more than one alloc" taggedAs (UnitTest) in {
     api
       .parse(
         Seq(
@@ -52,7 +53,7 @@ class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
       .value shouldBe s""""alloc": {$address: { "balance": $requestedBalance }, $address2: { "balance": $requestedBalance }}"""
   }
 
-  it should "generate allocs using addresses" in {
+  it should "generate allocs using addresses" taggedAs (UnitTest) in {
     api
       .parse(
         Seq(
@@ -65,7 +66,7 @@ class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
       .value shouldBe s""""alloc": {$address: { "balance": $requestedBalance }, $address2: { "balance": $requestedBalance }}"""
   }
 
-  it should "generate allocs using both keys and addresses" in {
+  it should "generate allocs using both keys and addresses" taggedAs (UnitTest) in {
     api
       .parse(
         Seq(
@@ -80,14 +81,14 @@ class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
   }
 
   behavior.of(generateKeyPairsCommand)
-  it should "generate one key pair when passed no args" in {
+  it should "generate one key pair when passed no args" taggedAs (UnitTest) in {
     val result = api.parse(Seq(generateKeyPairsCommand))
     result shouldBe a[Right[_, _]]
     val stringSplit = result.toOption.get.split("\\n\\n")
     stringSplit.length shouldEqual 1
   }
 
-  it should "generate multiple key-pair when passed correct args" in {
+  it should "generate multiple key-pair when passed correct args" taggedAs (UnitTest) in {
     val numOfKeys = "5"
     val numOfKeysAsInt = numOfKeys.toInt
     val result = api.parse(Seq(generateKeyPairsCommand, numOfKeys))
@@ -97,7 +98,7 @@ class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
   }
 
   behavior.of(encryptKeyCommand)
-  it should "encrypt private key (without passphrase)" in {
+  it should "encrypt private key (without passphrase)" taggedAs (UnitTest) in {
     val json = api.parse(Seq(encryptKeyCommand, privateKey)).value
 
     val decrypted = (for {
@@ -108,7 +109,7 @@ class CliCommandsSpec extends AnyFlatSpec with Matchers with EitherValues {
     ByteStringUtils.hash2string(decrypted) shouldBe privateKey
   }
 
-  it should "encrypt private key (with passphrase)" in {
+  it should "encrypt private key (with passphrase)" taggedAs (UnitTest) in {
     val pass = "pass"
     val json = api.parse(Seq(encryptKeyCommand, argument(passphraseOption, Some(pass)), privateKey)).value
 

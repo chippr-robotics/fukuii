@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object ETH61 {
 
@@ -55,7 +56,7 @@ object ETH61 {
     implicit class BlockHashesFromNumberDec(val bytes: Array[Byte]) extends AnyVal {
       def toBlockHashesFromNumber: BlockHashesFromNumber = rawDecode(bytes) match {
         case RLPList(RLPValue(numberBytes), RLPValue(maxBlocksBytes)) =>
-          BlockHashesFromNumber(BigInt(1, numberBytes), BigInt(1, maxBlocksBytes))
+          BlockHashesFromNumber(ByteUtils.bytesToBigInt(numberBytes), ByteUtils.bytesToBigInt(maxBlocksBytes))
         case _ => throw new RuntimeException("Cannot decode BlockHashesFromNumber")
       }
     }

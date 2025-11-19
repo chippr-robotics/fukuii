@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class QAServiceSpec
     extends TestKit(ActorSystem("QAServiceSpec_ActorSystem"))
@@ -29,7 +30,7 @@ class QAServiceSpec
     with ByteGenerators
     with AsyncMockFactory {
 
-  "QAService" should "send msg to miner and return miner's response" in testCaseM[IO] { fixture =>
+  "QAService" should "send msg to miner and return miner's response" taggedAs (UnitTest, RPCTest) in testCaseM[IO] { fixture =>
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
@@ -39,7 +40,7 @@ class QAServiceSpec
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Right(MineBlocksResponse(MiningOrdered)))
   }
 
-  it should "send msg to miner and return InternalError in case of problems" in testCaseM[IO] { fixture =>
+  it should "send msg to miner and return InternalError taggedAs (UnitTest, RPCTest) in case of problems" in testCaseM[IO] { fixture =>
     import fixture._
     (testMining.askMiner _)
       .expects(mineBlocksMsg)
@@ -49,7 +50,7 @@ class QAServiceSpec
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Left(JsonRpcError.InternalError))
   }
 
-  it should "generate checkpoint for block with given blockHash and send it to sync" in customTestCaseM(
+  it should "generate checkpoint for block with given blockHash and send it to sync" taggedAs (UnitTest, RPCTest) in customTestCaseM(
     new Fixture with CheckpointsGenerationFixture
   ) { fixture =>
     import fixture._
@@ -68,7 +69,7 @@ class QAServiceSpec
     }
   }
 
-  it should "generate checkpoint for best block when no block hash given and send it to sync" in customTestCaseM(
+  it should "generate checkpoint for best block when no block hash given and send it to sync" taggedAs (UnitTest, RPCTest) in customTestCaseM(
     new Fixture with CheckpointsGenerationFixture
   ) { fixture =>
     import fixture._
@@ -94,7 +95,7 @@ class QAServiceSpec
     }
   }
 
-  it should "return federation public keys when requesting federation members info" in testCaseM[IO] { fixture =>
+  it should "return federation public keys when requesting federation members info" taggedAs (UnitTest, RPCTest) in testCaseM[IO] { fixture =>
     import fixture._
     val result: ServiceResponse[GetFederationMembersInfoResponse] =
       qaService.getFederationMembersInfo(GetFederationMembersInfoRequest())

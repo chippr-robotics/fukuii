@@ -16,13 +16,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLContext
+import com.chipprbots.ethereum.testing.Tags._
 
 class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory with BeforeAndAfterAll {
 
@@ -37,11 +31,11 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
   override def afterAll(): Unit =
     file.delete()
 
-  val keyStorePath = "mantisCA.p12"
+  val keyStorePath = "fukuiiCA.p12"
   val keyStoreType = "pkcs12"
   val passwordFile = "password"
 
-  it should "createSSLContext" in new TestSetup(
+  it should "createSSLContext" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(keyStorePath, passwordFile),
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Right(()),
@@ -61,7 +55,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     }
   }
 
-  it should "return a Error because keystore path and password are missing" in new TestSetup(
+  it should "return a Error because keystore path and password are missing" taggedAs (UnitTest) in new TestSetup(
     existingFiles = Nil,
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Right(()),
@@ -78,7 +72,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     response shouldBe Left(SSLError("Certificate keystore path and password file configured but files are missing"))
   }
 
-  it should "return a Error because keystore path is missing" in new TestSetup(
+  it should "return a Error because keystore path is missing" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(passwordFile),
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Right(()),
@@ -95,7 +89,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     response shouldBe Left(SSLError("Certificate keystore path configured but file is missing"))
   }
 
-  it should "return a Error because password file is missing" in new TestSetup(
+  it should "return a Error because password file is missing" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(keyStorePath),
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Right(()),
@@ -112,7 +106,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     response shouldBe Left(SSLError("Certificate password file configured but file is missing"))
   }
 
-  it should "return a Error because invalid KeyStore Type" in new TestSetup(
+  it should "return a Error because invalid KeyStore Type" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(keyStorePath, passwordFile),
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Right(()),
@@ -130,7 +124,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     response shouldBe Left(SSLError(s"Certificate keystore invalid type set: $invalidKeyStoreType"))
   }
 
-  it should "return a Error because keystore file creation failed" in new TestSetup(
+  it should "return a Error because keystore file creation failed" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(keyStorePath, passwordFile),
     fCreateFileInputStream = () => Left(new RuntimeException("Certificate keystore file creation failed")),
     fLoadKeyStore = () => Right(()),
@@ -147,7 +141,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     response shouldBe Left(SSLError("Certificate keystore file creation failed"))
   }
 
-  it should "return a Error because failed to load keystore" in new TestSetup(
+  it should "return a Error because failed to load keystore" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(keyStorePath, passwordFile),
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Left(new RuntimeException("Failed to load keyStore")),
@@ -164,7 +158,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     response shouldBe Left(SSLError("Failed to load keyStore"))
   }
 
-  it should "return a Error because KeyManager failure" in new TestSetup(
+  it should "return a Error because KeyManager failure" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(keyStorePath, passwordFile),
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Right(()),
@@ -181,7 +175,7 @@ class SSLContextFactorySpec extends AnyFlatSpec with Matchers with MockFactory w
     response shouldBe Left(SSLError("Invalid Certificate keystore"))
   }
 
-  it should "return a Error because TrustManager failure" in new TestSetup(
+  it should "return a Error because TrustManager failure" taggedAs (UnitTest) in new TestSetup(
     existingFiles = List(keyStorePath, passwordFile),
     fCreateFileInputStream = () => Right(new FileInputStream(file)),
     fLoadKeyStore = () => Right(()),

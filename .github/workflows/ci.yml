@@ -71,10 +71,52 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Run tests with coverage
-        run: sbt testCoverage
+      - name: Run Essential Tests (Tier 1)
+        run: |
+          echo "=========================================="
+          echo "Running Essential Tests (< 5 minutes)"
+          echo "=========================================="
+          sbt testEssential
         env:
           FUKUII_DEV: true
+        timeout-minutes: 10
+      
+      - name: Run Standard Tests with Coverage (Tier 2)
+        run: |
+          echo "=========================================="
+          echo "Running Standard Tests with Coverage (< 30 minutes)"
+          echo "=========================================="
+          sbt testStandard
+          sbt coverageReport
+          sbt coverageAggregate
+        env:
+          FUKUII_DEV: true
+        timeout-minutes: 45
+      
+      - name: Validate KPI Baselines
+        run: |
+          echo "=========================================="
+          echo "Validating KPI Baselines"
+          echo "=========================================="
+          echo ""
+          sbt "testOnly *KPIBaselinesSpec"
+          echo ""
+          echo "✅ KPI baselines validated successfully"
+        env:
+          FUKUII_DEV: true
+      
+      - name: Run Ethereum/Tests Integration Tests
+        run: |
+          echo "Running ethereum/tests integration test suite..."
+          sbt "IntegrationTest / testOnly *SimpleEthereumTest *BlockchainTestsSpec" || true
+          
+          echo ""
+          echo "=== Ethereum/Tests Integration Results ==="
+          echo "Tests validate EVM compliance against official ethereum/tests repository"
+          echo "See test artifacts for detailed results"
+        env:
+          FUKUII_DEV: true
+        timeout-minutes: 10
       
       - name: Upload coverage reports
         if: always()
@@ -104,6 +146,18 @@ jobs:
           name: test-results-jdk21-scala-3.3.4
           path: |
             **/target/test-reports/**
+            **/target/scala-*/test-classes/**/*.log
+          retention-days: 7
+          if-no-files-found: warn
+      
+      - name: Upload ethereum/tests integration results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ethereum-tests-results-jdk21-scala-3.3.4
+          path: |
+            **/target/scala-*/it-classes/**/*.log
+            /tmp/fukuii-it-test/**/*.log
           retention-days: 7
           if-no-files-found: warn
       

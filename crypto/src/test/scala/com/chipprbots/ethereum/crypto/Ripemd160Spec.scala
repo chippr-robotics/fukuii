@@ -8,6 +8,8 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableFor2
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class Ripemd160Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Matchers {
 
   // these examples were taken from http://homes.esat.kuleuven.be/~bosselae/ripemd160.html#Outline
@@ -24,7 +26,7 @@ class Ripemd160Spec extends AnyFunSuite with ScalaCheckPropertyChecks with Match
     ("a" * 1000000, "52783243c1697bdbe16d37f97f68f08325dc1528")
   )
 
-  test("RIPEMD-160") {
+  test("RIPEMD-160", UnitTest, CryptoTest) {
     forAll(examples) { (input, result) =>
       val inBytes = input.getBytes(StandardCharsets.US_ASCII)
       val hash = ripemd160(inBytes)

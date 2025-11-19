@@ -12,6 +12,7 @@ import org.scalatest.wordspec.AnyWordSpecLike
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingReadyBlocks
 import com.chipprbots.ethereum.network.PeerId
 
@@ -31,7 +32,7 @@ class BlockFetcherStateSpec
 
   "BlockFetcherState" when {
     "invalidating blocks" should {
-      "not allow to go to negative block number" in {
+      "not allow to go to negative block number" taggedAs (UnitTest, SyncTest) in {
         val (_, actual) =
           BlockFetcherState.initial(importer, validators.blockValidator, 10).invalidateBlocksFrom(-5, None)
 
@@ -40,7 +41,7 @@ class BlockFetcherStateSpec
     }
 
     "handling requested blocks" should {
-      "clear headers queue if got empty list of blocks" in {
+      "clear headers queue if got empty list of blocks" taggedAs (UnitTest, SyncTest) in {
         val headers = blocks.map(_.header)
 
         val result = BlockFetcherState
@@ -51,7 +52,7 @@ class BlockFetcherStateSpec
         assert(result.map(_.waitingHeaders) === Right(Queue.empty))
       }
 
-      "enqueue requested blocks" in {
+      "enqueue requested blocks" taggedAs (UnitTest, SyncTest) in {
 
         val result = BlockFetcherState
           .initial(importer, validators.blockValidator, 0)
@@ -65,7 +66,10 @@ class BlockFetcherStateSpec
         assert(result.map(_.knownTop) === Right(blocks.last.number))
       }
 
-      "enqueue requested blocks fails when ready blocks is not forming a sequence with given headers" in {
+      "enqueue requested blocks fails when ready blocks is not forming a sequence with given headers" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
 
         val result = BlockFetcherState
           .initial(importer, validators.blockValidator, 0)

@@ -13,17 +13,18 @@ import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersEr
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.testing.Tags._
 
 class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators {
 
-  it should "validate correctly a valid list of ommers" in new BlockUtils {
+  it should "validate correctly a valid list of ommers" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
     ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, ommers, blockchainReader) match {
       case Right(_)  => succeed
       case Left(err) => fail(s"Unexpected validation error: $err")
     }
   }
 
-  it should "report failure if the list of ommers is too big" in new BlockUtils {
+  it should "report failure if the list of ommers is too big" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
     ommersValidator.validate(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -36,7 +37,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an invalid header in the list of ommers" in new BlockUtils {
+  it should "report failure if there is an invalid header taggedAs (UnitTest, ConsensusTest) in the list of ommers" in new BlockUtils {
     val invalidOmmer1: BlockHeader = ommer1.copy(number = ommer1.number + 1)
 
     ommersValidator.validate(
@@ -51,7 +52,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an ommer that was previously used" in new BlockUtils {
+  it should "report failure if there is an ommer that was previously used" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
     ommersValidator.validate(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -64,7 +65,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an ommer which is also an ancestor" in new BlockUtils {
+  it should "report failure if there is an ommer which is also an ancestor" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
     ommersValidator.validate(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -77,7 +78,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an ommer which that is not parent of an ancestor" in new BlockUtils {
+  it should "report failure if there is an ommer which that is not parent of an ancestor" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
     val getNBlocksBack: (ByteString, Int) => List[Block] =
       (_, n) =>
         ((ommersBlockNumber - n) until ommersBlockNumber).toList
@@ -94,7 +95,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if getNBlocksBack returns an empty list of ancestors" in new BlockUtils {
+  it should "report failure if getNBlocksBack returns an empty list of ancestors" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
     val getNBlocksBack: (ByteString, Int) => List[Block] = (_, _) => List.empty
 
     ommersValidator.validateOmmersAncestors(
@@ -108,7 +109,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an ommer that is too old" in new BlockUtils {
+  it should "report failure if there is an ommer that is too old" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
     ommersValidator.validate(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -120,7 +121,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is a duplicated ommer in the ommers list" in new BlockUtils {
+  it should "report failure if there is a duplicated ommer taggedAs (UnitTest, ConsensusTest) in the ommers list" in new BlockUtils {
     ommersValidator.validate(
       ommersBlockParentHash,
       ommersBlockNumber,

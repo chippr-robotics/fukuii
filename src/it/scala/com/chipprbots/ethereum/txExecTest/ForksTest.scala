@@ -19,6 +19,8 @@ import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
 import com.chipprbots.ethereum.domain.BlockchainStorages
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class ForksTest extends AnyFlatSpec with Matchers {
 
   trait TestSetup extends ScenarioSetup {
@@ -47,7 +49,7 @@ class ForksTest extends AnyFlatSpec with Matchers {
     val noErrors: ResultOfATypeInvocation[Right[_, Seq[Receipt]]] = a[Right[_, Seq[Receipt]]]
   }
 
-  "Ledger" should "execute blocks with respect to forks" in new TestSetup {
+  "Ledger" should "execute blocks with respect to forks" taggedAs (IntegrationTest, VMTest, SlowTest) in new TestSetup {
     val fixtures: FixtureProvider.Fixture = FixtureProvider.loadFixtures("/txExecTest/forksTest")
 
     val startBlock = 1

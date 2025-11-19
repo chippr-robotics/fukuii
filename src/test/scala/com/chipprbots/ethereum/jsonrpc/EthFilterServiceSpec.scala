@@ -28,6 +28,7 @@ import scala.concurrent.Future
 import scala.concurrent.Future
 import scala.concurrent.Future
 import scala.concurrent.Future
+import com.chipprbots.ethereum.testing.Tags._
 
 class EthFilterServiceSpec
     extends TestKit(ActorSystem("EthFilterServiceSpec_ActorSystem"))
@@ -42,7 +43,7 @@ class EthFilterServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  it should "handle newFilter request" in new TestSetup {
+  it should "handle newFilter request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val filter: Filter = Filter(None, None, None, Seq.empty)
     val res: Future[Either[JsonRpcError, NewFilterResponse]] =
       ethFilterService.newFilter(NewFilterRequest(filter)).unsafeToFuture()
@@ -51,7 +52,7 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(NewFilterResponse(123))
   }
 
-  it should "handle newBlockFilter request" in new TestSetup {
+  it should "handle newBlockFilter request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val res: Future[Either[JsonRpcError, NewFilterResponse]] =
       ethFilterService.newBlockFilter(NewBlockFilterRequest()).unsafeToFuture()
     filterManager.expectMsg(FM.NewBlockFilter)
@@ -59,7 +60,7 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(NewFilterResponse(123))
   }
 
-  it should "handle newPendingTransactionFilter request" in new TestSetup {
+  it should "handle newPendingTransactionFilter request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val res: Future[Either[JsonRpcError, NewFilterResponse]] =
       ethFilterService.newPendingTransactionFilter(NewPendingTransactionFilterRequest()).unsafeToFuture()
     filterManager.expectMsg(FM.NewPendingTransactionFilter)
@@ -67,7 +68,7 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(NewFilterResponse(123))
   }
 
-  it should "handle uninstallFilter request" in new TestSetup {
+  it should "handle uninstallFilter request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val res: Future[Either[JsonRpcError, UninstallFilterResponse]] =
       ethFilterService.uninstallFilter(UninstallFilterRequest(123)).unsafeToFuture()
     filterManager.expectMsg(FM.UninstallFilter(123))
@@ -75,7 +76,7 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(UninstallFilterResponse(true))
   }
 
-  it should "handle getFilterChanges request" in new TestSetup {
+  it should "handle getFilterChanges request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val res: Future[Either[JsonRpcError, GetFilterChangesResponse]] =
       ethFilterService.getFilterChanges(GetFilterChangesRequest(123)).unsafeToFuture()
     filterManager.expectMsg(FM.GetFilterChanges(123))
@@ -84,7 +85,7 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(GetFilterChangesResponse(changes))
   }
 
-  it should "handle getFilterLogs request" in new TestSetup {
+  it should "handle getFilterLogs request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val res: Future[Either[JsonRpcError, GetFilterLogsResponse]] =
       ethFilterService.getFilterLogs(GetFilterLogsRequest(123)).unsafeToFuture()
     filterManager.expectMsg(FM.GetFilterLogs(123))
@@ -93,7 +94,7 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(GetFilterLogsResponse(logs))
   }
 
-  it should "handle getLogs request" in new TestSetup {
+  it should "handle getLogs request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val filter: Filter = Filter(None, None, None, Seq.empty)
     val res: Future[Either[JsonRpcError, GetLogsResponse]] =
       ethFilterService.getLogs(GetLogsRequest(filter)).unsafeToFuture()

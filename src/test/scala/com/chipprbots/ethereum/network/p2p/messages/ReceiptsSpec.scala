@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.testing.Tags._
 
 class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
@@ -78,11 +79,11 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
       )
     )
 
-  "Legacy Receipts" should "encode legacy receipts" in {
+  "Legacy Receipts" should "encode legacy receipts" taggedAs (UnitTest, NetworkTest) in {
     (legacyReceipts.toBytes: Array[Byte]) shouldBe encode(encodedLegacyReceipts)
   }
 
-  it should "decode legacy receipts" in {
+  it should "decode legacy receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH63)
       .fromBytes(
@@ -91,17 +92,17 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
       ) shouldBe Right(legacyReceipts)
   }
 
-  it should "decode encoded legacy receipts" in {
+  it should "decode encoded legacy receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH63)
       .fromBytes(Codes.ReceiptsCode, legacyReceipts.toBytes) shouldBe Right(legacyReceipts)
   }
 
-  "Type 01 Receipts" should "encode type 01 receipts" in {
+  "Type 01 Receipts" should "encode type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
     (type01Receipts.toBytes: Array[Byte]) shouldBe encode(encodedType01Receipts)
   }
 
-  it should "decode type 01 receipts" in {
+  it should "decode type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH64)
       .fromBytes(
@@ -110,7 +111,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
       ) shouldBe Right(type01Receipts)
   }
 
-  it should "decode encoded type 01 receipts" in {
+  it should "decode encoded type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH64)
       .fromBytes(Codes.ReceiptsCode, type01Receipts.toBytes) shouldBe Right(type01Receipts)

@@ -49,7 +49,11 @@ import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
+import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -113,7 +117,9 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         .when(*, *, *)
         .onCall { case (block: Block, _, _) =>
           importedBlocksSet.add(block)
-          results(block.header.hash).flatTap(_ => importedBlocksSubject.publish1(block).void)
+          results
+            .getOrElse(block.header.hash, IO.pure(BlockEnqueued))
+            .flatTap(_ => importedBlocksSubject.publish1(block).void)
         }
       adapter
     }
@@ -157,13 +163,14 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def peerByNumber(number: Int): Peer = handshakedPeers.keys.toList.sortBy(_.id.value).apply(number)
 
-    def blockHeadersChunkRequest(fromChunk: Int): PeersClient.Request[GetBlockHeaders] = {
+    def blockHeadersChunkRequest(fromChunk: Int): PeersClient.Request[ETH66GetBlockHeaders] = {
       val block = testBlocksChunked(fromChunk).headNumberUnsafe
       blockHeadersRequest(block)
     }
 
-    def blockHeadersRequest(fromBlock: BigInt): PeersClient.Request[GetBlockHeaders] = PeersClient.Request.create(
-      GetBlockHeaders(
+    def blockHeadersRequest(fromBlock: BigInt): PeersClient.Request[ETH66GetBlockHeaders] = PeersClient.Request.create(
+      ETH66GetBlockHeaders(
+        requestId = 0,
         Left(fromBlock),
         syncConfig.blockHeadersPerRequest,
         skip = 0,
@@ -225,6 +232,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = PartialFunction.empty
 
       def defaultHandlers(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+        // Handle ETH62 GetBlockHeaders (without requestId)
         case PeersClient.Request(GetBlockHeaders(Left(minBlock), amount, _, _), _, _) =>
           val maxBlock = minBlock + amount
           val matchingHeaders = blocks
@@ -236,7 +244,26 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
             .sortBy(_.number)
           sender ! PeersClient.Response(defaultPeer, BlockHeaders(matchingHeaders))
           None
+        // Handle ETH66 GetBlockHeaders (with requestId)
+        case PeersClient.Request(ETH66GetBlockHeaders(_, Left(minBlock), amount, _, _), _, _) =>
+          val maxBlock = minBlock + amount
+          val matchingHeaders = blocks
+            .filter { b =>
+              val nr = b.number
+              minBlock <= nr && nr < maxBlock
+            }
+            .map(_.header)
+            .sortBy(_.number)
+          sender ! PeersClient.Response(defaultPeer, BlockHeaders(matchingHeaders))
+          None
+        // Handle ETH62 GetBlockBodies (without requestId)
         case PeersClient.Request(GetBlockBodies(hashes), _, _) =>
+          val matchingBodies = hashes.flatMap(hash => blocks.find(_.hash == hash)).map(_.body)
+
+          sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
+          None
+        // Handle ETH66 GetBlockBodies (with requestId)
+        case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
           val matchingBodies = hashes.flatMap(hash => blocks.find(_.hash == hash)).map(_.body)
 
           sender ! PeersClient.Response(defaultPeer, BlockBodies(matchingBodies))
@@ -383,6 +410,26 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       }
 
     peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+    // Set up AutoPilot for ommersPool to respond to GetOmmers messages
+    ommersPool.setAutoPilot(new AutoPilot {
+      def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
+        case OmmersPool.GetOmmers(_) =>
+          sender ! OmmersPool.Ommers(Seq.empty)
+          this
+        case _ => this
+      }
+    })
+
+    // Set up AutoPilot for pendingTransactionsManager to respond to GetPendingTransactions messages
+    pendingTransactionsManager.setAutoPilot(new AutoPilot {
+      def run(sender: ActorRef, msg: Any): AutoPilot = msg match {
+        case PendingTransactionsManager.GetPendingTransactions =>
+          sender ! PendingTransactionsManager.PendingTransactionsResponse(Seq.empty)
+          this
+        case _ => this
+      }
+    })
 
     def waitForSubscription(): Unit = {
       peerEventBus.expectMsgClass(classOf[Subscribe])

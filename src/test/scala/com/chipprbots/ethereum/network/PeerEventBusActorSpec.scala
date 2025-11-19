@@ -34,13 +34,12 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Ping
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong
-import scala.concurrent.Future
-import scala.concurrent.Future
+import com.chipprbots.ethereum.testing.Tags._
 import scala.concurrent.Future
 
 class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
 
-  "PeerEventBusActor" should "relay messages received to subscribers" in new TestSetup {
+  "PeerEventBusActor" should "relay messages received to subscribers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()(system)
     val probe2: TestProbe = TestProbe()(system)
@@ -65,7 +64,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
 
   }
 
-  it should "relay messages via streams" in new TestSetup {
+  it should "relay messages via streams" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     val classifier1: MessageClassifier = MessageClassifier(Set(Ping.code), PeerSelector.WithId(PeerId("1")))
     val classifier2: MessageClassifier = MessageClassifier(Set(Ping.code), PeerSelector.AllPeers)
 
@@ -112,7 +111,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     res2 shouldEqual Seq(msgFromPeer, msgFromPeer2)
   }
 
-  it should "only relay matching message codes" in new TestSetup {
+  it should "only relay matching message codes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     val classifier1: MessageClassifier = MessageClassifier(Set(Ping.code), PeerSelector.WithId(PeerId("1")))
@@ -128,7 +127,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe1.expectNoMessage()
   }
 
-  it should "relay peers disconnecting to its subscribers" in new TestSetup {
+  it should "relay peers disconnecting to its subscribers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     val probe2: TestProbe = TestProbe()
@@ -161,7 +160,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe2.expectMsg(msgPeerDisconnected)
   }
 
-  it should "relay peers handshaked to its subscribers" in new TestSetup {
+  it should "relay peers handshaked to its subscribers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     val probe2: TestProbe = TestProbe()
@@ -189,7 +188,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe2.expectMsg(msgPeerHandshaked)
   }
 
-  it should "relay a single notification when subscribed twice to the same message code" in new TestSetup {
+  it should "relay a single notification when subscribed twice to the same message code" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     peerEventBusActor.tell(
@@ -208,7 +207,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe1.expectNoMessage()
   }
 
-  it should "allow to handle subscriptions using AllPeers and WithId PeerSelector at the same time" in new TestSetup {
+  it should "allow to handle subscriptions using AllPeers and WithId PeerSelector at the same time" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     peerEventBusActor.tell(
@@ -243,7 +242,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe1.expectMsg(msgFromPeer)
   }
 
-  it should "allow to subscribe to new messages" in new TestSetup {
+  it should "allow to subscribe to new messages" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     peerEventBusActor.tell(
@@ -261,7 +260,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe1.expectMsg(msgFromPeer)
   }
 
-  it should "not change subscriptions when subscribing to empty set" in new TestSetup {
+  it should "not change subscriptions when subscribing to empty set" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     peerEventBusActor.tell(
@@ -279,7 +278,7 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe1.expectMsg(msgFromPeer)
   }
 
-  it should "allow to unsubscribe from messages" in new TestSetup {
+  it should "allow to unsubscribe from messages" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     peerEventBusActor.tell(

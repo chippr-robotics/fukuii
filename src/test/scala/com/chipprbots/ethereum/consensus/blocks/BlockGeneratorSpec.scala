@@ -32,15 +32,16 @@ import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.utils._
 import com.chipprbots.ethereum.ledger.TxResult
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with Logger {
   implicit val testContext: IORuntime = IORuntime.global
 
-  "BlockGenerator" should "generate correct block with empty transactions" in new TestSetup {
+  "BlockGenerator" should "generate correct block with empty transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val pendingBlock: PendingBlock =
       blockGenerator.generateBlock(bestBlock.get, Nil, Address(testAddress), blockGenerator.emptyX, None).pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("eb49a2da108d63de"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("a91c44e62d17005c4b22f6ed116f485ea30d8b63f2429745816093b304eb4f73"))
@@ -62,13 +63,13 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "generate correct block with transactions" in new TestSetup {
+  it should "generate correct block with transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val pendingBlock: PendingBlock =
       blockGenerator
         .generateBlock(bestBlock.get, Seq(signedTransaction), Address(testAddress), blockGenerator.emptyX, None)
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("4139b957dae0488d"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("dc25764fb562d778e5d1320f4c3ba4b09021a2603a0816235e16071e11f342ea"))
@@ -90,13 +91,13 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "be possible to simulate transaction, on world returned with pending block" in new TestSetup {
+  it should "be possible to simulate transaction, on world returned with pending block" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val pendingBlock: PendingBlock =
       blockGenerator
         .generateBlock(bestBlock.get, Seq(signedTransaction), Address(testAddress), blockGenerator.emptyX, None)
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("4139b957dae0488d"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("dc25764fb562d778e5d1320f4c3ba4b09021a2603a0816235e16071e11f342ea"))
@@ -139,7 +140,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     simulationResult.vmError shouldBe None
   }
 
-  it should "filter out failing transactions" in new TestSetup {
+  it should "filter out failing transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val pendingBlock: PendingBlock =
       blockGenerator
         .generateBlock(
@@ -151,7 +152,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         )
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("12cb47f9208d1e81"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("908471b57f2d3e70649f9ce0c9c318d61146d3ce19f70d2f94309f135b87b64a"))
@@ -175,7 +176,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "filter out transactions exceeding block gas limit and include correct transactions" in new TestSetup {
+  it should "filter out transactions exceeding block gas limit and include correct transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val txWitGasTooBigGasLimit: SignedTransaction = SignedTransaction
       .sign(
         transaction.copy(gasLimit = BigInt(2).pow(100000), nonce = signedTransaction.tx.nonce + 1),
@@ -190,7 +191,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         .generateBlock(bestBlock.get, transactions, Address(testAddress), blockGenerator.emptyX, None)
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("38026e10fb18b458"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("806f26f0efb12a0c0c16e587984227186c46f25fc4e76698a68996183edf2cf1"))
@@ -214,7 +215,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "generate block before eip155 and filter out chain specific tx" in new TestSetup {
+  it should "generate block before eip155 and filter out chain specific tx" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
       chainId = 0x3d.toByte,
       networkId = 1,
@@ -258,7 +259,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         .generateBlock(bestBlock.get, Seq(generalTx, specificTx), Address(testAddress), blockGenerator.emptyX, None)
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("48381cb0cd40936a"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("dacd96cf5dbc662fa113c73319fcdc7d6e7053571432345b936fd221c1e18d42"))
@@ -282,7 +283,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "generate correct block with (without empty accounts) after EIP-161" in new TestSetup {
+  it should "generate correct block with (without empty accounts) after EIP-161" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         frontierBlockNumber = 0,
@@ -336,7 +337,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     blockExecution.executeAndValidateBlock(generatedBlock.block, true) shouldBe a[Right[_, Seq[Receipt]]]
   }
 
-  it should "generate block after eip155 and allow both chain specific and general transactions" in new TestSetup {
+  it should "generate block after eip155 and allow both chain specific and general transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val generalTx: SignedTransaction =
       SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, None)
 
@@ -351,7 +352,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         )
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("39bd50fcbde30b18"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("c77dae7cef6c685896ed6b8026466a2e6338b8bc5f182e2dd7a64cf7da9c7d1b"))
@@ -374,7 +375,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "include consecutive transactions from single sender" in new TestSetup {
+  it should "include consecutive transactions from single sender" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val nextTransaction: SignedTransaction =
       SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(0x3d.toByte))
 
@@ -389,7 +390,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         )
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("8f88ec20f1be482f"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("247a206abc088487edc1697fcaceb33ad87b55666e438129b7048bb08c8ed88f"))
@@ -412,7 +413,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "filter out failing transaction from the middle of tx list" in new TestSetup {
+  it should "filter out failing transaction from the middle of tx list" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val nextTransaction: SignedTransaction =
       SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(0x3d.toByte))
 
@@ -441,7 +442,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         )
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("8f88ec20f1be482f"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("247a206abc088487edc1697fcaceb33ad87b55666e438129b7048bb08c8ed88f"))
@@ -463,7 +464,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "include transaction with higher gas price if nonce is the same" in new TestSetup {
+  it should "include transaction with higher gas price if nonce is the same" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val txWitSameNonceButLowerGasPrice: SignedTransaction = SignedTransaction
       .sign(transaction.copy(gasPrice = signedTransaction.tx.gasPrice - 1), keyPair, Some(0x3d.toByte))
 
@@ -478,7 +479,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         )
         .pendingBlock
 
-    // mined with mantis + ethminer
+    // mined with fukuii + ethminer
     val minedNonce: ByteString = ByteString(Hex.decode("14d7000ac544b38e"))
     val minedMixHash: ByteString =
       ByteString(Hex.decode("270f6b2618c5bef6a188397927129c803e5fd41c85492835486832f6825a8d78"))
@@ -500,7 +501,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "generate blocks with the correct extra fields" in {
+  it should "generate blocks with the correct extra fields" taggedAs (UnitTest, ConsensusTest) in {
     val table = Table[Boolean, Boolean, HeaderExtraFields](
       ("ecip1098Activated", "ecip1097Activated", "expectedExtraFields"),
       // No ecip activated
@@ -543,7 +544,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     }
   }
 
-  it should "generate a failure if treasury transfer was not made" in {
+  it should "generate a failure if treasury transfer was not made" taggedAs (UnitTest, ConsensusTest) in {
     val producer = new TestSetup {
       override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
         .withUpdatedForkBlocks(
@@ -586,7 +587,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     }
   }
 
-  it should "generate a failure if treasury transfer was made to a different treasury account" in {
+  it should "generate a failure if treasury transfer was made to a different treasury account" taggedAs (UnitTest, ConsensusTest) in {
     val producer = new TestSetup {
       override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
         .withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = 1))

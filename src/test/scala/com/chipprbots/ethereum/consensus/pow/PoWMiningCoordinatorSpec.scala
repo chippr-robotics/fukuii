@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 
 import org.scalatest.Ignore
+import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
 @Ignore

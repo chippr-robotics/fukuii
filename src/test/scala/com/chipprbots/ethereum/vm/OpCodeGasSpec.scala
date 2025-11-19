@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain.UInt256._
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.vm.Generators._
 
 import Fixtures.blockchainConfig
@@ -70,7 +71,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
     SELFBALANCE -> G_low
   ) ++ stackOpsFees ++ constOpsFees
 
-  test("wordsForBytes helper") {
+  test("wordsForBytes helper", UnitTest, VMTest) {
     val testData =
       Table(("bytes", "words"), 0 -> 0, 1 -> 1, 2 -> 1, 32 -> 1, 33 -> 2, 64 -> 2, 65 -> 3, 256 -> 8, 257 -> 9)
 
@@ -79,7 +80,7 @@ class OpCodeGasSpec extends AnyFunSuite with OpCodeTesting with Matchers with Sc
     }
   }
 
-  test("calcMemCost helper") {
+  test("calcMemCost helper", UnitTest, VMTest) {
     val testData = Table[UInt256, UInt256, UInt256, BigInt](
       ("memSize", "offset", "dataSize", "expectedCost"),
       (0, 0, 0, 0),

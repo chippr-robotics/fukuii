@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
 
 // scalastyle:off magic.number
@@ -24,7 +25,7 @@ class CachedReferenceCountedStorageSpec
     with ScalaCheckPropertyChecks
     with ObjectGenerators {
 
-  "ChangeLog" should "record all changes" in new TestSetup {
+  "ChangeLog" should "record all changes" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     var blockNumber = 1
     forAll(keyValueByteStringGen(10)) { changes =>
       val toUpdate = changes
@@ -57,7 +58,7 @@ class CachedReferenceCountedStorageSpec
     }
   }
 
-  it should "save all recorded changes to storage" in new TestSetup {
+  it should "save all recorded changes to storage" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     var blockNumber = 1
     forAll(keyValueByteStringGen(10)) { changes =>
       val toUpdate = changes
@@ -99,7 +100,10 @@ class CachedReferenceCountedStorageSpec
     }
   }
 
-  "CachedReferenceCountedStorage" should "prune not referenced nodes " in new TestSetup {
+  "CachedReferenceCountedStorage" should "prune not referenced nodes " taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
     updateStorage(1) { stor =>
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }
@@ -121,7 +125,7 @@ class CachedReferenceCountedStorageSpec
     assert(testLruCache.getValues.size == 15)
   }
 
-  it should "not prune nodes which became referenced" in new TestSetup {
+  it should "not prune nodes which became referenced" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     updateStorage(1) { stor =>
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }
@@ -149,7 +153,7 @@ class CachedReferenceCountedStorageSpec
     assert(value.numOfParents == 1 && value.bn == 2)
   }
 
-  it should "enable roll-backing changes made by block" in new TestSetup {
+  it should "enable roll-backing changes made by block" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     updateStorage(1) { stor =>
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }
@@ -178,7 +182,7 @@ class CachedReferenceCountedStorageSpec
     cacheStateBeforeChanges should contain theSameElementsAs cacheStateAfterRollback
   }
 
-  it should "flush exising nodes to disk" in new TestSetup {
+  it should "flush exising nodes to disk" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     updateStorage(1) { stor =>
       stor.update(generateKeys(5).map(_._1), generateKeys(10))
     }

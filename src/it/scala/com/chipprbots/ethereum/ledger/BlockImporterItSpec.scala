@@ -35,6 +35,8 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.crypto.ECDSASignature
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class BlockImporterItSpec
     extends AnyFlatSpecLike
     with Matchers
@@ -49,7 +51,10 @@ class BlockImporterItSpec
     // No need to shutdown IORuntime.global
   }
 
-  "BlockImporter" should "not discard blocks of the main chain if the reorganisation failed" in new TestFixture() {
+  "BlockImporter" should "not discard blocks of the main chain if the reorganisation failed" taggedAs (
+    IntegrationTest,
+    SlowTest
+  ) in new TestFixture() {
 
     override val blockImporter: ActorRef = system.actorOf(
       BlockImporter.props(
@@ -74,7 +79,10 @@ class BlockImporterItSpec
     eventually(blockchainReader.getBestBlock().get shouldEqual oldBlock4)
   }
 
-  it should "return a correct new best block after reorganising longer chain to a shorter one if its weight is bigger" in new StartedImportFixture() {
+  it should "return a correct new best block after reorganising longer chain to a shorter one if its weight is bigger" taggedAs (
+    IntegrationTest,
+    SlowTest
+  ) in new StartedImportFixture() {
     // returning discarded initial chain
     blockchainWriter.save(oldBlock2, Nil, oldWeight2, saveAsBestBlock = true)
     blockchainWriter.save(oldBlock3, Nil, oldWeight3, saveAsBestBlock = true)
@@ -85,7 +93,10 @@ class BlockImporterItSpec
     eventually(blockchainReader.getBestBlock().get shouldEqual newBlock3)
   }
 
-  it should "return Unknown branch, in case of PickedBlocks with block that has a parent that's not in the chain" in new StartedImportFixture() {
+  it should "return Unknown branch, in case of PickedBlocks with block that has a parent that's not in the chain" taggedAs (
+    IntegrationTest,
+    SlowTest
+  ) in new StartedImportFixture() {
     val newBlock4ParentOldBlock3: Block =
       getBlock(genesisBlock.number + 4, difficulty = 104, parent = oldBlock3.header.hash)
     val newBlock4WeightParentOldBlock3: ChainWeight = oldWeight3.increase(newBlock4ParentOldBlock3.header)
@@ -112,7 +123,7 @@ class BlockImporterItSpec
     eventually(blockchainReader.getBestBlock().get shouldEqual newBlock4ParentOldBlock3)
   }
 
-  it should "switch to a branch with a checkpoint" in new StartedImportFixture() {
+  it should "switch to a branch with a checkpoint" taggedAs (IntegrationTest, SlowTest) in new StartedImportFixture() {
 
     val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
     val oldBlock5WithCheckpoint: Block = checkpointBlockGenerator.generate(oldBlock4, checkpoint)
@@ -126,7 +137,10 @@ class BlockImporterItSpec
     eventually(blockchainReader.getLatestCheckpointBlockNumber() shouldEqual oldBlock5WithCheckpoint.header.number)
   }
 
-  it should "switch to a branch with a newer checkpoint" in new StartedImportFixture() {
+  it should "switch to a branch with a newer checkpoint" taggedAs (
+    IntegrationTest,
+    SlowTest
+  ) in new StartedImportFixture() {
 
     val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
     val newBlock4WithCheckpoint: Block = checkpointBlockGenerator.generate(newBlock3, checkpoint)
@@ -140,7 +154,10 @@ class BlockImporterItSpec
     eventually(blockchainReader.getLatestCheckpointBlockNumber() shouldEqual newBlock4WithCheckpoint.header.number)
   }
 
-  it should "return a correct checkpointed block after receiving a request for generating a new checkpoint" in new StartedImportFixture() {
+  it should "return a correct checkpointed block after receiving a request for generating a new checkpoint" taggedAs (
+    IntegrationTest,
+    SlowTest
+  ) in new StartedImportFixture() {
 
     val parent: Block = blockchainReader.getBestBlock().get
     val newBlock5: Block = getBlock(genesisBlock.number + 5, difficulty = 104, parent = parent.header.hash)
@@ -159,7 +176,7 @@ class BlockImporterItSpec
     eventually(blockchainReader.getLatestCheckpointBlockNumber() shouldEqual newBlock5.header.number + 1)
   }
 
-  it should "ask BlockFetcher to resolve missing node" in new TestFixture() {
+  it should "ask BlockFetcher to resolve missing node" taggedAs (IntegrationTest, SlowTest) in new TestFixture() {
     val parent: Block = blockchainReader.getBestBlock().get
     val newBlock: Block = getBlock(genesisBlock.number + 5, difficulty = 104, parent = parent.header.hash)
     val invalidBlock: Block = newBlock.copy(header = newBlock.header.copy(beneficiary = Address(111).bytes))

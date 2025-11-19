@@ -459,4 +459,65 @@ object Address:
 - Cryptographic operations
 
 Like the precious metal itself, mithril transformations make code lighter, stronger, and more beautiful. Apply it wisely, and the codebase will shine.
+
+## Recent Victories (ethereum/tests Adapter - November 2025)
+
+### Lesson 1: Storage Instance Management is Critical
+**Challenge:** "Root node not found" errors when executing blocks
+**Root cause:** Initial state created in separate storage instance from BlockExecution
+**Solution:** Use `blockchain.getBackingMptStorage(0)` for unified storage
+**Pattern:** Always create world state using the SAME storage instance that will execute blocks
+
+```scala
+// WRONG - Separate storages
+val mptStorage = new SerializingMptStorage(new ArchiveNodeStorage(new NodeStorage(dataSource)))
+val world = InMemoryWorldStateProxy(mptStorage = mptStorage, ...)
+// Later: BlockExecution uses different storage → "Root node not found"
+
+// RIGHT - Unified storage
+val mptStorage = blockchain.getBackingMptStorage(0)  // Same storage BlockExecution will use
+val world = InMemoryWorldStateProxy(mptStorage = mptStorage, ...)
+// Now BlockExecution can find the persisted state
+```
+
+### Lesson 2: LegacyTransaction vs Transaction in Scala 3
+**Challenge:** `Transaction` constructor deprecated
+**Solution:** Use `LegacyTransaction` for traditional transactions
+
+```scala
+// OLD (doesn't work in Scala 3)
+Transaction(nonce, gasPrice, gasLimit, receivingAddress, value, payload)
+
+// NEW (Scala 3 compatible)
+LegacyTransaction(nonce, gasPrice, gasLimit, receivingAddress, value, payload)
+```
+
+### Lesson 3: Storage API Evolution in Scala 3
+**Challenge:** `saveStorage` signature changed
+**Solution:** Get storage, update it, save it back (three-step pattern)
+
+```scala
+// OLD pattern (doesn't compile)
+world.saveStorage(address, key, value)
+
+// NEW pattern (works)
+val storage = world.getStorage(address)
+val newStorage = storage.store(key, value)
+world = world.saveStorage(address, newStorage)
+```
+
+### Lesson 4: BigInt Construction from Hex
+**Challenge:** `BigInt(parseHex(hex))` fails - wrong constructor
+**Solution:** Use helper function or proper constructor
+
+```scala
+// WRONG - Passes byte array to Int constructor
+val key = BigInt(parseHex(keyHex))
+
+// RIGHT - Use helper that handles hex properly
+val key = parseBigInt(keyHex)  // Handles "0x" prefix correctly
+
+// OR - Use proper BigInt constructor
+val key = BigInt(1, parseHex(keyHex))  // signum=1, magnitude=bytes
+```
 ```

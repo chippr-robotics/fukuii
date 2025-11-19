@@ -29,7 +29,7 @@ trait TestSyncConfig extends SyncConfigBuilder {
     minPeersToChoosePivotBlock = 2,
     peersToChoosePivotBlockMargin = 0,
     peersToFetchFrom = 5,
-    peerResponseTimeout = 1.second,
+    peerResponseTimeout = 5.seconds,
     peersScanInterval = 1.hour,
     fastSyncThrottle = 100.milliseconds,
     maxQueuedBlockNumberAhead = 10,

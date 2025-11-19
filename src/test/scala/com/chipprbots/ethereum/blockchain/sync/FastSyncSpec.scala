@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.FreeSpecBase
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.SpecFixtures
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
@@ -115,17 +116,22 @@ class FastSyncSpec
 
   "FastSync" - {
     "for reporting progress" - {
-      "returns NotSyncing until pivot block is selected and first data being fetched" in testCaseM {
-        (fixture: Fixture) =>
-          import fixture._
+      "returns NotSyncing until pivot block is selected and first data being fetched" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in testCaseM { (fixture: Fixture) =>
+        import fixture._
 
-          (for {
-            _ <- startSync
-            status <- getSyncStatus
-          } yield assert(status === Status.NotSyncing)).timeout(timeout.duration)
+        (for {
+          _ <- startSync
+          status <- getSyncStatus
+        } yield assert(status === Status.NotSyncing)).timeout(timeout.duration)
       }
 
-      "returns Syncing when pivot block is selected and started fetching data" in testCaseM { (fixture: Fixture) =>
+      "returns Syncing when pivot block is selected and started fetching data" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -145,7 +151,10 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with block progress once both header and body is fetched" in testCaseM { (fixture: Fixture) =>
+      "returns Syncing with block progress once both header and body is fetched" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in testCaseM { (fixture: Fixture) =>
         import fixture._
 
         (for {
@@ -155,7 +164,7 @@ class FastSyncSpec
           _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
           blocksBatch <- etcPeerManager.fetchedBlocks.head.compile.lastOrError
           status <- getSyncStatus
-          lastBlockFromBatch = blocksBatch.last.number
+          lastBlockFromBatch = blocksBatch.lastOption.map(_.number).getOrElse(BigInt(0))
         } yield status match {
           case Status.Syncing(startingBlockNumber, blocksProgress, stateNodesProgress) =>
             assert(startingBlockNumber === BigInt(0))
@@ -167,7 +176,7 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with state nodes progress" in customTestCaseM(new Fixture {
+      "returns Syncing with state nodes progress" taggedAs (UnitTest, SyncTest) in customTestCaseM(new Fixture {
         override lazy val syncConfig: SyncConfig =
           defaultSyncConfig.copy(
             peersScanInterval = 1.second,

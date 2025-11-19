@@ -10,15 +10,16 @@ import com.chipprbots.ethereum.consensus.pow.KeccakDataUtils
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderPoWError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.testing.Tags._
 
 class KeccakBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers {
   import KeccakBlockHeaderValidatorSpec._
 
-  "KeccakBlockHeaderValidatorSpec" should "return BlockHeaderValid when header is valid" in {
+  "KeccakBlockHeaderValidatorSpec" should "return BlockHeaderValid when header is valid" taggedAs (UnitTest, ConsensusTest) in {
     KeccakBlockHeaderValidator.validateHeader(validBlockHeader) shouldBe Right(BlockHeaderValid)
   }
 
-  it should "return HeaderPoWError when header is invalid" in {
+  it should "return HeaderPoWError when header is invalid" taggedAs (UnitTest, ConsensusTest) in {
     val invalidBlockHeader = validBlockHeader.copy(nonce = ByteString(Hex.decode("f245822d3413ab67")))
     KeccakBlockHeaderValidator.validateHeader(invalidBlockHeader) shouldBe Left(HeaderPoWError)
   }

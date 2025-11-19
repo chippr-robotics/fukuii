@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object ETH64 {
 
@@ -67,9 +68,9 @@ object ETH64 {
               forkId
             ) =>
           Status(
-            BigInt(1, protocolVersionBytes).toInt,
-            BigInt(1, networkIdBytes).toInt,
-            BigInt(1, totalDifficultyBytes),
+            ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+            ByteUtils.bytesToBigInt(networkIdBytes).toInt,
+            ByteUtils.bytesToBigInt(totalDifficultyBytes),
             ByteString(bestHashBytes),
             ByteString(genesisHashBytes),
             decode[ForkId](forkId)

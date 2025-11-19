@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.utils
 import com.typesafe.config.ConfigFactory
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
+import com.chipprbots.ethereum.testing.Tags._
 
 class ConfigUtilsSpec extends AnyWordSpec with Matchers {
   "keys" should {

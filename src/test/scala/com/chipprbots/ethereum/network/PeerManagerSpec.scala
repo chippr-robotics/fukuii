@@ -56,6 +56,7 @@ import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 
 import Arbitrary.arbitrary
@@ -74,12 +75,12 @@ class PeerManagerSpec
 
   behavior.of("PeerManagerActor")
 
-  it should "try to connect to bootstrap and known nodes on startup" in new TestSetup {
+  it should "try to connect to bootstrap and known nodes on startup" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
   }
 
-  it should "blacklist peer that sent a status msg with invalid genesisHash" in new TestSetup {
+  it should "blacklist peer that sent a status msg with invalid genesisHash" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -100,7 +101,7 @@ class PeerManagerSpec
     }
   }
 
-  it should "blacklist peer that fail to establish tcp connection" in new TestSetup {
+  it should "blacklist peer that fail to establish tcp connection" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -120,7 +121,7 @@ class PeerManagerSpec
     }
   }
 
-  it should "retry connections to remaining bootstrap nodes" in new TestSetup {
+  it should "retry connections to remaining bootstrap nodes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -138,7 +139,7 @@ class PeerManagerSpec
     peerDiscoveryManager.reply(PeerDiscoveryManager.DiscoveredNodesInfo(bootstrapNodes))
   }
 
-  it should "replace lost connections with random nodes" in new TestSetup {
+  it should "replace lost connections with random nodes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -152,7 +153,7 @@ class PeerManagerSpec
     peerDiscoveryManager.reply(PeerDiscoveryManager.RandomNodeInfo(bootstrapNodes.head))
   }
 
-  it should "publish disconnect messages from peers" in new TestSetup {
+  it should "publish disconnect messages from peers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -165,7 +166,7 @@ class PeerManagerSpec
     peerEventBus.expectMsg(Publish(PeerDisconnected(PeerId(probe.ref.path.name))))
   }
 
-  it should "not handle the connection from a peer that's already connected" in new TestSetup {
+  it should "not handle the connection from a peer that's already connected" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -179,7 +180,7 @@ class PeerManagerSpec
     watcher.expectMsgClass(classOf[Terminated])
   }
 
-  it should "handle pending and handshaked incoming peers" in new TestSetup {
+  it should "handle pending and handshaked incoming peers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -243,7 +244,7 @@ class PeerManagerSpec
     probe2.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.TooManyPeers))
   }
 
-  it should "handle common message about getting peers" in new TestSetup {
+  it should "handle common message about getting peers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -255,7 +256,7 @@ class PeerManagerSpec
     requestSender.expectMsgClass(classOf[Peers])
   }
 
-  it should "handle common message about sending message to peer" in new TestSetup {
+  it should "handle common message about sending message to peer" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -271,7 +272,7 @@ class PeerManagerSpec
     probe.expectMsg(PeerActor.SendMessage(block))
   }
 
-  it should "disconnect from incoming peers already handshaked" in new TestSetup {
+  it should "disconnect from incoming peers already handshaked" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -310,7 +311,7 @@ class PeerManagerSpec
     peerAsIncomingProbe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
   }
 
-  it should "disconnect from outgoing peer if, while it was pending, the same peer hanshaked as incoming" in new TestSetup {
+  it should "disconnect from outgoing peer if, while it was pending, the same peer hanshaked as incoming" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     handleInitialNodesDiscovery()
 
@@ -351,7 +352,7 @@ class PeerManagerSpec
 
   behavior.of("outgoingConnectionDemand")
 
-  it should "try to connect to at least min-outgoing-peers but no more than max-outgoing-peers" in new ConnectedPeersFixture {
+  it should "try to connect to at least min-outgoing-peers but no more than max-outgoing-peers" taggedAs (UnitTest, NetworkTest) in new ConnectedPeersFixture {
     forAll { (connectedPeers: ConnectedPeers) =>
       val demand = PeerManagerActor.outgoingConnectionDemand(connectedPeers, peerConfiguration)
       demand shouldBe >=(0)
@@ -363,7 +364,7 @@ class PeerManagerSpec
     }
   }
 
-  it should "try to connect to discovered nodes if there's an outgoing demand: new nodes first, retried last" in new TestSetup {
+  it should "try to connect to discovered nodes if there's an outgoing demand: new nodes first, retried last" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     start()
     val discoveredNodes: Set[Node] = Set(
       "enode://111bd28d5b2c1378d748383fd83ff59572967c317c3063a9f475a26ad3f1517642a164338fb5268d4e32ea1cc48e663bd627dec572f1d201c7198518e5a506b1@88.99.216.30:45834?discport=45834",
@@ -407,7 +408,7 @@ class PeerManagerSpec
 
   behavior.of("numberOfIncomingConnectionsToPrune")
 
-  it should "try to prune incoming connections down to the minimum allowed number" in new ConnectedPeersFixture {
+  it should "try to prune incoming connections down to the minimum allowed number" taggedAs (UnitTest, NetworkTest) in new ConnectedPeersFixture {
     forAll { (connectedPeers: ConnectedPeers) =>
       val numPeersToPrune = PeerManagerActor.numberOfIncomingConnectionsToPrune(connectedPeers, peerConfiguration)
       numPeersToPrune shouldBe >=(0)
@@ -427,7 +428,7 @@ class PeerManagerSpec
   behavior.of("ConnectedPeers.prunePeers")
 
   // The `ConnectedPeers` is quite slow to generate, so doing a few tests in one go.
-  it should "prune peers which are old enough, protecting against repeated forced pruning" in new ConnectedPeersFixture {
+  it should "prune peers which are old enough, protecting against repeated forced pruning" taggedAs (UnitTest, NetworkTest) in new ConnectedPeersFixture {
     forAll { (connectedPeers: ConnectedPeers) =>
       val numPeersToPrune = PeerManagerActor.numberOfIncomingConnectionsToPrune(connectedPeers, peerConfiguration)
 
@@ -512,7 +513,7 @@ class PeerManagerSpec
     }
   }
 
-  it should "not prune again until the pruned peers are disconnected and new ones connect" in new ConnectedPeersFixture {
+  it should "not prune again until the pruned peers are disconnected and new ones connect" taggedAs (UnitTest, NetworkTest) in new ConnectedPeersFixture {
     val data: Gen[(ConnectedPeers, List[Peer])] = for {
       connectedPeers <- arbitrary[ConnectedPeers]
       numIncoming <- Gen.choose(0, peerConfiguration.pruneIncomingPeers)
@@ -550,7 +551,7 @@ class PeerManagerSpec
 
   behavior.of("prunePriority")
 
-  it should "calculate priority as count(responses)/lifetime" in {
+  it should "calculate priority as count(responses)/lifetime" taggedAs (UnitTest, NetworkTest) in {
     val now = System.currentTimeMillis
 
     def stat(responses: Int, firstSeen: FiniteDuration, lastSeen: FiniteDuration) =

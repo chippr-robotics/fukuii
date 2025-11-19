@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
 import com.chipprbots.ethereum.proof.MptProofVerifier
 import com.chipprbots.ethereum.proof.ProofVerifyResult.ValidProof
+import com.chipprbots.ethereum.testing.Tags._
 
 class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ObjectGenerators {
 
@@ -42,14 +43,14 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     override def fromBytes(bytes: Array[Byte]): Int = ByteBuffer.wrap(bytes).getInt()
   }
 
-  test("PatriciaTrie gets inserted key-value pairs") {
+  test("PatriciaTrie gets inserted key-value pairs", UnitTest, MPTTest) {
     forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
       assertCanGetEveryKeyValue(trie, keyValueList)
     }
   }
 
-  test("PatriciaTrie collapsing trie") {
+  test("PatriciaTrie collapsing trie", UnitTest, MPTTest) {
     forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       // given
       val trie = addEveryKeyValuePair(keyValueList)
@@ -67,7 +68,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     }
   }
 
-  test("PatriciaTrie encoding decoding") {
+  test("PatriciaTrie encoding decoding", UnitTest, MPTTest) {
     forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
       val unfoldedTrieNode = MptTraversals.parseTrieIntoMemory(HashNode(trie.getRootHash), emptyEphemNodeStorage)
@@ -80,7 +81,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     }
   }
 
-  test("PatriciaTrie delete") {
+  test("PatriciaTrie delete", UnitTest, MPTTest) {
     forAll(Gen.nonEmptyListOf(Arbitrary.arbitrary[Int])) { (keyList: List[Int]) =>
       val keyValueList = keyList.distinct.zipWithIndex
       val trieAfterInsert = addEveryKeyValuePair(keyValueList)
@@ -98,7 +99,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     }
   }
 
-  test("Trie insert should have the same root independently on the order its pairs are inserted") {
+  test("Trie insert should have the same root independently on the order its pairs are inserted", UnitTest, MPTTest) {
     forAll(keyValueListGen()) { (keyValueList: Seq[(Int, Int)]) =>
       val trie = addEveryKeyValuePair(keyValueList)
 
@@ -110,13 +111,13 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   /* MerklePatriciaTree API tests for particular cases */
-  test("Remove key from an empty tree") {
+  test("Remove key from an empty tree", UnitTest, MPTTest) {
     val emptyTrie = MerklePatriciaTrie[Int, Int](emptyEphemNodeStorage)
     val afterDeleteTrie = emptyTrie.remove(1)
     assert(afterDeleteTrie.getRootHash.sameElements(emptyTrie.getRootHash))
   }
 
-  test("Remove a key that does not exist") {
+  test("Remove a key that does not exist", UnitTest, MPTTest) {
     val emptyTrie = MerklePatriciaTrie[Int, Int](emptyEphemNodeStorage)
     val trieWithOneElement = emptyTrie.put(1, 5)
     val obtained = trieWithOneElement.get(1)
@@ -127,7 +128,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assert(obtainedAfterDelete.get == 5)
   }
 
-  test("Insert only one (key, value) pair to a trie and then deleted") {
+  test("Insert only one (key, value) pair to a trie and then deleted", UnitTest, MPTTest) {
     val emptyTrie = MerklePatriciaTrie[Int, Int](emptyEphemNodeStorage)
     val trieWithOneElement = emptyTrie.put(1, 5)
     val obtained = trieWithOneElement.get(1)
@@ -138,7 +139,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assert(obtainedAfterDelete.isEmpty)
   }
 
-  test("Insert two (key, value) pairs with the first hex not in common") {
+  test("Insert two (key, value) pairs with the first hex not in common", UnitTest, MPTTest) {
     val key1: Array[Byte] = Hex.decode("0001")
     val key2: Array[Byte] = Hex.decode("f001")
     val val1: Array[Byte] = Hex.decode("0101")
@@ -152,7 +153,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assert(obtained2.get.sameElements(val1))
   }
 
-  test("Insert two (key, value) pairs with one hex or more in common") {
+  test("Insert two (key, value) pairs with one hex or more in common", UnitTest, MPTTest) {
     val key1: Array[Byte] = Hex.decode("00000001")
     val key2: Array[Byte] = Hex.decode("0000f001")
     val val1: Array[Byte] = Hex.decode("0101")
@@ -166,7 +167,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assert(obtained2.get.sameElements(val1))
   }
 
-  test("Insert two (key, value) pairs with the same key") {
+  test("Insert two (key, value) pairs with the same key", UnitTest, MPTTest) {
     val key1: Array[Byte] = Hex.decode("00000001")
     val val1: Array[Byte] = Hex.decode("0101")
     val val2: Array[Byte] = Hex.decode("010101")
@@ -177,7 +178,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assert(obtained2.get.sameElements(val2))
   }
 
-  test("Insert 3 (key, value) pairs with different first hex") {
+  test("Insert 3 (key, value) pairs with different first hex", UnitTest, MPTTest) {
     val key1: Array[Byte] = Hex.decode("10000001")
     val key2: Array[Byte] = Hex.decode("20000002")
     val key3: Array[Byte] = Hex.decode("30000003")
@@ -198,7 +199,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assert(obtained3.get.sameElements(val3))
   }
 
-  test("Multiple insertions") {
+  test("Multiple insertions", UnitTest, MPTTest) {
     val keys = List("123456", "234567", "123467", "12346789", "0123").map(Hex.decode)
     val vals = List("01", "02", "03", "04", "05").map(Hex.decode)
     val keysWithVal = keys.zip(vals)
@@ -207,7 +208,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assertCanGetEveryKeyValues(trie, keysWithVal)
   }
 
-  test("Multiple insertions and the removals") {
+  test("Multiple insertions and the removals", UnitTest, MPTTest) {
     val keys =
       List("123456", "234567", "123467", "12346789", "0123", "1235", "234568", "125678", "124567", "23456789").map(
         Hex.decode
@@ -223,7 +224,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     trieAfterDelete.get(Hex.decode("01"))
   }
 
-  test("Insert 3 (key-value) pairs with a common prefix") {
+  test("Insert 3 (key-value) pairs with a common prefix", UnitTest, MPTTest) {
     val key1: Array[Byte] = Hex.decode("1234")
     val key2: Array[Byte] = Hex.decode("1235")
     val key3: Array[Byte] = Hex.decode("1245")
@@ -236,7 +237,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     assertCanGetEveryKeyValues(trie, keysWithVal)
   }
 
-  test("Insert 2 (key-value) pairs with one hex in common and then delete one of them") {
+  test("Insert 2 (key-value) pairs with one hex in common and then delete one of them", UnitTest, MPTTest) {
     val key1: Array[Byte] = Hex.decode("123456")
     val key2: Array[Byte] = Hex.decode("223456")
     val val1: Array[Byte] = Hex.decode("01")

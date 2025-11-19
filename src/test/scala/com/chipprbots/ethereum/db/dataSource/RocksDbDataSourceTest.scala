@@ -5,6 +5,7 @@ import java.nio.file.Files
 import org.scalatest.flatspec.AnyFlatSpec
 
 import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.testing.Tags._
 
 class RocksDbDataSourceTest extends AnyFlatSpec with DataSourceTestBehavior {
 

@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.rlp.encode
+import com.chipprbots.ethereum.testing.Tags._
 
 class NodeDataSpec extends AnyFlatSpec with Matchers {
 
@@ -83,11 +84,11 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
     RLPValue(emptyStorageRoot.toArray[Byte])
   )
 
-  "NodeData" should "be encoded properly" in {
+  "NodeData" should "be encoded properly" taggedAs (UnitTest, NetworkTest) in {
     (nodeData.toBytes: Array[Byte]) shouldBe encode(encodedNodeData)
   }
 
-  it should "be decoded properly" in {
+  it should "be decoded properly" taggedAs (UnitTest, NetworkTest) in {
     val result = EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH63)
       .fromBytes(Codes.NodeDataCode, encode(encodedNodeData))
@@ -104,13 +105,13 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
     result shouldBe nodeData
   }
 
-  it should "be decoded previously encoded value" in {
+  it should "be decoded previously encoded value" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH63)
       .fromBytes(Codes.NodeDataCode, nodeData.toBytes) shouldBe Right(nodeData)
   }
 
-  it should "decode branch node with values in leafs that looks like RLP list" in {
+  it should "decode branch node with values taggedAs (UnitTest, NetworkTest) in leafs that looks like RLP list" in {
     // given
     val encodedMptBranch =
       Hex.decode(
@@ -161,7 +162,7 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
     result shouldBe decodedMptBranch
   }
 
-  it should "obtain the same value when decoding and encoding an encoded node" in {
+  it should "obtain the same value when decoding and encoding an encoded node" taggedAs (UnitTest, NetworkTest) in {
     // given
     val encodedMptBranch =
       Hex.decode(

@@ -9,6 +9,45 @@ import com.chipprbots.ethereum.utils.Logger
 
 object App extends Logger {
 
+  private def showHelp(): Unit =
+    println(
+      """
+        |Fukuii Ethereum Client
+        |
+        |Usage: fukuii [command] [options]
+        |
+        |Commands:
+        |  fukuii [network]       Start Fukuii node (default command)
+        |                         Networks: etc, eth, mordor, testnet-internal
+        |
+        |  cli [subcommand]       Command-line utilities
+        |                         Run 'fukuii cli --help' for more information
+        |
+        |  keytool [options]      Key management tool
+        |
+        |  bootstrap [path]       Download blockchain bootstrap data
+        |
+        |  faucet [options]       Run faucet service
+        |
+        |  eckeygen [options]     Generate EC key pairs
+        |
+        |  signature-validator    Validate signatures
+        |
+        |Options:
+        |  --help, -h             Show this help message
+        |  --tui                  Enable the console UI (disabled by default)
+        |  --force-pivot-sync     Disable checkpoint bootstrapping and force pivot sync
+        |
+        |Examples:
+        |  fukuii etc                      # Start Ethereum Classic node with standard logging
+        |  fukuii etc --tui                # Start with console UI enabled
+        |  fukuii cli --help               # Show CLI utilities help
+        |  fukuii cli generate-private-key # Generate a new private key
+        |
+        |For more information, visit: https://github.com/chippr-robotics/fukuii
+        |""".stripMargin
+    )
+
   def main(args: Array[String]): Unit = {
 
     val launchFukuii = "fukuii"
@@ -23,6 +62,7 @@ object App extends Logger {
 
     args.headOption match {
       case None                  => Fukuii.main(args)
+      case Some("--help" | "-h") => showHelp()
       case Some(`launchFukuii`)  => Fukuii.main(args.tail)
       case Some(`launchKeytool`) => KeyTool.main(args.tail)
       case Some(`downloadBootstrap`) =>
@@ -37,9 +77,8 @@ object App extends Logger {
       case Some(`cli`)          => CliLauncher.main(args.tail)
       case Some(unknown) =>
         log.error(
-          s"Unrecognised launcher option $unknown, " +
-            s"first parameter must be $launchKeytool, $downloadBootstrap, $launchFukuii, " +
-            s"$faucet, $ecKeyGen, $sigValidator or $cli"
+          s"Unrecognised launcher option: $unknown\n" +
+            s"Run 'fukuii --help' to see available commands."
         )
     }
 

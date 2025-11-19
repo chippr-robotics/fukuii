@@ -34,11 +34,15 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 
 class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
 
-  it should "succeed in establishing connection if the handshake is always successful" in new TestSetup {
+  it should "succeed in establishing connection if the handshake is always successful" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     import DefaultValues._
 
@@ -56,7 +60,10 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
     sender.expectMsg(StatusResponse(Handshaked))
   }
 
-  it should "fail in establishing connection if the handshake always fails" in new TestSetup {
+  it should "fail in establishing connection if the handshake always fails" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     import DefaultValues._
 
@@ -73,7 +80,10 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
 
   }
 
-  it should "succeed in establishing connection in simple Hello exchange" in new TestSetup {
+  it should "succeed in establishing connection in simple Hello exchange" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     import DefaultValues._
 
@@ -93,7 +103,10 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
     sender.expectMsg(StatusResponse(Handshaked))
   }
 
-  it should "fail in establishing connection in simple Hello exchange if timeout happened" in new TestSetup {
+  it should "fail in establishing connection in simple Hello exchange if timeout happened" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     import DefaultValues._
 
@@ -111,7 +124,10 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
     rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(defaultReasonDisconnect)))
   }
 
-  it should "fail in establishing connection in simple Hello exchange if a Status message was received" in new TestSetup {
+  it should "fail in establishing connection in simple Hello exchange if a Status message was received" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     import DefaultValues._
 
@@ -129,7 +145,7 @@ class PeerActorHandshakingSpec extends AnyFlatSpec with Matchers {
     rlpxConnectionProbe.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(defaultReasonDisconnect)))
   }
 
-  it should "ignore unhandled message while establishing connection" in new TestSetup {
+  it should "ignore unhandled message while establishing connection" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     import DefaultValues._
 

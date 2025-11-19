@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 import scala.concurrent.Future
@@ -31,7 +32,7 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "NetService" should "return handshaked peer count" in new TestSetup {
+  "NetService" should "return handshaked peer count" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val resF: Future[Either[JsonRpcError, PeerCountResponse]] = netService
       .peerCount(PeerCountRequest())
       .unsafeToFuture()
@@ -50,11 +51,11 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
     resF.futureValue shouldBe Right(PeerCountResponse(2))
   }
 
-  it should "return listening response" in new TestSetup {
+  it should "return listening response" taggedAs (UnitTest, RPCTest) in new TestSetup {
     netService.listening(ListeningRequest()).unsafeRunSync() shouldBe Right(ListeningResponse(true))
   }
 
-  it should "return version response" in new TestSetup {
+  it should "return version response" taggedAs (UnitTest, RPCTest) in new TestSetup {
     netService.version(VersionRequest()).unsafeRunSync() shouldBe Right(VersionResponse("42"))
   }
 

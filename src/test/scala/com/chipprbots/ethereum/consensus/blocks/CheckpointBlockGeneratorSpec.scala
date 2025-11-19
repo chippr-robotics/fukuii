@@ -9,10 +9,11 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostEcip1097
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BloomFilter
+import com.chipprbots.ethereum.testing.Tags._
 
 class CheckpointBlockGeneratorSpec extends AnyFlatSpec with Matchers {
 
-  it should "generate a proper block with checkpoint" in new TestSetup {
+  it should "generate a proper block with checkpoint" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
 
     val fakeCheckpoint = Checkpoint.empty
 

@@ -30,13 +30,14 @@ import com.chipprbots.ethereum.extvm.msg.GetBlockhash
 import com.chipprbots.ethereum.extvm.msg.Blockhash
 import com.chipprbots.ethereum.extvm.msg.Hello
 import com.chipprbots.ethereum.extvm.msg.{EthereumConfig => MsgEthereumConfig}
+import com.chipprbots.ethereum.testing.Tags._
 
 class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   import com.chipprbots.ethereum.Fixtures.Blocks._
   import Implicits._
 
-  "VMClient" should "handle call context and result" in new TestSetup {
+  "VMClient" should "handle call context and result" taggedAs (UnitTest, VMTest) in new TestSetup {
     val programContext: ProgramContext[MockWorldState, MockStorage] =
       ProgramContext[MockWorldState, MockStorage](tx, blockHeader, senderAddress, emptyWorld, evmConfig)
 
@@ -72,7 +73,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
     result.gasRefund shouldBe 120
   }
 
-  it should "handle account query" in new TestSetup {
+  it should "handle account query" taggedAs (UnitTest, VMTest) in new TestSetup {
     val testQueryAccountAddr: Address = Address("0x129982FF")
     val testQueryAccount: Account = Account(nonce = 11, balance = 99999999)
 
@@ -100,7 +101,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
     result.error shouldBe None
   }
 
-  it should "handle storage query" in new TestSetup {
+  it should "handle storage query" taggedAs (UnitTest, VMTest) in new TestSetup {
     val testStorageAddr: Address = Address("0x99999999444444ffcc")
     val testStorageOffset: BigInt = BigInt(123)
     val testStorageValue: BigInt = BigInt(5918918239L)
@@ -126,7 +127,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
     result.error shouldBe None
   }
 
-  it should "handle code query" in new TestSetup {
+  it should "handle code query" taggedAs (UnitTest, VMTest) in new TestSetup {
     val testCodeAddr: Address = Address("0x1234")
     val testCodeValue: ByteString = ByteString(Hex.decode("11223344991191919191919129129facefc122"))
 
@@ -150,7 +151,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
     result.error shouldBe None
   }
 
-  it should "handle blockhash query" in new TestSetup {
+  it should "handle blockhash query" taggedAs (UnitTest, VMTest) in new TestSetup {
     val testNumber = 87
 
     val world: MockWorldState = emptyWorld.copy(numberOfHashes = 100)
@@ -173,7 +174,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
     result.error shouldBe None
   }
 
-  it should "send hello msg" in new TestSetup {
+  it should "send hello msg" taggedAs (UnitTest, VMTest) in new TestSetup {
     val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
     val forkBlockNumbers: ForkBlockNumbers = blockchainConfig.forkBlockNumbers
     val expectedEthereumConfig = msg.EthereumConfig(
@@ -219,6 +220,8 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
       phoenixBlockNumber = 0,
       magnetoBlockNumber = 0,
       berlinBlockNumber = 0,
+      mystiqueBlockNumber = 0,
+      spiralBlockNumber = 0,
       chainId = 0x3d.toByte
     )
     val evmConfig: EvmConfig = EvmConfig.FrontierConfigBuilder(blockchainConfigForEvm)
@@ -239,7 +242,7 @@ class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {
 
     val messageHandler: MessageHandlerApi = mock[MessageHandlerApi]
 
-    val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("mantis", None, "127.0.0.1", 0)
+    val externalVmConfig: VmConfig.ExternalConfig = VmConfig.ExternalConfig("fukuii", None, "127.0.0.1", 0)
     val vmClient = new VMClient(externalVmConfig, messageHandler, testMode = false)
   }
 

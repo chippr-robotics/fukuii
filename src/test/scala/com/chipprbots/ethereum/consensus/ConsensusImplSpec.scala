@@ -23,11 +23,12 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
   import ConsensusImplSpec._
-  "Consensus" should "extend the current best chain" in new ConsensusSetup {
+  "Consensus" should "extend the current best chain" taggedAs(UnitTest, ConsensusTest) in new ConsensusSetup {
     val chainExtension = BlockHelpers.generateChain(3, initialBestBlock)
 
     whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) {
@@ -37,7 +38,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock() shouldBe Some(chainExtension.last)
   }
 
-  it should "extends the branch partially if one block is invalid" in new ConsensusSetup {
+  it should "extends the branch partially if one block is invalid" taggedAs(UnitTest, ConsensusTest) in new ConsensusSetup {
     val chainExtension = BlockHelpers.generateChain(3, initialBestBlock)
     setFailingBlock(chainExtension(1))
 
@@ -47,7 +48,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock() shouldBe Some(chainExtension.head)
   }
 
-  it should "keep the current best chain if the passed one is not better" in new ConsensusSetup {
+  it should "keep the current best chain if the passed one is not better" taggedAs(UnitTest, ConsensusTest) in new ConsensusSetup {
     val chainWithLowWeight =
       BlockHelpers.generateChain(3, initialChain(2), b => b.copy(header = b.header.copy(difficulty = 1)))
 
@@ -57,7 +58,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock() shouldBe Some(initialBestBlock)
   }
 
-  it should "reorganise the chain if the new chain is better" in new ConsensusSetup {
+  it should "reorganise the chain if the new chain is better" taggedAs(UnitTest, ConsensusTest) in new ConsensusSetup {
     val newBetterBranch =
       BlockHelpers.generateChain(3, initialChain(2), b => b.copy(header = b.header.copy(difficulty = 10000000)))
 
@@ -67,7 +68,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock() shouldBe Some(newBetterBranch.last)
   }
 
-  it should "return an error a block execution is failing during a reorganisation" in new ConsensusSetup {
+  it should "return an error a block execution is failing during a reorganisation" taggedAs(UnitTest, ConsensusTest) in new ConsensusSetup {
     val newBetterBranch =
       BlockHelpers.generateChain(3, initialChain(2), b => b.copy(header = b.header.copy(difficulty = 10000000)))
 
@@ -86,7 +87,7 @@ object ConsensusImplSpec {
   val initialBestBlock = initialChain.last
 
   abstract class ConsensusSetup {
-    private val testSetup = new EphemBlockchainTestSetup with MockFactory with org.scalatest.TestSuite {
+    private val testSetup = new EphemBlockchainTestSetup with MockFactory {
       override lazy val blockExecution: BlockExecution = stub[BlockExecution]
       (blockExecution
         .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))

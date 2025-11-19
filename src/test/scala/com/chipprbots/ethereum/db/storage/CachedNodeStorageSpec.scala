@@ -16,12 +16,13 @@ import com.chipprbots.ethereum.db.cache.MapCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
 
 class CachedNodeStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators {
   val iterations = 10
 
-  "CachedNodeStorage" should "not update dataSource until persist" in new TestSetup {
+  "CachedNodeStorage" should "not update dataSource until persist" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     forAll(keyValueByteStringGen(kvSize)) { keyvalues =>
       cachedNodeStorage.update(Nil, keyvalues)
     }
@@ -37,7 +38,7 @@ class CachedNodeStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     }
   }
 
-  it should "persist elements to underlying data source when full" in new TestSetup {
+  it should "persist elements to underlying data source when full" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
     forAll(keyValueByteStringGen(kvSize)) { keyvalues =>
       cachedNodeStorage.update(Nil, keyvalues)
 
@@ -48,7 +49,10 @@ class CachedNodeStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     }
   }
 
-  it should "persist elements to underlying data source when not cleared for long time" in new TestSetup {
+  it should "persist elements to underlying data source when not cleared for long time" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in new TestSetup {
     val key: ByteString = ByteString(1)
     val value: Array[Byte] = Array(1.toByte)
     val cachedNodeStorageTiming = new CachedNodeStorage(nodeStorage, mapCacheTime)

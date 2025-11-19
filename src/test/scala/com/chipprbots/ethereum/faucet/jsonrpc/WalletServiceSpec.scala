@@ -33,13 +33,14 @@ import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError
 import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError
 import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
+import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for WalletRpcClient
 class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "Wallet Service" should "send a transaction successfully when getNonce and sendTransaction successfully" in new TestSetup {
+  "Wallet Service" should "send a transaction successfully when getNonce and sendTransaction successfully" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val receivingAddress: Address = Address("0x99")
     val currentNonce = 2
@@ -69,7 +70,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   }
 
-  it should "failure the transaction when get timeout of getNonce" in new TestSetup {
+  it should "failure the transaction when get timeout of getNonce" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val timeout: ConnectionError = ConnectionError("timeout")
     (walletRpcClient.getNonce _).expects(config.walletAddress).returning(IO.pure(Left(timeout)))
@@ -80,7 +81,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   }
 
-  it should "get wallet successful" in new TestSetup {
+  it should "get wallet successful" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockKeyStore.unlockAccount _).expects(config.walletAddress, config.walletPassword).returning(Right(wallet))
 
     val res: Either[KeyStoreError, Wallet] = walletService.getWallet.unsafeRunSync()
@@ -88,7 +89,7 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
     res shouldEqual Right(wallet)
   }
 
-  it should "wallet decryption failed" in new TestSetup {
+  it should "wallet decryption failed" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockKeyStore.unlockAccount _)
       .expects(config.walletAddress, config.walletPassword)
       .returning(Left(DecryptionFailed))
@@ -103,22 +104,8 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
     val (prvKey, pubKey) = keyPairToByteStrings(walletKeyPair)
     val wallet: Wallet = Wallet(Address(crypto.kec256(pubKey)), prvKey)
 
-    val walletRpcClient: WalletRpcClient = createStubWalletRpcClient()
+    val walletRpcClient: WalletRpcClientApi = mock[WalletRpcClientApi]
     val mockKeyStore: KeyStore = mock[KeyStore]
-
-    private def createStubWalletRpcClient(): WalletRpcClient = {
-      import org.apache.pekko.actor.ActorSystem
-      import org.apache.pekko.http.scaladsl.model.Uri
-      import javax.net.ssl.SSLContext
-      import scala.concurrent.ExecutionContext
-
-      implicit val stubActorSystem: ActorSystem = mock[ActorSystem]
-      implicit val stubEc: ExecutionContext = mock[ExecutionContext]
-      val stubGetSSLContext: () => Either[com.chipprbots.ethereum.security.SSLError, SSLContext] =
-        () => Left(mock[com.chipprbots.ethereum.security.SSLError])
-
-      new WalletRpcClient(Uri("http://localhost"), 10.seconds, stubGetSSLContext)
-    }
     val config: FaucetConfig =
       FaucetConfig(
         walletAddress = wallet.address,

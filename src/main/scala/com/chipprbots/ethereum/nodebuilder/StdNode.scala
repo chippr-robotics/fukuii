@@ -11,6 +11,8 @@ import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.console.ConsoleUI
+import com.chipprbots.ethereum.console.ConsoleUIUpdater
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -30,6 +32,8 @@ import com.chipprbots.ethereum.utils.Hex
   *   [[com.chipprbots.ethereum.nodebuilder.Node Node]]
   */
 abstract class BaseNode extends Node {
+
+  private var consoleUIUpdater: Option[ConsoleUIUpdater] = None
 
   def start(): Unit = {
     startMetricsClient()
@@ -57,6 +61,8 @@ abstract class BaseNode extends Node {
     startJsonRpcIpcServer()
 
     startPeriodicDBConsistencyCheck()
+
+    startConsoleUIUpdater()
   }
 
   private[this] def startMetricsClient(): Unit = {
@@ -71,7 +77,10 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def loadGenesisData(): Unit =
-    if (!Config.testmode) genesisDataLoader.loadGenesisData()
+    if (!Config.testmode) {
+      genesisDataLoader.loadGenesisData()
+      bootstrapCheckpointLoader.loadBootstrapCheckpoints()
+    }
 
   private[this] def runDBConsistencyCheck(): Unit =
     StorageConsistencyChecker.checkStorageConsistency(
@@ -113,12 +122,30 @@ abstract class BaseNode extends Node {
         "PeriodicDBConsistencyCheck"
       )
 
+  private[this] def startConsoleUIUpdater(): Unit = {
+    val consoleUI = ConsoleUI.getInstance()
+    if (consoleUI.isEnabled) {
+      log.info("Starting Console UI updater")
+      val updater = new ConsoleUIUpdater(
+        consoleUI,
+        Some(peerManager),
+        Some(syncController),
+        Config.blockchains.network,
+        shutdown
+      )(system)
+      consoleUIUpdater = Some(updater)
+      updater.start()
+    }
+  }
+
   override def shutdown: () => Unit = () => {
     def tryAndLogFailure(f: () => Any): Unit = Try(f()) match {
       case Failure(e) => log.warn("Error while shutting down...", e)
       case Success(_) =>
     }
 
+    tryAndLogFailure(() => consoleUIUpdater.foreach(_.stop()))
+    tryAndLogFailure(() => ConsoleUI.getInstance().shutdown())
     tryAndLogFailure(() => peerDiscoveryManager ! PeerDiscoveryManager.Stop)
     tryAndLogFailure(() => mining.stopProtocol())
     tryAndLogFailure(() =>

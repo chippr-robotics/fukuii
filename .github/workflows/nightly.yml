@@ -1,0 +1,210 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # Run at 00:00 GMT (midnight UTC) every day
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  DOCKERHUB_IMAGE: chipprbots/fukuii
+
+jobs:
+  nightly-build:
+    name: Nightly Docker Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image:
+          - name: mainnet
+            file: Dockerfile.mainnet
+            suffix: -mainnet
+          - name: mordor
+            file: Dockerfile.mordor
+            suffix: -mordor
+          - name: mordor-miner
+            file: Dockerfile.mordor-miner
+            suffix: -mordor-miner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate nightly tag
+        id: nightly-tag
+        run: |
+          NIGHTLY_DATE=$(date -u +%Y%m%d)
+          echo "date=$NIGHTLY_DATE" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image.suffix }}
+            ${{ env.DOCKERHUB_IMAGE }}${{ matrix.image.suffix }}
+          tags: |
+            type=raw,value=nightly
+            type=raw,value=nightly-${{ steps.nightly-tag.outputs.date }}
+
+      - name: Build and push ${{ matrix.image.name }} image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/${{ matrix.image.file }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}
+
+  nightly-build-standard:
+    name: Nightly Build - Standard Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image:
+          - name: main
+            file: Dockerfile
+            suffix: ''
+          - name: dev
+            file: Dockerfile-dev
+            suffix: -dev
+          - name: base
+            file: Dockerfile-base
+            suffix: -base
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate nightly tag
+        id: nightly-tag
+        run: |
+          NIGHTLY_DATE=$(date -u +%Y%m%d)
+          echo "date=$NIGHTLY_DATE" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image.suffix }}
+            ${{ env.DOCKERHUB_IMAGE }}${{ matrix.image.suffix }}
+          tags: |
+            type=raw,value=nightly
+            type=raw,value=nightly-${{ steps.nightly-tag.outputs.date }}
+
+      - name: Build and push ${{ matrix.image.name }} image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/${{ matrix.image.file }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image.name }}-nightly
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-nightly
+
+  nightly-comprehensive-tests:
+    name: Nightly Comprehensive Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'sbt'
+      
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-21-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-21-
+            ${{ runner.os }}-sbt-
+      
+      - name: Set up SBT
+        run: |
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          sudo apt-get update
+          sudo apt-get install sbt
+      
+      - name: Run Comprehensive Test Suite
+        run: |
+          echo "=========================================="
+          echo "Running Comprehensive Test Suite (< 3 hours)"
+          echo "=========================================="
+          sbt testComprehensive
+        env:
+          FUKUII_DEV: true
+      
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comprehensive-test-results-${{ github.run_number }}
+          path: |
+            **/target/test-reports/**
+            **/target/scala-*/test-classes/**/*.log
+          retention-days: 30
+          if-no-files-found: warn

@@ -4,6 +4,7 @@ import java.util.logging.LogManager
 
 import org.rocksdb
 
+import com.chipprbots.ethereum.console.ConsoleUI
 import com.chipprbots.ethereum.nodebuilder.StdNode
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
@@ -13,8 +14,34 @@ object Fukuii extends Logger {
   def main(args: Array[String]): Unit = {
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
 
-    // Display Fukuii ASCII art on startup
-    printBanner()
+    // Check for --force-pivot-sync flag to disable checkpoint bootstrapping
+    val forcePivotSync = args.contains("--force-pivot-sync")
+    if (forcePivotSync) {
+      System.setProperty("fukuii.blockchain.use-bootstrap-checkpoints", "false")
+      log.info("Checkpoint bootstrapping disabled, will use pivot sync")
+    }
+
+    // Check for --tui flag to enable console UI (disabled by default)
+    val enableConsoleUI = args.contains("--tui")
+
+    // Initialize console UI if enabled
+    val consoleUI = if (enableConsoleUI) {
+      val ui = ConsoleUI.getInstance()
+      ui.initialize()
+      if (ui.isEnabled) {
+        Some(ui)
+      } else {
+        None
+      }
+    } else {
+      log.info("Console UI disabled (use --tui flag to enable)")
+      None
+    }
+
+    // Display Fukuii ASCII art on startup (only if console UI is not enabled)
+    if (consoleUI.isEmpty) {
+      printBanner()
+    }
 
     val node =
       if (Config.testmode) {
@@ -25,6 +52,16 @@ object Fukuii extends Logger {
 
     log.info("Fukuii app {}", Config.clientVersion)
     log.info("Using network {}", Config.blockchains.network)
+
+    // Update console UI with network info
+    consoleUI.foreach { ui =>
+      ui.updateNetwork(Config.blockchains.network)
+      ui.updateConnectionStatus("Starting node...")
+      ui.render()
+    }
+
+    // Add shutdown hook to cleanup console UI
+    Runtime.getRuntime.addShutdownHook(new Thread(() => consoleUI.foreach(_.shutdown())))
 
     node.start()
   }

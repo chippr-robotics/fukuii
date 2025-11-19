@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.testing.Tags._
 
 class DeleteAccountsSpec extends AnyFlatSpec with Matchers with MockFactory {
 
@@ -24,20 +25,23 @@ class DeleteAccountsSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   val blockchain: BlockchainImpl = mock[BlockchainImpl]
 
-  it should "delete no accounts when none of them should be deleted" in new TestSetup {
+  it should "delete no accounts when none of them should be deleted" taggedAs (UnitTest, StateTest) in new TestSetup {
     val newWorld: InMemoryWorldStateProxy =
       InMemoryWorldStateProxy.persistState(mining.blockPreparator.deleteAccounts(Set.empty)(worldState))
     accountAddresses.foreach(a => assert(newWorld.getAccount(a).isDefined))
     newWorld.stateRootHash shouldBe worldState.stateRootHash
   }
 
-  it should "delete the accounts listed for deletion" in new TestSetup {
+  it should "delete the accounts listed for deletion" taggedAs (UnitTest, StateTest) in new TestSetup {
     val newWorld: InMemoryWorldStateProxy = mining.blockPreparator.deleteAccounts(accountAddresses.tail)(worldState)
     accountAddresses.tail.foreach(a => assert(newWorld.getAccount(a).isEmpty))
     assert(newWorld.getAccount(accountAddresses.head).isDefined)
   }
 
-  it should "delete all the accounts if they are all listed for deletion" in new TestSetup {
+  it should "delete all the accounts if they are all listed for deletion" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup {
     val newWorld: InMemoryWorldStateProxy =
       InMemoryWorldStateProxy.persistState(mining.blockPreparator.deleteAccounts(accountAddresses)(worldState))
     accountAddresses.foreach(a => assert(newWorld.getAccount(a).isEmpty))
@@ -45,7 +49,7 @@ class DeleteAccountsSpec extends AnyFlatSpec with Matchers with MockFactory {
   }
 
   // scalastyle:off magic.number
-  it should "delete account that had storage updated before" in new TestSetup {
+  it should "delete account that had storage updated before" taggedAs (UnitTest, StateTest) in new TestSetup {
     val worldStateWithStorage: InMemoryWorldStateProxy = worldState.saveStorage(
       validAccountAddress,
       worldState.getStorage(validAccountAddress).store(UInt256(1), UInt256(123))

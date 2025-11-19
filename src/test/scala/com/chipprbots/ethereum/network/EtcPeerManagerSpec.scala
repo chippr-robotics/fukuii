@@ -34,11 +34,12 @@ import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 
 class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
-  it should "start with the peers initial info as provided" in new TestSetup {
+  it should "start with the peers initial info as provided" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
     setupNewPeer(peer2, peer2Probe, peer2Info)
@@ -56,7 +57,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(HandshakedPeers(Map(peer1 -> peer1Info, peer2 -> peer2Info)))
   }
 
-  it should "update max peer when receiving new block ETH63" in new TestSetup {
+  it should "update max peer when receiving new block ETH63" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -80,7 +81,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(PeerInfoResponse(Some(expectedPeerInfo)))
   }
 
-  it should "update max peer when receiving new block ETC64" in new TestSetup {
+  it should "update max peer when receiving new block ETC64" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1InfoETC64)
 
@@ -106,7 +107,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(PeerInfoResponse(Some(expectedPeerInfo)))
   }
 
-  it should "update max peer when receiving block header" in new TestSetup {
+  it should "update max peer when receiving block header" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -127,7 +128,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "update max peer when receiving new block hashes" in new TestSetup {
+  it should "update max peer when receiving new block hashes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -145,7 +146,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "update the peer total difficulty when receiving a NewBlock" in new TestSetup {
+  it should "update the peer total difficulty when receiving a NewBlock" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -162,7 +166,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "update the peer chain weight when receiving a ETC64.NewBlock" in new TestSetup {
+  it should "update the peer chain weight when receiving a ETC64.NewBlock" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1InfoETC64)
 
@@ -182,7 +189,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(PeerInfoResponse(Some(peer1InfoETC64.withChainWeight(newBlock.chainWeight))))
   }
 
-  it should "update the fork accepted when receiving the fork block" in new TestSetup {
+  it should "update the fork accepted when receiving the fork block" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -197,7 +204,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(PeerInfoResponse(Some(peer1Info.withForkAccepted(true))))
   }
 
-  it should "disconnect from a peer with different fork block" in new TestSetup {
+  it should "disconnect from a peer with different fork block" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
@@ -214,7 +221,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     peer1Probe.expectMsg(DisconnectPeer(Disconnect.Reasons.UselessPeer))
   }
 
-  it should "remove peers information when a peers is disconnected" in new TestSetup {
+  it should "remove peers information when a peers is disconnected" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
 
     setupNewPeer(peer1, peer1Probe, peer1Info)
@@ -249,7 +256,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(HandshakedPeers(Map.empty))
   }
 
-  it should "provide handshaked peers only with best block number determined" in new TestSetup {
+  it should "provide handshaked peers only with best block number determined" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, freshPeerInfo.copy(maxBlockNumber = 0))
@@ -270,7 +280,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "provide handshaked peers only with best block number determined even if peers best block is its genesis" in new TestSetup {
+  it should "provide handshaked peers only with best block number determined even if peers best block is its genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
 
     val genesisStatus: RemoteStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)

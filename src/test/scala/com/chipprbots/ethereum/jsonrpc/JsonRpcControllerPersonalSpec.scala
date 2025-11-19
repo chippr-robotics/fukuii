@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.OptionNoneToJNullSerializer
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.QuantitiesSerializer
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.UnformattedDataJsonSerializer
+import com.chipprbots.ethereum.testing.Tags._
 
 class JsonRpcControllerPersonalSpec
     extends TestKit(ActorSystem("JsonRpcControllerPersonalSpec_System"))
@@ -46,7 +47,7 @@ class JsonRpcControllerPersonalSpec
   implicit val formats: Formats = DefaultFormats.preservingEmptyValues + OptionNoneToJNullSerializer +
     QuantitiesSerializer + UnformattedDataJsonSerializer
 
-  it should "personal_importRawKey" in new JsonRpcControllerFixture {
+  it should "personal_importRawKey" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val key = "7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"
     val keyBytes: ByteString = ByteString(Hex.decode(key))
     val addr: Address = Address("0x00000000000000000000000000000000000000ff")
@@ -63,7 +64,7 @@ class JsonRpcControllerPersonalSpec
     response should haveStringResult(addr.toString)
   }
 
-  it should "personal_newAccount" in new JsonRpcControllerFixture {
+  it should "personal_newAccount" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 
@@ -78,7 +79,7 @@ class JsonRpcControllerPersonalSpec
     response should haveStringResult(addr.toString)
   }
 
-  it should "personal_listAccounts" in new JsonRpcControllerFixture {
+  it should "personal_listAccounts" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val addresses: List[Address] = List(34, 12391, 123).map(Address(_))
 
     (personalService.listAccounts _)
@@ -91,7 +92,7 @@ class JsonRpcControllerPersonalSpec
     response should haveResult(JArray(addresses.map(a => JString(a.toString))))
   }
 
-  it should "personal_unlockAccount" in new JsonRpcControllerFixture {
+  it should "personal_unlockAccount" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
     val params: List[JString] = JString(address.toString) :: JString(pass) :: Nil
@@ -106,7 +107,7 @@ class JsonRpcControllerPersonalSpec
     response should haveBooleanResult(true)
   }
 
-  it should "personal_unlockAccount for specified duration" in new JsonRpcControllerFixture {
+  it should "personal_unlockAccount for specified duration" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
     val dur = "1"
@@ -122,7 +123,7 @@ class JsonRpcControllerPersonalSpec
     response should haveBooleanResult(true)
   }
 
-  it should "personal_unlockAccount should handle possible duration errors" in new JsonRpcControllerFixture {
+  it should "personal_unlockAccount should handle possible duration errors" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
     val dur = "alksjdfh"
@@ -142,7 +143,7 @@ class JsonRpcControllerPersonalSpec
     )
   }
 
-  it should "personal_unlockAccount should handle null passed as a duration for compatibility with Parity and web3j" in new JsonRpcControllerFixture {
+  it should "personal_unlockAccount should handle null passed as a duration for compatibility with Parity and web3j" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
     val params: List[JValue] = JString(address.toString) :: JString(pass) :: JNull :: Nil
@@ -157,7 +158,7 @@ class JsonRpcControllerPersonalSpec
     response should haveBooleanResult(true)
   }
 
-  it should "personal_lockAccount" in new JsonRpcControllerFixture {
+  it should "personal_lockAccount" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val params: List[JString] = JString(address.toString) :: Nil
 
@@ -171,7 +172,7 @@ class JsonRpcControllerPersonalSpec
     response should haveBooleanResult(true)
   }
 
-  it should "personal_sendTransaction" in new JsonRpcControllerFixture {
+  it should "personal_sendTransaction" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val params: List[JValue] = JObject(
       "from" -> Address(42).toString,
       "to" -> Address(123).toString,
@@ -191,7 +192,7 @@ class JsonRpcControllerPersonalSpec
     response should haveResult(JString(s"0x${Hex.toHexString(txHash.toArray)}"))
   }
 
-  it should "personal_sign" in new JsonRpcControllerFixture {
+  it should "personal_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
 
     (personalService.sign _)
       .expects(
@@ -218,7 +219,7 @@ class JsonRpcControllerPersonalSpec
     )
   }
 
-  it should "personal_ecRecover" in new JsonRpcControllerFixture {
+  it should "personal_ecRecover" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
 
     (personalService.ecRecover _)
       .expects(EcRecoverRequest(ByteString(Hex.decode("deadbeaf")), sig))

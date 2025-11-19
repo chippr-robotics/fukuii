@@ -57,7 +57,7 @@ object BlockBody {
       rlpEncodableToBlockHeader: RLPEncodeable => BlockHeader
   ): BlockBody =
     rlpEncodeable match {
-      case RLPList((transactions: RLPList), (uncles: RLPList)) =>
+      case RLPList(transactions: RLPList, uncles: RLPList) =>
         BlockBody(
           transactions.items.toTypedRLPEncodables.map(rlpEncodableToSignedTransaction),
           uncles.items.map(rlpEncodableToBlockHeader)

@@ -154,6 +154,9 @@ object OpCodes {
 
   val PhoenixOpCodes: List[OpCode] =
     List(CHAINID, SELFBALANCE) ++ ConstantinopleOpCodes
+
+  val SpiralOpCodes: List[OpCode] =
+    PUSH0 +: PhoenixOpCodes
 }
 
 object OpCode {
@@ -208,6 +211,8 @@ object OpCode {
   *   number of words to be popped from stack
   * @param alpha
   *   number of words to be pushed to stack
+  * @param baseGasFn
+  *   function to compute base gas cost from fee schedule
   */
 abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGasFn: FeeSchedule => BigInt)
     extends Product
@@ -822,6 +827,13 @@ case object JUMPDEST extends OpCode(0x5b, 0, 0, _.G_jumpdest) with ConstGas {
     state.step()
 }
 
+case object PUSH0 extends OpCode(0x5f, 0, 1, _.G_base) with ConstGas {
+  protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
+    val stack1 = state.stack.push(UInt256.Zero)
+    state.withStack(stack1).step()
+  }
+}
+
 sealed abstract class PushOp(code: Int) extends OpCode(code, 0, 1, _.G_verylow) with ConstGas {
   val i: Int = code - 0x60
 
@@ -955,6 +967,13 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (Seq(endowment, inOffset, inSize), stack1) = state.stack.pop(3)
 
+    // EIP-3860: Check initcode size limit
+    val maxInitCodeSize = state.config.maxInitCodeSize
+    if (state.config.eip3860Enabled && maxInitCodeSize.exists(max => inSize.toBigInt > max)) {
+      // Exceptional abort: initcode too large
+      return state.withStack(stack1.push(UInt256.Zero)).withError(InitCodeSizeLimit).step()
+    }
+
     // FIXME: to avoid calculating this twice, we could adjust state.gas prior to execution in OpCode#execute
     // not sure how this would affect other opcodes [EC-243]
     val availableGas = state.gas - (baseGasFn(state.config.feeSchedule) + varGas(state))
@@ -1030,7 +1049,14 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
 case object CREATE extends CreateOp(0xf0, 3) {
   protected def varGas[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): BigInt = {
     val (Seq(_, inOffset, inSize), _) = state.stack.pop(3)
-    state.config.calcMemCost(state.memory.size, inOffset, inSize)
+    val memCost = state.config.calcMemCost(state.memory.size, inOffset, inSize)
+    val initCodeGasCost: BigInt = if (state.config.eip3860Enabled) {
+      val words = wordsForBytes(inSize)
+      state.config.feeSchedule.G_initcode_word * words
+    } else {
+      BigInt(0)
+    }
+    memCost + initCodeGasCost
   }
 }
 
@@ -1039,7 +1065,13 @@ case object CREATE2 extends CreateOp(0xf5, 4) {
     val (Seq(_, inOffset, inSize), _) = state.stack.pop(3)
     val memCost = state.config.calcMemCost(state.memory.size, inOffset, inSize)
     val hashCost = state.config.feeSchedule.G_sha3word * wordsForBytes(inSize)
-    memCost + hashCost
+    val initCodeGasCost: BigInt = if (state.config.eip3860Enabled) {
+      val words = wordsForBytes(inSize)
+      state.config.feeSchedule.G_initcode_word * words
+    } else {
+      BigInt(0)
+    }
+    memCost + hashCost + initCodeGasCost
   }
 }
 
@@ -1273,6 +1305,19 @@ case object INVALID extends OpCode(0xfe, 0, 0, _.G_zero) with ConstGas {
     state.withError(InvalidOpCode(code))
 }
 
+/** SELFDESTRUCT opcode (0xff)
+  *
+  * @deprecated
+  *   As of EIP-6049 (Spiral fork), SELFDESTRUCT is officially deprecated. The behavior remains unchanged for now, but
+  *   developers should avoid using this opcode in new contracts as future EIPs may change or remove its functionality.
+  *
+  * See: https://eips.ethereum.org/EIPS/eip-6049 Activated with Spiral fork (ECIP-1109):
+  *   - Block 19,250,000 on Ethereum Classic mainnet
+  *   - Block 9,957,000 on Mordor testnet
+  *
+  * Note: EIP-3529 (Mystique fork) already removed the gas refund for SELFDESTRUCT, setting R_selfdestruct to 0.
+  * EIP-6049 does not change behavior further.
+  */
 case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct) {
   protected def exec[W <: WorldStateProxy[W, S], S <: Storage[S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (refund, stack1) = state.stack.pop()

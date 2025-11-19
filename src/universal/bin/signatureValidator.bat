@@ -2,4 +2,4 @@
 
 cd "%~dp0\.."
 
-call bin\mantis.bat signature-validator %*
+call bin\fukuii.bat signature-validator %*

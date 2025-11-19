@@ -163,7 +163,7 @@ sbt pp
 
 ### Scala 3 Development
 
-Fukuii uses **Scala 3.3.4 (LTS)** exclusively. The migration from Scala 2.13 was completed in October 2025.
+Fukuii uses **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** exclusively. The migration from Scala 2.13 and JDK 17 was completed in October 2025.
 
 **Key Scala 3 Features in Use:**
 - Native `given`/`using` syntax for implicit parameters
@@ -181,7 +181,8 @@ sbt testAll      # Run all tests
 **Notes:**
 - The project is Scala 3 only (no cross-compilation)
 - All dependencies are Scala 3 compatible
-- CI pipeline tests on Scala 3.3.4
+- CI pipeline tests on Scala 3.3.4 with JDK 21
+- See [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md) for the architectural decision
 - See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed migration
 
 ## Pre-commit Hooks
@@ -324,6 +325,18 @@ Always run tests before submitting your changes:
 sbt testAll
 ```
 
+**Run tests by tier (TEST-002):**
+```bash
+# Tier 1: Essential tests (< 5 min)
+sbt testEssential
+
+# Tier 2: Standard tests with coverage (< 30 min)
+sbt testCoverage
+
+# Tier 3: Comprehensive tests (< 3 hours)
+sbt testComprehensive
+```
+
 **Run specific module tests:**
 ```bash
 sbt bytes/test
@@ -336,6 +349,12 @@ sbt test
 ```bash
 sbt "IntegrationTest / test"
 ```
+
+**For more information on test strategy and KPI baselines:**
+- [Test Suite Strategy and KPIs (TEST-002)](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
+- [Testing Documentation](docs/testing/README.md)
+- [KPI Baselines](docs/testing/KPI_BASELINES.md)
+- [KPI Monitoring Guide](docs/testing/KPI_MONITORING_GUIDE.md)
 
 ## Submitting Changes
 
@@ -459,8 +478,8 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 4. **Package Structure**
    - All code uses package prefix `com.chipprbots.ethereum`
-   - Previously used `io.iohk.ethereum` (from Mantis project) - update if found
-   - Configuration paths use `.fukuii/` not `.mantis/`
+   - Previously used `io.iohk.ethereum` (from Fukuii project) - update if found
+   - Configuration paths use `.fukuii/` not `.fukuii/`
 
 5. **Dependencies**
    - Don't add dependencies without justification
@@ -473,7 +492,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 - **Scala Version**: Code must compile on Scala 3.3.4 (LTS)
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
-- **Rebranding**: This is a rebrand from "Mantis" to "Fukuii" - update any remaining "mantis" or "io.iohk" references
+- **Rebranding**: This is a rebrand from "Fukuii" to "Fukuii" - update any remaining "fukuii" or "io.iohk" references
 - **Commit Messages**: Use clear, descriptive commit messages in imperative mood
 - **Git Hygiene**: Don't commit build artifacts, IDE files, or temporary files
 
@@ -491,7 +510,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 **When fixing tests:**
 ```
 1. Identify the root cause of the failure
-2. Check if it's related to rebranding (mantis→fukuii, io.iohk→com.chipprbots)
+2. Check if it's related to rebranding (fukuii→fukuii, io.iohk→com.chipprbots)
 3. Check logger configurations in src/test/resources/ and src/it/resources/
 4. Run the specific test to verify the fix
 5. Run full test suite to ensure no regressions
@@ -544,6 +563,7 @@ Before submitting a PR, verify:
 - [GitHub Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
+- [Architectural Decision Records](docs/adr/README.md)
 - [Migration History](docs/MIGRATION_HISTORY.md)
 - [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)
 - [Scalafmt Documentation](https://scalameta.org/scalafmt/)

@@ -23,18 +23,19 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
 import org.scalatest.Ignore
+import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
 @Ignore
 class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scalatest.MockFactory {
-  "KeccakMiner actor" should "mine valid blocks" in new TestSetup {
+  "KeccakMiner actor" should "mine valid blocks" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
     val parentBlock: Block = origin
     setBlockForMining(parentBlock)
 
     executeTest(parentBlock)
   }
 
-  it should "mine valid block on the beginning of the new epoch" in new TestSetup {
+  it should "mine valid block on the beginning of the new epoch" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
     val epochLength: Int = EthashUtils.EPOCH_LENGTH_BEFORE_ECIP_1099
     val parentBlockNumber: Int =
       epochLength - 1 // 29999, mined block will be 30000 (first block of the new epoch)
@@ -44,7 +45,7 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
     executeTest(parentBlock)
   }
 
-  it should "mine valid blocks on the end of the epoch" in new TestSetup {
+  it should "mine valid blocks on the end of the epoch" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
     val epochLength: Int = EthashUtils.EPOCH_LENGTH_BEFORE_ECIP_1099
     val parentBlockNumber: Int =
       2 * epochLength - 2 // 59998, mined block will be 59999 (last block of the current epoch)

@@ -45,9 +45,9 @@ object BaseETH6XMessages {
               RLPValue(genesisHashBytes)
             ) =>
           Status(
-            BigInt(1, protocolVersionBytes).toInt,
-            BigInt(1, networkIdBytes).toInt,
-            BigInt(1, totalDifficultyBytes),
+            ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+            ByteUtils.bytesToBigInt(networkIdBytes).toInt,
+            ByteUtils.bytesToBigInt(totalDifficultyBytes),
             ByteString(bestHashBytes),
             ByteString(genesisHashBytes)
           )
@@ -138,7 +138,7 @@ object BaseETH6XMessages {
                 uncleNodesList.items.map(_.toBlockHeader)
               )
             ),
-            BigInt(1, totalDifficultyBytes)
+            ByteUtils.bytesToBigInt(totalDifficultyBytes)
           )
 
         case _ => throw new RuntimeException("Cannot decode NewBlock")
@@ -292,16 +292,16 @@ object BaseETH6XMessages {
           val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
           SignedTransaction(
             TransactionWithAccessList(
-              BigInt(1, chainIdBytes),
-              BigInt(1, nonceBytes),
-              BigInt(1, gasPriceBytes),
-              BigInt(1, gasLimitBytes),
+              ByteUtils.bytesToBigInt(chainIdBytes),
+              ByteUtils.bytesToBigInt(nonceBytes),
+              ByteUtils.bytesToBigInt(gasPriceBytes),
+              ByteUtils.bytesToBigInt(gasLimitBytes),
               receivingAddressOpt,
-              BigInt(1, valueBytes),
+              ByteUtils.bytesToBigInt(valueBytes),
               ByteString(payloadBytes),
               fromRlpList[AccessListItem](accessList).toList
             ),
-            BigInt(1, pointSignBytes).toInt.toByte,
+            ByteUtils.bytesToBigInt(pointSignBytes).toInt.toByte,
             ByteString(signatureRandomBytes),
             ByteString(signatureBytes)
           )
@@ -320,14 +320,14 @@ object BaseETH6XMessages {
           val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
           SignedTransaction(
             LegacyTransaction(
-              BigInt(1, nonceBytes),
-              BigInt(1, gasPriceBytes),
-              BigInt(1, gasLimitBytes),
+              ByteUtils.bytesToBigInt(nonceBytes),
+              ByteUtils.bytesToBigInt(gasPriceBytes),
+              ByteUtils.bytesToBigInt(gasLimitBytes),
               receivingAddressOpt,
-              BigInt(1, valueBytes),
+              ByteUtils.bytesToBigInt(valueBytes),
               ByteString(payloadBytes)
             ),
-            BigInt(1, pointSignBytes).toInt.toByte,
+            ByteUtils.bytesToBigInt(pointSignBytes).toInt.toByte,
             ByteString(signatureRandomBytes),
             ByteString(signatureBytes)
           )

@@ -475,7 +475,7 @@ ufw allow 8546/tcp  # Firewall
 
 ```hocon
 # Fukuii config
-mantis.network.rpc.http {
+fukuii.network.rpc.http {
   mode = "http"
   interface = "127.0.0.1"  # Localhost only
   port = 8546
@@ -494,7 +494,7 @@ curl http://localhost:8546
 **Pattern 2: Internal network with IP whitelist**
 
 ```hocon
-mantis.network.rpc.http {
+fukuii.network.rpc.http {
   interface = "0.0.0.0"  # Listen on all interfaces
   port = 8546
 }
@@ -505,6 +505,8 @@ Restrict with firewall (see above) to specific IPs only.
 **Pattern 3: Reverse proxy with authentication** (for external access)
 
 Use nginx or Caddy as reverse proxy:
+
+**Note**: For direct TLS/HTTPS configuration on Fukuii (without reverse proxy), see the [TLS Operations](tls-operations.md) runbook for detailed instructions on certificate generation, configuration, and testing.
 
 **Nginx example:**
 ```nginx
@@ -574,6 +576,26 @@ rpc.example.com {
 }
 ```
 
+**Alternative: Direct HTTPS on Fukuii**
+
+Instead of using a reverse proxy, you can enable TLS/HTTPS directly on Fukuii:
+
+```hocon
+fukuii.network.rpc.http {
+  mode = "https"
+  interface = "0.0.0.0"
+  port = 8546
+  
+  certificate {
+    keystore-path = "tls/fukuiiCA.p12"
+    keystore-type = "pkcs12"
+    password-file = "tls/password"
+  }
+}
+```
+
+For complete TLS setup instructions including certificate generation, testing, and production considerations, see the **[TLS Operations Runbook](tls-operations.md)**.
+
 ### RPC Method Filtering
 
 **Disable dangerous methods:**
@@ -582,7 +604,7 @@ If Fukuii supports method filtering, restrict to read-only methods:
 
 ```hocon
 # Hypothetical configuration
-mantis.network.rpc {
+fukuii.network.rpc {
   allowed-methods = [
     "eth_*",
     "net_*",
@@ -626,7 +648,7 @@ server {
 
 **Application-level** (if supported by Fukuii):
 ```hocon
-mantis.network.rpc {
+fukuii.network.rpc {
   rate-limit {
     enabled = true
     requests-per-second = 10

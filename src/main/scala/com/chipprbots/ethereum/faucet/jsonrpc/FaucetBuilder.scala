@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.faucet.jsonrpc
 
 import org.apache.pekko.actor.ActorSystem
 
+import com.typesafe.config.ConfigFactory
+
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Await
@@ -20,7 +22,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 trait ActorSystemBuilder {
   def systemName: String
-  implicit lazy val system: ActorSystem = ActorSystem(systemName)
+  implicit lazy val system: ActorSystem = ActorSystem(systemName, ConfigFactory.load())
 }
 
 trait FaucetControllerBuilder {
@@ -51,7 +53,7 @@ trait FaucetRpcServiceBuilder {
       () => sslContext("faucet.rpc-client")
     )
   val walletService = new WalletService(walletRpcClient, keyStore, faucetConfig)
-  val faucetSupervisor: FaucetSupervisor = new FaucetSupervisor(walletService, faucetConfig, shutdown)(system, runtime)
+  val faucetSupervisor: FaucetSupervisor = new FaucetSupervisor(walletService, faucetConfig, shutdown)
   val faucetRpcService = new FaucetRpcService(faucetConfig)
 }
 
@@ -73,7 +75,7 @@ trait JsonRpcConfigBuilder {
   self: FaucetConfigBuilder with ApisBuilder =>
 
   lazy val availableApis: List[String] = available
-  lazy val jsonRpcConfig: JsonRpcConfig = JsonRpcConfig(rawMantisConfig, availableApis)
+  lazy val jsonRpcConfig: JsonRpcConfig = JsonRpcConfig(rawFukuiiConfig, availableApis)
   lazy val api = Apis
 }
 
@@ -95,8 +97,7 @@ trait FaucetJsonRpcHttpServerBuilder {
     faucetJsonRpcController,
     faucetJsonRpcHealthCheck,
     jsonRpcConfig.httpServerConfig,
-    secureRandom,
-    () => sslContext("mantis.network.rpc.http")
+    () => sslContext("fukuii.network.rpc.http")
   )
 }
 

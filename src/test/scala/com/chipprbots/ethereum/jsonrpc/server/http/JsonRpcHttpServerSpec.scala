@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.healthcheck.HealthcheckResult
 import com.chipprbots.ethereum.jsonrpc._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitConfig
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Logger
@@ -42,11 +43,15 @@ import org.scalatest.Ignore
 // SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (JsonRpcController with Option[TestService])
 // This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking JsonRpcController
 @Ignore
-class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRouteTest with org.scalamock.scalatest.MockFactory {
+class JsonRpcHttpServerSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ScalatestRouteTest
+    with org.scalamock.scalatest.MockFactory {
 
   import JsonRpcHttpServerSpec._
 
-  it should "respond to healthcheck" in new TestSetup {
+  it should "respond to healthcheck" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(IO.pure(HealthcheckResponse(List(HealthcheckResult.ok("peerCount", Some("2"))))))
@@ -63,7 +68,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "respond to healthcheck with an error if one healthcheck fails" in new TestSetup {
+  it should "respond to healthcheck with an error if one healthcheck fails" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(
@@ -90,7 +95,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "respond to buildinfo" in new TestSetup {
+  it should "respond to buildinfo" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val buildInfoRequest = HttpRequest(HttpMethods.GET, uri = "/buildinfo")
 
     buildInfoRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
@@ -106,7 +111,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "pass valid json request to controller" in new TestSetup {
+  it should "pass valid json request to controller" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -123,7 +128,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "pass valid batch json request to controller" in new TestSetup {
+  it should "pass valid batch json request to controller" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -140,7 +145,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return BadRequest when malformed request is received" in new TestSetup {
+  it should "return BadRequest when malformed request is received" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val jsonRequestInvalid = ByteString("""{"jsonrpc":"2.0", "method": "this is not a valid json""")
     val postRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequestInvalid))
@@ -150,7 +155,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return a CORS Error" in new TestSetup {
+  it should "return a CORS Error" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val postRequest = HttpRequest(
       HttpMethods.POST,
       uri = "/",
@@ -164,7 +169,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept CORS Requests" in new TestSetup {
+  it should "accept CORS Requests" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -182,7 +187,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept json request with ip restriction and only one request" in new TestSetup {
+  it should "accept json request with ip restriction and only one request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -199,7 +204,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return too many requests error with ip-restriction enabled and two requests executed in a row" in new TestSetup {
+  it should "return too many requests error with ip-restriction enabled and two requests executed taggedAs (UnitTest, RPCTest) in a row" in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -219,7 +224,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return method not allowed error for batch request with ip-restriction enabled" in new TestSetup {
+  it should "return method not allowed error for batch request with ip-restriction enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -235,7 +240,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept json request after rejected request with ip-restriction enabled once time has passed" in new TestSetup {
+  it should "accept json request after rejected request with ip-restriction enabled once time has passed" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -266,7 +271,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "accept json requests from different IPs with ip-restriction enabled" in new TestSetup {
+  it should "accept json requests from different IPs with ip-restriction enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -299,7 +304,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code OK when throw LogicError" in new TestSetup {
+  it should "return status code OK when throw LogicError" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val jsonRpcError = JsonRpcError.LogicError("Faucet error: Connection not established")
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -326,7 +331,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code BadRequest when request invalid is received" in new TestSetup {
+  it should "return status code BadRequest when request invalid is received" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
@@ -358,7 +363,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code BadRequest when parser request failure" in new TestSetup {
+  it should "return status code BadRequest when parser request failure" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
@@ -386,7 +391,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
     }
   }
 
-  it should "return status code BadRequest when the request has invalid params" in new TestSetup {
+  it should "return status code BadRequest when the request has invalid params" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val error = JsonRpcError.InvalidParams()
     (mockJsonRpcController.handleRequest _)
       .expects(*)
@@ -460,7 +465,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       config = serverConfig,
       cors = serverConfig.corsAllowedOrigins
     )
-    
+
     private def createStubJsonRpcController(): JsonRpcController = {
       import com.chipprbots.ethereum.jsonrpc._
       import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
@@ -470,19 +475,19 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
       import org.apache.pekko.actor.ActorRef
       import java.security.SecureRandom
       import scala.concurrent.duration._
-      
+
       val stubNodeStatus = NodeStatus(
         key = generateKeyPair(new SecureRandom()),
         serverStatus = ServerStatus.NotListening,
         discoveryStatus = ServerStatus.NotListening
       )
-      
+
       val stubNetService = new NetService(
         new AtomicReference[NodeStatus](stubNodeStatus),
         mock[ActorRef],
         NetService.NetServiceConfig(10.seconds)
       )
-      
+
       JsonRpcController(
         web3Service = mock[Web3Service],
         netService = stubNetService,
@@ -497,7 +502,7 @@ class JsonRpcHttpServerSpec extends AnyFlatSpec with Matchers with ScalatestRout
         debugService = mock[DebugService],
         qaService = mock[QAService],
         checkpointingService = mock[CheckpointingService],
-        mantisService = mock[MantisService],
+        fukuiiService = mock[FukuiiService],
         proofService = mock[ProofService],
         config = mock[JsonRpcConfig]
       )

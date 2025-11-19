@@ -345,8 +345,8 @@ object Fixtures {
         nonce = ByteString(Hex.decode("60832709c8979daa"))
       )
       override val body: BlockBody = BlockBody.empty
-      override val transactionHashes: Seq[ByteString] = ???
-      override val size: Long = ???
+      override val transactionHashes: Seq[ByteString] = Seq.empty
+      override val size: Long = 540 // Approximate size of an empty block with the above header
     }
 
   }

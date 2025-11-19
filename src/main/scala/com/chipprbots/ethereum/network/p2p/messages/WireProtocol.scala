@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object WireProtocol {
 
@@ -48,9 +49,9 @@ object WireProtocol {
               RLPValue(nodeIdBytes),
               _*
             ) =>
-          val p2pVersion = BigInt(p2pVersionBytes).toLong
+          val p2pVersion = ByteUtils.bytesToBigInt(p2pVersionBytes).toLong
           val clientId = new String(clientIdBytes, java.nio.charset.StandardCharsets.UTF_8)
-          val listenPort = BigInt(listenPortBytes).toLong
+          val listenPort = ByteUtils.bytesToBigInt(listenPortBytes).toLong
           val nodeId = ByteString(nodeIdBytes)
           Hello(p2pVersion, clientId, capabilities.items.map(_.toCapability).flatten, listenPort, nodeId)
         case _ => throw new RuntimeException("Cannot decode Hello")
@@ -125,7 +126,11 @@ object WireProtocol {
     implicit class DisconnectDec(val bytes: Array[Byte]) extends AnyVal {
       def toDisconnect: Disconnect = rawDecode(bytes) match {
         case RLPList(RLPValue(reasonBytes), _*) =>
-          val reason = BigInt(reasonBytes).toLong
+          val reason = ByteUtils.bytesToBigInt(reasonBytes).toLong
+          Disconnect(reason = reason)
+        case RLPValue(reasonBytes) =>
+          // Handle case where peer sends a single RLP value instead of a list (protocol deviation but common)
+          val reason = ByteUtils.bytesToBigInt(reasonBytes).toLong
           Disconnect(reason = reason)
         case _ => throw new RuntimeException("Cannot decode Disconnect")
       }

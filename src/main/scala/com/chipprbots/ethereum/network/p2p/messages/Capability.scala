@@ -45,7 +45,7 @@ object Capability {
   }
 
   def parseUnsafe(s: String): Capability =
-    parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Mantis"))
+    parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Fukuii"))
 
   def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] =
     c1.intersect(c2) match {
@@ -56,6 +56,14 @@ object Capability {
   // TODO consider how this scoring should be handled with 'snap' and other extended protocols
   def best(capabilities: List[Capability]): Capability =
     capabilities.maxBy(_.version)
+
+  /** Determines if this capability uses RequestId wrapper in messages (ETH66+) ETH66, ETH67, ETH68 use RequestId
+    * wrapper ETH63, ETH64, ETH65, ETC64 do not use RequestId wrapper
+    */
+  def usesRequestId(capability: Capability): Boolean = capability match {
+    case ETH66 | ETH67 | ETH68 => true
+    case _                     => false
+  }
 
   implicit class CapabilityEnc(val msg: Capability) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = RLPList(msg.name.toRLPEncodable, msg.version)

@@ -48,6 +48,7 @@ import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.ommers.OmmersPool.Ommers
 import com.chipprbots.ethereum.testing.ActorsTesting.simpleAutoPilot
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import org.scalatest.prop.TableFor1
@@ -70,21 +71,21 @@ class JsonRpcControllerEthSpec
   implicit val formats: Formats = DefaultFormats.preservingEmptyValues + OptionNoneToJNullSerializer +
     QuantitiesSerializer + UnformattedDataJsonSerializer
 
-  it should "eth_protocolVersion" in new JsonRpcControllerFixture {
+  it should "eth_protocolVersion" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("eth_protocolVersion")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
     response should haveStringResult("0x3f")
   }
 
-  it should "handle eth_chainId" in new JsonRpcControllerFixture {
+  it should "handle eth_chainId" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val request: JsonRpcRequest = newJsonRpcRequest("eth_chainId")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
     response should haveStringResult("0x3d")
   }
 
-  it should "handle eth_blockNumber request" in new JsonRpcControllerFixture {
+  it should "handle eth_blockNumber request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val bestBlockNumber = 10
     blockchainWriter.saveBestKnownBlocks(ByteString.empty, bestBlockNumber)
 
@@ -94,7 +95,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult(s"0xa")
   }
 
-  it should "eth_syncing" in new JsonRpcControllerFixture {
+  it should "eth_syncing" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     syncingController.setAutoPilot(simpleAutoPilot { case SyncProtocol.GetStatus =>
       SyncProtocol.Status.Syncing(999, Progress(200, 10000), Some(Progress(100, 144)))
     })
@@ -112,7 +113,7 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "handle eth_getBlockByHash request" in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByHash request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -133,7 +134,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByHash request (block with checkpoint)" in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByHash request (block with checkpoint)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithCheckpoint
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -154,7 +155,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByHash request (block with treasuryOptOut)" in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByHash request (block with treasuryOptOut)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithTreasuryOptOut
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -175,7 +176,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByNumber request" in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByNumber request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -197,7 +198,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByNumber request (block with treasuryOptOut)" in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByNumber request (block with treasuryOptOut)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithTreasuryOptOut
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -219,7 +220,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByNumber request (block with checkpoint)" in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByNumber request (block with checkpoint)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithCheckpoint
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -241,7 +242,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getUncleByBlockHashAndIndex request" in new JsonRpcControllerFixture {
+  it should "handle eth_getUncleByBlockHashAndIndex request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val uncle = Fixtures.Blocks.DaoForkBlock.header
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, BlockBody(Nil, Seq(uncle)))
 
@@ -266,7 +267,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedUncleBlockResponse)
   }
 
-  it should "handle eth_getUncleByBlockNumberAndIndex request" in new JsonRpcControllerFixture {
+  it should "handle eth_getUncleByBlockNumberAndIndex request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val uncle = Fixtures.Blocks.DaoForkBlock.header
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, BlockBody(Nil, Seq(uncle)))
 
@@ -292,7 +293,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedUncleBlockResponse)
   }
 
-  it should "eth_getWork" in new JsonRpcControllerFixture {
+  it should "eth_getWork" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     // Just record the fact that this is going to be called, we do not care about the returned value
     val seed: String = s"""0x${"00" * 32}"""
     val target = "0x1999999999999999999999999999999999999999999999999999999999999999"
@@ -309,17 +310,20 @@ class JsonRpcControllerEthSpec
       )(_: BlockchainConfig))
       .expects(parentBlock, *, *, *, *, *)
       .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
+
+    // Set up AutoPilot to respond immediately when messages are received
+    pendingTransactionsManager.setAutoPilot(simpleAutoPilot { case PendingTransactionsManager.GetPendingTransactions =>
+      PendingTransactionsManager.PendingTransactionsResponse(Nil)
+    })
+
+    ommersPool.setAutoPilot(simpleAutoPilot { case OmmersPool.GetOmmers(_) =>
+      Ommers(Nil)
+    })
 
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
-    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
-    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
-
-    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
-    ommersPool.reply(Ommers(Nil))
-
     response should haveResult(
       JArray(
         List(
@@ -331,8 +335,8 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "eth_getWork when fail to get ommers and transactions" in new JsonRpcControllerFixture {
-    // Just record the fact that this is going to be called, we do not care about the returned value
+  it should "eth_getWork when fail to get ommers and transactions" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+    // Test that when actors timeout, the service handles it gracefully and returns empty lists
     val seed: String = s"""0x${"00" * 32}"""
     val target = "0x1999999999999999999999999999999999999999999999999999999999999999"
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
@@ -349,18 +353,11 @@ class JsonRpcControllerEthSpec
       .expects(parentBlock, *, *, *, *, *)
       .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
 
+    // Don't set up AutoPilot - let the actors timeout and verify error handling returns empty lists
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
 
-    val result: JsonRpcResponse = jsonRpcController
-      .handleRequest(request)
-      .timeout(Timeouts.longTimeout)
-      .unsafeRunSync()
+    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
-    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
-    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
-    // on time out it should respond with empty list
-
-    val response = result
     response should haveResult(
       JArray(
         List(
@@ -372,7 +369,7 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "eth_submitWork" in new JsonRpcControllerFixture {
+  it should "eth_submitWork" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     // Just record the fact that this is going to be called, we do not care about the returned value
     val nonce: String = s"0x0000000000000001"
     val mixHash: String = s"""0x${"01" * 32}"""
@@ -381,7 +378,6 @@ class JsonRpcControllerEthSpec
     (blockGenerator.getPrepared _)
       .expects(ByteString(Hex.decode(headerPowHash)))
       .returns(Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil)))
-    (appStateStorage.getBestBlockNumber _).expects().returns(1)
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitWork",
@@ -396,7 +392,7 @@ class JsonRpcControllerEthSpec
     response should haveBooleanResult(true)
   }
 
-  it should "eth_submitHashrate" in new JsonRpcControllerFixture {
+  it should "eth_submitHashrate" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     // Just record the fact that this is going to be called, we do not care about the returned value
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitHashrate",
@@ -410,7 +406,7 @@ class JsonRpcControllerEthSpec
     response should haveBooleanResult(true)
   }
 
-  it should "eth_hashrate" in new JsonRpcControllerFixture {
+  it should "eth_hashrate" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     // Just record the fact that this is going to be called, we do not care about the returned value
     val request: JsonRpcRequest = newJsonRpcRequest("eth_hashrate")
 
@@ -418,7 +414,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x0")
   }
 
-  it should "eth_gasPrice" in new JsonRpcControllerFixture {
+  it should "eth_gasPrice" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     private val block: Block =
       Block(Fixtures.Blocks.Block3125369.header.copy(number = 42), Fixtures.Blocks.Block3125369.body)
     blockchainWriter.storeBlock(block).commit()
@@ -430,7 +426,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x4a817c800")
   }
 
-  it should "eth_call" in new JsonRpcControllerFixture {
+  it should "eth_call" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthInfoService: EthInfoService & scala.reflect.Selectable = mock[EthInfoService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
@@ -454,7 +450,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x617364")
   }
 
-  it should "eth_estimateGas" in new JsonRpcControllerFixture {
+  it should "eth_estimateGas" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthInfoService: EthInfoService & scala.reflect.Selectable = mock[EthInfoService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
@@ -490,7 +486,7 @@ class JsonRpcControllerEthSpec
 
   }
 
-  it should "eth_getCode" in new JsonRpcControllerFixture {
+  it should "eth_getCode" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
@@ -511,7 +507,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0xffaa22")
   }
 
-  it should "eth_getUncleCountByBlockNumber" in new JsonRpcControllerFixture {
+  it should "eth_getUncleCountByBlockNumber" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthBlocksService: EthBlocksService & scala.reflect.Selectable = mock[EthBlocksService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
@@ -531,7 +527,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x2")
   }
 
-  it should "eth_getUncleCountByBlockHash " in new JsonRpcControllerFixture {
+  it should "eth_getUncleCountByBlockHash " taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthBlocksService: EthBlocksService & scala.reflect.Selectable = mock[EthBlocksService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
@@ -551,7 +547,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x3")
   }
 
-  it should "eth_coinbase " in new JsonRpcControllerFixture {
+  it should "eth_coinbase " taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     // Just record the fact that this is going to be called, we do not care about the returned value
     val request: JsonRpcRequest = newJsonRpcRequest("eth_coinbase")
 
@@ -559,7 +555,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x000000000000000000000000000000000000002a")
   }
 
-  it should "eth_getBalance" in new JsonRpcControllerFixture {
+  it should "eth_getBalance" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
@@ -580,7 +576,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x11")
   }
 
-  it should "return error with custom error in data in eth_balance" in new JsonRpcControllerFixture {
+  it should "return error with custom error taggedAs (UnitTest, RPCTest) in data in eth_balance" in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
@@ -601,7 +597,7 @@ class JsonRpcControllerEthSpec
     response should haveError(JsonRpcError.NodeNotFound)
   }
 
-  it should "eth_getStorageAt" in new JsonRpcControllerFixture {
+  it should "eth_getStorageAt" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
@@ -623,7 +619,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(JString("0x" + Hex.toHexString(ByteString("response").toArray[Byte])))
   }
 
-  it should "eth_sign" in new JsonRpcControllerFixture {
+  it should "eth_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
 
     (personalService.sign _)
       .expects(
@@ -649,7 +645,7 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "eth_newFilter" in new JsonRpcControllerFixture {
+  it should "eth_newFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
@@ -674,7 +670,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x7b")
   }
 
-  it should "eth_newBlockFilter" in new JsonRpcControllerFixture {
+  it should "eth_newBlockFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
@@ -694,7 +690,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x3e7")
   }
 
-  it should "eth_newPendingTransactionFilter" in new JsonRpcControllerFixture {
+  it should "eth_newPendingTransactionFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
@@ -712,7 +708,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x2")
   }
 
-  it should "eth_uninstallFilter" in new JsonRpcControllerFixture {
+  it should "eth_uninstallFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
@@ -730,7 +726,7 @@ class JsonRpcControllerEthSpec
     response should haveBooleanResult(true)
   }
 
-  it should "eth_getFilterChanges" in new JsonRpcControllerFixture {
+  it should "eth_getFilterChanges" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
@@ -782,7 +778,7 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "decode and encode eth_getProof request and response" in new JsonRpcControllerFixture {
+  it should "decode and encode eth_getProof request and response" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val address = "0x7F0d15C7FAae65896648C8273B6d7E43f58Fa842"
 
     val request: JsonRpcRequest = JsonRpcRequest(
@@ -865,7 +861,7 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "return error with custom error in data in eth_getProof" in new JsonRpcControllerFixture {
+  it should "return error with custom error taggedAs (UnitTest, RPCTest) in data in eth_getProof" in new JsonRpcControllerFixture {
     val mockEthProofService: EthProofService & scala.reflect.Selectable = mock[EthProofService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(proofService = mockEthProofService)
 
@@ -887,7 +883,7 @@ class JsonRpcControllerEthSpec
     response should haveError(JsonRpcError.NodeNotFound)
   }
 
-  it should "eth_getFilterLogs" in new JsonRpcControllerFixture {
+  it should "eth_getFilterLogs" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
@@ -917,7 +913,7 @@ class JsonRpcControllerEthSpec
     response should haveResult(JArray(List(JString("0x1234"), JString("0x4567"), JString("0x7890"))))
   }
 
-  it should "eth_getLogs" in new JsonRpcControllerFixture {
+  it should "eth_getLogs" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)

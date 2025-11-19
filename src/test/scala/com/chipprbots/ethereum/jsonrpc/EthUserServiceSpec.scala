@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils._
 
 class EthUserServiceSpec
@@ -33,7 +34,7 @@ class EthUserServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  it should "handle getCode request" in new TestSetup {
+  it should "handle getCode request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
     storagesInstance.storages.evmCodeStorage.put(ByteString("code hash"), ByteString("code code code")).commit()
 
@@ -56,7 +57,7 @@ class EthUserServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetCodeResponse(ByteString("code code code")))
   }
 
-  it should "handle getBalance request" in new TestSetup {
+  it should "handle getBalance request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
     import MerklePatriciaTrie.defaultByteArraySerializable
@@ -79,7 +80,7 @@ class EthUserServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetBalanceResponse(123))
   }
 
-  it should "handle MissingNodeException when getting balance" in new TestSetup {
+  it should "handle MissingNodeException when getting balance" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
     val newBlockHeader = blockToRequest.header
@@ -92,7 +93,7 @@ class EthUserServiceSpec
 
     response.unsafeRunSync() shouldEqual Left(JsonRpcError.NodeNotFound)
   }
-  it should "handle getStorageAt request" in new TestSetup {
+  it should "handle getStorageAt request" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
@@ -123,7 +124,7 @@ class EthUserServiceSpec
     response.unsafeRunSync().map(v => UInt256(v.value)) shouldEqual Right(UInt256(123))
   }
 
-  it should "handle get transaction count request" in new TestSetup {
+  it should "handle get transaction count request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
 
     import MerklePatriciaTrie.defaultByteArraySerializable

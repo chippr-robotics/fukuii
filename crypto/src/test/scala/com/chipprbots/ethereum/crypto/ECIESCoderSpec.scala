@@ -8,9 +8,11 @@ import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
 
-  "ECIESCoder" should "decrypt encrypted message" in {
+  "ECIESCoder" should "decrypt encrypted message" taggedAs (UnitTest, CryptoTest) in {
 
     val generator = new ECKeyPairGenerator
     generator.init(new ECKeyGenerationParameters(curve, secureRandom))
@@ -31,11 +33,11 @@ class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder 
     val cryptogram = ECIESCoder.encrypt(pub, secureRandom, plainText)
     val result = ECIESCoder.decrypt(prv, cryptogram)
 
-    plainText shouldBe resultForProvidedCryptogram
-    plainText shouldBe result
+    plainText.sameElements(resultForProvidedCryptogram) shouldBe true
+    plainText.sameElements(result) shouldBe true
   }
 
-  "ECIESCoder" should "past tests from ethereumJ - test1" in {
+  "ECIESCoder" should "past tests from ethereumJ - test1" taggedAs (UnitTest, CryptoTest) in {
 
     val privKey = new BigInteger("5e173f6ac3c669587538e7727cf19b782a4f2fda07c1eaa662c593e5e85e3051", 16)
     val cipher = Hex.decode(
@@ -48,7 +50,7 @@ class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder 
     expectedPayload shouldBe Hex.toHexString(payload)
   }
 
-  "ECIESCoder" should "past tests from ethereumJ - test2" in {
+  "ECIESCoder" should "past tests from ethereumJ - test2" taggedAs (UnitTest, CryptoTest) in {
 
     val privKey = new BigInteger("5e173f6ac3c669587538e7727cf19b782a4f2fda07c1eaa662c593e5e85e3051", 16)
     val payload = Hex.decode("1122334455")
@@ -56,6 +58,6 @@ class ECIESCoderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder 
     val cipher = ECIESCoder.encrypt(pubKeyPoint, secureRandom, payload)
     val decryptedPayload = ECIESCoder.decrypt(privKey, cipher)
 
-    decryptedPayload shouldBe payload
+    decryptedPayload.sameElements(payload) shouldBe true
   }
 }

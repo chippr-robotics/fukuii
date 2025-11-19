@@ -37,6 +37,7 @@ import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.testing.Tags._
 
 class JsonRpcControllerSpec
     extends TestKit(ActorSystem("JsonRpcControllerSpec_System"))
@@ -56,7 +57,7 @@ class JsonRpcControllerSpec
   implicit val formats: Formats = DefaultFormats.preservingEmptyValues + OptionNoneToJNullSerializer +
     QuantitiesSerializer + UnformattedDataJsonSerializer
 
-  "JsonRpcController" should "handle valid sha3 request" in new JsonRpcControllerFixture {
+  "JsonRpcController" should "handle valid sha3 request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_sha3", JString("0x1234") :: Nil)
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -64,7 +65,7 @@ class JsonRpcControllerSpec
     response should haveStringResult("0x56570de287d73cd1cb6092bb8fdee6173974955fdef345ae579ee9f475ea7432")
   }
 
-  it should "fail when invalid request is received" in new JsonRpcControllerFixture {
+  it should "fail when invalid request is received" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_sha3", JString("asdasd") :: Nil)
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -72,7 +73,7 @@ class JsonRpcControllerSpec
     response should haveError(JsonRpcError.InvalidParams("Invalid method parameters"))
   }
 
-  it should "handle clientVersion request" in new JsonRpcControllerFixture {
+  it should "handle clientVersion request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_clientVersion")
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -80,7 +81,7 @@ class JsonRpcControllerSpec
     response should haveStringResult(version)
   }
 
-  it should "Handle net_peerCount request" in new JsonRpcControllerFixture {
+  it should "Handle net_peerCount request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     (netService.peerCount _).expects(*).returning(IO.pure(Right(PeerCountResponse(123))))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_peerCount")
@@ -90,7 +91,7 @@ class JsonRpcControllerSpec
     response should haveStringResult("0x7b")
   }
 
-  it should "Handle net_listening request" in new JsonRpcControllerFixture {
+  it should "Handle net_listening request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     (netService.listening _).expects(*).returning(IO.pure(Right(ListeningResponse(false))))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_listening")
@@ -99,7 +100,7 @@ class JsonRpcControllerSpec
     response should haveBooleanResult(false)
   }
 
-  it should "Handle net_version request" in new JsonRpcControllerFixture {
+  it should "Handle net_version request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val netVersion = "99"
 
     (netService.version _).expects(*).returning(IO.pure(Right(VersionResponse(netVersion))))
@@ -110,7 +111,7 @@ class JsonRpcControllerSpec
     response should haveStringResult(netVersion)
   }
 
-  it should "only allow to call methods of enabled apis" in new JsonRpcControllerFixture {
+  it should "only allow to call methods of enabled apis" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     override def config: JsonRpcConfig = new JsonRpcConfig {
       override val apis: Seq[String] = Seq("web3")
       override val accountTransactionsMaxBlocks = 50000
@@ -131,7 +132,7 @@ class JsonRpcControllerSpec
     web3Response should haveStringResult(version)
   }
 
-  it should "debug_listPeersInfo" in new JsonRpcControllerFixture {
+  it should "debug_listPeersInfo" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val peerStatus: RemoteStatus = RemoteStatus(
       capability = Capability.ETH63,
       networkId = 1,
@@ -158,7 +159,7 @@ class JsonRpcControllerSpec
     response should haveResult(JArray(peers.map(info => JString(info.toString))))
   }
 
-  it should "rpc_modules" in new JsonRpcControllerFixture {
+  it should "rpc_modules" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val request: JsonRpcRequest = newJsonRpcRequest("rpc_modules")
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
@@ -170,7 +171,7 @@ class JsonRpcControllerSpec
         "personal" -> JString("1.0"),
         "eth" -> JString("1.0"),
         "web3" -> JString("1.0"),
-        "mantis" -> JString("1.0"),
+        "fukuii" -> JString("1.0"),
         "debug" -> JString("1.0"),
         "qa" -> JString("1.0"),
         "checkpointing" -> JString("1.0")

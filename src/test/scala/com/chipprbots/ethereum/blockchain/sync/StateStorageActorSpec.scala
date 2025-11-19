@@ -12,6 +12,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync.SyncState
 import com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor
 import com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor.GetStorage
@@ -26,7 +27,7 @@ class StateStorageActorSpec
     with Eventually
     with NormalPatience {
 
-  "FastSyncStateActor" should "eventually persist a newest state of a fast sync" in {
+  "FastSyncStateActor" should "eventually persist a newest state of a fast sync" taggedAs (UnitTest, SyncTest) in {
     val dataSource = EphemDataSource()
     val syncStateActor = TestActorRef(new StateStorageActor)
     val maxN = 10

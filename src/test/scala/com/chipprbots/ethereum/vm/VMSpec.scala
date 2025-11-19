@@ -9,6 +9,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures.{Blocks => BlockFixtures}
 import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.vm.MockWorldState._
 
 class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
@@ -17,7 +18,7 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
 
     "executing message call" should {
 
-      "only transfer if recipient's account has no code" in new MessageCall {
+      "only transfer if recipient's account has no code" taggedAs (UnitTest, VMTest) in new MessageCall {
 
         val context: PC = getContext()
         val result: ProgramResult[MockWorldState, MockStorage] = vm.run(context)
@@ -25,7 +26,7 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
         result.world.getBalance(recipientAddr.get) shouldEqual context.value
       }
 
-      "execute recipient's contract" in new MessageCall {
+      "execute recipient's contract" taggedAs (UnitTest, VMTest) in new MessageCall {
         val inputData: ByteString = UInt256(42).bytes
 
         // store first 32 bytes of input data as value at offset 0
@@ -51,7 +52,7 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
 
     "executing contract creation" should {
 
-      "create new contract" in new ContractCreation {
+      "create new contract" taggedAs (UnitTest, VMTest) in new ContractCreation {
         val context1: PC = getContext()
         val result1: ProgramResult[MockWorldState, MockStorage] = vm.run(context1)
 
@@ -65,7 +66,10 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
         result2.world.getStorage(expectedNewAddress).load(storageOffset) shouldEqual secondStoredValue
       }
 
-      "go OOG if new contract's code size exceeds limit and block is after atlantis or eip161" in new ContractCreation {
+      "go OOG if new contract's code size exceeds limit and block is after atlantis or eip161" taggedAs (
+        UnitTest,
+        VMTest
+      ) in new ContractCreation {
         val codeSize: Int = evmBlockchainConfig.maxCodeSize.get.toInt + 1
         val contractCode: ByteString = ByteString(Array.fill(codeSize)(-1.toByte))
 
@@ -88,7 +92,10 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
         result1.error shouldBe Some(OutOfGas)
       }
 
-      "fail to create contract in case of address conflict (non-empty code)" in new ContractCreation {
+      "fail to create contract in case of address conflict (non-empty code)" taggedAs (
+        UnitTest,
+        VMTest
+      ) in new ContractCreation {
         val nonEmptyCodeHash: ByteString = ByteString(1)
         val world: MockWorldState = defaultWorld.saveAccount(expectedNewAddress, Account(codeHash = nonEmptyCodeHash))
 
@@ -98,7 +105,10 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
         result.error shouldBe Some(InvalidOpCode(INVALID.code))
       }
 
-      "fail to create contract in case of address conflict (non-zero nonce)" in new ContractCreation {
+      "fail to create contract in case of address conflict (non-zero nonce)" taggedAs (
+        UnitTest,
+        VMTest
+      ) in new ContractCreation {
         val world: MockWorldState = defaultWorld.saveAccount(expectedNewAddress, Account(nonce = 1))
 
         val context: PC = getContext(world = world)
@@ -107,7 +117,10 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
         result.error shouldBe Some(InvalidOpCode(INVALID.code))
       }
 
-      "create contract if the account already has some balance, but zero nonce and empty code" in new ContractCreation {
+      "create contract if the account already has some balance, but zero nonce and empty code" taggedAs (
+        UnitTest,
+        VMTest
+      ) in new ContractCreation {
         val world: MockWorldState = defaultWorld.saveAccount(expectedNewAddress, Account(balance = 1))
 
         val context: PC = getContext(world = world)
@@ -118,14 +131,20 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
         result.world.getCode(expectedNewAddress) shouldEqual defaultContractCode
       }
 
-      "initialise a new contract account with zero nonce before EIP-161" in new ContractCreation {
+      "initialise a new contract account with zero nonce before EIP-161" taggedAs (
+        UnitTest,
+        VMTest
+      ) in new ContractCreation {
         val context: PC = getContext(evmConfig = homesteadConfig)
         val result: ProgramResult[MockWorldState, MockStorage] = vm.run(context)
 
         result.world.getAccount(expectedNewAddress).map(_.nonce) shouldEqual Some(0)
       }
 
-      "initialise a new contract account with incremented nonce after EIP-161" in new ContractCreation {
+      "initialise a new contract account with incremented nonce after EIP-161" taggedAs (
+        UnitTest,
+        VMTest
+      ) in new ContractCreation {
         val world: MockWorldState = defaultWorld.copy(noEmptyAccountsCond = true)
 
         val context: PC = getContext(world = world, evmConfig = eip161Config)
@@ -164,6 +183,8 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
       phoenixBlockNumber = Long.MaxValue,
       magnetoBlockNumber = Long.MaxValue,
       berlinBlockNumber = Long.MaxValue,
+      mystiqueBlockNumber = Long.MaxValue,
+      spiralBlockNumber = Long.MaxValue,
       chainId = 0x3d.toByte
     )
 

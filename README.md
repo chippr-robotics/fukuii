@@ -5,23 +5,25 @@
 # 🧠🐛 Fukuii Ethereum Client
 
 [![CI](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml)
+[![Docker Build](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml)
+[![Nightly Build](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml)
 
-Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Mantis was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
+Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Fukuii was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
 
-Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
+Fukuii retains the robust architecture and ETC compatibility of Fukuii while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
 
-Executable scripts are renamed from mantis to fukuii.
+Executable scripts are renamed from fukuii to fukuii.
 
 Java/Scala packages under io.iohk have been moved to com.chipprbots.
 
-Environment variables and configuration keys prefixed with mantis have been changed to fukuii.
+Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
 
 Important Notes
 
 Licence: This project continues to be distributed under the Apache 2.0 licence. A copy of the licence is included in the LICENSE file. The original NOTICE file from IOHK is preserved as required by the licence, and Chippr Robotics LLC has added its own attribution.
 
 Origin: Fukuii is derived from the Mantis
- client. Mantis is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
+ client. Fukuii is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
 
 Chordoes Fukuii is a worm which controls a zombie mantis.
 
@@ -44,13 +46,44 @@ This project uses GitHub Actions for continuous integration and delivery:
 - Milestone tracking and automatic closure
 
 **Quick Links:**
+- [📚 Documentation Index](docs/README.md) - Complete documentation guide
+- [Repository Structure](docs/development/REPOSITORY_STRUCTURE.md) - Understand the codebase layout
 - [Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 - [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
-- [Docker Documentation](docker/README.md)
+- [Docker Documentation](docs/deployment/docker.md)
 - [Operations Runbooks](docs/runbooks/README.md) - Production operation guides
 
 **For Contributors:** Before submitting a PR, run `sbt pp` to check formatting, style, and tests locally.
+
+## Key Features
+
+### 🚀 Fast Initial Sync with Bootstrap Checkpoints
+
+**New in v1.1.0**: Fukuii now includes bootstrap checkpoints that significantly improve initial sync times:
+
+- **No Peer Wait**: Begin syncing immediately without waiting for peer consensus
+- **Trusted Reference Points**: Uses well-known fork activation blocks as starting points
+- **Faster Time-to-Sync**: Eliminates the bootstrap delay that previously affected new nodes
+- **Enabled by Default**: Works out-of-the-box for ETC mainnet and Mordor testnet
+- **Optional Override**: Use `--force-pivot-sync` flag to disable if needed
+
+See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkpoints.md) for technical details.
+
+### 🛡️ Production-Ready
+
+- **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
+- **Apache Pekko** actor system for reliable concurrency
+- **Full EIP Support**: Includes Spiral (ECIP-1109), Mystique (ECIP-1104), Magneto (ECIP-1103), and more
+- **Comprehensive Testing**: Unit, integration, and blockchain tests
+- **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
+
+### 🎯 Developer-Friendly
+
+- **Interactive Console UI**: Optional TUI for monitoring sync progress (use `--tui` flag)
+- **Extensive CLI Tools**: Key generation, address derivation, and more
+- **JSON-RPC API**: Full eth/web3/net API support
+- **Well-Documented**: Comprehensive runbooks and ADRs
 
 Getting started
 
@@ -111,7 +144,7 @@ docker run -d \
 - ✅ Include SLSA provenance attestations for supply chain verification
 - ✅ Include Software Bill of Materials (SBOM)
 
-See [docker/README.md](docker/README.md) for detailed Docker documentation, including:
+See [Docker Documentation](docs/deployment/docker.md) for detailed Docker documentation, including:
 - Available image variants (production, development, distroless)
 - Health checks and monitoring
 - Security considerations and signature verification
@@ -162,19 +195,55 @@ The distribution’s bin/ directory contains a launcher script named fukuii. To 
 ./bin/fukuii etc
 
 
-The launcher accepts the same network names that Mantis did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+The launcher accepts the same network names that Fukuii did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+
+#### Console UI
+
+Fukuii includes an enhanced Terminal User Interface (TUI) for real-time monitoring:
+
+```bash
+# Start with standard logging (default)
+./bin/fukuii etc
+
+# Enable console UI for interactive monitoring
+./bin/fukuii etc --tui
+```
+
+The console UI provides:
+- Real-time peer connection status
+- Blockchain sync progress with visual indicators
+- Network information and status
+- Keyboard commands (Q=quit, R=refresh, D=disable UI)
+- Color-coded health indicators
+
+**Note**: The console UI is currently disabled by default while under further development.
+
+See [Console UI Documentation](docs/architecture/console-ui.md) for detailed information.
+
 
 Command line interface (CLI)
 
-Fukuii’s CLI tool provides utilities for key generation and other functions. The entry point is:
+Fukuii's CLI tool provides utilities for key generation and other cryptographic functions. To see all available commands and options:
 
-./bin/fukuii cli [options]
+```bash
+./bin/fukuii --help          # Show all launcher commands
+./bin/fukuii cli --help      # Show all CLI utilities
+```
 
+Examples:
 
-For example, to generate a new private key:
-
+```bash
+# Generate a new private key
 ./bin/fukuii cli generate-private-key
 
+# Derive address from a private key
+./bin/fukuii cli derive-address <private-key-hex>
+
+# Get help on any specific command
+./bin/fukuii cli generate-key-pairs --help
+```
+
+For detailed CLI documentation, see the [Node Configuration Runbook](docs/runbooks/node-configuration.md#cli-subcommands).
 Configuration and Environment
 
 Many configuration properties begin with the prefix fukuii instead of mantis. For example, the RPC settings are controlled by keys like fukuii.network.rpc.http.mode. Similarly, the environment variable FUKUII_DEV=true enables developer‑friendly settings during the build.
@@ -202,14 +271,14 @@ When modifying code derived from Mantis, include a notice in the header of chang
 
 ## Development and Future Plans
 
-**Technology Stack**: This project uses **Scala 3.3.4 (LTS)** as the primary and only supported version. The migration from Scala 2.13 to Scala 3 was completed in October 2025, including:
+**Technology Stack**: This project uses **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** as the primary and only supported versions. The migration from Scala 2.13 to Scala 3 and JDK 17 to JDK 21 was completed in October 2025, including:
 - ✅ Migration from Akka to Apache Pekko (Scala 3 compatible)
 - ✅ Migration from Monix to Cats Effect 3 IO
 - ✅ Migration from Shapeless to native Scala 3 derivation
 - ✅ Update to json4s 4.0.7 (Scala 3 compatible)
 - ✅ Scalanet vendored locally in the `scalanet/` directory
 
-For historical information about the migration, see [Migration History](docs/MIGRATION_HISTORY.md).
+For the rationale behind these decisions, see [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/historical/MIGRATION_HISTORY.md).
 
 **Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 

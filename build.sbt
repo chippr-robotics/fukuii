@@ -4,7 +4,7 @@ javaAgents += "io.kamon" % "kanela-agent" % "1.0.6"
 
 import scala.sys.process.Process
 import NativePackagerHelper._
-import com.typesafe.sbt.SbtGit.GitKeys._
+import com.github.sbt.git.SbtGit.git
 
 // Necessary for the nix build, please do not remove.
 val nixBuild = sys.props.isDefinedAt("nix")
@@ -23,7 +23,14 @@ inThisBuild(
       ScmInfo(url("https://github.com/chippr-robotics/chordodes_fukuii"), "git@github.com:chippr-robotics/chordodes_fukuii.git")
     ),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
-    developers := List()
+    developers := List(),
+    // Add reliable resolvers to avoid transient HTTP 503 errors
+    resolvers ++= Seq(
+      Resolver.mavenCentral,
+      "Typesafe Releases" at "https://repo.typesafe.com/typesafe/releases/",
+      "Sonatype OSS Releases" at "https://oss.sonatype.org/content/repositories/releases/",
+      "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/"
+    )
   )
 )
 
@@ -65,8 +72,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   ThisBuild / scalafixDependencies ++= List(
     "com.github.liancheng" %% "organize-imports" % "0.6.0"
   ),
-  // Scalanet snapshots are published to Sonatype after each build.
-  resolvers += "Sonatype OSS Snapshots".at("https://oss.sonatype.org/content/repositories/snapshots"),
+  // Scalanet snapshots are published to Sonatype after each build (now defined in inThisBuild resolvers).
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
   // Configure scalacOptions for Scala 3
@@ -77,11 +83,12 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   },
   (Compile / console / scalacOptions) ~= (_.filterNot(
     Set(
-      "-Ywarn-unused-import",
       "-Xfatal-warnings"
     )
   )),
-  (Compile / doc / scalacOptions) := baseScalacOptions,
+  (Compile / doc / scalacOptions) := baseScalacOptions ++ Seq(
+    "-no-link-warnings" // Suppress link resolution warnings for F-bounded polymorphism issues
+  ),
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
   Test / parallelExecution := true,
   (Test / testOptions) += Tests.Argument("-oDG"),
@@ -108,6 +115,7 @@ lazy val scalanet = {
     .settings(publishSettings)
     .settings(
       Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
+      Test / unmanagedSourceDirectories += baseDirectory.value / "ut" / "src",
       libraryDependencies ++=
         Dependencies.pekko ++
           Dependencies.cats ++
@@ -136,7 +144,7 @@ lazy val scalanetDiscovery = {
     .settings(publishSettings)
     .settings(
       Compile / unmanagedSourceDirectories += baseDirectory.value / "src",
-      IntegrationTest / unmanagedSourceDirectories += baseDirectory.value / "it" / "src",
+      Integration / unmanagedSourceDirectories += baseDirectory.value / "it" / "src",
       Test / unmanagedSourceDirectories += baseDirectory.value / "ut" / "src",
       libraryDependencies ++=
         Dependencies.pekko ++
@@ -226,6 +234,7 @@ lazy val node = {
       Dependencies.pekko,
       Dependencies.pekkoHttp,
       Dependencies.apacheCommons,
+      Dependencies.apacheHttpClient,
       Dependencies.boopickle,
       Dependencies.cats,
       Dependencies.circe,
@@ -263,38 +272,74 @@ lazy val node = {
         version,
         scalaVersion,
         sbtVersion,
-        gitHeadCommit,
-        gitCurrentBranch,
-        gitCurrentTags,
-        gitDescribedVersion,
-        gitUncommittedChanges,
+        BuildInfoKey.action("gitHeadCommit") { git.gitHeadCommit.?.value.flatten.map(_.take(7)).getOrElse("unknown") },
+        BuildInfoKey.action("gitCurrentBranch") { 
+          val branch = git.gitCurrentBranch.?.value.getOrElse("")
+          if (branch != null && branch.nonEmpty) branch else "unknown"
+        },
+        BuildInfoKey.action("gitCurrentTags") { git.gitCurrentTags.?.value.getOrElse(Seq.empty).mkString(",") },
+        BuildInfoKey.action("gitDescribedVersion") { git.gitDescribedVersion.?.value.flatten.getOrElse("unknown") },
+        BuildInfoKey.action("gitUncommittedChanges") { git.gitUncommittedChanges.?.value.getOrElse(false) },
         (Compile / libraryDependencies)
       ),
       buildInfoPackage := "com.chipprbots.ethereum.utils",
       (Test / fork) := true,
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap,
       // Temporarily exclude test files with MockFactory compilation issues (Scala 3 migration)
-      // These files need additional refactoring to work with Scala 3's MockFactory self-type requirements
+      // 2 tests fixed with abstract mock pattern: BranchResolutionSpec, ConsensusAdapterSpec
+      // Remaining tests need different approaches (DaoForkTestSetup, TestSetup have existing self-types)
+      //
+      // DISABLED TESTS DOCUMENTATION:
+      // Each excluded test is documented below with reason and remediation approach
       (Test / excludeFilter) := {
         val base = (Test / excludeFilter).value
-        base || 
-          "RLPxConnectionHandlerSpec.scala" ||
-          "OmmersPoolSpec.scala" ||
-          "ConsensusAdapterSpec.scala" ||
-          "ConsensusImplSpec.scala" ||
-          "PoWMiningCoordinatorSpec.scala" ||
-          "PoWMiningSpec.scala" ||
-          "EthashMinerSpec.scala" ||
-          "KeccakMinerSpec.scala" ||
-          "MockedMinerSpec.scala" ||
-          "BranchResolutionSpec.scala" ||
-          "FastSyncBranchResolverActorSpec.scala" ||
-          "MessageHandlerSpec.scala" ||
-          "BlockExecutionSpec.scala" ||
-          "QaJRCSpec.scala" ||
-          "JsonRpcHttpServerSpec.scala" ||
-          "EthProofServiceSpec.scala" ||
-          "LegacyTransactionHistoryServiceSpec.scala"
+        val disabledTests = Seq(
+          // FIXED - using abstract mock members pattern:
+          // "BranchResolutionSpec.scala",
+          // "ConsensusAdapterSpec.scala",
+
+          // DISABLED - Self-type conflicts with MockFactory (requires trait-based mocking refactor):
+          "BlockExecutionSpec.scala",        // Reason: DaoForkTestSetup has self-type requiring DAO fork configuration
+                                             // Remediation: Replace MockFactory with mockito-scala or refactor to composition
+          "JsonRpcHttpServerSpec.scala",     // Reason: TestSetup has self-type requiring HTTP server dependencies
+                                             // Remediation: Replace MockFactory with mockito-scala or abstract mocks
+
+          // DISABLED - Complex actor mocking incompatible with Scala 3 MockFactory:
+          "ConsensusImplSpec.scala",         // Reason: MockFactory incompatible with Scala 3 for actor system mocking
+                                             // Remediation: Migrate to cats-effect TestControl or akka-testkit patterns
+          "FastSyncBranchResolverActorSpec.scala", // Reason: Actor choreography mocking fails in Scala 3
+                                             // Remediation: Use akka-testkit TestProbe or refactor to testable functions
+
+          // DISABLED - Mining coordinator mocking issues (SlowTest alternatives exist):
+          "PoWMiningCoordinatorSpec.scala",  // Reason: Mining coordinator actor mocking incompatible with Scala 3
+                                             // Remediation: Migrate to integration tests or mockito-scala
+          "PoWMiningSpec.scala",             // Reason: Mining process mocking fails with Scala 3 MockFactory
+                                             // Remediation: Use integration tests with test mining difficulty
+
+          // DISABLED - Miner implementations (covered by integration tests, marked SlowTest):
+          "EthashMinerSpec.scala",           // Reason: Ethash PoW mining MockFactory incompatibility
+                                             // Remediation: Use integration tests or migrate to mockito-scala
+          "KeccakMinerSpec.scala",           // Reason: Keccak mining MockFactory incompatibility
+                                             // Remediation: Use integration tests or migrate to mockito-scala
+          "MockedMinerSpec.scala",           // Reason: Test miner MockFactory incompatibility
+                                             // Remediation: Migrate to mockito-scala for mock verification
+
+          // DISABLED - ExtVM mocking issues (external VM integration):
+          "MessageHandlerSpec.scala",        // Reason: External VM message handling mocking fails in Scala 3
+                                             // Remediation: Replace MockFactory with mockito-scala
+
+          // DISABLED - JSON-RPC service mocking incompatibilities:
+          "QaJRCSpec.scala",                 // Reason: QA JSON-RPC controller MockFactory incompatibility
+                                             // Remediation: Migrate to mockito-scala
+          "EthProofServiceSpec.scala",       // Reason: Ethereum proof service mocking fails in Scala 3
+                                             // Remediation: Replace MockFactory with mockito-scala
+          "LegacyTransactionHistoryServiceSpec.scala" // Reason: Transaction history service MockFactory incompatibility
+                                             // Remediation: Migrate to mockito-scala
+        )
+        
+        disabledTests.foldLeft(base) { (filter, testFile) =>
+          filter || new SimpleFileFilter(_.getName == testFile)
+        }
       }
     )
     .settings(commonSettings("fukuii"): _*)
@@ -310,7 +355,22 @@ lazy val node = {
     .settings(
       inConfig(Integration)(
         Defaults.testSettings
-          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings :+ (Test / parallelExecution := false)
+          ++ org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings 
+          :+ (parallelExecution := false)
+          :+ (testGrouping := {
+            val tests = (definedTests).value
+            tests.map { test =>
+              Tests.Group(
+                name = test.name,
+                tests = Seq(test),
+                runPolicy = Tests.SubProcess(
+                  ForkOptions().withRunJVMOptions(
+                    Vector(s"-DFUKUII_TEST_ID=${System.currentTimeMillis()}-${test.name.hashCode.abs}")
+                  )
+                )
+              )
+            }
+          })
       ): _*
     )
     .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := false)): _*)
@@ -328,6 +388,7 @@ lazy val node = {
       ),
       // protobuf API version file is now provided in src/main/resources/extvm/VERSION
       // Packaging
+      maintainer := "chippr-robotics@github.com",
       (Compile / mainClass) := Some("com.chipprbots.ethereum.App"),
       (Compile / discoveredMainClasses) := Seq(),
       (Universal / mappings) ++= directory((Compile / resourceDirectory).value / "conf"),
@@ -335,14 +396,33 @@ lazy val node = {
       bashScriptExtraDefines += """addJava "-Dconfig.file=${app_home}/../conf/app.conf"""",
       bashScriptExtraDefines += """addJava "-Dlogback.configurationFile=${app_home}/../conf/logback.xml"""",
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
-      batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml""""
+      batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml"""",
+      // Assembly configuration
+      (assembly / mainClass) := Some("com.chipprbots.ethereum.App"),
+      (assembly / assemblyJarName) := s"fukuii-assembly-${version.value}.jar",
+      (assembly / assemblyMergeStrategy) := {
+        case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".SF")) => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".DSA")) => MergeStrategy.discard
+        case PathList("META-INF", xs @ _*) if xs.lastOption.exists(_.endsWith(".RSA")) => MergeStrategy.discard
+        case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.first
+        case PathList("META-INF", "native", xs @ _*) => MergeStrategy.first
+        case PathList("META-INF", "native-image", xs @ _*) => MergeStrategy.first
+        case PathList("META-INF", "versions", xs @ _*) => MergeStrategy.first
+        case "module-info.class" => MergeStrategy.discard
+        case "reference.conf" => MergeStrategy.concat
+        case "application.conf" => MergeStrategy.concat
+        case x if x.endsWith(".proto") => MergeStrategy.first
+        case x if x.contains("pekko") => MergeStrategy.first
+        case x if x.contains("akka") => MergeStrategy.first
+        case _ => MergeStrategy.first
+      }
     )
 
   if (!nixBuild)
     node
   else
-    //node.settings(PB.protocExecutable := file("protoc"))
-    node.settings((Compile / PB.runProtoc) := ((args: Seq[String]) => Process("protoc", args) !))
+    node.settings((Compile / PB.protocExecutable) := file("protoc"))
 
 }
 
@@ -464,7 +544,46 @@ addCommandAlias(
     |""".stripMargin
 )
 
+// ===== Test Tagging Commands (ADR-017) =====
+// These commands enable selective test execution based on ScalaTest tags
 
+// testEssential - Tier 1: Essential tests (< 5 minutes)
+// Runs fast unit tests, excludes integration, slow, and sync tests
+// Sync tests are excluded because they involve complex actor choreography (ADR-017)
+addCommandAlias(
+  "testEssential",
+  """; compile-all
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest
+    |; rlp / test
+    |; bytes / test
+    |; crypto / test
+    |""".stripMargin
+)
+
+// testStandard - Tier 2: Standard tests (< 30 minutes)
+// Runs unit and integration tests, excludes benchmarks and comprehensive ethereum tests
+addCommandAlias(
+  "testStandard",
+  """; compile-all
+    |; testOnly -- -l BenchmarkTest -l EthereumTest
+    |""".stripMargin
+)
+
+// testComprehensive - Tier 3: Comprehensive tests (< 3 hours)
+// Runs all tests including ethereum/tests compliance suite
+addCommandAlias(
+  "testComprehensive",
+  "testAll"
+)
+
+// Module-specific test commands
+addCommandAlias("testCrypto", "testOnly -- -n CryptoTest")
+addCommandAlias("testVM", "testOnly -- -n VMTest")
+addCommandAlias("testNetwork", "testOnly -- -n NetworkTest")
+addCommandAlias("testDatabase", "testOnly -- -n DatabaseTest")
+addCommandAlias("testRLP", "testOnly -- -n RLPTest")
+addCommandAlias("testMPT", "testOnly -- -n MPTTest")
+addCommandAlias("testEthereum", "testOnly -- -n EthereumTest")
 
 // Scapegoat configuration for Scala 3
 (ThisBuild / scapegoatVersion) := "3.1.4"

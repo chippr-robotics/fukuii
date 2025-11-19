@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.db.dataSource.DataSource.Key
 import com.chipprbots.ethereum.db.dataSource.DataSource.Namespace
 import com.chipprbots.ethereum.db.dataSource.DataSource.Value
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceClosedException
+import com.chipprbots.ethereum.testing.Tags._
 
 trait DataSourceTestBehavior extends ScalaCheckPropertyChecks with ObjectGenerators {
   this: AnyFlatSpec =>
@@ -36,7 +37,7 @@ trait DataSourceTestBehavior extends ScalaCheckPropertyChecks with ObjectGenerat
 
   // scalastyle:off
   def dataSource(createDataSource: => String => DataSource): Unit = {
-    it should "be able to insert and retrieve stored keys" in {
+    it should "be able to insert and retrieve stored keys" taggedAs (UnitTest, DatabaseTest) in {
       val someByteString = byteStringOfLengthNGen(KeySizeWithoutPrefix).sample.get
       withDir { path =>
         val dataSource = createDataSource(path)
@@ -51,7 +52,7 @@ trait DataSourceTestBehavior extends ScalaCheckPropertyChecks with ObjectGenerat
       }
     }
 
-    it should "throw an exception if the rocksdb storage is unavailable" in {
+    it should "throw an exception if the rocksdb storage is unavailable" taggedAs (UnitTest, DatabaseTest) in {
       withDir { path =>
         val dataSource = createDataSource(path)
         val someByteString = byteStringOfLengthNGen(KeySizeWithoutPrefix).sample.get
@@ -62,7 +63,7 @@ trait DataSourceTestBehavior extends ScalaCheckPropertyChecks with ObjectGenerat
       }
     }
 
-    it should "allow to remove keys" in {
+    it should "allow to remove keys" taggedAs (UnitTest, DatabaseTest) in {
       val key1 = byteStringOfLengthNGen(KeySizeWithoutPrefix).sample.get
       val key2 = byteStringOfLengthNGen(KeySizeWithoutPrefix).sample.get
       withDir { path =>

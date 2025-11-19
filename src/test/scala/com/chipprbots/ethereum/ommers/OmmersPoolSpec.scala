@@ -4,7 +4,6 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.ImplicitSender
 import org.apache.pekko.testkit.TestKit
-import org.apache.pekko.testkit.TestProbe
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.freespec.AnyFreeSpecLike
@@ -17,6 +16,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.ommers.OmmersPool.GetOmmers
+import com.chipprbots.ethereum.testing.Tags._
 
 class OmmersPoolSpec
     extends TestKit(ActorSystem("OmmersPoolSpec_System"))
@@ -34,7 +34,6 @@ class OmmersPoolSpec
         */
       (blockchainReader.getBlockHeaderByHash _).expects(block2Chain1.hash).returns(Some(block2Chain1))
       (blockchainReader.getBlockHeaderByHash _).expects(block1Chain1.hash).returns(Some(block1Chain1))
-      (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0))
 
       ommersPool ! AddOmmers(
         block0,
@@ -78,7 +77,6 @@ class OmmersPoolSpec
           */
         (blockchainReader.getBlockHeaderByHash _).expects(block1Chain4.hash).returns(Some(block1Chain4)).once()
         (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0)).once()
-        (blockchainReader.getBlockHeaderByHash _).expects(block0.parentHash).returns(None).once()
 
         ommersPool ! AddOmmers(
           block0,
@@ -106,7 +104,6 @@ class OmmersPoolSpec
           */
         (blockchainReader.getBlockHeaderByHash _).expects(block2Chain1.hash).returns(Some(block2Chain1))
         (blockchainReader.getBlockHeaderByHash _).expects(block1Chain1.hash).returns(Some(block1Chain1))
-        (blockchainReader.getBlockHeaderByHash _).expects(block0.hash).returns(Some(block0))
 
         ommersPool ! AddOmmers(
           block0,
@@ -125,8 +122,9 @@ class OmmersPoolSpec
     }
   }
 
+  // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
+  // Using lazy val for mock ensures it's created when accessed within MockFactory context.
   trait TestSetup {
-    this: org.scalamock.scalatest.MockFactory =>
 
     // In order to support all the blocks for the given scenarios
     val ommersPoolSize: Int = 8
@@ -161,10 +159,9 @@ class OmmersPoolSpec
 
     val block1Chain5: BlockHeader = Block3125369.header.copy(number = 1, parentHash = block0.hash, difficulty = 15)
 
-    val testProbe: TestProbe = TestProbe()
-
-    val blockchainReader: BlockchainReader = mock[BlockchainReader]
-    val ommersPool: ActorRef =
+    // Mock created lazily so it's initialized when accessed within the MockFactory context
+    lazy val blockchainReader: BlockchainReader = mock[BlockchainReader]
+    lazy val ommersPool: ActorRef =
       system.actorOf(
         OmmersPool.props(blockchainReader, ommersPoolSize, ommerGenerationLimit, returnedOmmerSizeLimit)
       )

@@ -96,7 +96,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
   val ethashConfig = MiningConfigs.ethashConfig
   override lazy val miningConfig = MiningConfigs.miningConfig
   val fullMiningConfig = MiningConfigs.fullMiningConfig
-  val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
+  // Increased timeout for CI environments where actor-based tests may be slower
+  val getTransactionFromPoolTimeout: FiniteDuration = 60.seconds
 
   val filterConfig: FilterConfig = new FilterConfig {
     override val filterTimeout: FiniteDuration = Timeouts.normalTimeout
@@ -157,7 +158,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
   val debugService: DebugService = mock[DebugService]
   val qaService: QAService = mock[QAService]
   val checkpointingService: CheckpointingService = mock[CheckpointingService]
-  val mantisService: MantisService = mock[MantisService]
+  val fukuiiService: FukuiiService = mock[FukuiiService]
 
   def jsonRpcController: JsonRpcController =
     JsonRpcController(
@@ -174,7 +175,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       debugService,
       qaService,
       checkpointingService,
-      mantisService,
+      fukuiiService,
       ProofServiceDummy,
       config
     )

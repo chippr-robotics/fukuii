@@ -43,11 +43,11 @@ import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.ommers.OmmersPool
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config
-import scala.concurrent.Future
 import scala.concurrent.Future
 
 class EthMiningServiceSpec
@@ -61,7 +61,7 @@ class EthMiningServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "MiningServiceSpec" should "return if node is mining base on getWork" in new TestSetup {
+  "MiningServiceSpec" should "return if node is mining base on getWork" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
 
@@ -97,7 +97,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(true))
   }
 
-  it should "return if node is mining base on submitWork" in new TestSetup {
+  it should "return if node is mining base on submitWork" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
 
@@ -113,7 +113,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(true))
   }
 
-  it should "return if node is mining base on submitHashRate" in new TestSetup {
+  it should "return if node is mining base on submitHashRate" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     ethMiningService.getMining(GetMiningRequest()).unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
     ethMiningService.submitHashRate(SubmitHashRateRequest(42, ByteString("id")))
@@ -123,7 +123,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(true))
   }
 
-  it should "return if node is mining after time out" in new TestSetup {
+  it should "return if node is mining after time out" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (blockGenerator
       .generateBlock(
@@ -152,14 +152,16 @@ class EthMiningServiceSpec
     import scala.concurrent.duration._
     Await.result(workFuture, 10.seconds)
 
-    Thread.sleep(minerActiveTimeout.toMillis)
+    // Sleep longer than the actual config timeout (30s) to ensure mining status expires
+    // Note: jsonRpcConfig uses the config value, not the test's minerActiveTimeout variable
+    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis + 1000)
 
     val response: ServiceResponse[GetMiningResponse] = ethMiningService.getMining(GetMiningRequest())
 
     response.unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
   }
 
-  it should "return requested work" in new TestSetup {
+  it should "return requested work" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (blockGenerator
       .generateBlock(
@@ -173,17 +175,26 @@ class EthMiningServiceSpec
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
 
-    val response: Either[JsonRpcError, GetWorkResponse] = ethMiningService.getWork(GetWorkRequest()).unsafeRunSync()
+    // Start the getWork call asynchronously
+    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] =
+      ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+
+    // Handle the actor messages
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
 
     ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
     ommersPool.reply(OmmersPool.Ommers(Nil))
 
+    // Wait for the result
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    val response = Await.result(workFuture, 10.seconds)
+
     response shouldEqual Right(GetWorkResponse(powHash, seedHash, target))
   }
 
-  it should "generate and submit work when generating block for mining with restricted ethash generator" in new TestSetup {
+  it should "generate and submit work when generating block for mining with restricted ethash generator" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val testMining: TestMining = buildTestMining()
     override lazy val restrictedGenerator = new RestrictedPoWBlockGeneratorImpl(
       evmCodeStorage = storagesInstance.storages.evmCodeStorage,
@@ -214,7 +225,7 @@ class EthMiningServiceSpec
     response1 shouldEqual Right(SubmitWorkResponse(true))
   }
 
-  it should "accept submitted correct PoW" in new TestSetup {
+  it should "accept submitted correct PoW" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val headerHash: ByteString = ByteString(Hex.decode("01" * 32))
 
@@ -226,7 +237,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(SubmitWorkResponse(true))
   }
 
-  it should "reject submitted correct PoW when header is no longer in cache" in new TestSetup {
+  it should "reject submitted correct PoW when header is no longer taggedAs (UnitTest, RPCTest) in cache" in new TestSetup {
 
     val headerHash: ByteString = ByteString(Hex.decode("01" * 32))
 
@@ -238,13 +249,13 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(SubmitWorkResponse(false))
   }
 
-  it should "return correct coinbase" in new TestSetup {
+  it should "return correct coinbase" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val response: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
     response.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(miningConfig.coinbase))
   }
 
-  it should "accept and report hashrate" in new TestSetup {
+  it should "accept and report hashrate" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val rate: BigInt = 42
     val id: ByteString = ByteString("id")
@@ -260,7 +271,7 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
   }
 
-  it should "combine hashrates from many miners and remove timed out rates" in new TestSetup {
+  it should "combine hashrates from many miners and remove timed out rates" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val rate: BigInt = 42
     val id1: ByteString = ByteString("id1")
@@ -269,7 +280,8 @@ class EthMiningServiceSpec
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id1)).unsafeRunSync() shouldEqual Right(
       SubmitHashRateResponse(true)
     )
-    Thread.sleep(minerActiveTimeout.toMillis / 2)
+    // Note: jsonRpcConfig uses the config value (30s), not the test's minerActiveTimeout variable (20s)
+    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis / 2)
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id2)).unsafeRunSync() shouldEqual Right(
       SubmitHashRateResponse(true)
     )
@@ -277,7 +289,9 @@ class EthMiningServiceSpec
     val response1: ServiceResponse[GetHashRateResponse] = ethMiningService.getHashRate(GetHashRateRequest())
     response1.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate * 2))
 
-    Thread.sleep(minerActiveTimeout.toMillis / 2)
+    // Sleep longer than half timeout to ensure first rate expires
+    // Total time from id1 submission will be > jsonRpcConfig.minerActiveTimeout
+    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis / 2 + 1000)
     val response2: ServiceResponse[GetHashRateResponse] = ethMiningService.getHashRate(GetHashRateRequest())
     response2.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
   }

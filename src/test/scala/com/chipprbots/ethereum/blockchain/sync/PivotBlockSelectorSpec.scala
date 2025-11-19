@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.testing.Tags._
 
 class PivotBlockSelectorSpec
     extends TestKit(
@@ -51,7 +52,7 @@ class PivotBlockSelectorSpec
     with BeforeAndAfter
     with WithActorSystemShutDown {
 
-  "FastSyncPivotBlockSelector" should "download pivot block from peers" in new TestSetup {
+  "FastSyncPivotBlockSelector" should "download pivot block from peers" taggedAs (UnitTest, SyncTest) in new TestSetup {
     updateHandshakedPeers(HandshakedPeers(threeAcceptedPeers))
 
     pivotBlockSelector ! SelectPivotBlock
@@ -83,7 +84,7 @@ class PivotBlockSelectorSpec
     peerMessageBus.expectMsg(Unsubscribe())
   }
 
-  it should "ask for the block number 0 if [bestPeerBestBlockNumber < syncConfig.pivotBlockOffset]" in new TestSetup {
+  it should "ask for the block number 0 if [bestPeerBestBlockNumber < syncConfig.pivotBlockOffset]" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val highestNumber: Int = syncConfig.pivotBlockOffset - 1
 
     updateHandshakedPeers(
@@ -110,7 +111,7 @@ class PivotBlockSelectorSpec
     )
   }
 
-  it should "retry if there are no enough peers" in new TestSetup {
+  it should "retry if there are no enough peers" taggedAs (UnitTest, SyncTest) in new TestSetup {
     updateHandshakedPeers(HandshakedPeers(singlePeer))
 
     pivotBlockSelector ! SelectPivotBlock
@@ -128,7 +129,7 @@ class PivotBlockSelectorSpec
     )
   }
 
-  it should "retry if there are no enough votes for one block" in new TestSetup {
+  it should "retry if there are no enough votes for one block" taggedAs (UnitTest, SyncTest) in new TestSetup {
     updateHandshakedPeers(HandshakedPeers(threeAcceptedPeers))
 
     pivotBlockSelector ! SelectPivotBlock
@@ -170,7 +171,7 @@ class PivotBlockSelectorSpec
     )
   }
 
-  it should "find out that there are no enough votes as soon as possible" in new TestSetup {
+  it should "find out that there are no enough votes as soon as possible" taggedAs (UnitTest, SyncTest) in new TestSetup {
     updateHandshakedPeers(HandshakedPeers(threeAcceptedPeers))
 
     pivotBlockSelector ! SelectPivotBlock
@@ -210,7 +211,7 @@ class PivotBlockSelectorSpec
     )
   }
 
-  it should "handle case when one peer responded with wrong block header" in new TestSetup {
+  it should "handle case when one peer responded with wrong block header" taggedAs (UnitTest, SyncTest) in new TestSetup {
     override def minPeersToChoosePivotBlock: Int = 1
 
     updateHandshakedPeers(HandshakedPeers(singlePeer))
@@ -241,7 +242,7 @@ class PivotBlockSelectorSpec
     peerMessageBus.expectNoMessage()
   }
 
-  it should "not ask additional peers if not needed" in new TestSetup {
+  it should "not ask additional peers if not needed" taggedAs (UnitTest, SyncTest) in new TestSetup {
     override val minPeersToChoosePivotBlock = 2
     override val peersToChoosePivotBlockMargin = 1
 
@@ -279,7 +280,7 @@ class PivotBlockSelectorSpec
     fastSync.expectMsg(Result(pivotBlockHeader))
   }
 
-  it should "ask additional peers if needed" in new TestSetup {
+  it should "ask additional peers if needed" taggedAs (UnitTest, SyncTest) in new TestSetup {
     override val minPeersToChoosePivotBlock = 2
     override val peersToChoosePivotBlockMargin = 1
 
@@ -329,7 +330,7 @@ class PivotBlockSelectorSpec
     fastSync.expectMsg(Result(pivotBlockHeader))
   }
 
-  it should "restart whole process after checking additional nodes" in new TestSetup {
+  it should "restart whole process after checking additional nodes" taggedAs (UnitTest, SyncTest) in new TestSetup {
     override val minPeersToChoosePivotBlock = 2
     override val peersToChoosePivotBlockMargin = 1
 
@@ -387,7 +388,7 @@ class PivotBlockSelectorSpec
     peerMessageBus.expectNoMessage()
   }
 
-  it should "check only peers with the highest block at least equal to [bestPeerBestBlockNumber - syncConfig.pivotBlockOffset]" in new TestSetup {
+  it should "check only peers with the highest block at least equal to [bestPeerBestBlockNumber - syncConfig.pivotBlockOffset]" taggedAs (UnitTest, SyncTest) in new TestSetup {
     updateHandshakedPeers(
       HandshakedPeers(allPeers.updated(peer1, allPeers(peer1).copy(maxBlockNumber = expectedPivotBlock - 1)))
     )
@@ -402,7 +403,7 @@ class PivotBlockSelectorSpec
     peerMessageBus.expectNoMessage() // Peer 1 will be skipped
   }
 
-  it should "only use only peers from the correct network to choose pivot block" in new TestSetup() {
+  it should "only use only peers from the correct network to choose pivot block" taggedAs (UnitTest, SyncTest) in new TestSetup() {
     updateHandshakedPeers(HandshakedPeers(peersFromDifferentNetworks))
 
     pivotBlockSelector ! SelectPivotBlock
@@ -436,7 +437,7 @@ class PivotBlockSelectorSpec
     peerMessageBus.expectMsg(Unsubscribe())
   }
 
-  it should "retry pivot block election with fallback to lower peer numbers" in new TestSetup {
+  it should "retry pivot block election with fallback to lower peer numbers" taggedAs (UnitTest, SyncTest) in new TestSetup {
 
     override val minPeersToChoosePivotBlock = 2
     override val peersToChoosePivotBlockMargin = 1

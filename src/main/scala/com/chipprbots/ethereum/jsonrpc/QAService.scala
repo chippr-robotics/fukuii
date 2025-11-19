@@ -102,7 +102,7 @@ object QAService {
 
     sealed trait MinerResponseType extends EnumEntry
     object MinerResponseType extends Enum[MinerResponseType] {
-      val values = findValues
+      val values: IndexedSeq[MinerResponseType] = findValues
 
       case object MinerIsWorking extends MinerResponseType
       case object MiningOrdered extends MinerResponseType

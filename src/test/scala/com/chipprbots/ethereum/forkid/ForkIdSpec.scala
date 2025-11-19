@@ -9,6 +9,7 @@ import org.scalatest.wordspec.AnyWordSpec
 import com.chipprbots.ethereum.forkid.ForkId._
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.Config._
+import com.chipprbots.ethereum.testing.Tags._
 
 class ForkIdSpec extends AnyWordSpec with Matchers {
 
@@ -21,7 +22,7 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
     "gatherForks for the etc chain correctly" in {
       val res = config.blockchains.map { case (name, conf) => (name, gatherForks(conf)) }
       res("etc") shouldBe List(1150000, 2500000, 3000000, 5000000, 5900000, 8772000, 9573000, 10500839, 11700000,
-        13189133)
+        13189133, 14525000, 19250000)
     }
 
     "gatherForks for the eth chain correctly" in {
@@ -34,7 +35,8 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       val ethGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
       def create(head: BigInt) = ForkId.create(ethGenesisHash, ethConf)(head)
 
-      create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Unsynced
+      // At block 0, report latest fork to match peer expectations (workaround for strict peers)
+      create(0) shouldBe ForkId(0x0eb440f6L, None) // Reports Berlin fork for peer compatibility
       create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Last Frontier block
       create(1150000) shouldBe ForkId(0x97c2c34cL, Some(1920000)) // First Homestead block
       create(1919999) shouldBe ForkId(0x97c2c34cL, Some(1920000)) // Last Homestead block
@@ -65,7 +67,8 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
       def create(head: BigInt) = ForkId.create(etcGenesisHash, etcConf)(head)
 
-      create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Unsynced
+      // At block 0, report latest fork to match peer expectations (workaround for strict peers)
+      create(0) shouldBe ForkId(0xbe46d57cL, None) // Reports Spiral fork for peer compatibility
       create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Last Frontier block
       create(1150000) shouldBe ForkId(0x97c2c34cL, Some(2500000)) // First Homestead block
       create(1919999) shouldBe ForkId(0x97c2c34cL, Some(2500000)) // Last Homestead block
@@ -85,7 +88,11 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(11700000 - 1) shouldBe ForkId(0x9007bfccL, Some(11700000))
       create(11700000) shouldBe ForkId(0xdb63a1caL, Some(13189133))
       create(13189133 - 1) shouldBe ForkId(0xdb63a1caL, Some(13189133))
-      create(13189133) shouldBe ForkId(0x0f6bf187L, None) // First Magneto block
+      create(13189133) shouldBe ForkId(0x0f6bf187L, Some(14525000)) // First Magneto block
+      create(14525000 - 1) shouldBe ForkId(0x0f6bf187L, Some(14525000))
+      create(14525000) shouldBe ForkId(0x7fd1bb25L, Some(19250000)) // First Mystique block
+      create(19250000 - 1) shouldBe ForkId(0x7fd1bb25L, Some(19250000))
+      create(19250000) shouldBe ForkId(0xbe46d57cL, None) // First Spiral block
     }
 
     "create correct ForkId for mordor blocks" in {
@@ -93,7 +100,8 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       val mordorGenesisHash = ByteString(Hex.decode("a68ebde7932eccb177d38d55dcc6461a019dd795a681e59b5a3e4f3a7259a3f1"))
       def create(head: BigInt) = ForkId.create(mordorGenesisHash, mordorConf)(head)
 
-      create(0) shouldBe ForkId(0x175782aaL, Some(301243)) // Unsynced
+      // At block 0, report latest fork to match peer expectations (workaround for strict peers)
+      create(0) shouldBe ForkId(0x3a6b00d7L, None) // Reports Spiral fork for peer compatibility
       create(301242) shouldBe ForkId(0x175782aaL, Some(301243))
       create(301243) shouldBe ForkId(0x604f6ee1L, Some(999983))
       create(999982) shouldBe ForkId(0x604f6ee1L, Some(999983))
@@ -101,10 +109,35 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(2519999) shouldBe ForkId(0xf42f5539L, Some(2520000))
       create(2520000) shouldBe ForkId(0x66b5c286L, Some(3985893))
       create(3985893 - 1) shouldBe ForkId(0x66b5c286L, Some(3985893))
-      create(3985893) shouldBe ForkId(0x92b323e0L, None) // First Magneto block
+      create(3985893) shouldBe ForkId(0x92b323e0L, Some(5520000)) // First Magneto block
+      create(5520000 - 1) shouldBe ForkId(0x92b323e0L, Some(5520000))
+      create(5520000) shouldBe ForkId(0x8c9b1797L, Some(9957000)) // First Mystique block
+      create(9957000 - 1) shouldBe ForkId(0x8c9b1797L, Some(9957000))
+      create(9957000) shouldBe ForkId(0x3a6b00d7L, None) // First Spiral block
     }
 
-    // Here’s a couple of tests to verify the proper RLP encoding (since FORK_HASH is a 4 byte binary but FORK_NEXT is an 8 byte quantity):
+    "use practical ForkId reporting for peer compatibility" in {
+      // While EIP-2124 technically requires reporting genesis ForkId at block 0,
+      // we use a practical workaround to match core-geth behavior and avoid peer rejections.
+      // This test verifies the workaround is working correctly.
+      val etcConf = config.blockchains("etc")
+      val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
+      def create(head: BigInt) = ForkId.create(etcGenesisHash, etcConf)(head)
+
+      // At block 0, report latest fork instead of genesis fork (peer compatibility workaround)
+      create(0) shouldBe ForkId(0xbe46d57cL, None)
+
+      // Verify that ForkId changes correctly when passing fork blocks
+      create(1) shouldBe ForkId(0xfc64ec04L, Some(1150000))
+      create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000))
+      create(1150000) shouldBe ForkId(0x97c2c34cL, Some(2500000))
+
+      // Latest fork should have None for next
+      create(19250000) shouldBe ForkId(0xbe46d57cL, None)
+      create(20000000) shouldBe ForkId(0xbe46d57cL, None)
+    }
+
+    // Here's a couple of tests to verify the proper RLP encoding (since FORK_HASH is a 4 byte binary but FORK_NEXT is an 8 byte quantity):
     "be correctly encoded via rlp" in {
       roundTrip(ForkId(0, None), "c6840000000080")
       roundTrip(ForkId(0xdeadbeefL, Some(0xbaddcafeL)), "ca84deadbeef84baddcafe")

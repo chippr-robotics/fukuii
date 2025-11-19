@@ -11,6 +11,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.network
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class AsymmetricCipherKeyPairLoaderSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
 
@@ -44,7 +45,7 @@ class AsymmetricCipherKeyPairLoaderSpec extends AnyFlatSpec with Matchers with S
     equalPrivateKey && equalPublicKey
   }
 
-  it should "correctly save the AsymmetricCipherKeyPairLoader" in {
+  it should "correctly save the AsymmetricCipherKeyPairLoader" taggedAs (UnitTest, NetworkTest) in {
     withFilePath { path =>
       // Create key pair
       val newKeyPair = network.loadAsymmetricCipherKeyPair(path, secureRandom)

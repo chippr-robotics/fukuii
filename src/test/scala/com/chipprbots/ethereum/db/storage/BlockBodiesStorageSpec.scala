@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockBodiesStorageSpec
     extends AnyWordSpec
@@ -21,7 +22,7 @@ class BlockBodiesStorageSpec
 
   "BlockBodiesStorage" should {
 
-    "insert block body properly" in {
+    "insert block body properly" taggedAs (UnitTest, DatabaseTest) in {
       forAll(Gen.listOfN(32, ObjectGenerators.newBlockGen(secureRandom, chainId))) { newBlocks =>
         val blocks = newBlocks.distinct
         val totalStorage = insertBlockBodiesMapping(newBlocks)
@@ -32,7 +33,7 @@ class BlockBodiesStorageSpec
       }
     }
 
-    "delete block body properly" in {
+    "delete block body properly" taggedAs (UnitTest, DatabaseTest) in {
       forAll(Gen.listOfN(32, ObjectGenerators.newBlockGen(secureRandom, chainId))) { newBlocks =>
         val blocks = newBlocks.distinct
         val storage = insertBlockBodiesMapping(newBlocks)

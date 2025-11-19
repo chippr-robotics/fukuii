@@ -69,54 +69,66 @@ object FixtureProvider {
         )
     }
 
-    val blocksToInclude = fixtures.blockByNumber.toSeq.sortBy { case (number, _) => number }.takeWhile {
-      case (number, _) => number <= blockNumber
+    // Pre-load ALL EVM code from fixtures into storage
+    // This is necessary because some fixtures have account codeHash values that don't match
+    // the actual code hash (they may have empty codeHash when they should have the real hash)
+    fixtures.evmCode.foreach { case (codeHash, code) =>
+      storages.evmCodeStorage.put(codeHash, code).commit()
     }
 
-    blocksToInclude.foreach { case (_, block) =>
-      val receiptsUpdates = fixtures.receipts
-        .get(block.header.hash)
-        .map(r => storages.receiptStorage.put(block.header.hash, r))
-        .getOrElse(storages.receiptStorage.emptyBatchUpdate)
+    // Iterate through headers in block number order using original hash keys
+    fixtures.blockHeaders.toSeq
+      .sortBy { case (_, header) => header.number }
+      .foreach { case (originalHash, header) =>
+        if (header.number <= blockNumber) {
+          val receiptsUpdates = fixtures.receipts
+            .get(originalHash)
+            .map(r => storages.receiptStorage.put(originalHash, r))
+            .getOrElse(storages.receiptStorage.emptyBatchUpdate)
 
-      storages.blockBodiesStorage
-        .put(block.header.hash, fixtures.blockBodies(block.header.hash))
-        .and(storages.blockHeadersStorage.put(block.header.hash, fixtures.blockHeaders(block.header.hash)))
-        .and(storages.blockNumberMappingStorage.put(block.header.number, block.header.hash))
-        .and(receiptsUpdates)
-        .commit()
+          storages.blockBodiesStorage
+            .put(originalHash, fixtures.blockBodies(originalHash))
+            .and(storages.blockHeadersStorage.put(originalHash, header))
+            .and(storages.blockNumberMappingStorage.put(header.number, originalHash))
+            .and(receiptsUpdates)
+            .commit()
 
-      def traverse(nodeHash: ByteString): Unit =
-        fixtures.stateMpt.get(nodeHash).orElse(fixtures.contractMpts.get(nodeHash)) match {
-          case Some(m: BranchNode) =>
-            storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, block.header.number)
-            m.children.collect { case HashNode(hash) => traverse(ByteString(hash)) }
+          def traverse(nodeHash: ByteString): Unit =
+            fixtures.stateMpt.get(nodeHash).orElse(fixtures.contractMpts.get(nodeHash)) match {
+              case Some(m: BranchNode) =>
+                storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
+                m.children.collect { case HashNode(hash) => traverse(ByteString(hash)) }
 
-          case Some(m: ExtensionNode) =>
-            storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, block.header.number)
-            m.next match {
-              case HashNode(hash) if hash.nonEmpty => traverse(ByteString(hash))
-              case _                               =>
+              case Some(m: ExtensionNode) =>
+                storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
+                m.next match {
+                  case HashNode(hash) if hash.nonEmpty => traverse(ByteString(hash))
+                  case _                               =>
+                }
+
+              case Some(m: LeafNode) =>
+                import AccountImplicits._
+                storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, header.number)
+                Try(m.value.toArray[Byte].toAccount).toOption.foreach { account =>
+                  // Note: We've already saved all EVM code above, so this check is now redundant
+                  // but kept for backwards compatibility with fixtures that have correct codeHash
+                  if (account.codeHash != DumpChainActor.emptyEvm) {
+                    fixtures.evmCode.get(account.codeHash).foreach { code =>
+                      storages.evmCodeStorage.put(account.codeHash, code).commit()
+                    }
+                  }
+                  if (account.storageRoot != DumpChainActor.emptyStorage) {
+                    traverse(account.storageRoot)
+                  }
+                }
+
+              case _ =>
+
             }
 
-          case Some(m: LeafNode) =>
-            import AccountImplicits._
-            storages.stateStorage.saveNode(ByteString(m.hash), m.toBytes, block.header.number)
-            Try(m.value.toArray[Byte].toAccount).toOption.foreach { account =>
-              if (account.codeHash != DumpChainActor.emptyEvm) {
-                storages.evmCodeStorage.put(account.codeHash, fixtures.evmCode(account.codeHash)).commit()
-              }
-              if (account.storageRoot != DumpChainActor.emptyStorage) {
-                traverse(account.storageRoot)
-              }
-            }
-
-          case _ =>
-
+          traverse(header.stateRoot)
         }
-
-      traverse(block.header.stateRoot)
-    }
+      }
 
     storages
   }
@@ -192,17 +204,17 @@ object FixtureProvider {
           .toMap
       )
 
-    val blocks = headers.toList
-      .sortBy { case (hash, _) => Hex.toHexString(hash.toArray[Byte]) }
-      .map { case (_, header) => header }
-      .zip(bodies.toList.sortBy { case (hash, _) => Hex.toHexString(hash.toArray[Byte]) }.map { case (_, body) =>
-        body
-      })
-      .map { case (h, b) => Block(h, b) }
+    // Match headers and bodies by their hash keys to create blocks
+    // Note: We keep both the original hash key and the block for later lookup
+    val blocksByOriginalHash = headers.flatMap { case (originalHash, header) =>
+      bodies.get(originalHash).map(body => (originalHash, Block(header, body)))
+    }
+
+    val blocks = blocksByOriginalHash.values.toList
 
     Fixture(
       blocks.map(b => b.header.number -> b).toMap,
-      blocks.map(b => b.header.hash -> b).toMap,
+      blocksByOriginalHash.toMap, // Use original hash keys for blockByHash
       headers,
       bodies,
       receipts,

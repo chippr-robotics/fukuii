@@ -75,7 +75,17 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       (invalidCallResult(context, Set.empty, Set.empty), Address(0))
     else {
       require(context.recipientAddr.isEmpty, "recipient address must be empty for contract creation")
-      require(context.doTransfer, "contract creation will alwyas transfer funds")
+      require(context.doTransfer, "contract creation will always transfer funds")
+
+      // EIP-3860: Check initcode size limit
+      val maxInitCodeSize = context.evmConfig.maxInitCodeSize
+      if (context.evmConfig.eip3860Enabled && maxInitCodeSize.exists(max => context.inputData.size > max)) {
+        // Exceptional abort: initcode too large (consumes all gas)
+        return (
+          invalidCallResult(context, Set.empty, Set.empty).copy(error = Some(InitCodeSizeLimit), gasRemaining = 0),
+          Address(0)
+        )
+      }
 
       val newAddress = salt
         .map(s => context.world.create2Address(context.callerAddr, s, context.inputData))
@@ -174,8 +184,13 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
 
       val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
       val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+      // EIP-3541: Reject new contracts starting with 0xEF byte
+      val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
 
-      if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
+      if (startsWithEF) {
+        // EIP-3541: Code starting with 0xEF byte causes exceptional abort
+        result.copy(error = Some(InvalidCode), gasRemaining = 0)
+      } else if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
         // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
         result.copy(error = Some(OutOfGas), gasRemaining = 0)
       } else if (codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit) {

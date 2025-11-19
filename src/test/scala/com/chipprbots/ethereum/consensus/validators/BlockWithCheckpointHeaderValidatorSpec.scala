@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
 import ByteStringUtils.byteStringOrdering
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockWithCheckpointHeaderValidatorSpec
     extends AnyFlatSpec
@@ -37,23 +38,23 @@ class BlockWithCheckpointHeaderValidatorSpec
     with MockFactory
     with SecureRandomBuilder {
 
-  it should "validate correctly formed BlockHeader with checkpoint" in new TestSetup {
+  it should "validate correctly formed BlockHeader with checkpoint" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     blockHeaderValidator.validate(validBlockHeaderWithCheckpoint, validBlockParentHeader) shouldBe a[Right[_, _]]
   }
 
-  it should "return failure if nonce is not empty" in new TestSetup {
+  it should "return failure if nonce is not empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(byteString => validBlockHeaderWithCheckpoint.copy(nonce = byteString), "nonce")
   }
 
-  it should "return failure if mixHash is not empty" in new TestSetup {
+  it should "return failure if mixHash is not empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(byteString => validBlockHeaderWithCheckpoint.copy(mixHash = byteString), "mixHash")
   }
 
-  it should "return failure if extraData is not empty" in new TestSetup {
+  it should "return failure if extraData is not empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(byteString => validBlockHeaderWithCheckpoint.copy(extraData = byteString), "extraData")
   }
 
-  it should "return failure if beneficiary is not an empty address" in new TestSetup {
+  it should "return failure if beneficiary is not an empty address" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(
       byteString => validBlockHeaderWithCheckpoint.copy(beneficiary = byteString),
       "beneficiary",
@@ -61,7 +62,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure if ommers is not empty" in new TestSetup {
+  it should "return failure if ommers is not empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(
       byteString => validBlockHeaderWithCheckpoint.copy(ommersHash = byteString),
       "ommersHash",
@@ -69,7 +70,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure if logsBloom is not empty" in new TestSetup {
+  it should "return failure if logsBloom is not empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(
       byteString => validBlockHeaderWithCheckpoint.copy(logsBloom = byteString),
       "logsBloom",
@@ -77,7 +78,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure if transactionsRoot is not empty" in new TestSetup {
+  it should "return failure if transactionsRoot is not empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(
       byteString => validBlockHeaderWithCheckpoint.copy(transactionsRoot = byteString),
       "transactionsRoot",
@@ -85,7 +86,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure if receiptsRoot is not empty" in new TestSetup {
+  it should "return failure if receiptsRoot is not empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfEmptyByteString(
       byteString => validBlockHeaderWithCheckpoint.copy(receiptsRoot = byteString),
       "receiptsRoot",
@@ -93,7 +94,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure if stateRoot is not the same as parent stateRoot" in new TestSetup {
+  it should "return failure if stateRoot is not the same as parent stateRoot" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     testOfTheSameValueAsParent(
       byteString => validBlockHeaderWithCheckpoint.copy(stateRoot = byteString),
       "stateRoot",
@@ -101,7 +102,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure if created based on invalid timestamp" in new TestSetup {
+  it should "return failure if created based on invalid timestamp" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     forAll(longGen.suchThat(_ != validBlockParentHeader.unixTimestamp + 1)) { timestamp =>
       val blockHeader = validBlockHeaderWithCheckpoint.copy(unixTimestamp = timestamp)
       val validateResult = blockHeaderValidator.validate(blockHeader, validBlockParentHeader)
@@ -109,7 +110,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     }
   }
 
-  it should "return failure if difficulty is different than parent difficulty" in new TestSetup {
+  it should "return failure if difficulty is different than parent difficulty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     forAll(bigIntGen.suchThat(_ != validBlockParentHeader.difficulty)) { difficulty =>
       val blockHeader = validBlockHeaderWithCheckpoint.copy(difficulty = difficulty)
       val validateResult = blockHeaderValidator.validate(blockHeader, validBlockParentHeader)
@@ -119,7 +120,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     }
   }
 
-  it should "return failure if gas used is not zero" in new TestSetup {
+  it should "return failure if gas used is not zero" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     forAll(bigIntGen.suchThat(_ != UInt256.Zero.toBigInt)) { gasUsed =>
       val blockHeader = validBlockHeaderWithCheckpoint.copy(gasUsed = gasUsed)
       val validateResult = blockHeaderValidator.validate(blockHeader, validBlockParentHeader)
@@ -127,7 +128,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     }
   }
 
-  it should "return failure if gas limit is different than parent gas limit" in new TestSetup {
+  it should "return failure if gas limit is different than parent gas limit" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     forAll(bigIntGen.suchThat(_ != validBlockParentHeader.gasLimit)) { gasLimit =>
       val blockHeader = validBlockHeaderWithCheckpoint.copy(gasLimit = gasLimit)
       val validateResult = blockHeaderValidator.validate(blockHeader, validBlockParentHeader)
@@ -137,7 +138,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     }
   }
 
-  it should "return failure if created based on invalid number" in new TestSetup {
+  it should "return failure if created based on invalid number" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     forAll(
       longGen.suchThat(num =>
         num != validBlockParentHeader.number + 1 && num >= config.forkBlockNumbers.ecip1097BlockNumber
@@ -149,17 +150,17 @@ class BlockWithCheckpointHeaderValidatorSpec
     }
   }
 
-  it should "validate correctly a block whose parent is in storage" in new TestSetup {
+  it should "validate correctly a block whose parent is taggedAs (UnitTest, ConsensusTest) in storage" in new TestSetup {
     blockHeaderValidator.validate(validBlockHeaderWithCheckpoint, getBlockHeaderWithParent) shouldBe a[Right[_, _]]
   }
 
-  it should "return failure if the parent's header is not in storage" in new TestSetup {
+  it should "return failure if the parent's header is not taggedAs (UnitTest, ConsensusTest) in storage" in new TestSetup {
     blockHeaderValidator.validate(validBlockHeaderWithCheckpoint, getBlockHeaderWithNone) shouldBe Left(
       HeaderParentNotFoundError
     )
   }
 
-  it should "return failure when checkpoint signatures aren't sorted lexicographically" in new TestSetup {
+  it should "return failure when checkpoint signatures aren't sorted lexicographically" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val invalidBlockHeaderExtraFields: HefPostEcip1097 =
       HefPostEcip1097(Some(Checkpoint(validCheckpoint.signatures.reverse)))
     val invalidBlockHeader: BlockHeader =
@@ -169,7 +170,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint has not enough valid signatures" in new TestSetup {
+  it should "return failure when checkpoint has not enough valid signatures" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val invalidBlockHeaderExtraFields: HefPostEcip1097 =
       HefPostEcip1097(Some(Checkpoint(Seq(validCheckpoint.signatures.head))))
     val invalidBlockHeader: BlockHeader =
@@ -179,7 +180,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint has enough valid signatures, but also an invalid one" in new TestSetup {
+  it should "return failure when checkpoint has enough valid signatures, but also an invalid one" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val invalidKeys: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
     val invalidSignatures: Seq[ECDSASignature] =
       CheckpointingTestHelpers.createCheckpointSignatures(Seq(invalidKeys), validBlockParent.hash)
@@ -197,7 +198,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint has no signatures" in new TestSetup {
+  it should "return failure when checkpoint has no signatures" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(Checkpoint(Nil)))
     val invalidBlockHeader: BlockHeader =
       validBlockHeaderWithCheckpoint.copy(extraFields = invalidBlockHeaderExtraFields)
@@ -206,7 +207,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint has different signatures from the same signer" in new TestSetup {
+  it should "return failure when checkpoint has different signatures from the same signer" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     // This is a signature generated with `keys(0)` with a random `k` parameter, therefore it's different than the one
     // obtained with `ECDSASignature.sign`.
     // Note that this test will fail if `validBlockParent` is changed. We currently cannot generate such signature
@@ -243,7 +244,7 @@ class BlockWithCheckpointHeaderValidatorSpec
     blockHeaderValidator.validate(headerWithInvalidCheckpoint, validBlockParentHeader) shouldBe expectedError
   }
 
-  it should "return when failure when checkpoint has too many signatures" in new TestSetup {
+  it should "return when failure when checkpoint has too many signatures" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val invalidCheckpoint: Checkpoint =
       validCheckpoint.copy(signatures = (validCheckpoint.signatures ++ validCheckpoint.signatures).sorted)
     val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(invalidCheckpoint))

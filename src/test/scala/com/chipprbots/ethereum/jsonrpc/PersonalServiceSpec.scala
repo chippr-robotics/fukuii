@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.keystore.KeyStore
@@ -59,7 +60,7 @@ class PersonalServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "PersonalService" should "import private keys" in new TestSetup {
+  "PersonalService" should "import private keys" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.importPrivateKey _).expects(prvKey, passphrase).returning(Right(address))
 
     val req: ImportRawKeyRequest = ImportRawKeyRequest(prvKey, passphrase)
@@ -68,7 +69,7 @@ class PersonalServiceSpec
     res shouldEqual Right(ImportRawKeyResponse(address))
   }
 
-  it should "create new accounts" in new TestSetup {
+  it should "create new accounts" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.newAccount _).expects(passphrase).returning(Right(address))
 
     val req: NewAccountRequest = NewAccountRequest(passphrase)
@@ -77,7 +78,7 @@ class PersonalServiceSpec
     res shouldEqual Right(NewAccountResponse(address))
   }
 
-  it should "handle too short passphrase error" in new TestSetup {
+  it should "handle too short passphrase error" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.newAccount _).expects(passphrase).returning(Left(KeyStore.PassPhraseTooShort(7)))
 
     val req: NewAccountRequest = NewAccountRequest(passphrase)
@@ -86,7 +87,7 @@ class PersonalServiceSpec
     res shouldEqual Left(PersonalService.PassPhraseTooShort(7))
   }
 
-  it should "list accounts" in new TestSetup {
+  it should "list accounts" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val addresses: List[Address] = List(123, 42, 1).map(Address(_))
     (keyStore.listAccounts _).expects().returning(Right(addresses))
 
@@ -95,7 +96,7 @@ class PersonalServiceSpec
     res shouldEqual Right(ListAccountsResponse(addresses))
   }
 
-  it should "translate KeyStore errors to JsonRpc errors" in new TestSetup {
+  it should "translate KeyStore errors to JsonRpc errors" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.listAccounts _).expects().returning(Left(IOError("boom!")))
     val res1: Either[JsonRpcError, ListAccountsResponse] = personal.listAccounts(ListAccountsRequest()).unsafeRunSync()
     res1 shouldEqual Left(LogicError("boom!"))
@@ -111,14 +112,14 @@ class PersonalServiceSpec
     res3 shouldEqual Left(InvalidPassphrase)
   }
 
-  it should "return an error when trying to import an invalid key" in new TestSetup {
+  it should "return an error when trying to import an invalid key" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val invalidKey = prvKey.tail
     val req: ImportRawKeyRequest = ImportRawKeyRequest(invalidKey, passphrase)
     val res: Either[JsonRpcError, ImportRawKeyResponse] = personal.importRawKey(req).unsafeRunSync()
     res shouldEqual Left(InvalidKey)
   }
 
-  it should "unlock an account given a correct passphrase" in new TestSetup {
+  it should "unlock an account given a correct passphrase" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _).expects(address, passphrase).returning(Right(wallet))
 
     val req: UnlockAccountRequest = UnlockAccountRequest(address, passphrase, None)
@@ -127,7 +128,7 @@ class PersonalServiceSpec
     res shouldEqual Right(UnlockAccountResponse(true))
   }
 
-  it should "send a transaction (given sender address and a passphrase)" in new TestSetup {
+  it should "send a transaction (given sender address and a passphrase)" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
       .returning(Right(wallet))
@@ -147,7 +148,7 @@ class PersonalServiceSpec
     txPool.expectMsg(AddOrOverrideTransaction(stx))
   }
 
-  it should "send a transaction when having pending txs from the same sender" in new TestSetup {
+  it should "send a transaction when having pending txs from the same sender" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val newTx: SignedTransaction = wallet.signTx(tx.toTransaction(nonce + 1), None).tx
 
     (keyStore.unlockAccount _)
@@ -169,7 +170,7 @@ class PersonalServiceSpec
     txPool.expectMsg(AddOrOverrideTransaction(newTx))
   }
 
-  it should "fail to send a transaction given a wrong passphrase" in new TestSetup {
+  it should "fail to send a transaction given a wrong passphrase" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
       .returning(Left(KeyStore.DecryptionFailed))
@@ -181,7 +182,7 @@ class PersonalServiceSpec
     txPool.expectNoMessage()
   }
 
-  it should "send a transaction (given sender address and using an unlocked account)" in new TestSetup {
+  it should "send a transaction (given sender address and using an unlocked account)" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
       .returning(Right(wallet))
@@ -202,7 +203,7 @@ class PersonalServiceSpec
     txPool.expectMsg(AddOrOverrideTransaction(stx))
   }
 
-  it should "fail to send a transaction when account is locked" in new TestSetup {
+  it should "fail to send a transaction when account is locked" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val req: SendTransactionRequest = SendTransactionRequest(tx)
     val res: Either[JsonRpcError, SendTransactionResponse] = personal.sendTransaction(req).unsafeRunSync()
 
@@ -210,7 +211,7 @@ class PersonalServiceSpec
     txPool.expectNoMessage()
   }
 
-  it should "lock an unlocked account" in new TestSetup {
+  it should "lock an unlocked account" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
       .returning(Right(wallet))
@@ -226,7 +227,7 @@ class PersonalServiceSpec
     txRes shouldEqual Left(AccountLocked)
   }
 
-  it should "sign a message when correct passphrase is sent" in new TestSetup {
+  it should "sign a message when correct passphrase is sent" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
@@ -250,7 +251,7 @@ class PersonalServiceSpec
 
   }
 
-  it should "sign a message using an unlocked account" in new TestSetup {
+  it should "sign a message using an unlocked account" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
@@ -269,7 +270,7 @@ class PersonalServiceSpec
     res shouldEqual Right(SignResponse(ECDSASignature(r, s, v)))
   }
 
-  it should "return an error if signing a message using a locked account" in new TestSetup {
+  it should "return an error if signing a message using a locked account" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
@@ -279,7 +280,7 @@ class PersonalServiceSpec
     res shouldEqual Left(AccountLocked)
   }
 
-  it should "return an error when signing a message if passphrase is wrong" in new TestSetup {
+  it should "return an error when signing a message if passphrase is wrong" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     val wrongPassphase = "wrongPassphrase"
 
@@ -295,7 +296,7 @@ class PersonalServiceSpec
     res shouldEqual Left(InvalidPassphrase)
   }
 
-  it should "return an error when signing if unexistent address is sent" in new TestSetup {
+  it should "return an error when signing if unexistent address is sent" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
@@ -309,7 +310,7 @@ class PersonalServiceSpec
     res shouldEqual Left(KeyNotFound)
   }
 
-  it should "recover address form signed message" in new TestSetup {
+  it should "recover address form signed message" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val sigAddress: Address = Address(ByteString(Hex.decode("12c2a3b877289050FBcfADC1D252842CA742BE81")))
 
     val message: ByteString = ByteString(Hex.decode("deadbeaf"))
@@ -324,7 +325,7 @@ class PersonalServiceSpec
     res shouldEqual Right(EcRecoverResponse(sigAddress))
   }
 
-  it should "allow to sign and recover the same message" in new TestSetup {
+  it should "allow to sign and recover the same message" taggedAs (UnitTest, RPCTest) in new TestSetup {
 
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
@@ -344,7 +345,7 @@ class PersonalServiceSpec
       }
   }
 
-  it should "produce not chain specific transaction before eip155" in new TestSetup {
+  it should "produce not chain specific transaction before eip155" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
       .returning(Right(wallet))
@@ -364,7 +365,7 @@ class PersonalServiceSpec
     txPool.expectMsg(AddOrOverrideTransaction(stx))
   }
 
-  it should "produce chain specific transaction after eip155" in new TestSetup {
+  it should "produce chain specific transaction after eip155" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
       .returning(Right(wallet))
@@ -385,7 +386,7 @@ class PersonalServiceSpec
     txPool.expectMsg(AddOrOverrideTransaction(chainSpecificStx))
   }
 
-  it should "return an error when importing a duplicated key" in new TestSetup {
+  it should "return an error when importing a duplicated key" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.importPrivateKey _).expects(prvKey, passphrase).returning(Left(KeyStore.DuplicateKeySaved))
 
     val req: ImportRawKeyRequest = ImportRawKeyRequest(prvKey, passphrase)
@@ -393,7 +394,7 @@ class PersonalServiceSpec
     res shouldEqual Left(LogicError("account already exists"))
   }
 
-  it should "unlock an account given a correct passphrase for specified duration" in new TestSetup {
+  it should "unlock an account given a correct passphrase for specified duration" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.unlockAccount _).expects(address, passphrase).returning(Right(wallet))
 
     val message: ByteString = ByteString(Hex.decode("deadbeaf"))

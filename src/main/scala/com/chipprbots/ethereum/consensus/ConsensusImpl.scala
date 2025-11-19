@@ -43,11 +43,12 @@ class ConsensusImpl(
     *   blockchain configuration
     * @return
     *   One of:
-    *   - [[ExtendedCurrentBestBranch]] - if the branch was added on top of the current branch
-    *   - [[SelectedNewBestBranch]] - if the chain was reorganized.
-    *   - [[KeptCurrentBestBranch]] - if the branch was not considered as better than the current branch
-    *   - [[ConsensusError]] - block failed to execute (when importing to top or reorganising the chain)
-    *   - [[ConsensusErrorDueToMissingNode]] - block failed to execute (when importing to top or reorganising the chain)
+    *   - [[Consensus.ExtendedCurrentBestBranch]] - if the branch was added on top of the current branch
+    *   - [[Consensus.SelectedNewBestBranch]] - if the chain was reorganized.
+    *   - [[Consensus.KeptCurrentBestBranch]] - if the branch was not considered as better than the current branch
+    *   - [[Consensus.ConsensusError]] - block failed to execute (when importing to top or reorganising the chain)
+    *   - [[Consensus.ConsensusErrorDueToMissingNode]] - block failed to execute (when importing to top or reorganising
+    *     the chain)
     */
   override def evaluateBranch(
       branch: NonEmptyList[Block]

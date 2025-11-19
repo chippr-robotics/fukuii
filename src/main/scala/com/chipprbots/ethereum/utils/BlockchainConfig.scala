@@ -8,6 +8,8 @@ import scala.util.Try
 import com.typesafe.config.ConfigRenderOptions
 import com.typesafe.config.{Config => TypesafeConfig}
 
+import com.chipprbots.ethereum.blockchain.data.BootstrapCheckpoint
+import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -30,7 +32,10 @@ case class BlockchainConfig(
     bootstrapNodes: Set[String],
     checkpointPubKeys: Set[ByteString] = Set.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
-    capabilities: List[Capability] = List.empty
+    capabilities: List[Capability] = List.empty,
+    bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
+    useBootstrapCheckpoints: Boolean = true,
+    messConfig: MESSConfig = MESSConfig()
 ) {
   val minRequireSignatures: Int = (Math.floor(checkpointPubKeys.size.toDouble / 2) + 1).toInt
 
@@ -62,7 +67,9 @@ case class ForkBlockNumbers(
     ecip1099BlockNumber: BigInt,
     muirGlacierBlockNumber: BigInt,
     magnetoBlockNumber: BigInt,
-    berlinBlockNumber: BigInt
+    berlinBlockNumber: BigInt,
+    mystiqueBlockNumber: BigInt,
+    spiralBlockNumber: BigInt
 ) {
   def all: List[BigInt] = this.productIterator.toList.flatMap {
     case i: BigInt => Some(i)
@@ -100,7 +107,9 @@ object ForkBlockNumbers {
     ecip1049BlockNumber = None,
     muirGlacierBlockNumber = Long.MaxValue,
     magnetoBlockNumber = Long.MaxValue,
-    berlinBlockNumber = Long.MaxValue
+    berlinBlockNumber = Long.MaxValue,
+    mystiqueBlockNumber = Long.MaxValue,
+    spiralBlockNumber = Long.MaxValue
   )
 }
 
@@ -174,9 +183,29 @@ object BlockchainConfig {
     val muirGlacierBlockNumber: BigInt = BigInt(blockchainConfig.getString("muir-glacier-block-number"))
     val magnetoBlockNumber: BigInt = BigInt(blockchainConfig.getString("magneto-block-number"))
     val berlinBlockNumber: BigInt = BigInt(blockchainConfig.getString("berlin-block-number"))
+    val mystiqueBlockNumber: BigInt = BigInt(blockchainConfig.getString("mystique-block-number"))
+    val spiralBlockNumber: BigInt = BigInt(blockchainConfig.getString("spiral-block-number"))
 
     val capabilities: List[Capability] =
       blockchainConfig.getStringList("capabilities").asScala.toList.map(Capability.parseUnsafe)
+
+    val bootstrapCheckpoints: List[BootstrapCheckpoint] = ConfigUtils
+      .getOptionalValue(blockchainConfig, _.getStringList, "bootstrap-checkpoints")
+      .map(_.asScala.toList.flatMap(BootstrapCheckpoint.fromString))
+      .getOrElse(List.empty)
+
+    val useBootstrapCheckpoints: Boolean =
+      Try(blockchainConfig.getBoolean("use-bootstrap-checkpoints")).getOrElse(true)
+
+    val messConfig: MESSConfig = Try {
+      val messConf = blockchainConfig.getConfig("mess")
+      MESSConfig(
+        enabled = Try(messConf.getBoolean("enabled")).getOrElse(false),
+        decayConstant = Try(messConf.getDouble("decay-constant")).getOrElse(0.0001),
+        maxTimeDelta = Try(messConf.getLong("max-time-delta")).getOrElse(2592000L),
+        minWeightMultiplier = Try(messConf.getDouble("min-weight-multiplier")).getOrElse(0.0001)
+      )
+    }.getOrElse(MESSConfig())
 
     BlockchainConfig(
       powTargetTime = powTargetTime,
@@ -204,7 +233,9 @@ object BlockchainConfig {
         ecip1099BlockNumber = ecip1099BlockNumber,
         muirGlacierBlockNumber = muirGlacierBlockNumber,
         magnetoBlockNumber = magnetoBlockNumber,
-        berlinBlockNumber = berlinBlockNumber
+        berlinBlockNumber = berlinBlockNumber,
+        mystiqueBlockNumber = mystiqueBlockNumber,
+        spiralBlockNumber = spiralBlockNumber
       ),
       treasuryAddress = treasuryAddress,
       maxCodeSize = maxCodeSize,
@@ -220,7 +251,10 @@ object BlockchainConfig {
       bootstrapNodes = bootstrapNodes,
       checkpointPubKeys = checkpointPubKeys,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
-      capabilities = capabilities
+      capabilities = capabilities,
+      bootstrapCheckpoints = bootstrapCheckpoints,
+      useBootstrapCheckpoints = useBootstrapCheckpoints,
+      messConfig = messConfig
     )
   }
   // scalastyle:on method.length

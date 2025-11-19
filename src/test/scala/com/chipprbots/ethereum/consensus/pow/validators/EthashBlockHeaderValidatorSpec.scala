@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
+import com.chipprbots.ethereum.testing.Tags._
 
 // scalastyle:off magic.number
 class EthashBlockHeaderValidatorSpec
@@ -38,21 +39,21 @@ class EthashBlockHeaderValidatorSpec
 
   implicit val blockchainConfig: BlockchainConfig = createBlockchainConfig()
 
-  "BlockHeaderValidator" should "validate correctly formed BlockHeaders" in {
+  "BlockHeaderValidator" should "validate correctly formed BlockHeaders" taggedAs (UnitTest, ConsensusTest) in {
     PoWBlockHeaderValidator.validate(validBlockHeader, validParent.header) match {
       case Right(_) => succeed
       case _        => fail()
     }
   }
 
-  it should "return a failure if created based on invalid extra data" in {
+  it should "return a failure if created based on invalid extra data" taggedAs (UnitTest, ConsensusTest) in {
     forAll(randomSizeByteStringGen(MaxExtraDataSize + 1, MaxExtraDataSize + ExtraDataSizeLimit)) { wrongExtraData =>
       val invalidBlockHeader = validBlockHeader.copy(extraData = wrongExtraData)
       assert(PoWBlockHeaderValidator.validate(invalidBlockHeader, validParent.header) == Left(HeaderExtraDataError))
     }
   }
 
-  it should "validate DAO block (extra data)" in {
+  it should "validate DAO block (extra data)" taggedAs (UnitTest, ConsensusTest) in {
     import Fixtures.Blocks._
     val cases: TableFor4[BlockHeader, Block, Boolean, Boolean] = Table(
       ("Block", "Parent Block", "Supports Dao Fork", "Valid"),
@@ -84,7 +85,7 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if created based on invalid timestamp" in {
+  it should "return a failure if created based on invalid timestamp" taggedAs (UnitTest, ConsensusTest) in {
     forAll(longGen) { timestamp =>
       val blockHeader = validBlockHeader.copy(unixTimestamp = timestamp)
       val validateResult = PoWBlockHeaderValidator.validate(blockHeader, validParent.header)
@@ -96,7 +97,7 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if created based on invalid difficulty" in {
+  it should "return a failure if created based on invalid difficulty" taggedAs (UnitTest, ConsensusTest) in {
     forAll(bigIntGen) { difficulty =>
       val blockHeader = validBlockHeader.copy(difficulty = difficulty)
       val validateResult = PoWBlockHeaderValidator.validate(blockHeader, validParent.header)
@@ -105,7 +106,7 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if created based on invalid gas used" in {
+  it should "return a failure if created based on invalid gas used" taggedAs (UnitTest, ConsensusTest) in {
     forAll(bigIntGen) { gasUsed =>
       val blockHeader = validBlockHeader.copy(gasUsed = gasUsed)
       val validateResult = PoWBlockHeaderValidator.validate(blockHeader, validParent.header)
@@ -114,14 +115,14 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if created based on invalid negative gas used" in {
+  it should "return a failure if created based on invalid negative gas used" taggedAs (UnitTest, ConsensusTest) in {
     val gasUsed = -1
     val blockHeader = validBlockHeader.copy(gasUsed = gasUsed)
     val validateResult = PoWBlockHeaderValidator.validate(blockHeader, validParent.header)
     assert(validateResult == Left(HeaderGasUsedError))
   }
 
-  it should "return a failure if created based on invalid gas limit" in {
+  it should "return a failure if created based on invalid gas limit" taggedAs (UnitTest, ConsensusTest) in {
     val LowerGasLimit =
       MinGasLimit.max(validParentBlockHeader.gasLimit - validParentBlockHeader.gasLimit / GasLimitBoundDivisor + 1)
     val UpperGasLimit = validParentBlockHeader.gasLimit + validParentBlockHeader.gasLimit / GasLimitBoundDivisor - 1
@@ -135,13 +136,13 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if created with gas limit above threshold and block number >= eip106 block number" in {
+  it should "return a failure if created with gas limit above threshold and block number >= eip106 block number" taggedAs (UnitTest, ConsensusTest) in {
     val validParent = Block(validParentBlockHeader.copy(gasLimit = Long.MaxValue), validParentBlockBody)
     val invalidBlockHeader = validBlockHeader.copy(gasLimit = BigInt(Long.MaxValue) + 1)
     PoWBlockHeaderValidator.validate(invalidBlockHeader, validParent.header) shouldBe Left(HeaderGasLimitError)
   }
 
-  it should "return a failure if created based on invalid number" in {
+  it should "return a failure if created based on invalid number" taggedAs (UnitTest, ConsensusTest) in {
     forAll(longGen) { number =>
       val blockHeader = validBlockHeader.copy(number = number)
       val parent = Block(validParentBlockHeader, validParentBlockBody)
@@ -152,7 +153,7 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if created based on invalid nonce/mixHash" in {
+  it should "return a failure if created based on invalid nonce/mixHash" taggedAs (UnitTest, ConsensusTest) in {
     val invalidNonce = ByteString(Hex.decode("0b80f001ae0c017f"))
     val invalidMixHash = ByteString(Hex.decode("1f947f00807f7f7f2f7f00ff82ff00de015980607f129c77afedff4680c10171"))
     val blockHeaderWithInvalidNonce = validBlockHeader.copy(nonce = invalidNonce)
@@ -166,7 +167,7 @@ class EthashBlockHeaderValidatorSpec
     PoWBlockHeaderValidator.validate(blockHeaderWithInvalidNonceAndMixHash, parent.header) shouldBe Left(HeaderPoWError)
   }
 
-  it should "validate correctly a block whose parent is in storage" in new EphemBlockchainTestSetup {
+  it should "validate correctly a block whose parent is taggedAs (UnitTest, ConsensusTest) in storage" in new EphemBlockchainTestSetup {
     blockchainWriter
       .storeBlockHeader(validParentBlockHeader)
       .and(blockchainWriter.storeBlockBody(validParentBlockHeader.hash, validParentBlockBody))
@@ -177,14 +178,14 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if the parent's header is not in storage" in new EphemBlockchainTestSetup {
+  it should "return a failure if the parent's header is not taggedAs (UnitTest, ConsensusTest) in storage" in new EphemBlockchainTestSetup {
     PoWBlockHeaderValidator.validate(validBlockHeader, blockchainReader.getBlockHeaderByHash _) match {
       case Left(HeaderParentNotFoundError) => succeed
       case _                               => fail()
     }
   }
 
-  it should "properly validate a block after difficulty bomb pause" in new EphemBlockchainTestSetup {
+  it should "properly validate a block after difficulty bomb pause" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
     val parent: Block = Block(pausedDifficultyBombBlockParent, parentBody)
 
     val res: Either[BlockHeaderError, BlockHeaderValid] =
@@ -192,7 +193,7 @@ class EthashBlockHeaderValidatorSpec
     res shouldBe Right(BlockHeaderValid)
   }
 
-  it should "mark as valid a post ecip1098 block opt-out with opt out undefined" in new EphemBlockchainTestSetup {
+  it should "mark as valid a post ecip1098 block opt-out with opt out undefined" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
     val ecip1098BlockNumber: BigInt = validBlockHeader.number / 2
     val blockchainConfigWithECIP1098Enabled: BlockchainConfig =
       EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
@@ -206,7 +207,7 @@ class EthashBlockHeaderValidatorSpec
     validationResult shouldBe Right(BlockHeaderValid)
   }
 
-  it should "properly calculate the difficulty after difficulty bomb resume (with reward reduction)" in new EphemBlockchainTestSetup {
+  it should "properly calculate the difficulty after difficulty bomb resume (with reward reduction)" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
     val parentHeader: BlockHeader =
       validParentBlockHeader.copy(number = 5000101, unixTimestamp = 1513175023, difficulty = BigInt("22627021745803"))
     val parent: Block = Block(parentHeader, parentBody)
@@ -220,7 +221,7 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe expected
   }
 
-  it should "properly calculate the difficulty after difficulty defuse" in new EphemBlockchainTestSetup {
+  it should "properly calculate the difficulty after difficulty defuse" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
     val parentHeader: BlockHeader =
       validParentBlockHeader.copy(number = 5899999, unixTimestamp = 1525176000, difficulty = BigInt("22627021745803"))
     val parent: Block = Block(parentHeader, parentBody)
@@ -234,7 +235,7 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe blockDifficultyWihtoutBomb
   }
 
-  it should "properly calculate a block after block reward reduction (without uncles)" in new EphemBlockchainTestSetup {
+  it should "properly calculate a block after block reward reduction (without uncles)" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
     val parent: Block = Block(afterRewardReductionParentBlockHeader, parentBody)
 
     val blockNumber: BigInt = afterRewardReductionBlockHeader.number
@@ -251,7 +252,7 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe afterRewardReductionBlockHeader.difficulty
   }
 
-  it should "properly calculate the difficulty after muir glacier delay" in new EphemBlockchainTestSetup {
+  it should "properly calculate the difficulty after muir glacier delay" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
     val blockchainConfigWithoutDifficultyBombRemoval: BlockchainConfig =
       EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
         _.copy(

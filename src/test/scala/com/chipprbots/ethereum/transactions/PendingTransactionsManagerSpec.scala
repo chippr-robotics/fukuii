@@ -36,11 +36,11 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.TxPoolConfig
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.SendMessage
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.SendMessage
+import com.chipprbots.ethereum.testing.Tags._
 
 class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
 
-  "PendingTransactionsManager" should "store pending transactions received from peers" in new TestSetup {
+  "PendingTransactionsManager" should "store pending transactions received from peers" taggedAs (UnitTest) in new TestSetup {
     val msg: Set[SignedTransactionWithSender] = (1 to 10).map(e => newStx(e)).toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg, PeerId("1"))
 
@@ -51,7 +51,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe msg
   }
 
-  it should "ignore known transaction" in new TestSetup {
+  it should "ignore known transaction" taggedAs (UnitTest) in new TestSetup {
     val msg: Set[SignedTransactionWithSender] = Seq(newStx(1)).toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg, PeerId("1"))
     pendingTransactionsManager ! ProperSignedTransactions(msg, PeerId("2"))
@@ -64,7 +64,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe msg
   }
 
-  it should "broadcast received pending transactions to other peers" in new TestSetup {
+  it should "broadcast received pending transactions to other peers" taggedAs (UnitTest) in new TestSetup {
     val stx: SignedTransactionWithSender = newStx()
     pendingTransactionsManager ! AddTransactions(stx)
 
@@ -82,7 +82,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     pendingTxs.pendingTransactions.map(_.stx) shouldBe Seq(stx)
   }
 
-  it should "notify other peers about received transactions and handle removal" in new TestSetup {
+  it should "notify other peers about received transactions and handle removal" taggedAs (UnitTest) in new TestSetup {
     val tx1: Seq[SignedTransactionWithSender] = Seq.fill(10)(newStx())
     val msg1 = tx1.toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg1, peer1.id)
@@ -121,7 +121,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe (tx2.take(2) ++ tx1.takeRight(4)).toSet
   }
 
-  it should "not add pending transaction again when it was removed while waiting for peers" in new TestSetup {
+  it should "not add pending transaction again when it was removed while waiting for peers" taggedAs (UnitTest) in new TestSetup {
     val msg1: Set[SignedTransactionWithSender] = Set(newStx(1))
     pendingTransactionsManager ! ProperSignedTransactions(msg1, peer1.id)
     Thread.sleep(Timeouts.normalTimeout.toMillis)
@@ -137,7 +137,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     pendingTxs.pendingTransactions.size shouldBe 0
   }
 
-  it should "override transactions with the same sender and nonce" in new TestSetup {
+  it should "override transactions with the same sender and nonce" taggedAs (UnitTest) in new TestSetup {
     val firstTx: SignedTransactionWithSender = newStx(1, tx, keyPair1)
     val otherTx: SignedTransactionWithSender = newStx(1, tx, keyPair2)
     val overrideTx: SignedTransactionWithSender = newStx(1, tx.copy(value = 2 * tx.value), keyPair1)
@@ -172,7 +172,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     )
   }
 
-  it should "broadcast pending transactions to newly connected peers" in new TestSetup {
+  it should "broadcast pending transactions to newly connected peers" taggedAs (UnitTest) in new TestSetup {
     val stx: SignedTransactionWithSender = newStx()
     pendingTransactionsManager ! AddTransactions(stx)
 
@@ -184,7 +184,7 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     etcPeerManager.expectMsgAllOf(EtcPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer1.id))
   }
 
-  it should "remove transaction on timeout" in new TestSetup {
+  it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup {
     override val txPoolConfig: TxPoolConfig = new TxPoolConfig {
       override val txPoolSize: Int = 300
       override val transactionTimeout: FiniteDuration = 500.millis

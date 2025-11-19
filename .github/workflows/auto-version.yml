@@ -64,7 +64,7 @@ jobs:
       - name: Read current version
         id: current-version
         run: |
-          VERSION=$(grep -oP '(?<=version.*:= ")[\d.]+' version.sbt)
+          VERSION=$(grep 'ThisBuild / version' version.sbt | grep -oP '\d+\.\d+\.\d+')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Current version: $VERSION"
       

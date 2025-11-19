@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
-import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 
 import org.apache.pekko.actor.ActorSystem
@@ -186,14 +185,13 @@ object JsonRpcHttpServer extends Logger {
       jsonRpcController: JsonRpcBaseController,
       jsonRpcHealthchecker: JsonRpcHealthChecker,
       config: JsonRpcHttpServerConfig,
-      secureRandom: SecureRandom,
       fSslContext: () => Either[SSLError, SSLContext]
   )(implicit actorSystem: ActorSystem): Either[String, JsonRpcHttpServer] =
     config.mode match {
       case "http" => Right(new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config)(actorSystem))
       case "https" =>
         Right(
-          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, secureRandom, fSslContext)(
+          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fSslContext)(
             actorSystem
           )
         )
@@ -229,8 +227,8 @@ object JsonRpcHttpServer extends Logger {
   }
 
   object JsonRpcHttpServerConfig {
-    def apply(mantisConfig: TypesafeConfig): JsonRpcHttpServerConfig = {
-      val rpcHttpConfig = mantisConfig.getConfig("network.rpc.http")
+    def apply(fukuiiConfig: TypesafeConfig): JsonRpcHttpServerConfig = {
+      val rpcHttpConfig = fukuiiConfig.getConfig("network.rpc.http")
 
       new JsonRpcHttpServerConfig {
         override val mode: String = rpcHttpConfig.getString("mode")

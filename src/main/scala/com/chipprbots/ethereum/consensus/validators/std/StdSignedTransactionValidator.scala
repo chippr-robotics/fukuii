@@ -35,6 +35,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     for {
       _ <- checkSyntacticValidity(stx)
+      _ <- validateInitCodeSize(stx, blockHeader.number)
       _ <- validateSignature(stx, blockHeader.number)
       _ <- validateNonce(stx, senderAccount.nonce)
       _ <- validateGasLimitEnoughForIntrinsicGas(stx, blockHeader.number)
@@ -97,7 +98,16 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
     val validR = r > 0 && r < secp256k1n
     val validS = s > 0 && s < (if (beforeHomestead) secp256k1n else secp256k1n / 2)
-    val validSigningSchema = if (beforeEIP155) !stx.isChainSpecific else true
+
+    // Validate signing schema based on transaction type
+    val validSigningSchema = stx.tx match {
+      case _: TransactionWithAccessList =>
+        // EIP-2930+ transactions use y-parity (0 or 1) for v
+        stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
+      case _: LegacyTransaction =>
+        // Legacy transactions: before EIP-155, must use unprotected signatures (v = 27 or 28)
+        if (beforeEIP155) !stx.isChainSpecific else true
+    }
 
     if (validR && validS && validSigningSchema) Right(SignedTransactionValid)
     else Left(TransactionSignatureError)
@@ -118,6 +128,33 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   ): Either[SignedTransactionError, SignedTransactionValid] =
     if (senderNonce == UInt256(stx.tx.nonce)) Right(SignedTransactionValid)
     else Left(TransactionNonceError(UInt256(stx.tx.nonce), senderNonce))
+
+  /** Validates the initcode size for contract creation transactions (EIP-3860)
+    *
+    * @param stx
+    *   Transaction to validate
+    * @param blockHeaderNumber
+    *   Number of the block where the stx transaction was included
+    * @return
+    *   Either the validated transaction or a TransactionInitCodeSizeError
+    */
+  private def validateInitCodeSize(
+      stx: SignedTransaction,
+      blockHeaderNumber: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] = {
+    import stx.tx
+    if (tx.isContractInit) {
+      val config = EvmConfig.forBlock(blockHeaderNumber, blockchainConfig)
+      config.maxInitCodeSize match {
+        case Some(maxSize) if config.eip3860Enabled && tx.payload.size > maxSize =>
+          Left(TransactionInitCodeSizeError(tx.payload.size, maxSize))
+        case _ =>
+          Right(SignedTransactionValid)
+      }
+    } else {
+      Right(SignedTransactionValid)
+    }
+  }
 
   /** Validates the gas limit is no smaller than the intrinsic gas used by the transaction.
     *

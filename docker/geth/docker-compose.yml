@@ -51,7 +51,7 @@ services:
     networks:
       - geth-net
     volumes:
-      - $HOME/.mantis/development/geth:/root/.ethereum
+      - $HOME/.fukuii/development/geth:/root/.ethereum
     command: --http --http.addr 0.0.0.0 --metrics --metrics.addr 0.0.0.0
     restart: always
 

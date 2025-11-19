@@ -9,7 +9,7 @@
 
     <logger name="io.netty" level="OFF"/>
 
-    <logger name="io.iohk.scalanet.peergroup.udp" level="ERROR"/>
+    <logger name="com.chipprbots.scalanet.peergroup.udp" level="ERROR"/>
 
     <root level="WARN">
         <appender-ref ref="STDOUT"/>

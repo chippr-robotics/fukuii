@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.domain.Checkpoint
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.jsonrpc.CheckpointingService._
 import com.chipprbots.ethereum.ledger.BlockQueue
+import com.chipprbots.ethereum.testing.Tags._
 
 class CheckpointingServiceSpec
     extends TestKit(ActorSystem("CheckpointingServiceSpec_System"))
@@ -39,7 +40,7 @@ class CheckpointingServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "CheckpointService" should "get latest block (at a correct checkpointing interval) from Blockchain" in new TestSetup {
+  "CheckpointService" should "get latest block (at a correct checkpointing interval) from Blockchain" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
@@ -63,10 +64,10 @@ class CheckpointingServiceSpec
     }
   }
 
-  it should "get latest block that is a descendant of the passed parent checkpoint block" in new TestSetup {
+  it should "get latest block that is a descendant of the passed parent checkpoint block" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
-      m <- Gen.choose(0, 1000) // number of checkpoints in the chain
+      m <- Gen.choose(1, 1000) // number of checkpoints in the chain (at least 1 to have a descendant)
       n <- Gen.choose(0, k - 1) // distance from best block to checkpointed block
     } yield (k, m, n)
 
@@ -76,6 +77,7 @@ class CheckpointingServiceSpec
     forAll(nums) { case (k, m, n) =>
       val checkpointedBlockNum: BigInt = k * m
       val bestBlockNum: BigInt = checkpointedBlockNum + n
+      val parentBlockNum: BigInt = checkpointedBlockNum - k // Parent is one checkpoint interval before
 
       val block = Block(Fixtures.Blocks.ValidBlock.header.copy(number = checkpointedBlockNum), BlockBody.empty)
 
@@ -85,7 +87,7 @@ class CheckpointingServiceSpec
       (blockchainReader.getBestBlockNumber _).expects().returning(bestBlockNum)
       (blockchainReader.getBlockHeaderByHash _)
         .expects(hash)
-        .returning(Some(previousCheckpoint.header.copy(number = 0)))
+        .returning(Some(previousCheckpoint.header.copy(number = parentBlockNum)))
       (blockchainReader.getBlockByNumber _).expects(*, checkpointedBlockNum).returning(Some(block))
       val result = service.getLatestBlock(request)
 
@@ -93,7 +95,7 @@ class CheckpointingServiceSpec
     }
   }
 
-  it should "not return a block that is at the same height as the passed parent checkpoint block" in new TestSetup {
+  it should "not return a block that is at the same height as the passed parent checkpoint block" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
@@ -121,7 +123,7 @@ class CheckpointingServiceSpec
     }
   }
 
-  it should "return an empty response if the descendant is not a part of a local blockchain" in new TestSetup {
+  it should "return an empty response if the descendant is not a part of a local blockchain" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
@@ -149,7 +151,7 @@ class CheckpointingServiceSpec
     }
   }
 
-  it should "send new checkpoint to Sync" in new TestSetup {
+  it should "send new checkpoint to Sync" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val parentBlock = Fixtures.Blocks.ValidBlock.block
     val hash = parentBlock.hash
     val signatures = Nil
@@ -164,7 +166,7 @@ class CheckpointingServiceSpec
     result shouldEqual Right(expectedResponse)
   }
 
-  it should "get latest block in case of blockchain re-org" in new TestSetup {
+  it should "get latest block taggedAs (UnitTest, RPCTest) in case of blockchain re-org" in new TestSetup {
     val block = Fixtures.Blocks.ValidBlock.block
     val expectedResponse: GetLatestBlockResponse = GetLatestBlockResponse(Some(BlockInfo(block.hash, block.number)))
     (blockchainReader.getBestBlockNumber _)

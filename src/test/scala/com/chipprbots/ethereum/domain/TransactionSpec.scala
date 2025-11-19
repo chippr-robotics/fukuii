@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.crypto.pubKeyFromKeyPair
 import com.chipprbots.ethereum.domain.SignedTransaction.getSender
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Hex
 
@@ -24,7 +25,7 @@ class TransactionSpec
     with SecureRandomBuilder
     with Matchers {
 
-  "rlp encoding then decoding transaction" should "give back the initial transaction" in {
+  "rlp encoding then decoding transaction" should "give back the initial transaction" taggedAs (UnitTest) in {
 
     forAll(signedTxGen(secureRandom, None)) { (originalSignedTransaction: SignedTransaction) =>
       // encode it
@@ -39,7 +40,7 @@ class TransactionSpec
     }
   }
 
-  "signing transaction, encoding and decoding it" should "allow to retrieve the proper sender" in {
+  "signing transaction, encoding and decoding it" should "allow to retrieve the proper sender" taggedAs (UnitTest) in {
 
     forAll(transactionGen) { (originalTransaction: Transaction) =>
       implicit val blockchainConfig = Config.blockchains.blockchainConfig
@@ -74,7 +75,7 @@ class TransactionSpec
     }
   }
 
-  "rlp encoding then decoding transactions sequence" should "give back the initial transactions sequence" in {
+  "rlp encoding then decoding transactions sequence" should "give back the initial transactions sequence" taggedAs (UnitTest) in {
 
     forAll(signedTxSeqGen(2, secureRandom, None)) { (originalSignedTransactionSeq: Seq[SignedTransaction]) =>
       // encode it
@@ -89,7 +90,7 @@ class TransactionSpec
     }
   }
 
-  "Transaction type 01" should "be correctly serialized to rlp" in {
+  "Transaction type 01" should "be correctly serialized to rlp" taggedAs (UnitTest) in {
 
     // binary values have be taken directly from core-geth own tests
     // see https://github.com/ethereum/go-ethereum/blob/a580f7d6c54812ef47df94c6ffc974c9dbc48245/core/types/transaction_test.go#L71
@@ -125,7 +126,7 @@ class TransactionSpec
     encodedSignedTransaction shouldBe expected
   }
 
-  "Legacy transaction" should "correctly serialize to original rlp" in {
+  "Legacy transaction" should "correctly serialize to original rlp" taggedAs (UnitTest) in {
     val toAddr: Address = Address.apply("b94f5374fce5edbc8e2a8697c15331677e6ebf0b")
     val tx: LegacyTransaction = LegacyTransaction(
       3,
@@ -147,11 +148,11 @@ class TransactionSpec
     val stx = SignedTransaction.apply(
       tx = tx,
       // hacky change to make the test succeed without regressing the general workflow.
-      // Mantis is currently importing *raw* signature values, and doesn't changes them
+      // Fukuii is currently importing *raw* signature values, and doesn't changes them
       // when building a signed transaction from a signature and a transaction.
       // On the other side, core-geth is updating the signature field v depending on the type
       // of transaction and the expected signature rule (homestead, eip155 or eip2930 for example).
-      // Mantis lacks this feature. Until the signers feature is integrated, we'll keep this localised
+      // Fukuii lacks this feature. Until the signers feature is integrated, we'll keep this localised
       // hack to check for legacy transaction regression.
       // The 27 magic number is taken from the yellow paper and eip155, which stipulate that
       // transaction.v = signature.yParity (here ECDSA.v raw field) + 27

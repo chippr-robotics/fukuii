@@ -416,4 +416,4 @@ setup.template.pattern: "fukuii-logs-*"
 
 - [Operations Runbooks](../runbooks/README.md)
 - [Log Triage Guide](../runbooks/log-triage.md)
-- [Architecture Overview](../architecture-overview.md)
+- [Architecture Overview](../architecture/architecture-overview.md)

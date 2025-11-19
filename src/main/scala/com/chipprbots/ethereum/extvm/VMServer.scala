@@ -35,13 +35,13 @@ import com.chipprbots.ethereum.vm.VM
 
 object VmServerApp extends Logger {
 
-  implicit val system: ActorSystem = ActorSystem("EVM_System")
+  implicit val system: ActorSystem = ActorSystem("EVM_System", ConfigFactory.load())
 
   def main(args: Array[String]): Unit = {
     val config = ConfigFactory.load()
 
-    val port = if (args.length > 0) args(0).toInt else config.getInt("mantis.vm.external.port")
-    val host = if (args.length > 1) args(1) else config.getString("mantis.vm.external.host")
+    val port = if (args.length > 0) args(0).toInt else config.getInt("fukuii.vm.external.port")
+    val host = if (args.length > 1) args(1) else config.getString("fukuii.vm.external.host")
 
     Tcp().bind(host, port).runForeach(connection => handleConnection(connection.flow))
     log.info(s"VM server listening on $host:$port")
@@ -237,6 +237,8 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
       phoenixBlockNumber = BigInt(10500839), // TODO include phoenix block number in protobuf
       magnetoBlockNumber = BigInt(13189133), // TODO include magneto block number in protobuf
       berlinBlockNumber = BigInt("1000000000000000000"), // TODO include berlin block number in protobuf
+      mystiqueBlockNumber = BigInt("1000000000000000000"), // TODO include mystique block number in protobuf
+      spiralBlockNumber = BigInt("1000000000000000000"), // TODO include spiral block number in protobuf
       chainId = conf.chainId.byteAt(0)
     )
 }

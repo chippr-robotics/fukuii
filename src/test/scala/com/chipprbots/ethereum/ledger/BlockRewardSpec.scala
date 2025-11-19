@@ -20,10 +20,11 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import org.scalatest.prop.TableFor4
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with MockFactory {
 
-  it should "pay to the miner if no ommers included" in new TestSetup {
+  it should "pay to the miner if no ommers included" taggedAs (UnitTest, StateTest) in new TestSetup {
     val block: Block = sampleBlock(validAccountAddress, Seq(validAccountAddress2, validAccountAddress3))
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
     val beforeExecutionBalance: BigInt = worldState.getGuaranteedAccount(Address(block.header.beneficiary)).balance
@@ -33,7 +34,7 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
   }
 
   // scalastyle:off magic.number
-  it should "be paid to the miner even if the account doesn't exist" in new TestSetup {
+  it should "be paid to the miner even if the account doesn't exist" taggedAs (UnitTest, StateTest) in new TestSetup {
     val block: Block = sampleBlock(Address(0xdeadbeef))
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
     val expectedRewardAsBigInt: BigInt =
@@ -42,7 +43,7 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     afterRewardWorldState.getGuaranteedAccount(Address(block.header.beneficiary)).balance shouldEqual expectedReward
   }
 
-  it should "be paid if ommers are included in block" in new TestSetup {
+  it should "be paid if ommers are included in block" taggedAs (UnitTest, StateTest) in new TestSetup {
     val block: Block = sampleBlock(validAccountAddress, Seq(validAccountAddress2, validAccountAddress3))
     val afterRewardWorldState: InMemoryWorldStateProxy = mining.blockPreparator.payBlockReward(block, worldState)
 

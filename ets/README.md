@@ -8,18 +8,88 @@ options. Oh, and this readme file is in there too, of course.
 * ETS: https://github.com/ethereum/tests
 * retesteth: https://github.com/ethereum/retesteth
 
-## Running locally
+## Integration Tests (Recommended)
+
+Fukuii includes native Scala integration tests that directly execute ethereum/tests test cases.
+These are the recommended way to run ethereum/tests locally and in CI.
+
+### Quick Start
+
+```bash
+# Run basic validation tests (4 tests, ~1 minute)
+sbt "IntegrationTest / testOnly *SimpleEthereumTest"
+
+# Run standard test suite (14 tests, ~5-10 minutes)
+sbt "IntegrationTest / testOnly *SimpleEthereumTest *BlockchainTestsSpec"
+
+# Run comprehensive test suite (98+ tests, ~20-30 minutes)
+sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.*"
+```
+
+### Test Categories
+
+- **SimpleEthereumTest**: Basic validation (SimpleTx Berlin/Istanbul variants)
+- **BlockchainTestsSpec**: Focused blockchain tests from ValidBlocks
+- **ComprehensiveBlockchainTestsSpec**: Extended tests across multiple categories
+- **GeneralStateTestsSpec**: State transition tests
+- **GasCalculationIssuesSpec**: Gas calculation validation
+
+### Prerequisites
+
+The ethereum/tests submodule must be initialized:
+
+```bash
+git submodule init
+git submodule update
+```
+
+Verify the submodule is populated:
+```bash
+ls -la ets/tests/BlockchainTests/
+# Should show: GeneralStateTests, InvalidBlocks, TransitionTests, ValidBlocks
+```
+
+### Documentation
+
+See comprehensive documentation in:
+- `docs/ETHEREUM_TESTS_CI_INTEGRATION.md` - CI integration guide
+- `docs/ETHEREUM_TESTS_MIGRATION.md` - Migration from custom tests
+- `docs/GAS_CALCULATION_ISSUES.md` - Known issues (resolved)
+- `docs/PHASE_3_SUMMARY.md` - Phase 3 implementation summary
+
+## Running locally (retesteth)
 
 Use the `test-ets.sh` script to boot Fukuii and run retesteth against it.
 
 ## Continuous integration
 
-The tests can be run as part of CI using the `test-ets.sh` script. Output is stored as artifacts.
+### Standard CI (Every Push/PR)
+
+The CI pipeline automatically runs ethereum/tests integration tests on every push and pull request.
+See `.github/workflows/ci.yml` for configuration.
+
+**What runs:**
+- SimpleEthereumTest and BlockchainTestsSpec (~14 tests)
+- Execution time: ~5-10 minutes
+- Artifacts: Test results and logs (7-day retention)
+
+### Nightly Comprehensive Tests
+
+A nightly workflow runs all ethereum/tests integration tests.
+See `.github/workflows/ethereum-tests-nightly.yml` for configuration.
+
+**What runs:**
+- All ethereum/tests integration test classes
+- Execution time: ~20-30 minutes
+- Artifacts: Comprehensive test results and logs (30-day retention)
+- Schedule: 02:00 GMT daily
+
+## Running retesteth (Legacy)
 
 Two test suites are run; GeneralStateTests and BlockchainTests. These seem to
 be the only ones maintained and recommended at the moment.
 
-## Running ETS locally
+## Running ETS locally with retesteth
 
 Start Fukuii in test mode:
 

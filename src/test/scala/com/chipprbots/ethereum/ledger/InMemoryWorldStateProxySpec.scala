@@ -15,19 +15,23 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.Generators
 import org.scalatest.compatible.Assertion
+import com.chipprbots.ethereum.testing.Tags._
 
 class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
 
-  "InMemoryWorldStateProxy" should "allow to create and retrieve an account" in new TestSetup {
+  "InMemoryWorldStateProxy" should "allow to create and retrieve an account" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup {
     worldState.newEmptyAccount(address1).accountExists(address1) shouldBe true
   }
 
-  it should "allow to save and retrieve code" in new TestSetup {
+  it should "allow to save and retrieve code" taggedAs (UnitTest, StateTest) in new TestSetup {
     val code: ByteString = Generators.getByteStringGen(1, 100).sample.get
     worldState.saveCode(address1, code).getCode(address1) shouldEqual code
   }
 
-  it should "allow to save and get storage" in new TestSetup {
+  it should "allow to save and get storage" taggedAs (UnitTest, StateTest) in new TestSetup {
     val addr: BigInt = Generators.getUInt256Gen().sample.getOrElse(UInt256.MaxValue).toBigInt
     val value: BigInt = Generators.getUInt256Gen().sample.getOrElse(UInt256.MaxValue).toBigInt
 
@@ -38,7 +42,7 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
     worldState.saveStorage(address1, storage).getStorage(address1).load(addr) shouldEqual value
   }
 
-  it should "allow to transfer value to other address" in new TestSetup {
+  it should "allow to transfer value to other address" taggedAs (UnitTest, StateTest) in new TestSetup {
     val account: Account = Account(0, 100)
     val toTransfer: UInt256 = account.balance - 20
     val finalWorldState: InMemoryWorldStateProxy = worldState
@@ -309,7 +313,9 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers {
   }
 
   it should "properly handle address collision during initialisation" in new TestSetup {
-    val alreadyExistingAddress: Address = Address("0x6295ee1b4f6dd65047762f924ecd367c17eabf8f")
+    // This is a known test vector from Ethereum/ETC general state tests
+    // The address is computed as keccak256(rlp([calling_address, 0]))
+    val alreadyExistingAddress: Address = Address("0x034d8dd86ca901c8469577758d174ce903da1a7e")
     val accountBalance = 100
 
     val callingAccount: Address = Address("0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b")

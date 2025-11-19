@@ -14,7 +14,7 @@ sealed trait Receipt {
 }
 
 // shared structure for EIP-2930, EIP-1559
-abstract class TypedLegacyReceipt(transactionTypeId: Byte, val delegateReceipt: LegacyReceipt) extends Receipt {
+abstract class TypedLegacyReceipt(_transactionTypeId: Byte, val delegateReceipt: LegacyReceipt) extends Receipt {
   def postTransactionStateHash: TransactionOutcome = delegateReceipt.postTransactionStateHash
   def cumulativeGasUsed: BigInt = delegateReceipt.cumulativeGasUsed
   def logsBloomFilter: ByteString = delegateReceipt.logsBloomFilter

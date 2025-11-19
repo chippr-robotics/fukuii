@@ -6,7 +6,11 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 
 ### Getting Started
 - **[First Start](first-start.md)** - Initial node setup, configuration, and first-time startup procedures
+- **[Operating Modes](operating-modes.md)** - Comprehensive guide to full nodes, archive nodes, boot nodes, and mining nodes
+- **[Node Configuration](node-configuration.md)** - Chain configs, node configs, and command line options
+- **[Configuration Tool](../tools/fukuii-configurator.html)** - Interactive web-based configuration generator (open in browser)
 - **[Security](security.md)** - Node security, firewall configuration, and security best practices
+- **[TLS Operations](tls-operations.md)** - TLS/HTTPS configuration for secure JSON-RPC connections
 
 ### Operations
 - **[Peering](peering.md)** - Peer discovery, network connectivity, and peering troubleshooting
@@ -16,6 +20,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 
 ### Reference
 - **[Known Issues](known-issues.md)** - Common issues with RocksDB, temporary directories, JVM flags, and their solutions
+- **[Log Analysis Reports](../analysis/)** - Detailed analysis of production issues and operational incidents
 
 ## Quick Reference
 
@@ -43,8 +48,28 @@ tail -f ~/.fukuii/etc/logs/fukuii.log
 ### Essential Ports
 - **9076** - Ethereum protocol (P2P)
 - **30303** - Discovery protocol (UDP)
-- **8546** - JSON-RPC HTTP API
-- **8545** - Alternative JSON-RPC port (configurable)
+- **8545** - JSON-RPC HTTP API
+- **8546** - Alternative JSON-RPC port (WebSocket, configurable)
+
+## Configuration Tool
+
+An interactive web-based configuration generator is available to help create custom node configurations:
+
+**[Open Fukuii Configurator](../tools/fukuii-configurator.html)**
+
+Features:
+- 🎯 **Visual Configuration** - Configure all node settings through an intuitive web interface
+- ✅ **Automatic Validation** - Ensures all required settings are included
+- 📝 **Proper Imports** - Automatically includes `include "app.conf"` in generated configs
+- 💾 **Export Ready** - Download configuration files ready to use with `--config` flag
+- 🚀 **Quick Setup** - Perfect for mining nodes, archive nodes, or custom configurations
+
+Usage:
+1. Open `docs/tools/fukuii-configurator.html` in your web browser
+2. Configure your node settings using the tabs
+3. Click "Generate Configuration"
+4. Download or copy the generated config
+5. Use with: `./bin/fukuii --config your-config.conf`
 
 ## Support
 
@@ -61,4 +86,4 @@ These runbooks are living documents. If you encounter issues not covered here or
 2. Submit a pull request with corrections or improvements
 3. Contact the maintainers at Chippr Robotics LLC
 
-**Last Updated**: 2025-11-02
+**Last Updated**: 2025-11-06

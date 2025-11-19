@@ -9,12 +9,13 @@ import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.Tags._
 
 class BlockchainReaderSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with SecureRandomBuilder {
 
   val chainId: Option[Byte] = Hex.decode("3d").headOption
 
-  "BlockchainReader" should "be able to get the best block after it was stored by BlockchainWriter" in new EphemBlockchainTestSetup {
+  "BlockchainReader" should "be able to get the best block after it was stored by BlockchainWriter" taggedAs (UnitTest, StateTest) in new EphemBlockchainTestSetup {
     forAll(ObjectGenerators.newBlockGen(secureRandom, chainId)) { case NewBlock(block, weight) =>
       blockchainWriter.save(block, Nil, ChainWeight(0, weight), true)
 

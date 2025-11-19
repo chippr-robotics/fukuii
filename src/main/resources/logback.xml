@@ -3,12 +3,23 @@
     <property name="stdoutEncoderPattern" value="%d %-5level [%logger{36}] - %msg%n" />
     <property name="fileEncoderPattern" value="%d [%thread] %-5level %logger{36} %X{akkaSource} - %msg%n" />
 
-    <!--read properties from application.conf-->
-    <newRule pattern="*/load" actionClass="com.chipprbots.ethereum.utils.LoadFromApplicationConfiguration"/>
-    <load key="logging.json-output" as="ASJSON"/>
-    <load key="logging.logs-dir" as="LOGSDIR"/>
-    <load key="logging.logs-file" as="LOGSFILENAME"/>
-    <load key="logging.logs-level" as="LOGSLEVEL"/>
+    <!--read properties from application.conf using PropertyDefiner (logback 1.5.x compatible)-->
+    <define name="LOGSLEVEL" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-level</key>
+        <defaultValue>INFO</defaultValue>
+    </define>
+    <define name="ASJSON" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.json-output</key>
+        <defaultValue>false</defaultValue>
+    </define>
+    <define name="LOGSDIR" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-dir</key>
+        <defaultValue>./logs</defaultValue>
+    </define>
+    <define name="LOGSFILENAME" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-file</key>
+        <defaultValue>fukuii</defaultValue>
+    </define>
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -79,14 +90,24 @@
     </root>
 
     <!-- NB. be aware you might want to adjust akka.loglevel if you set any level to DEBUG -->
+    
+    <!-- External libraries - reduce noise -->
     <logger name="io.netty" level="WARN"/>
-    <logger name="io.iohk.scalanet" level="INFO" />
-    <logger name="io.iohk.scalanet.discovery.ethereum.v4.DiscoveryService" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerActor" level="${LOGSLEVEL}" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="${LOGSLEVEL}" />
-    <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
     <logger name="org.jupnp.QueueingThreadPoolExecutor" level="WARN" />
     <logger name="org.jupnp.util.SpecificationViolationReporter" level="ERROR" />
     <logger name="org.jupnp.protocol.RetrieveRemoteDescriptors" level="ERROR" />
+    
+    <!-- Scalanet modules - INFO by default, set to DEBUG for detailed network diagnostics -->
+    <logger name="com.chipprbots.scalanet" level="INFO" />
+    <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="INFO" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="INFO" />
+    
+    <!-- Network and sync modules - INFO by default, set to DEBUG for detailed troubleshooting -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.discovery" level="INFO" />
+    
+    <!-- VM execution - disabled by default for performance -->
+    <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
 </configuration>

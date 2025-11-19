@@ -9,9 +9,11 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.testing.Tags._
+
 class ScryptSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
 
-  "scrypt" should "correctly evaluate for the test vectors" in {
+  "scrypt" should "correctly evaluate for the test vectors" taggedAs (UnitTest, CryptoTest) in {
 
     // https://datatracker.ietf.org/doc/rfc7914/?include_text=1
     val testVectors = Table[String, String, Int, Int, Int, Int, String](

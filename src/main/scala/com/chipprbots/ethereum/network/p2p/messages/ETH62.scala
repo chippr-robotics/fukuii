@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.utils.ByteUtils
 
 object ETH62 {
   object BlockHash {
@@ -29,7 +30,7 @@ object ETH62 {
     implicit class BlockHashRLPEncodableDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
       def toBlockHash: BlockHash = rlpEncodeable match {
         case RLPList(RLPValue(hashBytes), RLPValue(numberBytes)) =>
-          BlockHash(ByteString(hashBytes), BigInt(1, numberBytes))
+          BlockHash(ByteString(hashBytes), ByteUtils.bytesToBigInt(numberBytes))
         case _ => throw new RuntimeException("Cannot decode BlockHash")
       }
     }
@@ -94,18 +95,18 @@ object ETH62 {
         case RLPList(RLPValue(blockBytes), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes))
             if blockBytes.length < 32 =>
           GetBlockHeaders(
-            Left(BigInt(1, blockBytes)),
-            BigInt(1, maxHeadersBytes),
-            BigInt(1, skipBytes),
-            BigInt(1, reverseBytes) == 1
+            Left(ByteUtils.bytesToBigInt(blockBytes)),
+            ByteUtils.bytesToBigInt(maxHeadersBytes),
+            ByteUtils.bytesToBigInt(skipBytes),
+            ByteUtils.bytesToBigInt(reverseBytes) == 1
           )
 
         case RLPList(RLPValue(blockBytes), RLPValue(maxHeadersBytes), RLPValue(skipBytes), RLPValue(reverseBytes)) =>
           GetBlockHeaders(
             Right(ByteString(blockBytes)),
-            BigInt(1, maxHeadersBytes),
-            BigInt(1, skipBytes),
-            BigInt(1, reverseBytes) == 1
+            ByteUtils.bytesToBigInt(maxHeadersBytes),
+            ByteUtils.bytesToBigInt(skipBytes),
+            ByteUtils.bytesToBigInt(reverseBytes) == 1
           )
 
         case _ => throw new RuntimeException("Cannot decode GetBlockHeaders")

@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.testing.Tags._
 
 class EthProofServiceSpec
     extends TestKit(ActorSystem("EthGetProofSpec_ActorSystem"))
@@ -44,7 +45,7 @@ class EthProofServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "EthProofService" should "handle getStorageAt request" in new TestSetup {
+  "EthProofService" should "handle getStorageAt request" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val request = GetProofRequest(address, storageKeys, blockNumber)
     val result = ethGetProof.getProof(request)
 
@@ -87,14 +88,14 @@ class EthProofServiceSpec
     }
   }
 
-  "EthProofService" should "return an error when the proof is requested for non-existing account" in new TestSetup {
+  "EthProofService" should "return an error when the proof is requested for non-existing account" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val wrongAddress = Address(666)
     val result = fetchProof(wrongAddress, storageKeys, blockNumber).unsafeRunSync()
     result.isLeft shouldBe true
     result.fold(l => l.message should include("No account found for Address"), r => r)
   }
 
-  "EthProofService" should "return the proof with empty value for non-existing storage key" in new TestSetup {
+  "EthProofService" should "return the proof with empty value for non-existing storage key" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val wrongStorageKey = Seq(StorageProofKey(321))
     val result = fetchProof(address, wrongStorageKey, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
@@ -119,7 +120,7 @@ class EthProofServiceSpec
     )
   }
 
-  "EthProofService" should "return the proof and value for existing storage key" in new TestSetup {
+  "EthProofService" should "return the proof and value for existing storage key" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val storageKey = Seq(StorageProofKey(key))
     val result = fetchProof(address, storageKey, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
@@ -144,7 +145,7 @@ class EthProofServiceSpec
     )
   }
 
-  "EthProofService" should "return the proof and value for multiple existing storage keys" in new TestSetup {
+  "EthProofService" should "return the proof and value for multiple existing storage keys" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val storageKey = Seq(StorageProofKey(key), StorageProofKey(key2))
     val expectedValueStorageKey = Seq(BigInt(value), BigInt(value2))
     val result = fetchProof(address, storageKey, blockNumber).unsafeRunSync()
@@ -171,7 +172,7 @@ class EthProofServiceSpec
     )
   }
 
-  "EthProofService" should "return the proof for all storage keys provided, but value should be returned only for the existing ones" in new TestSetup {
+  "EthProofService" should "return the proof for all storage keys provided, but value should be returned only for the existing ones" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val wrongStorageKey = StorageProofKey(321)
     val storageKey = Seq(StorageProofKey(key), StorageProofKey(key2)) :+ wrongStorageKey
     val expectedValueStorageKey = Seq(BigInt(value), BigInt(value2), BigInt(0))
@@ -196,7 +197,7 @@ class EthProofServiceSpec
     )
   }
 
-  "EthProofService" should "return account proof and account details, with empty storage proof" in new TestSetup {
+  "EthProofService" should "return account proof and account details, with empty storage proof" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val result = fetchProof(address, Seq.empty, blockNumber).unsafeRunSync()
     result.isRight shouldBe true
     result.fold(

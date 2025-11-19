@@ -28,6 +28,7 @@ import org.scalatest.freespec.AnyFreeSpecLike
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync._
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed.NoCommonBlockFound
@@ -58,9 +59,9 @@ class FastSyncBranchResolverActorSpec
 
   "FastSyncBranchResolver" - {
     "fetch headers from the new master peer" - {
-      "the chain is repaired from the first request to the new master pair and then the last two blocks are removed" in new TestSetup {
+      "the chain is repaired from the first request to the new master pair and then the last two blocks are removed" taggedAs(UnitTest, SyncTest) in new TestSetup {
         implicit override lazy val system = self.system
-        implicit val ioRuntime: IORuntime = IORuntime.global
+        implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
         val sender = TestProbe("sender")
 
@@ -107,7 +108,7 @@ class FastSyncBranchResolverActorSpec
       "The chain is repaired doing binary searching with the new master peer and then remove the last invalid blocks" - {
         "highest common block is in the middle" in new TestSetup {
           implicit override lazy val system = self.system
-          implicit val ioRuntime: IORuntime = IORuntime.global
+          implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
           val sender = TestProbe("sender")
 
@@ -144,7 +145,7 @@ class FastSyncBranchResolverActorSpec
         }
         "highest common block is in the first half" in new TestSetup {
           implicit override lazy val system = self.system
-          implicit val ioRuntime: IORuntime = IORuntime.global
+          implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
           val sender = TestProbe("sender")
 
@@ -183,7 +184,7 @@ class FastSyncBranchResolverActorSpec
 
         "highest common block is in the second half" in new TestSetup {
           implicit override lazy val system = self.system
-          implicit val ioRuntime: IORuntime = IORuntime.global
+          implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
           val sender = TestProbe("sender")
 
@@ -222,7 +223,7 @@ class FastSyncBranchResolverActorSpec
 
       "No common block is found" in new TestSetup {
         implicit override lazy val system = self.system
-        implicit val ioRuntime: IORuntime = IORuntime.global
+        implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
         val sender = TestProbe("sender")
 

@@ -10,20 +10,21 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.LegacyReceipt
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.TxLogEntry
+import com.chipprbots.ethereum.testing.Tags._
 
 class BloomFilterSpec extends AnyFlatSpec with Matchers {
 
-  it should "properly create the bloom filter for without logs" in {
+  it should "properly create the bloom filter for without logs" taggedAs (UnitTest, StateTest) in {
     val obtained = BloomFilter.create(receiptWithoutLogs.logs)
     obtained shouldBe receiptWithoutLogs.logsBloomFilter
   }
 
-  it should "properly create the bloom filter for with one log entry with one topic" in {
+  it should "properly create the bloom filter for with one log entry with one topic" taggedAs (UnitTest, StateTest) in {
     val obtained = BloomFilter.create(receiptOneLogOneTopic.logs)
     obtained shouldBe receiptOneLogOneTopic.logsBloomFilter
   }
 
-  it should "properly create the bloom filter for with many logs" in {
+  it should "properly create the bloom filter for with many logs" taggedAs (UnitTest, StateTest) in {
     val obtained = BloomFilter.create(receiptWithManyLogs.logs)
     obtained shouldBe receiptWithManyLogs.logsBloomFilter
   }

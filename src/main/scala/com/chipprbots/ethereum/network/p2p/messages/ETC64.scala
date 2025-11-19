@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+import com.chipprbots.ethereum.utils.ByteUtils
 
 /** This is temporary ETC64 version, the real one will be implemented by ETCM-355 This one will be probably ETC67 in the
   * future
@@ -47,9 +48,12 @@ object ETC64 {
               RLPValue(genesisHashBytes)
             ) =>
           Status(
-            BigInt(1, protocolVersionBytes).toInt,
-            BigInt(1, networkIdBytes).toInt,
-            ChainWeight(BigInt(1, lastCheckpointNumberBytes), BigInt(1, totalDifficultyBytes)),
+            ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+            ByteUtils.bytesToBigInt(networkIdBytes).toInt,
+            ChainWeight(
+              ByteUtils.bytesToBigInt(lastCheckpointNumberBytes),
+              ByteUtils.bytesToBigInt(totalDifficultyBytes)
+            ),
             ByteString(bestHashBytes),
             ByteString(genesisHashBytes)
           )
@@ -122,7 +126,10 @@ object ETC64 {
                 uncleNodesList.items.map(_.toBlockHeader)
               )
             ),
-            ChainWeight(BigInt(1, lastCheckpointNumberBytes), BigInt(1, totalDifficultyBytes))
+            ChainWeight(
+              ByteUtils.bytesToBigInt(lastCheckpointNumberBytes),
+              ByteUtils.bytesToBigInt(totalDifficultyBytes)
+            )
           )
         case _ => throw new RuntimeException("Cannot decode NewBlock ETC64 version")
       }
