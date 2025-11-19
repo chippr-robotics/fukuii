@@ -85,7 +85,10 @@ class TimeSlotStatsSpec extends AnyFlatSpec with Matchers with ScalaCheckDrivenP
     }
   }
 
-  it should "turn around and overwrite the first slot after all of them have been written to" taggedAs (UnitTest, NetworkTest) in test {
+  it should "turn around and overwrite the first slot after all of them have been written to" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in test {
     for {
       _ <- Range
         .inclusive(0, defaultSlotCount)

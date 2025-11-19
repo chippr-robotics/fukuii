@@ -194,7 +194,10 @@ class EthMiningServiceSpec
     response shouldEqual Right(GetWorkResponse(powHash, seedHash, target))
   }
 
-  it should "generate and submit work when generating block for mining with restricted ethash generator" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "generate and submit work when generating block for mining with restricted ethash generator" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val testMining: TestMining = buildTestMining()
     override lazy val restrictedGenerator = new RestrictedPoWBlockGeneratorImpl(
       evmCodeStorage = storagesInstance.storages.evmCodeStorage,
@@ -271,7 +274,10 @@ class EthMiningServiceSpec
     response.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
   }
 
-  it should "combine hashrates from many miners and remove timed out rates" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "combine hashrates from many miners and remove timed out rates" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
 
     val rate: BigInt = 42
     val id1: ByteString = ByteString("id1")

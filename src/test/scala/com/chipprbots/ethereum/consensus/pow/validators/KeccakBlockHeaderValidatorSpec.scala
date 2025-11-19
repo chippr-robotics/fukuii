@@ -15,7 +15,10 @@ import com.chipprbots.ethereum.testing.Tags._
 class KeccakBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers {
   import KeccakBlockHeaderValidatorSpec._
 
-  "KeccakBlockHeaderValidatorSpec" should "return BlockHeaderValid when header is valid" taggedAs (UnitTest, ConsensusTest) in {
+  "KeccakBlockHeaderValidatorSpec" should "return BlockHeaderValid when header is valid" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     KeccakBlockHeaderValidator.validateHeader(validBlockHeader) shouldBe Right(BlockHeaderValid)
   }
 

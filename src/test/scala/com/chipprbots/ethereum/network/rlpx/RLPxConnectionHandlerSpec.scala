@@ -52,7 +52,10 @@ class RLPxConnectionHandlerSpec
 
   }
 
-  it should "write messages to TCP connection once all previous ACK were received" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "write messages to TCP connection once all previous ACK were received" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
@@ -74,7 +77,10 @@ class RLPxConnectionHandlerSpec
     connection.expectNoMessage()
   }
 
-  it should "accummulate messages and write them when receiving ACKs" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "accummulate messages and write them when receiving ACKs" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     (mockMessageCodec.encodeMessage _)
       .expects(Ping(): MessageSerializable)
@@ -151,7 +157,10 @@ class RLPxConnectionHandlerSpec
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
   }
 
-  it should "close the connection if the AuthHandshake init message's MAC is invalid" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "close the connection if the AuthHandshake init message's MAC is invalid" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     // Incomming connection arrives
     rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
     connection.expectMsgClass(classOf[Tcp.Register])
@@ -166,7 +175,10 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection)
   }
 
-  it should "close the connection if the AuthHandshake response message's MAC is invalid" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "close the connection if the AuthHandshake response message's MAC is invalid" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     // Outgoing connection request arrives
     rlpxConnection ! RLPxConnectionHandler.ConnectTo(uri)
     tcpActorProbe.expectMsg(Tcp.Connect(inetAddress))
@@ -196,17 +208,17 @@ class RLPxConnectionHandlerSpec
 
     // AuthHandshaker handles initial message and fails (simulating auth failure scenario)
     val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
-    
+
     // Configure the test double to fail authentication
     mockHandshaker.handleInitialMessageHandler = Some(_ => throw new Exception("Auth failed"))
     mockHandshaker.handleInitialMessageV4Handler = Some(_ => throw new Exception("Auth failed"))
 
     // Send the auth data which will trigger shutdown
     rlpxConnection ! Tcp.Received(data)
-    
+
     // Immediately send a SendMessage during the shutdown window
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
-    
+
     // The actor should gracefully handle the message and terminate without dead letters
     rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
     rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
