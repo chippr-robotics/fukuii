@@ -35,12 +35,32 @@ From Issue #512 ("reduce the noise"):
 
 ### Technical Context
 
-The fukuii client uses SLF4J for logging with the following levels available:
-- **ERROR**: Serious failures requiring attention
-- **WARN**: Unexpected but recoverable situations (note: SLF4J uses `warn`, Pekko uses `warning`)
-- **INFO**: Significant state changes and milestones
-- **DEBUG**: Detailed operational information for troubleshooting
-- **TRACE**: Extremely detailed debugging (rarely used)
+The fukuii client uses two different logging frameworks depending on the actor type:
+
+#### Pekko Classic Actors (ActorLogging)
+Classic actors that extend `Actor with ActorLogging` use Pekko's `LoggingAdapter`, which provides:
+- `log.debug()` - Debug level
+- `log.info()` - Info level
+- `log.warning()` - Warning level (note: **warning**, not warn)
+- `log.error()` - Error level
+
+Examples: `PivotBlockSelector`, `BlockImporter`, `RLPxConnectionHandler`
+
+#### Pekko Typed Actors (context.log)
+Typed actors that extend `AbstractBehavior` and use `context.log` get an SLF4J `Logger`, which provides:
+- `log.trace()` - Trace level
+- `log.debug()` - Debug level
+- `log.info()` - Info level
+- `log.warn()` - Warning level (note: **warn**, not warning)
+- `log.error()` - Error level
+
+Examples: `BlockFetcher`, `PoWMiningCoordinator`
+
+#### Other Components (SLF4J/Scala Logging)
+Non-actor components using SLF4J directly or Scala Logging also use:
+- `log.warn()` - Warning level (note: **warn**, not warning)
+
+**Important**: When modifying log levels, always check whether the file uses Pekko Classic ActorLogging (use `log.warning`) or SLF4J/Typed Actor logging (use `log.warn`). Using the wrong method will cause compilation errors.
 
 ## Decision
 
@@ -204,7 +224,7 @@ The following changes were implemented across 8 files (43 log statements total):
 
 1. **No functionality change**: All information still logged, just at appropriate levels
 2. **Backward compatible**: Operators can still enable DEBUG to see all details
-3. **Framework difference**: Must use `log.warning` (Pekko) not `log.warn` (SLF4J) in Actor code
+3. **Dual logging systems**: Must use `log.warning` for Pekko Classic ActorLogging and `log.warn` for SLF4J/Typed Actors - developers must check the actor type before modifying log statements
 
 ## Related Decisions
 

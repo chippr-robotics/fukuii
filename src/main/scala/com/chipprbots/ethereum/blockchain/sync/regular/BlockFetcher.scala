@@ -196,7 +196,7 @@ class BlockFetcher(
             }
             state.appendHeaders(headers) match {
               case Left(HeadersNotFormingSeq) =>
-                log.warning("Dismissed received headers due to: {} (peer: {})", HeadersNotFormingSeq.description, peer.id)
+                log.warn("Dismissed received headers due to: {} (peer: {})", HeadersNotFormingSeq.description, peer.id)
                 log.debug(
                   "Header validation failed: headers do not form a sequence. First: {}, Last: {}, Count: {}",
                   headers.headOption.map(_.number),
@@ -206,7 +206,7 @@ class BlockFetcher(
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
                 state.withHeaderFetchReceived
               case Left(HeadersNotMatchingReadyBlocks) =>
-                log.warning(
+                log.warn(
                   "Dismissed received headers due to: {} (peer: {})",
                   HeadersNotMatchingReadyBlocks.description,
                   peer.id
@@ -219,7 +219,7 @@ class BlockFetcher(
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
                 state.withHeaderFetchReceived
               case Left(err) =>
-                log.warning("Dismissed received headers due to: {} (peer: {})", err, peer.id)
+                log.warn("Dismissed received headers due to: {} (peer: {})", err, peer.id)
                 log.debug("Header validation error details: {}", err.description)
                 state.withHeaderFetchReceived
               case Right(updatedState) =>
