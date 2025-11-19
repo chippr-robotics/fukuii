@@ -221,9 +221,10 @@ Maximum security image using Google's distroless base.
 - Based on `gcr.io/distroless/java21-debian12:nonroot`
 - Minimal attack surface - no shell, no package manager
 - Smallest possible image size
+- Direct Java execution (no bash wrapper)
 - Best for production deployments with external orchestration
 
-**Note:** Distroless images don't support shell-based healthchecks. Use external health monitoring (e.g., Kubernetes liveness/readiness probes).
+**Note:** Distroless images don't support shell-based healthchecks or bash scripts. The entrypoint invokes Java directly with the main class `com.chipprbots.ethereum.App`. Use external health monitoring (e.g., Kubernetes liveness/readiness probes).
 
 **Build:**
 ```bash
