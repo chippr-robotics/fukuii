@@ -134,7 +134,10 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByHash request (block with checkpoint)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByHash request (block with checkpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithCheckpoint
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -155,7 +158,10 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByHash request (block with treasuryOptOut)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByHash request (block with treasuryOptOut)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithTreasuryOptOut
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -198,7 +204,10 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByNumber request (block with treasuryOptOut)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByNumber request (block with treasuryOptOut)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithTreasuryOptOut
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -220,7 +229,10 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByNumber request (block with checkpoint)" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockByNumber request (block with checkpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithCheckpoint
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
@@ -242,7 +254,10 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getUncleByBlockHashAndIndex request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getUncleByBlockHashAndIndex request" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val uncle = Fixtures.Blocks.DaoForkBlock.header
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, BlockBody(Nil, Seq(uncle)))
 
@@ -267,7 +282,10 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedUncleBlockResponse)
   }
 
-  it should "handle eth_getUncleByBlockNumberAndIndex request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getUncleByBlockNumberAndIndex request" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val uncle = Fixtures.Blocks.DaoForkBlock.header
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, BlockBody(Nil, Seq(uncle)))
 
@@ -335,7 +353,10 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "eth_getWork when fail to get ommers and transactions" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "eth_getWork when fail to get ommers and transactions" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     // Test that when actors timeout, the service handles it gracefully and returns empty lists
     val seed: String = s"""0x${"00" * 32}"""
     val target = "0x1999999999999999999999999999999999999999999999999999999999999999"
@@ -778,7 +799,10 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "decode and encode eth_getProof request and response" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "decode and encode eth_getProof request and response" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val address = "0x7F0d15C7FAae65896648C8273B6d7E43f58Fa842"
 
     val request: JsonRpcRequest = JsonRpcRequest(

@@ -20,7 +20,10 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class KnownNodesManagerSpec extends AnyFlatSpec with Matchers {
 
-  "KnownNodesManager" should "keep a list of nodes and persist changes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  "KnownNodesManager" should "keep a list of nodes and persist changes" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     knownNodesManager.tell(KnownNodesManager.GetKnownNodes, client.ref)
     client.expectMsg(KnownNodesManager.KnownNodes(Set.empty))
 

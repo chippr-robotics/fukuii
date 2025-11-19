@@ -69,7 +69,10 @@ class StateSyncSpec
     }
   }
 
-  it should "sync state to different tries when peers provide different set of data each time" taggedAs (UnitTest, SyncTest) in new TestSetup() {
+  it should "sync state to different tries when peers provide different set of data each time" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()
       initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
@@ -81,7 +84,10 @@ class StateSyncSpec
     }
   }
 
-  it should "sync state to different tries when peer provide mixed responses" taggedAs (UnitTest, SyncTest) in new TestSetup() {
+  it should "sync state to different tries when peer provide mixed responses" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()
       initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
@@ -108,7 +114,10 @@ class StateSyncSpec
     }
   }
 
-  it should "start state sync when receiving start signal while bloom filter is loading" taggedAs (UnitTest, SyncTest) in new TestSetup() {
+  it should "start state sync when receiving start signal while bloom filter is loading" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup() {
     override def buildBlockChain(): (BlockchainReader, BlockchainImpl) = {
       val storages = getNewStorages.storages
       val blockchainReader = BlockchainReader(storages)

@@ -22,7 +22,10 @@ class ExpiringMapSpec extends AnyFlatSpec with Matchers with Eventually {
   implicit override val patienceConfig: PatienceConfig =
     PatienceConfig(timeout = scaled(Span(waitTime, Millis)), interval = scaled(Span(testResolution, Millis)))
 
-  it should "Put element in, for correct amount of time and not retain it afterwards" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "Put element in, for correct amount of time and not retain it afterwards" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     expiringMap.add(address1, account1, holdTimeDur)
 
     expiringMap.get(address1) shouldEqual Some(account1)
@@ -34,7 +37,10 @@ class ExpiringMapSpec extends AnyFlatSpec with Matchers with Eventually {
     expiringMap.get(address1) shouldBe None
   }
 
-  it should "Put element in, for negative duration (element will be inaccessible and removed at first occasion)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "Put element in, for negative duration (element will be inaccessible and removed at first occasion)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     expiringMap.add(address1, account1, Duration.ofMillis(-50))
 
     expiringMap.get(address1) shouldEqual None
@@ -62,7 +68,10 @@ class ExpiringMapSpec extends AnyFlatSpec with Matchers with Eventually {
     expiringMap.get(address1) shouldBe None
   }
 
-  it should "Put two elements in, for different amount of time and not retain it afterwards" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "Put two elements in, for different amount of time and not retain it afterwards" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     expiringMap.add(address1, account1, holdTimeDur)
     expiringMap.add(address2, account2, holdTimeDur.plusMillis(50))
 
@@ -79,7 +88,10 @@ class ExpiringMapSpec extends AnyFlatSpec with Matchers with Eventually {
     }
   }
 
-  it should "Put element in, for default amount of time and not retain it afterwards" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "Put element in, for default amount of time and not retain it afterwards" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     expiringMap.add(address1, account1)
 
     expiringMap.get(address1) shouldEqual Some(account1)
@@ -91,7 +103,10 @@ class ExpiringMapSpec extends AnyFlatSpec with Matchers with Eventually {
     expiringMap.get(address1) shouldBe None
   }
 
-  it should "Put element in, until some time and not retain it afterwards" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "Put element in, until some time and not retain it afterwards" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     expiringMap.addFor(address1, account1, holdTimeDur)
 
     expiringMap.get(address1) shouldEqual Some(account1)
@@ -103,7 +118,10 @@ class ExpiringMapSpec extends AnyFlatSpec with Matchers with Eventually {
     expiringMap.get(address1) shouldBe None
   }
 
-  it should "not overflow and throw exception when adding duration with max seconds" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "not overflow and throw exception when adding duration with max seconds" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     expiringMap.add(address1, account1, Duration.ofSeconds(Long.MaxValue))
 
     expiringMap.get(address1) shouldEqual Some(account1)

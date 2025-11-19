@@ -148,7 +148,10 @@ class PersonalServiceSpec
     txPool.expectMsg(AddOrOverrideTransaction(stx))
   }
 
-  it should "send a transaction when having pending txs from the same sender" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "send a transaction when having pending txs from the same sender" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val newTx: SignedTransaction = wallet.signTx(tx.toTransaction(nonce + 1), None).tx
 
     (keyStore.unlockAccount _)
@@ -182,7 +185,10 @@ class PersonalServiceSpec
     txPool.expectNoMessage()
   }
 
-  it should "send a transaction (given sender address and using an unlocked account)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "send a transaction (given sender address and using an unlocked account)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     (keyStore.unlockAccount _)
       .expects(address, passphrase)
       .returning(Right(wallet))
@@ -270,7 +276,10 @@ class PersonalServiceSpec
     res shouldEqual Right(SignResponse(ECDSASignature(r, s, v)))
   }
 
-  it should "return an error if signing a message using a locked account" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return an error if signing a message using a locked account" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
 
     val message: ByteString = ByteString(Hex.decode("deadbeaf"))
 
@@ -280,7 +289,10 @@ class PersonalServiceSpec
     res shouldEqual Left(AccountLocked)
   }
 
-  it should "return an error when signing a message if passphrase is wrong" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return an error when signing a message if passphrase is wrong" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
 
     val wrongPassphase = "wrongPassphrase"
 
@@ -394,7 +406,10 @@ class PersonalServiceSpec
     res shouldEqual Left(LogicError("account already exists"))
   }
 
-  it should "unlock an account given a correct passphrase for specified duration" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "unlock an account given a correct passphrase for specified duration" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     (keyStore.unlockAccount _).expects(address, passphrase).returning(Right(wallet))
 
     val message: ByteString = ByteString(Hex.decode("deadbeaf"))

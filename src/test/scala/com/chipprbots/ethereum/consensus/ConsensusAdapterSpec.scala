@@ -52,7 +52,10 @@ class ConsensusAdapterSpec
   implicit override val patienceConfig: PatienceConfig =
     PatienceConfig(timeout = scaled(2 seconds), interval = scaled(1 second))
 
-  "ConsensusAdapter" should "ignore duplicated block" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl {
+  "ConsensusAdapter" should "ignore duplicated block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl {
     val block1: Block = getBlock()
     val block2: Block = getBlock()
 
@@ -67,7 +70,10 @@ class ConsensusAdapterSpec
     whenReady(consensusAdapter.evaluateBranchBlock(block2).unsafeToFuture())(_ shouldEqual DuplicateBlock)
   }
 
-  it should "import a block to the top of the main chain" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl {
+  it should "import a block to the top of the main chain" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
     val difficulty: BigInt = block.header.difficulty
     val hash: ByteString = block.header.hash
@@ -97,7 +103,10 @@ class ConsensusAdapterSpec
     }
   }
 
-  it should "handle exec error when importing to top" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl {
+  it should "handle exec error when importing to top" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
 
     setBlockExists(block, inChain = false, inQueue = false)
@@ -132,7 +141,10 @@ class ConsensusAdapterSpec
     )
   }
 
-  it should "handle no best block available error when importing to top" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl {
+  it should "handle no best block available error when importing to top" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
 
     setBlockExists(block, inChain = false, inQueue = false)
@@ -144,7 +156,10 @@ class ConsensusAdapterSpec
     )
   }
 
-  it should "handle total difficulty error when importing to top by logging and continuing" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl {
+  it should "handle total difficulty error when importing to top by logging and continuing" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl {
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
 
     setBlockExists(block, inChain = false, inQueue = false)
@@ -169,7 +184,10 @@ class ConsensusAdapterSpec
   }
 
   // scalastyle:off magic.number
-  it should "reorganise chain when a newly enqueued block forms a better branch" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchain {
+  it should "reorganise chain when a newly enqueued block forms a better branch" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchain {
     val block1: Block = getBlock(bestNum - 2)
     val newBlock2: Block = getBlock(bestNum - 1, difficulty = 101, parent = block1.header.hash)
     val newBlock3: Block = getBlock(bestNum, difficulty = 105, parent = newBlock2.header.hash)
@@ -303,7 +321,10 @@ class ConsensusAdapterSpec
     }
   }
 
-  it should "correctly handle importing genesis block" taggedAs (UnitTest, ConsensusTest) in new ImportBlockTestSetupImpl {
+  it should "correctly handle importing genesis block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ImportBlockTestSetupImpl {
     val genesisBlock = Block(genesisHeader, BlockBody.empty)
 
     setBestBlock(genesisBlock)
@@ -367,7 +388,10 @@ class ConsensusAdapterSpec
     blockchainReader.getBestBlock().get shouldEqual newBlock3WithOmmer
   }
 
-  it should "dequeue blocks where there is an execution error" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchain {
+  it should "dequeue blocks where there is an execution error" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchain {
     val mockExecution = mock[BlockExecution]
 
     val currentBestBlock: Block = getBlock(bestNum - 2)
@@ -396,7 +420,10 @@ class ConsensusAdapterSpec
     }
   }
 
-  it should "dequeue blocks that are children of a failing block when all blocks are failing" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchain {
+  it should "dequeue blocks that are children of a failing block when all blocks are failing" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchain {
     val mockExecution = mock[BlockExecution]
 
     val currentBestBlock: Block = getBlock(bestNum)
@@ -507,7 +534,8 @@ class ConsensusAdapterSpec
     }
   }
 
-  it should "correctly import a checkpoint block" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchain with CheckpointHelpers {
+  it should "correctly import a checkpoint block" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchain
+    with CheckpointHelpers {
     val parentBlock: Block = getBlock(bestNum)
     val regularBlock: Block = getBlock(bestNum + 1, difficulty = 200, parent = parentBlock.hash)
     val checkpointBlock: Block = getCheckpointBlock(parentBlock)
@@ -541,8 +569,10 @@ class ConsensusAdapterSpec
     blockchainReader.getChainWeightByHash(checkpointBlock.hash) shouldEqual Some(weightCheckpoint)
   }
 
-  it should "not import a block with higher difficulty that does not follow a checkpoint" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchain
-    with CheckpointHelpers {
+  it should "not import a block with higher difficulty that does not follow a checkpoint" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchain with CheckpointHelpers {
 
     val parentBlock: Block = getBlock(bestNum)
     val regularBlock: Block = getBlock(bestNum + 1, difficulty = 200, parent = parentBlock.hash)

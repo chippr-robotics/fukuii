@@ -136,7 +136,10 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "return a failure if created with gas limit above threshold and block number >= eip106 block number" taggedAs (UnitTest, ConsensusTest) in {
+  it should "return a failure if created with gas limit above threshold and block number >= eip106 block number" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val validParent = Block(validParentBlockHeader.copy(gasLimit = Long.MaxValue), validParentBlockBody)
     val invalidBlockHeader = validBlockHeader.copy(gasLimit = BigInt(Long.MaxValue) + 1)
     PoWBlockHeaderValidator.validate(invalidBlockHeader, validParent.header) shouldBe Left(HeaderGasLimitError)
@@ -185,7 +188,10 @@ class EthashBlockHeaderValidatorSpec
     }
   }
 
-  it should "properly validate a block after difficulty bomb pause" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
+  it should "properly validate a block after difficulty bomb pause" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchainTestSetup {
     val parent: Block = Block(pausedDifficultyBombBlockParent, parentBody)
 
     val res: Either[BlockHeaderError, BlockHeaderValid] =
@@ -193,7 +199,10 @@ class EthashBlockHeaderValidatorSpec
     res shouldBe Right(BlockHeaderValid)
   }
 
-  it should "mark as valid a post ecip1098 block opt-out with opt out undefined" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
+  it should "mark as valid a post ecip1098 block opt-out with opt out undefined" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchainTestSetup {
     val ecip1098BlockNumber: BigInt = validBlockHeader.number / 2
     val blockchainConfigWithECIP1098Enabled: BlockchainConfig =
       EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
@@ -207,7 +216,10 @@ class EthashBlockHeaderValidatorSpec
     validationResult shouldBe Right(BlockHeaderValid)
   }
 
-  it should "properly calculate the difficulty after difficulty bomb resume (with reward reduction)" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
+  it should "properly calculate the difficulty after difficulty bomb resume (with reward reduction)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchainTestSetup {
     val parentHeader: BlockHeader =
       validParentBlockHeader.copy(number = 5000101, unixTimestamp = 1513175023, difficulty = BigInt("22627021745803"))
     val parent: Block = Block(parentHeader, parentBody)
@@ -221,7 +233,10 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe expected
   }
 
-  it should "properly calculate the difficulty after difficulty defuse" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
+  it should "properly calculate the difficulty after difficulty defuse" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchainTestSetup {
     val parentHeader: BlockHeader =
       validParentBlockHeader.copy(number = 5899999, unixTimestamp = 1525176000, difficulty = BigInt("22627021745803"))
     val parent: Block = Block(parentHeader, parentBody)
@@ -235,7 +250,10 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe blockDifficultyWihtoutBomb
   }
 
-  it should "properly calculate a block after block reward reduction (without uncles)" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
+  it should "properly calculate a block after block reward reduction (without uncles)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchainTestSetup {
     val parent: Block = Block(afterRewardReductionParentBlockHeader, parentBody)
 
     val blockNumber: BigInt = afterRewardReductionBlockHeader.number
@@ -252,7 +270,10 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe afterRewardReductionBlockHeader.difficulty
   }
 
-  it should "properly calculate the difficulty after muir glacier delay" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchainTestSetup {
+  it should "properly calculate the difficulty after muir glacier delay" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new EphemBlockchainTestSetup {
     val blockchainConfigWithoutDifficultyBombRemoval: BlockchainConfig =
       EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
         _.copy(

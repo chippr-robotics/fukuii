@@ -50,7 +50,10 @@ class FaucetRpcServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "FaucetRpcService" should "answer txHash correctly when the wallet is available and the requested send funds be successfully" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  "FaucetRpcService" should "answer txHash correctly when the wallet is available and the requested send funds be successfully" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val address: Address = Address("0x00")
     val request: SendFundsRequest = SendFundsRequest(address)
     val txHash: ByteString = ByteString(Hex.decode("112233"))
@@ -64,7 +67,10 @@ class FaucetRpcServiceSpec
     }
   }
 
-  it should "answer WalletRpcClientError when the wallet is available and the requested send funds be failure" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "answer WalletRpcClientError when the wallet is available and the requested send funds be failure" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val address: Address = Address("0x00")
     val request: SendFundsRequest = SendFundsRequest(address)
     val clientError: String = "Parser error"
@@ -78,7 +84,10 @@ class FaucetRpcServiceSpec
     }
   }
 
-  it should "answer FaucetIsUnavailable when tried to send funds and the wallet is unavailable" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "answer FaucetIsUnavailable when tried to send funds and the wallet is unavailable" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val address: Address = Address("0x00")
     val request: SendFundsRequest = SendFundsRequest(address)
 
@@ -92,7 +101,10 @@ class FaucetRpcServiceSpec
     }
   }
 
-  it should "answer FaucetIsUnavailable when tried to get status and the wallet is unavailable" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "answer FaucetIsUnavailable when tried to get status and the wallet is unavailable" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     faucetHandler.setAutoPilot(simpleAutoPilot { case FaucetHandlerMsg.Status =>
       FaucetIsUnavailable
     })
@@ -103,7 +115,10 @@ class FaucetRpcServiceSpec
     }
   }
 
-  it should "answer WalletAvailable when tried to get status and the wallet is available" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "answer WalletAvailable when tried to get status and the wallet is available" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     faucetHandler.setAutoPilot(simpleAutoPilot { case FaucetHandlerMsg.Status =>
       StatusResponse(WalletAvailable)
     })
@@ -113,7 +128,10 @@ class FaucetRpcServiceSpec
     }
   }
 
-  it should "answer internal error when tried to send funds but the Faucet Handler is disable" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "answer internal error when tried to send funds but the Faucet Handler is disable" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val address: Address = Address("0x00")
     val request: SendFundsRequest = SendFundsRequest(address)
 
@@ -124,7 +142,10 @@ class FaucetRpcServiceSpec
     }
   }
 
-  it should "answer internal error when tried to get status but the Faucet Handler is disable" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "answer internal error when tried to get status but the Faucet Handler is disable" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val address: Address = Address("0x00")
     SendFundsRequest(address)
 

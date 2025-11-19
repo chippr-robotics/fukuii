@@ -99,7 +99,8 @@ class PeerActorSpec
     rlpxConnection.expectMsgClass(classOf[Terminated])
   }
 
-  it should "try to reconnect on broken rlpx connection" taggedAs (UnitTest, NetworkTest) in new NodeStatusSetup with HandshakerSetup {
+  it should "try to reconnect on broken rlpx connection" taggedAs (UnitTest, NetworkTest) in new NodeStatusSetup
+    with HandshakerSetup {
     implicit override lazy val system: ActorSystem =
       ActorSystem("PeerActorSpec_System", ConfigFactory.load("explicit-scheduler"))
     override def protocol: Capability = Capability.ETH63
@@ -324,7 +325,10 @@ class PeerActorSpec
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.UselessPeer)))
   }
 
-  it should "disconnect from non-ETC peer (when node is before fork)" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "disconnect from non-ETC peer (when node is before fork)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
 
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])

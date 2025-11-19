@@ -32,7 +32,10 @@ class StdBlockValidatorSpec extends AnyFlatSpec with Matchers with SecureRandomB
     }
   }
 
-  "Invalid block" should "return a failure if block with checkpoint body has a tx" taggedAs (UnitTest, ConsensusTest) in {
+  "Invalid block" should "return a failure if block with checkpoint body has a tx" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val block = Block(validBlockHeaderWithCheckpoint, validBlockBody)
     StdBlockValidator
       .validate(block, Nil) shouldBe Left(CheckpointBlockTransactionsNotEmptyError)
@@ -72,14 +75,20 @@ class StdBlockValidatorSpec extends AnyFlatSpec with Matchers with SecureRandomB
     }
   }
 
-  it should "return a failure if a block body doesn't corresponds to a block header due to wrong tx hash" taggedAs (UnitTest, ConsensusTest) in {
+  it should "return a failure if a block body doesn't corresponds to a block header due to wrong tx hash" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     StdBlockValidator.validateHeaderAndBody(wrongTransactionsRootHeader, validBlockBody) match {
       case Left(BlockTransactionsHashError) => succeed
       case _                                => fail()
     }
   }
 
-  it should "return a failure if a block body doesn't corresponds to a block header due to wrong ommers hash" taggedAs (UnitTest, ConsensusTest) in {
+  it should "return a failure if a block body doesn't corresponds to a block header due to wrong ommers hash" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     StdBlockValidator.validateHeaderAndBody(wrongOmmersHashHeader, validBlockBody) match {
       case Left(BlockOmmersHashError) => succeed
       case _                          => fail()

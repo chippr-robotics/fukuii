@@ -107,7 +107,10 @@ class JsonRpcControllerPersonalSpec
     response should haveBooleanResult(true)
   }
 
-  it should "personal_unlockAccount for specified duration" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "personal_unlockAccount for specified duration" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
     val dur = "1"
@@ -123,7 +126,10 @@ class JsonRpcControllerPersonalSpec
     response should haveBooleanResult(true)
   }
 
-  it should "personal_unlockAccount should handle possible duration errors" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "personal_unlockAccount should handle possible duration errors" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
     val dur = "alksjdfh"
@@ -143,7 +149,10 @@ class JsonRpcControllerPersonalSpec
     )
   }
 
-  it should "personal_unlockAccount should handle null passed as a duration for compatibility with Parity and web3j" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "personal_unlockAccount should handle null passed as a duration for compatibility with Parity and web3j" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
     val params: List[JValue] = JString(address.toString) :: JString(pass) :: JNull :: Nil
