@@ -50,9 +50,13 @@ RUN groupadd -r fukuii --gid=1000 && \
 # Copy application from builder
 COPY --from=builder --chown=fukuii:fukuii /fukuii-dist /app/fukuii
 
+# Copy default configuration files to /app/conf for easy user override
+# Users can mount their own config files at /app/conf to override defaults
+COPY --from=builder --chown=fukuii:fukuii /fukuii-dist/conf /app/conf
+
 # Create custom mining configuration
-RUN mkdir -p /app/conf && \
-    echo 'include "mordor"\n\
+# This will override the default mordor.conf with mining-specific settings
+RUN echo 'include "mordor"\n\
 \n\
 fukuii {\n\
   mining {\n\
@@ -127,6 +131,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD ["/usr/local/bin/healthcheck.sh"]
 
 # Set entrypoint to the fukuii binary with custom mining config
+# Uses custom mordor-miner.conf which includes mordor config with mining enabled
 # Users should override coinbase address with -Dfukuii.mining.coinbase=<address>
+# Override default config paths to use /app/conf (volume-mountable)
 ENTRYPOINT ["/app/fukuii/bin/fukuii"]
-CMD ["-Dconfig.file=/app/conf/mordor-miner.conf"]
+CMD ["-Dconfig.file=/app/conf/mordor-miner.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
