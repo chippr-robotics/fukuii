@@ -104,7 +104,10 @@ class PeerDiscoveryManagerSpec
 
   behavior.of("PeerDiscoveryManager")
 
-  it should "serve no peers if discovery is disabled and known peers are disabled and the manager isn't started" taggedAs (UnitTest, NetworkTest) in test {
+  it should "serve no peers if discovery is disabled and known peers are disabled and the manager isn't started" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = false)
@@ -114,7 +117,10 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "serve the bootstrap nodes if known peers are reused even discovery isn't enabled and the manager isn't started" taggedAs (UnitTest, NetworkTest) in test {
+  it should "serve the bootstrap nodes if known peers are reused even discovery isn't enabled and the manager isn't started" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = false, reuseKnownNodes = true, bootstrapNodes = sampleNodes)
@@ -124,7 +130,10 @@ class PeerDiscoveryManagerSpec
     }
   }
 
-  it should "serve the known peers if discovery is enabled and the manager isn't started" taggedAs (UnitTest, NetworkTest) in test {
+  it should "serve the known peers if discovery is enabled and the manager isn't started" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in test {
     new Fixture {
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = true)

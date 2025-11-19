@@ -52,7 +52,10 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an ommer that was previously used" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
+  it should "report failure if there is an ommer that was previously used" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils {
     ommersValidator.validate(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -65,7 +68,10 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an ommer which is also an ancestor" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
+  it should "report failure if there is an ommer which is also an ancestor" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils {
     ommersValidator.validate(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -78,7 +84,10 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if there is an ommer which that is not parent of an ancestor" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
+  it should "report failure if there is an ommer which that is not parent of an ancestor" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils {
     val getNBlocksBack: (ByteString, Int) => List[Block] =
       (_, n) =>
         ((ommersBlockNumber - n) until ommersBlockNumber).toList
@@ -95,7 +104,10 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     }
   }
 
-  it should "report failure if getNBlocksBack returns an empty list of ancestors" taggedAs (UnitTest, ConsensusTest) in new BlockUtils {
+  it should "report failure if getNBlocksBack returns an empty list of ancestors" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils {
     val getNBlocksBack: (ByteString, Int) => List[Block] = (_, _) => List.empty
 
     ommersValidator.validateOmmersAncestors(

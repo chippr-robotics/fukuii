@@ -38,7 +38,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     with MockFactory
     with SecureRandomBuilder {
 
-  it should "validate correctly formed BlockHeader with checkpoint" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "validate correctly formed BlockHeader with checkpoint" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     blockHeaderValidator.validate(validBlockHeaderWithCheckpoint, validBlockParentHeader) shouldBe a[Right[_, _]]
   }
 
@@ -54,7 +57,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     testOfEmptyByteString(byteString => validBlockHeaderWithCheckpoint.copy(extraData = byteString), "extraData")
   }
 
-  it should "return failure if beneficiary is not an empty address" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure if beneficiary is not an empty address" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     testOfEmptyByteString(
       byteString => validBlockHeaderWithCheckpoint.copy(beneficiary = byteString),
       "beneficiary",
@@ -94,7 +100,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure if stateRoot is not the same as parent stateRoot" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure if stateRoot is not the same as parent stateRoot" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     testOfTheSameValueAsParent(
       byteString => validBlockHeaderWithCheckpoint.copy(stateRoot = byteString),
       "stateRoot",
@@ -110,7 +119,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     }
   }
 
-  it should "return failure if difficulty is different than parent difficulty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure if difficulty is different than parent difficulty" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     forAll(bigIntGen.suchThat(_ != validBlockParentHeader.difficulty)) { difficulty =>
       val blockHeader = validBlockHeaderWithCheckpoint.copy(difficulty = difficulty)
       val validateResult = blockHeaderValidator.validate(blockHeader, validBlockParentHeader)
@@ -128,7 +140,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     }
   }
 
-  it should "return failure if gas limit is different than parent gas limit" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure if gas limit is different than parent gas limit" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     forAll(bigIntGen.suchThat(_ != validBlockParentHeader.gasLimit)) { gasLimit =>
       val blockHeader = validBlockHeaderWithCheckpoint.copy(gasLimit = gasLimit)
       val validateResult = blockHeaderValidator.validate(blockHeader, validBlockParentHeader)
@@ -160,7 +175,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint signatures aren't sorted lexicographically" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure when checkpoint signatures aren't sorted lexicographically" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val invalidBlockHeaderExtraFields: HefPostEcip1097 =
       HefPostEcip1097(Some(Checkpoint(validCheckpoint.signatures.reverse)))
     val invalidBlockHeader: BlockHeader =
@@ -170,7 +188,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint has not enough valid signatures" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure when checkpoint has not enough valid signatures" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val invalidBlockHeaderExtraFields: HefPostEcip1097 =
       HefPostEcip1097(Some(Checkpoint(Seq(validCheckpoint.signatures.head))))
     val invalidBlockHeader: BlockHeader =
@@ -180,7 +201,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint has enough valid signatures, but also an invalid one" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure when checkpoint has enough valid signatures, but also an invalid one" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val invalidKeys: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
     val invalidSignatures: Seq[ECDSASignature] =
       CheckpointingTestHelpers.createCheckpointSignatures(Seq(invalidKeys), validBlockParent.hash)
@@ -207,7 +231,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     )
   }
 
-  it should "return failure when checkpoint has different signatures from the same signer" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return failure when checkpoint has different signatures from the same signer" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     // This is a signature generated with `keys(0)` with a random `k` parameter, therefore it's different than the one
     // obtained with `ECDSASignature.sign`.
     // Note that this test will fail if `validBlockParent` is changed. We currently cannot generate such signature
@@ -244,7 +271,10 @@ class BlockWithCheckpointHeaderValidatorSpec
     blockHeaderValidator.validate(headerWithInvalidCheckpoint, validBlockParentHeader) shouldBe expectedError
   }
 
-  it should "return when failure when checkpoint has too many signatures" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "return when failure when checkpoint has too many signatures" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val invalidCheckpoint: Checkpoint =
       validCheckpoint.copy(signatures = (validCheckpoint.signatures ++ validCheckpoint.signatures).sorted)
     val invalidBlockHeaderExtraFields: HefPostEcip1097 = HefPostEcip1097(Some(invalidCheckpoint))

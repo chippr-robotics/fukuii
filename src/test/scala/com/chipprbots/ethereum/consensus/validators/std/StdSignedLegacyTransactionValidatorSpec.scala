@@ -209,7 +209,10 @@ class StdSignedLegacyTransactionValidatorSpec extends AnyFlatSpec with Matchers 
     }
   }
 
-  it should "report as invalid a tx with upfront cost higher than the sender's balance" taggedAs (UnitTest, ConsensusTest) in {
+  it should "report as invalid a tx with upfront cost higher than the sender's balance" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val senderAccountWithLowBalance = senderAccountAfterHomestead.copy(balance = upfrontGasCost / 2)
     StdSignedTransactionValidator.validate(
       stx = signedTxAfterHomestead,

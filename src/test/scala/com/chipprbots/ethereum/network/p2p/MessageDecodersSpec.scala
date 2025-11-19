@@ -30,7 +30,10 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
       "f842a0fccdbfe911f9df0a6cc0107d1240f76dfdd1d301b65fdc3cd2ae62752affbef6a0fccdbfe911f9df0a6cc0107d1240f76dfdd1d301b65fdc3cd2ae62752affbef6"
     )
 
-  "MessageDecoders" should "decode wire protocol message for all versions of protocol" taggedAs (UnitTest, NetworkTest) in {
+  "MessageDecoders" should "decode wire protocol message for all versions of protocol" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     val helloBytes: Array[Byte] =
       Hex.decode(
         "f854048666756b756969c6c5836574683f820d05b840a13f3f0555b5037827c743e40fce29139fcf8c3f2a8f12753872fe906a77ff70f6a7f517be995805ff39ab73af1d53dac1a6c9786eebc5935fc455ac8f41ba67"
@@ -65,7 +68,10 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
       .fromBytes(Codes.NewBlockHashesCode, NewBlockHashesETH62bytes) shouldBe Right(newBlockHashesETH62)
   }
 
-  it should "decode BlockHashesFromNumber message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
+  it should "decode BlockHashesFromNumber message for all supported versions of protocol" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     val blockHashesFromNumber = ETH61.BlockHashesFromNumber(12, 40)
     decode(Capability.ETH63).fromBytes(
       Codes.BlockHashesFromNumberCode,
@@ -73,7 +79,10 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     ) shouldBe Right(blockHashesFromNumber)
   }
 
-  it should "decode GetBlockHeaders message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
+  it should "decode GetBlockHeaders message for all supported versions of protocol" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     val getBlockHeaders = ETH62.GetBlockHeaders(Left(1), 1, 1, false)
     val getBlockHeadersBytes: Array[Byte] = getBlockHeaders.toBytes
 
@@ -180,7 +189,10 @@ class MessageDecodersSpec extends AnyFlatSpec with Matchers with SecureRandomBui
     decode(Capability.ETC64).fromBytes(Codes.NewBlockCode, newBlock64.toBytes) shouldBe Right(newBlock64)
   }
 
-  it should "decode SignedTransactions message for all supported versions of protocol" taggedAs (UnitTest, NetworkTest) in {
+  it should "decode SignedTransactions message for all supported versions of protocol" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     val signedTransactions = SignedTransactions(ObjectGenerators.signedTxSeqGen(3, secureRandom, None).sample.get)
     val signedTransactionsBytes: Array[Byte] = signedTransactions.toBytes
 

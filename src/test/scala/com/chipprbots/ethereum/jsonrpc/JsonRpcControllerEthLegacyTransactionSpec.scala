@@ -54,7 +54,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
   implicit val formats: Formats = DefaultFormats.preservingEmptyValues + OptionNoneToJNullSerializer +
     QuantitiesSerializer + UnformattedDataJsonSerializer
 
-  it should "handle eth_getTransactionByBlockHashAndIndex request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getTransactionByBlockHashAndIndex request" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val txIndexToRequest: Int = blockToRequest.body.transactionList.size / 2
 
@@ -77,7 +80,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(expectedTxResponse)
   }
 
-  it should "handle eth_getRawTransactionByBlockHashAndIndex request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getRawTransactionByBlockHashAndIndex request" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val txIndexToRequest: Int = blockToRequest.body.transactionList.size / 2
 
@@ -137,7 +143,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(JString(s"0x${Hex.toHexString(txHash.toArray)}"))
   }
 
-  it should "eth_getTransactionByBlockNumberAndIndex by tag" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "eth_getTransactionByBlockNumberAndIndex by tag" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val txIndex = 1
 
@@ -160,7 +169,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(expectedTxResponse)
   }
 
-  it should "eth_getTransactionByBlockNumberAndIndex by hex number" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "eth_getTransactionByBlockNumberAndIndex by hex number" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest: Block =
       Block(Fixtures.Blocks.Block3125369.header.copy(number = BigInt(0xc005)), Fixtures.Blocks.Block3125369.body)
     val txIndex = 1
@@ -184,7 +196,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(expectedTxResponse)
   }
 
-  it should "eth_getTransactionByBlockNumberAndIndex by number" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "eth_getTransactionByBlockNumberAndIndex by number" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val txIndex = 1
 
@@ -207,7 +222,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(expectedTxResponse)
   }
 
-  it should "eth_getRawTransactionByBlockNumberAndIndex by tag" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "eth_getRawTransactionByBlockNumberAndIndex by tag" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     // given
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val txIndex = 1
@@ -232,7 +250,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(expectedTxResponse)
   }
 
-  it should "eth_getRawTransactionByBlockNumberAndIndex by hex number" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "eth_getRawTransactionByBlockNumberAndIndex by hex number" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     // given
     val blockToRequest: Block =
       Block(Fixtures.Blocks.Block3125369.header.copy(number = BigInt(0xc005)), Fixtures.Blocks.Block3125369.body)
@@ -258,7 +279,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(expectedTxResponse)
   }
 
-  it should "eth_getRawTransactionByBlockNumberAndIndex by number" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "eth_getRawTransactionByBlockNumberAndIndex by number" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val txIndex = 1
 
@@ -339,7 +363,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveStringResult("0x11")
   }
 
-  it should "handle eth_getBlockTransactionCountByHash request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "handle eth_getBlockTransactionCountByHash request" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
 
     blockchainWriter.storeBlock(blockToRequest).commit()
@@ -523,7 +550,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     )
   }
 
-  "eth_pendingTransactions" should "request pending transactions and return valid response when mempool is empty" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  "eth_pendingTransactions" should "request pending transactions and return valid response when mempool is empty" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val mockEthTxService: EthTxService & scala.reflect.Selectable = mock[EthTxService]
     (mockEthTxService.ethPendingTransactions _)
       .expects(*)
@@ -546,7 +576,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     response should haveResult(JArray(List()))
   }
 
-  it should "request pending transactions and return valid response when mempool has transactions" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "request pending transactions and return valid response when mempool has transactions" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture {
     val transactions: IndexedSeq[PendingTransaction] = (0 to 1).map { _ =>
       val fakeTransaction = SignedTransactionWithSender(
         LegacyTransaction(

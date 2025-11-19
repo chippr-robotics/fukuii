@@ -34,13 +34,19 @@ class RestrictedEthashBlockHeaderValidatorSpec
     with ScalaCheckPropertyChecks
     with SecureRandomBuilder {
 
-  "RestrictedEthashBlockHeaderValidatorSpec" should "correctly validate header if allowed list is empty" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  "RestrictedEthashBlockHeaderValidatorSpec" should "correctly validate header if allowed list is empty" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
       RestrictedEthashBlockHeaderValidator.validate(validHeader, validParent)(createBlockchainConfig(Set()))
     assert(validationResult == Right(BlockHeaderValid))
   }
 
-  it should "fail validation of header with too long extra data field" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "fail validation of header with too long extra data field" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val tooLongExtraData: BlockHeader = validHeader.copy(extraData =
       ByteString.fromArrayUnsafe(new Array[Byte](RestrictedEthashBlockHeaderValidator.ExtraDataMaxSize + 1))
     )

@@ -40,7 +40,10 @@ class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "Wallet Service" should "send a transaction successfully when getNonce and sendTransaction successfully" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  "Wallet Service" should "send a transaction successfully when getNonce and sendTransaction successfully" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
 
     val receivingAddress: Address = Address("0x99")
     val currentNonce = 2
