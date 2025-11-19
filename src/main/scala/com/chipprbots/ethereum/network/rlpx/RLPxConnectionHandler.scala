@@ -80,12 +80,12 @@ class RLPxConnectionHandler(
 
   def waitingForCommand: Receive = {
     case ConnectTo(uri) =>
-      log.info("[RLPx] Initiating connection to peer {} at {}", peerId, uri)
+      log.debug("[RLPx] Initiating connection to peer {} at {}", peerId, uri)
       tcpActor ! Connect(new InetSocketAddress(uri.getHost, uri.getPort))
       context.become(waitingForConnectionResult(uri))
 
     case HandleConnection(connection) =>
-      log.info("[RLPx] Handling incoming connection for peer {}", peerId)
+      log.debug("[RLPx] Handling incoming connection for peer {}", peerId)
       context.watch(connection)
       connection ! Register(self)
       val timeout = system.scheduler.scheduleOnce(rlpxConfiguration.waitForHandshakeTimeout, self, AuthHandshakeTimeout)
@@ -94,7 +94,7 @@ class RLPxConnectionHandler(
 
   def waitingForConnectionResult(uri: URI): Receive = {
     case Connected(_, _) =>
-      log.info("[RLPx] TCP connection established for peer {}, starting auth handshake", peerId)
+      log.debug("[RLPx] TCP connection established for peer {}, starting auth handshake", peerId)
       val connection = sender()
       context.watch(connection)
       connection ! Register(self)
@@ -120,7 +120,7 @@ class RLPxConnectionHandler(
     def waitingForAuthHandshakeInit(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse {
         case Received(data) =>
-          log.info("[RLPx] Received auth handshake init message for peer {} ({} bytes)", peerId, data.length)
+          log.debug("[RLPx] Received auth handshake init message for peer {} ({} bytes)", peerId, data.length)
           timeout.cancel()
           // FIXME EIP8 is 6 years old, time to drop it
           val maybePreEIP8Result = Try {
@@ -136,7 +136,7 @@ class RLPxConnectionHandler(
 
           maybePreEIP8Result.orElse(maybePostEIP8Result) match {
             case Success((responsePacket, result, remainingData)) =>
-              log.info("[RLPx] Auth handshake init processed for peer {}, sending response", peerId)
+              log.debug("[RLPx] Auth handshake init processed for peer {}, sending response", peerId)
               connection ! Write(responsePacket, Ack)
               processHandshakeResult(result, remainingData)
 
@@ -154,12 +154,12 @@ class RLPxConnectionHandler(
     def waitingForAuthHandshakeResponse(handshaker: AuthHandshaker, timeout: Cancellable): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleTimeout).orElse(handleConnectionClosed).orElse {
         case Ack =>
-          log.info("[RLPx] Auth init packet write acknowledged for peer {}", peerId)
+          log.debug("[RLPx] Auth init packet write acknowledged for peer {}", peerId)
           // Init packet write succeeded, continue waiting for response
           ()
 
         case Received(data) =>
-          log.info("[RLPx] Received auth handshake response for peer {} ({} bytes)", peerId, data.length)
+          log.debug("[RLPx] Received auth handshake response for peer {} ({} bytes)", peerId, data.length)
           timeout.cancel()
           val maybePreEIP8Result = Try {
             val result = handshaker.handleResponseMessage(data.take(ResponsePacketLength))
@@ -173,7 +173,7 @@ class RLPxConnectionHandler(
           }
           maybePreEIP8Result.orElse(maybePostEIP8Result) match {
             case Success((result, remainingData)) =>
-              log.info("[RLPx] Auth handshake response processed for peer {}", peerId)
+              log.debug("[RLPx] Auth handshake response processed for peer {}", peerId)
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
@@ -272,7 +272,7 @@ class RLPxConnectionHandler(
     ): Unit =
       extractor.readHello(data) match {
         case Some((hello, restFrames)) =>
-          log.info(
+          log.debug(
             "[RLPx] Extracted Hello message from peer {}, protocol version: {}, capabilities: {}",
             peerId,
             hello.p2pVersion,
@@ -281,7 +281,7 @@ class RLPxConnectionHandler(
           val messageCodecOpt = for {
             opt <- negotiateCodec(hello, extractor)
             (messageCodec, negotiated) = opt
-            _ = log.info("[RLPx] Protocol negotiated with peer {}: {}", peerId, negotiated)
+            _ = log.debug("[RLPx] Protocol negotiated with peer {}: {}", peerId, negotiated)
             _ = context.parent ! InitialHelloReceived(hello, negotiated)
             _ = processFrames(restFrames, messageCodec)
           } yield messageCodec
@@ -322,7 +322,7 @@ class RLPxConnectionHandler(
 
       case Left(ex) =>
         val errorMsg = Option(ex.getMessage).getOrElse(ex.toString)
-        log.info("Cannot decode message from {}, because of {}", peerId, errorMsg)
+        log.error("Cannot decode message from {}, because of {}", peerId, errorMsg)
         // Enhanced debugging for decompression failures
         if (errorMsg.contains("FAILED_TO_UNCOMPRESS")) {
           log.error(

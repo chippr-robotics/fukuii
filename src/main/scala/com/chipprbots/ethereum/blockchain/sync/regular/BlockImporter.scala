@@ -305,13 +305,13 @@ class BlockImporter(
         val currentBlock = blocks.head.number.min(bestKnownBlockNumber)
         val goingBackTo = (currentBlock - syncConfig.branchResolutionRequestSize).max(0)
         val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
-        log.info(msg)
+        log.warn(msg)
         fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
         Left(goingBackTo)
       case InvalidBranch =>
         val goingBackTo = blocks.head.number
         val msg = s"Invalid branch, going back to $goingBackTo"
-        log.info(msg)
+        log.warn(msg)
         fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg)
         Right(Nil)
     }

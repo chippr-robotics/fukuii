@@ -139,7 +139,7 @@ class AdaptiveSyncController extends Logger {
           failedStrategies = failedStrategies + strategy
           Some(selectFallback(strategy))
         } else {
-          log.info(s"Sync strategy ${strategy.name} failed but can retry (attempt ${attemptCount(strategy)}): $reason")
+          log.debug(s"Sync strategy ${strategy.name} failed but can retry (attempt ${attemptCount(strategy)}): $reason")
           None // Retry same strategy
         }
 
