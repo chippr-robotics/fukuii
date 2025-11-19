@@ -61,7 +61,7 @@ class HeadersFetcher(
           peer.id
         )
         if (headers.isEmpty) {
-          log.warning("Received empty headers response from peer {}", peer.id)
+          log.warn("Received empty headers response from peer {}", peer.id)
         } else {
           log.debug("Headers range: {} to {}", headers.headOption.map(_.number), headers.lastOption.map(_.number))
         }
@@ -75,7 +75,7 @@ class HeadersFetcher(
           peer.id
         )
         if (headers.isEmpty) {
-          log.warning("Received empty headers response from peer {}", peer.id)
+          log.warn("Received empty headers response from peer {}", peer.id)
         } else {
           log.debug("Headers range: {} to {}", headers.headOption.map(_.number), headers.lastOption.map(_.number))
         }
@@ -116,7 +116,7 @@ class HeadersFetcher(
         log.debug("Headers request completed successfully")
         res
       case Failure(ex) =>
-        log.warning("Headers request failed with exception: {}", ex.getMessage)
+        log.warn("Headers request failed with exception: {}", ex.getMessage)
         HeadersFetcher.RetryHeadersRequest
     }
   }

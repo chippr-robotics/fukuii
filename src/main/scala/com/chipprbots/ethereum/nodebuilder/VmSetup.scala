@@ -28,7 +28,7 @@ object VmSetup extends Logger {
 
       // HIBERNATED: External VM code path commented out
       // case (External, Some(extConf)) =>
-      //   log.warning("HIBERNATED: External VM features are experimental and not production-ready")
+      //   log.warn("HIBERNATED: External VM features are experimental and not production-ready")
       //   startExternalVm(extConf)
       //   new ExtVMInterface(extConf, blockchainConfig, testMode)
 

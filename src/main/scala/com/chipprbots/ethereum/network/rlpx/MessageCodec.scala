@@ -81,7 +81,7 @@ class MessageCodec(
           decompressData(frameData, frame)
         } else if (shouldCompress && looksLikeRLP) {
           // Peer sent uncompressed data when compression was expected - protocol deviation but handle gracefully
-          log.warning(
+          log.warn(
             "Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 4 (protocol deviation)",
             frame.`type`.toHexString
           )
@@ -163,7 +163,7 @@ class MessageCodec(
 
       // If it looks like uncompressed data, try to decode it directly
       if (possibleUncompressed && data.length < 1024) { // reasonable size limit
-        log.warning("DECOMPRESSION_DEBUG: Attempting to decode as uncompressed data (peer protocol deviation)")
+        log.warn("DECOMPRESSION_DEBUG: Attempting to decode as uncompressed data (peer protocol deviation)")
         Success(data) // Return the data as-is to see if it decodes
       } else {
         Failure(ex)

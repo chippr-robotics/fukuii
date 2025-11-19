@@ -140,7 +140,7 @@ abstract class BaseNode extends Node {
 
   override def shutdown: () => Unit = () => {
     def tryAndLogFailure(f: () => Any): Unit = Try(f()) match {
-      case Failure(e) => log.warning("Error while shutting down...", e)
+      case Failure(e) => log.warn("Error while shutting down...", e)
       case Success(_) =>
     }
 
@@ -172,10 +172,10 @@ abstract class BaseNode extends Node {
     // We can remove this fix when we release an incompatible version.
     val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()
     if (bestBlockInfo.hash == ByteString.empty && bestBlockInfo.number > 0) {
-      log.warning("Fixing best block hash into database for block {}", bestBlockInfo.number)
+      log.warn("Fixing best block hash into database for block {}", bestBlockInfo.number)
       storagesInstance.storages.blockNumberMappingStorage.get(bestBlockInfo.number) match {
         case Some(hash) =>
-          log.warning("Putting {} as the best block hash", Hex.toHexString(hash.toArray))
+          log.warn("Putting {} as the best block hash", Hex.toHexString(hash.toArray))
           storagesInstance.storages.appStateStorage.putBestBlockInfo(bestBlockInfo.copy(hash = hash)).commit()
         case None =>
           log.error("No block found for number {} when trying to fix database", bestBlockInfo.number)

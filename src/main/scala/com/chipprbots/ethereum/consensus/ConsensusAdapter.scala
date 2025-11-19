@@ -50,7 +50,7 @@ class ConsensusAdapter(
         } else {
           // If chain weight lookup fails, treat it as recoverable: log and continue.
           if (blockchainReader.getChainWeightByHash(bestBlock.header.hash).isEmpty) {
-            log.warning(
+            log.warn(
               "Total chain weight for current best block {} is missing — continuing import (test harness may not provide chain weight)",
               bestBlock.header.hashAsHexString
             )
@@ -87,7 +87,7 @@ class ConsensusAdapter(
             ) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(failingBlockHash)
-          log.warning("extended best branch partially because of error: {}", error)
+          log.warn("extended best branch partially because of error: {}", error)
           BlockImportedToTop(blockImportData)
         case KeptCurrentBestBranch =>
           newBranch.toList.foreach(blockQueue.enqueueBlock(_))

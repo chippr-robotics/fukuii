@@ -60,7 +60,7 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
       }
 
       if (successful.size < quorumSize) {
-        log.warning(s"Only ${successful.size} sources succeeded, required $quorumSize")
+        log.warn(s"Only ${successful.size} sources succeeded, required $quorumSize")
         Seq.empty
       } else {
         verifyWithQuorum(successful, quorumSize)
@@ -143,7 +143,7 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     * }}}
     */
   private def parseSimpleJson(_json: String): Seq[BootstrapCheckpoint] = {
-    log.warning(
+    log.warn(
       "JSON parsing not implemented - returning empty checkpoint list. " +
         "Implement parseSimpleJson with circe or play-json before using in production."
     )

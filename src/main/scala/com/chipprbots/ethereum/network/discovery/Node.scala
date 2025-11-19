@@ -125,7 +125,7 @@ object NodeParser extends Logger {
       maybeNode match {
         case Right(node) => parsedNodes + node
         case Left(errors) =>
-          log.warning(s"Unable to parse node: $nodeString due to: $errors")
+          log.warn(s"Unable to parse node: $nodeString due to: $errors")
           parsedNodes
       }
   }

@@ -68,14 +68,14 @@ class ApacheHttpClientStreamClient(val configuration: StreamClientConfiguration)
       httpClient.close()
     catch {
       case ex: Exception =>
-        log.warning("Error closing Apache HttpClient", ex)
+        log.warn("Error closing Apache HttpClient", ex)
     }
 
   override protected def abort(callable: ApacheHttpClientStreamClient.HttpCallable): Unit =
     callable.abort()
 
   override protected def logExecutionException(t: Throwable): Boolean = {
-    log.warning("HTTP request execution failed", t)
+    log.warn("HTTP request execution failed", t)
     true
   }
 }
@@ -108,13 +108,13 @@ object ApacheHttpClientStreamClient {
           case UpnpRequest.Method.POST =>
             executePost(uri.toString())
           case method =>
-            log.warning(s"Unsupported HTTP method: $method")
+            log.warn(s"Unsupported HTTP method: $method")
             // Return new response with error status
             new StreamResponseMessage(new UpnpResponse(UpnpResponse.Status.METHOD_NOT_SUPPORTED))
         }
       } catch {
         case ex: Exception if !aborted =>
-          log.warning(s"HTTP request failed: ${ex.getMessage}")
+          log.warn(s"HTTP request failed: ${ex.getMessage}")
           // Return new response with error status
           new StreamResponseMessage(new UpnpResponse(UpnpResponse.Status.INTERNAL_SERVER_ERROR))
         case _: Exception =>
@@ -202,7 +202,7 @@ object ApacheHttpClientStreamClient {
               ContentType.parse(contentType.toString())
             catch {
               case ex: Exception =>
-                log.warning(s"Invalid content type header: '$contentType'. Using default.", ex)
+                log.warn(s"Invalid content type header: '$contentType'. Using default.", ex)
                 null
             }
           } else null

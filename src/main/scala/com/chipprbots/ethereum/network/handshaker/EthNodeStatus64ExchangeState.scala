@@ -38,7 +38,7 @@ case class EthNodeStatus64ExchangeState(
     log.debug("Local state for comparison: bestBlock={}, genesisHash={}", localBestBlock, localGenesisHash)
 
     if (status.genesisHash != localGenesisHash) {
-      log.warning(
+      log.warn(
         "Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
         localGenesisHash,
         status.genesisHash
@@ -58,7 +58,7 @@ case class EthNodeStatus64ExchangeState(
             log.debug("ForkId validation passed - accepting peer connection")
             applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
           case other =>
-            log.warning("ForkId validation failed with result: {} - disconnecting peer as UselessPeer", other)
+            log.warn("ForkId validation failed with result: {} - disconnecting peer as UselessPeer", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()

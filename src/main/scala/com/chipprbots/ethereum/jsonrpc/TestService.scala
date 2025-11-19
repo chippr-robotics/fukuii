@@ -327,7 +327,7 @@ class TestService(
         val blockHash = s"0x${ByteStringUtils.hash2string(block.hash)}"
         ImportRawBlockResponse(blockHash).rightNow
       case e =>
-        log.warning("Block import failed with {}", e)
+        log.warn("Block import failed with {}", e)
         IO.pure(Left(JsonRpcError(-1, "block validation failed!", None)))
     }
 

@@ -43,7 +43,7 @@ class BodiesFetcher(
       case FetchBodies(hashes) =>
         log.debug("Start fetching bodies for {} hashes", hashes.size)
         if (hashes.isEmpty) {
-          log.warning("FetchBodies called with empty hashes list")
+          log.warn("FetchBodies called with empty hashes list")
         }
         requestBodies(hashes)
         Behaviors.same
@@ -74,7 +74,7 @@ class BodiesFetcher(
         log.debug("Bodies request completed successfully")
         res
       case Failure(ex) =>
-        log.warning("Bodies request failed with exception: {}", ex.getMessage)
+        log.warn("Bodies request failed with exception: {}", ex.getMessage)
         BodiesFetcher.RetryBodiesRequest
     }
   }
