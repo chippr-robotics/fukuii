@@ -63,7 +63,7 @@ class ConsoleUI extends Logger {
       log.info("Console UI initialized")
     } catch {
       case e: Exception =>
-        log.warn(s"Failed to initialize console UI: ${e.getMessage}. Falling back to standard logging.")
+        log.warning(s"Failed to initialize console UI: ${e.getMessage}. Falling back to standard logging.")
         enabled = false
         terminal = None
     }

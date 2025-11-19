@@ -69,7 +69,7 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
 
       case None =>
         // after removing common prefix both 'new' and 'old` were empty
-        log.warn("Attempted to compare identical branches")
+        log.warning("Attempted to compare identical branches")
         NoChainSwitch
     }
   }

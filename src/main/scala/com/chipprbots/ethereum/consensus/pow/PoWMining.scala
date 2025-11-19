@@ -83,7 +83,7 @@ class PoWMining private (
       case MinerProtocol.StopMining =>
         mockedMinerRef.foreach(_ ! MockedMiner.StopMining)
         minerCoordinatorRef.foreach(_ ! PoWMiningCoordinator.StopMining)
-      case _ => log.warn("SendMiner method received unexpected message {}", msg)
+      case _ => log.warning("SendMiner method received unexpected message {}", msg)
     }
 
   // no interactions are done with minerCoordinatorRef using the ask pattern

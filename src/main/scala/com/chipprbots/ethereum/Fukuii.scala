@@ -67,7 +67,7 @@ object Fukuii extends Logger {
   }
 
   private def deleteRocksDBFiles(): Unit = {
-    log.warn("Deleting previous database {}", Config.Db.RocksDb.path)
+    log.warning("Deleting previous database {}", Config.Db.RocksDb.path)
     rocksdb.RocksDB.destroyDB(Config.Db.RocksDb.path, new rocksdb.Options())
   }
 

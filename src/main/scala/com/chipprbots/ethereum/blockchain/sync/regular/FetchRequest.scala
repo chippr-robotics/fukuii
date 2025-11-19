@@ -40,11 +40,11 @@ trait FetchRequest[A] {
           case PeersClient.Response(peer, msg) =>
             log.debug("Received response from peer {} - message type: {}", peer.id, msg.getClass.getSimpleName)
           case RequestFailed(peer, reason) =>
-            log.warn("Request failed from peer {} ({}): {}", peer.id, peer.remoteAddress, reason)
+            log.warning("Request failed from peer {} ({}): {}", peer.id, peer.remoteAddress, reason)
           case NoSuitablePeer =>
             log.debug("No suitable peer available for request - will retry")
           case Failure(cause) =>
-            log.warn("Request resulted in failure: {} - {}", cause.getClass.getSimpleName, cause.getMessage)
+            log.warning("Request resulted in failure: {} - {}", cause.getClass.getSimpleName, cause.getMessage)
           case _ =>
             log.debug("Request resulted in unexpected response type: {}", result.getClass.getSimpleName)
         }

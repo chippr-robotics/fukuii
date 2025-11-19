@@ -126,7 +126,7 @@ class BlockchainImpl(
     maybeBlock match {
       case Some(block) => removeBlock(block)
       case None =>
-        log.warn(s"Attempted removing block with hash ${ByteStringUtils.hash2string(blockHash)} that we don't have")
+        log.warning(s"Attempted removing block with hash ${ByteStringUtils.hash2string(blockHash)} that we don't have")
     }
   }
 

@@ -338,7 +338,7 @@ final case class CacheBasedBlacklist(cache: Cache[BlacklistId, BlacklistReasonTy
     cache.policy().expireVariably().toScala match {
       case Some(varExpiration) => varExpiration.put(id, reason.reasonType, duration.toJava)
       case None =>
-        log.warn(customExpirationError(id))
+        log.warning(customExpirationError(id))
         cache.put(id, reason.reasonType)
     }
   }

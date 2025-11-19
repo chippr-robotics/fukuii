@@ -114,7 +114,7 @@ object PortForwarder extends Logger {
       }
     catch {
       case ex: org.jupnp.transport.spi.InitializationException =>
-        log.warn(
+        log.warning(
           "Failed to initialize UPnP port forwarding: {}. " +
             "The node will continue to run, but automatic port forwarding is disabled. " +
             "Please configure port forwarding manually on your router if needed.",
@@ -123,7 +123,7 @@ object PortForwarder extends Logger {
         // Return a no-op service that can be safely shut down
         new NoOpUpnpService()
       case ex: Throwable =>
-        log.warn(
+        log.warning(
           "Unexpected error during UPnP initialization: {}. " +
             "The node will continue to run without automatic port forwarding.",
           ex.getMessage
