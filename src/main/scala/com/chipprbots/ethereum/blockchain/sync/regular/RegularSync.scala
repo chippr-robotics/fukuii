@@ -99,7 +99,7 @@ class RegularSync(
       importer ! BlockImporter.MinedBlock(block)
 
     case NewCheckpoint(block) =>
-      log.info(s"Received new checkpoint for block ${ByteStringUtils.hash2string(block.header.parentHash)}")
+      log.debug(s"Received new checkpoint for block ${ByteStringUtils.hash2string(block.header.parentHash)}")
       importer ! BlockImporter.NewCheckpoint(block)
 
     case SyncProtocol.GetStatus =>
@@ -112,11 +112,11 @@ class RegularSync(
       val newState = progressState.copy(initialBlock = blockNumber, currentBlock = blockNumber)
       context.become(running(newState))
     case ProgressProtocol.GotNewBlock(blockNumber) =>
-      log.info(s"Got information about new block [number = $blockNumber]")
+      log.debug(s"Got information about new block [number = $blockNumber]")
       val newState = progressState.copy(bestKnownNetworkBlock = blockNumber)
       context.become(running(newState))
     case ProgressProtocol.ImportedBlock(blockNumber, internally) =>
-      log.info(s"Imported new block [number = $blockNumber, internally = $internally]")
+      log.debug(s"Imported new block [number = $blockNumber, internally = $internally]")
       val newState = progressState.copy(currentBlock = blockNumber)
       if (internally) {
         fetcher ! InternalLastBlockImport(blockNumber)

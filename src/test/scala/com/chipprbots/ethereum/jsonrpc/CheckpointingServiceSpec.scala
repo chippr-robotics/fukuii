@@ -40,7 +40,10 @@ class CheckpointingServiceSpec
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  "CheckpointService" should "get latest block (at a correct checkpointing interval) from Blockchain" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  "CheckpointService" should "get latest block (at a correct checkpointing interval) from Blockchain" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
@@ -64,7 +67,10 @@ class CheckpointingServiceSpec
     }
   }
 
-  it should "get latest block that is a descendant of the passed parent checkpoint block" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "get latest block that is a descendant of the passed parent checkpoint block" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(1, 1000) // number of checkpoints in the chain (at least 1 to have a descendant)
@@ -95,7 +101,10 @@ class CheckpointingServiceSpec
     }
   }
 
-  it should "not return a block that is at the same height as the passed parent checkpoint block" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "not return a block that is at the same height as the passed parent checkpoint block" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain
@@ -123,7 +132,10 @@ class CheckpointingServiceSpec
     }
   }
 
-  it should "return an empty response if the descendant is not a part of a local blockchain" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return an empty response if the descendant is not a part of a local blockchain" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val nums: Gen[(Int, Int, Int)] = for {
       k <- Gen.choose[Int](1, 10) // checkpointing interval
       m <- Gen.choose(0, 1000) // number of checkpoints in the chain

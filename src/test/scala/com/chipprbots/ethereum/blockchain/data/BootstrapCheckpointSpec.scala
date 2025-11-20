@@ -9,7 +9,10 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class BootstrapCheckpointSpec extends AnyFlatSpec with Matchers {
 
-  "BootstrapCheckpoint.fromString" should "parse valid checkpoint string with 0x prefix" taggedAs (UnitTest, SyncTest) in {
+  "BootstrapCheckpoint.fromString" should "parse valid checkpoint string with 0x prefix" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val checkpointStr = "10500839:0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
     val result = BootstrapCheckpoint.fromString(checkpointStr)
 

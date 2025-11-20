@@ -37,7 +37,10 @@ import com.chipprbots.ethereum.testing.Tags._
 class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with Logger {
   implicit val testContext: IORuntime = IORuntime.global
 
-  "BlockGenerator" should "generate correct block with empty transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  "BlockGenerator" should "generate correct block with empty transactions" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val pendingBlock: PendingBlock =
       blockGenerator.generateBlock(bestBlock.get, Nil, Address(testAddress), blockGenerator.emptyX, None).pendingBlock
 
@@ -91,7 +94,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "be possible to simulate transaction, on world returned with pending block" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "be possible to simulate transaction, on world returned with pending block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val pendingBlock: PendingBlock =
       blockGenerator
         .generateBlock(bestBlock.get, Seq(signedTransaction), Address(testAddress), blockGenerator.emptyX, None)
@@ -176,7 +182,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "filter out transactions exceeding block gas limit and include correct transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "filter out transactions exceeding block gas limit and include correct transactions" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val txWitGasTooBigGasLimit: SignedTransaction = SignedTransaction
       .sign(
         transaction.copy(gasLimit = BigInt(2).pow(100000), nonce = signedTransaction.tx.nonce + 1),
@@ -215,7 +224,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "generate block before eip155 and filter out chain specific tx" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "generate block before eip155 and filter out chain specific tx" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
       chainId = 0x3d.toByte,
       networkId = 1,
@@ -283,7 +295,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "generate correct block with (without empty accounts) after EIP-161" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "generate correct block with (without empty accounts) after EIP-161" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         frontierBlockNumber = 0,
@@ -337,7 +352,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     blockExecution.executeAndValidateBlock(generatedBlock.block, true) shouldBe a[Right[_, Seq[Receipt]]]
   }
 
-  it should "generate block after eip155 and allow both chain specific and general transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "generate block after eip155 and allow both chain specific and general transactions" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val generalTx: SignedTransaction =
       SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, None)
 
@@ -413,7 +431,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "filter out failing transaction from the middle of tx list" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "filter out failing transaction from the middle of tx list" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val nextTransaction: SignedTransaction =
       SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(0x3d.toByte))
 
@@ -464,7 +485,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "include transaction with higher gas price if nonce is the same" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+  it should "include transaction with higher gas price if nonce is the same" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup {
     val txWitSameNonceButLowerGasPrice: SignedTransaction = SignedTransaction
       .sign(transaction.copy(gasPrice = signedTransaction.tx.gasPrice - 1), keyPair, Some(0x3d.toByte))
 
@@ -587,7 +611,10 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     }
   }
 
-  it should "generate a failure if treasury transfer was made to a different treasury account" taggedAs (UnitTest, ConsensusTest) in {
+  it should "generate a failure if treasury transfer was made to a different treasury account" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val producer = new TestSetup {
       override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
         .withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = 1))

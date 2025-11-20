@@ -8,15 +8,16 @@ Operations ADRs use the format: `OPS-NNN-title.md` where NNN is a zero-padded se
 
 Examples:
 - `OPS-001-console-ui.md`
-- `OPS-002-monitoring-strategy.md`
+- `OPS-002-logging-level-categorization.md`
 
 ## Current ADRs
 
 - [OPS-001: Enhanced Console User Interface](OPS-001-console-ui.md) - Accepted
+- [OPS-002: Logging Level Categorization Standards](OPS-002-logging-level-categorization.md) - Accepted
 
 ## Creating a New Operations ADR
 
-1. Use the next sequential number (e.g., `OPS-002-title.md`)
+1. Use the next sequential number (e.g., `OPS-003-title.md`)
 2. Follow the standard ADR template structure
 3. Link it in the index above
 4. Update the main ADR README

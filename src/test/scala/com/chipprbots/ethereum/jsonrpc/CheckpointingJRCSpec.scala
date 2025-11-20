@@ -57,28 +57,40 @@ class CheckpointingJRCSpec
     response should haveResult(expectedResult)
   }
 
-  it should "return invalid params when checkpoint parent is of the wrong type" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when checkpoint parent is of the wrong type" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = getLatestBlockRequestBuilder(JArray(JInt(1) :: JBool(true) :: Nil))
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(notSupportedTypeError)
   }
 
-  it should "return invalid params when checkpoint interval is not positive (getLatestBlock)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when checkpoint interval is not positive (getLatestBlock)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = getLatestBlockRequestBuilder(JArray(JInt(-1) :: JNull :: Nil))
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(expectedPositiveIntegerError)
   }
 
-  it should "return invalid params when checkpoint interval is too big (getLatestBlock)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when checkpoint interval is too big (getLatestBlock)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = getLatestBlockRequestBuilder(JArray(JInt(BigInt(Int.MaxValue) + 1) :: JNull :: Nil))
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
     response should haveError(expectedPositiveIntegerError)
   }
 
-  it should "return invalid params when checkpoint interval is missing (getLatestBlock)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when checkpoint interval is missing (getLatestBlock)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = getLatestBlockRequestBuilder(JArray(Nil))
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
@@ -109,7 +121,10 @@ class CheckpointingJRCSpec
     response should haveResult(expectedResult)
   }
 
-  it should "return invalid params when some arguments are missing (pushCheckpoint)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when some arguments are missing (pushCheckpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = pushCheckpointRequestBuilder(
       JArray(JString(ByteStringUtils.hash2string(block.hash)) :: Nil)
     )
@@ -118,7 +133,10 @@ class CheckpointingJRCSpec
     response should haveError(InvalidParams())
   }
 
-  it should "return invalid params when hash has bad length (pushCheckpoint)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when hash has bad length (pushCheckpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val badHash: String = ByteStringUtils.hash2string(block.hash).dropRight(2)
     val request: JsonRpcRequest = pushCheckpointRequestBuilder(
       JArray(
@@ -134,7 +152,10 @@ class CheckpointingJRCSpec
     response should haveError(expectedError)
   }
 
-  it should "return invalid params when hash has bad format (pushCheckpoint)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when hash has bad format (pushCheckpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val badHash: String = ByteStringUtils.hash2string(block.hash).replaceAll("0", "X")
     val request: JsonRpcRequest = pushCheckpointRequestBuilder(
       JArray(
@@ -148,7 +169,10 @@ class CheckpointingJRCSpec
     response should haveError(InvalidParams())
   }
 
-  it should "return invalid params when signatures are not strings (pushCheckpoint)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when signatures are not strings (pushCheckpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = pushCheckpointRequestBuilder(
       JArray(
         JString(ByteStringUtils.hash2string(block.hash))
@@ -163,7 +187,10 @@ class CheckpointingJRCSpec
     response should haveError(expectedError)
   }
 
-  it should "return invalid params when signatures have bad format (pushCheckpoint)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when signatures have bad format (pushCheckpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = pushCheckpointRequestBuilder(
       JArray(
         JString(ByteStringUtils.hash2string(block.hash))
@@ -176,7 +203,10 @@ class CheckpointingJRCSpec
     response should haveError(InvalidParams())
   }
 
-  it should "return invalid params when signatures have bad length (pushCheckpoint)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return invalid params when signatures have bad length (pushCheckpoint)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val request: JsonRpcRequest = pushCheckpointRequestBuilder(
       JArray(
         JString(ByteStringUtils.hash2string(block.hash))

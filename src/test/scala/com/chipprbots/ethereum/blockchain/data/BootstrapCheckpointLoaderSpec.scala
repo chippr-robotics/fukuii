@@ -12,7 +12,10 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockFactory {
 
-  "BootstrapCheckpointLoader.loadBootstrapCheckpoints" should "return false when checkpoints are disabled" taggedAs (UnitTest, SyncTest) in {
+  "BootstrapCheckpointLoader.loadBootstrapCheckpoints" should "return false when checkpoints are disabled" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val mockReader = mock[BlockchainReader]
     val loader = new BootstrapCheckpointLoader(mockReader)
 

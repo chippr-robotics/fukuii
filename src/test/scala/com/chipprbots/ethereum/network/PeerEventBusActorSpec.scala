@@ -39,7 +39,10 @@ import scala.concurrent.Future
 
 class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
 
-  "PeerEventBusActor" should "relay messages received to subscribers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  "PeerEventBusActor" should "relay messages received to subscribers" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()(system)
     val probe2: TestProbe = TestProbe()(system)
@@ -188,7 +191,10 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe2.expectMsg(msgPeerHandshaked)
   }
 
-  it should "relay a single notification when subscribed twice to the same message code" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "relay a single notification when subscribed twice to the same message code" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     peerEventBusActor.tell(
@@ -207,7 +213,10 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
     probe1.expectNoMessage()
   }
 
-  it should "allow to handle subscriptions using AllPeers and WithId PeerSelector at the same time" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "allow to handle subscriptions using AllPeers and WithId PeerSelector at the same time" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
     peerEventBusActor.tell(

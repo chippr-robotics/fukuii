@@ -77,7 +77,10 @@ class Secp256k1SigAlgSpec extends AnyFlatSpec with Matchers {
     sigalg.verify(publicKey, sigWithoutV, data) shouldBe true
   }
 
-  it should "verify a signature without the recovery ID based on a compressed public key" taggedAs (UnitTest, NetworkTest) in new SignatureFixture {
+  it should "verify a signature without the recovery ID based on a compressed public key" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new SignatureFixture {
     val signature: Signature.Tagged = sigalg.sign(privateKey, data)
     val compressedPublicKey: PublicKey.Tagged = sigalg.compressPublicKey(publicKey)
     val sigWithoutV: Signature.Tagged = sigalg.removeRecoveryId(signature)

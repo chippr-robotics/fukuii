@@ -35,7 +35,10 @@ class BlockchainSpec
   val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(2, 5).sample.get
   val checkpointBlockGenerator = new CheckpointBlockGenerator
 
-  "Blockchain" should "be able to store a block and return it if queried by hash" taggedAs (UnitTest, StateTest) in new EphemBlockchainTestSetup {
+  "Blockchain" should "be able to store a block and return it if queried by hash" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new EphemBlockchainTestSetup {
     val validBlock = Fixtures.Blocks.ValidBlock.block
     blockchainWriter.storeBlock(validBlock).commit()
     val block: Option[Block] = blockchainReader.getBlockByHash(validBlock.header.hash)
@@ -49,7 +52,10 @@ class BlockchainSpec
     validBlock.body should ===(blockBody.get)
   }
 
-  it should "be able to store a block and retrieve it by number" taggedAs (UnitTest, StateTest) in new EphemBlockchainTestSetup {
+  it should "be able to store a block and retrieve it by number" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new EphemBlockchainTestSetup {
     val validBlock = Fixtures.Blocks.ValidBlock.block
     blockchainWriter.storeBlock(validBlock).commit()
     blockchainWriter.saveBestKnownBlocks(validBlock.hash, validBlock.number)
@@ -74,7 +80,10 @@ class BlockchainSpec
     blockchainReader.isInChain(blockchainReader.getBestBranch(), validBlock.hash) should ===(false)
   }
 
-  it should "be able to query a stored blockHeader by it's number" taggedAs (UnitTest, StateTest) in new EphemBlockchainTestSetup {
+  it should "be able to query a stored blockHeader by it's number" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new EphemBlockchainTestSetup {
     val validHeader = Fixtures.Blocks.ValidBlock.header
     blockchainWriter.storeBlockHeader(validHeader).commit()
     val header: Option[BlockHeader] = blockchainReader.getBlockHeaderByNumber(validHeader.number)
@@ -88,7 +97,10 @@ class BlockchainSpec
     blockchainReader.getBlockByHash(Fixtures.Blocks.ValidBlock.header.hash) shouldBe None
   }
 
-  it should "be able to store a block with checkpoint and retrieve it and checkpoint" taggedAs (UnitTest, StateTest) in new EphemBlockchainTestSetup {
+  it should "be able to store a block with checkpoint and retrieve it and checkpoint" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new EphemBlockchainTestSetup {
     val parent = Fixtures.Blocks.Genesis.block
     blockchainWriter.storeBlock(parent)
 
@@ -104,7 +116,10 @@ class BlockchainSpec
     blockchainReader.getBestBlockNumber() should ===(validBlock.number)
   }
 
-  it should "be able to rollback block with checkpoint and store the previous existed checkpoint" taggedAs (UnitTest, StateTest) in new EphemBlockchainTestSetup {
+  it should "be able to rollback block with checkpoint and store the previous existed checkpoint" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new EphemBlockchainTestSetup {
     val genesis = Fixtures.Blocks.Genesis.block
     blockchainWriter.storeBlock(genesis)
 
@@ -146,7 +161,11 @@ class BlockchainSpec
     blockchainReader.getBestBlockNumber() should ===(genesis.number)
   }
 
-  it should "return an account given an address and a block number" taggedAs (UnitTest, StateTest, MPTTest) in new EphemBlockchainTestSetup {
+  it should "return an account given an address and a block number" taggedAs (
+    UnitTest,
+    StateTest,
+    MPTTest
+  ) in new EphemBlockchainTestSetup {
     val address: Address = Address(42)
     val account: Account = Account.empty(UInt256(7))
 
@@ -201,7 +220,11 @@ class BlockchainSpec
     }
   }
 
-  it should "return proof for non-existent account" taggedAs (UnitTest, StateTest, MPTTest) in new EphemBlockchainTestSetup {
+  it should "return proof for non-existent account" taggedAs (
+    UnitTest,
+    StateTest,
+    MPTTest
+  ) in new EphemBlockchainTestSetup {
     val emptyMpt: MerklePatriciaTrie[Address, Account] = MerklePatriciaTrie[Address, Account](
       storagesInstance.storages.stateStorage.getBackingStorage(0)
     )
@@ -224,7 +247,10 @@ class BlockchainSpec
     mptWithAcc.get(wrongAddress) shouldBe None
   }
 
-  it should "return correct best block number after saving and rolling back blocks" taggedAs (UnitTest, StateTest) in new TestSetup {
+  it should "return correct best block number after saving and rolling back blocks" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup {
     forAll(intGen(min = 1, max = maxNumberBlocksToImport)) { numberBlocksToImport =>
       val testSetup = newSetup()
       import testSetup._

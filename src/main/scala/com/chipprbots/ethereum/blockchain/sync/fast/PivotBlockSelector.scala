@@ -80,7 +80,7 @@ class PivotBlockSelector(
     if (election.hasEnoughVoters(minPeersToChoosePivotBlock)) {
       val (peersToAsk, waitingPeers) = correctPeers.splitAt(minPeersToChoosePivotBlock + peersToChoosePivotBlockMargin)
 
-      log.info(
+      log.debug(
         "Trying to choose fast sync pivot block using {} peers ({} ones with high enough block). Ask {} peers for block nr {}",
         peersToDownloadFrom.size,
         correctPeers.size,
@@ -101,7 +101,7 @@ class PivotBlockSelector(
         )
       )
     } else {
-      log.info(
+      log.debug(
         "Cannot pick pivot block. Need at least {} peers, but there are only {} which meet the criteria " +
           "({} all available at the moment). Best block number = {}",
         minPeersToChoosePivotBlock,
@@ -171,7 +171,7 @@ class PivotBlockSelector(
           blacklist.add(peerId, blacklistDuration, PivotBlockElectionTimeout)
         }
         peerEventBus ! Unsubscribe()
-        log.info("Pivot block header receive timeout. Retrying in {}", startRetryInterval)
+        log.warning("Pivot block header receive timeout. Retrying in {}", startRetryInterval)
         scheduleRetry(startRetryInterval)
     }
 
@@ -209,7 +209,7 @@ class PivotBlockSelector(
         )
       } else { // No more peers. Restart the whole process
         peerEventBus ! Unsubscribe()
-        log.info("Not enough votes for pivot block. Retrying in {}", startRetryInterval)
+        log.warning("Not enough votes for pivot block. Retrying in {}", startRetryInterval)
         scheduleRetry(startRetryInterval)
       }
       // Continue voting

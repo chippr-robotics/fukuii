@@ -56,7 +56,7 @@ class SyncStateSchedulerActor(
     }.toList
 
   private def requestNodes(request: PeerRequest): ActorRef = {
-    log.info("Requesting {} from peer {}", request.nodes.size, request.peer.id)
+    log.debug("Requesting {} from peer {}", request.nodes.size, request.peer.id)
     val handler = context.actorOf(
       PeerRequestHandler.props[GetNodeData, NodeData](
         request.peer,
@@ -72,7 +72,7 @@ class SyncStateSchedulerActor(
 
   def handleRequestResults: Receive = {
     case ResponseReceived(peer, nodeData: NodeData, timeTaken) =>
-      log.info("Received {} state nodes in {} ms", nodeData.values.size, timeTaken)
+      log.debug("Received {} state nodes in {} ms", nodeData.values.size, timeTaken)
       FastSyncMetrics.setMptStateDownloadTime(timeTaken)
 
       context.unwatch(sender())
