@@ -32,6 +32,11 @@ Developer guides and repository documentation.
 User guides and configuration documentation.
 - [MESS Configuration](guides/mess-configuration.md) - Peer scoring configuration
 
+#### 🌐 [API Documentation](api/)
+JSON-RPC API documentation and tools.
+- [Insomnia Workspace Guide](api/INSOMNIA_WORKSPACE_GUIDE.md) - Complete API testing workspace
+- [RPC API Analysis](api/INSOMNIA_RPC_ANALYSIS.md) - Implementation comparison with Ethereum execution-apis
+
 #### 📊 [Reports](reports/)
 Test reports, implementation summaries, and analysis.
 - [Network Test Report](reports/NETWORK_TEST_REPORT.md) - Network testing results
