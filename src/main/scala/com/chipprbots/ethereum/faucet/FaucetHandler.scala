@@ -34,7 +34,7 @@ class FaucetHandler(walletService: WalletService, config: FaucetConfig)(using ru
       log.info("Initialization called (faucet unavailable)")
       walletService.getWallet.unsafeRunSync() match {
         case Left(error) =>
-          log.error(s"Couldn't initialize wallet - error: $error")
+          log.debug(s"Couldn't initialize wallet - error: $error")
           throw new WalletException(error)
         case Right(wallet) =>
           log.info("Faucet initialization succeeded")

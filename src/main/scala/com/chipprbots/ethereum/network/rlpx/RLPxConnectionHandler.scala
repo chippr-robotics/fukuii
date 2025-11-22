@@ -141,7 +141,7 @@ class RLPxConnectionHandler(
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
-              log.error(
+              log.debug(
                 "[Stopping Connection] Init AuthHandshaker message handling failed for peer {}",
                 peerId,
                 ex
@@ -177,7 +177,7 @@ class RLPxConnectionHandler(
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
-              log.error(
+              log.debug(
                 "[Stopping Connection] Response AuthHandshaker message handling failed for peer {}",
                 peerId,
                 ex

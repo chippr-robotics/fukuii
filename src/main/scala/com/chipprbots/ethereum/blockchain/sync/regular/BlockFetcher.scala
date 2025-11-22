@@ -185,7 +185,7 @@ class BlockFetcher(
               peer.id
             )
             if (headers.isEmpty) {
-              log.warn("Received empty headers response from peer {}", peer.id)
+              log.debug("Received empty headers response from peer {}", peer.id)
             } else {
               log.debug(
                 "Header range: {} to {} (last block in state: {})",
@@ -196,7 +196,7 @@ class BlockFetcher(
             }
             state.appendHeaders(headers) match {
               case Left(HeadersNotFormingSeq) =>
-                log.warn("Dismissed received headers due to: {} (peer: {})", HeadersNotFormingSeq.description, peer.id)
+                log.debug("Dismissed received headers due to: {} (peer: {})", HeadersNotFormingSeq.description, peer.id)
                 log.debug(
                   "Header validation failed: headers do not form a sequence. First: {}, Last: {}, Count: {}",
                   headers.headOption.map(_.number),
@@ -206,7 +206,7 @@ class BlockFetcher(
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
                 state.withHeaderFetchReceived
               case Left(HeadersNotMatchingReadyBlocks) =>
-                log.warn(
+                log.debug(
                   "Dismissed received headers due to: {} (peer: {})",
                   HeadersNotMatchingReadyBlocks.description,
                   peer.id
@@ -219,7 +219,7 @@ class BlockFetcher(
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
                 state.withHeaderFetchReceived
               case Left(err) =>
-                log.warn("Dismissed received headers due to: {} (peer: {})", err, peer.id)
+                log.debug("Dismissed received headers due to: {} (peer: {})", err, peer.id)
                 log.debug("Header validation error details: {}", err.description)
                 state.withHeaderFetchReceived
               case Right(updatedState) =>
@@ -248,7 +248,7 @@ class BlockFetcher(
           fetchBlocks(state.withBodiesFetchReceived)
         } else {
           if (bodies.isEmpty) {
-            log.warn(
+            log.debug(
               "Received empty bodies response from peer {} (expected up to {} bodies)",
               peer.id,
               state.waitingHeaders.size.min(syncConfig.blockBodiesPerRequest)
@@ -259,7 +259,7 @@ class BlockFetcher(
           val newState =
             state.validateBodies(bodies) match {
               case Left(err) =>
-                log.warn("Body validation failed from peer {}: {}", peer.id, err)
+                log.debug("Body validation failed from peer {}: {}", peer.id, err)
                 log.debug("Blacklisting peer {} due to validation error", peer.id)
                 peersClient ! BlacklistPeer(peer.id, err)
                 state.withBodiesFetchReceived
@@ -320,7 +320,7 @@ class BlockFetcher(
         handleNewBlock(block, peerId, state)
 
       case BlockImportFailed(blockNr, reason) =>
-        log.warn("Block import failed for block {}: {}", blockNr, reason)
+        log.debug("Block import failed for block {}: {}", blockNr, reason)
         val (peerId, newState) = state.invalidateBlocksFrom(blockNr)
         peerId.foreach { id =>
           log.debug("Blacklisting peer {} due to block import failure", id)
