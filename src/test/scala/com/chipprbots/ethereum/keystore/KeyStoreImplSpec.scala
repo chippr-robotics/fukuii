@@ -47,7 +47,7 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     }
     
     // Small delay to ensure different file timestamp (ISO_DATE_TIME format includes milliseconds)
-    Thread.sleep(2)
+    Thread.sleep(10)
     
     val res2: Address = keyStore.importPrivateKey(key2, "bbbbbbbb").toOption.get
     res2 shouldEqual addr2
@@ -58,7 +58,7 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     }
     
     // Small delay to ensure different file timestamp
-    Thread.sleep(2)
+    Thread.sleep(10)
     
     val res3: Address = keyStore.importPrivateKey(key3, "cccccccc").toOption.get
     res3 shouldEqual addr3
