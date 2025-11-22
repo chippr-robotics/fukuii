@@ -110,7 +110,7 @@ class PeerDiscoveryManager(
           context.become(started(discovery, release))
 
         case Left(ex) =>
-          log.error(ex, "Failed to start peer discovery.")
+          log.debug("Failed to start peer discovery: {}", ex.getMessage)
           context.become(init)
       }
   }
@@ -138,7 +138,7 @@ class PeerDiscoveryManager(
           stopDiscoveryService(release)
 
         case Left(ex) =>
-          log.error(ex, "Failed to start peer discovery.")
+          log.debug("Failed to start peer discovery: {}", ex.getMessage)
           context.become(init)
       }
 

@@ -29,7 +29,7 @@ class WalletService(walletRpcClient: WalletRpcClientApi, keyStore: KeyStore, con
         log.info(s"Sending ${config.txValue} ETC to $addressTo in tx: $txIdHex.")
         Right(txId)
       case Left(error) =>
-        log.error(s"An error occurred while using faucet", error)
+        log.debug(s"An error occurred while using faucet", error)
         Left(error)
     }
 
@@ -47,7 +47,7 @@ class WalletService(walletRpcClient: WalletRpcClientApi, keyStore: KeyStore, con
         log.info(s"unlock wallet for use in faucet (${config.walletAddress})")
         Right(w)
       case Left(err) =>
-        log.error(s"Cannot unlock wallet for use in faucet (${config.walletAddress}), because of $err")
+        log.debug(s"Cannot unlock wallet for use in faucet (${config.walletAddress}), because of $err")
         Left(err)
     }
   }

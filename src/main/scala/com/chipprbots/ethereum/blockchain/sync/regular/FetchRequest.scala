@@ -40,11 +40,11 @@ trait FetchRequest[A] {
           case PeersClient.Response(peer, msg) =>
             log.debug("Received response from peer {} - message type: {}", peer.id, msg.getClass.getSimpleName)
           case RequestFailed(peer, reason) =>
-            log.warn("Request failed from peer {} ({}): {}", peer.id, peer.remoteAddress, reason)
+            log.debug("Request failed from peer {} ({}): {}", peer.id, peer.remoteAddress, reason)
           case NoSuitablePeer =>
             log.debug("No suitable peer available for request - will retry")
           case Failure(cause) =>
-            log.warn("Request resulted in failure: {} - {}", cause.getClass.getSimpleName, cause.getMessage)
+            log.debug("Request resulted in failure: {} - {}", cause.getClass.getSimpleName, cause.getMessage)
           case _ =>
             log.debug("Request resulted in unexpected response type: {}", result.getClass.getSimpleName)
         }
@@ -52,7 +52,7 @@ trait FetchRequest[A] {
       }
       .flatMap(handleRequestResult(responseFallback))
       .handleError { error =>
-        log.error("Unexpected error while doing a request: {}", error.getMessage, error)
+        log.debug("Unexpected error while doing a request: {}", error.getMessage, error)
         responseFallback
       }
   }
@@ -73,7 +73,7 @@ trait FetchRequest[A] {
         log.debug("No suitable peer available, retrying after {}", syncConfig.syncRetryInterval)
         IO.pure(fallback).delayBy(syncConfig.syncRetryInterval)
       case Failure(cause) =>
-        log.error("Unexpected error on the request result: {}", cause.getMessage, cause)
+        log.debug("Unexpected error on the request result: {}", cause.getMessage, cause)
         IO.pure(fallback)
       case PeersClient.Response(peer, msg) =>
         log.debug("Successfully received response from peer {} - type: {}", peer.id, msg.getClass.getSimpleName)

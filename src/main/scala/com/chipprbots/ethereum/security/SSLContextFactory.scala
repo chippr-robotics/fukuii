@@ -95,7 +95,7 @@ case class SSLContextFactory() extends FileUtils with KeyStoreUtils {
           sslContext.init(km, tm, secureRandom)
           Right(sslContext)
         case Left(error) =>
-          log.error("Invalid Certificate keystore", error)
+          log.debug("Invalid Certificate keystore", error)
           Left(SSLError("Invalid Certificate keystore"))
       }
     }
