@@ -34,18 +34,18 @@ case class ConnectedPeers(
   def hasHandshakedWith(nodeId: ByteString): Boolean =
     handshakedPeersNodeIds.contains(nodeId)
 
-  lazy val incomingPendingPeersCount: Int = incomingPendingPeers.size
-  lazy val outgoingPendingPeersCount: Int = outgoingPendingPeers.size
-  lazy val pendingPeersCount: Int = incomingPendingPeersCount + outgoingPendingPeersCount
+  def incomingPendingPeersCount: Int = incomingPendingPeers.size
+  def outgoingPendingPeersCount: Int = outgoingPendingPeers.size
+  def pendingPeersCount: Int = incomingPendingPeersCount + outgoingPendingPeersCount
 
-  lazy val incomingHandshakedPeersCount: Int = handshakedPeers.count { case (_, p) => p.incomingConnection }
-  lazy val outgoingHandshakedPeersCount: Int = handshakedPeers.count { case (_, p) => !p.incomingConnection }
-  lazy val handshakedPeersCount: Int = handshakedPeers.size
+  def incomingHandshakedPeersCount: Int = handshakedPeers.count { case (_, p) => p.incomingConnection }
+  def outgoingHandshakedPeersCount: Int = handshakedPeers.count { case (_, p) => !p.incomingConnection }
+  def handshakedPeersCount: Int = handshakedPeers.size
 
-  lazy val incomingPruningPeersCount: Int = pruningPeers.count { case (_, p) => p.incomingConnection }
+  def incomingPruningPeersCount: Int = pruningPeers.count { case (_, p) => p.incomingConnection }
 
   /** Sum of handshaked and pending peers. */
-  lazy val outgoingPeersCount: Int = peers.count { case (_, p) => !p.incomingConnection }
+  def outgoingPeersCount: Int = peers.count { case (_, p) => !p.incomingConnection }
 
   def getPeer(peerId: PeerId): Option[Peer] = peers.get(peerId)
 
