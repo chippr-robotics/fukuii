@@ -58,7 +58,7 @@ case class EthNodeStatus64ExchangeState(
             log.debug("ForkId validation passed - accepting peer connection")
             applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
           case other =>
-            log.warn("ForkId validation failed with result: {} - disconnecting peer as UselessPeer", other)
+            log.debug("ForkId validation failed with result: {} - disconnecting peer as UselessPeer", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()

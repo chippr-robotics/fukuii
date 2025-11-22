@@ -56,7 +56,7 @@ class FaucetRpcService(config: FaucetConfig)(implicit system: ActorSystem)
     case FaucetHandlerResponse.WalletRpcClientError(error) =>
       Left(JsonRpcError.LogicError(s"Faucet error: $error"))
     case other =>
-      log.error(s"process failure: $other")
+      log.debug(s"process failure: $other")
       Left(JsonRpcError.InternalError)
   }
 

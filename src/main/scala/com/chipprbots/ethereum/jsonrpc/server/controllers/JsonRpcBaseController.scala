@@ -67,7 +67,7 @@ trait JsonRpcBaseController {
       .flatTap {
         case JsonRpcResponse(_, _, Some(JsonRpcError(code, message, extraData)), _) =>
           IO {
-            log.error(
+            log.debug(
               s"JsonRpcError from request: ${request.toStringWithSensitiveInformation} - response code: $code and message: $message. " +
                 s"${extraData.map(data => s"Extra info: ${data.values}")}"
             )
