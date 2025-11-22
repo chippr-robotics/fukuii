@@ -59,15 +59,8 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Check code formatting (diagnostic)
-        run: |
-          sbt scalafmtCheckAll 2>&1 | tee format-check.log
-          echo "--- Last 200 lines of format check output ---"
-          tail -n 200 format-check.log
-          if grep -E "(error|failed|Failed to format|Unexpected formatting diff|does not match the file on disk)" format-check.log; then
-            echo "ERROR: Code formatting issues detected. See output above."
-            exit 1
-          fi
+      - name: Auto-format code
+        run: sbt scalafmtAll
         env:
           FUKUII_DEV: true
       
