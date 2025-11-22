@@ -41,6 +41,110 @@ import com.chipprbots.ethereum.utils.TxPoolConfig
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.testing.Tags._
 
+/** Test suite for PendingTransactionsManager actor.
+  *
+  * This test suite demonstrates proper actor testing patterns as specified in ADR-017, avoiding timing-dependent
+  * Thread.sleep calls in favor of akka-testkit patterns.
+  *
+  * ==Actor Testing Best Practices==
+  *
+  * '''1. Actor Lifecycle Management'''
+  *
+  * All actor systems must be properly tracked and shut down to prevent hanging tests:
+  * {{{
+  * class MyActorSpec extends AnyFlatSpec with BeforeAndAfterEach {
+  *   private var actorSystems: List[ActorSystem] = List.empty
+  *
+  *   override def afterEach(): Unit = {
+  *     actorSystems.foreach { as =>
+  *       try TestKit.shutdownActorSystem(as, verifySystemShutdown = false)
+  *       catch { case _: Exception => /* Ignore errors during cleanup */ }
+  *     }
+  *     actorSystems = List.empty
+  *   }
+  *
+  *   trait TestSetup {
+  *     implicit val system: ActorSystem = {
+  *       val as = ActorSystem("MyActorSpec_System")
+  *       actorSystems = as :: actorSystems
+  *       as
+  *     }
+  *   }
+  * }
+  * }}}
+  *
+  * '''2. Message Waiting with TestProbe'''
+  *
+  * Use TestProbe's expectMsg/expectNoMessage instead of Thread.sleep:
+  * {{{
+  * // ❌ BAD: Using Thread.sleep
+  * actor ! SomeMessage
+  * Thread.sleep(1000)
+  * val result = (actor ? GetState).futureValue
+  *
+  * // ✅ GOOD: Using TestProbe
+  * val probe = TestProbe()
+  * actor.tell(SomeMessage, probe.ref)
+  * probe.expectMsg(Timeouts.normalTimeout, ExpectedResponse)
+  * }}}
+  *
+  * '''3. State Verification with Eventually'''
+  *
+  * Use ScalaTest's `eventually` for non-deterministic state checks:
+  * {{{
+  * // ❌ BAD: Using Thread.sleep
+  * actor ! UpdateState(newValue)
+  * Thread.sleep(500)
+  * val state = (actor ? GetState).futureValue
+  * state shouldBe expectedState
+  *
+  * // ✅ GOOD: Using eventually
+  * actor ! UpdateState(newValue)
+  * eventually {
+  *   val state = (actor ? GetState).futureValue
+  *   state shouldBe expectedState
+  * }
+  * }}}
+  *
+  * The `eventually` block will retry the assertion until it succeeds or times out (default from NormalPatience).
+  *
+  * '''4. Testing Transaction Timeout Behavior'''
+  *
+  * For timeout-based behavior, use `eventually` with appropriate configuration:
+  * {{{
+  * // Configuration with short timeout
+  * val txPoolConfig = new TxPoolConfig {
+  *   override val transactionTimeout: FiniteDuration = 500.millis
+  *   // ... other config
+  * }
+  *
+  * // Verify timeout behavior
+  * actor ! AddTransaction(tx)
+  * eventually { /* verify tx is present */ }
+  *
+  * // Wait for timeout naturally
+  * eventually { /* verify tx is removed */ }
+  * }}}
+  *
+  * '''5. Avoid expectNoMessage Without Timeout'''
+  *
+  * Always specify a reasonable timeout for expectNoMessage:
+  * {{{
+  * // ❌ BAD: No timeout specified
+  * probe.expectNoMessage()
+  *
+  * // ✅ GOOD: With explicit timeout
+  * probe.expectNoMessage(Timeouts.shortTimeout)
+  * }}}
+  *
+  * @see
+  *   ADR-017 for comprehensive test suite strategy
+  * @see
+  *   [[com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherSpec]] for actor cleanup pattern
+  * @see
+  *   [[com.chipprbots.ethereum.blockchain.sync.StateStorageActorSpec]] for eventually pattern
+  */
+
 class PendingTransactionsManagerSpec
     extends AnyFlatSpec
     with Matchers
