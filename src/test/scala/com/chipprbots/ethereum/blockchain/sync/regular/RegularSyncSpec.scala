@@ -551,7 +551,9 @@ class RegularSyncSpec
 
         peerEventBus.reply(MessageFromPeer(NewBlock(newBlock, ChainWeight(0, 1)), defaultPeer.id))
 
-        Thread.sleep(remainingOrDefault.toMillis)
+        // Wait for actor to process the message - use expectNoMessage to ensure processing completes
+        // The actor may send messages to peersClient, but should not call evaluateBranchBlock
+        peerEventBus.expectNoMessage(remainingOrDefault)
 
         (consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never()
       })
@@ -632,8 +634,9 @@ class RegularSyncSpec
 
         awaitCond(didTryToImportBlock(testBlocks.head))
         regularSync ! SyncProtocol.MinedBlock(minedBlock)
-        // Give RegularSync time to process the MinedBlock message while still importing
-        Thread.sleep(remainingOrDefault.toMillis / 2)
+        // Wait for the MinedBlock message to be processed
+        // The actor should not import the block while another import is in progress
+        peerEventBus.expectNoMessage(remainingOrDefault / 2)
         didTryToImportBlock(minedBlock) shouldBe false
         // Clean up by completing the promise
         headPromise.success(BlockImportedToTop(Nil))
