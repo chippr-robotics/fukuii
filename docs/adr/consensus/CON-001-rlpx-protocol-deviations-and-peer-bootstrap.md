@@ -19,7 +19,7 @@ During investigation of persistent `FAILED_TO_UNCOMPRESS(5)` errors and peer han
 
 #### 1. RLPx Protocol Deviations by Remote Peers
 
-Through systematic debugging and packet-level analysis, we discovered THREE distinct protocol deviations by CoreGeth clients:
+Through systematic debugging and packet-level analysis, we discovered FOUR distinct protocol deviations by CoreGeth clients:
 
 **Deviation 1: Wire Protocol Message Compression**
 - **Observed**: CoreGeth clients compressing Wire Protocol messages (Hello, Disconnect, Ping, Pong - codes 0x00-0x03)
@@ -35,6 +35,12 @@ Through systematic debugging and packet-level analysis, we discovered THREE dist
 - **Observed**: Disconnect messages sent as single-byte values (e.g., `0x10`) instead of RLP lists
 - **Specification**: Disconnect messages should be encoded as `RLPList(reason)` per devp2p specification
 - **Impact**: Decoder expecting RLPList pattern failed on single RLPValue, causing "Cannot decode Disconnect" errors
+
+**Deviation 4: Status Message Decoding Incompatibility**
+- **Observed**: CoreGeth clients disconnect with reason 0x10 after receiving compressed Status messages, even when p2pVersion >= 4
+- **Specification**: For p2pVersion >= 4, all capability messages should be Snappy-compressed
+- **Impact**: CoreGeth clients cannot decode compressed Status messages, leading to immediate peer disconnection
+- **Root Cause**: CoreGeth sends uncompressed Status messages (Deviation 2) and expects to receive them uncompressed as well
 
 #### 2. The Peer Bootstrap Challenge
 
@@ -146,6 +152,21 @@ def toDisconnect: Disconnect = rawDecode(bytes) match {
 - **Rationale**: Accept both spec-compliant RLPList and non-standard single RLPValue
 - **Impact**: Successfully decode disconnect messages from peers with protocol deviations
 
+#### Fix 4: Status Message Compression Compatibility
+```scala
+// In MessageCodec.encodeMessage()
+val isStatusMessage = serializable.code == 0x10
+val payload =
+  if (remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage && !isStatusMessage) {
+    Snappy.compress(framedPayload)
+  } else {
+    framedPayload
+  }
+```
+- **Rationale**: CoreGeth clients send uncompressed Status messages and cannot decode compressed Status messages, causing immediate disconnection with reason 0x10
+- **Impact**: Sending uncompressed Status messages (code 0x10) matches CoreGeth behavior and prevents peer disconnections due to failed Status decoding
+- **Trade-off**: Deviates from strict RLPx v5 spec for p2pVersion >= 4, but enables interoperability with the dominant ETC mainnet client (CoreGeth)
+
 ### Documented: Bootstrap Challenge
 
 We document the bootstrap challenge but **do not implement a workaround** at this time because:
@@ -162,7 +183,7 @@ We document the bootstrap challenge but **do not implement a workaround** at thi
 
 ### Positive
 
-1. **Protocol Deviations Handled**: All three CoreGeth protocol deviations now handled gracefully
+1. **Protocol Deviations Handled**: All four CoreGeth protocol deviations now handled gracefully (wire protocol compression, uncompressed capability messages, malformed disconnect messages, and Status message compression)
 2. **Decode Errors Eliminated**: Zero "Cannot decode" or "FAILED_TO_UNCOMPRESS" errors in testing
 3. **Status Exchanges Succeed**: Handshake protocol completing successfully through status exchange
 4. **Defensive But Compliant**: Code handles deviations while remaining specification-compliant

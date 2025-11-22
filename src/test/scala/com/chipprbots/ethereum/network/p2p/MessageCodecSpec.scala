@@ -47,9 +47,9 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
       remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
     // remote peer did not receive local hello so it treats all remote messages as uncompressed,
-    // but local peer compresses messages when remote advertises p2p version >= 4
+    // but local peer sends Status (0x10) uncompressed for CoreGeth compatibility regardless of p2pVersion
     assert(remoteReadNotCompressedStatus.size == 1)
-    assert(remoteReadNotCompressedStatus.head.isLeft)
+    assert(remoteReadNotCompressedStatus.head == Right(status))
   }
 
   it should "compress messages when both sides advertises p2p version larger or equal 5" in new TestSetup {
@@ -77,12 +77,12 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     remoteMessageCodec.readMessages(localHello)
 
     // After hello exchange, subsequent messages should be compressed/decompressed correctly
-    // Hello is never compressed per spec, but Status will be compressed when both peers are v5+
+    // Hello is never compressed per spec, and Status (0x10) is not compressed for CoreGeth compatibility
     val localStatus: ByteString = messageCodec.encodeMessage(status)
     val remoteReadStatus: Seq[Either[Throwable, Message]] =
       remoteMessageCodec.readMessages(localStatus)
 
-    // Verify status message was correctly compressed and decompressed
+    // Verify status message was correctly sent uncompressed and decoded
     assert(remoteReadStatus.size == 1)
     assert(remoteReadStatus.head == Right(status))
   }

@@ -178,8 +178,11 @@ class MessageCodec(
     val frames = (0 until numFrames).map { frameNo =>
       val framedPayload = encoded.drop(frameNo * MaxFramePayloadSize).take(MaxFramePayloadSize)
       val isWireProtocolMessage = serializable.code >= 0x00 && serializable.code <= 0x03
+      // Status message (0x10) should not be compressed for compatibility with CoreGeth clients
+      // See ADR CON-001: CoreGeth sends uncompressed Status messages and expects to receive them uncompressed
+      val isStatusMessage = serializable.code == 0x10
       val payload =
-        if (remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage) {
+        if (remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage && !isStatusMessage) {
           Snappy.compress(framedPayload)
         } else {
           framedPayload
