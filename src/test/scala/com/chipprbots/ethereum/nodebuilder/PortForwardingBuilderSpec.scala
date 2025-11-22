@@ -246,16 +246,14 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
 
     // Override the portForwarding to use a mock implementation
     override protected lazy val portForwarding: IO[IO[Unit]] =
-      IO {
-        // Simulate allocation work
-        if (simulateDelay > 0) {
-          Thread.sleep(simulateDelay)
-        }
-        allocationCounter.incrementAndGet()
-
-        // Return cleanup function
+      (if (simulateDelay > 0) IO.sleep(simulateDelay.millis) else IO.unit).flatMap { _ =>
         IO {
-          cleanupCounter.incrementAndGet()
+          allocationCounter.incrementAndGet()
+
+          // Return cleanup function
+          IO {
+            cleanupCounter.incrementAndGet()
+          }
         }
       }
   }
