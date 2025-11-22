@@ -16,9 +16,8 @@ import org.scalatest.BeforeAndAfter
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatest.time.Seconds
-import org.scalatest.time.Span
 
+import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.KeyStore.IOError
@@ -30,9 +29,7 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.KeyStoreConfig
 import com.chipprbots.ethereum.testing.Tags._
 
-class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder with Eventually {
-
-  override implicit val patienceConfig: PatienceConfig = PatienceConfig(timeout = Span(5, Seconds))
+class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder with Eventually with NormalPatience {
 
   before(clearKeyStore())
 
