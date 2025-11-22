@@ -350,6 +350,50 @@ sbt test
 sbt "IntegrationTest / test"
 ```
 
+### Async Testing Best Practices
+
+When writing tests for actor-based code using Pekko/Akka TestKit, follow these patterns to avoid flaky tests:
+
+**✅ DO: Use TestKit patterns for waiting**
+```scala
+// Wait for a message with timeout
+probe.expectMsg(5.seconds, expectedMessage)
+
+// Wait for any message of a type
+probe.expectMsgClass(classOf[MyMessage])
+
+// Wait for a condition to become true
+awaitCond(someCondition, 5.seconds)
+
+// Verify no messages are received
+// Note: Use this on probes that receive messages FROM the actor under test
+// to verify it doesn't send unexpected messages
+probe.expectNoMessage(1.second)
+```
+
+**❌ DON'T: Use Thread.sleep**
+```scala
+// NEVER do this - creates flaky tests
+Thread.sleep(1000)
+// Check some condition
+```
+
+**Why?** `Thread.sleep` makes tests:
+- **Flaky**: Timing can vary based on system load
+- **Slow**: You wait the full duration even if the condition is met earlier
+- **Unreliable**: No guarantee the actor has finished processing
+
+**Use ScalaTest's `eventually` for polling conditions:**
+```scala
+import org.scalatest.concurrent.Eventually._
+import org.scalatest.time.{Seconds, Span}
+
+eventually(timeout(Span(5, Seconds))) {
+  // Condition that should eventually become true
+  stateChecker() shouldBe expectedValue
+}
+```
+
 **For more information on test strategy and KPI baselines:**
 - [Test Suite Strategy and KPIs (TEST-002)](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Testing Documentation](docs/testing/README.md)
