@@ -13,11 +13,9 @@ import scala.util.Try
 import org.apache.commons.io.FileUtils
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.BeforeAndAfter
-import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.KeyStore.IOError
@@ -29,7 +27,7 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.KeyStoreConfig
 import com.chipprbots.ethereum.testing.Tags._
 
-class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder with Eventually with NormalPatience {
+class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder {
 
   before(clearKeyStore())
 
@@ -37,38 +35,20 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     val listBeforeImport: List[Address] = keyStore.listAccounts().toOption.get
     listBeforeImport shouldEqual Nil
 
-    // Import first key
+    // Small delay between imports to ensure different file timestamps (ISO_DATE_TIME format includes milliseconds)
     val res1: Address = keyStore.importPrivateKey(key1, "aaaaaaaa").toOption.get
-    res1 shouldEqual addr1
-    
-    // Verify first account is in keystore
-    eventually {
-      keyStore.listAccounts().toOption.get should contain(addr1)
-    }
-    
-    // Small delay to ensure different file timestamp (ISO_DATE_TIME format includes milliseconds)
     Thread.sleep(10)
-    
     val res2: Address = keyStore.importPrivateKey(key2, "bbbbbbbb").toOption.get
-    res2 shouldEqual addr2
-    
-    // Verify both accounts are in keystore
-    eventually {
-      keyStore.listAccounts().toOption.get should contain allOf (addr1, addr2)
-    }
-    
-    // Small delay to ensure different file timestamp
     Thread.sleep(10)
-    
     val res3: Address = keyStore.importPrivateKey(key3, "cccccccc").toOption.get
+
+    res1 shouldEqual addr1
+    res2 shouldEqual addr2
     res3 shouldEqual addr3
 
-    // Verify all accounts are listed in the correct order
-    eventually {
-      val listAfterImport: List[Address] = keyStore.listAccounts().toOption.get
-      // result should be ordered by creation date
-      listAfterImport shouldEqual List(addr1, addr2, addr3)
-    }
+    val listAfterImport: List[Address] = keyStore.listAccounts().toOption.get
+    // result should be ordered by creation date
+    listAfterImport shouldEqual List(addr1, addr2, addr3)
   }
 
   it should "fail to import a key twice" taggedAs (UnitTest) in new TestSetup {
