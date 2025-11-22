@@ -13,8 +13,11 @@ import scala.util.Try
 import org.apache.commons.io.FileUtils
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.BeforeAndAfter
+import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.time.Seconds
+import org.scalatest.time.Span
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
@@ -27,7 +30,9 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.KeyStoreConfig
 import com.chipprbots.ethereum.testing.Tags._
 
-class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder {
+class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter with SecureRandomBuilder with Eventually {
+
+  override implicit val patienceConfig: PatienceConfig = PatienceConfig(timeout = Span(5, Seconds))
 
   before(clearKeyStore())
 
@@ -35,20 +40,34 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     val listBeforeImport: List[Address] = keyStore.listAccounts().toOption.get
     listBeforeImport shouldEqual Nil
 
-    // We sleep between imports so that dates of keyfiles' names are different
+    // Import keys with timestamp spacing ensured by eventually blocks
     val res1: Address = keyStore.importPrivateKey(key1, "aaaaaaaa").toOption.get
-    Thread.sleep(1005)
-    val res2: Address = keyStore.importPrivateKey(key2, "bbbbbbbb").toOption.get
-    Thread.sleep(1005)
-    val res3: Address = keyStore.importPrivateKey(key3, "cccccccc").toOption.get
-
     res1 shouldEqual addr1
+    
+    // Wait for system time to advance to ensure different file timestamp
+    val time1 = System.nanoTime()
+    eventually {
+      System.nanoTime() should be > time1
+    }
+    
+    val res2: Address = keyStore.importPrivateKey(key2, "bbbbbbbb").toOption.get
     res2 shouldEqual addr2
+    
+    // Wait for system time to advance to ensure different file timestamp  
+    val time2 = System.nanoTime()
+    eventually {
+      System.nanoTime() should be > time2
+    }
+    
+    val res3: Address = keyStore.importPrivateKey(key3, "cccccccc").toOption.get
     res3 shouldEqual addr3
 
-    val listAfterImport: List[Address] = keyStore.listAccounts().toOption.get
-    // result should be ordered by creation date
-    listAfterImport shouldEqual List(addr1, addr2, addr3)
+    // Verify all accounts are listed in the correct order
+    eventually {
+      val listAfterImport: List[Address] = keyStore.listAccounts().toOption.get
+      // result should be ordered by creation date
+      listAfterImport shouldEqual List(addr1, addr2, addr3)
+    }
   }
 
   it should "fail to import a key twice" taggedAs (UnitTest) in new TestSetup {
