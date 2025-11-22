@@ -12,6 +12,7 @@ import scala.concurrent.duration.FiniteDuration
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
+import org.scalatest.concurrent.Eventually
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -38,7 +39,10 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.jsonrpc.EthMiningService._
+import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
+import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
+import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
@@ -56,6 +60,7 @@ class EthMiningServiceSpec
     with WithActorSystemShutDown
     with Matchers
     with ScalaFutures
+    with Eventually
     with NormalPatience
     with org.scalamock.scalatest.MockFactory {
 
@@ -152,13 +157,11 @@ class EthMiningServiceSpec
     import scala.concurrent.duration._
     Await.result(workFuture, 10.seconds)
 
-    // Sleep longer than the actual config timeout (30s) to ensure mining status expires
-    // Note: jsonRpcConfig uses the config value, not the test's minerActiveTimeout variable
-    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis + 1000)
-
-    val response: ServiceResponse[GetMiningResponse] = ethMiningService.getMining(GetMiningRequest())
-
-    response.unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
+    // Wait for mining status to expire after timeout
+    eventually {
+      val response: ServiceResponse[GetMiningResponse] = ethMiningService.getMining(GetMiningRequest())
+      response.unsafeRunSync() shouldEqual Right(GetMiningResponse(false))
+    }
   }
 
   it should "return requested work" taggedAs (UnitTest, RPCTest) in new TestSetup {
@@ -286,20 +289,23 @@ class EthMiningServiceSpec
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id1)).unsafeRunSync() shouldEqual Right(
       SubmitHashRateResponse(true)
     )
-    // Note: jsonRpcConfig uses the config value (30s), not the test's minerActiveTimeout variable (20s)
+
+    // Wait half the timeout period, then submit second hashrate
     Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis / 2)
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id2)).unsafeRunSync() shouldEqual Right(
       SubmitHashRateResponse(true)
     )
 
+    // Both hashrates should be active (combined)
     val response1: ServiceResponse[GetHashRateResponse] = ethMiningService.getHashRate(GetHashRateRequest())
     response1.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate * 2))
 
-    // Sleep longer than half timeout to ensure first rate expires
-    // Total time from id1 submission will be > jsonRpcConfig.minerActiveTimeout
-    Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis / 2 + 1000)
-    val response2: ServiceResponse[GetHashRateResponse] = ethMiningService.getHashRate(GetHashRateRequest())
-    response2.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
+    // Wait until first hashrate expires while second is still valid
+    // Total time from id1 submission will be > minerActiveTimeout
+    eventually {
+      val response: ServiceResponse[GetHashRateResponse] = ethMiningService.getHashRate(GetHashRateRequest())
+      response.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
+    }
   }
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
@@ -312,7 +318,7 @@ class EthMiningServiceSpec
     val pendingTransactionsManager: TestProbe = TestProbe()
     val ommersPool: TestProbe = TestProbe()
 
-    val minerActiveTimeout: FiniteDuration = 20.seconds
+    val minerActiveTimeout: FiniteDuration = 2.seconds // Short timeout for tests
     val getTransactionFromPoolTimeout: FiniteDuration = 20.seconds
 
     lazy val minerKey: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(
@@ -329,7 +335,16 @@ class EthMiningServiceSpec
       minerKey
     )
 
-    val jsonRpcConfig: JsonRpcConfig = JsonRpcConfig(Config.config, available)
+    // Override jsonRpcConfig to use shorter timeout for tests
+    val baseJsonRpcConfig: JsonRpcConfig = JsonRpcConfig(Config.config, available)
+    val jsonRpcConfig: JsonRpcConfig = new JsonRpcConfig {
+      override def apis: Seq[String] = baseJsonRpcConfig.apis
+      override def accountTransactionsMaxBlocks: Int = baseJsonRpcConfig.accountTransactionsMaxBlocks
+      override def minerActiveTimeout: FiniteDuration = TestSetup.this.minerActiveTimeout
+      override def httpServerConfig: JsonRpcHttpServerConfig = baseJsonRpcConfig.httpServerConfig
+      override def ipcServerConfig: JsonRpcIpcServerConfig = baseJsonRpcConfig.ipcServerConfig
+      override def healthConfig: JsonRpcHealthConfig = baseJsonRpcConfig.healthConfig
+    }
 
     lazy val ethMiningService = new EthMiningService(
       blockchainReader,
