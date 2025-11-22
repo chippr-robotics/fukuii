@@ -57,8 +57,11 @@ import com.chipprbots.ethereum.testing.Tags._
   *
   *   override def afterEach(): Unit = {
   *     actorSystems.foreach { as =>
-  *       try TestKit.shutdownActorSystem(as, verifySystemShutdown = false)
-  *       catch { case _: Exception => /* Ignore errors during cleanup */ }
+  *       try {
+  *         TestKit.shutdownActorSystem(as, verifySystemShutdown = false)
+  *       } catch {
+  *         case _: Exception => // Ignore errors during cleanup
+  *       }
   *     }
   *     actorSystems = List.empty
   *   }
@@ -159,9 +162,9 @@ class PendingTransactionsManagerSpec
   override def afterEach(): Unit = {
     // Shutdown all actor systems to prevent hanging tests
     actorSystems.foreach { as =>
-      try
+      try {
         TestKit.shutdownActorSystem(as, verifySystemShutdown = false)
-      catch {
+      } catch {
         case _: Exception => // Ignore errors during cleanup
       }
     }
