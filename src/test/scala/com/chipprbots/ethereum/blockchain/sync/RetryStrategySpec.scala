@@ -4,12 +4,10 @@ import scala.concurrent.duration._
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatest.concurrent.Eventually
 
 import com.chipprbots.ethereum.testing.Tags._
-import com.chipprbots.ethereum.NormalPatience
 
-class RetryStrategySpec extends AnyFlatSpec with Matchers with Eventually with NormalPatience {
+class RetryStrategySpec extends AnyFlatSpec with Matchers {
 
   "RetryStrategy" should "calculate exponential backoff correctly" taggedAs (UnitTest, SyncTest) in {
     val strategy = RetryStrategy(
@@ -179,11 +177,11 @@ class RetryStrategySpec extends AnyFlatSpec with Matchers with Eventually with N
 
   it should "track total time spent from first attempt" taggedAs (UnitTest, SyncTest) in {
     val initialTime = System.currentTimeMillis()
-    val state = RetryState(firstAttemptTime = Some(initialTime))
+    Thread.sleep(100)
 
-    eventually {
-      val elapsed = state.totalTimeSpent.toMillis
-      elapsed should be >= 100L
-    }
+    val state = RetryState(firstAttemptTime = Some(initialTime))
+    val elapsed = state.totalTimeSpent.toMillis
+
+    elapsed should be >= 100L
   }
 }
