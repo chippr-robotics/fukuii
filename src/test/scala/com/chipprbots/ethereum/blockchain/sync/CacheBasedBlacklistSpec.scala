@@ -82,6 +82,33 @@ class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers {
       blacklist.remove(peer2)
       assert(blacklist.isBlacklisted(peer2) === false)
     }
+    "automatically clean up expired entries when calling keys" taggedAs (UnitTest, SyncTest) in {
+      val maxSize = 10
+      val ticker = new FakeTicker()
+      val cache = Scaffeine()
+        .expireAfter[BlacklistId, BlacklistReason.BlacklistReasonType](
+          create = (_, _) => 60.minutes,
+          update = (_, _, _) => 60.minutes,
+          read = (_, _, duration) => duration
+        )
+        .maximumSize(maxSize)
+        .ticker(ticker.read _)
+        .build[BlacklistId, BlacklistReason.BlacklistReasonType]()
+      val blacklist = CacheBasedBlacklist(cache)
+      
+      // Add peers with different expiration times
+      blacklist.add(peer1, 1.minute, reason)
+      blacklist.add(peer2, 10.minutes, reason)
+      blacklist.add(peer3, 3.minutes, anotherReason)
+      
+      // Advance time to expire peer1 and peer3
+      ticker.advance(5, TimeUnit.MINUTES)
+      
+      // keys should automatically clean up and only return non-expired entries
+      // Without explicit cleanUp() call, keys should still return only peer2
+      val activeKeys = blacklist.keys
+      activeKeys must contain theSameElementsAs Set(peer2)
+    }
   }
 
 }

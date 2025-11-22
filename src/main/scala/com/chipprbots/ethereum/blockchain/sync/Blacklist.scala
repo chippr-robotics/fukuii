@@ -344,7 +344,10 @@ final case class CacheBasedBlacklist(cache: Cache[BlacklistId, BlacklistReasonTy
   }
   override def remove(id: BlacklistId): Unit = cache.invalidate(id)
 
-  override def keys: Set[BlacklistId] = cache.underlying.asMap().keySet().asScala.toSet
+  override def keys: Set[BlacklistId] = {
+    cache.cleanUp() // Remove expired entries before returning keys
+    cache.underlying.asMap().keySet().asScala.toSet
+  }
 }
 
 object CacheBasedBlacklist {
