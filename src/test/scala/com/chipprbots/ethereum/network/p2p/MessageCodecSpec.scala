@@ -46,8 +46,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
       remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
-    // remote peer did not receive local hello so it treats all remote messages as uncompressed,
-    // but local peer sends Status (0x10) uncompressed for CoreGeth compatibility regardless of p2pVersion
+    // Status messages are sent uncompressed for CoreGeth compatibility regardless of p2pVersion
+    // The remote peer can decode it even though it didn't exchange hellos because it's uncompressed
     assert(remoteReadNotCompressedStatus.size == 1)
     assert(remoteReadNotCompressedStatus.head == Right(status))
   }
