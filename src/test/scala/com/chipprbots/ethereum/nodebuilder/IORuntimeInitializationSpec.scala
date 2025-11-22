@@ -3,7 +3,10 @@ package com.chipprbots.ethereum.nodebuilder
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.TestKit
 
+import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+
+import scala.concurrent.duration._
 
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpecLike
@@ -121,7 +124,7 @@ class IORuntimeInitializationSpec
     trait TestRuntime {
       implicit lazy val ioRuntime: IORuntime = {
         initCount += 1
-        Thread.sleep(10) // Simulate some initialization work
+        IO.sleep(10.millis).unsafeRunSync()(IORuntime.global) // Simulate some initialization work
         IORuntime.global
       }
     }
