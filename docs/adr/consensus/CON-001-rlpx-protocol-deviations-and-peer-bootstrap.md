@@ -184,7 +184,7 @@ We document the bootstrap challenge but **do not implement a workaround** at thi
 
 ### Positive
 
-1. **Protocol Deviations Handled**: All four CoreGeth protocol deviations now handled gracefully (wire protocol compression, uncompressed capability messages, malformed disconnect messages, and Status message compression)
+1. **Protocol Deviations Handled**: All four CoreGeth protocol deviations now handled gracefully (wire protocol compression, uncompressed capability messages, malformed disconnect messages, and p2pVersion compression threshold mismatch)
 2. **Decode Errors Eliminated**: Zero "Cannot decode" or "FAILED_TO_UNCOMPRESS" errors in testing
 3. **Status Exchanges Succeed**: Handshake protocol completing successfully through status exchange
 4. **Defensive But Compliant**: Code handles deviations while remaining specification-compliant
