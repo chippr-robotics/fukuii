@@ -71,5 +71,8 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
 }
 
 object EtcHelloExchangeState {
-  val P2pVersion = 4
+  // Use p2pVersion 5 to align with CoreGeth and enable Snappy compression
+  // CoreGeth (and go-ethereum) only enable Snappy when p2pVersion >= 5
+  // See: https://github.com/etclabscore/core-geth/blob/master/p2p/peer.go#L54
+  val P2pVersion = 5
 }

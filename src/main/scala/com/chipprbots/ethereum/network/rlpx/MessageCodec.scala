@@ -82,13 +82,13 @@ class MessageCodec(
         } else if (shouldCompress && looksLikeRLP) {
           // Peer sent uncompressed data when compression was expected - protocol deviation but handle gracefully
           log.warn(
-            "Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 4 (protocol deviation)",
+            "Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 5 (protocol deviation)",
             frame.`type`.toHexString
           )
           Success(frameData)
         } else {
           log.debug(
-            "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 4)",
+            "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 5)",
             frame.`type`.toHexString
           )
           Success(frameData)
