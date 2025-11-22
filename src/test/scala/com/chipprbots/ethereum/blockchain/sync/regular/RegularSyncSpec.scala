@@ -556,7 +556,7 @@ class RegularSyncSpec
         within(remainingOrDefault) {
           // The actor should not call evaluateBranchBlock for a block that is "too new"
           // We wait the full duration to give the actor time to process, then verify
-          awaitAssert((consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never(), remainingOrDefault)
+          awaitAssert((consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never())
         }
       })
 
@@ -640,7 +640,7 @@ class RegularSyncSpec
         // The actor should not import the block while another import is in progress
         // Use within block to wait and then verify the block was not imported
         within(remainingOrDefault / 2) {
-          awaitAssert(didTryToImportBlock(minedBlock) shouldBe false, remainingOrDefault / 2)
+          awaitAssert(didTryToImportBlock(minedBlock) shouldBe false)
         }
         // Clean up by completing the promise
         headPromise.success(BlockImportedToTop(Nil))
