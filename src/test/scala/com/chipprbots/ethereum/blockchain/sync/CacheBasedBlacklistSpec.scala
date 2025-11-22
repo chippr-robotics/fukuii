@@ -95,37 +95,38 @@ class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers {
         .ticker(ticker.read _)
         .build[BlacklistId, BlacklistReason.BlacklistReasonType]()
       val blacklist = CacheBasedBlacklist(cache)
-      
+
       // Add peers with different expiration times
       blacklist.add(peer1, 1.minute, reason)
       blacklist.add(peer2, 10.minutes, reason)
       blacklist.add(peer3, 3.minutes, anotherReason)
-      
+
       // Advance time to expire peer1 and peer3
       ticker.advance(5, TimeUnit.MINUTES)
-      
+
       // keys should automatically clean up and only return non-expired entries
       // Without explicit cleanUp() call, keys should still return only peer2
       val activeKeys = blacklist.keys
       activeKeys must contain theSameElementsAs Set(peer2)
     }
-    "return correct count immediately after adding peers" taggedAs (UnitTest, SyncTest) in withBlacklist(10) { blacklist =>
-      // Add first peer
-      blacklist.add(peer1, 5.minutes, reason)
-      assert(blacklist.keys.size === 1)
-      
-      // Add second peer
-      blacklist.add(peer2, 10.minutes, anotherReason)
-      assert(blacklist.keys.size === 2)
-      
-      // Add third peer
-      blacklist.add(peer3, 3.minutes, reason)
-      assert(blacklist.keys.size === 3)
-      
-      // Verify all are still blacklisted
-      assert(blacklist.isBlacklisted(peer1) === true)
-      assert(blacklist.isBlacklisted(peer2) === true)
-      assert(blacklist.isBlacklisted(peer3) === true)
+    "return correct count immediately after adding peers" taggedAs (UnitTest, SyncTest) in withBlacklist(10) {
+      blacklist =>
+        // Add first peer
+        blacklist.add(peer1, 5.minutes, reason)
+        assert(blacklist.keys.size === 1)
+
+        // Add second peer
+        blacklist.add(peer2, 10.minutes, anotherReason)
+        assert(blacklist.keys.size === 2)
+
+        // Add third peer
+        blacklist.add(peer3, 3.minutes, reason)
+        assert(blacklist.keys.size === 3)
+
+        // Verify all are still blacklisted
+        assert(blacklist.isBlacklisted(peer1) === true)
+        assert(blacklist.isBlacklisted(peer2) === true)
+        assert(blacklist.isBlacklisted(peer3) === true)
     }
   }
 
