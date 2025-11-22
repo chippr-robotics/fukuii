@@ -36,11 +36,12 @@ Through systematic debugging and packet-level analysis, we discovered FOUR disti
 - **Specification**: Disconnect messages should be encoded as `RLPList(reason)` per devp2p specification
 - **Impact**: Decoder expecting RLPList pattern failed on single RLPValue, causing "Cannot decode Disconnect" errors
 
-**Deviation 4: Status Message Decoding Incompatibility**
-- **Observed**: CoreGeth clients disconnect with reason 0x10 after receiving compressed Status messages, even when p2pVersion >= 4
-- **Specification**: For p2pVersion >= 4, all capability messages should be Snappy-compressed
-- **Impact**: CoreGeth clients cannot decode compressed Status messages, leading to immediate peer disconnection
-- **Root Cause**: CoreGeth sends uncompressed Status messages (Deviation 2) and expects to receive them uncompressed as well
+**Deviation 4: P2P Protocol Version Mismatch**
+- **Observed**: When Fukuii advertised p2pVersion 4, CoreGeth clients would send and expect uncompressed messages, but Fukuii was compressing messages
+- **Specification**: RLPx v5 spec suggests compression for p2pVersion >= 4, but CoreGeth implementation uses >= 5
+- **Impact**: CoreGeth clients could not decode compressed messages from Fukuii, leading to immediate disconnection with reason 0x10
+- **Root Cause**: CoreGeth uses `snappyProtocolVersion = 5` (defined in `p2p/peer.go`), while Fukuii was using threshold of >= 4 for compression
+- **Solution**: Aligned Fukuii's p2pVersion from 4 to 5 to match CoreGeth's compression threshold
 
 #### 2. The Peer Bootstrap Challenge
 
@@ -152,20 +153,20 @@ def toDisconnect: Disconnect = rawDecode(bytes) match {
 - **Rationale**: Accept both spec-compliant RLPList and non-standard single RLPValue
 - **Impact**: Successfully decode disconnect messages from peers with protocol deviations
 
-#### Fix 4: Status Message Compression Compatibility
+#### Fix 4: P2P Protocol Version Alignment with CoreGeth
 ```scala
-// In MessageCodec.encodeMessage()
-val isStatusMessage = serializable.code == 0x10
-val payload =
-  if (remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage && !isStatusMessage) {
-    Snappy.compress(framedPayload)
-  } else {
-    framedPayload
-  }
+// In EtcHelloExchangeState.scala
+object EtcHelloExchangeState {
+  // Use p2pVersion 5 to align with CoreGeth and enable Snappy compression
+  // CoreGeth (and go-ethereum) only enable Snappy when p2pVersion >= 5
+  // See: https://github.com/etclabscore/core-geth/blob/master/p2p/peer.go#L54
+  val P2pVersion = 5
+}
 ```
-- **Rationale**: CoreGeth clients send uncompressed Status messages and cannot decode compressed Status messages, causing immediate disconnection with reason 0x10
-- **Impact**: Sending uncompressed Status messages (code 0x10) matches CoreGeth behavior and prevents peer disconnections due to failed Status decoding
-- **Trade-off**: Deviates from strict RLPx v5 spec for p2pVersion >= 4, but enables interoperability with the dominant ETC mainnet client (CoreGeth)
+- **Rationale**: CoreGeth uses `snappyProtocolVersion = 5` and only enables Snappy compression when `p2pVersion >= 5`. Our previous p2pVersion 4 caused a mismatch where we compressed messages but CoreGeth expected uncompressed messages.
+- **Impact**: Aligning to p2pVersion 5 ensures both sides agree on when to enable Snappy compression, preventing decode failures and disconnections
+- **Root Cause**: When we advertised p2pVersion 4, CoreGeth clients would NOT enable Snappy compression (since 4 < 5), but our MessageCodec was compressing messages (since we used >= 4 threshold). CoreGeth couldn't decode the compressed messages and disconnected with reason 0x10.
+- **Solution**: Changed from p2pVersion 4 to 5 to match CoreGeth's snappyProtocolVersion threshold
 
 ### Documented: Bootstrap Challenge
 

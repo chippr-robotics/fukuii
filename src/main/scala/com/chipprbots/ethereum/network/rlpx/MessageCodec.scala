@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder.DecodingError
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
-import com.chipprbots.ethereum.network.p2p.messages.Codes
 
 import com.chipprbots.ethereum.utils.Logger
 
@@ -83,13 +82,13 @@ class MessageCodec(
         } else if (shouldCompress && looksLikeRLP) {
           // Peer sent uncompressed data when compression was expected - protocol deviation but handle gracefully
           log.warn(
-            "Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 4 (protocol deviation)",
+            "Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 5 (protocol deviation)",
             frame.`type`.toHexString
           )
           Success(frameData)
         } else {
           log.debug(
-            "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 4)",
+            "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 5)",
             frame.`type`.toHexString
           )
           Success(frameData)
@@ -179,11 +178,8 @@ class MessageCodec(
     val frames = (0 until numFrames).map { frameNo =>
       val framedPayload = encoded.drop(frameNo * MaxFramePayloadSize).take(MaxFramePayloadSize)
       val isWireProtocolMessage = serializable.code >= 0x00 && serializable.code <= 0x03
-      // Status message should not be compressed for compatibility with CoreGeth clients
-      // See ADR CON-001: CoreGeth sends uncompressed Status messages and expects to receive them uncompressed
-      val isStatusMessage = serializable.code == Codes.StatusCode
       val payload =
-        if (remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage && !isStatusMessage) {
+        if (remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage) {
           Snappy.compress(framedPayload)
         } else {
           framedPayload
