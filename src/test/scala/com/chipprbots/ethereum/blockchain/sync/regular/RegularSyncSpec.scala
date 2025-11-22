@@ -551,9 +551,12 @@ class RegularSyncSpec
 
         peerEventBus.reply(MessageFromPeer(NewBlock(newBlock, ChainWeight(0, 1)), defaultPeer.id))
 
-        Thread.sleep(remainingOrDefault.toMillis)
-
-        (consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never()
+        // Wait for actor to finish processing and verify it never calls evaluateBranchBlock
+        // Use assertForDuration to continuously verify the mock is never called
+        assertForDuration(
+          (consensusAdapter.evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig)).verify(*, *, *).never(),
+          remainingOrDefault
+        )
       })
 
       "retry fetch of block that failed to import" in sync(new Fixture(testSystem) {
@@ -632,9 +635,12 @@ class RegularSyncSpec
 
         awaitCond(didTryToImportBlock(testBlocks.head))
         regularSync ! SyncProtocol.MinedBlock(minedBlock)
-        // Give RegularSync time to process the MinedBlock message while still importing
-        Thread.sleep(remainingOrDefault.toMillis / 2)
-        didTryToImportBlock(minedBlock) shouldBe false
+        // Wait and verify the minedBlock is not imported while another import is in progress
+        // Use assertForDuration to continuously verify the block is not imported
+        assertForDuration(
+          didTryToImportBlock(minedBlock) shouldBe false,
+          remainingOrDefault / 2
+        )
         // Clean up by completing the promise
         headPromise.success(BlockImportedToTop(Nil))
       })
