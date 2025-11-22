@@ -5,12 +5,15 @@ import java.net.InetSocketAddress
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.pattern.ask
+import org.apache.pekko.testkit.TestKit
 import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.scalatest.BeforeAndAfterEach
+import org.scalatest.concurrent.Eventually
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -38,17 +41,38 @@ import com.chipprbots.ethereum.utils.TxPoolConfig
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.testing.Tags._
 
-class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
+class PendingTransactionsManagerSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ScalaFutures
+    with Eventually
+    with BeforeAndAfterEach
+    with NormalPatience {
+
+  // Track all actor systems created during tests for cleanup (ADR-017)
+  private var actorSystems: List[ActorSystem] = List.empty
+
+  override def afterEach(): Unit = {
+    // Shutdown all actor systems to prevent hanging tests
+    actorSystems.foreach { as =>
+      try
+        TestKit.shutdownActorSystem(as, verifySystemShutdown = false)
+      catch {
+        case _: Exception => // Ignore errors during cleanup
+      }
+    }
+    actorSystems = List.empty
+  }
 
   "PendingTransactionsManager" should "store pending transactions received from peers" taggedAs (UnitTest) in new TestSetup {
     val msg: Set[SignedTransactionWithSender] = (1 to 10).map(e => newStx(e)).toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg, PeerId("1"))
 
-    Thread.sleep(Timeouts.normalTimeout.toMillis)
-
-    val pendingTxs: PendingTransactionsResponse =
-      (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
-    pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe msg
+    eventually {
+      val pendingTxs: PendingTransactionsResponse =
+        (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe msg
+    }
   }
 
   it should "ignore known transaction" taggedAs (UnitTest) in new TestSetup {
@@ -56,12 +80,12 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     pendingTransactionsManager ! ProperSignedTransactions(msg, PeerId("1"))
     pendingTransactionsManager ! ProperSignedTransactions(msg, PeerId("2"))
 
-    Thread.sleep(Timeouts.normalTimeout.toMillis)
-
-    val pendingTxs: PendingTransactionsResponse =
-      (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
-    pendingTxs.pendingTransactions.map(_.stx).length shouldBe 1
-    pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe msg
+    eventually {
+      val pendingTxs: PendingTransactionsResponse =
+        (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      pendingTxs.pendingTransactions.map(_.stx).length shouldBe 1
+      pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe msg
+    }
   }
 
   it should "broadcast received pending transactions to other peers" taggedAs (UnitTest) in new TestSetup {
@@ -124,7 +148,13 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
   it should "not add pending transaction again when it was removed while waiting for peers" taggedAs (UnitTest) in new TestSetup {
     val msg1: Set[SignedTransactionWithSender] = Set(newStx(1))
     pendingTransactionsManager ! ProperSignedTransactions(msg1, peer1.id)
-    Thread.sleep(Timeouts.normalTimeout.toMillis)
+
+    eventually {
+      val pendingTxs: PendingTransactionsResponse =
+        (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe msg1
+    }
+
     pendingTransactionsManager ! RemoveTransactions(msg1.map(_.tx).toSeq)
 
     peerManager.expectMsg(PeerManagerActor.GetPeers)
@@ -132,9 +162,11 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
 
     etcPeerManager.expectNoMessage()
 
-    val pendingTxs: PendingTransactionsResponse =
-      (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
-    pendingTxs.pendingTransactions.size shouldBe 0
+    eventually {
+      val pendingTxs: PendingTransactionsResponse =
+        (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      pendingTxs.pendingTransactions.size shouldBe 0
+    }
   }
 
   it should "override transactions with the same sender and nonce" taggedAs (UnitTest) in new TestSetup {
@@ -145,24 +177,23 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     pendingTransactionsManager ! AddOrOverrideTransaction(firstTx.tx)
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> Handshaked)))
-    Thread.sleep(Timeouts.shortTimeout.toMillis)
 
     pendingTransactionsManager ! AddOrOverrideTransaction(otherTx.tx)
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> Handshaked)))
-    Thread.sleep(Timeouts.shortTimeout.toMillis)
 
     pendingTransactionsManager ! AddOrOverrideTransaction(overrideTx.tx)
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> Handshaked)))
-    Thread.sleep(Timeouts.shortTimeout.toMillis)
 
-    val pendingTxs: Seq[PendingTransaction] = (pendingTransactionsManager ? GetPendingTransactions)
-      .mapTo[PendingTransactionsResponse]
-      .futureValue
-      .pendingTransactions
+    eventually {
+      val pendingTxs: Seq[PendingTransaction] = (pendingTransactionsManager ? GetPendingTransactions)
+        .mapTo[PendingTransactionsResponse]
+        .futureValue
+        .pendingTransactions
 
-    pendingTxs.map(_.stx).toSet shouldEqual Set(overrideTx, otherTx)
+      pendingTxs.map(_.stx).toSet shouldEqual Set(overrideTx, otherTx)
+    }
 
     // overriden TX will still be broadcast to peers
     etcPeerManager.expectMsgAllOf(
@@ -201,19 +232,26 @@ class PendingTransactionsManagerSpec extends AnyFlatSpec with Matchers with Scal
     val stx: SignedTransactionWithSender = newStx()
     pendingTransactionsManager ! AddTransactions(stx)
 
-    val pendingTxs: PendingTransactionsResponse =
-      (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
-    pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
+    eventually {
+      val pendingTxs: PendingTransactionsResponse =
+        (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      pendingTxs.pendingTransactions.map(_.stx).toSet shouldBe Set(stx)
+    }
 
-    Thread.sleep(550)
-
-    val pendingTxsAfter: PendingTransactionsResponse =
-      (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
-    pendingTxsAfter.pendingTransactions.map(_.stx).toSet shouldBe Set.empty
+    // Wait for transaction to timeout (500ms + some buffer for actor processing)
+    eventually {
+      val pendingTxsAfter: PendingTransactionsResponse =
+        (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
+      pendingTxsAfter.pendingTransactions.map(_.stx).toSet shouldBe Set.empty
+    }
   }
 
   trait TestSetup extends SecureRandomBuilder {
-    implicit val system: ActorSystem = ActorSystem("test-system")
+    implicit val system: ActorSystem = {
+      val as = ActorSystem("PendingTransactionsManagerSpec_System")
+      actorSystems = as :: actorSystems
+      as
+    }
 
     val keyPair1: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
     val keyPair2: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
