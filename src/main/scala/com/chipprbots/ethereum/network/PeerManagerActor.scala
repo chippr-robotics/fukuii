@@ -275,8 +275,7 @@ class PeerManagerActor(
 
   private def handleCommonMessages(connectedPeers: ConnectedPeers): Receive = {
     case GetPeers =>
-      implicit val ec = context.dispatcher
-      getPeers(connectedPeers.peers.values.toSet).unsafeToFuture().pipeTo(sender())
+      pipeToRecipient(sender())(getPeers(connectedPeers.peers.values.toSet))
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
       connectedPeers.getPeer(peerId).foreach(peer => peer.ref ! PeerActor.SendMessage(message))
@@ -344,21 +343,24 @@ class PeerManagerActor(
   private def handlePruning(connectedPeers: ConnectedPeers): Receive = {
     case SchedulePruneIncomingPeers =>
       implicit val timeout: Timeout = Timeout(peerConfiguration.updateNodesInterval)
-      implicit val ec = context.dispatcher
 
       // Ask for the whole statistics duration, we'll use averages to make it fair.
       val window = peerConfiguration.statSlotCount * peerConfiguration.statSlotDuration
 
-      peerStatistics
+      val task = peerStatistics
         .askFor[PeerStatisticsActor.StatsForAll](PeerStatisticsActor.GetStatsForAll(window))
         .map(PruneIncomingPeers.apply)
-        .unsafeToFuture()
-        .pipeTo(self)
+
+      pipeToRecipient(self)(task)
 
     case PruneIncomingPeers(PeerStatisticsActor.StatsForAll(stats)) =>
       val prunedConnectedPeers = pruneIncomingPeers(connectedPeers, stats)
 
       context.become(listening(prunedConnectedPeers))
+
+    case Status.Failure(ex) =>
+      log.warning("Failed to get peer statistics for pruning: {}", ex.getMessage)
+    // Continue with existing peers without pruning
   }
 
   /** Disconnect some incoming connections so we can free up slots. */
@@ -382,6 +384,21 @@ class PeerManagerActor(
     }
 
     prunedConnectedPeers
+  }
+
+  /** Pipe an IO task to a recipient actor with explicit error handling.
+    *
+    * Converts IO failures to Status.Failure messages for deterministic error propagation. This prevents race conditions
+    * and flaky behavior when IO tasks fail.
+    */
+  private def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit = {
+    implicit val ec = context.dispatcher
+    val attemptedF = task.attempt.unsafeToFuture()
+    val mappedF = attemptedF.map {
+      case Right(value) => value
+      case Left(ex)     => Status.Failure(ex)
+    }
+    mappedF.pipeTo(recipient)
   }
 
   private def getPeers(peers: Set[Peer]): IO[Peers] =

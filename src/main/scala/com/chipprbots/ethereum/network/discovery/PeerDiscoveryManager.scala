@@ -4,6 +4,7 @@ import org.apache.pekko.actor.Actor
 import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
+import org.apache.pekko.actor.Status
 import org.apache.pekko.pattern.pipe
 import org.apache.pekko.util.ByteString
 
@@ -218,10 +219,17 @@ class PeerDiscoveryManager(
     }
     given IORuntime = runtime
     implicit val ec = context.dispatcher
-    task
-      .onError(ex => IO(log.error(ex, "Failed to relay result to recipient.")))
-      .unsafeToFuture()
-      .pipeTo(recipient)
+
+    // Convert IO[T] into a Future[Either[Throwable, T]] so we can explicitly handle errors
+    val attemptedF = task.attempt.unsafeToFuture()
+
+    // Map Left(ex) -> akka.actor.Status.Failure(ex) so recipients get a clear Failure message
+    val mappedF = attemptedF.map {
+      case Right(value) => value
+      case Left(ex)     => Status.Failure(ex)
+    }(ec)
+
+    mappedF.pipeTo(recipient)
   }
 
   def toNode(enode: ENode): Node =

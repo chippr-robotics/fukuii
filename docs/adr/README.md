@@ -31,6 +31,7 @@ Platform, language, runtime, and build system decisions.
   - [INF-001a: Netty Channel Lifecycle with Cats Effect IO](infrastructure/INF-001a-netty-cats-effect-integration.md) - Accepted (Addendum)
 - [INF-002: Actor System Architecture - Untyped vs Typed Actors](infrastructure/INF-002-actor-system-architecture.md) - Accepted
 - [INF-003: Apache HttpClient Transport for JupnP UPnP Port Forwarding](infrastructure/INF-003-jupnp-apache-httpclient-transport.md) - Accepted
+- [INF-004: Actor IO Error Handling Pattern with Cats Effect](infrastructure/INF-004-actor-io-error-handling.md) - Accepted
 
 [View all Infrastructure ADRs →](infrastructure/README.md)
 
