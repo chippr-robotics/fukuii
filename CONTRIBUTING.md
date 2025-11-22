@@ -366,6 +366,8 @@ probe.expectMsgClass(classOf[MyMessage])
 awaitCond(someCondition, 5.seconds)
 
 // Verify no messages are received
+// Note: Use this on probes that receive messages FROM the actor under test
+// to verify it doesn't send unexpected messages
 probe.expectNoMessage(1.second)
 ```
 
