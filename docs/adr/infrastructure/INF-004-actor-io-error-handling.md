@@ -180,11 +180,20 @@ The actor must explicitly handle `Status.Failure` messages.
 
 All network and actor code using `unsafeToFuture().pipeTo()` should be reviewed:
 
-- ✅ `PeerDiscoveryManager.pipeToRecipient` - Updated
-- ✅ `PeerManagerActor.pipeToRecipient` - Updated (added)
+- ✅ `PeerDiscoveryManager.pipeToRecipient` - Updated with explicit error handling
+- ✅ `PeerManagerActor.pipeToRecipient` - Updated with explicit error handling
 - ✅ `PeerManagerActor.handlePruning` - Added `Status.Failure` handler
-- ✅ Regular sync actors (`BodiesFetcher`, `StateNodeFetcher`, `HeadersFetcher`) - Use `context.pipeToSelf` (built-in error handling)
-- ✅ Fast sync actors (`StateStorageActor`, `SyncStateSchedulerActor`) - Pipe to `self` (may need `Status.Failure` handlers in future)
+- ✅ Regular sync actors (`BodiesFetcher`, `StateNodeFetcher`, `HeadersFetcher`) - Use `context.pipeToSelf` with explicit error handling
+- ⚠️ `StateStorageActor` - Pipes to `self`, has `case Failure(e) => throw e` handler (rethrows)
+- ⚠️ `SyncStateSchedulerActor` - Pipes to `self` but lacks explicit `Status.Failure` handler (future improvement)
+
+### Future Improvements
+
+The following actors should be reviewed and potentially updated in future work:
+
+1. **StateStorageActor**: Currently rethrows failures with `case Failure(e) => throw e`. Consider whether graceful error handling would be more appropriate than crashing the actor.
+
+2. **SyncStateSchedulerActor**: Pipes IO results to `self` but doesn't explicitly handle `Status.Failure`. Should add handler to prevent unhandled messages.
 
 ## References
 
