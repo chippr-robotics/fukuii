@@ -109,6 +109,24 @@ class CacheBasedBlacklistSpec extends AnyWordSpecLike with Matchers {
       val activeKeys = blacklist.keys
       activeKeys must contain theSameElementsAs Set(peer2)
     }
+    "return correct count immediately after adding peers" taggedAs (UnitTest, SyncTest) in withBlacklist(10) { blacklist =>
+      // Add first peer
+      blacklist.add(peer1, 5.minutes, reason)
+      assert(blacklist.keys.size === 1)
+      
+      // Add second peer
+      blacklist.add(peer2, 10.minutes, anotherReason)
+      assert(blacklist.keys.size === 2)
+      
+      // Add third peer
+      blacklist.add(peer3, 3.minutes, reason)
+      assert(blacklist.keys.size === 3)
+      
+      // Verify all are still blacklisted
+      assert(blacklist.isBlacklisted(peer1) === true)
+      assert(blacklist.isBlacklisted(peer2) === true)
+      assert(blacklist.isBlacklisted(peer3) === true)
+    }
   }
 
 }
