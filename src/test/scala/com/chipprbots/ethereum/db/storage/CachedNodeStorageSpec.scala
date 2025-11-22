@@ -7,10 +7,12 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.duration._
 
+import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
+import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.db.cache.MapCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
@@ -19,7 +21,13 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
 
-class CachedNodeStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with ObjectGenerators {
+class CachedNodeStorageSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ScalaCheckPropertyChecks
+    with ObjectGenerators
+    with Eventually
+    with NormalPatience {
   val iterations = 10
 
   "CachedNodeStorage" should "not update dataSource until persist" taggedAs (UnitTest, DatabaseTest) in new TestSetup {
@@ -57,9 +65,10 @@ class CachedNodeStorageSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     val value: Array[Byte] = Array(1.toByte)
     val cachedNodeStorageTiming = new CachedNodeStorage(nodeStorage, mapCacheTime)
     cachedNodeStorageTiming.update(Nil, Seq((key, value)))
-    Thread.sleep(1.second.toMillis)
-    cachedNodeStorageTiming.persist() shouldEqual true
-    dataSource.storage.nonEmpty shouldBe true
+    eventually {
+      cachedNodeStorageTiming.persist() shouldEqual true
+      dataSource.storage.nonEmpty shouldBe true
+    }
   }
 
   trait TestSetup {
