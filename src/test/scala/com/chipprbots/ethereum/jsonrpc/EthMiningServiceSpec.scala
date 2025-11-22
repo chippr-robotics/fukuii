@@ -289,7 +289,7 @@ class EthMiningServiceSpec
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id1)).unsafeRunSync() shouldEqual Right(
       SubmitHashRateResponse(true)
     )
-    
+
     // Wait half the timeout period, then submit second hashrate
     Thread.sleep(jsonRpcConfig.minerActiveTimeout.toMillis / 2)
     ethMiningService.submitHashRate(SubmitHashRateRequest(rate, id2)).unsafeRunSync() shouldEqual Right(
