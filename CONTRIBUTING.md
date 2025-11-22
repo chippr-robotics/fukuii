@@ -394,6 +394,59 @@ eventually(timeout(Span(5, Seconds))) {
 }
 ```
 
+### Actor IO Error Handling with Cats Effect
+
+When using Cats Effect `IO` with actors, follow this pattern to ensure deterministic error propagation:
+
+**✅ DO: Use explicit error handling with `IO.attempt` and `Status.Failure`**
+```scala
+import org.apache.pekko.actor.Status
+
+private def pipeToRecipient[T](recipient: ActorRef)(task: IO[T]): Unit = {
+  implicit val ec = context.dispatcher
+  
+  // Convert IO[T] into Future[Either[Throwable, T]] for explicit error handling
+  val attemptedF = task.attempt.unsafeToFuture()
+  
+  // Map Left(ex) -> Status.Failure(ex) so recipients get a clear Failure message
+  val mappedF = attemptedF.map {
+    case Right(value) => value
+    case Left(ex)     => Status.Failure(ex)
+  }
+  
+  mappedF.pipeTo(recipient)
+}
+
+// Usage: piping to external actors (e.g., sender)
+case GetSomething =>
+  pipeToRecipient(sender())(fetchSomething())
+
+// Usage: piping to self (requires Status.Failure handler)
+case StartAsyncOperation =>
+  pipeToRecipient(self)(performOperation())
+
+case Status.Failure(ex) =>
+  log.warning("Async operation failed: {}", ex.getMessage)
+  // Handle failure appropriately
+```
+
+**❌ DON'T: Use `onError` with `unsafeToFuture().pipeTo()`**
+```scala
+// NEVER do this - creates race conditions and flaky tests
+task
+  .onError(ex => IO(log.error(ex, "Error message")))
+  .unsafeToFuture()
+  .pipeTo(recipient)
+```
+
+**Why?** The `onError` approach causes:
+- **Race conditions**: Logging and error delivery timing is non-deterministic
+- **Flaky tests**: Tests that simulate errors may pass or fail unpredictably
+- **Unclear contract**: The error handling isn't explicit in the code
+
+**For more information:**
+- [Actor IO Error Handling Pattern (INF-004)](docs/adr/infrastructure/INF-004-actor-io-error-handling.md)
+
 **For more information on test strategy and KPI baselines:**
 - [Test Suite Strategy and KPIs (TEST-002)](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 - [Testing Documentation](docs/testing/README.md)
