@@ -35,11 +35,11 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     val listBeforeImport: List[Address] = keyStore.listAccounts().toOption.get
     listBeforeImport shouldEqual Nil
 
-    // We sleep between imports so that dates of keyfiles' names are different
+    // Small delay between imports to ensure different file timestamps (ISO_DATE_TIME format includes milliseconds)
     val res1: Address = keyStore.importPrivateKey(key1, "aaaaaaaa").toOption.get
-    Thread.sleep(1005)
+    Thread.sleep(10)
     val res2: Address = keyStore.importPrivateKey(key2, "bbbbbbbb").toOption.get
-    Thread.sleep(1005)
+    Thread.sleep(10)
     val res3: Address = keyStore.importPrivateKey(key3, "cccccccc").toOption.get
 
     res1 shouldEqual addr1
