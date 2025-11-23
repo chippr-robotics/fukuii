@@ -22,8 +22,8 @@ case class EthNodeStatus64ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH64.Status =>
     import ForkIdValidator.syncIoLogger
-    log.debug(
-      "Received status from peer: protocolVersion={}, networkId={}, totalDifficulty={}, bestHash={}, genesisHash={}, forkId={}",
+    log.info(
+      "STATUS_EXCHANGE: Received status from peer - protocolVersion={}, networkId={}, totalDifficulty={}, bestHash={}, genesisHash={}, forkId={}",
       status.protocolVersion,
       status.networkId,
       status.totalDifficulty,
@@ -34,12 +34,18 @@ case class EthNodeStatus64ExchangeState(
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
+    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock)
 
-    log.debug("Local state for comparison: bestBlock={}, genesisHash={}", localBestBlock, localGenesisHash)
+    log.info(
+      "STATUS_EXCHANGE: Local state - bestBlock={}, genesisHash={}, localForkId={}",
+      localBestBlock,
+      localGenesisHash,
+      localForkId
+    )
 
     if (status.genesisHash != localGenesisHash) {
       log.warn(
-        "Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
+        "STATUS_EXCHANGE: Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
         localGenesisHash,
         status.genesisHash
       )
@@ -52,13 +58,18 @@ case class EthNodeStatus64ExchangeState(
             status.forkId
           )
       } yield {
-        log.debug("ForkId validation result: {}", validationResult)
+        log.info("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.debug("ForkId validation passed - accepting peer connection")
+            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection")
             applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
           case other =>
-            log.debug("ForkId validation failed with result: {} - disconnecting peer as UselessPeer", other)
+            log.warn(
+              "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
+              other,
+              localForkId,
+              status.forkId
+            )
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()
@@ -85,8 +96,8 @@ case class EthNodeStatus64ExchangeState(
       forkId = forkId
     )
 
-    log.debug(
-      "Sending status: protocolVersion={}, networkId={}, totalDifficulty={}, bestBlock={}, bestHash={}, genesisHash={}, forkId={}",
+    log.info(
+      "STATUS_EXCHANGE: Sending status - protocolVersion={}, networkId={}, totalDifficulty={}, bestBlock={}, bestHash={}, genesisHash={}, forkId={}",
       status.protocolVersion,
       status.networkId,
       status.totalDifficulty,
@@ -95,6 +106,17 @@ case class EthNodeStatus64ExchangeState(
       genesisHash,
       forkId
     )
+    
+    if (bestBlockNumber == 0) {
+      log.warn(
+        "STATUS_EXCHANGE: WARNING - Sending genesis block as best block! This may cause peer disconnections. " +
+        "Best block number: {}, best hash: {}, chain weight TD: {}",
+        bestBlockNumber,
+        bestBlockHeader.hash,
+        chainWeight.totalDifficulty
+      )
+    }
+    
     status
   }
 
