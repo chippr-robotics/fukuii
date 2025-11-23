@@ -68,16 +68,17 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
   it should "return true when checkpoints are loaded successfully" taggedAs (UnitTest, SyncTest) in {
     val mockReader = mock[BlockchainReader]
     val mockAppStateStorage = mock[AppStateStorage]
+    val mockDataSource = mock[com.chipprbots.ethereum.db.dataSource.DataSource]
     val loader = new BootstrapCheckpointLoader(mockReader, mockAppStateStorage)
 
     (mockReader.getBestBlockNumber _).expects().returning(BigInt(0))
     
     import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-    val mockUpdate = mock[DataSourceBatchUpdate]
+    val stubUpdate = DataSourceBatchUpdate(mockDataSource, Array.empty)
     (mockAppStateStorage.putBootstrapPivotBlock _)
       .expects(BigInt(3000), ByteString(Array.fill[Byte](32)(0x03)))
-      .returning(mockUpdate)
-    (mockUpdate.commit _).expects().returning(())
+      .returning(stubUpdate)
+    (mockDataSource.update _).expects(*).returning(())
 
     implicit val config: BlockchainConfig = createTestConfig(
       useBootstrapCheckpoints = true,
@@ -96,16 +97,17 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
   it should "handle single checkpoint" taggedAs (UnitTest, SyncTest) in {
     val mockReader = mock[BlockchainReader]
     val mockAppStateStorage = mock[AppStateStorage]
+    val mockDataSource = mock[com.chipprbots.ethereum.db.dataSource.DataSource]
     val loader = new BootstrapCheckpointLoader(mockReader, mockAppStateStorage)
 
     (mockReader.getBestBlockNumber _).expects().returning(BigInt(0))
 
     import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-    val mockUpdate = mock[DataSourceBatchUpdate]
+    val stubUpdate = DataSourceBatchUpdate(mockDataSource, Array.empty)
     (mockAppStateStorage.putBootstrapPivotBlock _)
       .expects(BigInt(10500839), ByteString(Array.fill[Byte](32)(0xff.toByte)))
-      .returning(mockUpdate)
-    (mockUpdate.commit _).expects().returning(())
+      .returning(stubUpdate)
+    (mockDataSource.update _).expects(*).returning(())
 
     implicit val config: BlockchainConfig = createTestConfig(
       useBootstrapCheckpoints = true,
