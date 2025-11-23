@@ -278,28 +278,10 @@ class RLPxConnectionHandler(
             hello.p2pVersion,
             hello.capabilities.mkString(", ")
           )
-          log.debug(
-            "PROTOCOL_NEGOTIATION_DEBUG: Peer {} Hello - p2pVersion: {}, clientId: {}, capabilities: {}, nodeId: {}",
-            peerId,
-            hello.p2pVersion,
-            hello.clientId,
-            hello.capabilities.mkString(", "),
-            hello.nodeId.take(16)
-          )
-          log.debug(
-            "PROTOCOL_NEGOTIATION_DEBUG: Local capabilities for negotiation: {}",
-            capabilities.mkString(", ")
-          )
-          
           val messageCodecOpt = for {
             opt <- negotiateCodec(hello, extractor)
             (messageCodec, negotiated) = opt
             _ = log.debug("[RLPx] Protocol negotiated with peer {}: {}", peerId, negotiated)
-            _ = log.debug(
-              "PROTOCOL_NEGOTIATION_DEBUG: Successfully negotiated {} with peer {}. Will use this for message encoding/decoding.",
-              negotiated,
-              peerId
-            )
             _ = context.parent ! InitialHelloReceived(hello, negotiated)
             _ = processFrames(restFrames, messageCodec)
           } yield messageCodec
@@ -314,13 +296,7 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.error(
-                "PROTOCOL_NEGOTIATION_DEBUG: Unable to negotiate protocol with peer {}. " +
-                "Peer capabilities: {}, Local capabilities: {}. Disconnecting.",
-                peerId,
-                hello.capabilities.mkString(", "),
-                capabilities.mkString(", ")
-              )
+              log.error("[Stopping Connection] Unable to negotiate protocol with peer {}", peerId)
               context.parent ! ConnectionFailed
               gracefulStop()
           }
@@ -342,38 +318,19 @@ class RLPxConnectionHandler(
 
     def processMessage(messageTry: Either[DecodingError, Message]): Unit = messageTry match {
       case Right(message) =>
-        log.trace("Successfully decoded message from {}: {}", peerId, message.toShortString)
         context.parent ! MessageReceived(message)
 
       case Left(ex) =>
         val errorMsg = Option(ex.getMessage).getOrElse(ex.toString)
         log.error("Cannot decode message from {}, because of {}", peerId, errorMsg)
-        
-        // Enhanced debugging for decode failures
+        // Enhanced debugging for decompression failures
         if (errorMsg.contains("FAILED_TO_UNCOMPRESS")) {
           log.error(
-            "DECODE_ERROR_DEBUG: Peer {} - decompression failure. Connection will be closed. Error: {}",
+            "DECODE_ERROR_DEBUG: Peer {} failed message decode - connection will be closed. Error details: {}",
             peerId,
             errorMsg
-          )
-        } else if (errorMsg.contains("NewPooledTransactionHashes")) {
-          log.error(
-            "DECODE_ERROR_DEBUG: Peer {} - NewPooledTransactionHashes decode failure. " +
-            "This may indicate protocol version mismatch (ETH65 vs ETH67/68 format). " +
-            "Connection will be closed. Error: {}",
-            peerId,
-            errorMsg
-          )
-        } else {
-          log.error(
-            "DECODE_ERROR_DEBUG: Peer {} - message decode failure. " +
-            "Connection will be closed. Error: {} Stack trace: {}",
-            peerId,
-            errorMsg,
-            ex.getStackTrace.take(5).mkString("\n  ")
           )
         }
-        
         // break connection in case of failed decoding, to avoid attack which would send us garbage
         connection ! Close
       // Let handleConnectionTerminated clean up after TCP connection closes
