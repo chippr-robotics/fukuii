@@ -95,7 +95,27 @@ class MessageCodec(
         }
 
       payloadTry.toEither.flatMap { payload =>
-        messageDecoder.fromBytes(frame.`type`, payload)
+        val result = messageDecoder.fromBytes(frame.`type`, payload)
+        result match {
+          case Left(error) =>
+            // Enhanced debug logging for decode failures
+            val payloadHex = if (payload.length <= 64) {
+              Hex.toHexString(payload)
+            } else {
+              Hex.toHexString(payload.take(32)) + "..." + Hex.toHexString(payload.takeRight(32))
+            }
+            log.error(
+              "MESSAGE_DECODE_ERROR: Failed to decode message - " +
+              s"messageType: 0x${frame.`type`.toHexString}, " +
+              s"payloadSize: ${payload.length}, " +
+              s"p2pVersion: $remotePeer2PeerVersion, " +
+              s"payloadHex: $payloadHex, " +
+              s"error: ${error.getMessage}"
+            )
+          case Right(msg) =>
+            log.debug("Successfully decoded message type 0x{}: {}", frame.`type`.toHexString, msg.toShortString)
+        }
+        result
       }
     }
 
