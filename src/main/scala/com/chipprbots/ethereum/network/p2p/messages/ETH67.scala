@@ -23,6 +23,13 @@ import com.chipprbots.ethereum.rlp._
   *   2. Legacy ETH65 format: [hash1, hash2, ...] (sets default type=0, size=0)
   */
 object ETH67 {
+  
+  // Custom exception for ETH67 decode errors with enhanced diagnostics
+  private class ETH67DecodeException(message: String, cause: Throwable = null) 
+    extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause)
+  
+  // Maximum bytes to include in hex dumps for error messages
+  private val HexDumpMaxBytes = 100
 
   object NewPooledTransactionHashes {
     implicit class NewPooledTransactionHashesEnc(val underlyingMsg: NewPooledTransactionHashes)
@@ -41,24 +48,20 @@ object ETH67 {
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewPooledTransactionHashes: NewPooledTransactionHashes = {
         // Helper to create consistent hex dumps for error messages
-        def hexDump: String = s"${Hex.toHexString(bytes.take(100))}..."
-        
-        // Custom exception type for ETH67 decode errors
-        class ETH67DecodeException(message: String, cause: Throwable = null) 
-          extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause)
+        def hexDump: String = s"${Hex.toHexString(bytes.take(HexDumpMaxBytes))}..."
         
         try {
           val decoded = rawDecode(bytes)
           
           // Capture RLP structure for error reporting
           val structureInfo = decoded match {
-            case RLPList(items*) =>
-              val itemTypes = items.map {
+            case rlpList: RLPList =>
+              val itemTypes = rlpList.items.map {
                 case RLPValue(b) => s"RLPValue(${b.length}b)"
-                case RLPList(subitems*) => s"RLPList(${subitems.size})"
+                case subList: RLPList => s"RLPList(${subList.items.size})"
                 case other => s"${other.getClass.getSimpleName}"
               }.mkString(", ")
-              s"RLPList[${items.size}]: [$itemTypes]"
+              s"RLPList[${rlpList.items.size}]: [$itemTypes]"
             case RLPValue(b) => s"RLPValue(${b.length} bytes)"
             case other => s"${other.getClass.getSimpleName}"
           }
