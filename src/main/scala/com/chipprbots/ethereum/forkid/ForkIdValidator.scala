@@ -65,27 +65,33 @@ object ForkIdValidator {
 
     // The checks are left biased -> whenever a result is found we need to short circuit
     val validate = (for {
+      _ <- liftF(Logger[F].debug(s"FORKID_VALIDATION_DEBUG: Checking matching hashes - localChecksum: 0x${checksums(unpassedForkIndex).toString(16)}, remoteHash: 0x${remoteId.hash.toString(16)}"))
       _ <- liftF(Logger[F].trace(s"Before checkMatchingHashes"))
       matching <- fromEither[F](
         checkMatchingHashes(checksums(unpassedForkIndex), remoteId, currentHeight).toLeft("hashes didn't match")
       )
+      _ <- liftF(Logger[F].debug(s"FORKID_VALIDATION_DEBUG: checkMatchingHashes result: $matching"))
       _ <- liftF(Logger[F].trace(s"checkMatchingHashes result: $matching"))
       _ <- liftF(Logger[F].trace(s"Before checkSubset"))
       sub <- fromEither[F](checkSubset(checksums, forks, remoteId, unpassedForkIndex).toLeft("not in subset"))
+      _ <- liftF(Logger[F].debug(s"FORKID_VALIDATION_DEBUG: checkSubset result: $sub"))
       _ <- liftF(Logger[F].trace(s"checkSubset result: $sub"))
       _ <- liftF(Logger[F].trace(s"Before checkSuperset"))
       sup <- fromEither[F](checkSuperset(checksums, remoteId, unpassedForkIndex).toLeft("not in superset"))
+      _ <- liftF(Logger[F].debug(s"FORKID_VALIDATION_DEBUG: checkSuperset result: $sup"))
       _ <- liftF(Logger[F].trace(s"checkSuperset result: $sup"))
       _ <- liftF(Logger[F].trace(s"No check succeeded"))
       _ <- fromEither[F](Either.left[ForkIdValidationResult, Unit](ErrLocalIncompatibleOrStale))
     } yield ()).value
 
     for {
-      _ <- Logger[F].debug(s"Validating $remoteId")
+      _ <- Logger[F].debug(s"FORKID_VALIDATION_DEBUG: Validating remote ForkId: $remoteId")
+      _ <- Logger[F].debug(s"FORKID_VALIDATION_DEBUG: Local state - currentHeight: $currentHeight, forks: $forks")
+      _ <- Logger[F].debug(s"FORKID_VALIDATION_DEBUG: Local checksums: ${checksums.map(c => s"0x${c.toString(16)}").mkString(", ")}")
       _ <- Logger[F].trace(s" list: $forks")
       _ <- Logger[F].trace(s"Unpassed fork $unpassedFork was found at index $unpassedForkIndex")
       res <- validate.map(_.swap)
-      _ <- Logger[F].debug(s"Validation result is: $res")
+      _ <- Logger[F].debug(s"FORKID_VALIDATION_DEBUG: Validation result is: $res")
     } yield res.getOrElse(Connect)
   }
 
