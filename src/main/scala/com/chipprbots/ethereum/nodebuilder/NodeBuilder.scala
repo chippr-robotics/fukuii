@@ -855,11 +855,12 @@ trait GenesisDataLoaderBuilder {
 }
 
 trait BootstrapCheckpointLoaderBuilder {
-  self: BlockchainBuilder =>
+  self: BlockchainBuilder with StorageBuilder =>
 
   lazy val bootstrapCheckpointLoader =
     new com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader(
-      blockchainReader
+      blockchainReader,
+      storagesInstance.storages.appStateStorage
     )
 }
 

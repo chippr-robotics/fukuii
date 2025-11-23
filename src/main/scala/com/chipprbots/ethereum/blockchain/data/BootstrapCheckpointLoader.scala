@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.data
 
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -11,7 +12,8 @@ import com.chipprbots.ethereum.utils.Logger
   * discovery phase and start syncing immediately.
   */
 class BootstrapCheckpointLoader(
-    blockchainReader: BlockchainReader
+    blockchainReader: BlockchainReader,
+    appStateStorage: AppStateStorage
 ) extends Logger {
 
   /** Load bootstrap checkpoints if enabled and the database is empty (only genesis block exists).
@@ -60,21 +62,21 @@ class BootstrapCheckpointLoader(
 
     // Note: We don't actually insert checkpoint blocks into the database because we don't have the full block data.
     // Instead, we use these checkpoints as trusted reference points for the sync process.
-    // TODO: Future enhancement - modify sync controller to reference these checkpoints when selecting pivot block
-    // This would allow skipping the peer wait entirely. For now, checkpoints serve as trusted hints.
-    // IMPORTANT: Since checkpoints are not inserted, getBestBlockNumber() will still return 0 (genesis only).
-    // This causes the node to report genesis in Status messages to peers, which may lead to peer disconnections
-    // due to fork ID incompatibility. This is expected behavior until the sync process downloads actual blocks.
+    // We store the highest checkpoint as a "bootstrap pivot block" so that Status messages can report this
+    // height instead of genesis, avoiding fork ID incompatibility issues with peers.
+
+    // Store the highest checkpoint as the bootstrap pivot block
+    appStateStorage.putBootstrapPivotBlock(highestCheckpoint.blockNumber, highestCheckpoint.blockHash).commit()
 
     log.info(
-      "Bootstrap checkpoints loaded. {} checkpoints available. Node will use these as trusted reference points for syncing.",
-      sortedCheckpoints.size
+      "Bootstrap checkpoints loaded. {} checkpoints available. Highest checkpoint at block {} stored as pivot block.",
+      sortedCheckpoints.size,
+      highestCheckpoint.blockNumber
     )
     
-    log.warn(
-      "BOOTSTRAP_CHECKPOINT: Note that checkpoints are NOT inserted into the database. " +
-      "Best block number will remain at 0 (genesis) until sync downloads blocks. " +
-      "This will cause Status messages to report genesis block, which may cause initial peer disconnections."
+    log.info(
+      "Status messages will report block {} (bootstrap pivot) instead of genesis to avoid peer disconnections.",
+      highestCheckpoint.blockNumber
     )
 
     true
