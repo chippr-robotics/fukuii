@@ -33,7 +33,7 @@ We have implemented the **initial infrastructure** for SNAP/1 protocol support i
      - GetStorageRanges (0x02) / StorageRanges (0x03)
      - GetByteCodes (0x04) / ByteCodes (0x05)
      - GetTrieNodes (0x06) / TrieNodes (0x07)
-   - Implemented basic RLP encoding for GetAccountRange
+   - Implemented full RLP encoding and decoding for all 8 SNAP/1 protocol messages
    - Created message data structures with proper Scala types
 
 3. **Configuration**
@@ -47,9 +47,8 @@ We have implemented the **initial infrastructure** for SNAP/1 protocol support i
 
 ### What This Does NOT Include
 
-This is **infrastructure only**. The following are explicitly NOT implemented:
+This includes **protocol infrastructure and message encoding/decoding**. The following are explicitly NOT implemented:
 
-- Message encoding/decoding (except GetAccountRange)
 - SNAP sync coordinator/controller
 - Account/storage range downloading
 - State trie healing

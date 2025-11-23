@@ -51,10 +51,6 @@ object SNAP {
     * @param startingHash Account hash of the first to retrieve
     * @param limitHash Account hash after which to stop serving data
     * @param responseBytes Soft limit at which to stop returning data
-    * 
-    * Note: This is the only SNAP message with full RLP encoding/decoding implemented.
-    * Other messages have structure definitions only and will need encoding/decoding
-    * implementation in future phases of SNAP sync development.
     */
   case class GetAccountRange(
       requestId: BigInt,
