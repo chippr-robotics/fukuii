@@ -17,6 +17,10 @@ import com.chipprbots.ethereum.rlp._
   * The main change in ETH67 is that NewPooledTransactionHashes now includes:
   *   - transaction types (legacy, EIP-2930, EIP-1559, etc.)
   *   - transaction sizes (to help with bandwidth management)
+  *
+  * Note: For backward compatibility with some core-geth nodes, the decoder supports both:
+  *   1. Enhanced format: [[types...], [sizes...], [hashes...]]
+  *   2. Legacy ETH65 format: [hash1, hash2, ...] (sets default type=0, size=0)
   */
 object ETH67 {
 
