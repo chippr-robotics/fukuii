@@ -25,8 +25,10 @@ import com.chipprbots.ethereum.rlp._
 object ETH67 {
   
   // Custom exception for ETH67 decode errors with enhanced diagnostics
-  private class ETH67DecodeException(message: String, cause: Throwable = null) 
-    extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause)
+  private class ETH67DecodeException(message: String, cause: Throwable) 
+    extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause) {
+    def this(message: String) = this(message, null)
+  }
   
   // Maximum bytes to include in hex dumps for error messages
   private val HexDumpMaxBytes = 100
@@ -48,7 +50,10 @@ object ETH67 {
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewPooledTransactionHashes: NewPooledTransactionHashes = {
         // Helper to create consistent hex dumps for error messages
-        def hexDump: String = s"${Hex.toHexString(bytes.take(HexDumpMaxBytes))}..."
+        def hexDump: String = {
+          val hexStr = Hex.toHexString(bytes.take(HexDumpMaxBytes))
+          if (bytes.length > HexDumpMaxBytes) s"$hexStr..." else hexStr
+        }
         
         try {
           val decoded = rawDecode(bytes)
@@ -125,9 +130,7 @@ object ETH67 {
               )
           }
         } catch {
-          case e: ETH67DecodeException =>
-            // Re-throw our own detailed errors
-            throw e
+          case e: ETH67DecodeException => throw e  // Propagate our detailed errors
           case e: Throwable =>
             throw new ETH67DecodeException(
               s"${e.getClass.getSimpleName} during RLP decode: ${e.getMessage}. " +
