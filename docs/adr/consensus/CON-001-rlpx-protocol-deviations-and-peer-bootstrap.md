@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted (Updated 2025-11-23: Fix 2 revised - see Amendments section)
 
 ## Context
 
@@ -340,3 +340,53 @@ grep -E "Handshaked" /tmp/fukuii_test.log
 - **2025-11-06**: Identified bootstrap challenge as root cause of peer maintenance failures
 - **2025-11-06**: Tested on both ETC and ETH mainnet
 - **2025-11-06**: Documented findings in ADR-011
+- **2025-11-23**: Amendment - Fix 2 revised to address false positive issue (see Amendments section)
+
+## Amendments
+
+### Amendment 2025-11-23: Fix 2 Revision - looksLikeRLP False Positives
+
+**Issue Discovered**: The original Fix 2 implementation had a critical flaw. The `looksLikeRLP` check was performed BEFORE attempting decompression, which caused false positives when compressed data started with bytes in the 0x80-0xff range.
+
+**Specific Case**: Snappy-compressed `NewPooledTransactionHashes` messages starting with byte `0x94`:
+- Byte `0x94` is in the RLP range (0x80-0xbf), triggering `looksLikeRLP=true`
+- Decompression was skipped, raw Snappy data passed to RLP decoder
+- RLP decoder interpreted `0x94` as "string of 20 bytes", causing decode error
+- Error: `ETH67_DECODE_ERROR: Unexpected RLP structure. Expected [RLPValue, RLPList, RLPList] (ETH67/68) or RLPList (ETH65 legacy), got: RLPValue(20 bytes)`
+
+**Original Trade-off Assessment**: The original ADR stated "False positives theoretically possible but practically unlikely (compressed data rarely starts with RLP-like bytes)". This assumption proved incorrect - compressed data frequently starts with bytes in the 0x80-0xff range.
+
+**Revised Implementation**:
+```scala
+// NEW: Always attempt decompression first
+if (shouldCompress) {
+  decompressData(frameData, frame).recoverWith { case ex =>
+    // Fall back to uncompressed ONLY if decompression fails AND looks like RLP
+    if (looksLikeRLP(frameData)) {
+      log.warn("Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation)")
+      Success(frameData)
+    } else {
+      Failure(ex)  // Reject invalid data
+    }
+  }
+}
+```
+
+**Key Changes**:
+1. Always attempt decompression when `shouldCompress=true`
+2. Only check `looksLikeRLP` as fallback after decompression fails
+3. This correctly handles both:
+   - Compressed data (including when it starts with 0x80-0xff bytes)
+   - Uncompressed RLP from protocol-deviating peers
+
+**Impact**:
+- ✅ Fixes peer disconnections when receiving `NewPooledTransactionHashes` messages
+- ✅ Correctly decompresses messages regardless of starting byte
+- ✅ Maintains graceful handling of protocol deviations (uncompressed data)
+- ✅ More robust and correct than original implementation
+
+**Files Modified**:
+- `src/main/scala/com/chipprbots/ethereum/network/rlpx/MessageCodec.scala`
+- `LOG_REVIEW_RESOLUTION.md` (detailed analysis)
+
+**Reference**: See `LOG_REVIEW_RESOLUTION.md` for full technical analysis of the issue and fix.
