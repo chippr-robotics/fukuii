@@ -58,7 +58,12 @@ class MessageCodec(
       val frameData = frame.payload.toArray
       val isWireProtocolMessage = frame.`type` >= 0x00 && frame.`type` <= 0x03
 
-      // Check if data looks like RLP (starts with 0xc0-0xff for lists, 0x80-0xbf for strings)
+      // Heuristic to check if data looks like RLP-encoded data
+      // RLP encoding has predictable first-byte patterns:
+      // - 0x80-0xbf: RLP string (0x80 = empty string, 0x81-0xb7 = short string, 0xb8-0xbf = long string)
+      // - 0xc0-0xff: RLP list (0xc0 = empty list, 0xc1-0xf7 = short list, 0xf8-0xff = long list)
+      // This is used as a fallback check after decompression fails to handle protocol deviations
+      // where peers send uncompressed RLP data when compression is expected.
       def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
         val firstByte = data(0) & 0xff
         firstByte >= 0xc0 || (firstByte >= 0x80 && firstByte < 0xc0)
