@@ -34,11 +34,22 @@ object ETH67 {
 
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewPooledTransactionHashes: NewPooledTransactionHashes = rawDecode(bytes) match {
+        // ETH67/ETH68 enhanced format: [[types...], [sizes...], [hashes...]]
         case RLPList(typesList: RLPList, sizesList: RLPList, hashesList: RLPList) =>
           NewPooledTransactionHashes(
             fromRlpList[Byte](typesList),
             fromRlpList[BigInt](sizesList),
             fromRlpList[ByteString](hashesList)
+          )
+        // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
+        // Some core-geth nodes still send this format even when negotiating ETH67/ETH68
+        case rlpList: RLPList =>
+          val hashes = fromRlpList[ByteString](rlpList)
+          // For legacy format, assume all transactions are type 0 (legacy) with size 0 (unknown)
+          NewPooledTransactionHashes(
+            types = Seq.fill(hashes.size)(0.toByte),
+            sizes = Seq.fill(hashes.size)(BigInt(0)),
+            hashes = hashes
           )
         case _ => throw new RuntimeException("Cannot decode NewPooledTransactionHashes")
       }

@@ -157,6 +157,28 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
         }
       }
     }
+
+    "decoding NewPooledTransactionHashes in legacy ETH65 format" should {
+      "successfully decode and set default types and sizes" in {
+        import com.chipprbots.ethereum.rlp._
+        import com.chipprbots.ethereum.rlp.RLPImplicits._
+        import com.chipprbots.ethereum.rlp.RLPImplicits.given
+        import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
+        import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
+
+        // Encode in legacy ETH65 format: [hash1, hash2, hash3]
+        val hashes = Seq(ByteString("hash1"), ByteString("hash2"), ByteString("hash3"))
+        val legacyEncoded = encode(toRlpList(hashes))
+
+        // Decode as ETH67 message
+        val decoded = legacyEncoded.toNewPooledTransactionHashes
+
+        // Should decode successfully with default types and sizes
+        decoded.hashes shouldBe hashes
+        decoded.types shouldBe Seq[Byte](0, 0, 0)
+        decoded.sizes shouldBe Seq(BigInt(0), BigInt(0), BigInt(0))
+      }
+    }
   }
 
   "ETH68" when {
@@ -176,6 +198,28 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
         val hashes = Seq(ByteString("hash1"), ByteString("hash2"), ByteString("hash3"))
         val msg = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
         verify(msg, (m: ETH67.NewPooledTransactionHashes) => m.toBytes, Codes.NewPooledTransactionHashesCode, version)
+      }
+    }
+
+    "decoding NewPooledTransactionHashes in legacy ETH65 format" should {
+      "successfully decode and set default types and sizes" in {
+        import com.chipprbots.ethereum.rlp._
+        import com.chipprbots.ethereum.rlp.RLPImplicits._
+        import com.chipprbots.ethereum.rlp.RLPImplicits.given
+        import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
+        import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
+
+        // Encode in legacy ETH65 format: [hash1, hash2, hash3]
+        val hashes = Seq(ByteString("hash1"), ByteString("hash2"), ByteString("hash3"))
+        val legacyEncoded = encode(toRlpList(hashes))
+
+        // Decode as ETH68 message (uses ETH67 decoder)
+        val decoded = legacyEncoded.toNewPooledTransactionHashes
+
+        // Should decode successfully with default types and sizes
+        decoded.hashes shouldBe hashes
+        decoded.types shouldBe Seq[Byte](0, 0, 0)
+        decoded.sizes shouldBe Seq(BigInt(0), BigInt(0), BigInt(0))
       }
     }
 
