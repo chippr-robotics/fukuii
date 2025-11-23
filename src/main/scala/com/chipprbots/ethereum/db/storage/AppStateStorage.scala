@@ -77,6 +77,30 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   def putLatestCheckpointBlockNumber(latestCheckpointBlockNumber: BigInt): DataSourceBatchUpdate =
     update(Nil, Seq(Keys.LatestCheckpointBlockNumber -> latestCheckpointBlockNumber.toString))
+
+  /** Get the bootstrap pivot block number (highest bootstrap checkpoint)
+    * @return
+    *   Bootstrap pivot block number, or 0 if not set
+    */
+  def getBootstrapPivotBlock(): BigInt =
+    getBigInt(Keys.BootstrapPivotBlock)
+
+  /** Get the bootstrap pivot block hash (highest bootstrap checkpoint)
+    * @return
+    *   Bootstrap pivot block hash, or empty ByteString if not set
+    */
+  def getBootstrapPivotBlockHash(): ByteString =
+    get(Keys.BootstrapPivotBlockHash).map(v => ByteString(Hex.decode(v))).getOrElse(ByteString.empty)
+
+  /** Store the bootstrap pivot block info (number and hash of highest bootstrap checkpoint)
+    * @param number
+    *   The block number of the highest bootstrap checkpoint
+    * @param hash
+    *   The block hash of the highest bootstrap checkpoint
+    */
+  def putBootstrapPivotBlock(number: BigInt, hash: ByteString): DataSourceBatchUpdate =
+    put(Keys.BootstrapPivotBlock, number.toString)
+      .and(put(Keys.BootstrapPivotBlockHash, Hex.toHexString(hash.toArray)))
 }
 
 object AppStateStorage {
@@ -90,6 +114,8 @@ object AppStateStorage {
     val EstimatedHighestBlock = "EstimatedHighestBlock"
     val SyncStartingBlock = "SyncStartingBlock"
     val LatestCheckpointBlockNumber = "LatestCheckpointBlockNumber"
+    val BootstrapPivotBlock = "BootstrapPivotBlock"
+    val BootstrapPivotBlockHash = "BootstrapPivotBlockHash"
   }
 
 }
