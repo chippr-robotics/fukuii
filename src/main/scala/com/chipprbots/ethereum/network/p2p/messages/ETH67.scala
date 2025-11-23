@@ -43,28 +43,24 @@ object ETH67 {
         try {
           val decoded = rawDecode(bytes)
           
-          // Log the RLP structure for debugging
+          // Capture RLP structure for error reporting
           val structureInfo = decoded match {
             case RLPList(items*) =>
               val itemTypes = items.map {
-                case RLPValue(b) => s"RLPValue(${b.length} bytes)"
-                case RLPList(subitems*) => s"RLPList(${subitems.size} items)"
-                case other => s"Unknown(${other.getClass.getSimpleName})"
+                case RLPValue(b) => s"RLPValue(${b.length}b)"
+                case RLPList(subitems*) => s"RLPList(${subitems.size})"
+                case other => s"${other.getClass.getSimpleName}"
               }.mkString(", ")
-              s"RLPList with ${items.size} items: [$itemTypes]"
+              s"RLPList[${items.size}]: [$itemTypes]"
             case RLPValue(b) => s"RLPValue(${b.length} bytes)"
-            case other => s"Unknown type: ${other.getClass.getSimpleName}"
+            case other => s"${other.getClass.getSimpleName}"
           }
-          
-          println(s"ETH67_DECODE_DEBUG: Decoded RLP structure: $structureInfo")
-          println(s"ETH67_DECODE_DEBUG: Raw bytes (first 100): ${Hex.toHexString(bytes.take(100))}")
           
           decoded match {
             // ETH67/ETH68 enhanced format from core-geth: [types_as_byte_string, [sizes...], [hashes...]]
             // Note: core-geth encodes Types []byte as RLPValue (byte string), not RLPList
             // This matches Go's RLP encoding where []byte is encoded as a single byte string
             case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList) =>
-              println(s"ETH67_DECODE_DEBUG: Matched ETH67/68 format with ${typesBytes.length} types, ${sizesList.items.size} sizes, ${hashesList.items.size} hashes")
               try {
                 val types = typesBytes.toSeq
                 val sizes = fromRlpList[BigInt](sizesList)
@@ -78,17 +74,16 @@ object ETH67 {
               } catch {
                 case e: ArrayIndexOutOfBoundsException =>
                   throw new RuntimeException(
-                    s"ETH67_DECODE_ERROR: ArrayIndexOutOfBoundsException while parsing NewPooledTransactionHashes. " +
-                    s"RLP structure matched [RLPValue, RLPList, RLPList] but failed to extract data. " +
-                    s"Types length: ${typesBytes.length}, Sizes list items: ${sizesList.items.size}, " +
-                    s"Hashes list items: ${hashesList.items.size}. " +
-                    s"Raw bytes (first 100): ${Hex.toHexString(bytes.take(100))}",
+                    s"ETH67_DECODE_ERROR: ArrayIndexOutOfBoundsException in ETH67/68 format. " +
+                    s"Structure: $structureInfo. " +
+                    s"Types=${typesBytes.length}, Sizes=${sizesList.items.size}, Hashes=${hashesList.items.size}. " +
+                    s"Hex: ${Hex.toHexString(bytes.take(100))}...",
                     e
                   )
                 case e: Throwable =>
                   throw new RuntimeException(
-                    s"ETH67_DECODE_ERROR: Unexpected error (${e.getClass.getSimpleName}: ${e.getMessage}) while parsing NewPooledTransactionHashes ETH67/68 format. " +
-                    s"Raw bytes (first 100): ${Hex.toHexString(bytes.take(100))}",
+                    s"ETH67_DECODE_ERROR: ${e.getClass.getSimpleName} in ETH67/68 format: ${e.getMessage}. " +
+                    s"Structure: $structureInfo. Hex: ${Hex.toHexString(bytes.take(100))}...",
                     e
                   )
               }
@@ -96,7 +91,6 @@ object ETH67 {
             // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
             // Some older nodes may still send this format
             case rlpList: RLPList =>
-              println(s"ETH67_DECODE_DEBUG: Matched ETH65 legacy format with ${rlpList.items.size} items")
               try {
                 val hashes = fromRlpList[ByteString](rlpList)
                 // For legacy format, assume all transactions are type 0 (legacy) with size 0 (unknown)
@@ -108,19 +102,16 @@ object ETH67 {
               } catch {
                 case e: Throwable =>
                   throw new RuntimeException(
-                    s"ETH67_DECODE_ERROR: Failed to decode as ETH65 legacy format (${e.getClass.getSimpleName}: ${e.getMessage}). " +
-                    s"RLP list items: ${rlpList.items.size}. " +
-                    s"Raw bytes (first 100): ${Hex.toHexString(bytes.take(100))}",
+                    s"ETH67_DECODE_ERROR: ${e.getClass.getSimpleName} in ETH65 legacy format: ${e.getMessage}. " +
+                    s"Structure: $structureInfo. Hex: ${Hex.toHexString(bytes.take(100))}...",
                     e
                   )
               }
             
             case other =>
               throw new RuntimeException(
-                s"ETH67_DECODE_ERROR: Cannot decode NewPooledTransactionHashes - expected RLPList with structure " +
-                s"[RLPValue(types), RLPList(sizes), RLPList(hashes)] for ETH67/68 format, or " +
-                s"RLPList(hashes) for ETH65 legacy format, but got ${other.getClass.getSimpleName}. " +
-                s"Raw bytes (first 100): ${Hex.toHexString(bytes.take(100))}"
+                s"ETH67_DECODE_ERROR: Unexpected RLP structure. Expected [RLPValue, RLPList, RLPList] (ETH67/68) " +
+                s"or RLPList (ETH65 legacy), got: $structureInfo. Hex: ${Hex.toHexString(bytes.take(100))}..."
               )
           }
         } catch {
@@ -129,8 +120,8 @@ object ETH67 {
             throw e
           case e: Throwable =>
             throw new RuntimeException(
-              s"ETH67_DECODE_ERROR: Failed to RLP-decode NewPooledTransactionHashes message (${e.getClass.getSimpleName}: ${e.getMessage}). " +
-              s"Bytes length: ${bytes.length}, Raw bytes (first 100): ${Hex.toHexString(bytes.take(100))}",
+              s"ETH67_DECODE_ERROR: ${e.getClass.getSimpleName} during RLP decode: ${e.getMessage}. " +
+              s"Length: ${bytes.length}, Hex: ${Hex.toHexString(bytes.take(100))}...",
               e
             )
         }
