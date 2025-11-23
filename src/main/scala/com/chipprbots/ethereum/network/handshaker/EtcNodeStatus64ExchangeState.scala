@@ -41,9 +41,7 @@ case class EtcNodeStatus64ExchangeState(
     // For bootstrap pivot, we estimate the total difficulty based on the block number
     // This is a rough approximation but sufficient for Status exchange
     val chainWeight = if (bestBlockNumber == 0 && bootstrapPivotNumber > 0) {
-      // Estimate difficulty: assume average difficulty of ~2 TH for ETC mainnet
-      // This is just for Status exchange; actual chain weight will be determined during sync
-      val estimatedTotalDifficulty = bootstrapPivotNumber * BigInt(2000000000000L)
+      val estimatedTotalDifficulty = bootstrapPivotNumber * EtcNodeStatusExchangeState.EstimatedDifficultyPerBlock
       com.chipprbots.ethereum.domain.ChainWeight(0, estimatedTotalDifficulty)
     } else {
       blockchainReader

@@ -98,8 +98,7 @@ case class EthNodeStatus64ExchangeState(
     
     // Calculate chain weight and fork ID for the effective block
     val (chainWeight, forkId) = if (bestBlockNumber == 0 && bootstrapPivotNumber > 0) {
-      // Estimate difficulty: assume average difficulty of ~2 TH for ETC mainnet
-      val estimatedTotalDifficulty = bootstrapPivotNumber * BigInt(2000000000000L)
+      val estimatedTotalDifficulty = bootstrapPivotNumber * EtcNodeStatusExchangeState.EstimatedDifficultyPerBlock
       val weight = com.chipprbots.ethereum.domain.ChainWeight(0, estimatedTotalDifficulty)
       val genesisHash = blockchainReader.genesisHeader.hash
       val forkIdForPivot = ForkId.create(genesisHash, blockchainConfig)(bootstrapPivotNumber)

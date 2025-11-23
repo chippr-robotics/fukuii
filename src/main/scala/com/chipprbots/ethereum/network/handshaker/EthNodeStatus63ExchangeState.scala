@@ -40,8 +40,7 @@ case class EthNodeStatus63ExchangeState(
     
     // Calculate chain weight for the effective block
     val chainWeight = if (bestBlockNumber == 0 && bootstrapPivotNumber > 0) {
-      // Estimate difficulty: assume average difficulty of ~2 TH for ETC mainnet
-      val estimatedTotalDifficulty = bootstrapPivotNumber * BigInt(2000000000000L)
+      val estimatedTotalDifficulty = bootstrapPivotNumber * EtcNodeStatusExchangeState.EstimatedDifficultyPerBlock
       com.chipprbots.ethereum.domain.ChainWeight(0, estimatedTotalDifficulty)
     } else {
       blockchainReader
