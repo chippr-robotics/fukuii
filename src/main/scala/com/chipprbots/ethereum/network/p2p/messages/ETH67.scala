@@ -40,6 +40,13 @@ object ETH67 {
 
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewPooledTransactionHashes: NewPooledTransactionHashes = {
+        // Helper to create consistent hex dumps for error messages
+        def hexDump: String = s"${Hex.toHexString(bytes.take(100))}..."
+        
+        // Custom exception type for ETH67 decode errors
+        class ETH67DecodeException(message: String, cause: Throwable = null) 
+          extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause)
+        
         try {
           val decoded = rawDecode(bytes)
           
@@ -73,17 +80,17 @@ object ETH67 {
                 )
               } catch {
                 case e: ArrayIndexOutOfBoundsException =>
-                  throw new RuntimeException(
-                    s"ETH67_DECODE_ERROR: ArrayIndexOutOfBoundsException in ETH67/68 format. " +
+                  throw new ETH67DecodeException(
+                    s"ArrayIndexOutOfBoundsException in ETH67/68 format. " +
                     s"Structure: $structureInfo. " +
                     s"Types=${typesBytes.length}, Sizes=${sizesList.items.size}, Hashes=${hashesList.items.size}. " +
-                    s"Hex: ${Hex.toHexString(bytes.take(100))}...",
+                    s"Hex: $hexDump",
                     e
                   )
                 case e: Throwable =>
-                  throw new RuntimeException(
-                    s"ETH67_DECODE_ERROR: ${e.getClass.getSimpleName} in ETH67/68 format: ${e.getMessage}. " +
-                    s"Structure: $structureInfo. Hex: ${Hex.toHexString(bytes.take(100))}...",
+                  throw new ETH67DecodeException(
+                    s"${e.getClass.getSimpleName} in ETH67/68 format: ${e.getMessage}. " +
+                    s"Structure: $structureInfo. Hex: $hexDump",
                     e
                   )
               }
@@ -101,27 +108,27 @@ object ETH67 {
                 )
               } catch {
                 case e: Throwable =>
-                  throw new RuntimeException(
-                    s"ETH67_DECODE_ERROR: ${e.getClass.getSimpleName} in ETH65 legacy format: ${e.getMessage}. " +
-                    s"Structure: $structureInfo. Hex: ${Hex.toHexString(bytes.take(100))}...",
+                  throw new ETH67DecodeException(
+                    s"${e.getClass.getSimpleName} in ETH65 legacy format: ${e.getMessage}. " +
+                    s"Structure: $structureInfo. Hex: $hexDump",
                     e
                   )
               }
             
             case other =>
-              throw new RuntimeException(
-                s"ETH67_DECODE_ERROR: Unexpected RLP structure. Expected [RLPValue, RLPList, RLPList] (ETH67/68) " +
-                s"or RLPList (ETH65 legacy), got: $structureInfo. Hex: ${Hex.toHexString(bytes.take(100))}..."
+              throw new ETH67DecodeException(
+                s"Unexpected RLP structure. Expected [RLPValue, RLPList, RLPList] (ETH67/68) " +
+                s"or RLPList (ETH65 legacy), got: $structureInfo. Hex: $hexDump"
               )
           }
         } catch {
-          case e: RuntimeException if e.getMessage.contains("ETH67_DECODE_ERROR") =>
+          case e: ETH67DecodeException =>
             // Re-throw our own detailed errors
             throw e
           case e: Throwable =>
-            throw new RuntimeException(
-              s"ETH67_DECODE_ERROR: ${e.getClass.getSimpleName} during RLP decode: ${e.getMessage}. " +
-              s"Length: ${bytes.length}, Hex: ${Hex.toHexString(bytes.take(100))}...",
+            throw new ETH67DecodeException(
+              s"${e.getClass.getSimpleName} during RLP decode: ${e.getMessage}. " +
+              s"Length: ${bytes.length}, Hex: $hexDump",
               e
             )
         }
