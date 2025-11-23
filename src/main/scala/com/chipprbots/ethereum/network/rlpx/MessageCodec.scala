@@ -113,7 +113,7 @@ class MessageCodec(
               s"error: ${error.getMessage}"
             )
           case Right(msg) =>
-            log.debug("Successfully decoded message type 0x{}: {}", frame.`type`.toHexString, msg.toShortString)
+            log.trace("Successfully decoded message type 0x{}: {}", frame.`type`.toHexString, msg.toShortString)
         }
         result
       }

@@ -342,7 +342,7 @@ class RLPxConnectionHandler(
 
     def processMessage(messageTry: Either[DecodingError, Message]): Unit = messageTry match {
       case Right(message) =>
-        log.debug("Successfully decoded message from {}: {}", peerId, message.toShortString)
+        log.trace("Successfully decoded message from {}: {}", peerId, message.toShortString)
         context.parent ! MessageReceived(message)
 
       case Left(ex) =>

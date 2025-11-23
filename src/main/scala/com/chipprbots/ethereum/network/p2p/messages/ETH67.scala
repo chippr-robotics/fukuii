@@ -46,7 +46,10 @@ object ETH67 {
           // Some peers may incorrectly send ETH65 format even when negotiated to ETH67/68
           try {
             val hashes = fromRlpList[ByteString](rlpList)
-            // Convert to ETH67 format with default values
+            // Convert to ETH67 format with default values:
+            // - type=0 (legacy transaction): Safe default as it's the most common type
+            // - size=0 (unknown): Acceptable as size is only used for bandwidth management hints
+            // These defaults do not affect consensus or transaction processing, only pool management
             NewPooledTransactionHashes(
               types = Seq.fill(hashes.length)(0.toByte), // default to legacy transactions
               sizes = Seq.fill(hashes.length)(BigInt(0)), // unknown size
