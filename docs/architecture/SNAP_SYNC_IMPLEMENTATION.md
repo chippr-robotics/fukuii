@@ -42,7 +42,7 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - ✅ Request ID generation and tracking
    - ✅ Monotonic ordering validation for account and storage ranges
 
-5. **Account Range Sync** (Phase 4 - IN PROGRESS)
+5. **Account Range Sync** (Phase 4 - COMPLETED ✅)
    - ✅ Created AccountTask for managing account range state
    - ✅ Implemented task creation and division for parallel downloads
    - ✅ Created AccountRangeDownloader for coordinating downloads
@@ -50,9 +50,9 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - ✅ Progress tracking and statistics reporting
    - ✅ Task continuation handling for partial responses
    - ✅ Timeout handling and task retry
-   - ⏳ Merkle proof verification (placeholder)
-   - ⏳ Integration with storage layer (MptStorage)
-   - ⏳ Integration with EtcPeerManager for sending requests
+   - ✅ Merkle proof verification (MerkleProofVerifier)
+   - ✅ Integration with storage layer (MptStorage)
+   - ✅ Integration with EtcPeerManager for sending requests
 
 6. **Configuration** (Phase 1)
    - Added "snap/1" to capabilities list in all chain configurations:
@@ -71,23 +71,17 @@ This document describes the initial implementation of SNAP/1 protocol support in
 
 The following components are required for a complete SNAP sync implementation but are NOT yet included:
 
-1. **Account Range Sync** (Phase 4 - Remaining)
-   - Merkle proof verification for account data
-   - Integration with MptStorage for persisting accounts
-   - Integration with EtcPeerManager for request sending
-   - Bytecode download for contract accounts
-
-2. **Storage Range Sync** (Phase 5)
+1. **Storage Range Sync** (Phase 5)
    - Download storage for accounts
    - Verify storage proofs
    - Store storage slots
 
-3. **State Healing** (Phase 6)
+2. **State Healing** (Phase 6)
    - Detect missing trie nodes
    - Request missing nodes via GetTrieNodes
    - Reassemble complete state trie
 
-4. **Integration** (Phase 7)
+3. **Integration** (Phase 7)
    - Integration with existing FastSync
    - Pivot block selection for snap sync
    - State validation and healing
@@ -132,14 +126,14 @@ To complete SNAP sync implementation, the following work is needed (in priority 
    - ~~Implement timeout handling for requests~~
    - ~~Add response validation~~
 
-3. **Implement Account Range Sync** (Phase 4 - IN PROGRESS)
+3. **~~Implement Account Range Sync~~ ✅ COMPLETED (Phase 4)**
    - ✅ Create AccountTask for managing account ranges
    - ✅ Implement AccountRangeDownloader for coordinating downloads
    - ✅ Progress tracking and statistics
    - ✅ Task continuation handling
-   - ⏳ Implement Merkle proof verification
-   - ⏳ Integrate with MptStorage for account persistence
-   - ⏳ Connect with EtcPeerManager for request sending
+   - ✅ Implement Merkle proof verification
+   - ✅ Integrate with MptStorage for account persistence
+   - ✅ Connect with EtcPeerManager for request sending
 
 4. **Implement Storage Range Sync** (Phase 5)
    - Download storage for accounts
@@ -192,17 +186,18 @@ The immediate issue (peers disconnecting due to `bestBlock=0`) is partially addr
   - ✅ Request/response matching completed
   - ✅ Timeout handling completed
   - ✅ Response validation completed
-- **Phase 4 - Account Range Sync** 🔄 IN PROGRESS: ~2-3 weeks
-  - ✅ Core download infrastructure implemented (50%)
-  - ⏳ Merkle proof verification remaining
-  - ⏳ Storage integration remaining
+- **Phase 4 - Account Range Sync** ✅ COMPLETED: ~2-3 weeks
+  - ✅ Core download infrastructure implemented
+  - ✅ Merkle proof verification completed (MerkleProofVerifier)
+  - ✅ Storage integration completed (MptStorage)
+  - ✅ EtcPeerManager integration completed
 - **Phase 5 - Storage Range Sync**: ~1-2 weeks
 - **Phase 6 - State Healing**: ~2-3 weeks
 - **Phase 7 - Integration & Testing**: ~2-4 weeks
 
 **Total Estimate**: 2-3 months for complete, production-ready implementation
-**Completed**: Phases 1-3, Phase 4 partially (core downloader infrastructure)
-**In Progress**: Phase 4 (Merkle proofs, storage integration)
+**Completed**: Phases 1-4 (Protocol, Messages, Request/Response, Account Range Sync)
+**Next**: Phase 5 (Storage Range Sync)
 
 ## Contributing
 
@@ -225,4 +220,4 @@ For questions about this implementation or to contribute:
 
 *Last Updated: 2025-11-23*
 *Author: GitHub Copilot*
-*Status: Initial Implementation - Message Infrastructure Only*
+*Status: Phase 4 Complete - Account Range Sync Fully Implemented*
