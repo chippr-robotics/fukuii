@@ -65,6 +65,7 @@ class MessageCodec(
       // This is used as a fallback check after decompression fails to handle protocol deviations
       // where peers send uncompressed RLP data when compression is expected.
       def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
+        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
         val firstByte = data(0) & 0xff
         firstByte >= 0xc0 || (firstByte >= 0x80 && firstByte < 0xc0)
       }
@@ -151,7 +152,7 @@ class MessageCodec(
         Hex.toHexString(data.take(32)) + "..." + Hex.toHexString(data.takeRight(32))
       }
 
-      log.debug(
+      log.warn(
         "DECOMPRESSION_DEBUG: Failed to decompress frame - " +
           s"frameType: 0x${frame.`type`.toHexString}, " +
           s"frameSize: ${data.length}, " +
