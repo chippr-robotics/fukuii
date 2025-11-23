@@ -223,16 +223,30 @@ class MerkleProofVerifier(stateRoot: ByteString) extends Logger {
 
   /** Verify account value matches expected account
     *
+    * Decodes the RLP-encoded account and compares key fields to expected values.
+    * This ensures the account data in the proof matches what we expect.
+    *
     * @param value RLP-encoded account value
+    * @param expectedAccount The account we expect to find
     * @return Either error or success
     */
-  private def verifyAccountValue(value: ByteString, _expectedAccount: Account): Either[String, Unit] = {
+  private def verifyAccountValue(value: ByteString, expectedAccount: Account): Either[String, Unit] = {
     try {
-      // Decode the account from RLP to verify it's valid
-      rlp.rawDecode(value.toArray)
-      // For now, just check that it decodes successfully
-      // A full implementation would parse and compare all fields
-      Right(())
+      // Decode the account from RLP using the standard Account serializer
+      val decoded = Account.accountSerializer.fromBytes(value.toArray)
+      
+      // Compare key fields to ensure account data matches
+      if (decoded.nonce != expectedAccount.nonce) {
+        Left(s"Account nonce mismatch: expected ${expectedAccount.nonce}, got ${decoded.nonce}")
+      } else if (decoded.balance != expectedAccount.balance) {
+        Left(s"Account balance mismatch: expected ${expectedAccount.balance}, got ${decoded.balance}")
+      } else if (decoded.storageRoot != expectedAccount.storageRoot) {
+        Left(s"Account storageRoot mismatch: expected ${expectedAccount.storageRoot}, got ${decoded.storageRoot}")
+      } else if (decoded.codeHash != expectedAccount.codeHash) {
+        Left(s"Account codeHash mismatch: expected ${expectedAccount.codeHash}, got ${decoded.codeHash}")
+      } else {
+        Right(())
+      }
     } catch {
       case e: Exception =>
         Left(s"Failed to decode account value: ${e.getMessage}")

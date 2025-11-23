@@ -42,7 +42,7 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - ✅ Request ID generation and tracking
    - ✅ Monotonic ordering validation for account and storage ranges
 
-5. **Account Range Sync** (Phase 4 - COMPLETED ✅)
+5. **Account Range Sync** (Phase 4 - MOSTLY COMPLETE ⚠️)
    - ✅ Created AccountTask for managing account range state
    - ✅ Implemented task creation and division for parallel downloads
    - ✅ Created AccountRangeDownloader for coordinating downloads
@@ -51,7 +51,8 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - ✅ Task continuation handling for partial responses
    - ✅ Timeout handling and task retry
    - ✅ Merkle proof verification (MerkleProofVerifier)
-   - ✅ Integration with storage layer (MptStorage)
+   - ✅ Account data validation (nonce, balance, storageRoot, codeHash)
+   - ⚠️  Integration with storage layer (MptStorage) - **STUBBED, needs implementation**
    - ✅ Integration with EtcPeerManager for sending requests
 
 6. **Configuration** (Phase 1)

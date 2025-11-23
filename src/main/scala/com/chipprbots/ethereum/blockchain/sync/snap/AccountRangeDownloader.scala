@@ -219,6 +219,12 @@ class AccountRangeDownloader(
     * Thread-safe storage of accounts. Multiple tasks may be storing
     * accounts concurrently, so we synchronize on the storage.
     *
+    * TODO: This is a placeholder implementation. A complete implementation needs to:
+    * 1. Properly reconstruct the complete trie structure from accounts
+    * 2. Use appropriate MptStorage methods to persist account data
+    * 3. Handle account state updates correctly
+    * 4. Integrate with the existing state trie infrastructure
+    *
     * @param accounts Accounts to store (hash -> account)
     * @return Either error or success
     */
@@ -227,19 +233,24 @@ class AccountRangeDownloader(
       // Synchronize on storage to ensure thread-safety for concurrent writes
       mptStorage.synchronized {
         for ((accountHash, account) <- accounts) {
-          // Store each account in the state trie
-          // The account hash is the key, and the RLP-encoded account is the value
-          // This is a simplified approach - a full implementation would
-          // reconstruct the complete trie structure
-          
-          // For now, we'll use the storage persist method
-          // which will batch writes until persist() is called
+          // TODO: Implement actual account storage
+          // This requires properly integrating with the MPT storage layer
+          // Example approach:
+          //   mptStorage.put(accountHash, rlp.encode(account.toRLPEncodable))
+          // However, the actual implementation needs to:
+          // - Reconstruct the trie structure from account hashes
+          // - Update the state root properly
+          // - Handle storage slots for contract accounts
+          log.debug(s"TODO: Store account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} " +
+            s"(balance: ${account.balance}, nonce: ${account.nonce})")
         }
         
         // Persist the changes to disk
-        mptStorage.persist()
+        // TODO: Uncomment when actual storage is implemented
+        // mptStorage.persist()
       }
       
+      log.warn(s"Account storage is stubbed - ${accounts.size} accounts were verified but not persisted")
       Right(())
     } catch {
       case e: Exception =>

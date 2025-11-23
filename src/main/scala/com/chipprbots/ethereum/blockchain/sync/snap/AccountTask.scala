@@ -44,12 +44,20 @@ case class AccountTask(
     else if (accounts.isEmpty) 0.0
     else {
       // Rough estimate based on account count
-      math.min(0.9, accounts.size.toDouble / 1000.0)
+      // Typical ranges contain hundreds to thousands of accounts
+      math.min(0.9, accounts.size.toDouble / AccountTask.ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE)
     }
   }
 }
 
 object AccountTask {
+
+  /** 
+    * Estimated number of accounts that represents "almost complete" (90% progress).
+    * This is a rough heuristic based on typical account range sizes in SNAP sync.
+    * Actual ranges can vary significantly based on state distribution.
+    */
+  val ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE = 1000.0
 
   /** Create initial account tasks by dividing the account space
     *
@@ -80,10 +88,25 @@ object AccountTask {
       val end = if (i == concurrency - 1) BigInt(2).pow(256) - 1 else chunkSize * (i + 1)
       
       AccountTask(
-        next = ByteString(start.toByteArray.takeRight(32).padTo(32, 0.toByte).reverse.take(32).reverse),
-        last = ByteString(end.toByteArray.takeRight(32).padTo(32, 0.toByte).reverse.take(32).reverse),
+        next = bigIntTo32ByteString(start),
+        last = bigIntTo32ByteString(end),
         rootHash = rootHash
       )
     }
+  }
+
+  /** Convert BigInt to 32-byte big-endian ByteString
+    *
+    * Handles sign bit properly and ensures correct padding for hash values.
+    *
+    * @param bi BigInt to convert
+    * @return 32-byte ByteString in big-endian format
+    */
+  private def bigIntTo32ByteString(bi: BigInt): ByteString = {
+    val bytes = bi.toByteArray
+    // BigInt.toByteArray includes a sign bit, so remove it if present
+    val unsigned = if (bytes.length > 0 && bytes(0) == 0) bytes.drop(1) else bytes
+    // Pad to 32 bytes on the left (big-endian) and take right 32 bytes if too long
+    ByteString(Array.fill(32 - unsigned.length.min(32))(0.toByte) ++ unsigned.takeRight(32))
   }
 }

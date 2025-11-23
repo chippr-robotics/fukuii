@@ -47,13 +47,14 @@ We have implemented the **initial infrastructure** for SNAP/1 protocol support i
 
 ### What This Does NOT Include
 
-This includes **protocol infrastructure and message encoding/decoding**. The following are explicitly NOT implemented:
+This PR implements Phases 1-4 of SNAP sync (protocol infrastructure, message encoding/decoding, request/response flow, and account range sync with Merkle verification). The following are explicitly NOT implemented:
 
-- SNAP sync coordinator/controller
-- Account/storage range downloading
-- State trie healing
-- Snapshot storage layer
-- Integration with existing FastSync
+- **Complete account storage integration** - Account verification works, but actual persistence to MptStorage is stubbed
+- Storage range downloading (Phase 5)
+- State trie healing (Phase 6)
+- Integration with existing FastSync (Phase 7)
+- Complete snapshot storage layer
+- Bytecode download for contract accounts
 
 ## Rationale
 
