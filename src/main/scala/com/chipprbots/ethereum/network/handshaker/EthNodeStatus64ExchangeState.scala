@@ -106,7 +106,7 @@ case class EthNodeStatus64ExchangeState(
       genesisHash,
       forkId
     )
-    
+
     if (bestBlockNumber == 0) {
       log.warn(
         "STATUS_EXCHANGE: WARNING - Sending genesis block as best block! This may cause peer disconnections. " +
@@ -116,7 +116,7 @@ case class EthNodeStatus64ExchangeState(
         chainWeight.totalDifficulty
       )
     }
-    
+
     status
   }
 
