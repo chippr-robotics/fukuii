@@ -188,6 +188,13 @@ class PeerActor[R <: HandshakeResult](
         unstashAll()
 
       case Left(HandshakeFailure(reason)) =>
+        log.info(
+          "HANDSHAKE_FAILURE: Handshake failed with peer {}:{} - reason code: 0x{} ({}). Will disconnect and notify parent.",
+          peerAddress.getHostString,
+          peerAddress.getPort,
+          reason.toHexString,
+          Disconnect.reasonToString(reason)
+        )
         context.parent ! PeerClosedConnection(peerAddress.getHostString, reason)
         rlpxConnection.uriOpt.foreach(uri => knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri))
         disconnectFromPeer(rlpxConnection, reason)

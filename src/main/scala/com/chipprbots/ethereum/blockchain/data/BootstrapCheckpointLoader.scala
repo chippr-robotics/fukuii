@@ -62,10 +62,19 @@ class BootstrapCheckpointLoader(
     // Instead, we use these checkpoints as trusted reference points for the sync process.
     // TODO: Future enhancement - modify sync controller to reference these checkpoints when selecting pivot block
     // This would allow skipping the peer wait entirely. For now, checkpoints serve as trusted hints.
+    // IMPORTANT: Since checkpoints are not inserted, getBestBlockNumber() will still return 0 (genesis only).
+    // This causes the node to report genesis in Status messages to peers, which may lead to peer disconnections
+    // due to fork ID incompatibility. This is expected behavior until the sync process downloads actual blocks.
 
     log.info(
       "Bootstrap checkpoints loaded. {} checkpoints available. Node will use these as trusted reference points for syncing.",
       sortedCheckpoints.size
+    )
+    
+    log.warn(
+      "BOOTSTRAP_CHECKPOINT: Note that checkpoints are NOT inserted into the database. " +
+      "Best block number will remain at 0 (genesis) until sync downloads blocks. " +
+      "This will cause Status messages to report genesis block, which may cause initial peer disconnections."
     )
 
     true
