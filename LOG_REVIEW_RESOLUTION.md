@@ -1,6 +1,7 @@
 # Log Review Resolution - Core-Geth Connection Issue
 
 ## Date: 2025-11-23
+## Update: 2025-11-23 - Snappy Decompression Fix
 
 ## Issue Summary
 
@@ -106,6 +107,116 @@ case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList) =>
 3. Verify sustained peer connections
 4. Monitor transaction propagation
 5. Confirm block synchronization
+
+---
+
+## UPDATE 2025-11-23: Additional Fix - Snappy Decompression Logic
+
+### New Issue Discovered
+
+After deploying the initial fix, a second issue was discovered in the log file `fukuii.2025.11.18.txt`:
+
+**Error observed:**
+```
+Cannot decode message from X.X.X.X:30303, because of ETH67_DECODE_ERROR: Unexpected RLP structure. 
+Expected [RLPValue, RLPList, RLPList] (ETH67/68) or RLPList (ETH65 legacy), got: RLPValue(20 bytes). 
+Hex: 9401f093f8928400000000c6820289686e6ff884a0...
+```
+
+### Root Cause Analysis
+
+The issue was in `MessageCodec.scala` decompression logic:
+
+1. **The Bug**: The `looksLikeRLP` check was too broad
+   - It checked if first byte was in range `0x80-0xff` to determine if data looks like RLP
+   - Snappy-compressed data can also start with bytes in this range (e.g., `0x94`)
+   - When compressed data started with `0x94`, it was incorrectly treated as uncompressed RLP
+   - The raw Snappy data was passed to RLP decoder, causing decode errors
+
+2. **Why `0x94` caused the error**:
+   - In RLP encoding: `0x94` = `0x80 + 0x14` = "string of 20 bytes"
+   - In Snappy encoding: `0x94` is a valid compressed data byte
+   - The decoder saw `0x94` and tried to read only 20 bytes as an RLP string
+   - Result: "Unexpected RLP structure" error
+
+3. **The flawed logic flow**:
+```scala
+if (shouldCompress && !looksLikeRLP) {
+  decompressData(frameData, frame)  // Only decompress if it doesn't look like RLP
+} else if (shouldCompress && looksLikeRLP) {
+  Success(frameData)  // Skip decompression - WRONG!
+}
+```
+
+### The Fix
+
+Changed the decompression logic to **always attempt decompression first** when `shouldCompress=true`, with fallback to uncompressed data only if decompression fails:
+
+**Before (incorrect):**
+```scala
+// Check if looks like RLP BEFORE attempting decompression
+if (shouldCompress && !looksLikeRLP) {
+  decompressData(frameData, frame)
+} else if (shouldCompress && looksLikeRLP) {
+  // Assume uncompressed - WRONG for 0x94!
+  Success(frameData)
+}
+```
+
+**After (correct):**
+```scala
+if (shouldCompress) {
+  // ALWAYS attempt decompression first
+  decompressData(frameData, frame).recoverWith { case ex =>
+    // Only if decompression fails, check if it might be uncompressed RLP
+    if (looksLikeRLP(frameData)) {
+      log.warn("Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation)")
+      Success(frameData)
+    } else {
+      Failure(ex)  // Reject invalid data
+    }
+  }
+}
+```
+
+### Impact
+
+✅ **Fixes the decompression bypass issue** - Compressed data is always decompressed first  
+✅ **Still handles protocol deviations** - Falls back to uncompressed if decompression fails AND looks like RLP  
+✅ **Correctly processes NewPooledTransactionHashes** - Messages with any starting byte are now handled  
+✅ **Maintains backward compatibility** - Uncompressed RLP (protocol deviation) still works  
+✅ **Zero breaking changes** - Only affects internal decompression logic
+
+### Files Modified
+
+- `src/main/scala/com/chipprbots/ethereum/network/rlpx/MessageCodec.scala`
+  - Moved `looksLikeRLP` check from inline to local function for reusability
+  - Changed decompression logic to always attempt decompression when `shouldCompress=true`
+  - Added fallback to uncompressed data only after decompression failure
+  - Removed redundant fallback logic from `decompressData` method
+  - Improved logging to show `shouldCompress` instead of `willDecompress` for clarity
+
+### Testing
+
+After this fix:
+- ✅ Compressed messages starting with any byte (including 0x80-0xff range) will be decompressed correctly
+- ✅ Uncompressed RLP (protocol deviation) will still be handled via fallback
+- ✅ Invalid data (neither compressed nor valid RLP) will be rejected
+- ✅ Log messages will clearly show when fallback to uncompressed is used
+
+### Combined Fixes Summary
+
+This PR includes TWO fixes for core-geth peer disconnections:
+
+1. **ETH67 NewPooledTransactionHashes encoding** (previous fix):
+   - Changed Types field from RLPList to RLPValue to match core-geth
+   - See earlier sections of this document
+
+2. **Snappy decompression logic** (this fix):
+   - Always attempt decompression first when compression is expected
+   - Fall back to uncompressed only after decompression failure
+
+Both fixes are required for stable connections with core-geth peers.
 
 ## Expected Behavior After Fix
 

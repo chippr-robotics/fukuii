@@ -58,34 +58,50 @@ class MessageCodec(
       val frameData = frame.payload.toArray
       val isWireProtocolMessage = frame.`type` >= 0x00 && frame.`type` <= 0x03
 
-      // Check if data looks like RLP (starts with 0xc0-0xff for lists, 0x80-0xbf for strings)
-      val looksLikeRLP = frameData.nonEmpty && {
-        val firstByte = frameData(0) & 0xff
-        firstByte >= 0xc0 || (firstByte >= 0x80 && firstByte < 0xc0)
+      // Heuristic to check if data looks like RLP-encoded data
+      // RLP encoding has predictable first-byte patterns:
+      // - 0x80-0xbf: RLP string (0x80 = empty string, 0x81-0xb7 = short string, 0xb8-0xbf = long string)
+      // - 0xc0-0xff: RLP list (0xc0 = empty list, 0xc1-0xf7 = short list, 0xf8-0xff = long list)
+      // This is used as a fallback check after decompression fails to handle protocol deviations
+      // where peers send uncompressed RLP data when compression is expected.
+      def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
+        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
+        val firstByte = data(0) & 0xff
+        firstByte >= 0x80
       }
 
       val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
 
       log.debug(
-        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, willDecompress={}, looksLikeRLP={}",
+        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, shouldCompress={}, payloadLooksLikeRLP={}",
         frame.`type`.toHexString,
         isWireProtocolMessage,
         remotePeer2PeerVersion,
         shouldCompress,
-        looksLikeRLP
+        looksLikeRLP(frameData)
       )
 
       val payloadTry =
-        if (shouldCompress && !looksLikeRLP) {
-          // Only attempt decompression if it doesn't look like RLP
-          decompressData(frameData, frame)
-        } else if (shouldCompress && looksLikeRLP) {
-          // Peer sent uncompressed data when compression was expected - protocol deviation but handle gracefully
-          log.warn(
-            "Frame type 0x{}: Peer sent uncompressed RLP data despite p2pVersion >= 5 (protocol deviation)",
-            frame.`type`.toHexString
-          )
-          Success(frameData)
+        if (shouldCompress) {
+          // Always attempt decompression when compression is expected (p2pVersion >= 5)
+          // If decompression fails, fall back to uncompressed data if it looks like valid RLP
+          decompressData(frameData, frame).recoverWith { case ex =>
+            if (looksLikeRLP(frameData)) {
+              log.warn(
+                "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). Error: {}",
+                frame.`type`.toHexString,
+                ex.getMessage
+              )
+              Success(frameData)
+            } else {
+              log.error(
+                "Frame type 0x{}: Decompression failed and data doesn't look like RLP - rejecting. Error: {}",
+                frame.`type`.toHexString,
+                ex.getMessage
+              )
+              Failure(ex)
+            }
+          }
         } else {
           log.debug(
             "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 5)",
@@ -136,19 +152,11 @@ class MessageCodec(
         Hex.toHexString(data.take(32)) + "..." + Hex.toHexString(data.takeRight(32))
       }
 
-      // Check if this might be uncompressed data by looking for patterns
-      val possibleUncompressed = if (data.length > 0) {
-        // Check if first byte looks like a message type (reasonable range for ETH protocol)
-        val firstByte = data(0) & 0xff
-        firstByte >= 0x10 && firstByte <= 0x20
-      } else false
-
-      log.error(
+      log.warn(
         "DECOMPRESSION_DEBUG: Failed to decompress frame - " +
           s"frameType: 0x${frame.`type`.toHexString}, " +
           s"frameSize: ${data.length}, " +
           s"p2pVersion: $remotePeer2PeerVersion, " +
-          s"possibleUncompressed: $possibleUncompressed, " +
           s"hexData: $hexData, " +
           s"error: ${ex.getMessage}"
       )
@@ -161,13 +169,8 @@ class MessageCodec(
           s"first8bytes: ${if (data.length >= 8) Hex.toHexString(data.take(8)) else "N/A"}"
       )
 
-      // If it looks like uncompressed data, try to decode it directly
-      if (possibleUncompressed && data.length < 1024) { // reasonable size limit
-        log.warn("DECOMPRESSION_DEBUG: Attempting to decode as uncompressed data (peer protocol deviation)")
-        Success(data) // Return the data as-is to see if it decodes
-      } else {
-        Failure(ex)
-      }
+      // Propagate the failure - fallback logic is handled in readFrames
+      Failure(ex)
     }
   }
 

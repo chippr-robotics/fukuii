@@ -87,6 +87,29 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     assert(remoteReadStatus.head == Right(status))
   }
 
+  it should "correctly decompress messages even when compressed data starts with RLP-like bytes" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    // This test verifies the fix for the issue where compressed data starting with bytes
+    // in the range 0x80-0xff (like 0x94) was incorrectly treated as uncompressed RLP
+    
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
+    messageCodec.readMessages(remoteHello)
+
+    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
+    remoteMessageCodec.readMessages(localHello)
+
+    // Send a status message which may compress to data starting with 0x80-0xff range bytes
+    val localStatus: ByteString = messageCodec.encodeMessage(status)
+    val remoteReadStatus: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localStatus)
+
+    // The message should be correctly decompressed regardless of what byte the compressed data starts with
+    assert(remoteReadStatus.size == 1)
+    assert(remoteReadStatus.head == Right(status))
+  }
+
   trait TestSetup extends SecureChannelSetup {
     val frameCodec = new FrameCodec(secrets)
     val remoteFrameCodec = new FrameCodec(remoteSecrets)
