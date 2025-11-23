@@ -34,12 +34,18 @@ case class EthNodeStatus64ExchangeState(
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
+    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock)
 
     log.debug("Local state for comparison: bestBlock={}, genesisHash={}", localBestBlock, localGenesisHash)
+    log.debug(
+      "FORKID_DEBUG: Local forkId={}, Remote forkId={}, Comparing for compatibility",
+      localForkId,
+      status.forkId
+    )
 
     if (status.genesisHash != localGenesisHash) {
       log.warn(
-        "Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
+        "FORKID_DEBUG: Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
         localGenesisHash,
         status.genesisHash
       )
@@ -52,13 +58,19 @@ case class EthNodeStatus64ExchangeState(
             status.forkId
           )
       } yield {
-        log.debug("ForkId validation result: {}", validationResult)
+        log.debug("FORKID_DEBUG: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.debug("ForkId validation passed - accepting peer connection")
+            log.debug("FORKID_DEBUG: ForkId validation passed - accepting peer connection")
             applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
           case other =>
-            log.debug("ForkId validation failed with result: {} - disconnecting peer as UselessPeer", other)
+            log.warn(
+              "FORKID_DEBUG: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. " +
+              "Local: {}, Remote: {}",
+              other,
+              localForkId,
+              status.forkId
+            )
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()

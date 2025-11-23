@@ -35,12 +35,33 @@ object ETH67 {
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewPooledTransactionHashes: NewPooledTransactionHashes = rawDecode(bytes) match {
         case RLPList(typesList: RLPList, sizesList: RLPList, hashesList: RLPList) =>
+          // ETH67/ETH68 format with types, sizes, and hashes
           NewPooledTransactionHashes(
             fromRlpList[Byte](typesList),
             fromRlpList[BigInt](sizesList),
             fromRlpList[ByteString](hashesList)
           )
-        case _ => throw new RuntimeException("Cannot decode NewPooledTransactionHashes")
+        case rlpList: RLPList =>
+          // Fallback: Try ETH65 format (just hashes) for compatibility
+          // Some peers may incorrectly send ETH65 format even when negotiated to ETH67/68
+          try {
+            val hashes = fromRlpList[ByteString](rlpList)
+            // Convert to ETH67 format with default values:
+            // - type=0 (legacy transaction): Safe default as it's the most common type
+            // - size=0 (unknown): Acceptable as size is only used for bandwidth management hints
+            // These defaults do not affect consensus or transaction processing, only pool management
+            NewPooledTransactionHashes(
+              types = Seq.fill(hashes.length)(0.toByte), // default to legacy transactions
+              sizes = Seq.fill(hashes.length)(BigInt(0)), // unknown size
+              hashes = hashes
+            )
+          } catch {
+            case ex: Exception =>
+              throw new RuntimeException(
+                s"Cannot decode NewPooledTransactionHashes: expected ETH67 format [types, sizes, hashes] or ETH65 format [hashes], error: ${ex.getMessage}"
+              )
+          }
+        case _ => throw new RuntimeException("Cannot decode NewPooledTransactionHashes: invalid RLP structure")
       }
     }
   }
