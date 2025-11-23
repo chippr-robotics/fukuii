@@ -24,17 +24,14 @@ object ForkId {
     crc.update(genesisHash.asByteBuffer)
     val forks = gatherForks(config)
 
-    // WORKAROUND: When at block 0, report the latest known fork to match peer expectations.
-    // While EIP-2124 technically requires reporting genesis fork at block 0, many peers
-    // (including Core-Geth v1.12.20+) reject this as too old, preventing initial sync.
-    // This matches core-geth's practical approach to enable initial peer connections.
-    val effectiveHead = if (head == 0 && forks.nonEmpty) forks.last else head
-
+    // EIP-2124 compliant ForkId calculation matching Core-Geth reference implementation
+    // At block 0: reports genesis ForkId (0xfc64ec04 for ETC) per Core-Geth test cases
+    // Core-Geth: {0, 0, ID{Hash: checksumToBytes(0xfc64ec04), Next: 1150000}}
     val next = forks.find { fork =>
-      if (fork <= effectiveHead) {
+      if (fork <= head) {
         crc.update(bigIntToBytes(fork, 8))
       }
-      fork > effectiveHead
+      fork > head
     }
     new ForkId(crc.getValue(), next)
   }
