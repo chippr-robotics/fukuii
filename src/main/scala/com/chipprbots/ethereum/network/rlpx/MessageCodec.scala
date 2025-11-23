@@ -67,7 +67,7 @@ class MessageCodec(
       def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
         // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
         val firstByte = data(0) & 0xff
-        firstByte >= 0xc0 || (firstByte >= 0x80 && firstByte < 0xc0)
+        firstByte >= 0x80
       }
 
       val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage

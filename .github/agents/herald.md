@@ -300,10 +300,10 @@ Call `ICE` agent if:
 - **Error:** `ETH67_DECODE_ERROR: Unexpected RLP structure... got: RLPValue(20 bytes)`
 - **Cause:** looksLikeRLP check before decompression
 - **Fix:** Always decompress first, fallback only if it fails
-- **PR:** copilot/log-file-review-troubleshooting
+- **PR:** #559
 
 ### 2025-11-23: ETH67 NewPooledTransactionHashes Encoding  
 - **Error:** Core-geth peers disconnect after receiving message
 - **Cause:** Types field as RLPList instead of RLPValue
 - **Fix:** Changed to `RLPValue(types.toArray)` to match Go encoding
-- **PR:** copilot/log-file-review-troubleshooting
+- **PR:** #559
