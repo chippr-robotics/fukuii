@@ -14,18 +14,19 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Merkle proof verifier for SNAP sync
   *
-  * Verifies Merkle Patricia Trie proofs for account ranges received during SNAP sync.
-  * Follows core-geth implementation patterns from eth/protocols/snap/sync.go
+  * Verifies Merkle Patricia Trie proofs for account ranges and storage ranges
+  * received during SNAP sync. Follows core-geth implementation patterns from
+  * eth/protocols/snap/sync.go
   *
   * The verification process:
   * 1. Decode proof nodes from their RLP-encoded form
   * 2. Build a partial trie from the proof nodes
-  * 3. Verify that accounts exist in the trie at expected paths
-  * 4. Verify the trie root matches the expected state root
+  * 3. Verify that accounts/storage slots exist in the trie at expected paths
+  * 4. Verify the trie root matches the expected root (state root or storage root)
   *
-  * @param stateRoot Expected state root hash to verify against
+  * @param rootHash Expected root hash to verify against (state root or storage root)
   */
-class MerkleProofVerifier(stateRoot: ByteString) extends Logger {
+class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
   /** Verify an account range response with Merkle proof
     *
@@ -138,11 +139,11 @@ class MerkleProofVerifier(stateRoot: ByteString) extends Logger {
     // Convert account hash to nibbles (path in the trie)
     val path = hashToNibbles(accountHash)
     
-    // Start from the root
-    val rootHash = stateRoot
+    // Start from the root (use stateRoot for account verification)
+    val root = rootHash
     
     // Traverse the proof following the path
-    traversePath(rootHash, path, proofMap, account)
+    traversePath(root, path, proofMap, account)
   }
 
   /** Traverse the trie path to find the account
@@ -267,13 +268,13 @@ class MerkleProofVerifier(stateRoot: ByteString) extends Logger {
     val firstNode = proofNodes.head
     val firstNodeHash = ByteString(firstNode.hash)
     
-    // Check if first node hash matches state root
-    if (firstNodeHash == stateRoot) {
+    // Check if first node hash matches expected root
+    if (firstNodeHash == rootHash) {
       Right(())
     } else {
       // In a partial proof, we might not have the full root
       // This is acceptable as long as the proof is internally consistent
-      log.debug(s"Proof root ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString} doesn't match state root ${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}")
+      log.debug(s"Proof root ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString} doesn't match expected root ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}")
       Right(())
     }
   }
@@ -299,15 +300,184 @@ class MerkleProofVerifier(stateRoot: ByteString) extends Logger {
       Seq((byte >> 4) & 0x0f, byte & 0x0f)
     }.map(_.toInt)
   }
+
+  /** Verify a storage range response with Merkle proof
+    *
+    * This method verifies storage slots against an account's storage root.
+    * Similar to account verification but operates on storage tries.
+    *
+    * The verification process:
+    * 1. Decode proof nodes from their RLP-encoded form
+    * 2. Build a partial storage trie from the proof nodes
+    * 3. Verify that storage slots exist in the trie at expected paths
+    * 4. Verify the proof root matches the expected storage root
+    *
+    * Note: The rootHash of this verifier should be the account's storageRoot
+    * when verifying storage ranges.
+    *
+    * @param slots Storage slots to verify (slotHash -> slotValue)
+    * @param proof Merkle proof nodes (RLP-encoded)
+    * @param startHash Starting hash of the range
+    * @param endHash Ending hash of the range
+    * @return Either error message or Unit on success
+    */
+  def verifyStorageRange(
+      slots: Seq[(ByteString, ByteString)],
+      proof: Seq[ByteString],
+      startHash: ByteString,
+      endHash: ByteString
+  ): Either[String, Unit] = {
+    
+    // Empty proof is valid if there are no storage slots
+    if (proof.isEmpty && slots.isEmpty) {
+      return Right(())
+    }
+
+    // If we have slots, we need a proof
+    if (proof.isEmpty && slots.nonEmpty) {
+      return Left(s"Missing proof for ${slots.size} storage slots")
+    }
+
+    try {
+      // Decode proof nodes
+      val proofNodes = decodeProofNodes(proof)
+      
+      // Build proof map: hash -> node
+      val proofMap = buildProofMap(proofNodes)
+      
+      // Verify each storage slot is in the proof
+      val verificationResults = slots.map { case (slotHash, slotValue) =>
+        verifyStorageSlotInProof(slotHash, slotValue, proofMap) match {
+          case Left(error) => Left(s"Storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} verification failed: $error")
+          case Right(_) => Right(())
+        }
+      }
+      
+      // Check if any verification failed
+      verificationResults.collectFirst { case Left(error) => error } match {
+        case Some(error) => return Left(error)
+        case None => // Continue
+      }
+      
+      // Verify the proof forms a valid path to the storage root
+      verifyProofRoot(proofNodes) match {
+        case Left(error) => Left(s"Storage proof root verification failed: $error")
+        case Right(_) => Right(())
+      }
+      
+    } catch {
+      case e: Exception =>
+        log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
+        Left(s"Storage verification error: ${e.getMessage}")
+    }
+  }
+
+  /** Verify a storage slot exists in the proof
+    *
+    * Similar to verifyAccountInProof but for storage slots.
+    *
+    * @param slotHash Hash of the storage slot
+    * @param slotValue Value of the storage slot
+    * @param proofMap Map of node hashes to nodes
+    * @return Either error or success
+    */
+  private def verifyStorageSlotInProof(
+      slotHash: ByteString,
+      slotValue: ByteString,
+      proofMap: Map[ByteString, MptNode]
+  ): Either[String, Unit] = {
+    
+    // Convert slot hash to nibbles (path in the trie)
+    val path = hashToNibbles(slotHash)
+    
+    // Start from the storage root
+    val root = rootHash
+    
+    // Traverse the proof following the path
+    traverseStoragePath(root, path, proofMap, slotValue)
+  }
+
+  /** Traverse the storage trie path to find the slot
+    *
+    * Similar to traversePath but for storage slots.
+    *
+    * @param currentHash Hash of current node to look up
+    * @param path Remaining path (nibbles) to traverse
+    * @param proofMap Map of node hashes to nodes
+    * @param expectedValue Expected slot value at the end of path
+    * @return Either error or success
+    */
+  private def traverseStoragePath(
+      currentHash: ByteString,
+      path: Seq[Int],
+      proofMap: Map[ByteString, MptNode],
+      expectedValue: ByteString
+  ): Either[String, Unit] = {
+    
+    // Look up the node in the proof
+    proofMap.get(currentHash) match {
+      case None =>
+        // Node not in proof - this is acceptable for partial proofs
+        Right(())
+        
+      case Some(leafNode: LeafNode) =>
+        // Found a leaf - verify it matches the expected value
+        if (leafNode.value == expectedValue) {
+          Right(())
+        } else {
+          Left(s"Storage value mismatch: expected ${expectedValue.take(4).toArray.map("%02x".format(_)).mkString}, got ${leafNode.value.take(4).toArray.map("%02x".format(_)).mkString}")
+        }
+        
+      case Some(branchNode: BranchNode) =>
+        // Branch node - follow the path
+        if (path.isEmpty) {
+          // We're at the end of the path
+          branchNode.terminator match {
+            case Some(value) =>
+              if (value == expectedValue) Right(())
+              else Left(s"Storage value mismatch at branch terminator")
+            case None => Left("Path ended at branch without terminator")
+          }
+        } else {
+          // Continue traversal
+          val nextIndex = path.head
+          branchNode.children.lift(nextIndex) match {
+            case Some(nextNode: HashNode) =>
+              traverseStoragePath(ByteString(nextNode.hash), path.tail, proofMap, expectedValue)
+            case Some(nextNode) =>
+              traverseStoragePath(ByteString(nextNode.hash), path.tail, proofMap, expectedValue)
+            case None =>
+              Left(s"No child at index $nextIndex")
+          }
+        }
+        
+      case Some(extensionNode: ExtensionNode) =>
+        // Extension node - match the shared key
+        val sharedNibbles = bytesToNibbles(extensionNode.sharedKey)
+        if (path.startsWith(sharedNibbles)) {
+          extensionNode.next match {
+            case hashNode: HashNode =>
+              traverseStoragePath(ByteString(hashNode.hash), path.drop(sharedNibbles.length), proofMap, expectedValue)
+            case nextNode =>
+              traverseStoragePath(ByteString(nextNode.hash), path.drop(sharedNibbles.length), proofMap, expectedValue)
+          }
+        } else {
+          Left("Path doesn't match extension node")
+        }
+        
+      case Some(_) =>
+        Left("Unexpected node type")
+    }
+  }
 }
 
 object MerkleProofVerifier {
   
-  /** Create a new verifier for a given state root
+  /** Create a new verifier for a given root hash
     *
-    * @param stateRoot State root hash
+    * @param rootHash Root hash (state root or storage root)
     * @return New verifier instance
     */
-  def apply(stateRoot: ByteString): MerkleProofVerifier =
-    new MerkleProofVerifier(stateRoot)
+  def apply(rootHash: ByteString): MerkleProofVerifier =
+    new MerkleProofVerifier(rootHash)
 }

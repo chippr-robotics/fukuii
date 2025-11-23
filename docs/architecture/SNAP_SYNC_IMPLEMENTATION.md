@@ -68,21 +68,30 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - Created comprehensive message documentation with protocol references
    - Created ADR documenting architecture decisions
 
+8. **Storage Range Sync** (Phase 5 - COMPLETED ✅)
+   - ✅ Created StorageTask for managing storage range state
+   - ✅ Implemented task creation for per-account storage downloads
+   - ✅ Created StorageRangeDownloader for coordinating downloads
+   - ✅ Request/response lifecycle management for storage ranges
+   - ✅ Progress tracking and statistics reporting for storage sync
+   - ✅ Task continuation handling for partial storage responses
+   - ✅ Timeout handling and task retry for storage requests
+   - ✅ Storage Merkle proof verification (enhanced MerkleProofVerifier)
+   - ✅ Storage slot validation against account's storageRoot
+   - ✅ Integration with storage layer (MptStorage) - storage slots stored as MPT nodes
+   - ✅ Integration with EtcPeerManager for sending storage requests
+   - ✅ Batched storage requests (multiple accounts per request)
+
 ### ⏳ Not Yet Implemented
 
 The following components are required for a complete SNAP sync implementation but are NOT yet included:
 
-1. **Storage Range Sync** (Phase 5)
-   - Download storage for accounts
-   - Verify storage proofs
-   - Store storage slots
-
-2. **State Healing** (Phase 6)
+1. **State Healing** (Phase 6)
    - Detect missing trie nodes
    - Request missing nodes via GetTrieNodes
    - Reassemble complete state trie
 
-3. **Integration** (Phase 7)
+2. **Integration** (Phase 7)
    - Integration with existing FastSync
    - Pivot block selection for snap sync
    - State validation and healing
@@ -136,10 +145,15 @@ To complete SNAP sync implementation, the following work is needed (in priority 
    - ✅ Integrate with MptStorage for account persistence
    - ✅ Connect with EtcPeerManager for request sending
 
-4. **Implement Storage Range Sync** (Phase 5)
-   - Download storage for accounts
-   - Verify storage proofs
-   - Store storage slots
+4. **~~Implement Storage Range Sync~~ ✅ COMPLETED (Phase 5)**
+   - ✅ Create StorageTask for managing storage ranges
+   - ✅ Implement StorageRangeDownloader for coordinating downloads
+   - ✅ Batched storage requests (multiple accounts per request)
+   - ✅ Progress tracking and statistics for storage sync
+   - ✅ Task continuation handling for partial storage responses
+   - ✅ Enhanced MerkleProofVerifier with storage proof verification
+   - ✅ Integrate with MptStorage for storage slot persistence
+   - ✅ Connect with EtcPeerManager for sending storage requests
 
 5. **Implement State Healing** (Phase 6)
    - Detect missing trie nodes
@@ -192,13 +206,17 @@ The immediate issue (peers disconnecting due to `bestBlock=0`) is partially addr
   - ✅ Merkle proof verification completed (MerkleProofVerifier)
   - ✅ Storage integration completed (MptStorage)
   - ✅ EtcPeerManager integration completed
-- **Phase 5 - Storage Range Sync**: ~1-2 weeks
+- **Phase 5 - Storage Range Sync** ✅ COMPLETED: ~1-2 weeks
+  - ✅ StorageTask and StorageRangeDownloader implemented
+  - ✅ Storage proof verification added to MerkleProofVerifier
+  - ✅ MptStorage integration for storage slots completed
+  - ✅ Batched storage requests implemented
 - **Phase 6 - State Healing**: ~2-3 weeks
 - **Phase 7 - Integration & Testing**: ~2-4 weeks
 
 **Total Estimate**: 2-3 months for complete, production-ready implementation
-**Completed**: Phases 1-4 (Protocol, Messages, Request/Response, Account Range Sync)
-**Next**: Phase 5 (Storage Range Sync)
+**Completed**: Phases 1-5 (Protocol, Messages, Request/Response, Account Range Sync, Storage Range Sync)
+**Next**: Phase 6 (State Healing)
 
 ## Contributing
 
@@ -221,4 +239,4 @@ For questions about this implementation or to contribute:
 
 *Last Updated: 2025-11-23*
 *Author: GitHub Copilot*
-*Status: Phase 4 Complete - Account Range Sync Fully Implemented*
+*Status: Phase 5 Complete - Storage Range Sync Fully Implemented*
