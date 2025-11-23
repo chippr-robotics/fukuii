@@ -32,7 +32,15 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - Followed core-geth reference implementation patterns
    - All messages now fully serializable and deserializable
 
-4. **Configuration** (Phase 1)
+4. **Message Handling** (Phase 3 - IN PROGRESS)
+   - ✅ Created SNAPMessageDecoder for routing SNAP protocol messages
+   - ✅ Implemented message decoding for all 8 SNAP message types
+   - ✅ Integrated with existing MessageDecoder infrastructure
+   - ⏳ Request/response matching (not yet implemented)
+   - ⏳ Timeout handling (not yet implemented)
+   - ⏳ Peer management for SNAP (not yet implemented)
+
+5. **Configuration** (Phase 1)
    - Added "snap/1" to capabilities list in all chain configurations:
      - `etc-chain.conf` (Ethereum Classic mainnet)
      - `mordor-chain.conf` (Ethereum Classic testnet)
@@ -40,7 +48,7 @@ This document describes the initial implementation of SNAP/1 protocol support in
      - `test-chain.conf` (test network)
      - `ropsten-chain.conf` (Ropsten testnet)
 
-5. **Documentation** (Phase 1)
+6. **Documentation** (Phase 1)
    - Updated ETH68.scala documentation to reference SNAP/1 for state sync
    - Created comprehensive message documentation with protocol references
    - Created ADR documenting architecture decisions
@@ -49,7 +57,7 @@ This document describes the initial implementation of SNAP/1 protocol support in
 
 The following components are required for a complete SNAP sync implementation but are NOT yet included:
 
-1. **Sync Logic** (Phase 3-6)
+1. **Sync Logic** (Phase 4-6)
    - Snap sync coordinator/controller
    - Account range downloader
    - Storage range downloader
@@ -57,11 +65,11 @@ The following components are required for a complete SNAP sync implementation bu
    - Trie healing logic
    - State reassembly
 
-2. **Message Handling** (Phase 3)
-   - Message router for SNAP protocol
-   - Request/response matching
-   - Timeout handling
-   - Peer management for SNAP
+2. **Advanced Message Handling** (Phase 3 - Remaining)
+   - Request/response matching and tracking
+   - Timeout handling for pending requests
+   - Peer management and selection for SNAP
+   - Message validation and error handling
 
 3. **Storage** (Phase 4-5)
    - Snapshot storage layer
@@ -107,10 +115,12 @@ To complete SNAP sync implementation, the following work is needed (in priority 
    - ~~Implement RLP encoders/decoders for all SNAP messages~~
    - ~~Add unit tests for message serialization~~
 
-2. **Implement Basic Request/Response Flow** (Phase 3 - NEXT)
-   - Create SNAP message handler
-   - Implement request routing
-   - Add response validation
+2. **Implement Basic Request/Response Flow** (Phase 3 - IN PROGRESS)
+   - ✅ Create SNAP message decoder (SNAPMessageDecoder)
+   - ✅ Implement message routing for all 8 SNAP messages
+   - ⏳ Add request/response matching and tracking
+   - ⏳ Implement timeout handling for requests
+   - ⏳ Add response validation
 
 3. **Implement Account Range Sync** (Phase 4)
    - Download account ranges from peers
@@ -163,14 +173,17 @@ The immediate issue (peers disconnecting due to `bestBlock=0`) is partially addr
 
 - **Phase 1 - Message Infrastructure** ✅ COMPLETED: ~1-2 days
 - **Phase 2 - Message Encoding** ✅ COMPLETED: ~3-5 days
-- **Phase 3 - Basic Request/Response**: ~1 week
+- **Phase 3 - Basic Request/Response** 🔄 IN PROGRESS: ~1 week
+  - ✅ Message decoder implemented
+  - ⏳ Request/response matching remaining
 - **Phase 4 - Account Range Sync**: ~2-3 weeks
 - **Phase 5 - Storage Range Sync**: ~1-2 weeks
 - **Phase 6 - State Healing**: ~2-3 weeks
 - **Phase 7 - Integration & Testing**: ~2-4 weeks
 
 **Total Estimate**: 2-3 months for complete, production-ready implementation
-**Completed**: Phases 1-2 (infrastructure and message encoding/decoding)
+**Completed**: Phases 1-2, Phase 3 partially (message decoder)
+**In Progress**: Phase 3 (request/response matching)
 
 ## Contributing
 
