@@ -23,6 +23,15 @@ import com.chipprbots.ethereum.rlp._
   *   2. Legacy ETH65 format: [hash1, hash2, ...] (sets default type=0, size=0)
   */
 object ETH67 {
+  
+  // Custom exception for ETH67 decode errors with enhanced diagnostics
+  private class ETH67DecodeException(message: String, cause: Throwable) 
+    extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause) {
+    def this(message: String) = this(message, null)
+  }
+  
+  // Maximum bytes to include in hex dumps for error messages
+  private val HexDumpMaxBytes = 100
 
   object NewPooledTransactionHashes {
     implicit class NewPooledTransactionHashesEnc(val underlyingMsg: NewPooledTransactionHashes)
@@ -40,33 +49,93 @@ object ETH67 {
 
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewPooledTransactionHashes: NewPooledTransactionHashes = {
-        rawDecode(bytes) match {
-          // ETH67/ETH68 enhanced format from core-geth: [types_as_byte_string, [sizes...], [hashes...]]
-          // Note: core-geth encodes Types []byte as RLPValue (byte string), not RLPList
-          // This matches Go's RLP encoding where []byte is encoded as a single byte string
-          case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList) =>
-            NewPooledTransactionHashes(
-              types = typesBytes.toSeq,
-              sizes = fromRlpList[BigInt](sizesList),
-              hashes = fromRlpList[ByteString](hashesList)
-            )
+        // Helper to create consistent hex dumps for error messages
+        def hexDump: String = {
+          val hexStr = Hex.toHexString(bytes.take(HexDumpMaxBytes))
+          if (bytes.length > HexDumpMaxBytes) s"$hexStr..." else hexStr
+        }
+        
+        try {
+          val decoded = rawDecode(bytes)
           
-          // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
-          // Some older nodes may still send this format
-          case rlpList: RLPList =>
-            val hashes = fromRlpList[ByteString](rlpList)
-            // For legacy format, assume all transactions are type 0 (legacy) with size 0 (unknown)
-            NewPooledTransactionHashes(
-              types = Seq.fill(hashes.size)(0.toByte),
-              sizes = Seq.fill(hashes.size)(BigInt(0)),
-              hashes = hashes
-            )
+          // Capture RLP structure for error reporting
+          val structureInfo = decoded match {
+            case rlpList: RLPList =>
+              val itemTypes = rlpList.items.map {
+                case RLPValue(b) => s"RLPValue(${b.length}b)"
+                case subList: RLPList => s"RLPList(${subList.items.size})"
+                case other => s"${other.getClass.getSimpleName}"
+              }.mkString(", ")
+              s"RLPList[${rlpList.items.size}]: [$itemTypes]"
+            case RLPValue(b) => s"RLPValue(${b.length} bytes)"
+            case other => s"${other.getClass.getSimpleName}"
+          }
           
-          case other =>
-            throw new RuntimeException(
-              s"Cannot decode NewPooledTransactionHashes - expected RLPList with structure " +
-              s"[RLPValue(types), RLPList(sizes), RLPList(hashes)] for ETH67/68 format, or " +
-              s"RLPList(hashes) for ETH65 legacy format, but got ${other.getClass.getSimpleName}"
+          decoded match {
+            // ETH67/ETH68 enhanced format from core-geth: [types_as_byte_string, [sizes...], [hashes...]]
+            // Note: core-geth encodes Types []byte as RLPValue (byte string), not RLPList
+            // This matches Go's RLP encoding where []byte is encoded as a single byte string
+            case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList) =>
+              try {
+                val types = typesBytes.toSeq
+                val sizes = fromRlpList[BigInt](sizesList)
+                val hashes = fromRlpList[ByteString](hashesList)
+                
+                NewPooledTransactionHashes(
+                  types = types,
+                  sizes = sizes,
+                  hashes = hashes
+                )
+              } catch {
+                case e: ArrayIndexOutOfBoundsException =>
+                  throw new ETH67DecodeException(
+                    s"ArrayIndexOutOfBoundsException in ETH67/68 format. " +
+                    s"Structure: $structureInfo. " +
+                    s"Types=${typesBytes.length}, Sizes=${sizesList.items.size}, Hashes=${hashesList.items.size}. " +
+                    s"Hex: $hexDump",
+                    e
+                  )
+                case e: Throwable =>
+                  throw new ETH67DecodeException(
+                    s"${e.getClass.getSimpleName} in ETH67/68 format: ${e.getMessage}. " +
+                    s"Structure: $structureInfo. Hex: $hexDump",
+                    e
+                  )
+              }
+            
+            // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
+            // Some older nodes may still send this format
+            case rlpList: RLPList =>
+              try {
+                val hashes = fromRlpList[ByteString](rlpList)
+                // For legacy format, assume all transactions are type 0 (legacy) with size 0 (unknown)
+                NewPooledTransactionHashes(
+                  types = Seq.fill(hashes.size)(0.toByte),
+                  sizes = Seq.fill(hashes.size)(BigInt(0)),
+                  hashes = hashes
+                )
+              } catch {
+                case e: Throwable =>
+                  throw new ETH67DecodeException(
+                    s"${e.getClass.getSimpleName} in ETH65 legacy format: ${e.getMessage}. " +
+                    s"Structure: $structureInfo. Hex: $hexDump",
+                    e
+                  )
+              }
+            
+            case other =>
+              throw new ETH67DecodeException(
+                s"Unexpected RLP structure. Expected [RLPValue, RLPList, RLPList] (ETH67/68) " +
+                s"or RLPList (ETH65 legacy), got: $structureInfo. Hex: $hexDump"
+              )
+          }
+        } catch {
+          case e: ETH67DecodeException => throw e  // Propagate our detailed errors
+          case e: Throwable =>
+            throw new ETH67DecodeException(
+              s"${e.getClass.getSimpleName} during RLP decode: ${e.getMessage}. " +
+              s"Length: ${bytes.length}, Hex: $hexDump",
+              e
             )
         }
       }
