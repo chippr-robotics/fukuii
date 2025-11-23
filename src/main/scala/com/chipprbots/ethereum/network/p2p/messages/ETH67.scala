@@ -32,55 +32,36 @@ object ETH67 {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        RLPList(toRlpList(types), toRlpList(sizes), toRlpList(hashes))
+        // Core-geth encodes Types as a single byte string (RLPValue), not a list
+        // to match Go's RLP encoding of []byte
+        RLPList(RLPValue(types.toArray), toRlpList(sizes), toRlpList(hashes))
       }
     }
 
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
       def toNewPooledTransactionHashes: NewPooledTransactionHashes = {
-        val decoded = rawDecode(bytes)
-        
-        // Enhanced debugging to understand the RLP structure from core-geth
-        decoded match {
+        rawDecode(bytes) match {
+          // ETH67/ETH68 enhanced format from core-geth: [types_as_byte_string, [sizes...], [hashes...]]
+          // Note: core-geth encodes Types []byte as RLPValue (byte string), not RLPList
+          // This matches Go's RLP encoding where []byte is encoded as a single byte string
+          case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList) =>
+            NewPooledTransactionHashes(
+              types = typesBytes.toSeq,
+              sizes = fromRlpList[BigInt](sizesList),
+              hashes = fromRlpList[ByteString](hashesList)
+            )
+          
+          // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
+          // Some older nodes may still send this format
           case rlpList: RLPList =>
-            val itemTypes = rlpList.items.map {
-              case _: RLPValue => "RLPValue"
-              case _: RLPList => "RLPList"
-              case other => other.getClass.getSimpleName
-            }.mkString("[", ", ", "]")
-            
-            println(s"DEBUG: NewPooledTransactionHashes RLP structure: " +
-              s"${rlpList.items.length} items, types: $itemTypes")
-            
-            rlpList.items match {
-              // ETH67/ETH68 enhanced format: [[types...], [sizes...], [hashes...]]
-              case Seq(typesList: RLPList, sizesList: RLPList, hashesList: RLPList) =>
-                println(s"DEBUG: ETH67/68 format - types: ${typesList.items.length}, " +
-                  s"sizes: ${sizesList.items.length}, hashes: ${hashesList.items.length}")
-                
-                // Debug sizes list structure
-                val sizesItemTypes = sizesList.items.take(3).map {
-                  case RLPValue(bytes) => s"RLPValue(${bytes.length} bytes, hex=${Hex.toHexString(bytes)})"
-                  case item: RLPList => s"RLPList(${item.items.length} items)"
-                  case other => other.toString
-                }.mkString("[", ", ", "]")
-                println(s"DEBUG: First 3 sizes items: $sizesItemTypes")
-                
-                NewPooledTransactionHashes(
-                  fromRlpList[Byte](typesList),
-                  fromRlpList[BigInt](sizesList),
-                  fromRlpList[ByteString](hashesList)
-                )
-              // ETH65 legacy format: [hash1, hash2, ...]
-              case _ =>
-                println(s"DEBUG: Using ETH65 legacy format fallback")
-                val hashes = fromRlpList[ByteString](rlpList)
-                NewPooledTransactionHashes(
-                  types = Seq.fill(hashes.size)(0.toByte),
-                  sizes = Seq.fill(hashes.size)(BigInt(0)),
-                  hashes = hashes
-                )
-            }
+            val hashes = fromRlpList[ByteString](rlpList)
+            // For legacy format, assume all transactions are type 0 (legacy) with size 0 (unknown)
+            NewPooledTransactionHashes(
+              types = Seq.fill(hashes.size)(0.toByte),
+              sizes = Seq.fill(hashes.size)(BigInt(0)),
+              hashes = hashes
+            )
+          
           case other =>
             throw new RuntimeException(
               s"Cannot decode NewPooledTransactionHashes - expected RLPList, got ${other.getClass.getSimpleName}"
