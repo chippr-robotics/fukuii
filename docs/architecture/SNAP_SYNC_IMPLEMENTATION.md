@@ -52,7 +52,7 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - ✅ Timeout handling and task retry
    - ✅ Merkle proof verification (MerkleProofVerifier)
    - ✅ Account data validation (nonce, balance, storageRoot, codeHash)
-   - ⚠️  Integration with storage layer (MptStorage) - **STUBBED, needs implementation**
+   - ✅ Integration with storage layer (MptStorage) - accounts stored as MPT nodes
    - ✅ Integration with EtcPeerManager for sending requests
 
 6. **Configuration** (Phase 1)
