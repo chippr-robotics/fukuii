@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.db.storage
 
+import org.apache.pekko.util.ByteString
+
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
@@ -87,8 +89,6 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     }
 
     "insert and get bootstrap pivot block properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
-      import org.apache.pekko.util.ByteString
-      
       val storage = newAppStateStorage()
       val pivotNumber = BigInt(10500000)
       val pivotHash = ByteString(Array.fill[Byte](32)(0xab.toByte))
@@ -100,8 +100,6 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     }
 
     "get zero and empty hash for bootstrap pivot when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
-      import org.apache.pekko.util.ByteString
-      
       val storage = newAppStateStorage()
       assert(storage.getBootstrapPivotBlock() == 0)
       assert(storage.getBootstrapPivotBlockHash() == ByteString.empty)

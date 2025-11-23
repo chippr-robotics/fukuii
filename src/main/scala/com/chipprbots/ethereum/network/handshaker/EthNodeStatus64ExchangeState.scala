@@ -136,8 +136,8 @@ case class EthNodeStatus64ExchangeState(
 
     if (bestBlockNumber == 0 && bootstrapPivotNumber == 0) {
       log.warn(
-        "STATUS_EXCHANGE: WARNING - Sending genesis block as best block! This may cause peer disconnections. " +
-        "Best block number: {}, best hash: {}, chain weight TD: {}",
+        "STATUS_EXCHANGE: WARNING - Sending genesis block as best block (no bootstrap pivot available)! " +
+        "This may cause peer disconnections. Best block number: {}, best hash: {}, chain weight TD: {}",
         bestBlockNumber,
         bestBlockHeader.hash,
         chainWeight.totalDifficulty
