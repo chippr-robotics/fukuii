@@ -64,7 +64,9 @@ object ETH67 {
           
           case other =>
             throw new RuntimeException(
-              s"Cannot decode NewPooledTransactionHashes - expected RLPList, got ${other.getClass.getSimpleName}"
+              s"Cannot decode NewPooledTransactionHashes - expected RLPList with structure " +
+              s"[RLPValue(types), RLPList(sizes), RLPList(hashes)] for ETH67/68 format, or " +
+              s"RLPList(hashes) for ETH65 legacy format, but got ${other.getClass.getSimpleName}"
             )
         }
       }
