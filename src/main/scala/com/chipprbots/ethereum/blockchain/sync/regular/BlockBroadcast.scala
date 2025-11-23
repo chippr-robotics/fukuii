@@ -53,6 +53,10 @@ class BlockBroadcast(val etcPeerManager: ActorRef) {
         case Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68 =>
           blockToBroadcast.as63
         case Capability.ETC64 => blockToBroadcast.asEtc64
+        case Capability.SNAP1 =>
+          // SNAP is a satellite protocol for state sync, not for block broadcasting
+          // Block broadcasting should use the ETH capability
+          blockToBroadcast.as63
       }
       etcPeerManager ! EtcPeerManagerActor.SendMessage(message, peer.id)
     }

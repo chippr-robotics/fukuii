@@ -8,13 +8,13 @@ This document describes the initial implementation of SNAP/1 protocol support in
 
 ### ✅ Completed
 
-1. **Protocol Infrastructure**
+1. **Protocol Infrastructure** (Phase 1)
    - Added `SNAP` protocol family to `ProtocolFamily` enum
    - Added `SNAP1` capability definition (snap/1)
    - Updated capability parsing to recognize "snap/1"
    - Updated `usesRequestId` to include SNAP1 (uses request IDs like ETH66+)
 
-2. **Message Definitions**
+2. **Message Definitions** (Phase 1)
    - Created `SNAP.scala` with all 8 SNAP/1 protocol messages:
      - `GetAccountRange` (0x00) - Request account ranges
      - `AccountRange` (0x01) - Response with accounts and proofs
@@ -25,7 +25,14 @@ This document describes the initial implementation of SNAP/1 protocol support in
      - `GetTrieNodes` (0x06) - Request trie nodes for healing
      - `TrieNodes` (0x07) - Response with trie nodes
 
-3. **Configuration**
+3. **Message Encoding/Decoding** (Phase 2 - COMPLETED)
+   - Implemented complete RLP encoding for all 8 SNAP messages
+   - Implemented complete RLP decoding for all 8 SNAP messages
+   - Added comprehensive error handling with descriptive messages
+   - Followed core-geth reference implementation patterns
+   - All messages now fully serializable and deserializable
+
+4. **Configuration** (Phase 1)
    - Added "snap/1" to capabilities list in all chain configurations:
      - `etc-chain.conf` (Ethereum Classic mainnet)
      - `mordor-chain.conf` (Ethereum Classic testnet)
@@ -33,15 +40,16 @@ This document describes the initial implementation of SNAP/1 protocol support in
      - `test-chain.conf` (test network)
      - `ropsten-chain.conf` (Ropsten testnet)
 
-4. **Documentation**
+5. **Documentation** (Phase 1)
    - Updated ETH68.scala documentation to reference SNAP/1 for state sync
    - Created comprehensive message documentation with protocol references
+   - Created ADR documenting architecture decisions
 
 ### ⏳ Not Yet Implemented
 
-The following components are required for a complete SNAP sync implementation but are NOT included in this initial commit:
+The following components are required for a complete SNAP sync implementation but are NOT yet included:
 
-1. **Sync Logic**
+1. **Sync Logic** (Phase 3-6)
    - Snap sync coordinator/controller
    - Account range downloader
    - Storage range downloader
@@ -49,24 +57,19 @@ The following components are required for a complete SNAP sync implementation bu
    - Trie healing logic
    - State reassembly
 
-2. **Message Encoding/Decoding**
-   - RLP encoders for SNAP messages (only `GetAccountRange` has full encoding)
-   - RLP decoders for SNAP messages
-   - Message serialization integration
-
-3. **Message Handling**
+2. **Message Handling** (Phase 3)
    - Message router for SNAP protocol
    - Request/response matching
    - Timeout handling
    - Peer management for SNAP
 
-4. **Storage**
+3. **Storage** (Phase 4-5)
    - Snapshot storage layer
    - Account range storage
    - Storage slot range storage
    - Incremental snapshot updates
 
-5. **Integration**
+4. **Integration** (Phase 7)
    - Integration with existing FastSync
    - Pivot block selection for snap sync
    - State validation and healing
@@ -100,31 +103,31 @@ The SNAP protocol would enhance this by:
 
 To complete SNAP sync implementation, the following work is needed (in priority order):
 
-1. **Complete Message Encoding/Decoding**
-   - Implement RLP encoders/decoders for all SNAP messages
-   - Add unit tests for message serialization
+1. **~~Complete Message Encoding/Decoding~~ ✅ COMPLETED (Phase 2)**
+   - ~~Implement RLP encoders/decoders for all SNAP messages~~
+   - ~~Add unit tests for message serialization~~
 
-2. **Implement Basic Request/Response Flow**
+2. **Implement Basic Request/Response Flow** (Phase 3 - NEXT)
    - Create SNAP message handler
    - Implement request routing
    - Add response validation
 
-3. **Implement Account Range Sync**
+3. **Implement Account Range Sync** (Phase 4)
    - Download account ranges from peers
    - Verify Merkle proofs
    - Store accounts locally
 
-4. **Implement Storage Range Sync**
+4. **Implement Storage Range Sync** (Phase 5)
    - Download storage for accounts
    - Verify storage proofs
    - Store storage slots
 
-5. **Implement State Healing**
+5. **Implement State Healing** (Phase 6)
    - Detect missing trie nodes
    - Request missing nodes via GetTrieNodes
    - Reassemble complete state trie
 
-6. **Integration and Testing**
+6. **Integration and Testing** (Phase 7)
    - Integrate with SyncController
    - Add configuration options
    - Test against geth, erigon, and other SNAP-enabled clients
@@ -158,8 +161,8 @@ The immediate issue (peers disconnecting due to `bestBlock=0`) is partially addr
 
 ## Implementation Timeline Estimate
 
-- **Phase 1 - Message Infrastructure** (COMPLETED): ~1-2 days
-- **Phase 2 - Message Encoding**: ~3-5 days
+- **Phase 1 - Message Infrastructure** ✅ COMPLETED: ~1-2 days
+- **Phase 2 - Message Encoding** ✅ COMPLETED: ~3-5 days
 - **Phase 3 - Basic Request/Response**: ~1 week
 - **Phase 4 - Account Range Sync**: ~2-3 weeks
 - **Phase 5 - Storage Range Sync**: ~1-2 weeks
@@ -167,6 +170,7 @@ The immediate issue (peers disconnecting due to `bestBlock=0`) is partially addr
 - **Phase 7 - Integration & Testing**: ~2-4 weeks
 
 **Total Estimate**: 2-3 months for complete, production-ready implementation
+**Completed**: Phases 1-2 (infrastructure and message encoding/decoding)
 
 ## Contributing
 

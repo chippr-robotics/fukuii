@@ -256,5 +256,9 @@ object EthereumMessageDecoder {
       case Capability.ETH66 => ETH66MessageDecoder
       case Capability.ETH67 => ETH67MessageDecoder
       case Capability.ETH68 => ETH68MessageDecoder
+      case Capability.SNAP1 =>
+        // SNAP protocol has its own message decoder (not implemented yet)
+        // For now, throw an error if someone tries to use SNAP as primary protocol
+        throw new IllegalArgumentException("SNAP1 is a satellite protocol and cannot be used as the primary protocol decoder. Use ETH protocol decoder.")
     }
 }
