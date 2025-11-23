@@ -99,9 +99,15 @@ object SNAP {
             ByteString(limitHashBytes),
             ByteUtils.bytesToBigInt(responseBytesBytes)
           )
+        case rlpList: RLPList => 
+          throw new RuntimeException(
+            s"Cannot decode GetAccountRange. Expected RLPList[5] with structure " +
+            s"[requestId, rootHash, startingHash, limitHash, responseBytes], " +
+            s"but got RLPList[${rlpList.items.size}]"
+          )
         case other => 
           throw new RuntimeException(
-            s"Cannot decode GetAccountRange. Expected RLPList[5], got: ${other.getClass.getSimpleName}"
+            s"Cannot decode GetAccountRange. Expected RLPList, got: ${other.getClass.getSimpleName}"
           )
       }
     }
