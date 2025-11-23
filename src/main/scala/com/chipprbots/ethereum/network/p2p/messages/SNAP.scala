@@ -3,13 +3,9 @@ package com.chipprbots.ethereum.network.p2p.messages
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
-import com.chipprbots.ethereum.rlp.RLPCodec.Ops
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.utils.ByteUtils
@@ -54,6 +50,10 @@ object SNAP {
     * @param startingHash Account hash of the first to retrieve
     * @param limitHash Account hash after which to stop serving data
     * @param responseBytes Soft limit at which to stop returning data
+    * 
+    * Note: This is the only SNAP message with full RLP encoding/decoding implemented.
+    * Other messages have structure definitions only and will need encoding/decoding
+    * implementation in future phases of SNAP sync development.
     */
   case class GetAccountRange(
       requestId: BigInt,
@@ -74,11 +74,11 @@ object SNAP {
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
         RLPList(
-          requestId,
+          RLPValue(requestId.toByteArray),
           RLPValue(rootHash.toArray[Byte]),
           RLPValue(startingHash.toArray[Byte]),
           RLPValue(limitHash.toArray[Byte]),
-          responseBytes
+          RLPValue(responseBytes.toByteArray)
         )
       }
     }
@@ -99,7 +99,10 @@ object SNAP {
             ByteString(limitHashBytes),
             ByteUtils.bytesToBigInt(responseBytesBytes)
           )
-        case _ => throw new RuntimeException("Cannot decode GetAccountRange")
+        case other => 
+          throw new RuntimeException(
+            s"Cannot decode GetAccountRange. Expected RLPList[5], got: ${other.getClass.getSimpleName}"
+          )
       }
     }
   }
@@ -111,6 +114,8 @@ object SNAP {
     * @param requestId ID of the request this is a response for
     * @param accounts List of consecutive accounts from the trie (account hash -> account body)
     * @param proof List of trie nodes proving the account range
+    * 
+    * TODO: Implement RLP encoding/decoding for this message.
     */
   case class AccountRange(
       requestId: BigInt,
@@ -132,6 +137,8 @@ object SNAP {
     * @param startingHash Storage slot hash to start from
     * @param limitHash Storage slot hash after which to stop
     * @param responseBytes Soft limit at which to stop returning data
+    * 
+    * TODO: Implement RLP encoding/decoding for this message.
     */
   case class GetStorageRanges(
       requestId: BigInt,
@@ -153,6 +160,8 @@ object SNAP {
     * @param requestId ID of the request this is a response for
     * @param slots List of storage slot sets (one per account)
     * @param proof List of trie nodes proving the storage ranges
+    * 
+    * TODO: Implement RLP encoding/decoding for this message.
     */
   case class StorageRanges(
       requestId: BigInt,
@@ -171,6 +180,8 @@ object SNAP {
     * @param requestId Request ID to match up responses
     * @param hashes List of bytecode hashes to retrieve
     * @param responseBytes Soft limit at which to stop returning data
+    * 
+    * TODO: Implement RLP encoding/decoding for this message.
     */
   case class GetByteCodes(
       requestId: BigInt,
@@ -188,6 +199,8 @@ object SNAP {
     *
     * @param requestId ID of the request this is a response for
     * @param codes List of contract bytecodes
+    * 
+    * TODO: Implement RLP encoding/decoding for this message.
     */
   case class ByteCodes(
       requestId: BigInt,
@@ -206,6 +219,8 @@ object SNAP {
     * @param rootHash Root hash of the trie to serve nodes from
     * @param paths List of trie paths to retrieve (each path is a list of node hashes)
     * @param responseBytes Soft limit at which to stop returning data
+    * 
+    * TODO: Implement RLP encoding/decoding for this message.
     */
   case class GetTrieNodes(
       requestId: BigInt,
@@ -224,6 +239,8 @@ object SNAP {
     *
     * @param requestId ID of the request this is a response for
     * @param nodes List of trie nodes (RLP-encoded)
+    * 
+    * TODO: Implement RLP encoding/decoding for this message.
     */
   case class TrieNodes(
       requestId: BigInt,
