@@ -32,30 +32,43 @@ object ETH67 {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        RLPList(toRlpList(types), toRlpList(sizes), toRlpList(hashes))
+        // Core-geth encodes Types as a single byte string (RLPValue), not a list
+        // to match Go's RLP encoding of []byte
+        RLPList(RLPValue(types.toArray), toRlpList(sizes), toRlpList(hashes))
       }
     }
 
     implicit class NewPooledTransactionHashesDec(val bytes: Array[Byte]) extends AnyVal {
-      def toNewPooledTransactionHashes: NewPooledTransactionHashes = rawDecode(bytes) match {
-        // ETH67/ETH68 enhanced format: [[types...], [sizes...], [hashes...]]
-        case RLPList(typesList: RLPList, sizesList: RLPList, hashesList: RLPList) =>
-          NewPooledTransactionHashes(
-            fromRlpList[Byte](typesList),
-            fromRlpList[BigInt](sizesList),
-            fromRlpList[ByteString](hashesList)
-          )
-        // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
-        // Some core-geth nodes still send this format even when negotiating ETH67/ETH68
-        case rlpList: RLPList =>
-          val hashes = fromRlpList[ByteString](rlpList)
-          // For legacy format, assume all transactions are type 0 (legacy) with size 0 (unknown)
-          NewPooledTransactionHashes(
-            types = Seq.fill(hashes.size)(0.toByte),
-            sizes = Seq.fill(hashes.size)(BigInt(0)),
-            hashes = hashes
-          )
-        case _ => throw new RuntimeException("Cannot decode NewPooledTransactionHashes")
+      def toNewPooledTransactionHashes: NewPooledTransactionHashes = {
+        rawDecode(bytes) match {
+          // ETH67/ETH68 enhanced format from core-geth: [types_as_byte_string, [sizes...], [hashes...]]
+          // Note: core-geth encodes Types []byte as RLPValue (byte string), not RLPList
+          // This matches Go's RLP encoding where []byte is encoded as a single byte string
+          case RLPList(RLPValue(typesBytes), sizesList: RLPList, hashesList: RLPList) =>
+            NewPooledTransactionHashes(
+              types = typesBytes.toSeq,
+              sizes = fromRlpList[BigInt](sizesList),
+              hashes = fromRlpList[ByteString](hashesList)
+            )
+          
+          // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
+          // Some older nodes may still send this format
+          case rlpList: RLPList =>
+            val hashes = fromRlpList[ByteString](rlpList)
+            // For legacy format, assume all transactions are type 0 (legacy) with size 0 (unknown)
+            NewPooledTransactionHashes(
+              types = Seq.fill(hashes.size)(0.toByte),
+              sizes = Seq.fill(hashes.size)(BigInt(0)),
+              hashes = hashes
+            )
+          
+          case other =>
+            throw new RuntimeException(
+              s"Cannot decode NewPooledTransactionHashes - expected RLPList with structure " +
+              s"[RLPValue(types), RLPList(sizes), RLPList(hashes)] for ETH67/68 format, or " +
+              s"RLPList(hashes) for ETH65 legacy format, but got ${other.getClass.getSimpleName}"
+            )
+        }
       }
     }
   }
