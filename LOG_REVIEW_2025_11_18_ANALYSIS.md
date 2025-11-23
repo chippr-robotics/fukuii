@@ -62,18 +62,61 @@ The log file **does NOT contain** the errors that the fixes in `LOG_REVIEW_RESOL
 
 **Conclusion**: The fixes are working correctly. The node can successfully decode messages from core-geth peers.
 
+### ✅ NewPooledTransactionHashes Messages Working
+
+**From detailed log (fukuii.2025.11.18_detailed.txt)**:
+
+The detailed log shows `NewPooledTransactionHashes` messages are **being received and decoded successfully**:
+
+```
+2025-11-22 23:02:56,703 DEBUG - Message received: NewPooledTransactionHashes { 
+  txs: (type=0, size=104, hash=e4385f2d...), 
+       (type=0, size=649, hash=0a708794...), 
+       (type=0, size=111, hash=fb4abddf...), 
+       (type=0, size=110, hash=c47f02f3...) 
+} from peer /164.90.144.106:30303
+
+2025-11-22 23:03:26,387 DEBUG - Message received: NewPooledTransactionHashes { 
+  txs: (type=0, size=649, hash=0a708794...), 
+       (type=0, size=110, hash=c47f02f3...), 
+       ... [10 transactions total]
+} from peer /64.225.0.245:30303
+```
+
+**Key Points**:
+- ✅ Messages decoded successfully (no ETH67_DECODE_ERROR)
+- ✅ All transaction types are `0` (legacy transactions)
+- ✅ Multiple peers sending transaction announcements
+- ✅ Variable number of transactions per message (1-10 txs)
+- ⚠️ Peers disconnect **1ms after** sending transaction hashes
+
+This proves the ETH67 fix is working correctly - the `types` field is being decoded as `RLPValue` as expected.
+
 ## Current Behavior Analysis
 
-### Observed Pattern
+### Observed Pattern (from detailed log fukuii.2025.11.18_detailed.txt)
 
 1. **Node starts at genesis** (block 0)
 2. **Peer discovery succeeds** - finds multiple peers
-3. **Handshake succeeds** - completes auth and protocol negotiation
+3. **Handshake succeeds** - completes auth and protocol negotiation (ETH68)
 4. **Status exchange succeeds**:
    - Local: `bestBlock=0, forkId=ForkId(0xfc64ec04, Some(1150000))` (genesis)
    - Remote: `bestBlock=21154569..., forkId=ForkId(0xbe46d57c, None)` (current chain height)
 5. **ForkID validation passes** - returns `Right(Connect)`
-6. **Peer immediately disconnects** - reason code `0x1` (TCP sub-system error)
+6. **We send GetBlockHeaders request** - requesting block 1920000 (DAO fork check)
+7. **Peer sends NewPooledTransactionHashes** - announcing available transactions
+8. **Peer immediately disconnects** - reason code `0x1` (TCP sub-system error), 1ms after sending transaction hashes
+
+### Detailed Sequence (timestamp 23:02:56)
+
+```
+23:02:56,615 - ForkId validation passed - accepting peer connection
+23:02:56,616 - Sent GetBlockHeaders{ block: 1920000 } to 157.245.77.211:30303
+23:02:56,703 - Message received: NewPooledTransactionHashes from /164.90.144.106:30303
+23:02:56,704 - DISCONNECT_DEBUG: Received disconnect from 164.90.144.106:30303 - reason code: 0x1
+```
+
+**Key Observation**: NewPooledTransactionHashes messages are **decoded successfully** (no errors), but peers disconnect immediately after sending them.
 
 ### Why Peers Disconnect
 
@@ -83,6 +126,13 @@ According to `SYNC_REVIEW_FINDINGS.md`, this is **expected behavior**:
 > - Fukuii starting from genesis advertises genesis block information
 > - Peers identify Fukuii as having no useful blockchain data
 > - This is **correct behavior** per Ethereum protocol: peers should disconnect from useless peers to conserve resources
+
+**Additional insight from detailed log**: Peers send `NewPooledTransactionHashes` messages (transaction announcements) because they just established a connection, but then immediately close the connection because the node has no useful data. The timing suggests:
+
+1. Peer completes handshake and status exchange
+2. Peer sees we're at genesis block (block 0)
+3. Peer sends pending transaction announcements (standard behavior after connecting)
+4. Peer closes connection to conserve resources (we can't help sync the chain)
 
 The node is experiencing the **"Bootstrap Paradox"** described in the documentation:
 ```
