@@ -32,13 +32,15 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - Followed core-geth reference implementation patterns
    - All messages now fully serializable and deserializable
 
-4. **Message Handling** (Phase 3 - IN PROGRESS)
+4. **Message Handling** (Phase 3 - COMPLETED)
    - ✅ Created SNAPMessageDecoder for routing SNAP protocol messages
    - ✅ Implemented message decoding for all 8 SNAP message types
    - ✅ Integrated with existing MessageDecoder infrastructure
-   - ⏳ Request/response matching (not yet implemented)
-   - ⏳ Timeout handling (not yet implemented)
-   - ⏳ Peer management for SNAP (not yet implemented)
+   - ✅ Created SNAPRequestTracker for request/response matching
+   - ✅ Implemented timeout handling for pending requests
+   - ✅ Added response validation for all SNAP message types
+   - ✅ Request ID generation and tracking
+   - ✅ Monotonic ordering validation for account and storage ranges
 
 5. **Configuration** (Phase 1)
    - Added "snap/1" to capabilities list in all chain configurations:
@@ -65,19 +67,13 @@ The following components are required for a complete SNAP sync implementation bu
    - Trie healing logic
    - State reassembly
 
-2. **Advanced Message Handling** (Phase 3 - Remaining)
-   - Request/response matching and tracking
-   - Timeout handling for pending requests
-   - Peer management and selection for SNAP
-   - Message validation and error handling
-
-3. **Storage** (Phase 4-5)
+2. **Storage** (Phase 4-5)
    - Snapshot storage layer
    - Account range storage
    - Storage slot range storage
    - Incremental snapshot updates
 
-4. **Integration** (Phase 7)
+3. **Integration** (Phase 7)
    - Integration with existing FastSync
    - Pivot block selection for snap sync
    - State validation and healing
@@ -115,14 +111,14 @@ To complete SNAP sync implementation, the following work is needed (in priority 
    - ~~Implement RLP encoders/decoders for all SNAP messages~~
    - ~~Add unit tests for message serialization~~
 
-2. **Implement Basic Request/Response Flow** (Phase 3 - IN PROGRESS)
-   - ✅ Create SNAP message decoder (SNAPMessageDecoder)
-   - ✅ Implement message routing for all 8 SNAP messages
-   - ⏳ Add request/response matching and tracking
-   - ⏳ Implement timeout handling for requests
-   - ⏳ Add response validation
+2. **~~Implement Basic Request/Response Flow~~ ✅ COMPLETED (Phase 3)**
+   - ~~Create SNAP message decoder (SNAPMessageDecoder)~~
+   - ~~Implement message routing for all 8 SNAP messages~~
+   - ~~Add request/response matching and tracking (SNAPRequestTracker)~~
+   - ~~Implement timeout handling for requests~~
+   - ~~Add response validation~~
 
-3. **Implement Account Range Sync** (Phase 4)
+3. **Implement Account Range Sync** (Phase 4 - NEXT)
    - Download account ranges from peers
    - Verify Merkle proofs
    - Store accounts locally
@@ -173,17 +169,19 @@ The immediate issue (peers disconnecting due to `bestBlock=0`) is partially addr
 
 - **Phase 1 - Message Infrastructure** ✅ COMPLETED: ~1-2 days
 - **Phase 2 - Message Encoding** ✅ COMPLETED: ~3-5 days
-- **Phase 3 - Basic Request/Response** 🔄 IN PROGRESS: ~1 week
+- **Phase 3 - Basic Request/Response** ✅ COMPLETED: ~1 week
   - ✅ Message decoder implemented
-  - ⏳ Request/response matching remaining
+  - ✅ Request/response matching completed
+  - ✅ Timeout handling completed
+  - ✅ Response validation completed
 - **Phase 4 - Account Range Sync**: ~2-3 weeks
 - **Phase 5 - Storage Range Sync**: ~1-2 weeks
 - **Phase 6 - State Healing**: ~2-3 weeks
 - **Phase 7 - Integration & Testing**: ~2-4 weeks
 
 **Total Estimate**: 2-3 months for complete, production-ready implementation
-**Completed**: Phases 1-2, Phase 3 partially (message decoder)
-**In Progress**: Phase 3 (request/response matching)
+**Completed**: Phases 1-3 (infrastructure, encoding/decoding, request/response flow)
+**Next**: Phase 4 (Account Range Sync)
 
 ## Contributing
 
