@@ -659,44 +659,46 @@ function validateGetBalanceArgs(args: unknown) {
 ## Implementation Roadmap
 
 ### Phase 1: Core Infrastructure (Week 1-2)
-- [ ] Set up MCP server project structure
-- [ ] Implement basic server with MCP SDK
-- [ ] Add Fukuii JSON-RPC client
-- [ ] Implement authentication and rate limiting
-- [ ] Create configuration system
+- Set up MCP server project structure
+- Implement basic server with MCP SDK
+- Add Fukuii JSON-RPC client
+- Implement authentication and rate limiting
+- Create configuration system
 
 ### Phase 2: Essential Resources (Week 2-3)
-- [ ] Implement block resources
-- [ ] Implement transaction resources
-- [ ] Implement account resources
-- [ ] Implement network resources
-- [ ] Add resource caching
+- Implement block resources
+- Implement transaction resources
+- Implement account resources
+- Implement network resources
+- Add resource caching
 
 ### Phase 3: Core Tools (Week 3-4)
-- [ ] Implement query tools (get_block, get_transaction, etc.)
-- [ ] Implement analysis tools (analyze_transaction, get_network_status)
-- [ ] Implement estimation tools (estimate_gas)
-- [ ] Add comprehensive error handling
+- Implement query tools (get_block, get_transaction, etc.)
+- Implement analysis tools (analyze_transaction, get_network_status)
+- Implement estimation tools (estimate_gas)
+- Add comprehensive error handling
 
 ### Phase 4: Advanced Features (Week 4-5)
-- [ ] Implement log querying tools
-- [ ] Add contract interaction tools
-- [ ] Implement transaction tools (with confirmations)
-- [ ] Add batch operation support
+- Implement log querying tools
+- Add contract interaction tools
+- Implement transaction tools (with confirmations)
+- Add batch operation support
 
 ### Phase 5: Testing & Documentation (Week 5-6)
-- [ ] Unit tests for all tools and resources
-- [ ] Integration tests with Fukuii
-- [ ] Performance testing and optimization
-- [ ] Complete documentation
-- [ ] Example MCP client implementations
+- Unit tests for all tools and resources
+- Integration tests with Fukuii
+- Performance testing and optimization
+- Complete documentation
+- Example MCP client implementations
 
 ### Phase 6: Deployment (Week 6-7)
-- [ ] Docker container for MCP server
-- [ ] Kubernetes manifests
-- [ ] CI/CD pipeline
-- [ ] Monitoring and logging
-- [ ] Production deployment guide
+- Docker container for MCP server
+- Kubernetes manifests
+- CI/CD pipeline
+- Monitoring and logging
+- Production deployment guide
+
+**Status**: Planning phase - implementation not yet started
 
 ## Testing Strategy
 

@@ -77,6 +77,7 @@ Fukuii organizes JSON-RPC methods into namespaces:
 | Namespace | Endpoints | Purpose | Production Ready |
 |-----------|-----------|---------|------------------|
 | **ETH** | 40 | Core blockchain operations | ✅ Yes |
+<!-- Note: Keep endpoint counts synchronized with JSON_RPC_API_REFERENCE.md -->
 | **WEB3** | 2 | Utility methods | ✅ Yes |
 | **NET** | 3 | Network information | ✅ Yes |
 | **PERSONAL** | 8 | Account management | ⚠️ Dev only |

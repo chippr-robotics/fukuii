@@ -16,6 +16,12 @@ This document provides a comprehensive reference for all JSON-RPC endpoints supp
 - [PERSONAL Namespace](#personal-namespace)
 - [DEBUG Namespace](#debug-namespace)
 - [Custom Namespaces](#custom-namespaces)
+  - [FUKUII Namespace](#fukuii-namespace)
+  - [CHECKPOINTING Namespace](#checkpointing-namespace-etc-specific)
+  - [QA Namespace](#qa-namespace-testing)
+  - [TEST Namespace](#test-namespace-testing)
+  - [IELE Namespace](#iele-namespace)
+  - [RPC Namespace](#rpc-namespace)
 - [Error Codes](#error-codes)
 - [Best Practices](#best-practices)
 

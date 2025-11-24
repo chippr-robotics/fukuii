@@ -153,6 +153,7 @@ Based on the latest Ethereum JSON-RPC specification, the following standard meth
    - **Status**: ⚠️ Missing
    - **Priority**: Medium
    - **Use Case**: Offline transaction signing
+   - **Note**: Omitted for security reasons; use `personal_sendTransaction` with passphrase or sign offline
 
 2. **`eth_createAccessList`** (EIP-2930)
    - **Status**: ⚠️ Missing
