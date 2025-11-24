@@ -7,7 +7,7 @@ This document provides a comprehensive analysis of fukuii's JSON-RPC implementat
 
 ## Executive Summary
 
-Fukuii implements **77 JSON-RPC endpoints** across **11 namespaces**. The implementation covers all core Ethereum JSON-RPC methods plus several extensions specific to Ethereum Classic and testing/development needs.
+Fukuii implements **78 JSON-RPC endpoints** across **11 namespaces**. The implementation covers all core Ethereum JSON-RPC methods plus several extensions specific to Ethereum Classic and testing/development needs.
 
 **Coverage Status**:
 - ✅ **Complete**: All standard Ethereum JSON-RPC methods are implemented

@@ -7,7 +7,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 ### Core API Documentation
 
 1. **[JSON-RPC API Reference](./JSON_RPC_API_REFERENCE.md)**
-   - Complete reference for all 77 JSON-RPC endpoints
+   - Complete reference for all 78 JSON-RPC endpoints
    - Request/response examples for each method
    - Parameter descriptions and validation rules
    - Error codes and handling
@@ -62,7 +62,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 3. **Import Insomnia Workspace**:
    - Open Insomnia
    - Import `insomnia_workspace.json`
-   - Start exploring all 77 endpoints
+   - Start exploring all 78 endpoints
 
 ### For AI Integration
 
@@ -377,7 +377,7 @@ When updating API documentation:
 - ✅ Completed coverage analysis
 - ✅ Added MCP integration guide
 - ✅ Updated Insomnia workspace
-- ✅ Documented all 77 endpoints
+- ✅ Documented all 78 endpoints
 
 ### Future Plans
 - [ ] Implement missing EIP-1559 methods
