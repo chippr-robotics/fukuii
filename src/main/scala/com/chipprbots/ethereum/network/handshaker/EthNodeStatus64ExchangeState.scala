@@ -79,47 +79,22 @@ case class EthNodeStatus64ExchangeState(
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
-    val bootstrapPivotNumber = appStateStorage.getBootstrapPivotBlock()
-    val bootstrapPivotHash = appStateStorage.getBootstrapPivotBlockHash()
     
-    // If we only have genesis but have a bootstrap pivot, use the pivot for the Status message
-    // to avoid fork ID incompatibility and peer disconnections during initial sync
-    val (effectiveHash, effectiveNumber) = 
-      if (bestBlockNumber == 0 && bootstrapPivotNumber > 0 && bootstrapPivotHash.nonEmpty) {
-        log.info(
-          "Using bootstrap pivot block {} (hash: {}) for Status message instead of genesis to avoid peer disconnections",
-          bootstrapPivotNumber,
-          com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(bootstrapPivotHash)
-        )
-        (bootstrapPivotHash, bootstrapPivotNumber)
-      } else {
-        (bestBlockHeader.hash, bestBlockNumber)
-      }
+    val chainWeight = blockchainReader
+      .getChainWeightByHash(bestBlockHeader.hash)
+      .getOrElse(
+        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
+      )
     
-    // Calculate chain weight and fork ID for the effective block
-    val (chainWeight, forkId) = if (bestBlockNumber == 0 && bootstrapPivotNumber > 0) {
-      val estimatedTotalDifficulty = bootstrapPivotNumber * EtcNodeStatusExchangeState.EstimatedDifficultyPerBlock
-      val weight = com.chipprbots.ethereum.domain.ChainWeight(0, estimatedTotalDifficulty)
-      val genesisHash = blockchainReader.genesisHeader.hash
-      val forkIdForPivot = ForkId.create(genesisHash, blockchainConfig)(bootstrapPivotNumber)
-      (weight, forkIdForPivot)
-    } else {
-      val weight = blockchainReader
-        .getChainWeightByHash(bestBlockHeader.hash)
-        .getOrElse(
-          throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
-        )
-      val genesisHash = blockchainReader.genesisHeader.hash
-      val forkIdForBest = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber)
-      (weight, forkIdForBest)
-    }
+    val genesisHash = blockchainReader.genesisHeader.hash
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,
       networkId = peerConfiguration.networkId,
       totalDifficulty = chainWeight.totalDifficulty,
-      bestHash = effectiveHash,
-      genesisHash = blockchainReader.genesisHeader.hash,
+      bestHash = bestBlockHeader.hash,
+      genesisHash = genesisHash,
       forkId = forkId
     )
 
@@ -128,21 +103,11 @@ case class EthNodeStatus64ExchangeState(
       status.protocolVersion,
       status.networkId,
       status.totalDifficulty,
-      effectiveNumber,
-      effectiveHash,
-      blockchainReader.genesisHeader.hash,
+      bestBlockNumber,
+      bestBlockHeader.hash,
+      genesisHash,
       forkId
     )
-
-    if (bestBlockNumber == 0 && bootstrapPivotNumber == 0) {
-      log.warn(
-        "STATUS_EXCHANGE: WARNING - Sending genesis block as best block (no bootstrap pivot available)! " +
-        "This may cause peer disconnections. Best block number: {}, best hash: {}, chain weight TD: {}",
-        bestBlockNumber,
-        bestBlockHeader.hash,
-        chainWeight.totalDifficulty
-      )
-    }
 
     status
   }
