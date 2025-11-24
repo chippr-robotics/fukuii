@@ -34,7 +34,11 @@ User guides and configuration documentation.
 
 #### 🌐 [API Documentation](api/)
 JSON-RPC API documentation and tools.
-- [Insomnia Workspace Guide](api/INSOMNIA_WORKSPACE_GUIDE.md) - Complete API testing workspace
+- **[API Documentation Index](api/README.md)** - Complete API documentation hub
+- [JSON-RPC API Reference](api/JSON_RPC_API_REFERENCE.md) - Comprehensive endpoint reference (77 methods)
+- [JSON-RPC Coverage Analysis](api/JSON_RPC_COVERAGE_ANALYSIS.md) - Gap analysis vs Ethereum specification
+- [MCP Integration Guide](api/MCP_INTEGRATION_GUIDE.md) - Model Context Protocol server planning
+- [Insomnia Workspace Guide](api/INSOMNIA_WORKSPACE_GUIDE.md) - API testing workspace guide
 - [RPC API Analysis](api/INSOMNIA_RPC_ANALYSIS.md) - Implementation comparison with Ethereum execution-apis
 
 #### 📊 [Reports](reports/)
