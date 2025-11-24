@@ -52,11 +52,3 @@ trait EtcNodeStatusExchangeState[T <: Message] extends InProgressState[PeerInfo]
   protected def createStatusMsg(): MessageSerializable
 
 }
-
-object EtcNodeStatusExchangeState {
-  /** Estimated average difficulty per block for ETC mainnet, used when calculating total difficulty
-    * for bootstrap pivot blocks. This is a rough approximation (~2 TH) sufficient for Status exchange.
-    * The actual chain weight will be determined during sync.
-    */
-  val EstimatedDifficultyPerBlock: BigInt = BigInt(2000000000000L)
-}

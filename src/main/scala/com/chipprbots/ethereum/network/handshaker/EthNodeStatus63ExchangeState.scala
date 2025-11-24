@@ -20,41 +20,18 @@ case class EthNodeStatus63ExchangeState(
 
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
-    val bestBlockNumber = blockchainReader.getBestBlockNumber()
-    val bootstrapPivotNumber = appStateStorage.getBootstrapPivotBlock()
-    val bootstrapPivotHash = appStateStorage.getBootstrapPivotBlockHash()
     
-    // If we only have genesis but have a bootstrap pivot, use the pivot for the Status message
-    // to avoid fork ID incompatibility and peer disconnections during initial sync
-    val effectiveHash = 
-      if (bestBlockNumber == 0 && bootstrapPivotNumber > 0 && bootstrapPivotHash.nonEmpty) {
-        log.info(
-          "Using bootstrap pivot block {} (hash: {}) for Status message instead of genesis to avoid peer disconnections",
-          bootstrapPivotNumber,
-          com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(bootstrapPivotHash)
-        )
-        bootstrapPivotHash
-      } else {
-        bestBlockHeader.hash
-      }
-    
-    // Calculate chain weight for the effective block
-    val chainWeight = if (bestBlockNumber == 0 && bootstrapPivotNumber > 0) {
-      val estimatedTotalDifficulty = bootstrapPivotNumber * EtcNodeStatusExchangeState.EstimatedDifficultyPerBlock
-      com.chipprbots.ethereum.domain.ChainWeight(0, estimatedTotalDifficulty)
-    } else {
-      blockchainReader
-        .getChainWeightByHash(bestBlockHeader.hash)
-        .getOrElse(
-          throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
-        )
-    }
+    val chainWeight = blockchainReader
+      .getChainWeightByHash(bestBlockHeader.hash)
+      .getOrElse(
+        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
+      )
 
     val status = BaseETH6XMessages.Status(
       protocolVersion = Capability.ETH63.version,
       networkId = peerConfiguration.networkId,
       totalDifficulty = chainWeight.totalDifficulty,
-      bestHash = effectiveHash,
+      bestHash = bestBlockHeader.hash,
       genesisHash = blockchainReader.genesisHeader.hash
     )
 
