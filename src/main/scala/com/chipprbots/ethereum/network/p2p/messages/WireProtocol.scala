@@ -84,6 +84,7 @@ object WireProtocol {
     object Reasons {
       val DisconnectRequested = 0x00
       val TcpSubsystemError = 0x01
+      val BreachOfProtocol = 0x02
       val UselessPeer = 0x03
       val TooManyPeers = 0x04
       val AlreadyConnected = 0x05
@@ -100,6 +101,7 @@ object WireProtocol {
       reasonCode match {
         case Reasons.DisconnectRequested            => "Disconnect requested"
         case Reasons.TcpSubsystemError              => "TCP sub-system error"
+        case Reasons.BreachOfProtocol               => "Breach of protocol, e.g. malformed message, bad RLP"
         case Reasons.UselessPeer                    => "Useless peer"
         case Reasons.TooManyPeers                   => "Too many peers"
         case Reasons.AlreadyConnected               => "Already connected"
