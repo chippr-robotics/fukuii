@@ -133,10 +133,15 @@ class FrameCodec(private val secrets: Secrets) {
       headBuffer(1) = (totalSize >> 8).toByte
       headBuffer(2) = totalSize.toByte
 
-      var headerDataElems: Seq[Array[Byte]] = Nil
-      headerDataElems :+= rlp.encode(frame.header.protocol)
-      frame.header.contextId.foreach(cid => headerDataElems :+= rlp.encode(cid))
-      frame.header.totalPacketSize.foreach(tfs => headerDataElems :+= rlp.encode(tfs))
+      // Build header data as a sequence of raw int values, then encode once
+      // Previously this was double-encoding: each value was RLP-encoded, then the
+      // sequence was encoded again, causing interoperability issues with other
+      // RLPx implementations (e.g., core-geth). The correct approach is to encode
+      // the sequence of integers directly.
+      var headerDataElems: Seq[Int] = Nil
+      headerDataElems :+= frame.header.protocol
+      frame.header.contextId.foreach(cid => headerDataElems :+= cid)
+      frame.header.totalPacketSize.foreach(tfs => headerDataElems :+= tfs)
 
       val headerData = rlp.encode(headerDataElems)
       System.arraycopy(headerData, 0, headBuffer, 3, headerData.length)
