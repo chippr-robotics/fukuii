@@ -270,7 +270,9 @@ class PeerActor[R <: HandshakeResult](
             IdentityTheSame | Other =>
           context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
           rlpxConnection.uriOpt.foreach(uri => knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri))
-        case TooManyPeers =>
+        case TooManyPeers | TcpSubsystemError | DisconnectRequested | ClientQuitting | TimeoutOnReceivingAMessage =>
+          // These disconnect reasons should be reported for blacklisting but don't require
+          // removing the node from known nodes (they may be temporary issues)
           context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
         case _ => // nothing
       }

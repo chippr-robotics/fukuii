@@ -452,12 +452,24 @@ Bytes: 0xf8 0x... (list of headers)
 ```
 GetBlockHeaders message:
 RLP: [requestId, [block, maxHeaders, skip, reverse]]
-Bytes: 0xc5 0x00 0xc4 0x01 0x01 0x00 0x00
-       └─ RLPList with 2 items (requestId + inner list)
+
+For requestId=0 (empty bytes per RLP spec):
+Bytes: 0xc6 0x80 0xc4 0x01 0x01 0x00 0x00
+       │    │    └─ Inner RLPList: [block=1, maxHeaders=1, skip=0, reverse=0]
+       │    └─ requestId=0 encoded as 0x80 (empty byte string, NOT 0x00)
+       └─ Outer RLPList marker
+
+For requestId=42:
+Bytes: 0xc6 0x2a 0xc4 0x01 0x01 0x00 0x00
+            └─ requestId=42 encoded as 0x2a (single byte < 0x80)
+
+IMPORTANT: Per Ethereum RLP specification, integer 0 MUST be encoded as 
+an empty byte string (0x80), not as a single byte 0x00. This is critical
+for interoperability with core-geth and other Ethereum clients.
 
 BlockHeaders response:
 RLP: [requestId, [header1, header2, ...]]
-Bytes: 0x... 0x00 0xf8 0x...
+Bytes: 0x... 0x80 0xf8 0x...
        └─ RLPList with 2 items (requestId + headers list)
 ```
 

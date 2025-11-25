@@ -90,7 +90,22 @@ case class EthNodeStatus64ExchangeState(
       )
     
     val genesisHash = blockchainReader.genesisHeader.hash
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber)
+    
+    // EIP-2124: Use bootstrap pivot block for ForkId calculation when at genesis
+    // This ensures we advertise a ForkId compatible with synced peers, avoiding
+    // immediate disconnection due to ForkId mismatch (issue #574)
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    val forkIdBlockNumber = if (bestBlockNumber == 0 && bootstrapPivotBlock > 0) {
+      log.info(
+        "STATUS_EXCHANGE: Using bootstrap pivot block {} for ForkId calculation (actual best block: {})",
+        bootstrapPivotBlock,
+        bestBlockNumber
+      )
+      bootstrapPivotBlock
+    } else {
+      bestBlockNumber
+    }
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,
