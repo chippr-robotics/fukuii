@@ -24,33 +24,16 @@ object ForkId {
     crc.update(genesisHash.asByteBuffer)
     val forks = gatherForks(config)
 
-    // EIP-2124 ForkId calculation with practical workaround for unsynced nodes
-    // 
-    // Problem: When at block 0, strictly following EIP-2124 reports genesis ForkId
-    // (e.g., 0xfc64ec04 for ETC). However, synced peers running core-geth and other
-    // clients often reject this as "incompatible" because they expect nodes to be
-    // at or near the current chain head.
-    //
-    // Solution: When head is 0, report the latest fork's ForkId to match what
-    // synced peers expect. This is a pragmatic deviation from strict EIP-2124
-    // that allows unsynced nodes to establish peer connections.
-    //
-    // Once the node advances past block 0, normal ForkId calculation resumes.
-    if (head == 0 && forks.nonEmpty) {
-      // Calculate ForkId for the latest known fork
-      forks.foreach { fork =>
+    // EIP-2124 compliant ForkId calculation matching Core-Geth reference implementation
+    // At block 0: reports genesis ForkId (0xfc64ec04 for ETC) per Core-Geth test cases
+    // Core-Geth: {0, 0, ID{Hash: checksumToBytes(0xfc64ec04), Next: 1150000}}
+    val next = forks.find { fork =>
+      if (fork <= head) {
         crc.update(bigIntToBytes(fork, 8))
       }
-      new ForkId(crc.getValue(), None)
-    } else {
-      val next = forks.find { fork =>
-        if (fork <= head) {
-          crc.update(bigIntToBytes(fork, 8))
-        }
-        fork > head
-      }
-      new ForkId(crc.getValue(), next)
+      fork > head
     }
+    new ForkId(crc.getValue(), next)
   }
 
   val noFork: BigInt = BigInt("1000000000000000000")
