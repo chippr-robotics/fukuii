@@ -113,13 +113,16 @@ case class EthNodeStatus64ExchangeState(
     )
 
     // Debug: Log the raw RLP-encoded message bytes for protocol analysis
-    val encodedBytes = status.toBytes
-    val hexBytes = org.bouncycastle.util.encoders.Hex.toHexString(encodedBytes)
-    log.debug(
-      "STATUS_EXCHANGE: Raw RLP bytes (len={}): {}",
-      encodedBytes.length,
-      if (hexBytes.length > 200) hexBytes.take(200) + "..." else hexBytes
-    )
+    // Only compute hex encoding when debug logging is enabled to avoid overhead
+    if (log.underlying.isDebugEnabled()) {
+      val encodedBytes = status.toBytes
+      val hexBytes = org.bouncycastle.util.encoders.Hex.toHexString(encodedBytes)
+      log.debug(
+        "STATUS_EXCHANGE: Raw RLP bytes (len={}): {}",
+        encodedBytes.length,
+        if (hexBytes.length > 200) hexBytes.take(200) + "..." else hexBytes
+      )
+    }
 
     status
   }
