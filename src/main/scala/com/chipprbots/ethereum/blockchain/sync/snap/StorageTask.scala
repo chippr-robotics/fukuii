@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.network.Peer
-
 /** Storage range task for SNAP sync
   *
   * Represents a range of storage slots to download for a specific account.

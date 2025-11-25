@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, MptStorage}
 import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /**
   * SNAP Sync Controller - Main coordinator for SNAP sync process
@@ -43,7 +44,7 @@ class SNAPSyncController(
   private var trieNodeHealer: Option[TrieNodeHealer] = None
   
   // Request tracker for all SNAP requests
-  private val requestTracker = new SNAPRequestTracker(snapSyncConfig.timeout)
+  private val requestTracker = new SNAPRequestTracker()(scheduler)
   
   // State tracking
   private var currentPhase: SyncPhase = Idle
@@ -114,7 +115,7 @@ class SNAPSyncController(
     
     if (pivotBlockNumber <= 0) {
       log.error(s"Cannot start SNAP sync: pivot block $pivotBlockNumber <= 0")
-      context.parent ! SyncProtocol.Done
+      context.parent ! SyncProtocol.Status.SyncDone
       return
     }
 
@@ -124,8 +125,9 @@ class SNAPSyncController(
     blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
       case Some(header) =>
         stateRoot = Some(header.stateRoot)
-        appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
-        appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+        // TODO: Add AppStateStorage methods for SNAP sync state tracking
+        // appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
+        // appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
         
         log.info(s"SNAP sync pivot block: $pivotBlockNumber, state root: ${header.stateRoot.toHex}")
         
@@ -136,7 +138,7 @@ class SNAPSyncController(
 
       case None =>
         log.error(s"Cannot get header for pivot block $pivotBlockNumber")
-        context.parent ! SyncProtocol.Done
+        context.parent ! SyncProtocol.Status.SyncDone
     }
   }
 
@@ -150,7 +152,7 @@ class SNAPSyncController(
         requestTracker = requestTracker,
         mptStorage = mptStorage,
         concurrency = snapSyncConfig.accountConcurrency
-      )
+      )(scheduler)
     )
 
     progressMonitor.startPhase(AccountRangeSync)
@@ -172,8 +174,8 @@ class SNAPSyncController(
           etcPeerManager = etcPeerManager,
           requestTracker = requestTracker,
           mptStorage = mptStorage,
-          batchSize = snapSyncConfig.storageBatchSize
-        )
+          maxAccountsPerBatch = snapSyncConfig.storageBatchSize
+        )(scheduler)
       )
 
       progressMonitor.startPhase(StorageRangeSync)
@@ -249,7 +251,8 @@ class SNAPSyncController(
 
   private def completeSnapSync(): Unit = {
     pivotBlock.foreach { pivot =>
-      appStateStorage.putSnapSyncDone(true).commit()
+      // TODO: Add AppStateStorage method for SNAP sync completion tracking
+      // appStateStorage.putSnapSyncDone(true).commit()
       appStateStorage.putBestBlockNumber(pivot).commit()
       
       progressMonitor.complete()
@@ -258,7 +261,7 @@ class SNAPSyncController(
       log.info(progressMonitor.currentProgress.toString)
       
       context.become(completed)
-      context.parent ! SyncProtocol.Done
+      context.parent ! SyncProtocol.Status.SyncDone
     }
   }
 }

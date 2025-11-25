@@ -230,7 +230,7 @@ class StorageRangeDownloader(
           errors = errMsg :: errors
           // Mark task as not pending so it can be retried
           task.pending = false
-          tasks.enqueue(task) // Re-queue for retry
+          this.tasks.enqueue(task) // Re-queue for retry (use class field, not parameter)
         
         case Right(_) =>
           log.debug(s"Storage proof verified successfully for ${accountSlots.size} slots")
@@ -242,7 +242,7 @@ class StorageRangeDownloader(
               log.warn(errMsg)
               errors = errMsg :: errors
               task.pending = false
-              tasks.enqueue(task) // Re-queue for retry
+              this.tasks.enqueue(task) // Re-queue for retry (use class field, not parameter)
             
             case Right(_) =>
               log.debug(s"Successfully stored ${accountSlots.size} storage slots")
@@ -262,7 +262,7 @@ class StorageRangeDownloader(
                 // If we didn't reach the end of the range, create continuation task
                 if (lastSlot.toSeq.compare(task.last.toSeq) < 0) {
                   val continuationTask = StorageTask.createContinuation(task, lastSlot)
-                  tasks.enqueue(continuationTask)
+                  this.tasks.enqueue(continuationTask) // Use class field, not parameter
                   log.debug(s"Created continuation task for account ${task.accountString} from ${continuationTask.rangeString}")
                 }
               }

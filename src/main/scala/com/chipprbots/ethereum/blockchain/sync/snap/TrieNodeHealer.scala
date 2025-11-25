@@ -2,14 +2,15 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.util.ByteString
-import com.chipprbots.ethereum.blockchain.sync.PeerListSupport.PeerId
-import com.chipprbots.ethereum.mpt.{MptStorage, MptNode, LeafNode, BranchNode, ExtensionNode}
+import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.network.EtcPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
-import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** Coordinator for state trie healing operations.
   *
@@ -72,7 +73,7 @@ class TrieNodeHealer(
     * @param peer The peer to request from
     * @return Some(requestId) if a request was sent, None if no pending tasks
     */
-  def requestNextBatch(peer: PeerId): Option[BigInt] = synchronized {
+  def requestNextBatch(peer: Peer): Option[BigInt] = synchronized {
     if (pendingTasks.isEmpty) {
       log.debug("No pending healing tasks")
       return None
@@ -98,12 +99,12 @@ class TrieNodeHealer(
     )
 
     // Track request with timeout
-    requestTracker.trackRequest(requestId, peer, RequestType.GetTrieNodes) {
+    requestTracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetTrieNodes) {
       handleTimeout(requestId, batch)
     }
 
     // Send request to peer
-    etcPeerManager ! EtcPeerManagerActor.SendMessage(request, peer)
+    etcPeerManager ! EtcPeerManagerActor.SendMessage(request, peer.id)
 
     log.debug(
       s"Requested ${batch.size} trie nodes from peer $peer " +
@@ -126,7 +127,7 @@ class TrieNodeHealer(
 
     // Find active tasks for this request
     val tasksForRequest = activeTasks.filter(task =>
-      requestTracker.pendingRequests.get(requestId).exists(_.requestType == RequestType.GetTrieNodes)
+      requestTracker.getPendingRequest(requestId).exists(_.requestType == SNAPRequestTracker.RequestType.GetTrieNodes)
     )
 
     if (tasksForRequest.isEmpty) {
@@ -212,8 +213,8 @@ class TrieNodeHealer(
     val leafNode = LeafNode(
       key = nodeHash,
       value = nodeData,
-      cachedHash = Some(nodeHash),
-      cachedRlpEncoded = Some(nodeData),
+      cachedHash = Some(nodeHash.toArray),
+      cachedRlpEncoded = Some(nodeData.toArray),
       parsedRlp = None
     )
 
