@@ -73,6 +73,23 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
         )
         verify(msg, (m: ETH66.GetBlockHeaders) => m.toBytes, Codes.GetBlockHeadersCode, version)
       }
+
+      "correctly encode request-id=0 as empty bytes per RLP spec" in {
+        // This test verifies the fix for peer disconnect issue where request-id=0
+        // was incorrectly encoded as [0] instead of empty bytes
+        val msg = ETH66.GetBlockHeaders(requestId = 0, block = Left(1), maxHeaders = 1, skip = 0, reverse = false)
+        val encoded = msg.toBytes
+        // The encoded message should round-trip correctly
+        verify(msg, (m: ETH66.GetBlockHeaders) => m.toBytes, Codes.GetBlockHeadersCode, version)
+        // Verify that request-id=0 is encoded as empty bytes (0x80) not as [0] (0x00)
+        // The first byte after the RLP list marker should be 0x80 (empty string) for request-id=0
+        val rlpDecoded = com.chipprbots.ethereum.rlp.rawDecode(encoded)
+        rlpDecoded match {
+          case com.chipprbots.ethereum.rlp.RLPList(com.chipprbots.ethereum.rlp.RLPValue(requestIdBytes), _*) =>
+            requestIdBytes shouldBe empty
+          case _ => fail("Expected RLPList with request-id as first element")
+        }
+      }
     }
 
     "encoding and decoding BlockHeaders with request-id" should {

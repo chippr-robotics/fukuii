@@ -35,7 +35,8 @@ object ETH66 {
           case Left(blockNumber) => RLPList(blockNumber, maxHeaders, skip, if (reverse) 1 else 0)
           case Right(blockHash)  => RLPList(RLPValue(blockHash.toArray[Byte]), maxHeaders, skip, if (reverse) 1 else 0)
         }
-        RLPList(RLPValue(requestId.toByteArray), blockQuery)
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)), blockQuery)
       }
     }
 
@@ -121,7 +122,8 @@ object ETH66 {
       override def code: Int = Codes.BlockHeadersCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(RLPValue(msg.requestId.toByteArray), RLPList(msg.headers.map(_.toRLPEncodable): _*))
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.headers.map(_.toRLPEncodable): _*))
     }
 
     implicit class BlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
@@ -156,7 +158,9 @@ object ETH66 {
 
       override def code: Int = Codes.GetBlockBodiesCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.hashes))
+      override def toRLPEncodable: RLPEncodeable =
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), toRlpList(msg.hashes))
     }
 
     implicit class GetBlockBodiesDec(val bytes: Array[Byte]) extends AnyVal {
@@ -198,7 +202,8 @@ object ETH66 {
       override def code: Int = Codes.BlockBodiesCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(RLPValue(msg.requestId.toByteArray), RLPList(msg.bodies.map(_.toRLPEncodable): _*))
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.bodies.map(_.toRLPEncodable): _*))
     }
 
     implicit class BlockBodiesDec(val bytes: Array[Byte]) extends AnyVal {
@@ -232,7 +237,9 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.GetPooledTransactionsCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.txHashes))
+      override def toRLPEncodable: RLPEncodeable =
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), toRlpList(msg.txHashes))
     }
 
     implicit class GetPooledTransactionsDec(val bytes: Array[Byte]) extends AnyVal {
@@ -266,7 +273,8 @@ object ETH66 {
       override def code: Int = Codes.PooledTransactionsCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(RLPValue(msg.requestId.toByteArray), RLPList(msg.txs.map(_.toRLPEncodable): _*))
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.txs.map(_.toRLPEncodable): _*))
     }
 
     implicit class PooledTransactionsDec(val bytes: Array[Byte]) extends AnyVal {
@@ -304,7 +312,8 @@ object ETH66 {
       override def code: Int = Codes.GetNodeDataCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.mptElementsHashes))
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), toRlpList(msg.mptElementsHashes))
     }
 
     implicit class GetNodeDataDec(val bytes: Array[Byte]) extends AnyVal {
@@ -342,7 +351,9 @@ object ETH66 {
         with RLPSerializable {
 
       override def code: Int = Codes.NodeDataCode
-      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), msg.values)
+      override def toRLPEncodable: RLPEncodeable =
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), msg.values)
     }
 
     implicit class NodeDataDec(val bytes: Array[Byte]) extends AnyVal {
@@ -380,7 +391,8 @@ object ETH66 {
       override def code: Int = Codes.GetReceiptsCode
 
       override def toRLPEncodable: RLPEncodeable =
-        RLPList(RLPValue(msg.requestId.toByteArray), toRlpList(msg.blockHashes))
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), toRlpList(msg.blockHashes))
     }
 
     implicit class GetReceiptsDec(val bytes: Array[Byte]) extends AnyVal {
@@ -421,7 +433,9 @@ object ETH66 {
         with RLPSerializable {
       override def code: Int = Codes.ReceiptsCode
 
-      override def toRLPEncodable: RLPEncodeable = RLPList(RLPValue(msg.requestId.toByteArray), msg.receiptsForBlocks)
+      override def toRLPEncodable: RLPEncodeable =
+        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), msg.receiptsForBlocks)
     }
 
     implicit class ReceiptsDec(val bytes: Array[Byte]) extends AnyVal {
