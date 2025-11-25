@@ -70,6 +70,15 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         val msg = NewBlock(Fixtures.Blocks.Block3125369.block, 2323)
         verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH63)
       }
+
+      // Test with totalDifficulty >= 128 to verify RLP encoding handles high-bit values correctly
+      "handle totalDifficulty >= 128 correctly (two's complement edge case)" in {
+        val msg = NewBlock(
+          Fixtures.Blocks.Block3125369.block,
+          totalDifficulty = BigInt("8000000000000000", 16) // Tests high bit in large value
+        )
+        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH63)
+      }
     }
   }
 
@@ -96,6 +105,20 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         val msg = Status(1, 2, 2, ByteString("HASH"), ByteString("HASH2"))
         verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH63)
       }
+
+      // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
+      // BigInt.toByteArray uses two's complement which adds leading 0x00 for values with high bit set
+      // (e.g., 128 -> [0x00, 0x80] instead of [0x80]). This tests the fix using bigIntToUnsignedByteArray.
+      "handle values >= 128 correctly (two's complement edge case)" in {
+        val msg = Status(
+          protocolVersion = 128,  // Tests high bit in single byte
+          networkId = 256,        // Tests value requiring 2 bytes
+          totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
+          bestHash = ByteString("HASH"),
+          genesisHash = ByteString("HASH2")
+        )
+        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH63)
+      }
     }
     commonEthAssertions(version)
   }
@@ -105,6 +128,19 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
     "encoding and decoding Status" should {
       "return same result" in {
         val msg = ETH64.Status(1, 2, 3, ByteString("HASH"), ByteString("HASH2"), ForkId(1L, None))
+        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH64)
+      }
+
+      // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
+      "handle values >= 128 correctly (two's complement edge case)" in {
+        val msg = ETH64.Status(
+          protocolVersion = 128,  // Tests high bit in single byte
+          networkId = 256,        // Tests value requiring 2 bytes
+          totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
+          bestHash = ByteString("HASH"),
+          genesisHash = ByteString("HASH2"),
+          forkId = ForkId(1L, None)
+        )
         verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH64)
       }
     }

@@ -61,8 +61,11 @@ case class EthNodeStatus64ExchangeState(
         log.info("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection")
-            applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
+            // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+
+            // When ForkId validation passes, we go directly to connected state
+            // without needing to do the old-style fork block handshake
+            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)")
+            ConnectedState(PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability)))
           case other =>
             log.warn(
               "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
@@ -87,7 +90,22 @@ case class EthNodeStatus64ExchangeState(
       )
     
     val genesisHash = blockchainReader.genesisHeader.hash
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber)
+    
+    // EIP-2124: Use bootstrap pivot block for ForkId calculation when at genesis
+    // This ensures we advertise a ForkId compatible with synced peers, avoiding
+    // immediate disconnection due to ForkId mismatch (issue #574)
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    val forkIdBlockNumber = if (bestBlockNumber == 0 && bootstrapPivotBlock > 0) {
+      log.info(
+        "STATUS_EXCHANGE: Using bootstrap pivot block {} for ForkId calculation (actual best block: {})",
+        bootstrapPivotBlock,
+        bestBlockNumber
+      )
+      bootstrapPivotBlock
+    } else {
+      bestBlockNumber
+    }
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,
@@ -108,6 +126,18 @@ case class EthNodeStatus64ExchangeState(
       genesisHash,
       forkId
     )
+
+    // Debug: Log the raw RLP-encoded message bytes for protocol analysis
+    // Only compute hex encoding when debug logging is enabled to avoid overhead
+    if (log.underlying.isDebugEnabled()) {
+      val encodedBytes = status.toBytes
+      val hexBytes = org.bouncycastle.util.encoders.Hex.toHexString(encodedBytes)
+      log.debug(
+        "STATUS_EXCHANGE: Raw RLP bytes (len={}): {}",
+        encodedBytes.length,
+        if (hexBytes.length > 200) hexBytes.take(200) + "..." else hexBytes
+      )
+    }
 
     status
   }

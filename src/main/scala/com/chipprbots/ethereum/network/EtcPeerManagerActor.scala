@@ -102,16 +102,29 @@ class EtcPeerManagerActor(
       context.become(handleMessages(newPeersWithInfo))
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
+      log.info(
+        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}",
+        peer.id,
+        peerInfo.remoteStatus.capability,
+        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+      )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
       // Ask for the highest block from the peer
       // Send GetBlockHeaders in format based on negotiated capability
+      val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
       val getBlockHeadersMsg: MessageSerializable =
-        if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
+        if (usesRequestId)
           ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
         else
           ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+      log.info(
+        "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
+        peer.id,
+        usesRequestId,
+        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+      )
       peer.ref ! SendMessage(getBlockHeadersMsg)
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))

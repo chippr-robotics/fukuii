@@ -286,6 +286,47 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
 
   }
 
+  it should "skip fork block exchange for ETH64+ when ForkId validation passes (EIP-2124 compliance)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
+    // This test verifies the EIP-2124 fix: for ETH64+ protocols with ForkId in status,
+    // we should skip the fork block exchange and go directly to connected state
+    // even if a fork resolver is configured.
+    // Previously, we would incorrectly send a GetBlockHeaders request after status exchange.
+
+    val newChainWeight: ChainWeight = ChainWeight.zero.increase(genesisBlock.header).increase(firstBlock.header)
+    blockchainWriter.save(firstBlock, Nil, newChainWeight, saveAsBestBlock = true)
+
+    // Use a handshaker WITH fork resolver configured
+    val eth64HandshakerWithResolver = EtcHandshaker(etcHandshakerConfigurationWithResolver)
+
+    // Complete Hello exchange
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = eth64HandshakerWithResolver.applyMessage(remoteHello)
+    assert(handshakerAfterHelloOpt.isDefined)
+
+    // Complete Status exchange
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    assert(handshakerAfterStatusOpt.isDefined)
+
+    // Verify we go directly to HandshakeSuccess without fork block exchange
+    // Per EIP-2124, ForkId validation in ETH64+ replaces the fork block exchange
+    handshakerAfterStatusOpt.get.nextMessage match {
+      case Left(HandshakeSuccess(peerInfo)) =>
+        peerInfo.remoteStatus.capability shouldBe localStatus.capability
+        peerInfo.forkAccepted shouldBe true
+
+      case Left(HandshakeFailure(reason)) =>
+        fail(s"Expected HandshakeSuccess but got HandshakeFailure($reason)")
+
+      case Right(nextMsg) =>
+        // This would fail before the fix - we would incorrectly transition to
+        // EtcForkBlockExchangeState and send GetBlockHeaders
+        fail(s"Expected direct HandshakeSuccess but got NextMessage(${nextMsg.messageToSend})")
+    }
+  }
+
   it should "fail if a timeout happened during hello exchange" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     val handshakerAfterTimeout = initHandshakerWithoutResolver.processTimeout
     handshakerAfterTimeout.nextMessage.map(_.messageToSend) shouldBe Left(
