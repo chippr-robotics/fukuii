@@ -61,8 +61,11 @@ case class EthNodeStatus64ExchangeState(
         log.info("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection")
-            applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
+            // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+
+            // When ForkId validation passes, we go directly to connected state
+            // without needing to do the old-style fork block handshake
+            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)")
+            ConnectedState(PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability)))
           case other =>
             log.warn(
               "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
