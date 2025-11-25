@@ -61,8 +61,11 @@ case class EthNodeStatus64ExchangeState(
         log.info("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection")
-            applyRemoteStatusMessage(RemoteStatus(status, negotiatedCapability))
+            // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+
+            // When ForkId validation passes, we go directly to connected state
+            // without needing to do the old-style fork block handshake
+            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)")
+            ConnectedState(PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability)))
           case other =>
             log.warn(
               "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
@@ -79,47 +82,37 @@ case class EthNodeStatus64ExchangeState(
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
-    val bootstrapPivotNumber = appStateStorage.getBootstrapPivotBlock()
-    val bootstrapPivotHash = appStateStorage.getBootstrapPivotBlockHash()
     
-    // If we only have genesis but have a bootstrap pivot, use the pivot for the Status message
-    // to avoid fork ID incompatibility and peer disconnections during initial sync
-    val (effectiveHash, effectiveNumber) = 
-      if (bestBlockNumber == 0 && bootstrapPivotNumber > 0 && bootstrapPivotHash.nonEmpty) {
-        log.info(
-          "Using bootstrap pivot block {} (hash: {}) for Status message instead of genesis to avoid peer disconnections",
-          bootstrapPivotNumber,
-          com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(bootstrapPivotHash)
-        )
-        (bootstrapPivotHash, bootstrapPivotNumber)
-      } else {
-        (bestBlockHeader.hash, bestBlockNumber)
-      }
+    val chainWeight = blockchainReader
+      .getChainWeightByHash(bestBlockHeader.hash)
+      .getOrElse(
+        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
+      )
     
-    // Calculate chain weight and fork ID for the effective block
-    val (chainWeight, forkId) = if (bestBlockNumber == 0 && bootstrapPivotNumber > 0) {
-      val estimatedTotalDifficulty = bootstrapPivotNumber * EtcNodeStatusExchangeState.EstimatedDifficultyPerBlock
-      val weight = com.chipprbots.ethereum.domain.ChainWeight(0, estimatedTotalDifficulty)
-      val genesisHash = blockchainReader.genesisHeader.hash
-      val forkIdForPivot = ForkId.create(genesisHash, blockchainConfig)(bootstrapPivotNumber)
-      (weight, forkIdForPivot)
+    val genesisHash = blockchainReader.genesisHeader.hash
+    
+    // EIP-2124: Use bootstrap pivot block for ForkId calculation when at genesis
+    // This ensures we advertise a ForkId compatible with synced peers, avoiding
+    // immediate disconnection due to ForkId mismatch (issue #574)
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    val forkIdBlockNumber = if (bestBlockNumber == 0 && bootstrapPivotBlock > 0) {
+      log.info(
+        "STATUS_EXCHANGE: Using bootstrap pivot block {} for ForkId calculation (actual best block: {})",
+        bootstrapPivotBlock,
+        bestBlockNumber
+      )
+      bootstrapPivotBlock
     } else {
-      val weight = blockchainReader
-        .getChainWeightByHash(bestBlockHeader.hash)
-        .getOrElse(
-          throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
-        )
-      val genesisHash = blockchainReader.genesisHeader.hash
-      val forkIdForBest = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber)
-      (weight, forkIdForBest)
+      bestBlockNumber
     }
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,
       networkId = peerConfiguration.networkId,
       totalDifficulty = chainWeight.totalDifficulty,
-      bestHash = effectiveHash,
-      genesisHash = blockchainReader.genesisHeader.hash,
+      bestHash = bestBlockHeader.hash,
+      genesisHash = genesisHash,
       forkId = forkId
     )
 
@@ -128,19 +121,21 @@ case class EthNodeStatus64ExchangeState(
       status.protocolVersion,
       status.networkId,
       status.totalDifficulty,
-      effectiveNumber,
-      effectiveHash,
-      blockchainReader.genesisHeader.hash,
+      bestBlockNumber,
+      bestBlockHeader.hash,
+      genesisHash,
       forkId
     )
 
-    if (bestBlockNumber == 0 && bootstrapPivotNumber == 0) {
-      log.warn(
-        "STATUS_EXCHANGE: WARNING - Sending genesis block as best block (no bootstrap pivot available)! " +
-        "This may cause peer disconnections. Best block number: {}, best hash: {}, chain weight TD: {}",
-        bestBlockNumber,
-        bestBlockHeader.hash,
-        chainWeight.totalDifficulty
+    // Debug: Log the raw RLP-encoded message bytes for protocol analysis
+    // Only compute hex encoding when debug logging is enabled to avoid overhead
+    if (log.underlying.isDebugEnabled()) {
+      val encodedBytes = status.toBytes
+      val hexBytes = org.bouncycastle.util.encoders.Hex.toHexString(encodedBytes)
+      log.debug(
+        "STATUS_EXCHANGE: Raw RLP bytes (len={}): {}",
+        encodedBytes.length,
+        if (hexBytes.length > 200) hexBytes.take(200) + "..." else hexBytes
       )
     }
 
