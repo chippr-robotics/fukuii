@@ -75,7 +75,7 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       "handle totalDifficulty >= 128 correctly (two's complement edge case)" in {
         val msg = NewBlock(
           Fixtures.Blocks.Block3125369.block,
-          totalDifficulty = BigInt("0x8000000000000000", 16) // Tests high bit in large value
+          totalDifficulty = BigInt("8000000000000000", 16) // Tests high bit in large value
         )
         verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH63)
       }
@@ -113,7 +113,7 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         val msg = Status(
           protocolVersion = 128,  // Tests high bit in single byte
           networkId = 256,        // Tests value requiring 2 bytes
-          totalDifficulty = BigInt("0x8000000000000000", 16), // Tests high bit in large value
+          totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
           bestHash = ByteString("HASH"),
           genesisHash = ByteString("HASH2")
         )
@@ -136,7 +136,7 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         val msg = ETH64.Status(
           protocolVersion = 128,  // Tests high bit in single byte
           networkId = 256,        // Tests value requiring 2 bytes
-          totalDifficulty = BigInt("0x8000000000000000", 16), // Tests high bit in large value
+          totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
           bestHash = ByteString("HASH"),
           genesisHash = ByteString("HASH2"),
           forkId = ForkId(1L, None)
