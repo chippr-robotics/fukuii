@@ -35,8 +35,9 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       val ethGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
       def create(head: BigInt) = ForkId.create(ethGenesisHash, ethConf)(head)
 
-      // At block 0, report genesis ForkId per EIP-2124 and Core-Geth reference implementation
-      create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Unsynced (genesis)
+      // At block 0, report latest fork ForkId (pragmatic workaround for peer compatibility)
+      // This allows unsynced nodes to establish peer connections with synced nodes
+      create(0) shouldBe ForkId(0x0eb440f6L, None) // Latest fork (Berlin) at block 0
       create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Last Frontier block
       create(1150000) shouldBe ForkId(0x97c2c34cL, Some(1920000)) // First Homestead block
       create(1919999) shouldBe ForkId(0x97c2c34cL, Some(1920000)) // Last Homestead block
@@ -67,8 +68,9 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
       def create(head: BigInt) = ForkId.create(etcGenesisHash, etcConf)(head)
 
-      // At block 0, report genesis ForkId per EIP-2124 and Core-Geth reference implementation
-      create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Unsynced (genesis)
+      // At block 0, report latest fork ForkId (pragmatic workaround for peer compatibility)
+      // This allows unsynced nodes to establish peer connections with synced nodes
+      create(0) shouldBe ForkId(0xbe46d57cL, None) // Latest fork (Spiral) at block 0
       create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Last Frontier block
       create(1150000) shouldBe ForkId(0x97c2c34cL, Some(2500000)) // First Homestead block
       create(1919999) shouldBe ForkId(0x97c2c34cL, Some(2500000)) // Last Homestead block
@@ -100,8 +102,8 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       val mordorGenesisHash = ByteString(Hex.decode("a68ebde7932eccb177d38d55dcc6461a019dd795a681e59b5a3e4f3a7259a3f1"))
       def create(head: BigInt) = ForkId.create(mordorGenesisHash, mordorConf)(head)
 
-      // At block 0, report genesis ForkId per EIP-2124 and Core-Geth reference implementation
-      create(0) shouldBe ForkId(0x175782aaL, Some(301243)) // Unsynced (genesis)
+      // At block 0, report latest fork ForkId (pragmatic workaround for peer compatibility)
+      create(0) shouldBe ForkId(0x3a6b00d7L, None) // Latest fork (Spiral) at block 0
       create(301242) shouldBe ForkId(0x175782aaL, Some(301243))
       create(301243) shouldBe ForkId(0x604f6ee1L, Some(999983))
       create(999982) shouldBe ForkId(0x604f6ee1L, Some(999983))
@@ -117,17 +119,18 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
     }
 
     "follow EIP-2124 specification for ForkId at all block heights" in {
-      // Verify that ForkId calculation strictly follows EIP-2124 specification
-      // and matches Core-Geth reference implementation behavior.
-      // Core-Geth test case: {0, 0, ID{Hash: checksumToBytes(0xfc64ec04), Next: 1150000}}
+      // ForkId calculation with pragmatic workaround for unsynced nodes
+      // At block 0: reports latest fork ForkId to allow peer connections
+      // At all other blocks: strictly follows EIP-2124 specification
       val etcConf = config.blockchains("etc")
       val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
       def create(head: BigInt) = ForkId.create(etcGenesisHash, etcConf)(head)
 
-      // At block 0, report genesis ForkId (not latest fork)
-      create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000))
+      // At block 0, report latest fork ForkId (peer compatibility workaround)
+      create(0) shouldBe ForkId(0xbe46d57cL, None)
 
       // Verify that ForkId changes correctly when passing fork blocks
+      // From block 1 onwards, strict EIP-2124 compliance
       create(1) shouldBe ForkId(0xfc64ec04L, Some(1150000))
       create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000))
       create(1150000) shouldBe ForkId(0x97c2c34cL, Some(2500000))

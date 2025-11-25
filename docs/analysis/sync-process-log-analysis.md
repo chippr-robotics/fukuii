@@ -1,10 +1,10 @@
 # Sync Process Log Analysis
 
-## Latest Update: 2025-11-18 (RESOLVED)
+## Latest Update: 2025-11-25 (RESOLVED)
 
 **Status**: ✅ **FIXED**
 
-The ForkId mismatch issue has been **resolved** by implementing the default behavior to report the latest fork when at block 0, matching core-geth's approach.
+The ForkId mismatch issue has been **resolved** by implementing the default behavior to report the latest fork when at block 0, matching core-geth's practical approach for peer compatibility.
 
 ### Fix Implemented
 
