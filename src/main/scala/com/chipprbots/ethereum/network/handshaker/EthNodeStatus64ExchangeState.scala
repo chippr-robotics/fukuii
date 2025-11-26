@@ -105,12 +105,11 @@ case class EthNodeStatus64ExchangeState(
     // - Regular sync: Node at block 1-1000 tries to connect to peers at block 19M+
     // - The low block number produces an incompatible ForkId causing peer rejection
     // 
-    // We continue using the bootstrap pivot block until the node has synced close
-    // to it. The threshold is calculated as the minimum of:
-    // - 10% of the pivot block number, OR
-    // - MaxBootstrapPivotThreshold (100,000 blocks)
+    // We continue using the bootstrap pivot block until the node is within a threshold
+    // distance from the pivot, where the threshold is the minimum of (10% of the pivot
+    // block number, MaxBootstrapPivotThreshold blocks).
     // 
-    // For example, with pivot at 19,250,000:
+    // For example, if the pivot is at 19,250,000:
     // - 10% = 1,925,000 blocks
     // - threshold = min(1,925,000, 100,000) = 100,000 blocks
     // - Use pivot when: bestBlockNumber < 19,150,000

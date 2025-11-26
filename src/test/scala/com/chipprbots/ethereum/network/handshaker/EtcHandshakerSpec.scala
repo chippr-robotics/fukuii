@@ -431,8 +431,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
         statusMsg.bestHash shouldBe lowBlock.header.hash
         // But ForkId should be calculated using bootstrap pivot block, not the actual block number
         // This ensures compatibility with synced peers
-        // ForkId will be based on block 19,250,000 instead of block 1000
-        succeed
+        val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(bootstrapPivotBlockNumber)
+        statusMsg.forkId shouldBe expectedForkId
       case other =>
         fail(s"Expected status message but got: $other")
     }
