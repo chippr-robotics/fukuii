@@ -117,7 +117,7 @@ case class EthNodeStatus64ExchangeState(
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
       // Calculate the threshold: maximum distance from pivot block before switching to actual number
-      val threshold = math.min(bootstrapPivotBlock / 10, MaxBootstrapPivotThreshold)
+      val threshold = (bootstrapPivotBlock / 10).min(MaxBootstrapPivotThreshold)
       val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
       
       if (shouldUseBootstrap) {

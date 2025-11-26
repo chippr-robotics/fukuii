@@ -95,7 +95,7 @@ private val MaxBootstrapPivotThreshold = BigInt(100000)
 val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
 val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
   // Calculate threshold: maximum distance from pivot before switching to actual
-  val threshold = math.min(bootstrapPivotBlock / 10, MaxBootstrapPivotThreshold)
+  val threshold = (bootstrapPivotBlock / 10).min(MaxBootstrapPivotThreshold)
   val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
   
   if (shouldUseBootstrap) {
