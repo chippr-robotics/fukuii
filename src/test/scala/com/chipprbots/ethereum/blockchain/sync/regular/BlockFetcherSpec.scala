@@ -405,7 +405,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, FixtureBlocks.Genesis.block)
 
     // Fetcher request for headers - using ETH66 format (current implementation)
-    // Note: requestId is now dynamically generated, so we don't check for specific values
+    // Note: requestId is dynamically generated to fix core-geth compatibility (request IDs must be
+    // unique and non-zero for proper request/response correlation in ETH66+ protocol)
     def handleFirstBlockBatchHeaders(): Unit = {
       // Expect ETH66 format message with dynamic requestId - capture it to use in response
       val requestId = peersClient.expectMsgPF() {
