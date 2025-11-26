@@ -310,87 +310,167 @@ docker run -d \
   ghcr.io/chippr-robotics/fukuii-mordor:latest
 ```
 
-#### 5.3. Mordor Testnet Miner Image (`Dockerfile.mordor-miner`)
-Pre-configured for Ethereum Classic Mordor testnet with mining enabled by default.
+#### 5.3. Bootnode Image (`Dockerfile.bootnode`)
+Pre-configured as a bootnode for peer discovery and network health.
 
 **Features:**
-- Pre-configured for Mordor testnet
-- Mining enabled by default
-- Environment variable `FUKUII_MINING_ENABLED=true` pre-set
-- Requires setting a coinbase address to receive mining rewards
+- Optimized for peer discovery and connection brokering
+- High peer capacity (500+ concurrent peers)
+- Minimal resource footprint (2-4GB RAM, ~5GB disk)
+- No RPC endpoints (reduced attack surface)
+- In-memory pruning for minimal disk usage
+- Exposes only P2P ports (30303/udp, 9076/tcp)
 
-**⚠️ IMPORTANT:** You **MUST** specify a coinbase address to receive mining rewards. The default address (`0000000000000000000000000000000000000000`) is a null/burn address - any rewards mined to this address will be **permanently lost**. Always override the coinbase address using `-Dfukuii.mining.coinbase=YOUR_ADDRESS` when starting the container.
+**Purpose:**
+Bootnodes serve as network infrastructure, helping new nodes discover peers and join the network faster. They focus exclusively on:
+- Maintaining connections to many peers
+- Sharing peer information via discovery protocol
+- Enabling faster network synchronization
+- Providing stable entry points to the network
 
 **Docker Hub:**
-- `chipprbots/fukuii-mordor-miner:latest` (latest build)
-- `chipprbots/fukuii-mordor-miner:nightly` (nightly build)
-- `chipprbots/fukuii-mordor-miner:nightly-YYYYMMDD` (specific nightly)
+- `chipprbots/fukuii-bootnode:latest` (latest build)
+- `chipprbots/fukuii-bootnode:nightly` (nightly build)
+- `chipprbots/fukuii-bootnode:nightly-YYYYMMDD` (specific nightly)
 
 **GitHub Container Registry:**
-- `ghcr.io/chippr-robotics/fukuii-mordor-miner:latest`
+- `ghcr.io/chippr-robotics/fukuii-bootnode:latest`
 
-**Run with custom coinbase address:**
+**Run:**
 ```bash
-# From Docker Hub - specify your coinbase address
+# From Docker Hub
 docker run -d \
-  --name fukuii-mordor-miner \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
-  -v fukuii-mordor-miner-data:/app/data \
-  chipprbots/fukuii-mordor-miner:latest \
-  -Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE
-
-# Example with a real address
-docker run -d \
-  --name fukuii-mordor-miner \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
-  -v fukuii-mordor-miner-data:/app/data \
-  chipprbots/fukuii-mordor-miner:latest \
-  -Dfukuii.mining.coinbase=0x1234567890123456789012345678901234567890
+  --name fukuii-bootnode \
+  -p 30303:30303/udp \
+  -p 9076:9076/tcp \
+  -v fukuii-bootnode-data:/app/data \
+  -e JAVA_OPTS="-Xmx2g -Xms2g" \
+  chipprbots/fukuii-bootnode:latest
 
 # From GitHub Container Registry
 docker run -d \
+  --name fukuii-bootnode \
+  -p 30303:30303/udp \
+  -p 9076:9076/tcp \
+  -v fukuii-bootnode-data:/app/data \
+  -e JAVA_OPTS="-Xmx2g -Xms2g" \
+  ghcr.io/chippr-robotics/fukuii-bootnode:latest
+```
+
+**Docker Compose Example for Bootnode:**
+```yaml
+volumes:
+  bootnode-data:
+
+networks:
+  fukuii-bootnode-net:
+    driver: bridge
+
+services:
+  fukuii-bootnode:
+    image: chipprbots/fukuii-bootnode:latest
+    container_name: fukuii-bootnode
+    restart: unless-stopped
+    ports:
+      - "30303:30303/udp"  # P2P discovery
+      - "9076:9076/tcp"    # P2P networking
+    volumes:
+      - bootnode-data:/app/data
+    environment:
+      - JAVA_OPTS=-Xmx2g -Xms2g
+      - FUKUII_NETWORK=etc
+    networks:
+      - fukuii-bootnode-net
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+```
+
+**Getting Your Bootnode's Enode URL:**
+
+After starting the bootnode, you can share its enode URL with others:
+
+1. Your node ID is derived from `~/.fukuii/<network>/node.key`
+2. Construct enode URL: `enode://<node-id>@<public-ip>:30303`
+3. Share this URL with others who want to use your bootnode
+
+**Firewall Configuration:**
+
+Ensure these ports are open:
+- UDP 30303 (discovery protocol) - REQUIRED
+- TCP 9076 (P2P connections) - REQUIRED
+
+Example firewall rules:
+```bash
+sudo ufw allow 30303/udp
+sudo ufw allow 9076/tcp
+```
+
+**Monitoring Your Bootnode:**
+
+Check logs for peer activity:
+```bash
+docker logs fukuii-bootnode | grep -E "peer|discovery"
+```
+
+Look for messages indicating healthy operation:
+- "Discovery - Found N peers in routing table"
+- "PeerManager - Connected to peer"
+- Regular discovery activity
+
+**Resource Requirements:**
+- CPU: 2 cores (minimal)
+- RAM: 2-4 GB
+- Disk: ~5 GB (no blockchain data)
+- Network: 50-100 Mbps (handles many peer connections)
+
+**Best Practices:**
+1. Use a static public IP or reliable hostname
+2. Ensure high uptime (bootnodes should be always available)
+3. Monitor disk space for knownNodes.json growth
+4. Monitor network bandwidth (many connections = higher traffic)
+5. Set up alerting if peer count drops below threshold
+6. Consider running multiple bootnodes for redundancy
+7. Keep the bootnode software updated
+
+For detailed bootnode configuration and operations, see:
+- `src/main/resources/conf/bootnode.conf` - Configuration file
+- `docs/runbooks/operating-modes.md` - Operating modes documentation
+- `docs/runbooks/peering.md` - Peering best practices
+- `docs/adr/infrastructure/INF-005-docker-deployment-strategy.md` - Docker strategy ADR
+
+#### 5.4. Mining Configuration (Alternative to Bootnode)
+
+While we recommend running bootnodes to improve network health, you can also enable mining on any Fukuii node:
+
+**Using Standard Mordor Image with Mining:**
+```bash
+docker run -d \
   --name fukuii-mordor-miner \
   -p 8545:8545 \
   -p 8546:8546 \
   -p 30303:30303 \
-  -v fukuii-mordor-miner-data:/app/data \
-  ghcr.io/chippr-robotics/fukuii-mordor-miner:latest \
-  -Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE
+  -v fukuii-mordor-data:/app/data \
+  chipprbots/fukuii-mordor:latest \
+  -Dfukuii.mining.mining-enabled=true \
+  -Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE \
+  -Dconfig.file=/app/conf/app.conf \
+  -Dlogback.configurationFile=/app/conf/logback.xml \
+  mordor
 ```
 
-**Docker Compose Example for Miner:**
-```yaml
-version: '3.8'
-
-services:
-  fukuii-mordor-miner:
-    image: chipprbots/fukuii-mordor-miner:latest
-    container_name: fukuii-mordor-miner
-    restart: unless-stopped
-    ports:
-      - "8545:8545"
-      - "8546:8546"
-      - "30303:30303"
-    volumes:
-      - fukuii-mordor-miner-data:/app/data
-    command:
-      - "-Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE"
-    environment:
-      - JAVA_OPTS=-Xmx4g -Xms4g
-    healthcheck:
-      test: ["/usr/local/bin/healthcheck.sh"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-volumes:
-  fukuii-mordor-miner-data:
-```
+**⚠️ IMPORTANT:** Always specify a valid coinbase address to receive mining rewards. Without it, rewards will be lost.
 
 ## Health Checks
 
@@ -630,9 +710,9 @@ git push origin v1.0.0
 - **Mordor Image:**
   - `ghcr.io/chippr-robotics/fukuii-mordor:latest`
   - `chipprbots/fukuii-mordor:latest`
-- **Mordor Miner Image:**
-  - `ghcr.io/chippr-robotics/fukuii-mordor-miner:latest`
-  - `chipprbots/fukuii-mordor-miner:latest`
+- **Bootnode Image:**
+  - `ghcr.io/chippr-robotics/fukuii-bootnode:latest`
+  - `chipprbots/fukuii-bootnode:latest`
 
 **Tags Generated:**
 - Branch names (e.g., `main`, `develop`)
@@ -654,7 +734,7 @@ git push origin v1.0.0
 
 **Images Built:**
 - Standard images (main, dev, base)
-- Network-specific images (mainnet, mordor, mordor-miner)
+- Network-specific images (mainnet, mordor, bootnode)
 
 **Tags Generated:**
 - `nightly` - Always points to the latest nightly build
@@ -671,12 +751,11 @@ git push origin v1.0.0
 # Pull latest nightly build of mainnet image
 docker pull chipprbots/fukuii-mainnet:nightly
 
-# Pull specific nightly build
-docker pull chipprbots/fukuii-mordor-miner:nightly-20250115
+# Pull specific nightly build of bootnode
+docker pull chipprbots/fukuii-bootnode:nightly-20250115
 
 # Use in Docker Compose for continuous testing
 ```yaml
-version: '3.8'
 services:
   fukuii:
     image: chipprbots/fukuii-mordor:nightly
