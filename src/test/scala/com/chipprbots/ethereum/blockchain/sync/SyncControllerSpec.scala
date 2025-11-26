@@ -240,7 +240,7 @@ class SyncControllerSpec
     }
   }
 
-  it should "not change best block after receiving faraway block" in withTestSetup() { testSetup =>
+  it should "not change best block after receiving faraway block" taggedAs (UnitTest, SyncTest) in withTestSetup() { testSetup =>
     import testSetup._
 
     startWithState(defaultStateBeforeNodeRestart)
@@ -419,7 +419,7 @@ class SyncControllerSpec
       }
   }
 
-  it should "re-enqueue block bodies when empty response is received" in withTestSetup() { testSetup =>
+  it should "re-enqueue block bodies when empty response is received" taggedAs (UnitTest, SyncTest) in withTestSetup() { testSetup =>
     import testSetup._
 
     startWithState(defaultStateBeforeNodeRestart)
