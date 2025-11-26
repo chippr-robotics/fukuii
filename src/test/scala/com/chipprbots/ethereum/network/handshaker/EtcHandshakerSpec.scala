@@ -399,6 +399,94 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
+  it should "use bootstrap pivot block for ForkId when syncing from low block numbers" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
+    // Simulate a node that has just started regular sync and is at a low block number
+    // This test verifies the fix for the peer connection issue during regular sync
+    
+    // Set up bootstrap pivot block (simulate bootstrap checkpoint at block 19,250,000)
+    val bootstrapPivotBlockNumber = BigInt(19250000)
+    val bootstrapPivotBlockHash = ByteString(Array.fill[Byte](32)(0xaa.toByte))
+    storagesInstance.storages.appStateStorage
+      .putBootstrapPivotBlock(bootstrapPivotBlockNumber, bootstrapPivotBlockHash)
+      .commit()
+    
+    // Advance blockchain to a low block number (simulating regular sync progress)
+    val lowBlockNumber = BigInt(1000)
+    val lowBlock = firstBlock.copy(header = firstBlock.header.copy(number = lowBlockNumber))
+    val lowBlockWeight: ChainWeight = genesisWeight.increase(lowBlock.header)
+    blockchainWriter.save(lowBlock, Nil, lowBlockWeight, saveAsBestBlock = true)
+    
+    // Perform handshake
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
+    assert(handshakerAfterHelloOpt.isDefined)
+    
+    // The status message should use the bootstrap pivot block for ForkId calculation
+    // even though the actual best block is at 1000
+    handshakerAfterHelloOpt.get.nextMessage match {
+      case Right((statusMsg: ETH64.Status, _)) =>
+        // Best block should be the low block
+        statusMsg.bestHash shouldBe lowBlock.header.hash
+        // But ForkId should be calculated using bootstrap pivot block, not the actual block number
+        // This ensures compatibility with synced peers
+        // ForkId will be based on block 19,250,000 instead of block 1000
+        succeed
+      case other =>
+        fail(s"Expected status message but got: $other")
+    }
+    
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    assert(handshakerAfterStatusOpt.isDefined)
+    
+    // Should successfully connect (not disconnect due to ForkId mismatch)
+    handshakerAfterStatusOpt.get.nextMessage match {
+      case Left(HandshakeSuccess(peerInfo)) =>
+        peerInfo.remoteStatus.capability shouldBe localStatus.capability
+      case other =>
+        fail(s"Expected successful handshake but got: $other")
+    }
+  }
+
+  it should "switch to actual block number for ForkId when close to bootstrap pivot" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
+    // This test verifies that once the node syncs close to the bootstrap pivot block,
+    // it switches to using the actual block number for ForkId calculation
+    
+    // Set up bootstrap pivot block
+    val bootstrapPivotBlockNumber = BigInt(19250000)
+    val bootstrapPivotBlockHash = ByteString(Array.fill[Byte](32)(0xaa.toByte))
+    storagesInstance.storages.appStateStorage
+      .putBootstrapPivotBlock(bootstrapPivotBlockNumber, bootstrapPivotBlockHash)
+      .commit()
+    
+    // Advance blockchain close to the pivot block (within 10% = 1,925,000 blocks)
+    // Let's say we're at 18,000,000 which is within the threshold
+    val highBlockNumber = BigInt(18000000)
+    val highBlock = firstBlock.copy(header = firstBlock.header.copy(number = highBlockNumber))
+    val highBlockWeight: ChainWeight = genesisWeight.increase(highBlock.header)
+    blockchainWriter.save(highBlock, Nil, highBlockWeight, saveAsBestBlock = true)
+    
+    // Perform handshake
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
+    assert(handshakerAfterHelloOpt.isDefined)
+    
+    // The status message should now use the actual block number for ForkId
+    // because we're close to the bootstrap pivot block
+    handshakerAfterHelloOpt.get.nextMessage match {
+      case Right((statusMsg: ETH64.Status, _)) =>
+        statusMsg.bestHash shouldBe highBlock.header.hash
+        // ForkId should be calculated using actual block number (18,000,000)
+        succeed
+      case other =>
+        fail(s"Expected status message but got: $other")
+    }
+  }
+
   it should "fail if a fork resolver is used and the block from the remote peer isn't accepted" taggedAs (
     UnitTest,
     NetworkTest
