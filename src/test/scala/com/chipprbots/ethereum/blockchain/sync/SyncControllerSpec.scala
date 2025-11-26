@@ -22,7 +22,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks
-import com.chipprbots.ethereum.NormalPatience
+import com.chipprbots.ethereum.LongPatience
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync.SyncState
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
@@ -56,7 +56,7 @@ class SyncControllerSpec
     with BeforeAndAfter
     with MockFactory
     with Eventually
-    with NormalPatience {
+    with LongPatience {
 
   "SyncController" should "download pivot block and request block headers" taggedAs (
     UnitTest,
@@ -240,7 +240,7 @@ class SyncControllerSpec
     }
   }
 
-  it should "not change best block after receiving faraway block" taggedAs (UnitTest, SyncTest) in withTestSetup() { testSetup =>
+  it should "not change best block after receiving faraway block" in withTestSetup() { testSetup =>
     import testSetup._
 
     startWithState(defaultStateBeforeNodeRestart)
@@ -419,7 +419,7 @@ class SyncControllerSpec
       }
   }
 
-  it should "re-enqueue block bodies when empty response is received" taggedAs (UnitTest, SyncTest) in withTestSetup() { testSetup =>
+  it should "re-enqueue block bodies when empty response is received" in withTestSetup() { testSetup =>
     import testSetup._
 
     startWithState(defaultStateBeforeNodeRestart)
