@@ -466,9 +466,11 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     
     // Advance blockchain to just past the threshold where we switch to actual block numbers
     // With pivot at 19,250,000, threshold = min(1,925,000, 100,000) = 100,000
-    // Switch happens at: 19,250,000 - 100,000 = 19,150,000
-    // At 19,200,000, we're only 50,000 blocks away from pivot, which is < threshold (100,000)
-    // Therefore we should switch to using actual block number for ForkId
+    // The condition for using pivot is: bestBlockNumber < (pivot - threshold)
+    // So switch point is: 19,250,000 - 100,000 = 19,150,000
+    // At 19,200,000: bestBlockNumber (19,200,000) >= (pivot - threshold) (19,150,000)
+    // Since 19,200,000 >= 19,150,000, we're past the switch point
+    // Therefore we should use actual block number (19,200,000) for ForkId, not the pivot
     val highBlockNumber = BigInt(19200000)
     val highBlock = firstBlock.copy(header = firstBlock.header.copy(number = highBlockNumber))
     val highBlockWeight: ChainWeight = genesisWeight.increase(highBlock.header)
