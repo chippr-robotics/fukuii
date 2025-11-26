@@ -1,7 +1,7 @@
 # Known Issues
 
 **Audience**: Operators troubleshooting common problems  
-**Last Updated**: 2025-11-05  
+**Last Updated**: 2025-11-26  
 **Status**: Living Document
 
 ## Overview
@@ -16,6 +16,7 @@ This document catalogs known issues, their symptoms, root causes, workarounds, a
 4. [Other Common Issues](#other-common-issues)
    - [Issue 13: Network Sync Error - Zero Length BigInteger](#issue-13-network-sync-error---zero-length-biginteger)
    - [Issue 14: ETH68 Peer Connection Failures](#issue-14-eth68-peer-connection-failures)
+   - [Issue 15: Peer Disconnections During Regular Sync](#issue-15-peer-disconnections-during-regular-sync)
 
 ## RocksDB Issues
 
@@ -1154,6 +1155,134 @@ Please submit a pull request or open an issue to update this documentation.
 
 ---
 
-**Document Version**: 1.1  
-**Last Updated**: 2025-11-04  
+### Issue 15: Peer Disconnections During Regular Sync
+
+**Severity**: Critical  
+**Frequency**: Affects all nodes using regular sync mode  
+**Impact**: Unable to maintain peer connections, nodes not visible on network crawlers  
+**Status**: Fixed
+
+#### Symptoms
+
+```
+INFO  [c.c.e.n.handshaker.EthNodeStatus64ExchangeState] - STATUS_EXCHANGE: Sending status - bestBlock=1234
+INFO  [c.c.e.n.PeerManagerActor] - Handshaked 0/80, pending connection attempts 15
+INFO  [c.c.e.b.sync.PivotBlockSelector] - Cannot pick pivot block. Need at least 3 peers, but there are only 0
+```
+
+- Node completes handshake with peers but they immediately disconnect
+- Unable to maintain minimum peer count (always 0-2 peers)
+- Regular sync mode cannot proceed (requires stable peer connections)
+- Node not discoverable on network crawlers like etcnodes.org
+- **Issue only affects regular sync mode; fast sync works correctly**
+
+#### Root Cause
+
+The issue was caused by incompatible ForkId values being advertised during ETH64+ protocol handshake:
+
+**Technical Details**:
+- **Location**: `src/main/scala/com/chipprbots/ethereum/network/handshaker/EthNodeStatus64ExchangeState.scala`
+- **Affected component**: ForkId calculation in Status message creation
+- **Issue**: Bootstrap pivot block only used when `bestBlockNumber == 0`
+- **Impact**: Regular sync nodes at blocks 1-1000 advertised incompatible ForkId to synced peers
+
+The bug occurred because:
+1. Node starts at block 0 (genesis) with bootstrap pivot at block 19,250,000
+2. During regular sync, bestBlockNumber quickly advances: 0 → 1 → 2 → 3 → ...
+3. Original code stopped using bootstrap pivot after block 1
+4. Node calculated ForkId based on very low block numbers (1, 2, 3, etc.)
+5. Synced peers at block 19M+ rejected this incompatible ForkId
+6. Peers disconnected immediately after handshake, preventing sync
+
+**Why Fast Sync Worked**: Fast sync implementation kept bestBlockNumber at 0 longer during initial sync, allowing bootstrap pivot to continue being used for ForkId calculation.
+
+#### Ethereum Specification Context
+
+According to [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124):
+- ForkId is calculated from genesis hash and current block number
+- Used to reject incompatible peers early in handshake
+- Prevents wasting resources on peers from different chains/forks
+
+#### Workaround
+
+**Temporary mitigation** (before fix):
+- Use fast sync mode instead of regular sync: `do-fast-sync = true`
+- Fast sync happened to work due to implementation details
+- Not a reliable long-term solution
+
+#### Permanent Fix
+
+**Applied in this release**
+
+Modified `EthNodeStatus64ExchangeState.createStatusMsg()` to extend bootstrap pivot usage:
+
+```scala
+// Before (buggy):
+val forkIdBlockNumber = if (bestBlockNumber == 0 && bootstrapPivotBlock > 0) {
+  bootstrapPivotBlock
+} else {
+  bestBlockNumber
+}
+
+// After (fixed):
+val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
+  val threshold = math.min(bootstrapPivotBlock / 10, BigInt(100000))
+  val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
+  
+  if (shouldUseBootstrap) {
+    bootstrapPivotBlock  // Use pivot during entire initial sync
+  } else {
+    bestBlockNumber      // Switch to actual once close to pivot
+  }
+} else {
+  bestBlockNumber
+}
+```
+
+This ensures:
+- Bootstrap pivot used for ForkId calculation during entire initial sync
+- Applies to both regular sync and fast sync modes equally
+- Compatible ForkId maintained with synced peers
+- Smooth transition from pivot to actual block number when close to synced
+
+**Threshold Logic**:
+- Threshold = min(10% of pivot block, 100,000 blocks)
+- Example for ETC mainnet (pivot at 19,250,000):
+  - Use pivot when: bestBlockNumber < 19,150,000
+  - Switch to actual when: bestBlockNumber >= 19,150,000
+
+#### Prevention & Testing
+
+**Test coverage**:
+- Added test: "use bootstrap pivot block for ForkId when syncing from low block numbers"
+- Added test: "switch to actual block number for ForkId when close to bootstrap pivot"
+- Tests verify both low block numbers (1,000) and high block numbers (18,000,000)
+- Enhanced logging for debugging ForkId calculation in production
+
+**Before fix**:
+- Regular sync: Cannot maintain peers, cannot sync
+- Fast sync: Works (implementation accident)
+- Nodes not visible on etcnodes.org with regular sync
+
+**After fix**:
+- Regular sync: Stable peer connections, successful sync
+- Fast sync: Continues to work correctly
+- Nodes visible on etcnodes.org with both sync modes
+- Both modes have equal peer connectivity
+
+#### References
+
+1. [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124)
+2. [ADR-012: Bootstrap Checkpoints](../adr/consensus/CON-002-bootstrap-checkpoints.md)
+3. [Detailed Fix Documentation](../fixes/peer-connection-regular-sync-fix.md)
+4. [Peering Runbook](peering.md)
+
+#### Status
+
+**Fixed**: This release includes the fix. Both regular sync and fast sync now maintain stable peer connections.
+
+---
+
+**Document Version**: 1.2  
+**Last Updated**: 2025-11-26  
 **Maintainer**: Chippr Robotics LLC
