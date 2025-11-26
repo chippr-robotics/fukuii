@@ -107,7 +107,7 @@ case class EthNodeStatus64ExchangeState(
     // 
     // We continue using the bootstrap pivot block until the node is within a threshold
     // distance from the pivot, where the threshold is the minimum of (10% of the pivot
-    // block number, MaxBootstrapPivotThreshold blocks).
+    // block number, MaxBootstrapPivotThreshold (100,000) blocks).
     // 
     // For example, if the pivot is at 19,250,000:
     // - 10% = 1,925,000 blocks
