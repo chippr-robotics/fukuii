@@ -33,6 +33,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
+import org.bouncycastle.util.encoders.Hex
+
 /** EtcPeerManager actor is in charge of keeping updated information about each peer, while also being able to query it
   * for this information. In order to do so it receives events for peer creation, disconnection and new messages being
   * sent and received by each peer.
@@ -46,6 +48,9 @@ class EtcPeerManagerActor(
     with ActorLogging {
 
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
+  
+  // Maximum length for hex string in debug logs (to avoid very long log lines)
+  private val MaxHexLogLength = 200
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -103,10 +108,11 @@ class EtcPeerManagerActor(
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
       log.info(
-        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}",
+        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, TotalDifficulty: {}",
         peer.id,
         peerInfo.remoteStatus.capability,
-        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
+        peerInfo.remoteStatus.chainWeight.totalDifficulty
       )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
@@ -119,6 +125,18 @@ class EtcPeerManagerActor(
           ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
         else
           ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+      
+      // Debug: Log the raw RLP-encoded message bytes for protocol analysis
+      if (log.isDebugEnabled) {
+        val encodedBytes = getBlockHeadersMsg.toBytes
+        val hexBytes = Hex.toHexString(encodedBytes)
+        log.debug(
+          "PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}",
+          encodedBytes.length,
+          if (hexBytes.length > MaxHexLogLength) hexBytes.take(MaxHexLogLength) + "..." else hexBytes
+        )
+      }
+      
       log.info(
         "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
         peer.id,
