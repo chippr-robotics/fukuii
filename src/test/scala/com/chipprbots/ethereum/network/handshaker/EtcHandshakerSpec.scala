@@ -426,13 +426,18 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     // The status message should use the bootstrap pivot block for ForkId calculation
     // even though the actual best block is at 1000
     handshakerAfterHelloOpt.get.nextMessage match {
-      case Right((statusMsg: ETH64.Status, _)) =>
-        // Best block should be the low block
-        statusMsg.bestHash shouldBe lowBlock.header.hash
-        // But ForkId should be calculated using bootstrap pivot block, not the actual block number
-        // This ensures compatibility with synced peers
-        val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(bootstrapPivotBlockNumber)
-        statusMsg.forkId shouldBe expectedForkId
+      case Right(nextMsg) =>
+        nextMsg.messageToSend match {
+          case statusMsg: ETH64.Status =>
+            // Best block should be the low block
+            statusMsg.bestHash shouldBe lowBlock.header.hash
+            // But ForkId should be calculated using bootstrap pivot block, not the actual block number
+            // This ensures compatibility with synced peers
+            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(bootstrapPivotBlockNumber)
+            statusMsg.forkId shouldBe expectedForkId
+          case other =>
+            fail(s"Expected ETH64.Status message but got: $other")
+        }
       case other =>
         fail(s"Expected status message but got: $other")
     }
@@ -483,10 +488,15 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     // The status message should now use the actual block number for ForkId
     // because we're within the threshold distance of the bootstrap pivot block
     handshakerAfterHelloOpt.get.nextMessage match {
-      case Right((statusMsg: ETH64.Status, _)) =>
-        statusMsg.bestHash shouldBe highBlock.header.hash
-        // ForkId should be calculated using actual block number (19,200,000), not the pivot
-        succeed
+      case Right(nextMsg) =>
+        nextMsg.messageToSend match {
+          case statusMsg: ETH64.Status =>
+            statusMsg.bestHash shouldBe highBlock.header.hash
+            // ForkId should be calculated using actual block number (19,200,000), not the pivot
+            succeed
+          case other =>
+            fail(s"Expected ETH64.Status message but got: $other")
+        }
       case other =>
         fail(s"Expected status message but got: $other")
     }
