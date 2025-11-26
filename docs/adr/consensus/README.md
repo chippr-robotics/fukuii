@@ -17,6 +17,7 @@ Examples:
 - [CON-003: Block Sync Improvements - Enhanced Reliability and Performance](CON-003-block-sync-improvements.md) - Accepted
 - [CON-004: MESS (Modified Exponential Subjective Scoring) Implementation](CON-004-mess-implementation.md) - Accepted
 - [CON-005: ETH66 Protocol Aware Message Formatting](CON-005-eth66-protocol-aware-message-formatting.md) - Accepted
+- [CON-006: ForkId Compatibility During Initial Sync](CON-006-forkid-compatibility-during-initial-sync.md) - Accepted
 
 ## Creating a New Consensus ADR
 
