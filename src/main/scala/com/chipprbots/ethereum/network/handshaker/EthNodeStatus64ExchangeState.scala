@@ -19,6 +19,10 @@ case class EthNodeStatus64ExchangeState(
 ) extends EtcNodeStatusExchangeState[ETH64.Status] {
 
   import handshakerConfiguration._
+  
+  // Maximum threshold for bootstrap pivot block usage (100,000 blocks)
+  // This limits the threshold to prevent using the pivot too long for very high pivot values
+  private val MaxBootstrapPivotThreshold = BigInt(100000)
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH64.Status =>
     import ForkIdValidator.syncIoLogger
@@ -102,12 +106,12 @@ case class EthNodeStatus64ExchangeState(
     // - The low block number produces an incompatible ForkId causing peer rejection
     // 
     // We continue using the bootstrap pivot block until the node has synced close
-    // to it (within 10% or 100k blocks, whichever is smaller), at which point we
-    // switch to using the actual block number for ForkId calculation.
+    // to it (within 10% or MaxBootstrapPivotThreshold blocks, whichever is smaller),
+    // at which point we switch to using the actual block number for ForkId calculation.
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
-      // Calculate the threshold: use bootstrap pivot until we're within 10% of it or 100k blocks
-      val threshold = math.min(bootstrapPivotBlock / 10, BigInt(100000))
+      // Calculate the threshold: use bootstrap pivot until we're within 10% of it or MaxBootstrapPivotThreshold
+      val threshold = math.min(bootstrapPivotBlock / 10, MaxBootstrapPivotThreshold)
       val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
       
       if (shouldUseBootstrap) {
