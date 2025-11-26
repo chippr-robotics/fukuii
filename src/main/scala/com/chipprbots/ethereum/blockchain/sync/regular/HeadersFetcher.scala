@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.utils.ByteStringUtils
@@ -93,7 +94,7 @@ class HeadersFetcher(
   private def requestHeaders(block: Either[BigInt, ByteString], amount: BigInt): Unit = {
     val blockDesc = block.fold(num => s"number $num", hash => s"hash ${ByteStringUtils.hash2string(hash)}")
     log.debug("Requesting headers from block {} (amount: {})", blockDesc, amount)
-    val msg = ETH66GetBlockHeaders(0, block, amount, skip = 0, reverse = false)
+    val msg = ETH66GetBlockHeaders(ETH66.nextRequestId, block, amount, skip = 0, reverse = false)
 
     val resp = makeRequest(Request.create(msg, BestPeer), HeadersFetcher.RetryHeadersRequest)
       .flatMap {

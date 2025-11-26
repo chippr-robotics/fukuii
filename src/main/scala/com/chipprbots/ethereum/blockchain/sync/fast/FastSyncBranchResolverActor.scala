@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -201,7 +202,7 @@ class FastSyncBranchResolverActor(
           syncConfig.peerResponseTimeout,
           etcPeerManager,
           peerEventBus,
-          requestMsg = ETH66GetBlockHeaders(0, Left(fromBlock), amount, skip = 0, reverse = false),
+          requestMsg = ETH66GetBlockHeaders(ETH66.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
           responseMsgCode = Codes.BlockHeadersCode
         )
       )

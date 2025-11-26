@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
+import java.util.concurrent.atomic.AtomicLong
+
 import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
@@ -21,6 +23,17 @@ import com.chipprbots.ethereum.utils.ByteUtils
   * https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth66
   */
 object ETH66 {
+
+  /** Thread-safe counter for generating unique request IDs.
+    * Starting from 1 to avoid the special case of encoding 0.
+    */
+  private val requestIdCounter = new AtomicLong(1L)
+
+  /** Generates a new unique request ID for ETH66+ protocol messages.
+    * Request IDs are used to match responses to their corresponding requests.
+    * @return a unique, incrementing request ID
+    */
+  def nextRequestId: BigInt = BigInt(requestIdCounter.getAndIncrement())
 
   object GetBlockHeaders {
     implicit class GetBlockHeadersEnc(val underlyingMsg: GetBlockHeaders)

@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -155,7 +156,7 @@ class PeersClient(
             ETH62.GetBlockHeaders(eth66.block, eth66.maxHeaders, eth66.skip, eth66.reverse)
           case eth62: ETH62.GetBlockHeaders if usesRequestId =>
             // Convert ETH62 format to ETH66 format for newer peers
-            ETH66GetBlockHeaders(0, eth62.block, eth62.maxHeaders, eth62.skip, eth62.reverse)
+            ETH66GetBlockHeaders(ETH66.nextRequestId, eth62.block, eth62.maxHeaders, eth62.skip, eth62.reverse)
           case _ => message // Already in correct format or not a GetBlockHeaders message
         }
       case None =>

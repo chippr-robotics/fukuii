@@ -339,8 +339,20 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       }
     }
 
+    // Helper to compare ETH66 messages ignoring requestId (which is dynamically generated
+    // for core-geth compatibility). Only handles GetBlockHeaders and GetBlockBodies as those
+    // are the ETH66 message types used in these tests. Other ETH66 request types like
+    // GetPooledTransactions, GetNodeData, and GetReceipts are not used in RegularSync tests.
+    private def messagesEqualIgnoringRequestId(x: Message, y: Message): Boolean = (x, y) match {
+      case (h1: ETH66GetBlockHeaders, h2: ETH66GetBlockHeaders) =>
+        h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
+      case (b1: ETH66GetBlockBodies, b2: ETH66GetBlockBodies) =>
+        b1.hashes == b2.hashes
+      case _ => x == y
+    }
+
     implicit def eqInstanceForPeersClientRequest[T <: Message]: Eq[PeersClient.Request[T]] =
-      (x, y) => x.message == y.message && x.peerSelector == y.peerSelector
+      (x, y) => messagesEqualIgnoringRequestId(x.message, y.message) && x.peerSelector == y.peerSelector
 
     def fakeEvaluateBlock(
         block: Block

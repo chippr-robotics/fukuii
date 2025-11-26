@@ -879,7 +879,7 @@ class FastSync(
             etcPeerManager,
             peerEventBus,
             requestMsg =
-              ETH66.GetBlockHeaders(0, Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
+              ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
             responseMsgCode = Codes.BlockHeadersCode
           ),
           BlockHeadersHandlerName
