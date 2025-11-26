@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -248,7 +249,7 @@ class PivotBlockSelector(
     // Get peer info to determine message format based on negotiated capability
     val getBlockHeadersMsg: MessageSerializable = handshakedPeers.get(peer) match {
       case Some(peerWithInfo) if Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability) =>
-        ETH66GetBlockHeaders(0, Left(blockNumber), 1, 0, reverse = false)
+        ETH66GetBlockHeaders(ETH66.nextRequestId, Left(blockNumber), 1, 0, reverse = false)
       case _ =>
         ETH62GetBlockHeaders(Left(blockNumber), 1, 0, reverse = false)
     }
