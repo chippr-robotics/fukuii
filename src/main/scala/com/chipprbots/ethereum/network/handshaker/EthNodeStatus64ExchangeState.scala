@@ -91,17 +91,42 @@ case class EthNodeStatus64ExchangeState(
     
     val genesisHash = blockchainReader.genesisHeader.hash
     
-    // EIP-2124: Use bootstrap pivot block for ForkId calculation when at genesis
+    // EIP-2124: Use bootstrap pivot block for ForkId calculation when syncing
     // This ensures we advertise a ForkId compatible with synced peers, avoiding
     // immediate disconnection due to ForkId mismatch (issue #574)
+    // 
+    // During initial sync (both fast sync and regular sync), we use the bootstrap
+    // pivot block for ForkId calculation instead of the actual best block number.
+    // This prevents peer disconnections that occur when:
+    // - Regular sync: Node at block 1-1000 tries to connect to peers at block 19M+
+    // - The low block number produces an incompatible ForkId causing peer rejection
+    // 
+    // We continue using the bootstrap pivot block until the node has synced close
+    // to it (within 10% or 100k blocks, whichever is smaller), at which point we
+    // switch to using the actual block number for ForkId calculation.
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
-    val forkIdBlockNumber = if (bestBlockNumber == 0 && bootstrapPivotBlock > 0) {
-      log.info(
-        "STATUS_EXCHANGE: Using bootstrap pivot block {} for ForkId calculation (actual best block: {})",
-        bootstrapPivotBlock,
+    val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
+      // Calculate the threshold: use bootstrap pivot until we're within 10% of it or 100k blocks
+      val threshold = math.min(bootstrapPivotBlock / 10, BigInt(100000))
+      val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
+      
+      if (shouldUseBootstrap) {
+        log.info(
+          "STATUS_EXCHANGE: Using bootstrap pivot block {} for ForkId calculation (actual best block: {}, threshold: {})",
+          bootstrapPivotBlock,
+          bestBlockNumber,
+          threshold
+        )
+        bootstrapPivotBlock
+      } else {
+        log.info(
+          "STATUS_EXCHANGE: Node synced close to pivot block - switching to actual block number {} for ForkId (pivot: {}, threshold: {})",
+          bestBlockNumber,
+          bootstrapPivotBlock,
+          threshold
+        )
         bestBlockNumber
-      )
-      bootstrapPivotBlock
+      }
     } else {
       bestBlockNumber
     }
