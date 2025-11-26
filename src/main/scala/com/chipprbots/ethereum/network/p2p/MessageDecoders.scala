@@ -256,5 +256,37 @@ object EthereumMessageDecoder {
       case Capability.ETH66 => ETH66MessageDecoder
       case Capability.ETH67 => ETH67MessageDecoder
       case Capability.ETH68 => ETH68MessageDecoder
+      case Capability.SNAP1 => SNAPMessageDecoder
+    }
+}
+
+/** SNAP/1 protocol message decoder
+  *
+  * Decodes SNAP/1 protocol messages (satellite protocol for state sync).
+  * SNAP is used alongside ETH protocol, not as a replacement.
+  */
+object SNAPMessageDecoder extends MessageDecoder {
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes._
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeDec
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange.AccountRangeDec
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesDec
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges.StorageRangesDec
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesDec
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes.ByteCodesDec
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesDec
+  import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes.TrieNodesDec
+  
+  def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
+    msgCode match {
+      case GetAccountRangeCode  => Try(payload.toGetAccountRange).toEither
+      case AccountRangeCode     => Try(payload.toAccountRange).toEither
+      case GetStorageRangesCode => Try(payload.toGetStorageRanges).toEither
+      case StorageRangesCode    => Try(payload.toStorageRanges).toEither
+      case GetByteCodesCode     => Try(payload.toGetByteCodes).toEither
+      case ByteCodesCode        => Try(payload.toByteCodes).toEither
+      case GetTrieNodesCode     => Try(payload.toGetTrieNodes).toEither
+      case TrieNodesCode        => Try(payload.toTrieNodes).toEither
+      case _                    => Left(new RuntimeException(s"Unknown snap/1 message type: $msgCode"))
     }
 }

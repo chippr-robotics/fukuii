@@ -14,10 +14,12 @@ sealed trait ProtocolFamily
 object ProtocolFamily {
   case object ETH extends ProtocolFamily
   case object ETC extends ProtocolFamily
+  case object SNAP extends ProtocolFamily
   implicit class ProtocolFamilyEnc(val msg: ProtocolFamily) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = msg match {
       case ETH => RLPValue("eth".getBytes())
       case ETC => RLPValue("etc".getBytes())
+      case SNAP => RLPValue("snap".getBytes())
     }
   }
 }
@@ -32,6 +34,7 @@ object Capability {
   case object ETH67 extends Capability(ProtocolFamily.ETH, 67) // scalastyle:ignore magic.number
   case object ETH68 extends Capability(ProtocolFamily.ETH, 68) // scalastyle:ignore magic.number
   case object ETC64 extends Capability(ProtocolFamily.ETC, 64) // scalastyle:ignore magic.number
+  case object SNAP1 extends Capability(ProtocolFamily.SNAP, 1) // scalastyle:ignore magic.number
 
   def parse(s: String): Option[Capability] = s match {
     case "eth/63" => Some(ETH63)
@@ -41,6 +44,7 @@ object Capability {
     case "eth/67" => Some(ETH67)
     case "eth/68" => Some(ETH68)
     case "etc/64" => Some(ETC64)
+    case "snap/1" => Some(SNAP1)
     case _        => None // TODO: log unknown capability?
   }
 
@@ -57,12 +61,13 @@ object Capability {
   def best(capabilities: List[Capability]): Capability =
     capabilities.maxBy(_.version)
 
-  /** Determines if this capability uses RequestId wrapper in messages (ETH66+) ETH66, ETH67, ETH68 use RequestId
-    * wrapper ETH63, ETH64, ETH65, ETC64 do not use RequestId wrapper
+  /** Determines if this capability uses RequestId wrapper in messages (ETH66+, SNAP1+)
+    * ETH66, ETH67, ETH68, SNAP1 use RequestId wrapper
+    * ETH63, ETH64, ETH65, ETC64 do not use RequestId wrapper
     */
   def usesRequestId(capability: Capability): Boolean = capability match {
-    case ETH66 | ETH67 | ETH68 => true
-    case _                     => false
+    case ETH66 | ETH67 | ETH68 | SNAP1 => true
+    case _                             => false
   }
 
   implicit class CapabilityEnc(val msg: Capability) extends RLPSerializable {
