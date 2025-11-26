@@ -8,6 +8,7 @@ import cats.effect.unsafe.IORuntime
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.util.control.NonFatal
 
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.concurrent.ScalaFutures
@@ -43,11 +44,13 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
 
   override def afterEach(): Unit = {
     // Ensure all port forwarding resources are cleaned up after each test
+    // This is defensive cleanup - if stopPortForwarding fails, the test already
+    // made assertions about the state, so we don't need to fail here
     testBuilders.foreach { builder =>
       try {
         builder.stopPortForwarding().futureValue
       } catch {
-        case _: Exception => // Ignore cleanup errors
+        case NonFatal(_) => // Ignore non-fatal cleanup errors (already stopped, timeout, etc.)
       }
     }
     testBuilders = List.empty
