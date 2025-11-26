@@ -405,17 +405,15 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, FixtureBlocks.Genesis.block)
 
     // Fetcher request for headers - using ETH66 format (current implementation)
-    val firstGetBlockHeadersRequest: ETH66GetBlockHeaders =
-      ETH66GetBlockHeaders(requestId = 0, Left(1), syncConfig.blockHeadersPerRequest, skip = 0, reverse = false)
-
+    // Note: requestId is now dynamically generated, so we don't check for specific values
     def handleFirstBlockBatchHeaders(): Unit = {
-      // Expect ETH66 format message with requestId
-      peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.requestId == 0 && msg.block == Left(1) => ()
+      // Expect ETH66 format message with dynamic requestId - capture it to use in response
+      val requestId = peersClient.expectMsgPF() {
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(1) => msg.requestId
       }
 
-      // Respond with ETH66 format (matching request format)
-      val firstGetBlockHeadersResponse = ETH66BlockHeaders(0, firstBlocksBatch.map(_.header))
+      // Respond with ETH66 format (matching request format with same requestId)
+      val firstGetBlockHeadersResponse = ETH66BlockHeaders(requestId, firstBlocksBatch.map(_.header))
       peersClient.reply(PeersClient.Response(fakePeer, firstGetBlockHeadersResponse))
     }
 
