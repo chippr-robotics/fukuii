@@ -106,11 +106,18 @@ case class EthNodeStatus64ExchangeState(
     // - The low block number produces an incompatible ForkId causing peer rejection
     // 
     // We continue using the bootstrap pivot block until the node has synced close
-    // to it (within 10% or MaxBootstrapPivotThreshold blocks, whichever is smaller),
-    // at which point we switch to using the actual block number for ForkId calculation.
+    // to it. The threshold is calculated as the minimum of:
+    // - 10% of the pivot block number, OR
+    // - MaxBootstrapPivotThreshold (100,000 blocks)
+    // 
+    // For example, with pivot at 19,250,000:
+    // - 10% = 1,925,000 blocks
+    // - threshold = min(1,925,000, 100,000) = 100,000 blocks
+    // - Use pivot when: bestBlockNumber < 19,150,000
+    // - Switch to actual when: bestBlockNumber >= 19,150,000
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
-      // Calculate the threshold: use bootstrap pivot until we're within 10% of it or MaxBootstrapPivotThreshold
+      // Calculate the threshold: maximum distance from pivot block before switching to actual number
       val threshold = math.min(bootstrapPivotBlock / 10, MaxBootstrapPivotThreshold)
       val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
       

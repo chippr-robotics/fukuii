@@ -84,11 +84,16 @@ val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
 
 ### Threshold Logic
 
-- **Threshold**: min(10% of pivot block, 100,000 blocks)
-- **Example**: For pivot at 19,250,000:
-  - Threshold = min(1,925,000, 100,000) = 100,000
-  - Use pivot when: bestBlockNumber < 19,150,000
-  - Switch to actual when: bestBlockNumber >= 19,150,000
+The threshold determines the maximum distance from the pivot block before the node switches from using the bootstrap pivot to using its actual block number for ForkId calculation.
+
+- **Threshold Formula**: min(10% of pivot block, 100,000 blocks)
+- **Example**: For ETC mainnet pivot at 19,250,000:
+  - 10% of pivot = 1,925,000 blocks
+  - Threshold = min(1,925,000, 100,000) = **100,000 blocks**
+  - **Use pivot when**: bestBlockNumber < 19,150,000 (i.e., distance > 100,000)
+  - **Switch to actual when**: bestBlockNumber >= 19,150,000 (i.e., distance <= 100,000)
+
+**Rationale**: The 100,000 block cap ensures that for high pivot values (like 19M+), we don't wait too long before switching to the actual block number. This provides adequate compatibility during initial sync while allowing a timely transition to actual values once the node is reasonably close to being synced.
 
 ### Benefits
 
@@ -107,9 +112,9 @@ val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
    - Prevents regression of the bug
 
 2. **Test: Switch to actual block number near pivot**
-   - Verifies nodes at block 18,000,000 use actual number for ForkId
-   - Ensures correct transition from pivot to actual
-   - Tests threshold logic boundary
+   - Verifies nodes at block 19,200,000 (within threshold) use actual number for ForkId
+   - Ensures correct transition from pivot to actual when within 100k blocks of pivot
+   - Tests threshold logic boundary (19,250,000 - 100,000 = 19,150,000 is the switch point)
 
 ### Integration Testing
 

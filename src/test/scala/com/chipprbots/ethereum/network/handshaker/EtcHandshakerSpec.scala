@@ -454,7 +454,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
-    // This test verifies that once the node syncs close to the bootstrap pivot block,
+    // This test verifies that once the node syncs close enough to the bootstrap pivot block,
     // it switches to using the actual block number for ForkId calculation
     
     // Set up bootstrap pivot block
@@ -464,9 +464,12 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
       .putBootstrapPivotBlock(bootstrapPivotBlockNumber, bootstrapPivotBlockHash)
       .commit()
     
-    // Advance blockchain close to the pivot block (within 10% = 1,925,000 blocks)
-    // Let's say we're at 18,000,000 which is within the threshold
-    val highBlockNumber = BigInt(18000000)
+    // Advance blockchain to just past the threshold where we switch to actual block numbers
+    // With pivot at 19,250,000, threshold = min(1,925,000, 100,000) = 100,000
+    // Switch happens at: 19,250,000 - 100,000 = 19,150,000
+    // At 19,200,000, we're only 50,000 blocks away from pivot, which is < threshold (100,000)
+    // Therefore we should switch to using actual block number for ForkId
+    val highBlockNumber = BigInt(19200000)
     val highBlock = firstBlock.copy(header = firstBlock.header.copy(number = highBlockNumber))
     val highBlockWeight: ChainWeight = genesisWeight.increase(highBlock.header)
     blockchainWriter.save(highBlock, Nil, highBlockWeight, saveAsBestBlock = true)
@@ -476,11 +479,11 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     assert(handshakerAfterHelloOpt.isDefined)
     
     // The status message should now use the actual block number for ForkId
-    // because we're close to the bootstrap pivot block
+    // because we're within the threshold distance of the bootstrap pivot block
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right((statusMsg: ETH64.Status, _)) =>
         statusMsg.bestHash shouldBe highBlock.header.hash
-        // ForkId should be calculated using actual block number (18,000,000)
+        // ForkId should be calculated using actual block number (19,200,000), not the pivot
         succeed
       case other =>
         fail(s"Expected status message but got: $other")
