@@ -464,7 +464,7 @@ docker run -d \
   chipprbots/fukuii-mordor:latest \
   -Dfukuii.mining.mining-enabled=true \
   -Dfukuii.mining.coinbase=YOUR_ADDRESS_HERE \
-  -Dconfig.file=/app/conf/app.conf \
+  -Dconfig.file=/app/conf/mordor.conf \
   -Dlogback.configurationFile=/app/conf/logback.xml \
   mordor
 ```

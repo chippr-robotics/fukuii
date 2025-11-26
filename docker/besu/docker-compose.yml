@@ -69,7 +69,7 @@ services:
     networks:
       - besu-net
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9091/-/healthy"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9091/"]
       interval: 30s
       timeout: 10s
       retries: 3
