@@ -1273,8 +1273,8 @@ This ensures:
 #### References
 
 1. [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124)
-2. [ADR-012: Bootstrap Checkpoints](../adr/consensus/CON-002-bootstrap-checkpoints.md)
-3. [Detailed Fix Documentation](../fixes/peer-connection-regular-sync-fix.md)
+2. [CON-002: Bootstrap Checkpoints](../adr/consensus/CON-002-bootstrap-checkpoints.md)
+3. [CON-006: ForkId Compatibility During Initial Sync](../adr/consensus/CON-006-forkid-compatibility-during-initial-sync.md)
 4. [Peering Runbook](peering.md)
 
 #### Status
