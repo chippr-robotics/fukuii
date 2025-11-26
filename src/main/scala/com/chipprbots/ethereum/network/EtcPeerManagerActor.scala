@@ -112,7 +112,7 @@ class EtcPeerManagerActor(
         peer.id,
         peerInfo.remoteStatus.capability,
         ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
-        peerInfo.remoteStatus.totalDifficulty
+        peerInfo.remoteStatus.chainWeight.totalDifficulty
       )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
