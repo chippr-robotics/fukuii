@@ -22,7 +22,6 @@ services:
     environment:
       # Allocate memory appropriate for bootnode (2-4GB recommended)
       - JAVA_OPTS=-Xmx2g -Xms2g
-      - FUKUII_NETWORK=etc
     networks:
       - fukuii-bootnode-net
     healthcheck:

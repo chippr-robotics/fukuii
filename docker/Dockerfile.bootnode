@@ -122,4 +122,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 # Set entrypoint to the fukuii binary with bootnode configuration
 # Uses bootnode.conf which optimizes for peer discovery
 ENTRYPOINT ["/app/fukuii/bin/fukuii"]
-CMD ["-Dconfig.file=/app/fukuii/conf/bootnode.conf", "-Dlogback.configurationFile=/app/conf/logback.xml", "etc"]
+CMD ["-Dconfig.file=/app/conf/bootnode.conf", "-Dlogback.configurationFile=/app/conf/logback.xml", "etc"]

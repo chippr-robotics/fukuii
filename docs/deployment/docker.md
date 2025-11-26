@@ -378,7 +378,6 @@ services:
       - bootnode-data:/app/data
     environment:
       - JAVA_OPTS=-Xmx2g -Xms2g
-      - FUKUII_NETWORK=etc
     networks:
       - fukuii-bootnode-net
     healthcheck:
