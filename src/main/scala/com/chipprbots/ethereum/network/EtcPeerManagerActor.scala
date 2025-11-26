@@ -103,10 +103,11 @@ class EtcPeerManagerActor(
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
       log.info(
-        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}",
+        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, TotalDifficulty: {}",
         peer.id,
         peerInfo.remoteStatus.capability,
-        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
+        peerInfo.remoteStatus.totalDifficulty
       )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
@@ -119,6 +120,18 @@ class EtcPeerManagerActor(
           ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
         else
           ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+      
+      // Debug: Log the raw RLP-encoded message bytes for protocol analysis
+      if (log.isDebugEnabled) {
+        val encodedBytes = getBlockHeadersMsg.toBytes
+        val hexBytes = org.bouncycastle.util.encoders.Hex.toHexString(encodedBytes)
+        log.debug(
+          "PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}",
+          encodedBytes.length,
+          if (hexBytes.length > 200) hexBytes.take(200) + "..." else hexBytes
+        )
+      }
+      
       log.info(
         "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
         peer.id,
