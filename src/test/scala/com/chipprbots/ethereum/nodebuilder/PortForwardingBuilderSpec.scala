@@ -38,13 +38,39 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
   implicit override val patienceConfig: PatienceConfig =
     PatienceConfig(timeout = Span(10, Seconds), interval = Span(0.1, Seconds))
 
+  // Track all builders created during tests for cleanup
+  private var testBuilders: List[TestPortForwardingBuilder] = List.empty
+
+  override def afterEach(): Unit = {
+    // Ensure all port forwarding resources are cleaned up after each test
+    testBuilders.foreach { builder =>
+      try {
+        builder.stopPortForwarding().futureValue
+      } catch {
+        case _: Exception => // Ignore cleanup errors
+      }
+    }
+    testBuilders = List.empty
+    super.afterEach()
+  }
+
+  private def createTestBuilder(
+      allocationCount: AtomicInteger,
+      cleanupCount: AtomicInteger,
+      simulateDelay: Long = 0
+  ): TestPortForwardingBuilder = {
+    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount, simulateDelay)
+    testBuilders = builder :: testBuilders
+    builder
+  }
+
   behavior.of("PortForwardingBuilder")
 
   it should "allocate port forwarding exactly once on first call" taggedAs (UnitTest) in {
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount)
+    val builder = createTestBuilder(allocationCount, cleanupCount)
 
     // First call should trigger allocation
     val future1 = builder.startPortForwarding()
@@ -58,7 +84,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount)
+    val builder = createTestBuilder(allocationCount, cleanupCount)
 
     // First call
     val future1 = builder.startPortForwarding()
@@ -85,7 +111,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount, simulateDelay = 50)
+    val builder = createTestBuilder(allocationCount, cleanupCount, simulateDelay = 50)
 
     // Start multiple concurrent calls
     val futures = (1 to 10).map { _ =>
@@ -107,7 +133,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount)
+    val builder = createTestBuilder(allocationCount, cleanupCount)
 
     // Start port forwarding
     val startFuture = builder.startPortForwarding()
@@ -128,7 +154,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount)
+    val builder = createTestBuilder(allocationCount, cleanupCount)
 
     // Start port forwarding
     val startFuture = builder.startPortForwarding()
@@ -153,7 +179,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount)
+    val builder = createTestBuilder(allocationCount, cleanupCount)
 
     // First cycle: start and stop
     whenReady(builder.startPortForwarding()) { _ =>
@@ -176,7 +202,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount)
+    val builder = createTestBuilder(allocationCount, cleanupCount)
 
     // Stop before start should be a no-op
     val stopFuture = builder.stopPortForwarding()
@@ -197,7 +223,7 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     val allocationCount = new AtomicInteger(0)
     val cleanupCount = new AtomicInteger(0)
 
-    val builder = new TestPortForwardingBuilder(allocationCount, cleanupCount)
+    val builder = createTestBuilder(allocationCount, cleanupCount)
 
     // Simulate the scenario that would have caused the bug:
     // Multiple rapid calls to startPortForwarding

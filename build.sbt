@@ -91,6 +91,11 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   ),
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
   Test / parallelExecution := true,
+  Test / fork := true, // Fork JVM for tests to ensure clean shutdown and avoid resource leak issues
+  Test / javaOptions ++= Seq(
+    "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit
+    "-Dpekko.coordinated-shutdown.run-by-actor-system-terminate=on" // Ensure proper shutdown on ActorSystem.terminate
+  ),
   (Test / testOptions) += Tests.Argument("-oDG"),
   // Only publish selected libraries.
   (publish / skip) := true
