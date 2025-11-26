@@ -1,0 +1,42 @@
+# Docker Compose file for Fukuii Bootnode
+# Compose file format: https://docs.docker.com/compose/compose-file/
+# This bootnode configuration optimizes for peer discovery and connection brokering
+
+volumes:
+  bootnode-data:
+
+networks:
+  fukuii-bootnode-net:
+    driver: bridge
+
+services:
+  fukuii-bootnode:
+    image: chipprbots/fukuii-bootnode:latest
+    container_name: fukuii-bootnode
+    restart: unless-stopped
+    ports:
+      - "30303:30303/udp"  # P2P discovery
+      - "9076:9076/tcp"    # P2P networking
+    volumes:
+      - bootnode-data:/app/data
+    environment:
+      # Allocate memory appropriate for bootnode (2-4GB recommended)
+      - JAVA_OPTS=-Xmx2g -Xms2g
+      - FUKUII_NETWORK=etc
+    networks:
+      - fukuii-bootnode-net
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Resource limits for bootnode
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G

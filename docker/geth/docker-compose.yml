@@ -1,4 +1,5 @@
-version: '3.1'
+# Docker Compose file for Geth with monitoring stack
+# Compose file format: https://docs.docker.com/compose/compose-file/
 
 volumes:
     prometheus_data: {}
@@ -6,11 +7,13 @@ volumes:
 
 networks:
   geth-net:
+    driver: bridge
 
 services:
-
   prometheus:
-    image: prom/prometheus:v2.23.0
+    image: prom/prometheus:v2.48.0
+    container_name: geth-prometheus
+    restart: unless-stopped
     volumes:
       - ./prometheus/:/etc/prometheus/
       - prometheus_data:/prometheus
@@ -19,39 +22,60 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
     ports:
-      - 9090:9090
-    links:
-      - geth:geth
+      - "9090:9090"
     depends_on:
       - geth
     networks:
       - geth-net
-    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   grafana:
-    image: grafana/grafana:7.3.6
+    image: grafana/grafana:10.2.2
+    container_name: geth-grafana
+    restart: unless-stopped
     depends_on:
       - prometheus
     ports:
-      - 3000:3000
+      - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning/:/etc/grafana/provisioning/
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-geth}
     networks:
       - geth-net
-    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   geth:
     image: ethereum/client-go:stable
+    container_name: geth-node
+    restart: unless-stopped
     ports:
-      - 8545:8545
-      - 30303:30303
-      - 6060:6060
+      - "8545:8545"
+      - "30303:30303"
+      - "6060:6060"
     networks:
       - geth-net
     volumes:
-      - $HOME/.fukuii/development/geth:/root/.ethereum
+      - ${HOME}/.fukuii/development/geth:/root/.ethereum
     command: --http --http.addr 0.0.0.0 --metrics --metrics.addr 0.0.0.0
-    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 

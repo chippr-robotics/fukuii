@@ -1,4 +1,5 @@
-version: '3.8'
+# Docker Compose file for test network with Core-geth and Fukuii
+# Compose file format: https://docs.docker.com/compose/compose-file/
 
 networks:
   test-network:

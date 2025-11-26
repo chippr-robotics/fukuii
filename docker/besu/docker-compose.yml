@@ -1,4 +1,5 @@
-version: '3.1'
+# Docker Compose file for Besu with monitoring stack
+# Compose file format: https://docs.docker.com/compose/compose-file/
 
 volumes:
     prometheus_data: {}
@@ -6,11 +7,13 @@ volumes:
 
 networks:
   besu-net:
+    driver: bridge
 
 services:
-
   prometheus:
-    image: prom/prometheus:v2.23.0
+    image: prom/prometheus:v2.48.0
+    container_name: besu-prometheus
+    restart: unless-stopped
     volumes:
       - ./prometheus/:/etc/prometheus/
       - prometheus_data:/prometheus
@@ -19,47 +22,74 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
     ports:
-      - 9090:9090
-    links:
-      - besu:besu
+      - "9090:9090"
     depends_on:
       - besu
     networks:
       - besu-net
-    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   grafana:
-    image: grafana/grafana:7.3.6
+    image: grafana/grafana:10.2.2
+    container_name: besu-grafana
+    restart: unless-stopped
     depends_on:
       - prometheus
     ports:
-      - 3000:3000
+      - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning/:/etc/grafana/provisioning/
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-besu}
     networks:
       - besu-net
-    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   pushgateway:
-    image: prom/pushgateway:v1.4.0
+    image: prom/pushgateway:v1.7.0
+    container_name: besu-pushgateway
+    restart: unless-stopped
     ports:
-      - 9091:9091
+      - "9091:9091"
     depends_on:
       - besu
     networks:
       - besu-net
-    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9091/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   besu:
-    image: hyperledger/besu:$VERSION
+    image: hyperledger/besu:${VERSION:-latest}
+    container_name: besu-node
+    restart: unless-stopped
     ports:
-      - 8545:8545
-      - 9545:9545
+      - "8545:8545"
+      - "9545:9545"
     networks:
       - besu-net
     volumes:
-      - $HOME/.fukuii/development/besu:/var/lib/besu
+      - ${HOME}/.fukuii/development/besu:/var/lib/besu
     command: --rpc-http-cors-origins="all" --rpc-http-enabled --metrics-push-enabled --metrics-push-port=9091 --metrics-push-host=pushgateway
-    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
