@@ -40,14 +40,19 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH63
 import com.chipprbots.ethereum.network.p2p.messages.ETH63._
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -266,8 +271,33 @@ class FastSync(
         requestedBlockBodies -= sender()
         removeRequestHandler(sender())
         handleBlockBodies(peer, requestedBodies, blockBodies)
+      case ResponseReceived(peer, ETH66BlockBodies(_, blockBodies), timeTaken) =>
+        log.debug("Received {} block bodies (ETH66) from peer [{}] in {} ms", blockBodies.size, peer.id, timeTaken)
+        FastSyncMetrics.setBlockBodiesDownloadTime(timeTaken)
+
+        val requestedBodies = requestedBlockBodies.getOrElse(sender(), Nil)
+        requestedBlockBodies -= sender()
+        removeRequestHandler(sender())
+        handleBlockBodies(peer, requestedBodies, blockBodies)
       case ResponseReceived(peer, Receipts(receipts), timeTaken) =>
         log.debug("Received {} receipts from peer [{}] in {} ms", receipts.size, peer.id, timeTaken)
+        FastSyncMetrics.setBlockReceiptsDownloadTime(timeTaken)
+
+        val requestedHashes = requestedReceipts.getOrElse(sender(), Nil)
+        requestedReceipts -= sender()
+        removeRequestHandler(sender())
+        handleReceipts(peer, requestedHashes, receipts)
+      case ResponseReceived(peer, eth66Receipts: ETH66Receipts, timeTaken) =>
+        // Convert ETH66 RLPList format to Seq[Seq[Receipt]] expected by handleReceipts
+        // Local imports provide implicit conversions: toTypedRLPEncodables and toReceipt
+        val receipts: Seq[Seq[Receipt]] = {
+          import ETH63.ReceiptImplicits._
+          import BaseETH6XMessages.TypedTransaction._
+          eth66Receipts.receiptsForBlocks.items.collect {
+            case r: RLPList => r.items.toTypedRLPEncodables.map(_.toReceipt)
+          }
+        }
+        log.debug("Received {} receipts (ETH66) from peer [{}] in {} ms", receipts.size, peer.id, timeTaken)
         FastSyncMetrics.setBlockReceiptsDownloadTime(timeTaken)
 
         val requestedHashes = requestedReceipts.getOrElse(sender(), Nil)
