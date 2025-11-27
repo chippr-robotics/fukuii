@@ -293,8 +293,11 @@ class FastSync(
         val receipts: Seq[Seq[Receipt]] = {
           import ETH63.ReceiptImplicits._
           import BaseETH6XMessages.TypedTransaction._
-          eth66Receipts.receiptsForBlocks.items.collect {
-            case r: RLPList => r.items.toTypedRLPEncodables.map(_.toReceipt)
+          eth66Receipts.receiptsForBlocks.items.flatMap {
+            case r: RLPList => Some(r.items.toTypedRLPEncodables.map(_.toReceipt))
+            case other =>
+              log.warning("Unexpected RLP item type in ETH66Receipts from peer [{}]: {}", peer.id, other.getClass.getSimpleName)
+              None
           }
         }
         log.debug("Received {} receipts (ETH66) from peer [{}] in {} ms", receipts.size, peer.id, timeTaken)
