@@ -42,6 +42,17 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
   private def timeTakenSoFar(): Long = System.currentTimeMillis() - startTime
 
   override def preStart(): Unit = {
+    log.info(
+      "PEER_REQUEST: Starting request to peer={}, reqType={}, respCode=0x{}, timeout={}ms",
+      peer.id,
+      requestMsg.getClass.getSimpleName,
+      responseMsgCode.toHexString,
+      responseTimeout.toMillis
+    )
+    log.debug(
+      "PEER_REQUEST: Request details: {}",
+      requestMsg.toShortString
+    )
     etcPeerManager ! EtcPeerManagerActor.SendMessage(toSerializable(requestMsg), peer.id)
     peerEventBus ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
     peerEventBus ! Subscribe(subscribeMessageClassifier)
@@ -54,16 +65,40 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
   }
 
   def handleResponseMsg(responseMsg: ResponseMsg): Unit = {
+    val elapsed = timeTakenSoFar()
+    log.info(
+      "PEER_REQUEST_SUCCESS: peer={}, reqType={}, respType={}, elapsed={}ms",
+      peer.id,
+      requestMsg.getClass.getSimpleName,
+      responseMsg.getClass.getSimpleName,
+      elapsed
+    )
+    log.debug("PEER_REQUEST_SUCCESS: Response details: {}", responseMsg.toShortString)
     cleanupAndStop()
-    initiator ! ResponseReceived(peer, responseMsg, timeTaken = timeTakenSoFar())
+    initiator ! ResponseReceived(peer, responseMsg, timeTaken = elapsed)
   }
 
   def handleTimeout(): Unit = {
+    val elapsed = timeTakenSoFar()
+    log.error(
+      "PEER_REQUEST_TIMEOUT: peer={}, reqType={}, elapsed={}ms (timeout={}ms)",
+      peer.id,
+      requestMsg.getClass.getSimpleName,
+      elapsed,
+      responseTimeout.toMillis
+    )
     cleanupAndStop()
     initiator ! RequestFailed(peer, "request timeout")
   }
 
   def handleTerminated(): Unit = {
+    val elapsed = timeTakenSoFar()
+    log.error(
+      "PEER_REQUEST_DISCONNECTED: peer={}, reqType={}, elapsed={}ms - connection closed before response",
+      peer.id,
+      requestMsg.getClass.getSimpleName,
+      elapsed
+    )
     cleanupAndStop()
     initiator ! RequestFailed(peer, "connection closed")
   }

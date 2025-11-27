@@ -90,6 +90,12 @@ class EtcPeerManagerActor(
 
     case EtcPeerManagerActor.SendMessage(message, peerId) =>
       NetworkMetrics.SentMessagesCounter.increment()
+      log.debug(
+        "SEND_VIA_MANAGER: peer={}, type={}, code=0x{}",
+        peerId,
+        message.underlyingMsg.getClass.getSimpleName,
+        message.code.toHexString
+      )
       val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message.underlyingMsg, handleSentMessage)
       peerManagerActor ! PeerManagerActor.SendMessage(message, peerId)
       context.become(handleMessages(newPeersWithInfo))
@@ -203,10 +209,31 @@ class EtcPeerManagerActor(
     * @return
     *   new updated peer info
     */
-  private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo =
+  private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo = {
+    // Log received BlockHeaders for debugging GetBlockHeaders response tracking
+    message match {
+      case m: ETH62BlockHeaders =>
+        log.info(
+          "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
+          initialPeerWithInfo.peer.id,
+          m.headers.size,
+          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+        )
+      case m: ETH66BlockHeaders =>
+        log.info(
+          "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
+          initialPeerWithInfo.peer.id,
+          m.requestId,
+          m.headers.size,
+          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+        )
+      case _ => // Don't log other message types at INFO level
+    }
+    
     (updateChainWeight(message) _)
       .andThen(updateForkAccepted(message, initialPeerWithInfo.peer))
       .andThen(updateMaxBlock(message))(initialPeerWithInfo.peerInfo)
+  }
 
   /** Processes the message and updates the chain weight of the peer
     *
