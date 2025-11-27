@@ -259,14 +259,13 @@ class RLPxConnectionHandler(
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach { ack =>
             ack.cancellable.cancel()
-            val msgCodeStr = if (ack.messageCode < 0) "unknown" else f"0x${ack.messageCode}%02x"
             log.error(
               "[Stopping Connection] Sending 'Hello' to {} failed - TCP ack not received within timeout. " +
                 "seqNum={}, msgType={}, msgCode={}",
               peerId,
               ackSeqNumber,
               ack.messageType,
-              msgCodeStr
+              formatMessageCode(ack.messageCode)
             )
           }
           gracefulStop()
@@ -429,16 +428,8 @@ class RLPxConnectionHandler(
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach { ack =>
             ack.cancellable.cancel()
-            val msgCodeStr = if (ack.messageCode < 0) "unknown" else f"0x${ack.messageCode}%02x"
-            log.error(
-              "[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}, lastMsgType={}, lastMsgCode={}, " +
-                "pendingMsgs={}. TCP ack not received within timeout - possible network issue or peer closed connection",
-              peerId,
-              ackSeqNumber,
-              ack.messageType,
-              msgCodeStr,
-              messagesNotSent.size
-            )
+            val details = s"lastMsgType=${ack.messageType}, lastMsgCode=${formatMessageCode(ack.messageCode)}, pendingMsgs=${messagesNotSent.size}"
+            log.error("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}, {} - TCP ack not received", peerId, ackSeqNumber, details)
           }
           gracefulStop()
       }
@@ -581,14 +572,20 @@ object RLPxConnectionHandler {
 
   case class AckTimeout(seqNumber: Int)
 
+  /** Helper to format message codes consistently for logging.
+    * Negative codes indicate unset/unknown values.
+    */
+  private def formatMessageCode(code: Int): String =
+    if (code < 0) "unknown" else f"0x$code%02x"
+
   /** Tracks a pending TCP ack with timeout information for diagnostics.
     * 
     * @param seqNumber Sequence number for matching ack/timeout events
     * @param cancellable The cancellable timeout future
     * @param messageType Type of message that was sent (for logging purposes). Defaults to "unknown" for backward
     *                    compatibility with existing code paths that don't track message types.
-    * @param messageCode The message code that was sent (for diagnostics). Defaults to -1 (invalid code) for backward
-    *                    compatibility with existing code paths.
+    * @param messageCode The message code that was sent (for diagnostics). Defaults to -1 (unset/unknown) for backward
+    *                    compatibility with existing code paths that may not have message code information.
     */
   case class CancellableAckTimeout(
       seqNumber: Int,
