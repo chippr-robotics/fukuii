@@ -251,11 +251,37 @@ The following changes were implemented across 8 files (43 log statements total):
 
 The `logback.xml` file provides comprehensive logger entries for all major components, organized by subsystem. Operators can manually set log levels for troubleshooting by editing the appropriate logger entry.
 
-### Configuration Location
+### Configuration Location Rationale
+
+Fukuii uses a hybrid configuration approach for logging:
+
+| Setting Type | Location | Rationale |
+|-------------|----------|-----------|
+| **Global log level** | `base.conf` (`logging.logs-level`) | Simple runtime override via `-Dlogging.logs-level=DEBUG` or environment variable |
+| **Output format** | `base.conf` (`logging.json-output`) | Deployment-specific setting (JSON for log aggregation) |
+| **Log file paths** | `base.conf` (`logging.logs-dir`, `logging.logs-file`) | Environment-specific paths |
+| **Per-component log levels** | `logback.xml` | Detailed troubleshooting control (see below) |
+
+**Why per-component log levels belong in `logback.xml`:**
+
+1. **Hierarchical control**: Logback's native logger hierarchy allows setting levels at package and class granularity. HOCON config would require flattening this into string keys.
+
+2. **Well-documented convention**: Logback's XML format is the standard for Java/Scala applications. Operators familiar with SLF4J/Logback will expect logger configuration in `logback.xml`.
+
+3. **IDE and tooling support**: XML schema validation, autocompletion, and logback-specific tooling work natively with `logback.xml`.
+
+4. **Conditional logic**: Logback supports `<if>` conditions for environment-specific behavior (e.g., JSON output toggle), which is already used in the current configuration.
+
+5. **Hot reload capability**: Logback can reload `logback.xml` at runtime with `scan="true"`, enabling log level changes without restart.
+
+The global `logging.logs-level` in `base.conf` is bridged to logback via `ConfigPropertyDefiner`, providing a convenient override for the root logger while preserving fine-grained control in `logback.xml`.
+
+### Configuration Files
 
 - Production: `src/main/resources/logback.xml`
 - Unit tests: `src/test/resources/logback-test.xml`
 - Integration tests: `src/it/resources/logback-test.xml`
+- Global settings: `src/main/resources/conf/base.conf` (logging section)
 
 ### Subsystem Categories
 
