@@ -428,7 +428,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
-          case statusMsg: ETH64.Status =>
+          case statusEnc: ETH64.Status.StatusEnc =>
+            val statusMsg = statusEnc.underlyingMsg
             // Best block should be the low block
             statusMsg.bestHash shouldBe lowBlock.header.hash
             // But ForkId should be calculated using bootstrap pivot block, not the actual block number
@@ -436,7 +437,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
             val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(bootstrapPivotBlockNumber)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
-            fail(s"Expected ETH64.Status message but got: $other")
+            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
         }
       case other =>
         fail(s"Expected status message but got: $other")
@@ -490,12 +491,13 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
-          case statusMsg: ETH64.Status =>
+          case statusEnc: ETH64.Status.StatusEnc =>
+            val statusMsg = statusEnc.underlyingMsg
             statusMsg.bestHash shouldBe highBlock.header.hash
             // ForkId should be calculated using actual block number (19,200,000), not the pivot
             succeed
           case other =>
-            fail(s"Expected ETH64.Status message but got: $other")
+            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
         }
       case other =>
         fail(s"Expected status message but got: $other")
