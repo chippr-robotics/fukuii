@@ -2,6 +2,82 @@
 
 This document provides technical analysis and resolutions for network-related issues discovered through log review.
 
+## UPDATE 2025-11-27: Enhanced Diagnostics for 5-Second Disconnect Pattern
+
+### Issue Investigated
+Peers disconnect simultaneously after ~5 seconds of no activity with reason code 0x10 ("Some other reason specific to a subprotocol"). The pattern observed:
+
+1. Last successful request: GetReceipts sent at 10:35:10.761
+2. Disconnection: 10:35:15.780 (5.019 seconds later)
+3. All peers disconnect at the same time
+
+### Analysis Findings
+
+#### Correlation with TCP Ack Timeout
+The 5-second disconnect pattern matches the `wait-for-tcp-ack-timeout` configuration (default: 5 seconds). When a message is sent via TCP, the system waits for a TCP-level acknowledgment from the Akka IO layer. If this ack is not received within the timeout, the connection is closed.
+
+**Important:** This is NOT a peer response timeout - it's a local TCP write acknowledgment timeout. If this timeout is triggered, it indicates:
+- Network congestion or packet loss
+- The remote peer has closed the connection
+- TCP buffer is full
+
+#### "Did not find 'Hello'" Warnings
+These warnings appear when:
+1. Data is received after auth handshake
+2. The FrameCodec parses the data into frames
+3. The first frame is not a Hello message (type 0x00)
+
+This can happen legitimately when:
+- Data is incomplete (need to wait for more bytes)
+- Frame parsing returns no complete frames yet
+
+### Diagnostic Improvements Made
+
+1. **Enhanced AckTimeout Logging**
+   - Now logs the message type and code that was pending when timeout occurred
+   - Shows the number of queued messages waiting to be sent
+   - Provides clear indication that it's a TCP ack timeout, not a peer response timeout
+
+2. **Enhanced "Did not find 'Hello'" Warning**
+   - Now shows the data length received
+   - Indicates that the system is waiting for more data or a Hello frame
+
+3. **CancellableAckTimeout Enhancement**
+   - Now tracks the message type and code for better diagnostics
+   - Allows correlating timeout errors with specific message types
+
+### Verification Steps
+
+1. **Check if disconnects are TCP ack timeouts**:
+   ```bash
+   grep "SEND_MSG_TIMEOUT" /path/to/fukuii.log
+   ```
+   If you see these, the disconnect is due to TCP ack timeout, not encoding issues.
+
+2. **Check for frame parsing issues**:
+   ```bash
+   grep "Did not find 'Hello'" /path/to/fukuii.log
+   ```
+   The enhanced message will show if frames are being parsed correctly.
+
+3. **Monitor connection health**:
+   ```bash
+   grep -E "SEND_MSG_ACK|SEND_MSG_TIMEOUT|RECV_MSG" /path/to/fukuii.log
+   ```
+
+### Files Modified
+- `src/main/scala/com/chipprbots/ethereum/network/rlpx/RLPxConnectionHandler.scala` - Enhanced diagnostic logging
+- `docs/troubleshooting/LOG_REVIEW_RESOLUTION.md` - This documentation
+
+### Next Steps for Further Investigation
+If the 5-second disconnect persists:
+1. Check if `SEND_MSG_TIMEOUT` appears in logs - indicates TCP ack issue
+2. Increase `wait-for-tcp-ack-timeout` to 10 seconds temporarily to rule out transient issues
+3. Check network connectivity and firewall rules
+4. Monitor system resources (CPU, memory) during syncing
+
+---
+
 ## UPDATE 2025-11-27: ETH66+ Protocol Adaptation for GetReceipts and GetBlockBodies
 
 ### Issue Discovered

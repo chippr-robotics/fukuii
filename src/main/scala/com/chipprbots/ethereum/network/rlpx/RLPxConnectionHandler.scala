@@ -243,7 +243,7 @@ class RLPxConnectionHandler(
           context.become(
             awaitInitialHello(
               extractor,
-              Some(CancellableAckTimeout(seqNumber, timeout)),
+              Some(CancellableAckTimeout(seqNumber, timeout, "Hello", h.code)),
               increaseSeqNumber(seqNumber)
             )
           )
@@ -257,8 +257,18 @@ class RLPxConnectionHandler(
           ()
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
-          cancellableAckTimeout.foreach(_.cancellable.cancel())
-          log.error("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
+          cancellableAckTimeout.foreach { ack =>
+            ack.cancellable.cancel()
+            val msgCodeStr = if (ack.messageCode < 0) "unknown" else f"0x${ack.messageCode}%02x"
+            log.error(
+              "[Stopping Connection] Sending 'Hello' to {} failed - TCP ack not received within timeout. " +
+                "seqNum={}, msgType={}, msgCode={}",
+              peerId,
+              ackSeqNumber,
+              ack.messageType,
+              msgCodeStr
+            )
+          }
           gracefulStop()
         case Received(data) =>
           extractHello(extractor, data, cancellableAckTimeout, seqNumber)
@@ -301,7 +311,14 @@ class RLPxConnectionHandler(
               gracefulStop()
           }
         case None =>
-          log.warning("[RLPx] Did not find 'Hello' in message from peer {}, continuing to await", peerId)
+          // readHello already parsed the frames, so we only log minimal diagnostic info here
+          // The frame parsing state is maintained internally by the FrameCodec
+          log.warning(
+            "[RLPx] Did not find 'Hello' in message from peer {}, continuing to await. " +
+              "Received {} bytes, waiting for more data or Hello frame",
+            peerId,
+            data.length
+          )
           context.become(awaitInitialHello(extractor, cancellableAckTimeout, seqNumber))
       }
 
@@ -410,8 +427,19 @@ class RLPxConnectionHandler(
             context.become(handshaked(messageCodec, Queue.empty, None, seqNumber))
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
-          cancellableAckTimeout.foreach(_.cancellable.cancel())
-          log.error("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, ackSeqNumber)
+          cancellableAckTimeout.foreach { ack =>
+            ack.cancellable.cancel()
+            val msgCodeStr = if (ack.messageCode < 0) "unknown" else f"0x${ack.messageCode}%02x"
+            log.error(
+              "[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}, lastMsgType={}, lastMsgCode={}, " +
+                "pendingMsgs={}. TCP ack not received within timeout - possible network issue or peer closed connection",
+              peerId,
+              ackSeqNumber,
+              ack.messageType,
+              msgCodeStr,
+              messagesNotSent.size
+            )
+          }
           gracefulStop()
       }
 
@@ -458,11 +486,17 @@ class RLPxConnectionHandler(
       log.debug("Sent message: {} to {}", messageToSend.underlyingMsg.toShortString, peerId)
 
       val timeout = system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
+      val ackTimeout = CancellableAckTimeout(
+        seqNumber = seqNumber,
+        cancellable = timeout,
+        messageType = messageToSend.underlyingMsg.getClass.getSimpleName,
+        messageCode = messageToSend.code
+      )
       context.become(
         handshaked(
           messageCodec = messageCodec,
           messagesNotSent = remainingMsgsToSend,
-          cancellableAckTimeout = Some(CancellableAckTimeout(seqNumber, timeout)),
+          cancellableAckTimeout = Some(ackTimeout),
           seqNumber = increaseSeqNumber(seqNumber)
         )
       )
@@ -547,7 +581,21 @@ object RLPxConnectionHandler {
 
   case class AckTimeout(seqNumber: Int)
 
-  case class CancellableAckTimeout(seqNumber: Int, cancellable: Cancellable)
+  /** Tracks a pending TCP ack with timeout information for diagnostics.
+    * 
+    * @param seqNumber Sequence number for matching ack/timeout events
+    * @param cancellable The cancellable timeout future
+    * @param messageType Type of message that was sent (for logging purposes). Defaults to "unknown" for backward
+    *                    compatibility with existing code paths that don't track message types.
+    * @param messageCode The message code that was sent (for diagnostics). Defaults to -1 (invalid code) for backward
+    *                    compatibility with existing code paths.
+    */
+  case class CancellableAckTimeout(
+      seqNumber: Int,
+      cancellable: Cancellable,
+      messageType: String = "unknown",
+      messageCode: Int = -1
+  )
 
   trait RLPxConfiguration {
     val waitForHandshakeTimeout: FiniteDuration
