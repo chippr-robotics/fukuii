@@ -848,17 +848,38 @@ class FastSync(
 
       log.debug("Requesting [{}] receipts from peer [{}]", receiptsToGet.size, peer.id.value)
 
-      val handler = context.actorOf(
-        PeerRequestHandler.props[GetReceipts, Receipts](
-          peer,
-          peerResponseTimeout,
-          etcPeerManager,
-          peerEventBus,
-          requestMsg = GetReceipts(receiptsToGet),
-          responseMsgCode = Codes.ReceiptsCode
-        ),
-        s"$countActor-peer-request-handler-receipts"
-      )
+      // Create message in correct format based on peer's negotiated capability
+      val usesRequestId = handshakedPeers
+        .get(peer.id)
+        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
+
+      val handler = if (usesRequestId) {
+        // Use ETH66 format for ETH66+ peers
+        context.actorOf(
+          PeerRequestHandler.props[ETH66.GetReceipts, ETH66Receipts](
+            peer,
+            peerResponseTimeout,
+            etcPeerManager,
+            peerEventBus,
+            requestMsg = ETH66.GetReceipts(ETH66.nextRequestId, receiptsToGet),
+            responseMsgCode = Codes.ReceiptsCode
+          ),
+          s"$countActor-peer-request-handler-receipts"
+        )
+      } else {
+        // Use ETH63 format for older peers
+        context.actorOf(
+          PeerRequestHandler.props[GetReceipts, Receipts](
+            peer,
+            peerResponseTimeout,
+            etcPeerManager,
+            peerEventBus,
+            requestMsg = GetReceipts(receiptsToGet),
+            responseMsgCode = Codes.ReceiptsCode
+          ),
+          s"$countActor-peer-request-handler-receipts"
+        )
+      }
 
       context.watch(handler)
       assignedHandlers += (handler -> peer)
@@ -872,17 +893,38 @@ class FastSync(
 
       log.debug("Requesting [{}] block bodies from peer [{}]", blockBodiesToGet.size, peer.id.value)
 
-      val handler = context.actorOf(
-        PeerRequestHandler.props[GetBlockBodies, BlockBodies](
-          peer,
-          peerResponseTimeout,
-          etcPeerManager,
-          peerEventBus,
-          requestMsg = GetBlockBodies(blockBodiesToGet),
-          responseMsgCode = Codes.BlockBodiesCode
-        ),
-        s"$countActor-peer-request-handler-block-bodies"
-      )
+      // Create message in correct format based on peer's negotiated capability
+      val usesRequestId = handshakedPeers
+        .get(peer.id)
+        .exists(peerWithInfo => Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability))
+
+      val handler = if (usesRequestId) {
+        // Use ETH66 format for ETH66+ peers
+        context.actorOf(
+          PeerRequestHandler.props[ETH66.GetBlockBodies, ETH66BlockBodies](
+            peer,
+            peerResponseTimeout,
+            etcPeerManager,
+            peerEventBus,
+            requestMsg = ETH66.GetBlockBodies(ETH66.nextRequestId, blockBodiesToGet),
+            responseMsgCode = Codes.BlockBodiesCode
+          ),
+          s"$countActor-peer-request-handler-block-bodies"
+        )
+      } else {
+        // Use ETH62 format for older peers
+        context.actorOf(
+          PeerRequestHandler.props[GetBlockBodies, BlockBodies](
+            peer,
+            peerResponseTimeout,
+            etcPeerManager,
+            peerEventBus,
+            requestMsg = GetBlockBodies(blockBodiesToGet),
+            responseMsgCode = Codes.BlockBodiesCode
+          ),
+          s"$countActor-peer-request-handler-block-bodies"
+        )
+      }
 
       context.watch(handler)
       assignedHandlers += (handler -> peer)
