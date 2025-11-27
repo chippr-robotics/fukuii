@@ -246,3 +246,52 @@ The following changes were implemented across 8 files (43 log statements total):
 - Keep messages concise but informative
 - Use consistent terminology across the codebase
 - Prefix subsystem-specific logs with tags like `[RLPx]`, `[FastSync]`, etc. when helpful
+
+## Appendix: Manual Log Level Configuration
+
+The `logback.xml` file provides comprehensive logger entries for all major components, organized by subsystem. Operators can manually set log levels for troubleshooting by editing the appropriate logger entry.
+
+### Configuration Location
+
+- Production: `src/main/resources/logback.xml`
+- Unit tests: `src/test/resources/logback-test.xml`
+- Integration tests: `src/it/resources/logback-test.xml`
+
+### Subsystem Categories
+
+The following subsystems have dedicated logger entries in `logback.xml`:
+
+| Subsystem | Package | Description |
+|-----------|---------|-------------|
+| Scalanet | `com.chipprbots.scalanet` | Low-level networking library |
+| Network | `com.chipprbots.ethereum.network` | Peer connections and communication |
+| RLPx | `com.chipprbots.ethereum.network.rlpx` | Encrypted transport protocol |
+| Sync | `com.chipprbots.ethereum.blockchain.sync` | Block synchronization |
+| Fast Sync | `com.chipprbots.ethereum.blockchain.sync.fast` | Fast sync mode |
+| Regular Sync | `com.chipprbots.ethereum.blockchain.sync.regular` | Regular sync mode |
+| SNAP Sync | `com.chipprbots.ethereum.blockchain.sync.snap` | SNAP protocol sync |
+| Ledger | `com.chipprbots.ethereum.ledger` | Block execution and state |
+| Database | `com.chipprbots.ethereum.db` | Storage and persistence |
+| MPT | `com.chipprbots.ethereum.mpt` | Merkle Patricia Trie |
+| VM | `com.chipprbots.ethereum.vm` | Ethereum Virtual Machine |
+| Consensus | `com.chipprbots.ethereum.consensus` | Mining and validation |
+| Transactions | `com.chipprbots.ethereum.transactions` | Pending transactions |
+| JSON-RPC | `com.chipprbots.ethereum.jsonrpc` | API server |
+| Faucet | `com.chipprbots.ethereum.faucet` | Test network faucet |
+| Metrics | `com.chipprbots.ethereum.metrics` | Performance monitoring |
+
+### Example: Enabling DEBUG for RLPx Troubleshooting
+
+To enable DEBUG logging for RLPx connection issues, modify `logback.xml`:
+
+```xml
+<!-- Before: INFO (production default) -->
+<logger name="com.chipprbots.ethereum.network.rlpx" level="INFO" />
+
+<!-- After: DEBUG (for troubleshooting) -->
+<logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
+```
+
+### Note on Pekko Actor Logging
+
+When setting any level to DEBUG, you may also need to adjust `pekko.loglevel` in `application.conf` for actor-based components to ensure DEBUG messages are not filtered at the actor system level.
