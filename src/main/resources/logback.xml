@@ -105,8 +105,13 @@
     <!-- Network and sync modules - INFO by default, set to DEBUG for detailed troubleshooting -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.discovery" level="INFO" />
+    
+    <!-- RLPx protocol debugging - DEBUG enabled for TCP connection troubleshooting -->
+    <!-- See PR #592: Enhanced logging for core-geth peer connectivity issues -->
+    <logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.EtcPeerManagerActor" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="DEBUG" />
     
     <!-- VM execution - disabled by default for performance -->
     <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
