@@ -369,11 +369,38 @@ class RLPxConnectionHandler(
             )
 
         case Received(data) =>
+          log.debug(
+            "RECV_MSG: peer={}, dataLen={}, pendingAck={}",
+            peerId,
+            data.length,
+            cancellableAckTimeout.isDefined
+          )
           val messages = messageCodec.readMessages(data)
+          log.debug("RECV_MSG: peer={}, decoded {} message(s)", peerId, messages.size)
+          messages.zipWithIndex.foreach { case (msgResult, idx) =>
+            msgResult match {
+              case Right(msg) =>
+                log.debug(
+                  "RECV_MSG: peer={}, msg[{}] type={}, code=0x{}",
+                  peerId,
+                  idx,
+                  msg.getClass.getSimpleName,
+                  msg.code.toHexString
+                )
+              case Left(err) =>
+                log.error(
+                  "RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}",
+                  peerId,
+                  idx,
+                  err.getMessage
+                )
+            }
+          }
           messages.foreach(processMessage)
 
         case Ack if cancellableAckTimeout.nonEmpty =>
           // Cancel pending message timeout
+          log.debug("SEND_MSG_ACK: peer={}, seqNum={}", peerId, cancellableAckTimeout.map(_.seqNumber).getOrElse(-1))
           cancellableAckTimeout.foreach(_.cancellable.cancel())
 
           // Send next message if there is one
@@ -384,7 +411,7 @@ class RLPxConnectionHandler(
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
-          log.debug("[Stopping Connection] Write to {} failed", peerId)
+          log.error("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, ackSeqNumber)
           gracefulStop()
       }
 
@@ -407,6 +434,26 @@ class RLPxConnectionHandler(
         remainingMsgsToSend: Queue[MessageSerializable]
     ): Unit = {
       val out = messageCodec.encodeMessage(messageToSend)
+      
+      // Enhanced logging for GetBlockHeaders debugging
+      val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
+      log.info(
+        "SEND_MSG: peer={}, type={}, code=0x{}, seqNum={}",
+        peerId,
+        msgType,
+        messageToSend.code.toHexString,
+        seqNumber
+      )
+      // Convert to array only once for hex logging
+      val outBytes = out.toArray[Byte]
+      val outHex = MessageCodec.truncateHex(outBytes)
+      log.debug(
+        "SEND_MSG: encodedLen={}, remaining={}, hex={}",
+        out.length,
+        remainingMsgsToSend.size,
+        outHex
+      )
+      
       connection ! Write(out, Ack)
       log.debug("Sent message: {} to {}", messageToSend.underlyingMsg.toShortString, peerId)
 
