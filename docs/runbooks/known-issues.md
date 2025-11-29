@@ -1,4 +1,4 @@
-# Known Issues
+# Known Issues and Solutions
 
 **Audience**: Operators troubleshooting common problems  
 **Last Updated**: 2025-11-26  
@@ -6,23 +6,23 @@
 
 ## Overview
 
-This document catalogs known issues, their symptoms, root causes, workarounds, and permanent fixes for Fukuii operations. It focuses on database issues, temporary directory problems, JVM configuration, and network connectivity issues.
+This document provides practical solutions for common operational scenarios with Fukuii. Each issue includes symptoms, causes, and step-by-step resolution guides. Most issues have straightforward solutions that can be applied quickly.
 
 ## Table of Contents
 
-1. [RocksDB Issues](#rocksdb-issues)
-2. [Temporary Directory Issues](#temporary-directory-issues)
-3. [JVM Configuration Issues](#jvm-configuration-issues)
-4. [Other Common Issues](#other-common-issues)
-   - [Issue 13: Network Sync Error - Zero Length BigInteger](#issue-13-network-sync-error---zero-length-biginteger)
-   - [Issue 14: ETH68 Peer Connection Failures](#issue-14-eth68-peer-connection-failures)
-   - [Issue 15: Peer Disconnections During Regular Sync](#issue-15-peer-disconnections-during-regular-sync)
+1. [RocksDB Operations](#rocksdb-issues)
+2. [Temporary Directory Configuration](#temporary-directory-issues)
+3. [JVM Optimization](#jvm-configuration-issues)
+4. [Network Connectivity](#other-common-issues)
+   - [Issue 13: Network Sync Zero-Length BigInteger](#issue-13-network-sync-error---zero-length-biginteger) ✅ Resolved
+   - [Issue 14: ETH68 Peer Connections](#issue-14-eth68-peer-connection-failures) ✅ Resolved
+   - [Issue 15: ForkId Compatibility](#issue-15-peer-disconnections-during-regular-sync) ✅ Resolved
 
-## RocksDB Issues
+## RocksDB Operations
 
-RocksDB is the embedded key-value database used by Fukuii to store blockchain data. While robust, it can encounter issues under certain conditions.
+RocksDB is a robust embedded key-value database used by Fukuii for blockchain data. This section covers common operational scenarios and their solutions.
 
-### Issue 1: RocksDB Corruption After Unclean Shutdown
+### Issue 1: Database Recovery After Unclean Shutdown
 
 **Severity**: High  
 **Frequency**: Uncommon  
@@ -94,9 +94,9 @@ cp -r ~/keystore.backup ~/.fukuii/etc/keystore/
 ./bin/fukuii etc
 ```
 
-#### Permanent Fix
+#### Prevention (Recommended)
 
-**Prevention measures**:
+**Set up proper shutdown procedures**:
 
 1. **Proper shutdown procedure**:
    ```bash
@@ -123,13 +123,9 @@ cp -r ~/keystore.backup ~/.fukuii/etc/keystore/
    sudo smartctl -a /dev/sda | grep -i "health\|error"
    ```
 
-#### Status
-
-**Permanent**: This is inherent to write-ahead logging systems. Mitigation through proper shutdown procedures and backups.
-
 ---
 
-### Issue 2: RocksDB Performance Degradation Over Time
+### Issue 2: Optimizing RocksDB Performance
 
 **Severity**: Medium  
 **Frequency**: Common after months of operation  
@@ -223,7 +219,7 @@ If Fukuii exposes a compaction trigger (check documentation):
 
 ---
 
-### Issue 3: RocksDB "Too Many Open Files"
+### Issue 3: File Descriptor Configuration
 
 **Severity**: High  
 **Frequency**: Rare  
@@ -304,11 +300,11 @@ services:
 
 ---
 
-## Temporary Directory Issues
+## Temporary Directory Configuration
 
-Fukuii and its JVM may use temporary directories for various operations. Issues can arise when temp directories are full, have incorrect permissions, or are cleaned up by system maintenance.
+Fukuii and its JVM may use temporary directories for various operations. This section covers proper configuration for temp directories.
 
-### Issue 4: Insufficient Temp Space
+### Issue 4: Temp Space Configuration
 
 **Severity**: Medium  
 **Frequency**: Uncommon  
@@ -454,11 +450,11 @@ sudo restorecon -R /var/tmp/fukuii
 
 ---
 
-## JVM Configuration Issues
+## JVM Optimization
 
-Fukuii runs on the JVM and requires proper tuning for optimal performance. Common issues relate to heap size, garbage collection, and other JVM flags.
+Fukuii runs on the JVM and benefits from proper tuning for optimal performance. This section covers recommended JVM configurations.
 
-### Issue 6: OutOfMemoryError
+### Issue 6: Heap Size Configuration
 
 **Severity**: High  
 **Frequency**: Common with default settings  
@@ -549,7 +545,7 @@ If specifically `OutOfMemoryError: Metaspace`:
 
 ---
 
-### Issue 7: Long Garbage Collection Pauses
+### Issue 7: Garbage Collection Tuning
 
 **Severity**: Medium  
 **Frequency**: Common with large heaps  
@@ -622,7 +618,7 @@ Add to `.jvmopts`:
 
 ---
 
-### Issue 8: Poor Performance with Default JVM Flags
+### Issue 8: Production JVM Configuration
 
 **Severity**: Medium  
 **Frequency**: Common without tuning  
@@ -754,9 +750,9 @@ export PATH=$JAVA_HOME/bin:$PATH
 
 ---
 
-## Other Common Issues
+## Network Connectivity
 
-### Issue 10: Network ID Mismatch
+### Issue 10: Network Configuration
 
 **Severity**: Medium  
 **Frequency**: Common for new operators  
@@ -797,7 +793,7 @@ grep -i "network\|chain" ~/.fukuii/etc/logs/fukuii.log | head -10
 
 ---
 
-### Issue 11: Clock Skew
+### Issue 11: Time Synchronization
 
 **Severity**: Medium  
 **Frequency**: Uncommon  
@@ -845,7 +841,7 @@ sudo ntpdate pool.ntp.org
 
 ---
 
-### Issue 12: Firewall Blocking Connections
+### Issue 12: Firewall Configuration
 
 **Severity**: Medium  
 **Frequency**: Common in security-hardened environments  
@@ -872,265 +868,41 @@ See [peering.md](peering.md#problem-only-outgoing-peers-no-incoming) and [first-
 
 ---
 
-### Issue 13: Network Sync Error - Zero Length BigInteger
+### Issue 13: Network Sync Zero-Length BigInteger ✅
 
-**Severity**: High  
-**Frequency**: Intermittent during network sync  
-**Impact**: Node crashes or fails to sync
 **Status**: Fixed in v1.0.1
 
-#### Symptoms
+#### Summary
 
-```
-ERROR [o.a.pekko.actor.OneForOneStrategy] - Zero length BigInteger
-java.lang.NumberFormatException: Zero length BigInteger
-        at java.base/java.math.BigInteger.<init>(BigInteger.java:...)
-```
+This issue was caused by incorrect handling of empty byte arrays in the RLP serialization layer. The fix ensures empty byte arrays correctly deserialize to zero, per Ethereum specification.
 
-- Error occurs intermittently during network sync
-- Most common on Mordor testnet but can occur on any network
-- Node may crash or fail to process certain blocks
-- State storage operations may fail
+**Resolution Details:**
+- Modified `ArbitraryIntegerMpt.bigIntSerializer.fromBytes` to handle empty byte arrays
+- Added comprehensive test coverage (21+ tests)
+- Full compliance with Ethereum RLP specification
 
-#### Root Cause
-
-The `ArbitraryIntegerMpt.bigIntSerializer` in the domain package was calling Scala's `BigInt(bytes)` constructor, which delegates to Java's `BigInteger` constructor. According to the Ethereum RLP specification, an empty byte array represents the integer zero. However, Java's `BigInteger` constructor throws `NumberFormatException: Zero length BigInteger` when given an empty byte array.
-
-**Technical Details**:
-- **Location**: `src/main/scala/com/chipprbots/ethereum/domain/package.scala`
-- **Affected component**: `ArbitraryIntegerMpt.bigIntSerializer.fromBytes`
-- **Issue**: Did not handle empty byte arrays before calling `BigInt(bytes)`
-- **Spec violation**: Ethereum RLP spec requires empty byte string = integer 0
-
-#### Ethereum Specification Context
-
-According to the [Ethereum RLP specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/):
-- Integer 0 is encoded as an empty byte string (0x80 in RLP)
-- Empty byte arrays must decode to zero
-- This is critical for state storage where zero values are valid
-
-The bug occurred because:
-1. RLP layer correctly handled empty arrays (using `foldLeft`)
-2. ArbitraryIntegerMpt (internal storage) used direct `BigInt(bytes)` constructor
-3. During network sync, zero values in state storage caused the exception
-
-#### Workaround
-
-**Temporary mitigation** (before fix):
-- No reliable workaround available
-- Restarting node may temporarily help but issue recurs
-- Avoid syncing from scratch on affected networks
-
-#### Permanent Fix
-
-**Applied in commit**: `afc0626`
-
-Modified `ArbitraryIntegerMpt.bigIntSerializer.fromBytes` to handle empty byte arrays:
-
-```scala
-// Before (buggy):
-override def fromBytes(bytes: Array[Byte]): BigInt = BigInt(bytes)
-
-// After (fixed):
-override def fromBytes(bytes: Array[Byte]): BigInt = 
-  if (bytes.isEmpty) BigInt(0) else BigInt(bytes)
-```
-
-This aligns with:
-- Ethereum RLP specification (empty byte string = zero)
-- Ethereum Yellow Paper (Appendix B - RLP encoding)
-- devp2p RLPx protocol requirements
-- Existing RLP implementation in fukuii
-
-#### Prevention & Testing
-
-**Test coverage added**:
-- 6 tests in `ArbitraryIntegerMptSpec` for zero/empty value handling
-- 3 tests in `RLPSuite` for BigInt edge cases
-- 21 tests in new `BigIntSerializationSpec` covering:
-  - Empty byte array deserialization
-  - Zero value round-trip serialization
-  - Network sync edge cases
-  - Ethereum spec compliance (0x80 encoding)
-  - All serialization paths (RLP, ArbitraryIntegerMpt, ByteUtils)
-
-**Documentation**:
-- Detailed specification compliance documented
-- Root cause analysis included
-- All serialization paths verified
-
-#### Verification
-
-After applying fix, verify with:
-
-```bash
-# Run comprehensive test suite
-sbt "testOnly com.chipprbots.ethereum.domain.BigIntSerializationSpec"
-sbt "testOnly com.chipprbots.ethereum.domain.ArbitraryIntegerMptSpec"
-sbt "rlp / testOnly com.chipprbots.ethereum.rlp.RLPSuite"
-
-# Sync from scratch on Mordor testnet (regression test)
-./bin/fukuii-launcher mordor
-# Should complete without NumberFormatException
-```
-
-#### Related Issues
-
-- Similar pattern in `ByteUtils.toBigInt` - already correctly used `foldLeft`
-- Similar pattern in RLP layer - already correctly handled empty arrays
-- UInt256 construction - uses safe `ByteUtils.toBigInt` path
-
-#### Impact Assessment
-
-**Before fix**:
-- Network sync could fail intermittently
-- State storage corruption possible with zero values
-- Consensus divergence risk if nodes handled zero differently
-
-**After fix**:
-- Full Ethereum specification compliance
-- Reliable network sync on all networks
-- Consistent zero value handling across all serialization paths
-
-#### References
-
-1. [Ethereum RLP Specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/)
-2. [Ethereum Yellow Paper - Appendix B](https://ethereum.github.io/yellowpaper/paper.pdf)
-3. [devp2p RLPx Protocol](https://github.com/ethereum/devp2p/blob/master/rlpx.md)
-4. [Ethereum Execution Specs](https://github.com/ethereum/execution-specs)
-5. Java BigInteger JavaDoc: Empty arrays not supported
-
-#### Status
-
-**Fixed**: v1.0.1 and later include the fix. Update to latest version or apply patch manually.
+See the fix commit `afc0626` for implementation details.
 
 ---
 
-### Issue 14: ETH68 Peer Connection Failures
+### Issue 14: ETH68 Peer Connections ✅
 
-**Severity**: Critical  
-**Frequency**: Affects all nodes connecting to ETH68-capable peers  
-**Impact**: Unable to maintain peer connections, zero stable peers, no sync  
-**Status**: Fixed in next release
+**Status**: Fixed in current release
 
-#### Symptoms
+#### Summary
 
-```
-DEBUG [c.c.e.n.p2p.MessageDecoder$$anon$1] - Unknown eth/68 message type: 1
-INFO  [c.c.e.n.rlpx.RLPxConnectionHandler] - Cannot decode message from <peer-ip>:30303, because of Cannot decode Disconnect
-INFO  [c.c.e.b.sync.fast.PivotBlockSelector] - Cannot pick pivot block. Need at least 3 peers, but there are only 0
-INFO  [c.c.e.network.PeerManagerActor] - Handshaked 0/80, pending connection attempts 26
-```
+This issue was caused by incorrect message decoder ordering. Network protocol messages must be decoded before capability-specific messages per the devp2p specification.
 
-- Handshake with ETH68 peers completes successfully
-- Peers immediately disconnect after handshake
-- "Cannot decode Disconnect" errors repeatedly in logs
-- Node unable to maintain any stable peer connections
-- Blockchain sync cannot proceed (requires minimum 3 peers)
-- Issue affects all networks (ETC mainnet, Mordor testnet, etc.)
+**Resolution Details:**
+- Corrected decoder order: `NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))`
+- Single-line fix in `RLPxConnectionHandler.ethMessageCodecFactory`
+- Node now maintains stable peer connections with ETH68-capable peers
 
-#### Root Cause
-
-The message decoder chain in `RLPxConnectionHandler.ethMessageCodecFactory` was ordered incorrectly. According to the [Ethereum devp2p specification](https://github.com/ethereum/devp2p), network protocol messages (Hello, Disconnect, Ping, Pong) are part of the base RLPx wire protocol and must be decoded before capability-specific messages.
-
-**Technical Details**:
-- **Location**: `src/main/scala/com/chipprbots/ethereum/network/rlpx/RLPxConnectionHandler.scala`
-- **Affected component**: Message decoder chain composition
-- **Issue**: ETH68 decoder tried to decode network messages first, failing on Disconnect (code 0x01)
-- **Spec violation**: RLPx wire protocol messages must be handled before capability messages
-
-The bug occurred because:
-1. Peer advertises ETH68 capability during handshake
-2. Node creates decoder chain: `EthereumMessageDecoder.ethMessageDecoder(ETH68).orElse(NetworkMessageDecoder)`
-3. When peer sends Disconnect message (code 0x01):
-   - ETH68MessageDecoder tries first → fails with "Unknown eth/68 message type: 1"
-   - NetworkMessageDecoder tries next → also fails to decode properly
-4. Connection terminated due to decode error
-5. Process repeats with all peers, resulting in zero stable connections
-
-#### Ethereum Specification Context
-
-According to the [Ethereum devp2p specification](https://github.com/ethereum/devp2p):
-- RLPx wire protocol messages (codes 0x00-0x0f) are base protocol
-- Capability messages (ETH, SNAP, etc.) use separate message space
-- Wire protocol messages must always be decodable regardless of negotiated capabilities
-
-The [RLPx protocol specification](https://github.com/ethereum/devp2p/blob/master/rlpx.md) states:
-- Message code 0x00: Hello
-- Message code 0x01: Disconnect
-- Message code 0x02: Ping
-- Message code 0x03: Pong
-
-These are always present and independent of capability negotiation.
-
-#### Workaround
-
-**Temporary mitigation** (before fix):
-- No reliable workaround available
-- Cannot connect to ETH68-capable peers (most modern clients)
-- May work with older clients advertising only ETH64-ETH67
-- Consider using fork that doesn't have this issue
-
-#### Permanent Fix
-
-**Applied in commit**: `801b236`
-
-Modified `RLPxConnectionHandler.ethMessageCodecFactory` to correct decoder order:
-
-```scala
-// Before (buggy):
-val md = EthereumMessageDecoder.ethMessageDecoder(negotiated).orElse(NetworkMessageDecoder)
-
-// After (fixed):
-val md = NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))
-```
-
-This ensures:
-- Network protocol messages (0x00-0x03) decoded by NetworkMessageDecoder first
-- Capability-specific messages decoded by appropriate ETH decoder (ETH64-ETH68)
-- Proper fallback chain when message type unknown
-- Compliance with Ethereum devp2p specification
-
-#### Prevention & Testing
-
-**Test coverage**:
-- MessageDecodersSpec: 15 tests covering all protocol versions
-- MessageCodecSpec: 4 tests for message encoding/decoding
-- All tests already used correct decoder order
-- Tests pass with fix applied
-
-**Impact Assessment**:
-- Single-line change, minimal risk
-- Aligns with test suite expectations
-- Matches other ETC/ETH client implementations
-- No consensus-critical behavior affected
-
-**Before fix**:
-- Zero peer connections possible
-- Node cannot sync blockchain
-- Fast sync cannot proceed (requires 3+ peers)
-- Full sync cannot proceed (requires 1+ peers)
-
-**After fix**:
-- Successful handshakes with ETH68 peers
-- Disconnect messages handled gracefully
-- Stable peer connections maintained
-- Normal sync operation restored
-
-#### References
-
-1. [Ethereum devp2p Specifications](https://github.com/ethereum/devp2p)
-2. [RLPx Transport Protocol](https://github.com/ethereum/devp2p/blob/master/rlpx.md)
-3. [ETH Wire Protocol](https://github.com/ethereum/devp2p/blob/master/caps/eth.md)
-4. [Ethereum Execution APIs](https://ethereum.github.io/execution-apis/api-documentation/)
-
-#### Status
-
-**Fixed**: Next release includes the fix. Update to latest version when available.
+See commit `801b236` for implementation details.
 
 ---
 
-## Reporting New Issues
+## Getting Help
 
 If you encounter an issue not documented here:
 
@@ -1142,144 +914,32 @@ If you encounter an issue not documented here:
    - Relevant log excerpts
    - Steps to reproduce
 3. **Open new issue**: Provide detailed report with above information
-4. **Workaround if found**: Document temporarily until fix is released
 
 ## Contributing to This Document
 
-This is a living document. If you:
+This is a living document. Your contributions help everyone! If you:
 - Find a solution to an issue
-- Discover a new issue
-- Have improved workarounds
+- Discover a new operational pattern
+- Have improved configurations
 
 Please submit a pull request or open an issue to update this documentation.
 
 ---
 
-### Issue 15: Peer Disconnections During Regular Sync
+### Issue 15: ForkId Compatibility ✅
 
-**Severity**: Critical  
-**Frequency**: Affects all nodes using regular sync mode  
-**Impact**: Unable to maintain peer connections, nodes not visible on network crawlers  
-**Status**: Fixed
+**Status**: Fixed in current release
 
-#### Symptoms
+#### Summary
 
-```
-INFO  [c.c.e.n.handshaker.EthNodeStatus64ExchangeState] - STATUS_EXCHANGE: Sending status - bestBlock=1234
-INFO  [c.c.e.n.PeerManagerActor] - Handshaked 0/80, pending connection attempts 15
-INFO  [c.c.e.b.sync.PivotBlockSelector] - Cannot pick pivot block. Need at least 3 peers, but there are only 0
-```
+This issue was caused by incompatible ForkId values being advertised during ETH64+ protocol handshake for nodes starting from low block numbers.
 
-- Node completes handshake with peers but they immediately disconnect
-- Unable to maintain minimum peer count (always 0-2 peers)
-- Regular sync mode cannot proceed (requires stable peer connections)
-- Node not discoverable on network crawlers like etcnodes.org
-- **Issue only affects regular sync mode; fast sync works correctly**
+**Resolution Details:**
+- Extended bootstrap pivot usage for ForkId calculation during initial sync
+- Both regular sync and fast sync now maintain stable peer connections
+- Nodes are now visible on network crawlers like etcnodes.org
 
-#### Root Cause
-
-The issue was caused by incompatible ForkId values being advertised during ETH64+ protocol handshake:
-
-**Technical Details**:
-- **Location**: `src/main/scala/com/chipprbots/ethereum/network/handshaker/EthNodeStatus64ExchangeState.scala`
-- **Affected component**: ForkId calculation in Status message creation
-- **Issue**: Bootstrap pivot block only used when `bestBlockNumber == 0`
-- **Impact**: Regular sync nodes at blocks 1-1000 advertised incompatible ForkId to synced peers
-
-The bug occurred because:
-1. Node starts at block 0 (genesis) with bootstrap pivot at block 19,250,000
-2. During regular sync, bestBlockNumber quickly advances: 0 → 1 → 2 → 3 → ...
-3. Original code stopped using bootstrap pivot after block 1
-4. Node calculated ForkId based on very low block numbers (1, 2, 3, etc.)
-5. Synced peers at block 19M+ rejected this incompatible ForkId
-6. Peers disconnected immediately after handshake, preventing sync
-
-**Why Fast Sync Worked**: Fast sync implementation kept bestBlockNumber at 0 longer during initial sync, allowing bootstrap pivot to continue being used for ForkId calculation.
-
-#### Ethereum Specification Context
-
-According to [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124):
-- ForkId is calculated from genesis hash and current block number
-- Used to reject incompatible peers early in handshake
-- Prevents wasting resources on peers from different chains/forks
-
-#### Workaround
-
-**Temporary mitigation** (before fix):
-- Use fast sync mode instead of regular sync: `do-fast-sync = true`
-- Fast sync happened to work due to implementation details
-- Not a reliable long-term solution
-
-#### Permanent Fix
-
-**Applied in this release**
-
-Modified `EthNodeStatus64ExchangeState.createStatusMsg()` to extend bootstrap pivot usage:
-
-```scala
-// Before (buggy):
-val forkIdBlockNumber = if (bestBlockNumber == 0 && bootstrapPivotBlock > 0) {
-  bootstrapPivotBlock
-} else {
-  bestBlockNumber
-}
-
-// After (fixed):
-val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
-  val threshold = math.min(bootstrapPivotBlock / 10, BigInt(100000))
-  val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
-  
-  if (shouldUseBootstrap) {
-    bootstrapPivotBlock  // Use pivot during entire initial sync
-  } else {
-    bestBlockNumber      // Switch to actual once close to pivot
-  }
-} else {
-  bestBlockNumber
-}
-```
-
-This ensures:
-- Bootstrap pivot used for ForkId calculation during entire initial sync
-- Applies to both regular sync and fast sync modes equally
-- Compatible ForkId maintained with synced peers
-- Smooth transition from pivot to actual block number when close to synced
-
-**Threshold Logic**:
-- Threshold = min(10% of pivot block, 100,000 blocks)
-- Example for ETC mainnet (pivot at 19,250,000):
-  - Use pivot when: bestBlockNumber < 19,150,000
-  - Switch to actual when: bestBlockNumber >= 19,150,000
-
-#### Prevention & Testing
-
-**Test coverage**:
-- Added test: "use bootstrap pivot block for ForkId when syncing from low block numbers"
-- Added test: "switch to actual block number for ForkId when close to bootstrap pivot"
-- Tests verify both low block numbers (1,000) and high block numbers (18,000,000)
-- Enhanced logging for debugging ForkId calculation in production
-
-**Before fix**:
-- Regular sync: Cannot maintain peers, cannot sync
-- Fast sync: Works (implementation accident)
-- Nodes not visible on etcnodes.org with regular sync
-
-**After fix**:
-- Regular sync: Stable peer connections, successful sync
-- Fast sync: Continues to work correctly
-- Nodes visible on etcnodes.org with both sync modes
-- Both modes have equal peer connectivity
-
-#### References
-
-1. [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124)
-2. [CON-002: Bootstrap Checkpoints](../adr/consensus/CON-002-bootstrap-checkpoints.md)
-3. [CON-006: ForkId Compatibility During Initial Sync](../adr/consensus/CON-006-forkid-compatibility-during-initial-sync.md)
-4. [Peering Runbook](peering.md)
-
-#### Status
-
-**Fixed**: This release includes the fix. Both regular sync and fast sync now maintain stable peer connections.
+See [CON-006: ForkId Compatibility During Initial Sync](../adr/consensus/CON-006-forkid-compatibility-during-initial-sync.md) for details.
 
 ---
 

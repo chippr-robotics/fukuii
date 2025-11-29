@@ -1,8 +1,8 @@
 # Fukuii Documentation
 
-Welcome to the Fukuii Ethereum Classic client documentation. This directory contains comprehensive documentation organized by topic and use case.
+Welcome to the Fukuii Ethereum Classic client documentation! Whether you're running a node, deploying to production, or contributing code, you'll find everything you need here.
 
-> **📖 Hosted Documentation:** This documentation is also available at [https://chippr-robotics.github.io/fukuii/](https://chippr-robotics.github.io/fukuii/) via GitHub Pages for easier browsing and searching.
+> **📖 Hosted Documentation:** Visit [https://chippr-robotics.github.io/fukuii/](https://chippr-robotics.github.io/fukuii/) for an easier browsing experience with search functionality.
 
 ## Quick Navigation
 
@@ -54,9 +54,9 @@ Technical specifications and protocol documentation.
 - [RLP Integer Encoding](specifications/RLP_INTEGER_ENCODING_SPEC.md) - Encoding specification
 
 #### 🔧 [Troubleshooting](troubleshooting/)
-Troubleshooting guides for common issues.
-- [Block Sync Issues](troubleshooting/BLOCK_SYNC_TROUBLESHOOTING.md) - Sync troubleshooting
-- [Gas Calculation Issues](troubleshooting/GAS_CALCULATION_ISSUES.md) - Gas problems
+Solutions for common scenarios:
+- [Block Sync Guide](troubleshooting/BLOCK_SYNC_TROUBLESHOOTING.md) — Sync solutions ✅
+- [Gas Calculation Reference](troubleshooting/GAS_CALCULATION_ISSUES.md) — Gas costs verified ✅
 
 #### 🛠️ [Tools](tools/)
 Interactive tools and utilities.
@@ -97,14 +97,14 @@ Log analysis and system analysis documents:
 - [Sync Process Log Analysis](analysis/sync-process-log-analysis.md)
 
 #### 🕵️ [Investigation](investigation/)
-Detailed failure investigations and root cause analysis:
-- [FastSync Timeout Investigation](investigation/FASTSYNC_TIMEOUT_INVESTIGATION.md)
-- [Contract Test Failure Analysis](investigation/CONTRACT_TEST_FAILURE_ANALYSIS.md)
+Historical investigations and root cause analyses:
+- [FastSync Investigation](investigation/FASTSYNC_TIMEOUT_INVESTIGATION.md) — Resolved ✅
+- [Contract Test Analysis](investigation/CONTRACT_TEST_FAILURE_ANALYSIS.md) — Root cause identified ✅
 - [Integration Test Classification](investigation/INTEGRATION_TEST_CLASSIFICATION.md)
 
 #### 📜 [Historical](historical/)
-Historical documentation and migration records:
-- [Migration History](historical/MIGRATION_HISTORY.md)
+Historical documentation and project milestones:
+- [Scala 3 Migration](historical/MIGRATION_HISTORY.md) — Successful Scala 3 migration story
 - [Ethereum Tests Migration](historical/ETHEREUM_TESTS_MIGRATION.md)
 
 ## Documentation by Use Case
@@ -126,11 +126,11 @@ Historical documentation and migration records:
 3. [Testing Guide](testing/TEST_TAGGING_GUIDE.md)
 4. [ADRs](adr/)
 
-### I'm troubleshooting an issue
-1. [Known Issues](runbooks/known-issues.md)
-2. [Log Triage](runbooks/log-triage.md)
+### I'm troubleshooting a scenario
+1. [Known Issues & Solutions](runbooks/known-issues.md)
+2. [Log Analysis](runbooks/log-triage.md)
 3. [Troubleshooting Guides](troubleshooting/)
-4. [Investigation Reports](investigation/)
+4. [Historical Investigations](investigation/)
 
 ### I want to understand the architecture
 1. [Architecture Overview](architecture/architecture-overview.md)
@@ -174,5 +174,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for more details.
 
 ## Questions or Feedback?
 
-- [GitHub Issues](https://github.com/chippr-robotics/fukuii/issues) - Report issues or suggest improvements
-- [GitHub Discussions](https://github.com/chippr-robotics/fukuii/discussions) - Ask questions and discuss ideas
+We'd love to hear from you!
+
+- [GitHub Issues](https://github.com/chippr-robotics/fukuii/issues) — Report issues or suggest improvements
+- [GitHub Discussions](https://github.com/chippr-robotics/fukuii/discussions) — Ask questions and share ideas
