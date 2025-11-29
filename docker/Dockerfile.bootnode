@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
-# Multi-stage Dockerfile for Fukuii Ethereum Client
-# Stage 1: Build stage using full JDK
+# Multi-stage Dockerfile for Fukuii Ethereum Client - Bootnode
+# Pre-configured as a bootnode with high peer capacity and in-memory pruning
 FROM eclipse-temurin:21-jdk-jammy AS builder
 
 # Install required build tools including SBT
@@ -42,8 +42,6 @@ RUN --mount=type=cache,target=/root/.ivy2 \
 COPY . /build
 
 # Build distribution
-# Note: Submodules are already initialized by the GitHub Actions checkout step
-# or should be initialized manually before building (git submodule update --init --recursive)
 RUN --mount=type=cache,target=/root/.ivy2 \
     --mount=type=cache,target=/root/.sbt \
     --mount=type=cache,target=/root/.cache \
@@ -60,8 +58,8 @@ RUN cd target/universal && \
 FROM eclipse-temurin:21-jre-jammy
 
 # OCI labels for container metadata
-LABEL org.opencontainers.image.title="Fukuii Ethereum Client"
-LABEL org.opencontainers.image.description="Fukuii - A Scala-based Ethereum Classic client"
+LABEL org.opencontainers.image.title="Fukuii Ethereum Client - Bootnode"
+LABEL org.opencontainers.image.description="Fukuii - Pre-configured as a bootnode with high peer capacity"
 LABEL org.opencontainers.image.vendor="Chippr Robotics LLC"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.source="https://github.com/chippr-robotics/fukuii"
@@ -82,33 +80,23 @@ COPY --from=builder --chown=fukuii:fukuii /fukuii-dist/conf /app/conf
 
 # Create healthcheck script
 RUN echo '#!/bin/bash\n\
-# Health check script for Fukuii\n\
-# Checks if the process is running and optionally tests RPC endpoint\n\
+# Health check script for Fukuii Bootnode\n\
+# Checks if the process is running and verifies peer count\n\
 \n\
 # Check if process is running\n\
 if ! pgrep -f "com.chipprbots.ethereum.App" > /dev/null; then\n\
-  echo "Fukuii process is not running"\n\
+  echo "Fukuii bootnode process is not running"\n\
   exit 1\n\
 fi\n\
 \n\
-# If curl is available and RPC is enabled, check RPC endpoint\n\
-if command -v curl &> /dev/null; then\n\
-  # Try to connect to default RPC port\n\
-  if curl -sf -X POST -H "Content-Type: application/json" \\\n\
-    --data '\''{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}'\'' \\\n\
-    http://localhost:8545 > /dev/null 2>&1; then\n\
-    echo "Fukuii is healthy - RPC responding"\n\
-    exit 0\n\
-  fi\n\
-fi\n\
-\n\
-# If we reach here, process is running but RPC may not be enabled or curl not available\n\
-echo "Fukuii process is running"\n\
+# Bootnode healthcheck is simpler - just ensure process is running\n\
+# since RPC is disabled on bootnodes\n\
+echo "Fukuii bootnode process is running"\n\
 exit 0\n\
 ' > /usr/local/bin/healthcheck.sh && \
     chmod +x /usr/local/bin/healthcheck.sh
 
-# Install curl for healthcheck (minimal overhead)
+# Install curl and procps for healthcheck
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && \
@@ -121,21 +109,22 @@ WORKDIR /app
 # Set up environment
 ENV FUKUII_DATA_DIR=/app/data
 ENV FUKUII_CONF_DIR=/app/conf
+ENV FUKUII_NETWORK=etc
 
-# Expose default ports
-# 8545: HTTP RPC
-# 8546: WebSocket RPC  
-# 30303: P2P networking (TCP/UDP)
-EXPOSE 8545 8546 30303
+# Expose only P2P ports (no RPC on bootnode)
+# 30303: P2P discovery (UDP)
+# 9076: P2P networking (TCP)
+EXPOSE 30303/udp 9076/tcp
 
 # Configure volumes for persistent data
+# Bootnode needs minimal disk space - mainly for known peers
 VOLUME ["/app/data", "/app/conf"]
 
 # Add healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD ["/usr/local/bin/healthcheck.sh"]
 
-# Set entrypoint to the fukuii binary
-# Override default config paths to use /app/conf (volume-mountable)
+# Set entrypoint to the fukuii binary with bootnode configuration
+# Uses bootnode.conf which optimizes for peer discovery
 ENTRYPOINT ["/app/fukuii/bin/fukuii"]
-CMD ["-Dconfig.file=/app/conf/app.conf", "-Dlogback.configurationFile=/app/conf/logback.xml", "etc"]
+CMD ["-Dconfig.file=/app/conf/bootnode.conf", "-Dlogback.configurationFile=/app/conf/logback.xml", "etc"]

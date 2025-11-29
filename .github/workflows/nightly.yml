@@ -27,9 +27,9 @@ jobs:
           - name: mordor
             file: Dockerfile.mordor
             suffix: -mordor
-          - name: mordor-miner
-            file: Dockerfile.mordor-miner
-            suffix: -mordor-miner
+          - name: bootnode
+            file: Dockerfile.bootnode
+            suffix: -bootnode
 
     steps:
       - name: Checkout code

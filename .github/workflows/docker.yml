@@ -305,8 +305,8 @@ jobs:
           cache-from: type=gha,scope=mordor
           cache-to: type=gha,mode=max,scope=mordor
 
-  docker-build-mordor-miner:
-    name: Build Mordor Miner Docker Image
+  docker-build-bootnode:
+    name: Build Bootnode Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -341,8 +341,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-mordor-miner
-            ${{ env.DOCKERHUB_IMAGE }}-mordor-miner
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bootnode
+            ${{ env.DOCKERHUB_IMAGE }}-bootnode
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -351,13 +351,13 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push mordor-miner image
+      - name: Build and push bootnode image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./docker/Dockerfile.mordor-miner
+          file: ./docker/Dockerfile.bootnode
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=mordor-miner
-          cache-to: type=gha,mode=max,scope=mordor-miner
+          cache-from: type=gha,scope=bootnode
+          cache-to: type=gha,mode=max,scope=bootnode
