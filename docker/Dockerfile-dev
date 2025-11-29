@@ -32,10 +32,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y sbt
 
-# Create non-root user
+# Create non-root user and necessary directories
 RUN groupadd -r fukuii --gid=1000 && \
     useradd -r -g fukuii --uid=1000 --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
-    mkdir -p /home/fukuii && \
+    mkdir -p /home/fukuii/.cache/sbt /home/fukuii/.ivy2 /home/fukuii/.sbt && \
     chown -R fukuii:fukuii /home/fukuii
 
 USER fukuii
