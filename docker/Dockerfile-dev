@@ -43,9 +43,9 @@ WORKDIR /home/fukuii
 ENV USER=fukuii
 
 # Pre-warm SBT by running a simple command
-RUN --mount=type=cache,target=/home/fukuii/.ivy2 \
-    --mount=type=cache,target=/home/fukuii/.sbt \
-    --mount=type=cache,target=/home/fukuii/.cache \
+RUN --mount=type=cache,target=/home/fukuii/.ivy2,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/fukuii/.sbt,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/fukuii/.cache,uid=1000,gid=1000 \
     sbt -version
 
 CMD ["/bin/bash"]
