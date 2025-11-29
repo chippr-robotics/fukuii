@@ -13,6 +13,7 @@ import cats.effect.IO
 
 import scala.concurrent.duration._
 
+import com.chipprbots.ethereum.Timeouts
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.handlers.CallHandler4
 import org.scalamock.handlers.CallHandler6
@@ -127,9 +128,10 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         setBlockForMining(parentBlock)
         coordinator ! SetMiningMode(RecurrentMining)
 
-        sync.expectMsgType[MinedBlock]
-        sync.expectMsgType[MinedBlock]
-        sync.expectMsgType[MinedBlock]
+        // Extended timeout for CI environments where mining may take longer
+        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
 
         coordinator ! StopMining
       }
@@ -154,9 +156,10 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         setBlockForMining(parentBlock)
         coordinator ! SetMiningMode(RecurrentMining)
 
-        sync.expectMsgType[MinedBlock]
-        sync.expectMsgType[MinedBlock]
-        sync.expectMsgType[MinedBlock]
+        // Extended timeout for CI environments where mining may take longer
+        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
 
         coordinator ! StopMining
       }
