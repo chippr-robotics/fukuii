@@ -177,12 +177,42 @@ nav:
       - EVM Compatibility: specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md
     - ADRs:
       - adr/README.md
-      - Infrastructure: adr/infrastructure/
-      - Consensus: adr/consensus/
-      - VM: adr/vm/
-      - Testing: adr/testing/
-      - Operations: adr/operations/
-      - Protocols: adr/protocols/
+      - Infrastructure:
+        - adr/infrastructure/README.md
+        - Scala 3 Migration: adr/infrastructure/INF-001-scala-3-migration.md
+        - Netty Integration: adr/infrastructure/INF-001a-netty-cats-effect-integration.md
+        - Actor Architecture: adr/infrastructure/INF-002-actor-system-architecture.md
+        - UPnP Transport: adr/infrastructure/INF-003-jupnp-apache-httpclient-transport.md
+        - Actor IO Error Handling: adr/infrastructure/INF-004-actor-io-error-handling.md
+        - Docker Strategy: adr/infrastructure/INF-005-docker-deployment-strategy.md
+      - Consensus:
+        - adr/consensus/README.md
+        - RLPx Protocol: adr/consensus/CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md
+        - Bootstrap Checkpoints: adr/consensus/CON-002-bootstrap-checkpoints.md
+        - Block Sync: adr/consensus/CON-003-block-sync-improvements.md
+        - MESS Implementation: adr/consensus/CON-004-mess-implementation.md
+        - ETH66 Formatting: adr/consensus/CON-005-eth66-protocol-aware-message-formatting.md
+        - ForkID Compatibility: adr/consensus/CON-006-forkid-compatibility-during-initial-sync.md
+      - VM:
+        - adr/vm/README.md
+        - EIP-3541: adr/vm/VM-001-eip-3541-implementation.md
+        - EIP-3529: adr/vm/VM-002-eip-3529-implementation.md
+        - EIP-3651: adr/vm/VM-003-eip-3651-implementation.md
+        - EIP-3855: adr/vm/VM-004-eip-3855-implementation.md
+        - EIP-3860: adr/vm/VM-005-eip-3860-implementation.md
+        - EIP-6049: adr/vm/VM-006-eip-6049-implementation.md
+        - EIP-161 Fix: adr/vm/VM-007-eip-161-noemptyaccounts-fix.md
+      - Testing:
+        - adr/testing/README.md
+        - Ethereum Tests Adapter: adr/testing/TEST-001-ethereum-tests-adapter.md
+        - Test Suite Strategy: adr/testing/TEST-002-test-suite-strategy-and-kpis.md
+      - Operations:
+        - adr/operations/README.md
+        - Console UI: adr/operations/OPS-001-console-ui.md
+        - Logging Levels: adr/operations/OPS-002-logging-level-categorization.md
+      - Protocols:
+        - SNAP Protocol Infra: adr/protocols/ADR-SNAP-001-protocol-infrastructure.md
+        - SNAP Integration: adr/protocols/ADR-SNAP-002-integration-architecture.md
     - Guides:
       - guides/README.md
       - MESS Configuration: guides/mess-configuration.md
@@ -199,8 +229,12 @@ nav:
       - Migration History: historical/MIGRATION_HISTORY.md
       - Ethereum Tests Migration: historical/ETHEREUM_TESTS_MIGRATION.md
     - Investigation:
-      - investigation/
-    - Analysis:
-      - archive/
+      - FastSync Timeout: investigation/FASTSYNC_TIMEOUT_INVESTIGATION.md
+      - Contract Test Failure: investigation/CONTRACT_TEST_FAILURE_ANALYSIS.md
+      - Integration Tests: investigation/INTEGRATION_TEST_CLASSIFICATION.md
+    - Reports:
+      - reports/README.md
+      - Network Test Report: reports/NETWORK_TEST_REPORT.md
+      - Implementation Complete: reports/IMPLEMENTATION_COMPLETE.md
     - Tools:
       - tools/README.md

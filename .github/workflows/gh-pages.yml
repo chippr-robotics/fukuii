@@ -1,9 +1,13 @@
 # GitHub Pages Deployment Workflow
 #
-# This workflow deploys documentation from the docs/ folder to GitHub Pages.
-# Documentation is kept in the same branch as code for AI agents to consume,
-# while still being accessible via GitHub Pages at:
-# https://chippr-robotics.github.io/fukuii/
+# This workflow deploys documentation from the docs/ folder to GitHub Pages
+# using MkDocs Material for enhanced features including:
+# - Mermaid diagram rendering
+# - Full-text search
+# - Audience-focused navigation tabs
+# - Dark/light mode toggle
+#
+# URL: https://chippr-robotics.github.io/fukuii/
 #
 # Triggers:
 # - Push to main/master/develop branches (docs changes)
@@ -20,6 +24,8 @@ on:
       - develop
     paths:
       - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
       - '.github/workflows/gh-pages.yml'
   pull_request:
     branches:
@@ -28,12 +34,14 @@ on:
       - develop
     paths:
       - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
       - '.github/workflows/gh-pages.yml'
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -49,20 +57,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-docs.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Build documentation
+        run: mkdocs build --strict
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Build with Jekyll
-        uses: actions/jekyll-build-pages@v1
-        with:
-          source: ./docs
-          destination: ./_site
-
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./_site
+          path: site
 
   deploy:
     # Only deploy on push to main branches, not on PRs
