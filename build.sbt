@@ -18,9 +18,9 @@ lazy val scala3OptimizationsForProd = Seq.empty[String]
 // Releasing. https://github.com/olafurpg/sbt-ci-release
 inThisBuild(
   List(
-    homepage := Some(url("https://github.com/chippr-robotics/chordodes_fukuii")),
+    homepage := Some(url("https://github.com/chippr-robotics/fukuii")),
     scmInfo := Some(
-      ScmInfo(url("https://github.com/chippr-robotics/chordodes_fukuii"), "git@github.com:chippr-robotics/chordodes_fukuii.git")
+      ScmInfo(url("https://github.com/chippr-robotics/fukuii"), "git@github.com:chippr-robotics/fukuii.git")
     ),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     developers := List(),
