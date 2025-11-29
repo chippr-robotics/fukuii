@@ -21,10 +21,6 @@ kramdown:
   hard_wrap: false
   syntax_highlighter: rouge
 
-# Include directories that start with underscore
-include:
-  - _config.yml
-
 # Exclude files from the build
 exclude:
   - Gemfile
