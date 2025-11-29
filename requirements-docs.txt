@@ -1,0 +1,6 @@
+# Documentation dependencies for MkDocs Material
+# Install with: pip install -r requirements-docs.txt
+
+mkdocs-material>=9.5.0
+pymdown-extensions>=10.7.0
+mkdocs-mermaid2-plugin>=1.1.1

@@ -1,0 +1,206 @@
+# Fukuii Documentation Configuration
+# Using MkDocs Material for enhanced features including Mermaid diagrams, search, and audience tabs
+
+site_name: Fukuii Documentation
+site_description: Comprehensive documentation for the Fukuii Ethereum Classic client
+site_url: https://chippr-robotics.github.io/fukuii/
+site_author: Chippr Robotics LLC
+
+repo_name: chippr-robotics/fukuii
+repo_url: https://github.com/chippr-robotics/fukuii
+edit_uri: edit/develop/docs/
+
+# Theme configuration
+theme:
+  name: material
+  palette:
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Plugins
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
+
+# Extra configuration
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/chippr-robotics/fukuii
+  generator: false
+  analytics:
+    provider: google
+    property: !ENV GOOGLE_ANALYTICS_KEY
+
+extra_css:
+  - stylesheets/extra.css
+
+# Navigation structure
+nav:
+  - Home: index.md
+  
+  - Getting Started:
+    - getting-started/index.md
+    - Quick Start: getting-started/quickstart.md
+    - Docker Quick Start: deployment/docker.md
+    - Codespaces: getting-started/codespaces.md
+    - Build from Source: getting-started/build-from-source.md
+  
+  - For Node Operators:
+    - for-node-operators/index.md
+    - First Start: runbooks/first-start.md
+    - Configuration: runbooks/node-configuration.md
+    - Operating Modes: runbooks/operating-modes.md
+    - Security: runbooks/security.md
+    - Peering: runbooks/peering.md
+    - Disk Management: runbooks/disk-management.md
+    - Backup & Restore: runbooks/backup-restore.md
+    - TLS Operations: runbooks/tls-operations.md
+    - Troubleshooting: runbooks/known-issues.md
+  
+  - For Operators/SRE:
+    - for-operators/index.md
+    - Docker Compose: deployment/docker.md
+    - Kong API Gateway: deployment/kong.md
+    - Test Network: deployment/test-network.md
+    - Metrics & Monitoring: operations/metrics-and-monitoring.md
+    - Log Triage: runbooks/log-triage.md
+    - Logging: operations/LOGGING.md
+  
+  - For Developers:
+    - for-developers/index.md
+    - Architecture:
+      - architecture/architecture-overview.md
+      - Architecture Diagrams: architecture/ARCHITECTURE_DIAGRAMS.md
+      - Console UI: architecture/console-ui.md
+      - Snap Sync: architecture/SNAP_SYNC_IMPLEMENTATION.md
+    - Development:
+      - development/contributing.md
+      - Repository Structure: development/REPOSITORY_STRUCTURE.md
+      - Static Analysis: development/static-analysis.md
+      - CI/CD: development/ci-cd.md
+      - Branch Protection: development/branch-protection.md
+      - Codespaces: development/codespaces.md
+    - Testing:
+      - testing/README.md
+      - Test Tagging Guide: testing/TEST_TAGGING_GUIDE.md
+      - E2E Testing: testing/E2E_TESTING_GUIDE.md
+      - Ethereum Tests: testing/ETHEREUM_TESTS_CI_INTEGRATION.md
+      - KPI Monitoring: testing/KPI_MONITORING_GUIDE.md
+      - Performance Baselines: testing/PERFORMANCE_BASELINES.md
+  
+  - API Reference:
+    - api/README.md
+    - JSON-RPC Reference: api/JSON_RPC_API_REFERENCE.md
+    - RPC Coverage Analysis: api/JSON_RPC_COVERAGE_ANALYSIS.md
+    - Insomnia Workspace: api/INSOMNIA_WORKSPACE_GUIDE.md
+    - MCP Integration: api/MCP_INTEGRATION_GUIDE.md
+  
+  - Reference:
+    - Specifications:
+      - specifications/README.md
+      - RLP Encoding: specifications/RLP_INTEGER_ENCODING_SPEC.md
+      - EVM Compatibility: specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md
+    - ADRs:
+      - adr/README.md
+      - Infrastructure: adr/infrastructure/
+      - Consensus: adr/consensus/
+      - VM: adr/vm/
+      - Testing: adr/testing/
+      - Operations: adr/operations/
+      - Protocols: adr/protocols/
+    - Guides:
+      - guides/README.md
+      - MESS Configuration: guides/mess-configuration.md
+  
+  - Troubleshooting:
+    - troubleshooting/README.md
+    - Block Sync Issues: troubleshooting/BLOCK_SYNC_TROUBLESHOOTING.md
+    - Gas Calculation: troubleshooting/GAS_CALCULATION_ISSUES.md
+    - Log Review: troubleshooting/LOG_REVIEW_RESOLUTION.md
+  
+  - Background:
+    - Historical:
+      - historical/README.md
+      - Migration History: historical/MIGRATION_HISTORY.md
+      - Ethereum Tests Migration: historical/ETHEREUM_TESTS_MIGRATION.md
+    - Investigation:
+      - investigation/
+    - Analysis:
+      - archive/
+    - Tools:
+      - tools/README.md
