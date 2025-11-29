@@ -28,17 +28,26 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.healthcheck.HealthcheckResponse
 import com.chipprbots.ethereum.healthcheck.HealthcheckResult
 import com.chipprbots.ethereum.jsonrpc._
+import com.chipprbots.ethereum.jsonrpc.server.controllers.ApisBase
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
+import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitConfig
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Logger
 
+/** Mockable stub controller for testing. This is needed because JsonRpcBaseController 
+  * has self-type constraints that make it unmockable directly with ScalaMock in Scala 3.
+  */
+class MockableJsonRpcController extends JsonRpcBaseController with ApisBase with Logger {
+  override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map.empty
+  override def enabledApis: Seq[String] = Seq.empty
+  override def available: List[String] = List.empty
+  override val config: JsonRpcConfig = null // Will be overridden by mock
+}
+
 // SCALA 3 MIGRATION: Fixed by having test class extend MockFactory, which satisfies inner trait self-type constraints
-// TODO: These tests are flaky in CI due to HTTP server lifecycle issues. Need investigation.
-// Marked as @Ignore until JsonRpcHttpServer test isolation is stabilized.
-@org.scalatest.Ignore
 class JsonRpcHttpServerSpec
     extends AnyFlatSpec
     with Matchers
@@ -46,6 +55,9 @@ class JsonRpcHttpServerSpec
     with org.scalamock.scalatest.MockFactory {
 
   import JsonRpcHttpServerSpec._
+  
+  // Provide implicit MockFactory reference for TestSetup instances
+  implicit val mockFactoryInstance: org.scalamock.scalatest.MockFactory = this
 
   it should "respond to healthcheck" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
@@ -221,11 +233,7 @@ class JsonRpcHttpServerSpec
   }
 
   it should "return method not allowed error for batch request with ip-restriction enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
-    (mockJsonRpcController.handleRequest _)
-      .expects(*)
-      .twice()
-      .returning(IO.pure(jsonRpcResponseSuccessful))
-
+    // When rate limiting is enabled, batch requests should be rejected without calling handleRequest
     val jsonRequests =
       ByteString("""[{"jsonrpc":"2.0", "method": "asd", "id": "1"}, {"jsonrpc":"2.0", "method": "asd", "id": "2"}]""")
     val postRequest =
@@ -414,8 +422,11 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  // SCALA 3 MIGRATION: Changed from trait with self-type to class to work with MockFactory in test class
-  class TestSetup {
+  // SCALA 3 MIGRATION: TestSetup takes implicit MockFactory parameter to properly capture mock context.
+  // This follows the pattern used in JsonRpcControllerFixture for Scala 3 compatibility.
+  // We use mockFactory.mock explicitly to avoid ambiguity with inherited mock method.
+  class TestSetup(implicit mockFactory: org.scalamock.scalatest.MockFactory) {
+
     val jsonRpc = "2.0"
     val id = 1
     val jsonRequest: ByteString = ByteString(s"""{"jsonrpc":"$jsonRpc", "method": "eth_blockNumber", "id": "$id"}""")
@@ -452,8 +463,9 @@ class JsonRpcHttpServerSpec
       override val rateLimit: RateLimitConfig = rateLimitEnabledConfig
     }
 
-    val mockJsonRpcController: JsonRpcController = createStubJsonRpcController()
-    val mockJsonRpcHealthChecker: JsonRpcHealthChecker = mock[JsonRpcHealthChecker]
+    // Mock the MockableJsonRpcController which satisfies JsonRpcBaseController's self-type constraints
+    val mockJsonRpcController: MockableJsonRpcController = mockFactory.mock[MockableJsonRpcController]
+    val mockJsonRpcHealthChecker: JsonRpcHealthChecker = mockFactory.mock[JsonRpcHealthChecker]
 
     val mockJsonRpcHttpServer = new FakeJsonRpcHttpServer(
       jsonRpcController = mockJsonRpcController,
@@ -461,50 +473,6 @@ class JsonRpcHttpServerSpec
       config = serverConfig,
       cors = serverConfig.corsAllowedOrigins
     )
-
-    private def createStubJsonRpcController(): JsonRpcController = {
-      import com.chipprbots.ethereum.jsonrpc._
-      import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
-      import java.util.concurrent.atomic.AtomicReference
-      import com.chipprbots.ethereum.utils.{NodeStatus, ServerStatus}
-      import com.chipprbots.ethereum.crypto.generateKeyPair
-      import java.security.SecureRandom
-      import scala.concurrent.duration._
-
-      val stubNodeStatus = NodeStatus(
-        key = generateKeyPair(new SecureRandom()),
-        serverStatus = ServerStatus.NotListening,
-        discoveryStatus = ServerStatus.NotListening
-      )
-
-      // Create a simple stub ActorRef using TestProbe from Pekko testkit
-      val stubActorRef = org.apache.pekko.testkit.TestProbe().ref
-
-      val stubNetService = new NetService(
-        new AtomicReference[NodeStatus](stubNodeStatus),
-        stubActorRef,
-        NetService.NetServiceConfig(10.seconds)
-      )
-
-      JsonRpcController(
-        web3Service = mock[Web3Service],
-        netService = stubNetService,
-        ethInfoService = mock[EthInfoService],
-        ethMiningService = mock[EthMiningService],
-        ethBlocksService = mock[EthBlocksService],
-        ethTxService = mock[EthTxService],
-        ethUserService = mock[EthUserService],
-        ethFilterService = mock[EthFilterService],
-        personalService = mock[PersonalService],
-        testServiceOpt = None,
-        debugService = mock[DebugService],
-        qaService = mock[QAService],
-        checkpointingService = mock[CheckpointingService],
-        fukuiiService = mock[FukuiiService],
-        proofService = mock[ProofService],
-        config = mock[JsonRpcConfig]
-      )
-    }
 
     val corsAllowedOrigin: HttpOrigin = HttpOrigin("http://localhost:3333")
     val mockJsonRpcHttpServerWithCors = new FakeJsonRpcHttpServer(
