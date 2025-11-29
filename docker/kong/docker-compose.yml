@@ -1,4 +1,5 @@
-version: '3.8'
+# Docker Compose file for Kong API Gateway with Fukuii
+# Compose file format: https://docs.docker.com/compose/compose-file/
 
 volumes:
   fukuii-data:
