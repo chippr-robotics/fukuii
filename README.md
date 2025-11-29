@@ -23,7 +23,7 @@ Important Notes
 Licence: This project continues to be distributed under the Apache 2.0 licence. A copy of the licence is included in the LICENSE file. The original NOTICE file from IOHK is preserved as required by the licence, and Chippr Robotics LLC has added its own attribution.
 
 Origin: Fukuii is derived from the Mantis
- client. Fukuii is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
+ client. Mantis is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
 
 Chordoes Fukuii is a worm which controls a zombie mantis.
 
