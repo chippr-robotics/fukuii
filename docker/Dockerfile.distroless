@@ -24,7 +24,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /build
 
 # Create SBT cache directories with proper permissions
-RUN mkdir -p /root/.cache/sbt /root/.ivy2 /root/.sbt
+# Also set HOME explicitly to ensure SBT uses the correct paths
+RUN mkdir -p /root/.cache/sbt /root/.ivy2 /root/.sbt && \
+    chmod -R 755 /root/.cache /root/.ivy2 /root/.sbt
+ENV HOME=/root
+ENV SBT_OPTS="-Dsbt.global.base=/root/.sbt -Dsbt.ivy.home=/root/.ivy2 -Dsbt.boot.directory=/root/.sbt/boot"
 
 # Copy dependency files first for better caching
 COPY build.sbt version.sbt .jvmopts ./
