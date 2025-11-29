@@ -21,6 +21,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Set up build environment
 WORKDIR /build
 
+# Create SBT cache directories with proper permissions
+RUN mkdir -p /root/.cache/sbt /root/.ivy2 /root/.sbt
+
 # Copy dependency files first for better caching
 COPY build.sbt version.sbt .jvmopts ./
 COPY project/ ./project/
