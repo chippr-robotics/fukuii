@@ -4,6 +4,28 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 ## Workflows Overview
 
+### 📖 Documentation Workflow (`gh-pages.yml`)
+
+**Triggers:** Push to main/master/develop branches (docs changes), Pull Requests (build only), Manual dispatch
+
+**Purpose:** Deploys documentation from the `docs/` folder to GitHub Pages
+
+**URL:** [https://chippr-robotics.github.io/fukuii/](https://chippr-robotics.github.io/fukuii/)
+
+**Steps:**
+1. Checks out code
+2. Configures GitHub Pages
+3. Builds documentation with Jekyll
+4. Deploys to GitHub Pages (on push only, not PRs)
+
+**Notes:**
+- Documentation is kept in the same branch as code for AI agents to consume
+- Pull requests only build documentation (for validation) but do not deploy
+- Uses the GitHub Pages deployment API for modern, artifact-based deployment
+- Jekyll configuration is in `docs/_config.yml`
+
+---
+
 ### 🧪 CI Workflow (`ci.yml`)
 
 **Triggers:** Push to main/master/develop branches, Pull Requests
