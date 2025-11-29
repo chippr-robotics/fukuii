@@ -38,3 +38,6 @@ cs
 coverage-reports/
 target/scala-*/scoverage-data/
 target/scala-*/scoverage-report/
+
+# MkDocs build output
+site/
