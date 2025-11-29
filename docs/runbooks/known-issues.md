@@ -10,13 +10,13 @@ This document provides practical solutions for common operational scenarios with
 
 ## Table of Contents
 
-1. [RocksDB Operations](#rocksdb-issues)
-2. [Temporary Directory Configuration](#temporary-directory-issues)
-3. [JVM Optimization](#jvm-configuration-issues)
-4. [Network Connectivity](#other-common-issues)
-   - [Issue 13: Network Sync Zero-Length BigInteger](#issue-13-network-sync-error---zero-length-biginteger) ✅ Resolved
-   - [Issue 14: ETH68 Peer Connections](#issue-14-eth68-peer-connection-failures) ✅ Resolved
-   - [Issue 15: ForkId Compatibility](#issue-15-peer-disconnections-during-regular-sync) ✅ Resolved
+1. [RocksDB Operations](#rocksdb-operations)
+2. [Temporary Directory Configuration](#temporary-directory-configuration)
+3. [JVM Optimization](#jvm-optimization)
+4. [Network Connectivity](#network-connectivity)
+   - [Issue 13: Network Sync Zero-Length BigInteger](#issue-13-network-sync-zero-length-biginteger) ✅ Resolved
+   - [Issue 14: ETH68 Peer Connections](#issue-14-eth68-peer-connections) ✅ Resolved
+   - [Issue 15: ForkId Compatibility](#issue-15-forkid-compatibility) ✅ Resolved
 
 ## RocksDB Operations
 

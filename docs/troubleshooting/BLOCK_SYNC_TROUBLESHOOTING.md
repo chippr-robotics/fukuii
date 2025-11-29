@@ -134,7 +134,7 @@ After updating configuration:
 
 ## Related Documentation
 
-- [Issue 14: ETH68 Peer Connection Failures](../runbooks/known-issues.md#issue-14-eth68-peer-connection-failures)
+- [Issue 14: ETH68 Peer Connections](../runbooks/known-issues.md#issue-14-eth68-peer-connections)
 - [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124)
 - [Peering Runbook](../runbooks/peering.md)
 - [Log Triage Runbook](../runbooks/log-triage.md)

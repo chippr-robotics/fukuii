@@ -280,7 +280,7 @@ ERROR [RocksDbDataSource] - Failed to open database
 ERROR [RocksDbDataSource] - Corruption: ...
 ```
 
-**Solution**: See [known-issues.md](known-issues.md#rocksdb-corruption)
+**Solution**: See [known-issues.md](known-issues.md#issue-1-database-recovery-after-unclean-shutdown)
 
 #### Problem: Genesis Data Load Failure
 
@@ -456,7 +456,7 @@ jps -lvm | grep fukuii
 cat .jvmopts
 ```
 
-**Solution**: See [known-issues.md](known-issues.md#jvm-memory-tuning)
+**Solution**: See [known-issues.md](known-issues.md#issue-6-heap-size-configuration)
 
 #### Problem: Slow Performance
 
@@ -489,7 +489,7 @@ ERROR [RocksDbDataSource] - Failed to write batch
 WARN  [RocksDbDataSource] - Compaction pending
 ```
 
-**Solution**: See [known-issues.md](known-issues.md#rocksdb-issues)
+**Solution**: See [known-issues.md](known-issues.md#issue-2-optimizing-rocksdb-performance)
 
 ## Log Analysis Tools
 

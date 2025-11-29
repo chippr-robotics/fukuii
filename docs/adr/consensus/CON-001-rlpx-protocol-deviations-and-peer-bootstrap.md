@@ -299,7 +299,7 @@ grep -E "Handshaked" /tmp/fukuii_test.log
 4. [RLP Encoding Specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/)
 
 ### Related Documentation
-1. [Known Issues Runbook](../runbooks/known-issues.md#issue-14-eth68-peer-connection-failures)
+1. [Known Issues Runbook](../../runbooks/known-issues.md#issue-14-eth68-peer-connections)
 2. [Peering Runbook](../runbooks/peering.md#troubleshooting-connectivity)
 3. [First Start Runbook](../runbooks/first-start.md#initial-synchronization)
 
