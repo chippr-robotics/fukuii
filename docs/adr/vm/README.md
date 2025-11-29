@@ -20,6 +20,10 @@ Examples:
 - [VM-006: EIP-6049 Implementation](VM-006-eip-6049-implementation.md) - Accepted
 - [VM-007: EIP-161 noEmptyAccounts Configuration Fix](VM-007-eip-161-noemptyaccounts-fix.md) - Accepted
 
+## Related Specifications
+
+- **[Ethereum Mainnet EVM Compatibility](../specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md)** - Comprehensive analysis of EIPs and VM opcodes required for full Ethereum mainnet execution client compatibility
+
 ## Creating a New VM ADR
 
 1. Use the next sequential number (e.g., `VM-008-title.md`)

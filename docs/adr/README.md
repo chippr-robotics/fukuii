@@ -45,6 +45,9 @@ EVM implementations, EIPs, and VM-specific features.
 - [VM-006: EIP-6049 Implementation](vm/VM-006-eip-6049-implementation.md) - Accepted
 - [VM-007: EIP-161 noEmptyAccounts Configuration Fix](vm/VM-007-eip-161-noemptyaccounts-fix.md) - Accepted
 
+**Related Specifications:**
+- [Ethereum Mainnet EVM Compatibility](../specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md) - Comprehensive analysis of EIPs and opcodes for Ethereum mainnet compatibility
+
 [View all VM ADRs →](vm/README.md)
 
 ### Consensus (`consensus/`)
