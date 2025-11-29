@@ -23,6 +23,20 @@ object MessageCodec {
   val MaxFramePayloadSize: Int = Int.MaxValue // no framing
   // 16Mb in base 2
   val MaxDecompressedLength = 16777216
+  // Maximum bytes to show fully in hex strings (larger data will be truncated)
+  val MaxFullHexLength = 64
+
+  /** Utility method to truncate hex strings for logging.
+    * For data up to MaxFullHexLength bytes: shows complete hex string
+    * For larger data: shows first 32 bytes + "..." + last 32 bytes
+    */
+  def truncateHex(data: Array[Byte]): String = {
+    if (data.length <= MaxFullHexLength) {
+      Hex.toHexString(data)
+    } else {
+      Hex.toHexString(data.take(32)) + "..." + Hex.toHexString(data.takeRight(32))
+    }
+  }
 }
 
 class MessageCodec(
@@ -146,11 +160,7 @@ class MessageCodec(
 
     // Log debug information when decompression fails
     result.recoverWith { case ex =>
-      val hexData = if (data.length <= 64) {
-        Hex.toHexString(data)
-      } else {
-        Hex.toHexString(data.take(32)) + "..." + Hex.toHexString(data.takeRight(32))
-      }
+      val hexData = truncateHex(data)
 
       log.warn(
         "DECOMPRESSION_DEBUG: Failed to decompress frame - " +
@@ -178,13 +188,41 @@ class MessageCodec(
     val encoded: Array[Byte] = serializable.toBytes
     val numFrames = Math.ceil(encoded.length / MaxFramePayloadSize.toDouble).toInt
     val contextId = contextIdCounter.incrementAndGet()
+
+    // Log message encoding details for protocol debugging
+    val encodedHex = truncateHex(encoded)
+    log.debug(
+      "ENCODE_MSG: Encoding message code=0x{}, type={}, rawBytes={}, hex={}",
+      serializable.code.toHexString,
+      serializable.underlyingMsg.getClass.getSimpleName,
+      encoded.length,
+      encodedHex
+    )
+
     val frames = (0 until numFrames).map { frameNo =>
       val framedPayload = encoded.drop(frameNo * MaxFramePayloadSize).take(MaxFramePayloadSize)
       val isWireProtocolMessage = serializable.code >= 0x00 && serializable.code <= 0x03
+      val shouldCompressThis = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
       val payload =
-        if (remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage) {
-          Snappy.compress(framedPayload)
+        if (shouldCompressThis) {
+          val compressed = Snappy.compress(framedPayload)
+          // Safe compression ratio calculation (avoid division by zero)
+          val ratio = if (framedPayload.length > 0) compressed.length.toDouble / framedPayload.length else 0.0
+          log.debug(
+            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {:.2f})",
+            frameNo,
+            framedPayload.length,
+            compressed.length,
+            ratio
+          )
+          compressed
         } else {
+          log.debug(
+            "ENCODE_MSG: Skipping compression for frame {} (wireProtocol={}, p2pVersion={})",
+            frameNo,
+            isWireProtocolMessage,
+            remotePeer2PeerVersion
+          )
           framedPayload
         }
 
@@ -195,7 +233,14 @@ class MessageCodec(
       Frame(header, serializable.code, ByteString(payload))
     }
 
-    frameCodec.writeFrames(frames)
+    val result = frameCodec.writeFrames(frames)
+    log.debug(
+      "ENCODE_MSG: Final encoded message code=0x{} totalBytes={} numFrames={}",
+      serializable.code.toHexString,
+      result.length,
+      numFrames
+    )
+    result
   }
 
 }

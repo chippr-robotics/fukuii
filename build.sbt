@@ -18,9 +18,9 @@ lazy val scala3OptimizationsForProd = Seq.empty[String]
 // Releasing. https://github.com/olafurpg/sbt-ci-release
 inThisBuild(
   List(
-    homepage := Some(url("https://github.com/chippr-robotics/chordodes_fukuii")),
+    homepage := Some(url("https://github.com/chippr-robotics/fukuii")),
     scmInfo := Some(
-      ScmInfo(url("https://github.com/chippr-robotics/chordodes_fukuii"), "git@github.com:chippr-robotics/chordodes_fukuii.git")
+      ScmInfo(url("https://github.com/chippr-robotics/fukuii"), "git@github.com:chippr-robotics/fukuii.git")
     ),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     developers := List(),
@@ -91,6 +91,13 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   ),
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
   Test / parallelExecution := true,
+  Test / fork := true, // Fork JVM for tests to ensure clean shutdown and avoid resource leak issues
+  Test / javaOptions ++= Seq(
+    "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit
+    "-Dpekko.coordinated-shutdown.run-by-actor-system-terminate=on", // Ensure proper shutdown on ActorSystem.terminate
+    "-Dpekko.jvm-shutdown-hooks=off" // Disable Pekko JVM shutdown hooks that may interfere with test cleanup
+  ),
+  Test / testForkedParallel := false, // Run tests sequentially in the forked JVM to avoid resource contention
   (Test / testOptions) += Tests.Argument("-oDG"),
   // Only publish selected libraries.
   (publish / skip) := true

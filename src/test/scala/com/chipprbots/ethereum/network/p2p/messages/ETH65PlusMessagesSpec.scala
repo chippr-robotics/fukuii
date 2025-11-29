@@ -113,6 +113,51 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
           case _ => fail("Expected RLPList with request-id as first element")
         }
       }
+
+      "match core-geth encoding exactly" in {
+        // This test verifies the encoding matches core-geth's expected format exactly
+        // From core-geth protocol_test.go:
+        // GetBlockHeadersPacket{1111, &GetBlockHeadersRequest{HashOrNumber{hashes[0], 0}, 5, 5, false}}
+        // where hashes[0] = 0x00000000000000000000000000000000000000000000000000000000deadc0de
+        // expected: e8820457e4a000000000000000000000000000000000000000000000000000000000deadc0de050580
+        import org.bouncycastle.util.encoders.Hex
+
+        val hash = ByteString(Hex.decode("00000000000000000000000000000000000000000000000000000000deadc0de"))
+        val msg = ETH66.GetBlockHeaders(
+          requestId = 1111,
+          block = Right(hash),
+          maxHeaders = 5,
+          skip = 5,
+          reverse = false
+        )
+        val encoded = msg.toBytes
+        val hexEncoded = Hex.toHexString(encoded)
+        val expected = "e8820457e4a000000000000000000000000000000000000000000000000000000000deadc0de050580"
+
+        hexEncoded shouldBe expected
+      }
+
+      "generate unique non-zero request IDs with nextRequestId" in {
+        // ETH66.nextRequestId should generate unique, incrementing request IDs
+        // starting from a non-zero value
+        val id1 = ETH66.nextRequestId
+        val id2 = ETH66.nextRequestId
+        val id3 = ETH66.nextRequestId
+
+        id1 should be > BigInt(0)
+        id2 should be > id1
+        id3 should be > id2
+
+        // Verify that the generated IDs can be used in messages without encoding issues
+        val msg = ETH66.GetBlockHeaders(
+          requestId = id1,
+          block = Left(100),
+          maxHeaders = 10,
+          skip = 0,
+          reverse = false
+        )
+        verify(msg, (m: ETH66.GetBlockHeaders) => m.toBytes, Codes.GetBlockHeadersCode, version)
+      }
     }
 
     "encoding and decoding BlockHeaders with request-id" should {

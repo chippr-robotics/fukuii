@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -27,7 +28,7 @@ case class EtcForkBlockExchangeState(
   def nextMessage: NextMessage = {
     val getBlockHeadersMsg: MessageSerializable =
       if (Capability.usesRequestId(remoteStatus.capability))
-        ETH66GetBlockHeaders(0, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
+        ETH66GetBlockHeaders(ETH66.nextRequestId, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
       else
         ETH62GetBlockHeaders(Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
 

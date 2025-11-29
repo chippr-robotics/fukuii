@@ -27,11 +27,14 @@ import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.ByteStringUtils
+
+import org.bouncycastle.util.encoders.Hex
 
 /** EtcPeerManager actor is in charge of keeping updated information about each peer, while also being able to query it
   * for this information. In order to do so it receives events for peer creation, disconnection and new messages being
@@ -46,6 +49,9 @@ class EtcPeerManagerActor(
     with ActorLogging {
 
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
+  
+  // Maximum length for hex string in debug logs (to avoid very long log lines)
+  private val MaxHexLogLength = 200
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -84,6 +90,12 @@ class EtcPeerManagerActor(
 
     case EtcPeerManagerActor.SendMessage(message, peerId) =>
       NetworkMetrics.SentMessagesCounter.increment()
+      log.debug(
+        "SEND_VIA_MANAGER: peer={}, type={}, code=0x{}",
+        peerId,
+        message.underlyingMsg.getClass.getSimpleName,
+        message.code.toHexString
+      )
       val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message.underlyingMsg, handleSentMessage)
       peerManagerActor ! PeerManagerActor.SendMessage(message, peerId)
       context.become(handleMessages(newPeersWithInfo))
@@ -103,10 +115,11 @@ class EtcPeerManagerActor(
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
       log.info(
-        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}",
+        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, TotalDifficulty: {}",
         peer.id,
         peerInfo.remoteStatus.capability,
-        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
+        peerInfo.remoteStatus.chainWeight.totalDifficulty
       )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
@@ -116,9 +129,21 @@ class EtcPeerManagerActor(
       val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
       val getBlockHeadersMsg: MessageSerializable =
         if (usesRequestId)
-          ETH66GetBlockHeaders(0, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+          ETH66GetBlockHeaders(ETH66.nextRequestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
         else
           ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+      
+      // Debug: Log the raw RLP-encoded message bytes for protocol analysis
+      if (log.isDebugEnabled) {
+        val encodedBytes = getBlockHeadersMsg.toBytes
+        val hexBytes = Hex.toHexString(encodedBytes)
+        log.debug(
+          "PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}",
+          encodedBytes.length,
+          if (hexBytes.length > MaxHexLogLength) hexBytes.take(MaxHexLogLength) + "..." else hexBytes
+        )
+      }
+      
       log.info(
         "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
         peer.id,
@@ -184,10 +209,31 @@ class EtcPeerManagerActor(
     * @return
     *   new updated peer info
     */
-  private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo =
+  private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo = {
+    // Log received BlockHeaders for debugging GetBlockHeaders response tracking
+    message match {
+      case m: ETH62BlockHeaders =>
+        log.info(
+          "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
+          initialPeerWithInfo.peer.id,
+          m.headers.size,
+          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+        )
+      case m: ETH66BlockHeaders =>
+        log.info(
+          "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
+          initialPeerWithInfo.peer.id,
+          m.requestId,
+          m.headers.size,
+          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+        )
+      case _ => // Don't log other message types at INFO level
+    }
+    
     (updateChainWeight(message) _)
       .andThen(updateForkAccepted(message, initialPeerWithInfo.peer))
       .andThen(updateMaxBlock(message))(initialPeerWithInfo.peerInfo)
+  }
 
   /** Processes the message and updates the chain weight of the peer
     *
