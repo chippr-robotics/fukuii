@@ -39,12 +39,17 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Mockable stub controller for testing. This is needed because JsonRpcBaseController 
   * has self-type constraints that make it unmockable directly with ScalaMock in Scala 3.
+  * 
+  * Note: When this class is used with ScalaMock via `mock[MockableJsonRpcController]`, 
+  * all method calls including `config` are intercepted by the mock framework.
+  * The null value here is never actually accessed in practice.
   */
 class MockableJsonRpcController extends JsonRpcBaseController with ApisBase with Logger {
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map.empty
   override def enabledApis: Seq[String] = Seq.empty
   override def available: List[String] = List.empty
-  override val config: JsonRpcConfig = null // Will be overridden by mock
+  @SuppressWarnings(Array("scalafix:DisableSyntax.null"))
+  override val config: JsonRpcConfig = null
 }
 
 // SCALA 3 MIGRATION: Fixed by having test class extend MockFactory, which satisfies inner trait self-type constraints
