@@ -85,11 +85,13 @@ jobs:
           echo "Running Standard Tests with Coverage (< 30 minutes)"
           echo "=========================================="
           set -o pipefail
-          sbt -v testStandard 2>&1 | tee /tmp/sbt-testStandard.log || {
+          # Enable coverage instrumentation before running tests
+          sbt -v "coverage; testStandard" 2>&1 | tee /tmp/sbt-testStandard.log || {
             echo "sbt testStandard failed — dumping 'last test'"
             sbt 'last test' 2>&1 | tee /tmp/sbt-last-test-standard.log || true
             exit 1
           }
+          # Generate coverage reports
           sbt -v coverageReport 2>&1 | tee /tmp/sbt-coverageReport.log || true
           sbt -v coverageAggregate 2>&1 | tee /tmp/sbt-coverageAggregate.log || true
         env:
@@ -126,7 +128,17 @@ jobs:
           FUKUII_DEV: true
         timeout-minutes: 10
       
-      - name: Upload coverage reports
+      - name: Upload coverage reports to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          directory: .
+          flags: unittests
+          name: codecov-fukuii
+          fail_ci_if_error: false
+          verbose: true
+      
+      - name: Upload coverage artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
