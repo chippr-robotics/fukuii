@@ -49,13 +49,13 @@ class MockedMinerSpec
 
   "MockedPowMiner actor" should {
     "not mine blocks" when {
-      "there is no request" in new TestSetup {
+      "there is no request" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         expectNoNewBlockMsg(noMessageTimeOut)
       }
     }
 
     "not mine block and return MinerNotSupport msg" when {
-      "the request comes before miner started" in new TestSetup {
+      "the request comes before miner started" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val msg = MineBlocks(1, false, None)
         sendToMiner(msg)
         expectNoNewBlockMsg(noMessageTimeOut)
@@ -64,7 +64,7 @@ class MockedMinerSpec
     }
 
     "stop mining in case of error" when {
-      "Unable to get block for mining" in new TestSetup {
+      "Unable to get block for mining" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val bfm1 = setBlockForMining(parent, Seq.empty)
 
@@ -93,7 +93,7 @@ class MockedMinerSpec
         }
       }
 
-      "Unable to get parent block for mining" in new TestSetup {
+      "Unable to get parent block for mining" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parentHash = origin.hash
 
         val errorMsg = s"Unable to get parent block with hash ${ByteStringUtils.hash2string(parentHash)} for mining"
@@ -111,7 +111,7 @@ class MockedMinerSpec
     }
 
     "return MinerIsWorking to requester" when {
-      "miner is working during next mine request" in new TestSetup {
+      "miner is working during next mine request" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val bfm = setBlockForMining(parent, Seq.empty)
 
@@ -133,7 +133,7 @@ class MockedMinerSpec
     }
 
     "mine valid blocks" when {
-      "there is request for block with other parent than best block" in new TestSetup {
+      "there is request for block with other parent than best block" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val parentHash = origin.hash
         val bfm = setBlockForMining(parent, Seq.empty)
@@ -153,7 +153,7 @@ class MockedMinerSpec
         }
       }
 
-      "there is request for one block without transactions" in new TestSetup {
+      "there is request for one block without transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val bfm = setBlockForMining(parent, Seq.empty)
 
@@ -170,7 +170,7 @@ class MockedMinerSpec
         }
       }
 
-      "there is request for one block with transactions" in new TestSetup {
+      "there is request for one block with transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val bfm = setBlockForMining(parent)
 
@@ -187,7 +187,7 @@ class MockedMinerSpec
         }
       }
 
-      "there is request for few blocks without transactions" in new TestSetup {
+      "there is request for few blocks without transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val bfm1 = setBlockForMining(parent, Seq.empty)
         val bfm2 = setBlockForMining(bfm1, Seq.empty)
@@ -209,7 +209,7 @@ class MockedMinerSpec
         }
       }
 
-      "there is request for few blocks with transactions" in new TestSetup {
+      "there is request for few blocks with transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val bfm1 = setBlockForMining(parent)
         val bfm2 = setBlockForMining(bfm1, Seq.empty)

@@ -46,14 +46,14 @@ import com.chipprbots.ethereum.testing.Tags._
 class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with Matchers with org.scalamock.scalatest.MockFactory {
 
   "PoWMinerCoordinator actor" - {
-    "should throw exception when starting with other message than StartMining(mode)" in new TestSetup {
+    "should throw exception when starting with other message than StartMining(mode)" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
       override def coordinatorName = "FailedCoordinator"
       LoggingTestKit.error("StopMining").expect {
         coordinator ! StopMining
       }
     }
 
-    "should start recurrent mining when receiving message StartMining(RecurrentMining)" in new TestSetup {
+    "should start recurrent mining when receiving message StartMining(RecurrentMining)" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
       override def coordinatorName = "RecurrentMining"
       setBlockForMining(parentBlock)
       LoggingTestKit.info("Received message SetMiningMode(RecurrentMining)").expect {
@@ -62,7 +62,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
       coordinator ! StopMining
     }
 
-    "should start on demand mining when receiving message StartMining(OnDemandMining)" in new TestSetup {
+    "should start on demand mining when receiving message StartMining(OnDemandMining)" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
       override def coordinatorName = "OnDemandMining"
       LoggingTestKit.info("Received message SetMiningMode(OnDemandMining)").expect {
         coordinator ! SetMiningMode(OnDemandMining)
@@ -71,7 +71,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
     }
 
     "in Recurrent Mining" - {
-      "MineNext starts EthashMiner if mineWithKeccak is false" in new TestSetup {
+      "MineNext starts EthashMiner if mineWithKeccak is false" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
         override def coordinatorName = "EthashMining"
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
@@ -82,7 +82,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "MineNext starts KeccakMiner if mineWithKeccak is true" in new TestSetup {
+      "MineNext starts KeccakMiner if mineWithKeccak is true" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
         override def coordinatorName = "KeccakMining"
         override val coordinator = system.systemActorOf(
           PoWMiningCoordinator(
@@ -109,7 +109,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
           }
       }
 
-      "Miners mine recurrently" in new TestSetup {
+      "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
         override def coordinatorName = "RecurrentMining"
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
@@ -134,7 +134,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "Continue to attempt to mine if blockchainReader.getBestBlock() return None" in new TestSetup {
+      "Continue to attempt to mine if blockchainReader.getBestBlock() return None" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
         override def coordinatorName = "AlwaysMine"
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
@@ -161,7 +161,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "StopMining stops PoWMinerCoordinator" in new TestSetup {
+      "StopMining stops PoWMinerCoordinator" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
         override def coordinatorName = "StoppingMining"
         val probe = TestProbe()
         override val coordinator = testKit.spawn(
