@@ -123,27 +123,27 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
   def validateAccountRange(response: AccountRange): Either[String, AccountRange] = {
     // Check if request is pending
     if (!isPending(response.requestId)) {
-      return Left(s"No pending request for ID ${response.requestId}")
-    }
+      Left(s"No pending request for ID ${response.requestId}")
+    } else {
+      val pending = getPendingRequest(response.requestId).get
 
-    val pending = getPendingRequest(response.requestId).get
-
-    // Verify it's the expected type
-    if (pending.requestType != RequestType.GetAccountRange) {
-      return Left(s"Expected ${RequestType.GetAccountRange} but got response for ${pending.requestType}")
-    }
-
-    // Check accounts are monotonically increasing
-    for (i <- 1 until response.accounts.size) {
-      val prevHash = response.accounts(i - 1)._1
-      val currHash = response.accounts(i)._1
-      // Compare ByteStrings using lexicographical ordering
-      if (prevHash.toSeq.compare(currHash.toSeq) >= 0) {
-        return Left(s"Accounts not monotonically increasing at index $i")
+      // Verify it's the expected type
+      if (pending.requestType != RequestType.GetAccountRange) {
+        Left(s"Expected ${RequestType.GetAccountRange} but got response for ${pending.requestType}")
+      } else {
+        // Check accounts are monotonically increasing
+        val violation = (1 until response.accounts.size).find { i =>
+          val prevHash = response.accounts(i - 1)._1
+          val currHash = response.accounts(i)._1
+          // Compare ByteStrings using lexicographical ordering
+          prevHash.toSeq.compare(currHash.toSeq) >= 0
+        }
+        violation match {
+          case Some(i) => Left(s"Accounts not monotonically increasing at index $i")
+          case None => Right(response)
+        }
       }
     }
-
-    Right(response)
   }
 
   /** Validate StorageRanges response
@@ -153,27 +153,28 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     */
   def validateStorageRanges(response: StorageRanges): Either[String, StorageRanges] = {
     if (!isPending(response.requestId)) {
-      return Left(s"No pending request for ID ${response.requestId}")
-    }
-
-    val pending = getPendingRequest(response.requestId).get
-    if (pending.requestType != RequestType.GetStorageRanges) {
-      return Left(s"Expected ${RequestType.GetStorageRanges} but got response for ${pending.requestType}")
-    }
-
-    // Validate storage slots are monotonically increasing within each account
-    response.slots.zipWithIndex.foreach { case (accountSlots, accountIdx) =>
-      for (i <- 1 until accountSlots.size) {
-        val prevHash = accountSlots(i - 1)._1
-        val currHash = accountSlots(i)._1
-        // Compare ByteStrings using lexicographical ordering
-        if (prevHash.toSeq.compare(currHash.toSeq) >= 0) {
-          return Left(s"Storage slots not monotonically increasing for account $accountIdx at index $i")
+      Left(s"No pending request for ID ${response.requestId}")
+    } else {
+      val pending = getPendingRequest(response.requestId).get
+      if (pending.requestType != RequestType.GetStorageRanges) {
+        Left(s"Expected ${RequestType.GetStorageRanges} but got response for ${pending.requestType}")
+      } else {
+        // Validate storage slots are monotonically increasing within each account
+        val violation = response.slots.zipWithIndex.collectFirst {
+          case (accountSlots, accountIdx) =>
+            (1 until accountSlots.size).find { i =>
+              val prevHash = accountSlots(i - 1)._1
+              val currHash = accountSlots(i)._1
+              // Compare ByteStrings using lexicographical ordering
+              prevHash.toSeq.compare(currHash.toSeq) >= 0
+            }.map(i => (accountIdx, i))
+        }.flatten
+        violation match {
+          case Some((accountIdx, i)) => Left(s"Storage slots not monotonically increasing for account $accountIdx at index $i")
+          case None => Right(response)
         }
       }
     }
-
-    Right(response)
   }
 
   /** Validate ByteCodes response
