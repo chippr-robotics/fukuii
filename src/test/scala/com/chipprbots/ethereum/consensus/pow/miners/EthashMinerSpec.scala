@@ -34,9 +34,9 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by refactoring MinerSpecSetup to use abstract mock members pattern.
-// TODO: This test is flaky in CI due to real Ethash mining/DAG work taking too long.
-// The test runs actual PoW mining which may timeout in CI environments.
-// Marked as @Ignore until mining difficulty can be reduced for tests or mocking is improved.
+// NOTE: This test runs real Ethash mining which is inherently slow.
+// The test takes several minutes to complete due to DAG generation and actual PoW mining.
+// Marked as @Ignore for regular CI runs - run manually with: sbt "testOnly *EthashMinerSpec"
 @org.scalatest.Ignore
 class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scalatest.MockFactory {
 
