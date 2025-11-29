@@ -2,19 +2,19 @@
 
 ## Overview
 
-This document provides solutions for block synchronization scenarios. The issues documented here have been resolved in the current release.
+This document provides solutions for block synchronization. All documented issues have been resolved and work out-of-the-box in the current release.
 
 ## Quick Reference
 
 | Scenario | Solution | Status |
 |----------|----------|--------|
-| ForkId mismatch at block 0 | Use latest fork in ForkId | ✅ Fixed (default) |
-| Peers disconnect after handshake | Enable bootstrap checkpoints | ✅ Fixed |
-| Zero stable peers | Check firewall + use manual connections | ✅ Documented |
+| ForkId mismatch at block 0 | Automatic — uses latest fork in ForkId | ✅ Fixed |
+| Peers disconnect after handshake | Automatic — bootstrap checkpoints enabled | ✅ Fixed |
+| Zero stable peers | Check firewall + manual connections available | ✅ Documented |
 
-## Background
+## How It Works
 
-Based on production deployment analysis, peer disconnections with reason code `0x10` (subprotocol incompatibility) were typically caused by ForkId mismatches during initial synchronization.
+Fukuii automatically handles ForkId compatibility during initial synchronization. No configuration is needed for new installations.
 
 ### Comparison with Core-Geth Implementation
 

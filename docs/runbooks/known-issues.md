@@ -876,12 +876,33 @@ See [peering.md](peering.md#problem-only-outgoing-peers-no-incoming) and [first-
 
 This issue was caused by incorrect handling of empty byte arrays in the RLP serialization layer. The fix ensures empty byte arrays correctly deserialize to zero, per Ethereum specification.
 
-**Resolution Details:**
-- Modified `ArbitraryIntegerMpt.bigIntSerializer.fromBytes` to handle empty byte arrays
-- Added comprehensive test coverage (21+ tests)
-- Full compliance with Ethereum RLP specification
+#### Symptoms (for reference)
 
-See the fix commit `afc0626` for implementation details.
+```
+ERROR [o.a.pekko.actor.OneForOneStrategy] - Zero length BigInteger
+java.lang.NumberFormatException: Zero length BigInteger
+        at java.base/java.math.BigInteger.<init>(BigInteger.java:...)
+```
+
+#### Technical Details
+
+- **Location**: `src/main/scala/com/chipprbots/ethereum/domain/package.scala`
+- **Affected component**: `ArbitraryIntegerMpt.bigIntSerializer.fromBytes`
+- **Root cause**: Did not handle empty byte arrays before calling `BigInt(bytes)`
+
+The fix:
+```scala
+// Before:
+override def fromBytes(bytes: Array[Byte]): BigInt = BigInt(bytes)
+
+// After:
+override def fromBytes(bytes: Array[Byte]): BigInt = 
+  if (bytes.isEmpty) BigInt(0) else BigInt(bytes)
+```
+
+**Test coverage added**: 21+ tests covering all serialization paths.
+
+See commit `afc0626` for full implementation details.
 
 ---
 
@@ -893,12 +914,28 @@ See the fix commit `afc0626` for implementation details.
 
 This issue was caused by incorrect message decoder ordering. Network protocol messages must be decoded before capability-specific messages per the devp2p specification.
 
-**Resolution Details:**
-- Corrected decoder order: `NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))`
-- Single-line fix in `RLPxConnectionHandler.ethMessageCodecFactory`
-- Node now maintains stable peer connections with ETH68-capable peers
+#### Symptoms (for reference)
 
-See commit `801b236` for implementation details.
+```
+DEBUG [c.c.e.n.p2p.MessageDecoder$$anon$1] - Unknown eth/68 message type: 1
+INFO  [c.c.e.n.rlpx.RLPxConnectionHandler] - Cannot decode message from <peer-ip>:30303, because of Cannot decode Disconnect
+```
+
+#### Technical Details
+
+- **Location**: `src/main/scala/com/chipprbots/ethereum/network/rlpx/RLPxConnectionHandler.scala`
+- **Root cause**: ETH68 decoder tried to decode network messages first
+
+The fix:
+```scala
+// Before:
+val md = EthereumMessageDecoder.ethMessageDecoder(negotiated).orElse(NetworkMessageDecoder)
+
+// After:
+val md = NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))
+```
+
+See commit `801b236` for full implementation details.
 
 ---
 
@@ -934,10 +971,34 @@ Please submit a pull request or open an issue to update this documentation.
 
 This issue was caused by incompatible ForkId values being advertised during ETH64+ protocol handshake for nodes starting from low block numbers.
 
-**Resolution Details:**
-- Extended bootstrap pivot usage for ForkId calculation during initial sync
+#### Symptoms (for reference)
+
+```
+INFO  [c.c.e.n.handshaker.EthNodeStatus64ExchangeState] - STATUS_EXCHANGE: Sending status - bestBlock=1234
+INFO  [c.c.e.n.PeerManagerActor] - Handshaked 0/80, pending connection attempts 15
+INFO  [c.c.e.b.sync.PivotBlockSelector] - Cannot pick pivot block. Need at least 3 peers, but there are only 0
+```
+
+#### Technical Details
+
+- **Location**: `src/main/scala/com/chipprbots/ethereum/network/handshaker/EthNodeStatus64ExchangeState.scala`
+- **Root cause**: Bootstrap pivot block only used when `bestBlockNumber == 0`
+
+The fix extends bootstrap pivot usage for ForkId calculation during initial sync:
+
+```scala
+// Use bootstrap pivot for ForkId during initial sync
+val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
+  val threshold = math.min(bootstrapPivotBlock / 10, BigInt(100000))
+  if (bestBlockNumber < (bootstrapPivotBlock - threshold)) bootstrapPivotBlock
+  else bestBlockNumber
+} else bestBlockNumber
+```
+
+**Benefits:**
+- Bootstrap pivot used for ForkId calculation during entire initial sync
+- Smooth transition from pivot to actual block number when close to synced
 - Both regular sync and fast sync now maintain stable peer connections
-- Nodes are now visible on network crawlers like etcnodes.org
 
 See [CON-006: ForkId Compatibility During Initial Sync](../adr/consensus/CON-006-forkid-compatibility-during-initial-sync.md) for details.
 

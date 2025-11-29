@@ -4,7 +4,7 @@
 
 Gas calculation in Fukuii is fully compliant with Ethereum specifications including EIP-2929 cold/warm storage access costs.
 
-**Status:** ✅ Verified and compliant with Ethereum/tests
+**Status:** ✅ Verified and compliant with ethereum/tests
 
 ---
 
@@ -26,13 +26,50 @@ The gas calculation correctly handles:
 - **G_sset:** 20,000 gas (setting fresh slot)
 - **G_sreset:** 2,900 gas (resetting existing slot)
 
+### Example Calculation
+
+For a simple contract that stores a value:
+```
+Contract Code: 0x600160010160005500
+- PUSH1 0x01: 3 gas
+- PUSH1 0x01: 3 gas
+- ADD: 3 gas
+- PUSH1 0x00: 3 gas
+- SSTORE (cold): 20,000 (G_sset) + 2,100 (G_cold_sload) = 22,100 gas
+- STOP: 0 gas
+Transaction intrinsic: 21,000 gas
+Total: 21,000 + 3 + 3 + 3 + 3 + 22,100 = 43,112 gas
+```
+
 ## Fork Configuration
 
-Proper fork detection requires all fork block numbers to be configured. The test converter includes correct configurations for all supported forks:
+Proper fork detection requires all fork block numbers to be configured. The implementation includes correct configurations for:
 
-- Frontier, Homestead, EIP-150, EIP-155/160
-- Byzantium, Constantinople, Petersburg
-- Istanbul, Berlin, London (ETC-compatible parts)
+| Fork | Key Parameters |
+|------|----------------|
+| Frontier | Base gas costs |
+| Homestead | EIP-2/7 |
+| EIP-150 | Gas repricing |
+| EIP-155/160 | Replay protection |
+| Byzantium | EIP-658 |
+| Constantinople | EIP-1014, 1052, 1283 |
+| Petersburg | EIP-1283 removed |
+| Istanbul | EIP-1884, 2028, 2200 |
+| Berlin | EIP-2929 cold/warm |
+| London | EIP-3529 (ETC partial) |
+
+### Fork Detection Logic
+
+```scala
+def ethForkForBlockNumber(blockNumber: BigInt): EthForks.Value = blockNumber match {
+  case _ if blockNumber < byzantiumBlockNumber      => BeforeByzantium
+  case _ if blockNumber < constantinopleBlockNumber => Byzantium
+  case _ if blockNumber < petersburgBlockNumber     => Constantinople
+  case _ if blockNumber < istanbulBlockNumber       => Petersburg
+  case _ if blockNumber < berlinBlockNumber         => Istanbul
+  case _ if blockNumber >= berlinBlockNumber        => Berlin
+}
+```
 
 ## Verification
 
@@ -40,6 +77,12 @@ Gas calculations have been verified against:
 - ✅ ethereum/tests official test suite
 - ✅ Core-geth reference implementation
 - ✅ Besu reference implementation
+
+### Key Files
+
+- `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala` - Gas schedule
+- `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala` - SSTORE gas logic
+- `src/it/scala/com/chipprbots/ethereum/ethtest/TestConverter.scala` - Fork configuration
 
 ## References
 
