@@ -8,25 +8,36 @@ import cats.effect.IO
 
 import scala.concurrent.duration._
 
+import org.scalamock.handlers.CallHandler4
+import org.scalamock.handlers.CallHandler6
 import org.scalatest._
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.consensus.blocks.PendingBlock
+import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.pow.MinerSpecSetup
+import com.chipprbots.ethereum.consensus.pow.PoWBlockCreator
+import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MineBlocks
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MockedMinerResponses._
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockchainImpl
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.jsonrpc.EthMiningService
+import com.chipprbots.ethereum.jsonrpc.EthMiningService.SubmitHashRateResponse
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
-import org.scalatest.Ignore
 import com.chipprbots.ethereum.testing.Tags._
 
-// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
-@Ignore
+// SCALA 3 MIGRATION: Fixed by refactoring MinerSpecSetup to use abstract mock members pattern.
 class MockedMinerSpec
     extends TestKit(ClassicSystem("MockedPowMinerSpec_System"))
     with AnyWordSpecLike
@@ -59,7 +70,7 @@ class MockedMinerSpec
 
         blockCreatorBehaviour(parent, withTransactions = false, bfm1)
 
-        (blockCreator
+        (mockBlockCreator
           .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
           .expects(bfm1, false, *, *)
           .returning(
@@ -223,10 +234,18 @@ class MockedMinerSpec
     }
   }
 
-  trait TestSetup extends MinerSpecSetup {
-    this: org.scalamock.scalatest.MockFactory =>
-    implicit def system: ClassicSystem
+  class TestSetup extends MinerSpecSetup {
+    implicit def system: ClassicSystem = MockedMinerSpec.this.system
     val noMessageTimeOut: FiniteDuration = 3.seconds
+
+    // Implement abstract mock members - created in test class with MockFactory context
+    override lazy val mockBlockchainReader: BlockchainReader = mock[BlockchainReader]
+    override lazy val mockBlockchain: BlockchainImpl = mock[BlockchainImpl]
+    override lazy val mockBlockCreator: PoWBlockCreator = mock[PoWBlockCreator]
+    override lazy val mockBlockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
+    override lazy val mockEthMiningService: EthMiningService = mock[EthMiningService]
+    override lazy val mockEvmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
+    override lazy val mockMptStorage: MptStorage = mock[MptStorage]
 
     val miner: TestActorRef[Nothing] = TestActorRef(
       MockedMiner.props(
@@ -238,6 +257,53 @@ class MockedMinerSpec
     )
 
     (blockchainReader.getBestBlock _).expects().returns(Some(origin))
+
+    // Implement abstract expectation methods
+    override def setBlockForMiningExpectation(
+        parentBlock: Block,
+        block: Block,
+        fakeWorld: InMemoryWorldStateProxy
+    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState] =
+      (blockGenerator
+        .generateBlock(
+          _: Block,
+          _: Seq[SignedTransaction],
+          _: Address,
+          _: Seq[BlockHeader],
+          _: Option[InMemoryWorldStateProxy]
+        )(_: BlockchainConfig))
+        .expects(parentBlock, Nil, miningConfig.coinbase, Nil, None, *)
+        .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
+
+    override def blockCreatorBehaviourExpectation(
+        parentBlock: Block,
+        withTransactions: Boolean,
+        resultBlock: Block,
+        fakeWorld: InMemoryWorldStateProxy
+    ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
+      (mockBlockCreator
+        .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
+        .expects(parentBlock, withTransactions, *, *)
+        .returning(IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld)))
+
+    override def blockCreatorBehaviourExpectingInitialWorldExpectation(
+        parentBlock: Block,
+        withTransactions: Boolean,
+        resultBlock: Block,
+        fakeWorld: InMemoryWorldStateProxy
+    ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
+      (mockBlockCreator
+        .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
+        .expects(where { (parent: Block, withTxs: Boolean, _: Option[InMemoryWorldStateProxy], _: BlockchainConfig) =>
+          parent == parentBlock && withTxs == withTransactions
+        })
+        .returning(IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld)))
+
+    override def setupMiningServiceExpectation(): Unit =
+      (ethMiningService.submitHashRate _)
+        .expects(*)
+        .returns(IO.pure(Right(SubmitHashRateResponse(true))))
+        .atLeastOnce()
 
     def validateBlock(block: Block, parent: Block, txs: Seq[SignedTransaction] = Seq.empty): Assertion = {
       block.body.transactionList shouldBe txs
