@@ -21,7 +21,8 @@ import com.chipprbots.ethereum.domain._
 
 import org.scalatest.Ignore
 
-// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for InMemoryWorldStateProxy in MinerSpecSetup
+// SCALA 3 MIGRATION: Disabled - MinerSpecSetup has self-type requiring MockFactory which 
+// doesn't work with inner classes in Scala 3. Needs refactoring of MinerSpecSetup.
 @Ignore
 class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scalatest.MockFactory {
   final val PoWMinerSpecTag: Tag = Tag("EthashMinerSpec")

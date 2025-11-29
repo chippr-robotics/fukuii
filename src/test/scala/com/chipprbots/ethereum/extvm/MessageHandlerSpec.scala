@@ -55,6 +55,10 @@ class MessageHandlerSpec extends AnyFlatSpec with Matchers with MockFactory with
         override def companion: GeneratedMessageCompanion[_] = ???
         override def serializedSize: Int = bytes.size
         override def toProtoString: String = ???
+        // Scala 3 requires Product trait methods to be implemented
+        override def canEqual(that: Any): Boolean = false
+        override def productArity: Int = 0
+        override def productElement(n: Int): Any = throw new IndexOutOfBoundsException(n.toString)
       }
       val messageHandler = new MessageHandler(in, out)
       messageHandler.sendMessage(gm)

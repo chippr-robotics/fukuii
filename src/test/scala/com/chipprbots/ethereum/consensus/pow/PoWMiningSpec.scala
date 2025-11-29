@@ -146,5 +146,8 @@ class PoWMiningSpec
     val validator: ValidatorsExecutor = successValidators.asInstanceOf[ValidatorsExecutor]
   }
 
-  class TestMiningNode extends StdNode with EphemBlockchainTestSetup
+  class TestMiningNode extends StdNode with EphemBlockchainTestSetup {
+    // SCALA 3 MIGRATION: Override ioRuntime with public access to satisfy Node trait
+    override lazy val ioRuntime: cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+  }
 }

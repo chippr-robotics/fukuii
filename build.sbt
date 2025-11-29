@@ -312,36 +312,26 @@ lazy val node = {
                                              // Remediation: Replace MockFactory with mockito-scala or abstract mocks
 
           // DISABLED - Complex actor mocking incompatible with Scala 3 MockFactory:
-          "ConsensusImplSpec.scala",         // Reason: MockFactory incompatible with Scala 3 for actor system mocking
-                                             // Remediation: Migrate to cats-effect TestControl or akka-testkit patterns
-          "FastSyncBranchResolverActorSpec.scala", // Reason: Actor choreography mocking fails in Scala 3
-                                             // Remediation: Use akka-testkit TestProbe or refactor to testable functions
+          // FIXED - ConsensusImplSpec.scala (MockFactory mixin works correctly)
+          // FIXED - FastSyncBranchResolverActorSpec.scala (no MockFactory usage)
 
           // DISABLED - Mining coordinator mocking issues (SlowTest alternatives exist):
           "PoWMiningCoordinatorSpec.scala",  // Reason: Mining coordinator actor mocking incompatible with Scala 3
                                              // Remediation: Migrate to integration tests or mockito-scala
-          "PoWMiningSpec.scala",             // Reason: Mining process mocking fails with Scala 3 MockFactory
-                                             // Remediation: Use integration tests with test mining difficulty
+          // FIXED - PoWMiningSpec.scala (trait uses outer class MockFactory correctly)
 
           // DISABLED - Miner implementations (covered by integration tests, marked SlowTest):
-          "EthashMinerSpec.scala",           // Reason: Ethash PoW mining MockFactory incompatibility
-                                             // Remediation: Use integration tests or migrate to mockito-scala
-          "KeccakMinerSpec.scala",           // Reason: Keccak mining MockFactory incompatibility
-                                             // Remediation: Use integration tests or migrate to mockito-scala
-          "MockedMinerSpec.scala",           // Reason: Test miner MockFactory incompatibility
-                                             // Remediation: Migrate to mockito-scala for mock verification
+          "EthashMinerSpec.scala",           // Reason: MinerSpecSetup has self-type requiring MockFactory - needs refactor
+          "KeccakMinerSpec.scala",           // Reason: MinerSpecSetup has self-type requiring MockFactory - needs refactor
+          "MockedMinerSpec.scala",           // Reason: MinerSpecSetup has self-type requiring MockFactory - needs refactor
 
           // DISABLED - ExtVM mocking issues (external VM integration):
-          "MessageHandlerSpec.scala",        // Reason: External VM message handling mocking fails in Scala 3
-                                             // Remediation: Replace MockFactory with mockito-scala
+          // FIXED - MessageHandlerSpec.scala (uses MockFactory correctly at class level)
 
           // DISABLED - JSON-RPC service mocking incompatibilities:
-          "QaJRCSpec.scala",                 // Reason: QA JSON-RPC controller MockFactory incompatibility
-                                             // Remediation: Migrate to mockito-scala
-          "EthProofServiceSpec.scala",       // Reason: Ethereum proof service mocking fails in Scala 3
-                                             // Remediation: Replace MockFactory with mockito-scala
-          "LegacyTransactionHistoryServiceSpec.scala" // Reason: Transaction history service MockFactory incompatibility
-                                             // Remediation: Migrate to mockito-scala
+          // FIXED - QaJRCSpec.scala (uses MockFactory correctly at class level)
+          // FIXED - EthProofServiceSpec.scala (uses MockFactory correctly at class level)
+          // FIXED - LegacyTransactionHistoryServiceSpec.scala (no MockFactory usage)
         )
         
         disabledTests.foldLeft(base) { (filter, testFile) =>
