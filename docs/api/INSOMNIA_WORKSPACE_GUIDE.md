@@ -294,7 +294,7 @@ Error: authentication needed: password or unlock
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 2.0 | 2025-11-21 | Complete rewrite with all 77 endpoints, organized namespaces |
+| 2.0 | 2025-11-21 | Complete rewrite with all 78 endpoints, organized namespaces |
 | 1.0 | 2021-02-01 | Initial workspace with basic endpoints |
 
 ---
