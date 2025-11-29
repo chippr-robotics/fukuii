@@ -263,14 +263,24 @@ class PeerActor[R <: HandshakeResult](
     case RLPxConnectionHandler.MessageReceived(d: Disconnect) =>
       import Disconnect.Reasons._
       log.info(
-        s"DISCONNECT_DEBUG: Received disconnect from ${peerAddress.getHostString}:${peerAddress.getPort} - reason code: 0x${d.reason.toHexString} (${Disconnect.reasonToString(d.reason)})"
+        s"DISCONNECT_DEBUG: Received disconnect from ${peerAddress.getHostString}:${peerAddress.getPort} - reason code: 0x${d.reason.toHexString} (${Disconnect.reasonToString(d.reason)}), status: $status"
       )
+      // Log additional context for 0x10 (Other/subprotocol) disconnects to aid debugging
+      if (d.reason == Other) {
+        log.info(
+          s"DISCONNECT_DEBUG: Subprotocol disconnect (0x10) from ${peerAddress.getHostString}:${peerAddress.getPort}. " +
+          s"This typically indicates: ForkId mismatch, malformed message, or protocol incompatibility. " +
+          s"Check peer logs or enable debug logging for RLP bytes."
+        )
+      }
       d.reason match {
         case IncompatibleP2pProtocolVersion | UselessPeer | NullNodeIdentityReceived | UnexpectedIdentity |
             IdentityTheSame | Other =>
           context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
           rlpxConnection.uriOpt.foreach(uri => knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri))
-        case TooManyPeers =>
+        case TooManyPeers | TcpSubsystemError | DisconnectRequested | ClientQuitting | TimeoutOnReceivingAMessage =>
+          // These disconnect reasons should be reported for blacklisting but don't require
+          // removing the node from known nodes (they may be temporary issues)
           context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
         case _ => // nothing
       }

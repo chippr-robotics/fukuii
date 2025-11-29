@@ -286,6 +286,47 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
 
   }
 
+  it should "skip fork block exchange for ETH64+ when ForkId validation passes (EIP-2124 compliance)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
+    // This test verifies the EIP-2124 fix: for ETH64+ protocols with ForkId in status,
+    // we should skip the fork block exchange and go directly to connected state
+    // even if a fork resolver is configured.
+    // Previously, we would incorrectly send a GetBlockHeaders request after status exchange.
+
+    val newChainWeight: ChainWeight = ChainWeight.zero.increase(genesisBlock.header).increase(firstBlock.header)
+    blockchainWriter.save(firstBlock, Nil, newChainWeight, saveAsBestBlock = true)
+
+    // Use a handshaker WITH fork resolver configured
+    val eth64HandshakerWithResolver = EtcHandshaker(etcHandshakerConfigurationWithResolver)
+
+    // Complete Hello exchange
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = eth64HandshakerWithResolver.applyMessage(remoteHello)
+    assert(handshakerAfterHelloOpt.isDefined)
+
+    // Complete Status exchange
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    assert(handshakerAfterStatusOpt.isDefined)
+
+    // Verify we go directly to HandshakeSuccess without fork block exchange
+    // Per EIP-2124, ForkId validation in ETH64+ replaces the fork block exchange
+    handshakerAfterStatusOpt.get.nextMessage match {
+      case Left(HandshakeSuccess(peerInfo)) =>
+        peerInfo.remoteStatus.capability shouldBe localStatus.capability
+        peerInfo.forkAccepted shouldBe true
+
+      case Left(HandshakeFailure(reason)) =>
+        fail(s"Expected HandshakeSuccess but got HandshakeFailure($reason)")
+
+      case Right(nextMsg) =>
+        // This would fail before the fix - we would incorrectly transition to
+        // EtcForkBlockExchangeState and send GetBlockHeaders
+        fail(s"Expected direct HandshakeSuccess but got NextMessage(${nextMsg.messageToSend})")
+    }
+  }
+
   it should "fail if a timeout happened during hello exchange" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     val handshakerAfterTimeout = initHandshakerWithoutResolver.processTimeout
     handshakerAfterTimeout.nextMessage.map(_.messageToSend) shouldBe Left(
@@ -356,6 +397,111 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     handshakerAfterHelloOpt.get.nextMessage.leftSide shouldBe Left(
       HandshakeFailure(Disconnect.Reasons.IncompatibleP2pProtocolVersion)
     )
+  }
+
+  it should "use bootstrap pivot block for ForkId when syncing from low block numbers" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
+    // Simulate a node that has just started regular sync and is at a low block number
+    // This test verifies the fix for the peer connection issue during regular sync
+    
+    // Set up bootstrap pivot block (simulate bootstrap checkpoint at block 19,250,000)
+    val bootstrapPivotBlockNumber = BigInt(19250000)
+    val bootstrapPivotBlockHash = ByteString(Array.fill[Byte](32)(0xaa.toByte))
+    storagesInstance.storages.appStateStorage
+      .putBootstrapPivotBlock(bootstrapPivotBlockNumber, bootstrapPivotBlockHash)
+      .commit()
+    
+    // Advance blockchain to a low block number (simulating regular sync progress)
+    val lowBlockNumber = BigInt(1000)
+    val lowBlock = firstBlock.copy(header = firstBlock.header.copy(number = lowBlockNumber))
+    val lowBlockWeight: ChainWeight = genesisWeight.increase(lowBlock.header)
+    blockchainWriter.save(lowBlock, Nil, lowBlockWeight, saveAsBestBlock = true)
+    
+    // Perform handshake
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
+    assert(handshakerAfterHelloOpt.isDefined)
+    
+    // The status message should use the bootstrap pivot block for ForkId calculation
+    // even though the actual best block is at 1000
+    handshakerAfterHelloOpt.get.nextMessage match {
+      case Right(nextMsg) =>
+        nextMsg.messageToSend match {
+          case statusEnc: ETH64.Status.StatusEnc =>
+            val statusMsg = statusEnc.underlyingMsg
+            // Best block should be the low block
+            statusMsg.bestHash shouldBe lowBlock.header.hash
+            // But ForkId should be calculated using bootstrap pivot block, not the actual block number
+            // This ensures compatibility with synced peers
+            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(bootstrapPivotBlockNumber)
+            statusMsg.forkId shouldBe expectedForkId
+          case other =>
+            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
+        }
+      case other =>
+        fail(s"Expected status message but got: $other")
+    }
+    
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    assert(handshakerAfterStatusOpt.isDefined)
+    
+    // Should successfully connect (not disconnect due to ForkId mismatch)
+    handshakerAfterStatusOpt.get.nextMessage match {
+      case Left(HandshakeSuccess(peerInfo)) =>
+        peerInfo.remoteStatus.capability shouldBe localStatus.capability
+      case other =>
+        fail(s"Expected successful handshake but got: $other")
+    }
+  }
+
+  it should "switch to actual block number for ForkId when close to bootstrap pivot" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
+    // This test verifies that once the node syncs close enough to the bootstrap pivot block,
+    // it switches to using the actual block number for ForkId calculation
+    
+    // Set up bootstrap pivot block
+    val bootstrapPivotBlockNumber = BigInt(19250000)
+    val bootstrapPivotBlockHash = ByteString(Array.fill[Byte](32)(0xaa.toByte))
+    storagesInstance.storages.appStateStorage
+      .putBootstrapPivotBlock(bootstrapPivotBlockNumber, bootstrapPivotBlockHash)
+      .commit()
+    
+    // Advance blockchain to just past the threshold where we switch to actual block numbers
+    // With pivot at 19,250,000, threshold = min(1,925,000, 100,000) = 100,000
+    // The condition for using pivot is: bestBlockNumber < (pivot - threshold)
+    // So switch point is: 19,250,000 - 100,000 = 19,150,000
+    // At 19,200,000: bestBlockNumber (19,200,000) >= (pivot - threshold) (19,150,000)
+    // Since 19,200,000 >= 19,150,000, we're past the switch point
+    // Therefore we should use actual block number (19,200,000) for ForkId, not the pivot
+    val highBlockNumber = BigInt(19200000)
+    val highBlock = firstBlock.copy(header = firstBlock.header.copy(number = highBlockNumber))
+    val highBlockWeight: ChainWeight = genesisWeight.increase(highBlock.header)
+    blockchainWriter.save(highBlock, Nil, highBlockWeight, saveAsBestBlock = true)
+    
+    // Perform handshake
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
+    assert(handshakerAfterHelloOpt.isDefined)
+    
+    // The status message should now use the actual block number for ForkId
+    // because we're within the threshold distance of the bootstrap pivot block
+    handshakerAfterHelloOpt.get.nextMessage match {
+      case Right(nextMsg) =>
+        nextMsg.messageToSend match {
+          case statusEnc: ETH64.Status.StatusEnc =>
+            val statusMsg = statusEnc.underlyingMsg
+            statusMsg.bestHash shouldBe highBlock.header.hash
+            // ForkId should be calculated using actual block number (19,200,000), not the pivot
+            succeed
+          case other =>
+            fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
+        }
+      case other =>
+        fail(s"Expected status message but got: $other")
+    }
   }
 
   it should "fail if a fork resolver is used and the block from the remote peer isn't accepted" taggedAs (

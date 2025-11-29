@@ -2,6 +2,8 @@
 
 Welcome to the Fukuii Ethereum Classic client documentation. This directory contains comprehensive documentation organized by topic and use case.
 
+> **📖 Hosted Documentation:** This documentation is also available at [https://chippr-robotics.github.io/fukuii/](https://chippr-robotics.github.io/fukuii/) via GitHub Pages for easier browsing and searching.
+
 ## Quick Navigation
 
 ### 🚀 Getting Started
@@ -165,6 +167,8 @@ When adding new documentation:
 3. Add entry to the category's README.md
 4. Update this main index if needed
 5. Check all cross-references are correct
+
+**Note:** Documentation changes are automatically deployed to GitHub Pages when merged to main/master/develop branches. The workflow validates documentation builds on PRs before merging.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for more details.
 

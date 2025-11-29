@@ -73,6 +73,91 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
         )
         verify(msg, (m: ETH66.GetBlockHeaders) => m.toBytes, Codes.GetBlockHeadersCode, version)
       }
+
+      "correctly encode request-id=0 as empty bytes per RLP spec" in {
+        // This test verifies the fix for peer disconnect issue where request-id=0
+        // was incorrectly encoded as [0] instead of empty bytes
+        val msg = ETH66.GetBlockHeaders(requestId = 0, block = Left(1), maxHeaders = 1, skip = 0, reverse = false)
+        val encoded = msg.toBytes
+        // The encoded message should round-trip correctly
+        verify(msg, (m: ETH66.GetBlockHeaders) => m.toBytes, Codes.GetBlockHeadersCode, version)
+        // Verify that request-id=0 is encoded as empty bytes (0x80) not as [0] (0x00)
+        // The first byte after the RLP list marker should be 0x80 (empty string) for request-id=0
+        val rlpDecoded = com.chipprbots.ethereum.rlp.rawDecode(encoded)
+        rlpDecoded match {
+          case com.chipprbots.ethereum.rlp.RLPList(com.chipprbots.ethereum.rlp.RLPValue(requestIdBytes), _*) =>
+            requestIdBytes shouldBe empty
+          case _ => fail("Expected RLPList with request-id as first element")
+        }
+      }
+
+      "correctly encode request-id=0 with block hash as empty bytes per RLP spec" in {
+        // This test verifies the exact scenario from issue #574 where GetBlockHeaders
+        // is sent with requestId=0 and block hash after peer handshake
+        val bestHash = ByteString(Array.fill(32)(0x68.toByte)) // Simulated best block hash
+        val msg = ETH66.GetBlockHeaders(
+          requestId = 0,
+          block = Right(bestHash),
+          maxHeaders = 1,
+          skip = 0,
+          reverse = false
+        )
+        val encoded = msg.toBytes
+        // The encoded message should round-trip correctly
+        verify(msg, (m: ETH66.GetBlockHeaders) => m.toBytes, Codes.GetBlockHeadersCode, version)
+        // Verify that request-id=0 is encoded as empty bytes (0x80) not as [0] (0x00)
+        val rlpDecoded = com.chipprbots.ethereum.rlp.rawDecode(encoded)
+        rlpDecoded match {
+          case com.chipprbots.ethereum.rlp.RLPList(com.chipprbots.ethereum.rlp.RLPValue(requestIdBytes), _*) =>
+            requestIdBytes shouldBe empty
+          case _ => fail("Expected RLPList with request-id as first element")
+        }
+      }
+
+      "match core-geth encoding exactly" in {
+        // This test verifies the encoding matches core-geth's expected format exactly
+        // From core-geth protocol_test.go:
+        // GetBlockHeadersPacket{1111, &GetBlockHeadersRequest{HashOrNumber{hashes[0], 0}, 5, 5, false}}
+        // where hashes[0] = 0x00000000000000000000000000000000000000000000000000000000deadc0de
+        // expected: e8820457e4a000000000000000000000000000000000000000000000000000000000deadc0de050580
+        import org.bouncycastle.util.encoders.Hex
+
+        val hash = ByteString(Hex.decode("00000000000000000000000000000000000000000000000000000000deadc0de"))
+        val msg = ETH66.GetBlockHeaders(
+          requestId = 1111,
+          block = Right(hash),
+          maxHeaders = 5,
+          skip = 5,
+          reverse = false
+        )
+        val encoded = msg.toBytes
+        val hexEncoded = Hex.toHexString(encoded)
+        val expected = "e8820457e4a000000000000000000000000000000000000000000000000000000000deadc0de050580"
+
+        hexEncoded shouldBe expected
+      }
+
+      "generate unique non-zero request IDs with nextRequestId" in {
+        // ETH66.nextRequestId should generate unique, incrementing request IDs
+        // starting from a non-zero value
+        val id1 = ETH66.nextRequestId
+        val id2 = ETH66.nextRequestId
+        val id3 = ETH66.nextRequestId
+
+        id1 should be > BigInt(0)
+        id2 should be > id1
+        id3 should be > id2
+
+        // Verify that the generated IDs can be used in messages without encoding issues
+        val msg = ETH66.GetBlockHeaders(
+          requestId = id1,
+          block = Left(100),
+          maxHeaders = 10,
+          skip = 0,
+          reverse = false
+        )
+        verify(msg, (m: ETH66.GetBlockHeaders) => m.toBytes, Codes.GetBlockHeadersCode, version)
+      }
     }
 
     "encoding and decoding BlockHeaders with request-id" should {

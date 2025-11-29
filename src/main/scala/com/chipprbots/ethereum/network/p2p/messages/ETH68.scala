@@ -4,7 +4,7 @@ package com.chipprbots.ethereum.network.p2p.messages
   * https://github.com/ethereum/devp2p/blob/master/caps/eth.md#eth68
   *
   * The main change in ETH68 is the removal of GetNodeData (0x0d) and NodeData (0x0e) messages. These were used for
-  * state synchronization but have been deprecated in favor of snap sync.
+  * state synchronization but have been deprecated in favor of snap sync (SNAP/1 protocol).
   *
   * ETH68 includes all messages from ETH67:
   *   - All messages from ETH66 (with request-id)
@@ -15,6 +15,8 @@ package com.chipprbots.ethereum.network.p2p.messages
   *
   * Note: For backward compatibility with some core-geth nodes, the NewPooledTransactionHashes decoder
   * (inherited from ETH67) supports both the enhanced format and the legacy ETH65 format.
+  *
+  * For state synchronization on ETH68+, use the SNAP/1 protocol as a satellite protocol.
   */
 object ETH68 {
   // ETH68 uses all messages from ETH66 (with request-id) and ETH67 (enhanced NewPooledTransactionHashes)

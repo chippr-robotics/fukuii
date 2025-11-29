@@ -214,7 +214,11 @@ class PeerManagerActor(
       // policies (e.g., rejecting nodes at genesis) rather than actual protocol issues.
       // Peers may be willing to connect later once we've synced past genesis.
       case Other => peerConfiguration.shortBlacklistDuration
-      case _     => peerConfiguration.longBlacklistDuration
+      // TcpSubsystemError (0x01) may indicate temporary network issues or peer-side problems
+      // Use short blacklist to allow quick reconnection attempts
+      case TcpSubsystemError | DisconnectRequested | TimeoutOnReceivingAMessage =>
+        peerConfiguration.shortBlacklistDuration
+      case _ => peerConfiguration.longBlacklistDuration
     }
   }
 

@@ -22,7 +22,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks
-import com.chipprbots.ethereum.NormalPatience
+import com.chipprbots.ethereum.LongPatience
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync.SyncState
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
@@ -56,7 +56,7 @@ class SyncControllerSpec
     with BeforeAndAfter
     with MockFactory
     with Eventually
-    with NormalPatience {
+    with LongPatience {
 
   "SyncController" should "download pivot block and request block headers" taggedAs (
     UnitTest,

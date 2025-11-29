@@ -246,3 +246,78 @@ The following changes were implemented across 8 files (43 log statements total):
 - Keep messages concise but informative
 - Use consistent terminology across the codebase
 - Prefix subsystem-specific logs with tags like `[RLPx]`, `[FastSync]`, etc. when helpful
+
+## Appendix: Manual Log Level Configuration
+
+The `logback.xml` file provides comprehensive logger entries for all major components, organized by subsystem. Operators can manually set log levels for troubleshooting by editing the appropriate logger entry.
+
+### Configuration Location Rationale
+
+Fukuii uses a hybrid configuration approach for logging:
+
+| Setting Type | Location | Rationale |
+|-------------|----------|-----------|
+| **Global log level** | `base.conf` (`logging.logs-level`) | Simple runtime override via `-Dlogging.logs-level=DEBUG` or environment variable |
+| **Output format** | `base.conf` (`logging.json-output`) | Deployment-specific setting (JSON for log aggregation) |
+| **Log file paths** | `base.conf` (`logging.logs-dir`, `logging.logs-file`) | Environment-specific paths |
+| **Per-component log levels** | `logback.xml` | Detailed troubleshooting control (see below) |
+
+**Why per-component log levels belong in `logback.xml`:**
+
+1. **Hierarchical control**: Logback's native logger hierarchy allows setting levels at package and class granularity. HOCON config would require flattening this into string keys.
+
+2. **Well-documented convention**: Logback's XML format is the standard for Java/Scala applications. Operators familiar with SLF4J/Logback will expect logger configuration in `logback.xml`.
+
+3. **IDE and tooling support**: XML schema validation, autocompletion, and logback-specific tooling work natively with `logback.xml`.
+
+4. **Conditional logic**: Logback supports `<if>` conditions for environment-specific behavior (e.g., JSON output toggle), which is already used in the current configuration.
+
+5. **Hot reload capability**: Logback can reload `logback.xml` at runtime with `scan="true"`, enabling log level changes without restart.
+
+The global `logging.logs-level` in `base.conf` is bridged to logback via `ConfigPropertyDefiner`, providing a convenient override for the root logger while preserving fine-grained control in `logback.xml`.
+
+### Configuration Files
+
+- Production: `src/main/resources/logback.xml`
+- Unit tests: `src/test/resources/logback-test.xml`
+- Integration tests: `src/it/resources/logback-test.xml`
+- Global settings: `src/main/resources/conf/base.conf` (logging section)
+
+### Subsystem Categories
+
+The following subsystems have dedicated logger entries in `logback.xml`:
+
+| Subsystem | Package | Description |
+|-----------|---------|-------------|
+| Scalanet | `com.chipprbots.scalanet` | Low-level networking library |
+| Network | `com.chipprbots.ethereum.network` | Peer connections and communication |
+| RLPx | `com.chipprbots.ethereum.network.rlpx` | Encrypted transport protocol |
+| Sync | `com.chipprbots.ethereum.blockchain.sync` | Block synchronization |
+| Fast Sync | `com.chipprbots.ethereum.blockchain.sync.fast` | Fast sync mode |
+| Regular Sync | `com.chipprbots.ethereum.blockchain.sync.regular` | Regular sync mode |
+| SNAP Sync | `com.chipprbots.ethereum.blockchain.sync.snap` | SNAP protocol sync |
+| Ledger | `com.chipprbots.ethereum.ledger` | Block execution and state |
+| Database | `com.chipprbots.ethereum.db` | Storage and persistence |
+| MPT | `com.chipprbots.ethereum.mpt` | Merkle Patricia Trie |
+| VM | `com.chipprbots.ethereum.vm` | Ethereum Virtual Machine |
+| Consensus | `com.chipprbots.ethereum.consensus` | Mining and validation |
+| Transactions | `com.chipprbots.ethereum.transactions` | Pending transactions |
+| JSON-RPC | `com.chipprbots.ethereum.jsonrpc` | API server |
+| Faucet | `com.chipprbots.ethereum.faucet` | Test network faucet |
+| Metrics | `com.chipprbots.ethereum.metrics` | Performance monitoring |
+
+### Example: Enabling DEBUG for RLPx Troubleshooting
+
+To enable DEBUG logging for RLPx connection issues, modify `logback.xml`:
+
+```xml
+<!-- Before: INFO (production default) -->
+<logger name="com.chipprbots.ethereum.network.rlpx" level="INFO" />
+
+<!-- After: DEBUG (for troubleshooting) -->
+<logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
+```
+
+### Note on Pekko Actor Logging
+
+When setting any level to DEBUG, you may also need to adjust `pekko.loglevel` in `application.conf` for actor-based components to ensure DEBUG messages are not filtered at the actor system level.
