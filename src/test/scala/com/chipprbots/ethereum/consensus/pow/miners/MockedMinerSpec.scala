@@ -38,9 +38,8 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.testing.Tags._
 
 // SCALA 3 MIGRATION: Fixed by refactoring MinerSpecSetup to use abstract mock members pattern.
-// TODO: These tests are flaky in CI due to actor timing issues. Need investigation.
-// Marked as @Ignore until mocked miner actor lifecycle is stabilized.
-@org.scalatest.Ignore
+// ACTOR SYSTEM FIX: TestSetup now overrides classicSystem to use TestKit's actor system,
+// preventing actor system conflicts between TestKit and MinerSpecSetup.
 class MockedMinerSpec
     extends TestKit(ClassicSystem("MockedPowMinerSpec_System"))
     with AnyWordSpecLike
@@ -238,7 +237,8 @@ class MockedMinerSpec
   }
 
   class TestSetup extends MinerSpecSetup {
-    implicit def system: ClassicSystem = MockedMinerSpec.this.system
+    // Override classicSystem to use the TestKit's actor system instead of creating a new one
+    override implicit def classicSystem: ClassicSystem = MockedMinerSpec.this.system
     val noMessageTimeOut: FiniteDuration = 3.seconds
 
     // Implement abstract mock members - created in test class with MockFactory context

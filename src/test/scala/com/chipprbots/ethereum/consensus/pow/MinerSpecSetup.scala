@@ -60,12 +60,21 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
   lazy val ethMiningService: EthMiningService = mockEthMiningService
   lazy val evmCodeStorage: EvmCodeStorage = mockEvmCodeStorage
   
-  implicit val classicSystem: ClassicSystem = ClassicSystem()
+  // ACTOR SYSTEM HANDLING:
+  // Subclasses that extend TestKit or ScalaTestWithActorTestKit should override this
+  // to provide their test kit's actor system instead of creating a new one.
+  // This prevents actor system conflicts between the test kit and MinerSpecSetup.
+  implicit def classicSystem: ClassicSystem = _defaultClassicSystem
+  
+  // Lazy val to avoid creating an actor system until actually needed.
+  // Tests that override classicSystem won't trigger this.
+  private lazy val _defaultClassicSystem: ClassicSystem = ClassicSystem("MinerSpecSetup-DefaultSystem")
+  
   implicit val runtime: IORuntime = IORuntime.global
-  val parentActor: TestProbe = TestProbe()
-  val sync: TestProbe = TestProbe()
-  val ommersPool: TestProbe = TestProbe()
-  val pendingTransactionsManager: TestProbe = TestProbe()
+  lazy val parentActor: TestProbe = TestProbe()(classicSystem)
+  lazy val sync: TestProbe = TestProbe()(classicSystem)
+  lazy val ommersPool: TestProbe = TestProbe()(classicSystem)
+  lazy val pendingTransactionsManager: TestProbe = TestProbe()(classicSystem)
 
   val origin: Block = Block(Fixtures.Blocks.Genesis.header, Fixtures.Blocks.Genesis.body)
 
