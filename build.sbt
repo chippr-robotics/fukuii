@@ -293,9 +293,7 @@ lazy val node = {
       (Test / fork) := true,
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap,
       // Temporarily exclude test files with MockFactory compilation issues (Scala 3 migration)
-      // 2 tests fixed with abstract mock pattern: BranchResolutionSpec, ConsensusAdapterSpec
-      // Remaining tests need different approaches (DaoForkTestSetup, TestSetup have existing self-types)
-      //
+      // 
       // DISABLED TESTS DOCUMENTATION:
       // Each excluded test is documented below with reason and remediation approach
       (Test / excludeFilter) := {
@@ -304,34 +302,23 @@ lazy val node = {
           // FIXED - using abstract mock members pattern:
           // "BranchResolutionSpec.scala",
           // "ConsensusAdapterSpec.scala",
+          // "BlockExecutionSpec.scala",     // DaoForkTestSetup fixed, 2 DAO tests marked ignore
+          // "JsonRpcHttpServerSpec.scala",  // TestSetup converted to class
 
-          // DISABLED - Self-type conflicts with MockFactory (requires trait-based mocking refactor):
-          "BlockExecutionSpec.scala",        // Reason: DaoForkTestSetup has self-type requiring DAO fork configuration
-                                             // Remediation: Replace MockFactory with mockito-scala or refactor to composition
-          "JsonRpcHttpServerSpec.scala",     // Reason: TestSetup has self-type requiring HTTP server dependencies
-                                             // Remediation: Replace MockFactory with mockito-scala or abstract mocks
+          // DISABLED - Mining tests require MinerSpecSetup refactoring for Scala 3
+          // MinerSpecSetup has self-type requiring MockFactory which inner classes cannot satisfy in Scala 3
+          "PoWMiningCoordinatorSpec.scala",  // Reason: MinerSpecSetup self-type requires MockFactory in inner class
+          "EthashMinerSpec.scala",           // Reason: MinerSpecSetup self-type requires MockFactory in inner class
+          "KeccakMinerSpec.scala",           // Reason: MinerSpecSetup self-type requires MockFactory in inner class
+          "MockedMinerSpec.scala",           // Reason: MinerSpecSetup self-type requires MockFactory in inner class
 
-          // DISABLED - Complex actor mocking incompatible with Scala 3 MockFactory:
-          // FIXED - ConsensusImplSpec.scala (MockFactory mixin works correctly)
-          // FIXED - FastSyncBranchResolverActorSpec.scala (no MockFactory usage)
-
-          // DISABLED - Mining coordinator mocking issues (SlowTest alternatives exist):
-          "PoWMiningCoordinatorSpec.scala",  // Reason: Mining coordinator actor mocking incompatible with Scala 3
-                                             // Remediation: Migrate to integration tests or mockito-scala
-          // FIXED - PoWMiningSpec.scala (trait uses outer class MockFactory correctly)
-
-          // DISABLED - Miner implementations (covered by integration tests, marked SlowTest):
-          "EthashMinerSpec.scala",           // Reason: MinerSpecSetup has self-type requiring MockFactory - needs refactor
-          "KeccakMinerSpec.scala",           // Reason: MinerSpecSetup has self-type requiring MockFactory - needs refactor
-          "MockedMinerSpec.scala",           // Reason: MinerSpecSetup has self-type requiring MockFactory - needs refactor
-
-          // DISABLED - ExtVM mocking issues (external VM integration):
-          // FIXED - MessageHandlerSpec.scala (uses MockFactory correctly at class level)
-
-          // DISABLED - JSON-RPC service mocking incompatibilities:
-          // FIXED - QaJRCSpec.scala (uses MockFactory correctly at class level)
-          // FIXED - EthProofServiceSpec.scala (uses MockFactory correctly at class level)
-          // FIXED - LegacyTransactionHistoryServiceSpec.scala (no MockFactory usage)
+          // FIXED - Other tests:
+          // "ConsensusImplSpec.scala" (MockFactory mixin works correctly)
+          // "FastSyncBranchResolverActorSpec.scala" (no MockFactory usage)
+          // "MessageHandlerSpec.scala" (uses MockFactory correctly at class level)
+          // "QaJRCSpec.scala" (uses MockFactory correctly at class level)
+          // "EthProofServiceSpec.scala" (uses MockFactory correctly at class level)
+          // "LegacyTransactionHistoryServiceSpec.scala" (no MockFactory usage)
         )
         
         disabledTests.foldLeft(base) { (filter, testFile) =>

@@ -5,8 +5,6 @@ import java.util.concurrent.TimeUnit
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.scaladsl.model._
-import org.apache.pekko.http.scaladsl.model.headers.HttpOrigin
-import org.apache.pekko.http.scaladsl.model.headers.Origin
 import org.apache.pekko.http.scaladsl.model.headers._
 import org.apache.pekko.http.scaladsl.server.Route
 import org.apache.pekko.http.scaladsl.testkit.ScalatestRouteTest
@@ -24,7 +22,6 @@ import org.json4s.JsonAST.JNothing
 import org.json4s.JsonAST.JString
 import org.json4s.native.JsonMethods
 import org.json4s.native.JsonMethods._
-import org.scalamock.scalatest.MockFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -38,11 +35,7 @@ import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitCo
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Logger
 
-import org.scalatest.Ignore
-
-// SCALA 3 MIGRATION: Disabled due to scalamock limitation with complex parameterized types (JsonRpcController with Option[TestService])
-// This test requires either scalamock library updates for Scala 3 or test refactoring to avoid mocking JsonRpcController
-@Ignore
+// SCALA 3 MIGRATION: Fixed by having test class extend MockFactory, which satisfies inner trait self-type constraints
 class JsonRpcHttpServerSpec
     extends AnyFlatSpec
     with Matchers
@@ -418,8 +411,8 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  trait TestSetup {
-    this: org.scalamock.scalatest.MockFactory =>
+  // SCALA 3 MIGRATION: Changed from trait with self-type to class to work with MockFactory in test class
+  class TestSetup {
     val jsonRpc = "2.0"
     val id = 1
     val jsonRequest: ByteString = ByteString(s"""{"jsonrpc":"$jsonRpc", "method": "eth_blockNumber", "id": "$id"}""")
@@ -472,7 +465,6 @@ class JsonRpcHttpServerSpec
       import java.util.concurrent.atomic.AtomicReference
       import com.chipprbots.ethereum.utils.{NodeStatus, ServerStatus}
       import com.chipprbots.ethereum.crypto.generateKeyPair
-      import org.apache.pekko.actor.ActorRef
       import java.security.SecureRandom
       import scala.concurrent.duration._
 
@@ -482,9 +474,12 @@ class JsonRpcHttpServerSpec
         discoveryStatus = ServerStatus.NotListening
       )
 
+      // Create a simple stub ActorRef using TestProbe from Pekko testkit
+      val stubActorRef = org.apache.pekko.testkit.TestProbe().ref
+
       val stubNetService = new NetService(
         new AtomicReference[NodeStatus](stubNodeStatus),
-        mock[ActorRef],
+        stubActorRef,
         NetService.NetServiceConfig(10.seconds)
       )
 

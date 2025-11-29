@@ -210,18 +210,19 @@ trait BlockchainSetup extends TestSetup {
     SignedTransaction.sign(validTx, originKeyPair, Some(blockchainConfig.chainId))
 }
 
+// SCALA 3 MIGRATION: Cannot use self-type constraint with anonymous instantiation in Scala 3.
+// The implementing class must extend MockFactory and provide mock implementations.
 trait DaoForkTestSetup extends TestSetup {
-  self: org.scalamock.scalatest.MockFactory =>
 
-  lazy val testBlockchainReader: BlockchainReader = mock[BlockchainReader]
-  lazy val testBlockchain: BlockchainImpl = mock[BlockchainImpl]
-  val worldState: InMemoryWorldStateProxy = createStubWorldStateProxy()
+  // Abstract members - to be provided by implementing class that has MockFactory context
+  def testBlockchainReader: BlockchainReader
+  def testBlockchain: BlockchainImpl
+  def worldState: InMemoryWorldStateProxy
+  
   val proDaoBlock: Block = Fixtures.Blocks.ProDaoForkBlock.block
 
-  private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
-    // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
-    val stubEvmCodeStorage = mock[EvmCodeStorage]
-    val stubMptStorage = mock[MptStorage]
+  // Helper to create stub world state - to be called from implementing class
+  protected def createStubWorldStateProxy(stubEvmCodeStorage: EvmCodeStorage, stubMptStorage: MptStorage): InMemoryWorldStateProxy = {
     InMemoryWorldStateProxy(
       stubEvmCodeStorage,
       stubMptStorage,
@@ -266,12 +267,8 @@ trait DaoForkTestSetup extends TestSetup {
 
   val parentBlockHeader = Fixtures.Blocks.DaoParentBlock.header
 
-  (testBlockchainReader.getBlockHeaderByHash _)
-    .expects(proDaoBlock.header.parentHash)
-    .returning(Some(parentBlockHeader))
-  (testBlockchain.getBackingMptStorage _)
-    .expects(*)
-    .returning(storagesInstance.storages.stateStorage.getBackingStorage(1920000))
+  // Abstract method for setting up expectations - to be implemented by class with MockFactory context
+  def setupDaoForkExpectations(): Unit
 }
 
 trait BinarySimulationChopSetup {
