@@ -68,7 +68,7 @@ class MockedMinerSpec
     "stop mining in case of error" when {
       "Unable to get block for mining" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
-        val bfm1 = setBlockForMining(parent, Seq.empty)
+        val bfm1 = createBlockForMining(parent, Seq.empty)
 
         blockCreatorBehaviour(parent, withTransactions = false, bfm1)
 
@@ -115,7 +115,7 @@ class MockedMinerSpec
     "return MinerIsWorking to requester" when {
       "miner is working during next mine request" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
-        val bfm = setBlockForMining(parent, Seq.empty)
+        val bfm = createBlockForMining(parent, Seq.empty)
 
         blockCreatorBehaviour(parent, withTransactions = false, bfm)
 
@@ -138,7 +138,7 @@ class MockedMinerSpec
       "there is request for block with other parent than best block" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
         val parentHash = origin.hash
-        val bfm = setBlockForMining(parent, Seq.empty)
+        val bfm = createBlockForMining(parent, Seq.empty)
 
         (blockchainReader.getBlockByHash _).expects(parentHash).returns(Some(parent))
 
@@ -157,7 +157,7 @@ class MockedMinerSpec
 
       "there is request for one block without transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
-        val bfm = setBlockForMining(parent, Seq.empty)
+        val bfm = createBlockForMining(parent, Seq.empty)
 
         blockCreatorBehaviour(parent, withTransactions = false, bfm)
 
@@ -174,7 +174,7 @@ class MockedMinerSpec
 
       "there is request for one block with transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
-        val bfm = setBlockForMining(parent)
+        val bfm = createBlockForMining(parent)
 
         blockCreatorBehaviour(parent, withTransactions = true, bfm)
 
@@ -191,8 +191,8 @@ class MockedMinerSpec
 
       "there is request for few blocks without transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
-        val bfm1 = setBlockForMining(parent, Seq.empty)
-        val bfm2 = setBlockForMining(bfm1, Seq.empty)
+        val bfm1 = createBlockForMining(parent, Seq.empty)
+        val bfm2 = createBlockForMining(bfm1, Seq.empty)
 
         blockCreatorBehaviour(parent, withTransactions = false, bfm1)
 
@@ -213,8 +213,8 @@ class MockedMinerSpec
 
       "there is request for few blocks with transactions" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
         val parent = origin
-        val bfm1 = setBlockForMining(parent)
-        val bfm2 = setBlockForMining(bfm1, Seq.empty)
+        val bfm1 = createBlockForMining(parent)
+        val bfm2 = createBlockForMining(bfm1, Seq.empty)
 
         blockCreatorBehaviour(parent, withTransactions = true, bfm1)
 
@@ -259,9 +259,12 @@ class MockedMinerSpec
       )
     )
 
-    (blockchainReader.getBestBlock _).expects().returns(Some(origin))
+    // Allow getBestBlock to be called 0 or more times since some tests use getBlockByHash instead
+    (blockchainReader.getBestBlock _).expects().returns(Some(origin)).anyNumberOfTimes()
 
     // Implement abstract expectation methods
+    // NOTE: MockedMiner tests use createBlockForMining() which doesn't call this method,
+    // because MockedMiner uses the mocked blockCreator directly without going through blockGenerator.
     override def setBlockForMiningExpectation(
         parentBlock: Block,
         block: Block,

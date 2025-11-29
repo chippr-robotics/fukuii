@@ -145,10 +145,26 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
       fakeWorld: InMemoryWorldStateProxy
   ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState]
 
+  /** Creates a block for mining and optionally sets up expectations.
+    * This is the main helper for tests that need mocked block generation.
+    * Tests that use MockedMiner with a fully mocked blockCreator should use
+    * `createBlockForMining` instead to avoid unsatisfied expectations on blockGenerator.
+    */
   protected def setBlockForMining(parentBlock: Block, transactions: Seq[SignedTransaction] = Seq(txToMine)): Block = {
+    val block = createBlockForMining(parentBlock, transactions)
+    setBlockForMiningExpectation(parentBlock, block, fakeWorld)
+      .atLeastOnce()
+    block
+  }
+
+  /** Creates a block for mining WITHOUT setting up any mock expectations.
+    * Use this when the test will set up its own mocks (e.g., MockedMiner tests
+    * where blockCreator is mocked and blockGenerator is never called).
+    */
+  protected def createBlockForMining(parentBlock: Block, transactions: Seq[SignedTransaction] = Seq(txToMine)): Block = {
     val parentHeader: BlockHeader = parentBlock.header
 
-    val block = Block(
+    Block(
       BlockHeader(
         parentHash = parentHeader.hash,
         ommersHash = ByteString(Hex.decode("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347")),
@@ -168,11 +184,6 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
       ),
       BlockBody(transactions, Nil)
     )
-
-    setBlockForMiningExpectation(parentBlock, block, fakeWorld)
-      .atLeastOnce()
-
-    block
   }
 
   private def calculateGasLimit(parentGas: UInt256): UInt256 = {
