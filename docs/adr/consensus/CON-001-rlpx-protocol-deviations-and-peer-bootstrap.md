@@ -300,8 +300,8 @@ grep -E "Handshaked" /tmp/fukuii_test.log
 
 ### Related Documentation
 1. [Known Issues Runbook](../../runbooks/known-issues.md#issue-14-eth68-peer-connections)
-2. [Peering Runbook](../runbooks/peering.md#troubleshooting-connectivity)
-3. [First Start Runbook](../runbooks/first-start.md#initial-synchronization)
+2. [Peering Runbook](../../runbooks/peering.md)
+3. [First Start Runbook](../../runbooks/first-start.md)
 
 ## Future Work
 

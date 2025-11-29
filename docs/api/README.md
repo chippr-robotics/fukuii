@@ -34,9 +34,9 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 
 ### Quick Links
 
-- **[Insomnia Workspace](../../insomnia_workspace.json)** - Pre-configured API collection with all endpoints
+- **[Insomnia Guide](INSOMNIA_WORKSPACE_GUIDE.md)** - How to use the Insomnia API collection
 - **[Runbooks](../runbooks/README.md)** - Operational documentation
-- **[Main README](../../README.md)** - Project overview and getting started
+- **[Documentation Home](../index.md)** - Project overview and getting started
 
 ## 🎯 Quick Start
 
@@ -61,7 +61,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 
 3. **Import Insomnia Workspace**:
    - Open Insomnia
-   - Import `insomnia_workspace.json`
+   - Import the Insomnia workspace from the repository root
    - Start exploring all 78 endpoints
 
 ### For AI Integration
@@ -340,14 +340,14 @@ See [Metrics & Monitoring](../operations/metrics-and-monitoring.md) for comprehe
 
 ## 🤝 Contributing
 
-Found an issue or want to suggest an improvement? See our [Contributing Guide](../../CONTRIBUTING.md).
+Found an issue or want to suggest an improvement? See our [Contributing Guide](../development/contributing.md).
 
 ### Documentation Updates
 
 When updating API documentation:
 
 1. Update the relevant markdown file
-2. Update [Insomnia workspace](../../insomnia_workspace.json) if adding endpoints
+2. Update the Insomnia workspace in repository root if adding endpoints
 3. Update [coverage analysis](./JSON_RPC_COVERAGE_ANALYSIS.md) if implementation status changes
 4. Test all examples and code snippets
 5. Submit PR with clear description

@@ -16,7 +16,7 @@ The default configuration includes example credentials for demonstration purpose
 1. Copy `.env.example` to `.env`
 2. Generate strong random passwords and secrets
 3. Update all credentials in `.env` and `kong.yml`
-4. Review the [SECURITY.md](SECURITY.md) guide
+4. Review the [Kong Security Guide](kong-security.md)
 
 ## Prerequisites
 
@@ -304,8 +304,8 @@ curl -X POST http://localhost:8000/ \
 
 ## Next Steps
 
-1. Read the [full README](README.md) for detailed documentation
-2. Review [Security Guide](SECURITY.md) for production deployment
+1. Read the [Deployment Guide](README.md) for detailed documentation
+2. Review [Kong Security Guide](kong-security.md) for production deployment
 3. Configure additional Fukuii instances for high availability
 4. Set up SSL/TLS certificates
 5. Configure monitoring alerts
@@ -315,9 +315,9 @@ curl -X POST http://localhost:8000/ \
 
 - Check logs: `docker-compose logs -f`
 - Run tests: `./test-api.sh`
-- Review documentation: [README.md](README.md)
-- Security guide: [SECURITY.md](SECURITY.md)
-- Main Fukuii docs: [../../README.md](../../README.md)
+- Review documentation: [Deployment Guide](README.md)
+- Security guide: [Kong Security](kong-security.md)
+- Main Fukuii docs: [Documentation Home](../index.md)
 
 ## Clean Up
 

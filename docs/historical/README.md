@@ -27,6 +27,5 @@ One-time rebranding script used to migrate the codebase from "Mantis" (IOHK) to 
 
 ## Related Documentation
 
-- [docs/MIGRATION_HISTORY.md](../MIGRATION_HISTORY.md) - Detailed history of the Scala 3 migration
-- [docs/adr/infrastructure/INF-001-scala-3-migration.md](../adr/infrastructure/INF-001-scala-3-migration.md) - Architecture decision record
-- [CHANGELOG.md](../../CHANGELOG.md) - Version history and changes
+- [Migration History](MIGRATION_HISTORY.md) - Detailed history of the Scala 3 migration
+- [INF-001: Scala 3 Migration](../adr/infrastructure/INF-001-scala-3-migration.md) - Architecture decision record

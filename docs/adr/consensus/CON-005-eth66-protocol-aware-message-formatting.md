@@ -385,8 +385,8 @@ implicit def eth62ToEth66(msg: ETH62.GetBlockHeaders): ETH66.GetBlockHeaders = ?
 3. [Besu](https://github.com/hyperledger/besu) - Java-based Ethereum client
 
 ### Related ADRs
-1. [ADR-011: RLPx Protocol Deviations](011-rlpx-protocol-deviations-and-peer-bootstrap.md) - Defensive protocol handling precedent
-2. [ADR-013: Block Sync Improvements](013-block-sync-improvements.md) - Fast sync architecture
+1. [CON-001: RLPx Protocol Deviations](CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md) - Defensive protocol handling precedent
+2. [CON-003: Block Sync Improvements](CON-003-block-sync-improvements.md) - Fast sync architecture
 
 ### Related Issues
 1. [chippr-robotics/fukuii#441](https://github.com/chippr-robotics/fukuii/issues/441) - Peer connection errors

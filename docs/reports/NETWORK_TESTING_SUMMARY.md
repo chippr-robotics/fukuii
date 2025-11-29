@@ -129,5 +129,5 @@ The single failing test is a non-critical edge case (bidirectional connection ra
 ## References
 
 - Full Test Report: [NETWORK_TEST_REPORT.md](NETWORK_TEST_REPORT.md)
-- E2E Test Suite: [src/it/scala/com/chipprbots/ethereum/network/E2EHandshakeSpec.scala](src/it/scala/com/chipprbots/ethereum/network/E2EHandshakeSpec.scala)
-- Test Tags: [src/test/scala/com/chipprbots/ethereum/testing/Tags.scala](src/test/scala/com/chipprbots/ethereum/testing/Tags.scala)
+- E2E Test Suite: `src/it/scala/com/chipprbots/ethereum/network/E2EHandshakeSpec.scala`
+- Test Tags: `src/test/scala/com/chipprbots/ethereum/testing/Tags.scala`

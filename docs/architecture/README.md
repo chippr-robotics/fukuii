@@ -15,10 +15,10 @@ This directory contains architectural documentation for the Fukuii Ethereum Clas
 ## Related Documentation
 
 - [Architecture Decision Records (ADRs)](../adr/) - Detailed architectural decisions with context and rationale
-- [Operations Runbooks](../runbooks/) - Operational guides for running nodes
-- [Deployment Guides](../deployment/) - Docker and deployment documentation
+- [Operations Runbooks](../runbooks/README.md) - Operational guides for running nodes
+- [Deployment Guides](../deployment/README.md) - Docker and deployment documentation
 
 ## See Also
 
-- [Main README](../../README.md)
-- [Contributing Guide](../../CONTRIBUTING.md)
+- [Documentation Home](../index.md)
+- [Contributing Guide](../development/contributing.md)

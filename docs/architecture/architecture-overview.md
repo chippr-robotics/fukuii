@@ -877,7 +877,7 @@ This section documents significant architectural decisions made during the devel
 - Breaking change for contracts relying on refunds
 - Improved network security
 
-**See:** [Full VM-002 documentation](adr/vm/VM-002-eip-3529-implementation.md)
+**See:** [Full VM-002 documentation](../adr/vm/VM-002-eip-3529-implementation.md)
 
 ---
 

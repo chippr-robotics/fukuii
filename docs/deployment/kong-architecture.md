@@ -554,4 +554,4 @@ See the [README.md](README.md#troubleshooting) for detailed troubleshooting step
 - [Cassandra Documentation](https://cassandra.apache.org/doc/)
 - [Prometheus Documentation](https://prometheus.io/docs/)
 - [Grafana Documentation](https://grafana.com/docs/)
-- [Fukuii Documentation](../../README.md)
+- [Fukuii Documentation](../index.md)

@@ -402,8 +402,8 @@ grep "Peer .* score" logs/fukuii.log | awk '{print $NF}' | sort -n | uniq -c
 ## References
 
 ### Related ADRs
-- [ADR-011: RLPx Protocol Deviations and Peer Bootstrap Challenge](011-rlpx-protocol-deviations-and-peer-bootstrap.md)
-- [ADR-012: Bootstrap Checkpoints for Improved Initial Sync](012-bootstrap-checkpoints.md)
+- [CON-001: RLPx Protocol Deviations and Peer Bootstrap Challenge](CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md)
+- [CON-002: Bootstrap Checkpoints for Improved Initial Sync](CON-002-bootstrap-checkpoints.md)
 
 ### External References
 - [Core-Geth Implementation](https://github.com/etclabscore/core-geth)

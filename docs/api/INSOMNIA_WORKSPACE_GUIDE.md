@@ -10,7 +10,7 @@ The `insomnia_workspace.json` file contains a complete collection of all 77 JSON
 
 ### Prerequisites
 - [Insomnia](https://insomnia.rest/) API client (version 2023.5.0 or later recommended)
-- Running Fukuii node (see [Quick Start Guide](../../.github/QUICKSTART.md))
+- Running Fukuii node (see [Getting Started](../getting-started/index.md))
 
 ### Import Steps
 
@@ -287,8 +287,8 @@ Error: authentication needed: password or unlock
 
 - [Fukuii RPC API Analysis](./INSOMNIA_RPC_ANALYSIS.md) - Detailed comparison with Ethereum execution-apis
 - [Ethereum JSON-RPC Specification](https://ethereum.github.io/execution-apis/api-documentation/)
-- [Fukuii Documentation](../README.md)
-- [Quick Start Guide](../../.github/QUICKSTART.md)
+- [Fukuii Documentation](../index.md)
+- [Getting Started Guide](../getting-started/index.md)
 
 ## Version History
 

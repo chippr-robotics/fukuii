@@ -18,8 +18,8 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 - **[KPI_MONITORING_GUIDE.md](KPI_MONITORING_GUIDE.md)** - Practical guide for monitoring and maintaining KPIs
 
 ### Programmatic KPI Access
-- **[KPIBaselines.scala](../../src/test/scala/com/chipprbots/ethereum/testing/KPIBaselines.scala)** - Scala object with baseline values
-- **[KPIBaselinesSpec.scala](../../src/test/scala/com/chipprbots/ethereum/testing/KPIBaselinesSpec.scala)** - Test suite validating baseline definitions
+- **KPIBaselines.scala** - Scala object with baseline values (`src/test/scala/com/chipprbots/ethereum/testing/KPIBaselines.scala`)
+- **KPIBaselinesSpec.scala** - Test suite validating baseline definitions (`src/test/scala/com/chipprbots/ethereum/testing/KPIBaselinesSpec.scala`)
 
 ## Test Tier Classification
 

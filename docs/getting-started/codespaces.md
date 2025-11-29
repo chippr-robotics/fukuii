@@ -90,6 +90,6 @@ git submodule update --init --recursive
 
 ## More Information
 
-- [Contributing Guide](contributing.md)
-- [Repository Structure](REPOSITORY_STRUCTURE.md)
+- [Contributing Guide](../development/contributing.md)
+- [Repository Structure](../development/REPOSITORY_STRUCTURE.md)
 - [GitHub Codespaces Documentation](https://docs.github.com/en/codespaces)
