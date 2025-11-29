@@ -22,7 +22,7 @@ Examples:
 
 ## Related Specifications
 
-- **[Ethereum Mainnet EVM Compatibility](../specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md)** - Comprehensive analysis of EIPs and VM opcodes required for full Ethereum mainnet execution client compatibility
+- **[Ethereum Mainnet EVM Compatibility](../../specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md)** - Comprehensive analysis of EIPs and VM opcodes required for full Ethereum mainnet execution client compatibility
 
 ## Creating a New VM ADR
 
