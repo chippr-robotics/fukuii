@@ -1,25 +1,29 @@
+# syntax=docker/dockerfile:1.4
 # Base image for Fukuii Docker builds
 # This provides a minimal Ubuntu base with essential tools
 
 FROM ubuntu:22.04
 
+# OCI labels for container metadata
 LABEL org.opencontainers.image.title="Fukuii Base Image"
 LABEL org.opencontainers.image.description="Base image for Fukuii Ethereum Client"
 LABEL org.opencontainers.image.vendor="Chippr Robotics LLC"
+LABEL org.opencontainers.image.source="https://github.com/chippr-robotics/fukuii"
+LABEL org.opencontainers.image.documentation="https://github.com/chippr-robotics/fukuii/blob/main/docs/deployment/docker.md"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install base system packages
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
     apt-get dist-upgrade -y && \
     apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
         locales \
-    && locale-gen en_US.UTF-8 && \
-    update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 && \
-    apt-get clean && \
-    rm -rf /var/cache/debconf/* /var/lib/apt/lists/* /var/log/* /tmp/* /var/tmp/*
+    && locale-gen en_US.UTF-8 \
+    && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 
 # Create non-root user
 RUN groupadd -r fukuii --gid=1000 && \

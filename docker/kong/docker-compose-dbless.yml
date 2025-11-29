@@ -1,5 +1,5 @@
-version: '3.8'
-
+# Docker Compose file for Kong API Gateway (DB-less) with Fukuii
+# Compose file format: https://docs.docker.com/compose/compose-file/
 # DB-less Kong setup - Simpler deployment without Cassandra
 # Uses only declarative configuration from kong.yml
 # Suitable for development and smaller deployments
