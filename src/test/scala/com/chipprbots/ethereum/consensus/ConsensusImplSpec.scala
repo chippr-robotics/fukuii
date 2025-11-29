@@ -26,7 +26,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecErr
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
+class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience with MockFactory {
   import ConsensusImplSpec._
   "Consensus" should "extend the current best chain" taggedAs(UnitTest, ConsensusTest) in new ConsensusSetup {
     val chainExtension = BlockHelpers.generateChain(3, initialBestBlock)
@@ -80,45 +80,43 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
     blockchainReader.getBestBlock() shouldBe Some(initialBestBlock)
   }
-}
 
-object ConsensusImplSpec {
-  val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)
-  val initialBestBlock = initialChain.last
+  // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
+  class ConsensusSetup extends EphemBlockchainTestSetup {
+    override lazy val blockExecution: BlockExecution = stub[BlockExecution]
+    
+    // Set up stub behavior
+    (blockExecution
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
+      .when(*, *, *)
+      .anyNumberOfTimes()
+      .onCall { (blocks, _, _) =>
+        val executedBlocks = blocks
+          .takeWhile(b => !failingBlockHash.contains(b.hash))
+          .map(b => BlockData(b, Nil, ChainWeight.zero))
+        executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
+        (
+          executedBlocks,
+          blocks.find(b => failingBlockHash.contains(b.hash)).map(_ => ValidationAfterExecError("test error"))
+        )
+      }
 
-  abstract class ConsensusSetup {
-    private val testSetup = new EphemBlockchainTestSetup with MockFactory {
-      override lazy val blockExecution: BlockExecution = stub[BlockExecution]
-      (blockExecution
-        .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-        .when(*, *, *)
-        .anyNumberOfTimes()
-        .onCall { (blocks, _, _) =>
-          val executedBlocks = blocks
-            .takeWhile(b => !failingBlockHash.contains(b.hash))
-            .map(b => BlockData(b, Nil, ChainWeight.zero))
-          executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
-          (
-            executedBlocks,
-            blocks.find(b => failingBlockHash.contains(b.hash)).map(_ => ValidationAfterExecError("test error"))
-          )
-        }
-    }
-
+    // Initialize chain
     initialChain.foldLeft(ChainWeight.zero) { (previousWeight, block) =>
       val weight = previousWeight.increase(block.header)
-      testSetup.blockchainWriter.save(block, Nil, weight, saveAsBestBlock = true)
+      blockchainWriter.save(block, Nil, weight, saveAsBestBlock = true)
       weight
     }
 
     private var failingBlockHash: Option[ByteString] = None
 
-    val consensus = testSetup.consensus
-    val blockchainReader = testSetup.blockchainReader
     implicit val runtime: IORuntime = IORuntime.global
-    implicit val blockchainConfig: BlockchainConfig = testSetup.blockchainConfig
 
     def setFailingBlock(block: Block): Unit = failingBlockHash = Some(block.hash)
-
   }
+}
+
+object ConsensusImplSpec {
+  val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)
+  val initialBestBlock = initialChain.last
 }

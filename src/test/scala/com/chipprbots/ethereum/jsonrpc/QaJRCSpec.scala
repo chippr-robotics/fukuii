@@ -244,8 +244,9 @@ class QaJRCSpec
     }
   }
 
-  trait TestSetup extends JRCMatchers with ByteGenerators with BlockchainConfigBuilder with ApisBuilder {
-    this: org.scalamock.scalatest.MockFactory =>
+  // SCALA 3 MIGRATION: Changed TestSetup from trait with self-type to class
+  // that receives mocks from the outer class via constructor-like pattern
+  class TestSetup extends JRCMatchers with ByteGenerators with BlockchainConfigBuilder with ApisBuilder {
     def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
     val appStateStorage: AppStateStorage = mock[AppStateStorage]

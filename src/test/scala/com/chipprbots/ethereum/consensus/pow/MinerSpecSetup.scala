@@ -14,6 +14,7 @@ import scala.concurrent.duration.FiniteDuration
 
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.handlers.CallHandler4
+import org.scalamock.handlers.CallHandler6
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -26,6 +27,7 @@ import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.consensus.pow.difficulty.EthashDifficultyCalculator
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthMiningService
 import com.chipprbots.ethereum.jsonrpc.EthMiningService.SubmitHashRateResponse
@@ -37,8 +39,27 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
+// SCALA 3 MIGRATION: Refactored to use abstract mock members pattern.
+// The test class (which extends MockFactory) provides the mock implementations.
+// This avoids the self-type constraint issue where inner classes cannot satisfy MockFactory.
 trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
-  this: org.scalamock.scalatest.MockFactory =>
+  // Abstract mock members - must be implemented by test class that has MockFactory
+  def mockBlockchainReader: BlockchainReader
+  def mockBlockchain: BlockchainImpl
+  def mockBlockCreator: PoWBlockCreator
+  def mockBlockGenerator: PoWBlockGenerator
+  def mockEthMiningService: EthMiningService
+  def mockEvmCodeStorage: EvmCodeStorage
+  def mockMptStorage: MptStorage
+  
+  // Concrete lazy vals that use the abstract mocks
+  lazy val blockchainReader: BlockchainReader = mockBlockchainReader
+  lazy val blockchain: BlockchainImpl = mockBlockchain
+  lazy val blockCreator: PoWBlockCreator = mockBlockCreator
+  lazy val blockGenerator: PoWBlockGenerator = mockBlockGenerator
+  lazy val ethMiningService: EthMiningService = mockEthMiningService
+  lazy val evmCodeStorage: EvmCodeStorage = mockEvmCodeStorage
+  
   implicit val classicSystem: ClassicSystem = ClassicSystem()
   implicit val runtime: IORuntime = IORuntime.global
   val parentActor: TestProbe = TestProbe()
@@ -48,21 +69,13 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
 
   val origin: Block = Block(Fixtures.Blocks.Genesis.header, Fixtures.Blocks.Genesis.body)
 
-  val blockchainReader: BlockchainReader = mock[BlockchainReader]
-  val blockchain: BlockchainImpl = mock[BlockchainImpl]
-  val blockCreator: PoWBlockCreator = mock[PoWBlockCreator]
-  val fakeWorld: InMemoryWorldStateProxy = createStubWorldStateProxy()
-  val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
-  val ethMiningService: EthMiningService = mock[EthMiningService]
-  val evmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
+  lazy val fakeWorld: InMemoryWorldStateProxy = createStubWorldStateProxy()
 
   private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
     // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
-    val stubEvmCodeStorage = mock[EvmCodeStorage]
-    val stubMptStorage = mock[com.chipprbots.ethereum.db.storage.MptStorage]
     InMemoryWorldStateProxy(
-      stubEvmCodeStorage,
-      stubMptStorage,
+      mockEvmCodeStorage,
+      mockMptStorage,
       _ => None,
       UInt256.Zero,
       ByteString.empty,
@@ -115,6 +128,14 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
     )
   }
 
+  // Abstract method for setting up block generation expectations
+  // Must be implemented by the test class with MockFactory context
+  def setBlockForMiningExpectation(
+      parentBlock: Block,
+      block: Block,
+      fakeWorld: InMemoryWorldStateProxy
+  ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState]
+
   protected def setBlockForMining(parentBlock: Block, transactions: Seq[SignedTransaction] = Seq(txToMine)): Block = {
     val parentHeader: BlockHeader = parentBlock.header
 
@@ -139,16 +160,7 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
       BlockBody(transactions, Nil)
     )
 
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, Nil, miningConfig.coinbase, Nil, None, *)
-      .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
+    setBlockForMiningExpectation(parentBlock, block, fakeWorld)
       .atLeastOnce()
 
     block
@@ -161,39 +173,43 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
     parentGas + gasLimitDifference - 1
   }
 
+  // Abstract method for block creator behavior expectations
+  def blockCreatorBehaviourExpectation(
+      parentBlock: Block,
+      withTransactions: Boolean,
+      resultBlock: Block,
+      fakeWorld: InMemoryWorldStateProxy
+  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]]
+
   protected def blockCreatorBehaviour(
       parentBlock: Block,
       withTransactions: Boolean,
       resultBlock: Block
   ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
-    (blockCreator
-      .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
-      .expects(parentBlock, withTransactions, *, *)
-      .returning(
-        IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
-      )
+    blockCreatorBehaviourExpectation(parentBlock, withTransactions, resultBlock, fakeWorld)
       .atLeastOnce()
+
+  // Abstract method for block creator behavior with initial world expectations  
+  def blockCreatorBehaviourExpectingInitialWorldExpectation(
+      parentBlock: Block,
+      withTransactions: Boolean,
+      resultBlock: Block,
+      fakeWorld: InMemoryWorldStateProxy
+  ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]]
 
   protected def blockCreatorBehaviourExpectingInitialWorld(
       parentBlock: Block,
       withTransactions: Boolean,
       resultBlock: Block
   ): CallHandler4[Block, Boolean, Option[InMemoryWorldStateProxy], BlockchainConfig, IO[PendingBlockAndState]] =
-    (blockCreator
-      .getBlockForMining(_: Block, _: Boolean, _: Option[InMemoryWorldStateProxy])(_: BlockchainConfig))
-      .expects(where { (parent, withTxs, _, _) =>
-        parent == parentBlock && withTxs == withTransactions
-      })
-      .returning(
-        IO.pure(PendingBlockAndState(PendingBlock(resultBlock, Nil), fakeWorld))
-      )
+    blockCreatorBehaviourExpectingInitialWorldExpectation(parentBlock, withTransactions, resultBlock, fakeWorld)
       .atLeastOnce()
 
+  // Abstract method for prepareMocks expectations
+  def setupMiningServiceExpectation(): Unit
+
   protected def prepareMocks(): Unit = {
-    (ethMiningService.submitHashRate _)
-      .expects(*)
-      .returns(IO.pure(Right(SubmitHashRateResponse(true))))
-      .atLeastOnce()
+    setupMiningServiceExpectation()
 
     ommersPool.setAutoPilot { (sender: ActorRef, _: Any) =>
       sender ! OmmersPool.Ommers(Nil)
