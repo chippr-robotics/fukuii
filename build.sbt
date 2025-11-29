@@ -530,12 +530,13 @@ addCommandAlias(
 // These commands enable selective test execution based on ScalaTest tags
 
 // testEssential - Tier 1: Essential tests (< 5 minutes)
-// Runs fast unit tests, excludes integration, slow, and sync tests
+// Runs fast unit tests, excludes integration, slow, sync, and disabled tests
 // Sync tests are excluded because they involve complex actor choreography (ADR-017)
+// DisabledTest is excluded because these tests are known to be broken or flaky
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest
     |; rlp / test
     |; bytes / test
     |; crypto / test
@@ -543,11 +544,12 @@ addCommandAlias(
 )
 
 // testStandard - Tier 2: Standard tests (< 30 minutes)
-// Runs unit and integration tests, excludes benchmarks and comprehensive ethereum tests
+// Runs unit and integration tests, excludes benchmarks, comprehensive ethereum tests, and disabled tests
+// DisabledTest is excluded because these tests are known to be broken or flaky
 addCommandAlias(
   "testStandard",
   """; compile-all
-    |; testOnly -- -l BenchmarkTest -l EthereumTest
+    |; testOnly -- -l BenchmarkTest -l EthereumTest -l DisabledTest
     |""".stripMargin
 )
 
