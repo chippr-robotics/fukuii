@@ -46,6 +46,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 - Milestone tracking and automatic closure
 
 **Quick Links:**
+- [🌐 Documentation Site](https://chippr-robotics.github.io/fukuii/) - Hosted documentation (GitHub Pages)
 - [📚 Documentation Index](docs/README.md) - Complete documentation guide
 - [Repository Structure](docs/development/REPOSITORY_STRUCTURE.md) - Understand the codebase layout
 - [Workflow Documentation](.github/workflows/README.md)
