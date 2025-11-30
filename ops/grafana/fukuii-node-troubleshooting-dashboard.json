@@ -78,7 +78,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_sync_block_number_gauge{instance=\"$node\"}",
+          "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Block",
           "refId": "A"
@@ -133,7 +133,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_block_pivotBlock_number_gauge{instance=\"$node\"}",
+          "expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Pivot",
           "refId": "A"
@@ -188,7 +188,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_totaltime_minutes_gauge{instance=\"$node\"}",
+          "expr": "app_fastsync_totaltime_minutes_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Minutes",
           "refId": "A"
@@ -243,7 +243,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_state_downloadedNodes_gauge{instance=\"$node\"}",
+          "expr": "app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Nodes",
           "refId": "A"
@@ -299,7 +299,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_sync_block_number_gauge{instance=\"$node\"}",
+          "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Block Number",
           "refId": "A"
@@ -407,19 +407,19 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "jvm_memory_bytes_used{instance=\"$node\", area=\"heap\"}",
+          "expr": "jvm_memory_bytes_used{instance=~\"$node\", area=\"heap\"}",
           "interval": "",
           "legendFormat": "Used",
           "refId": "A"
         },
         {
-          "expr": "jvm_memory_bytes_max{instance=\"$node\", area=\"heap\"}",
+          "expr": "jvm_memory_bytes_max{instance=~\"$node\", area=\"heap\"}",
           "interval": "",
           "legendFormat": "Max",
           "refId": "B"
         },
         {
-          "expr": "jvm_memory_bytes_committed{instance=\"$node\", area=\"heap\"}",
+          "expr": "jvm_memory_bytes_committed{instance=~\"$node\", area=\"heap\"}",
           "interval": "",
           "legendFormat": "Committed",
           "refId": "C"
@@ -513,7 +513,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(jvm_gc_collection_seconds_sum{instance=\"$node\"}[1m])",
+          "expr": "rate(jvm_gc_collection_seconds_sum{instance=~\"$node\"}[1m])",
           "interval": "",
           "legendFormat": "{{gc}}",
           "refId": "A"
@@ -607,7 +607,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(jvm_gc_collection_seconds_count{instance=\"$node\"}[1m])",
+          "expr": "rate(jvm_gc_collection_seconds_count{instance=~\"$node\"}[1m])",
           "interval": "",
           "legendFormat": "{{gc}}",
           "refId": "A"
@@ -701,19 +701,19 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "jvm_threads_current{instance=\"$node\"}",
+          "expr": "jvm_threads_current{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Current",
           "refId": "A"
         },
         {
-          "expr": "jvm_threads_peak{instance=\"$node\"}",
+          "expr": "jvm_threads_peak{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Peak",
           "refId": "B"
         },
         {
-          "expr": "jvm_threads_daemon{instance=\"$node\"}",
+          "expr": "jvm_threads_daemon{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Daemon",
           "refId": "C"
@@ -821,7 +821,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(app_json_rpc_methods_timer_seconds_sum{instance=\"$node\"}[$__rate_interval])/rate(app_json_rpc_methods_timer_seconds_count{instance=\"$node\"}[$__rate_interval])",
+          "expr": "rate(app_json_rpc_methods_timer_seconds_sum{instance=~\"$node\"}[$__rate_interval])/rate(app_json_rpc_methods_timer_seconds_count{instance=~\"$node\"}[$__rate_interval])",
           "interval": "",
           "legendFormat": "{{method}}",
           "refId": "A"
@@ -915,7 +915,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(app_json_rpc_methods_timer_seconds_count{instance=\"$node\"}[$__rate_interval])",
+          "expr": "rate(app_json_rpc_methods_timer_seconds_count{instance=~\"$node\"}[$__rate_interval])",
           "interval": "",
           "legendFormat": "{{method}}",
           "refId": "A"
@@ -1008,7 +1008,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_json_rpc_methods_success_counter_total{instance=\"$node\"}",
+          "expr": "app_json_rpc_methods_success_counter_total{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Success",
           "refId": "A"
@@ -1070,7 +1070,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_json_rpc_methods_error_counter_total{instance=\"$node\"}",
+          "expr": "app_json_rpc_methods_error_counter_total{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Errors",
           "refId": "A"
@@ -1132,7 +1132,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_json_rpc_methods_exception_counter_total{instance=\"$node\"}",
+          "expr": "app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Exceptions",
           "refId": "A"
@@ -1202,13 +1202,13 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_network_peers_incoming_handshaked_gauge{instance=\"$node\"}",
+          "expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Incoming",
           "refId": "A"
         },
         {
-          "expr": "app_network_peers_outgoing_handshaked_gauge{instance=\"$node\"}",
+          "expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Outgoing",
           "refId": "B"
@@ -1302,13 +1302,13 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_network_peers_pending_gauge{instance=\"$node\"}",
+          "expr": "app_network_peers_pending_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Pending",
           "refId": "A"
         },
         {
-          "expr": "app_network_discovery_foundPeers_gauge{instance=\"$node\"}",
+          "expr": "app_network_discovery_foundPeers_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Discovered",
           "refId": "B"
@@ -1402,7 +1402,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_network_peers_blacklisted_gauge{instance=\"$node\"}",
+          "expr": "app_network_peers_blacklisted_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Blacklisted",
           "refId": "A"
@@ -1496,13 +1496,13 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(app_network_messages_sent_counter_total{instance=\"$node\"}[$__rate_interval])",
+          "expr": "rate(app_network_messages_sent_counter_total{instance=~\"$node\"}[$__rate_interval])",
           "interval": "",
           "legendFormat": "Sent",
           "refId": "A"
         },
         {
-          "expr": "rate(app_network_messages_received_counter_total{instance=\"$node\"}[$__rate_interval])",
+          "expr": "rate(app_network_messages_received_counter_total{instance=~\"$node\"}[$__rate_interval])",
           "interval": "",
           "legendFormat": "Received",
           "refId": "B"
@@ -1610,13 +1610,13 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "process_open_fds{instance=\"$node\"}",
+          "expr": "process_open_fds{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Open",
           "refId": "A"
         },
         {
-          "expr": "process_max_fds{instance=\"$node\"}",
+          "expr": "process_max_fds{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Max",
           "refId": "B"
@@ -1710,7 +1710,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(process_cpu_seconds_total{instance=\"$node\"}[$__rate_interval])",
+          "expr": "rate(process_cpu_seconds_total{instance=~\"$node\"}[$__rate_interval])",
           "interval": "",
           "legendFormat": "CPU",
           "refId": "A"

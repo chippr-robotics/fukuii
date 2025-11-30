@@ -2811,7 +2811,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "(sum(increase(app_network_messages_received_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=\"$node\"}[$__range])) - sum(increase(app_network_peers_highSeverityOffense_counter_total{instance=\"$node\"}[$__range])) - sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=\"$node\"}[$__range])) / 2) / (sum(increase(app_network_messages_received_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=\"$node\"}[$__range])))",
+          "expr": "(sum(increase(app_network_messages_received_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=~\"$node\"}[$__range])) - sum(increase(app_network_peers_highSeverityOffense_counter_total{instance=~\"$node\"}[$__range])) - sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=~\"$node\"}[$__range])) / 2) / (sum(increase(app_network_messages_received_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=~\"$node\"}[$__range])))",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -2901,7 +2901,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "app_network_peers_blacklisted_gauge{instance=\"$node\"}",
+          "expr": "app_network_peers_blacklisted_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -4285,7 +4285,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_sync_block_minedBlocks_counter_total{instance=\"$node\"}[$__range]))) / (sum(increase(app_sync_block_minedBlocks_counter_total[$__range]))) * 100",
+              "expr": "(sum(increase(app_sync_block_minedBlocks_counter_total{instance=~\"$node\"}[$__range]))) / (sum(increase(app_sync_block_minedBlocks_counter_total[$__range]))) * 100",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4568,7 +4568,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "process_start_time_seconds{instance=\"$node\"}*1000",
+              "expr": "process_start_time_seconds{instance=~\"$node\"}*1000",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4658,7 +4658,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "process_start_time_seconds{instance=\"$node\"}*1000",
+              "expr": "process_start_time_seconds{instance=~\"$node\"}*1000",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4749,7 +4749,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "app_sync_block_number_gauge{instance=\"$node\"}",
+              "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4842,7 +4842,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=\"$node\"}",
+              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4934,7 +4934,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=\"$node\"}",
+              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -5025,7 +5025,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(app_sync_block_checkpoint_number_gauge{instance=\"$node\"})",
+              "expr": "(app_sync_block_checkpoint_number_gauge{instance=~\"$node\"})",
               "refId": "A"
             }
           ],
@@ -5125,7 +5125,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "increase(logback_appender_total_counter{instance=\"$node\"}[1m])",
+              "expr": "increase(logback_appender_total_counter{instance=~\"$node\"}[1m])",
               "interval": "",
               "legendFormat": "{{level}}",
               "refId": "A"
@@ -5252,7 +5252,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) / 2) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])))",
+              "expr": "(sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) / 2) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])))",
               "interval": "",
               "legendFormat": "apdex_rpc_responses",
               "refId": "A"
@@ -5345,7 +5345,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])))) * 100",
+              "expr": "(sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])))) * 100",
               "interval": "",
               "legendFormat": "rpc_error_responses",
               "refId": "A"
@@ -5438,7 +5438,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])))) * 100",
+              "expr": "(sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])))) * 100",
               "interval": "",
               "legendFormat": "rpc_fatal_errors_responses",
               "refId": "A"
@@ -5631,7 +5631,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_threads_state{instance=\"$node\"}",
+              "expr": "jvm_threads_state{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "{{state}}",
               "refId": "A"
@@ -5728,13 +5728,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_threads_current{instance=\"$node\"}",
+              "expr": "jvm_threads_current{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "current",
               "refId": "A"
             },
             {
-              "expr": "jvm_threads_daemon{instance=\"$node\"}",
+              "expr": "jvm_threads_daemon{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "daemon",
               "refId": "B"
@@ -5831,7 +5831,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_memory_bytes_used{instance=\"$node\"}",
+              "expr": "jvm_memory_bytes_used{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "{{area}} memory",
               "refId": "A"
@@ -5926,7 +5926,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_classes_loaded{instance=\"$node\"}",
+              "expr": "jvm_classes_loaded{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -6023,7 +6023,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_gc_collection_seconds_count{instance=\"$node\"}",
+              "expr": "jvm_gc_collection_seconds_count{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "{{gc}}",
               "refId": "A"
@@ -6120,7 +6120,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(jvm_gc_collection_seconds_sum{instance=\"$node\"}[1m])",
+              "expr": "rate(jvm_gc_collection_seconds_sum{instance=~\"$node\"}[1m])",
               "interval": "",
               "legendFormat": "{{gc}}",
               "refId": "A"
@@ -6230,13 +6230,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_open_fds{instance=\"$node\"}",
+              "expr": "process_open_fds{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "open",
               "refId": "A"
             },
             {
-              "expr": "process_max_fds{instance=\"$node\"}",
+              "expr": "process_max_fds{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "max",
               "refId": "B"
@@ -6539,7 +6539,7 @@
           ],
           "targets": [
             {
-              "expr": "sum(rate(pekko_system_active_actors_count{instance=\"$pekko_node\", system=\"$system\"}[$interval])) by (system)",
+              "expr": "sum(rate(pekko_system_active_actors_count{instance=~\"$pekko_node\", system=\"$system\"}[$interval])) by (system)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "Active Actors",
@@ -6547,7 +6547,7 @@
               "step": 10
             },
             {
-              "expr": "sum(irate(pekko_system_processed_messages_total{instance=\"$pekko_node\",tracked=\"true\", system=\"$system\"}[$interval])) by (system)",
+              "expr": "sum(irate(pekko_system_processed_messages_total{instance=~\"$pekko_node\",tracked=\"true\", system=\"$system\"}[$interval])) by (system)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "Processed Messages (tracked=true)",
@@ -6555,7 +6555,7 @@
               "step": 10
             },
             {
-              "expr": "sum(irate(pekko_system_processed_messages_total{instance=\"$pekko_node\",tracked=\"false\", system=\"$system\"}[$interval])) by (system)",
+              "expr": "sum(irate(pekko_system_processed_messages_total{instance=~\"$pekko_node\",tracked=\"false\", system=\"$system\"}[$interval])) by (system)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "Processed Messages (tracked=false)",
