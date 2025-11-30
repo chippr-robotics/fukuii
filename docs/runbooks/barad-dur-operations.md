@@ -542,10 +542,13 @@ docker-compose stop fukuii-primary
    # Update secondary first
    docker-compose up -d fukuii-secondary
    
-   # Wait for it to sync
-   # ...
+   # Wait 5-10 minutes and verify sync status
+   curl -X POST http://localhost:8548/ \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}'
+   # Expected: "result": false (synced) or sync progress details
    
-   # Update primary
+   # Update primary after secondary is synced
    docker-compose up -d fukuii-primary
    ```
 
