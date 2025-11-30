@@ -1,6 +1,6 @@
-# Kong API Gateway for Fukuii
+# Barad-dûr (Kong API Gateway) for Fukuii
 
-This directory contains a complete Kong API Gateway setup for managing Fukuii Ethereum Classic nodes with high availability, security, and monitoring capabilities.
+This directory contains a complete Kong API Gateway setup (named Barad-dûr, Sauron's Dark Tower) for managing Fukuii Ethereum Classic nodes with high availability, security, and monitoring capabilities.
 
 ## ⚠️ CRITICAL SECURITY NOTICE
 
@@ -11,19 +11,21 @@ Default credentials that MUST be changed:
 - API keys  
 - JWT secrets
 - Grafana admin password
+- PostgreSQL password
 
 See [Kong Security Guide](kong-security.md) for detailed instructions on securing your deployment.
 
 ## Overview
 
-The Kong setup provides:
+The Barad-dûr (Kong) setup provides:
 
 - **API Gateway**: Kong Gateway for routing and managing all traffic to Fukuii nodes
 - **High Availability**: Load balancing across multiple Fukuii instances with health checks
-- **Database**: Cassandra for Kong's configuration and state
+- **Database**: PostgreSQL for Kong's configuration and state (replaces deprecated Cassandra support)
 - **Security**: Basic Auth, JWT, rate limiting, and CORS support
 - **Monitoring**: Prometheus metrics collection and Grafana dashboards
 - **Multi-Network Support**: HD wallet hierarchy routing for Bitcoin, Ethereum, and Ethereum Classic
+- **Data Directory Bindings**: Configurable host directories for persistent data
 
 ## Architecture
 
@@ -69,10 +71,10 @@ The Kong setup provides:
   - `8444` - Admin API HTTPS
 - **Features**: Load balancing, authentication, rate limiting, monitoring
 
-### Cassandra Database
-- **Port**: `9042` (internal)
+### PostgreSQL Database
+- **Port**: `5432` (internal)
 - **Purpose**: Kong's configuration and state storage
-- **Replication**: SimpleStrategy with factor 1 (configurable for production)
+- **Note**: Replaces Cassandra which is no longer supported in Kong 3.x+
 
 ### Fukuii Nodes
 - **Primary Instance**:
@@ -109,8 +111,8 @@ The Kong setup provides:
 ### Start the Stack
 
 ```bash
-# Navigate to the Kong directory
-cd docker/kong
+# Navigate to the Barad-dûr directory
+cd docker/barad-dur
 
 # Start all services
 docker-compose up -d
@@ -499,14 +501,14 @@ curl -X POST http://localhost:9090/-/reload
 
 ## Backup and Restore
 
-### Backup Cassandra Data
+### Backup PostgreSQL Data
 
 ```bash
 # Create backup
-docker exec fukuii-cassandra nodetool snapshot fukuii-backup
+docker exec fukuii-postgres pg_dump -U kong kong > kong-backup.sql
 
-# Export backup
-docker cp fukuii-cassandra:/var/lib/cassandra/data ./cassandra-backup
+# Or use compressed backup
+docker exec fukuii-postgres pg_dump -U kong kong | gzip > kong-backup.sql.gz
 ```
 
 ### Backup Fukuii Data
@@ -539,10 +541,10 @@ docker-compose up -d
 
 ### Kong Not Starting
 
-1. Check Cassandra is healthy:
+1. Check PostgreSQL is healthy:
 ```bash
-docker-compose ps cassandra
-docker-compose logs cassandra
+docker-compose ps postgres
+docker-compose logs postgres
 ```
 
 2. Run migrations manually:
@@ -618,7 +620,7 @@ Before deploying to production:
 - [ ] Configure SSL/TLS certificates for HTTPS
 - [ ] Set up proper CORS origins (not `"*"`)
 - [ ] Enable IP restriction if needed
-- [ ] Configure Cassandra replication for multi-node setup
+- [ ] Configure PostgreSQL backup strategy
 - [ ] Set up monitoring alerts in Prometheus/Alertmanager
 - [ ] Configure log aggregation and retention
 - [ ] Set up automated backups
@@ -637,15 +639,10 @@ Before deploying to production:
 
 ### Using Kong in DB-less Mode
 
-For simpler deployments, Kong can run without Cassandra using declarative configuration only:
+For simpler deployments, Kong can run without PostgreSQL using declarative configuration only:
 
-1. Remove Cassandra and kong-migrations services from `docker-compose.yml`
-2. Update Kong environment:
-```yaml
-environment:
-  - KONG_DATABASE=off
-  - KONG_DECLARATIVE_CONFIG=/etc/kong/kong.yml
-```
+1. Use `docker-compose-dbless.yml` instead of the main compose file
+2. This mode uses only the declarative configuration from `kong.yml`
 
 ### Custom Plugins
 
@@ -672,8 +669,8 @@ environment:
 
 For multi-region HADR:
 
-1. Deploy Kong + Fukuii stack in each region
-2. Use Cassandra multi-datacenter replication
+1. Deploy Barad-dûr (Kong) + Fukuii stack in each region
+2. Use PostgreSQL replication or external database service
 3. Configure DNS-based routing or global load balancer
 4. Set up cross-region monitoring
 

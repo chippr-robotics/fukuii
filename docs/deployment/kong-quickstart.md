@@ -1,6 +1,6 @@
-# Kong API Gateway - Quick Start Guide
+# Barad-dûr (Kong API Gateway) - Quick Start Guide
 
-This guide will get you up and running with Kong API Gateway for Fukuii in under 5 minutes.
+This guide will get you up and running with Barad-dûr (Kong API Gateway) for Fukuii in under 5 minutes.
 
 ## ⚠️ SECURITY WARNING
 
@@ -11,6 +11,7 @@ The default configuration includes example credentials for demonstration purpose
 - Default API keys: `admin_api_key_change_me`, `dev_api_key_change_me`
 - Default JWT secret: `your_jwt_secret_change_me`
 - Default Grafana password: `fukuii_grafana_admin`
+- Default PostgreSQL password: `kong`
 
 **Before production deployment:**
 1. Copy `.env.example` to `.env`
@@ -28,7 +29,7 @@ The default configuration includes example credentials for demonstration purpose
 ## Step 1: Clone and Navigate
 
 ```bash
-cd docker/kong
+cd docker/barad-dur
 ```
 
 ## Step 2: Run Setup Script
@@ -39,7 +40,7 @@ cd docker/kong
 
 The setup script will:
 - Check prerequisites
-- Create necessary directories
+- Create necessary directories (including data directories for container bindings)
 - Copy configuration templates
 - Optionally start the stack
 
@@ -247,13 +248,13 @@ curl -X POST http://localhost:8000/ethereum \
 
 ### Kong Won't Start
 
-1. Check if Cassandra is healthy:
+1. Check if PostgreSQL is healthy:
 ```bash
-docker-compose ps cassandra
-docker-compose logs cassandra
+docker-compose ps postgres
+docker-compose logs postgres
 ```
 
-2. Wait for Cassandra to be fully ready (can take 2 minutes)
+2. Wait for PostgreSQL to be fully ready (can take 30 seconds)
 
 3. Run migrations manually:
 ```bash
@@ -324,13 +325,16 @@ curl -X POST http://localhost:8000/ \
 To completely remove all services and data:
 
 ```bash
-# Stop and remove containers, networks, volumes
-docker-compose down -v
+# Stop and remove containers, networks
+docker-compose down
+
+# Remove data directories (optional)
+rm -rf data/
 
 # Remove images (optional)
-docker-compose down --rmi all -v
+docker-compose down --rmi all
 
-# Remove Kong directory (optional)
+# Remove Barad-dûr directory (optional)
 cd ../..
-rm -rf docker/kong
+rm -rf docker/barad-dur
 ```

@@ -2,7 +2,7 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    monitor: 'fukuii-kong-monitor'
+    monitor: 'fukuii-barad-dur-monitor'
     cluster: 'fukuii-production'
 
 # Alerting configuration (optional - can be configured later)

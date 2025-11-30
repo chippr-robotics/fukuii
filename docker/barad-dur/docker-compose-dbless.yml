@@ -1,13 +1,9 @@
-# Docker Compose file for Kong API Gateway (DB-less) with Fukuii
+# Barad-dûr: Docker Compose file for Kong API Gateway (DB-less) with Fukuii
+# Named after Sauron's Dark Tower - the fortified gateway to Fukuii
 # Compose file format: https://docs.docker.com/compose/compose-file/
-# DB-less Kong setup - Simpler deployment without Cassandra
+# DB-less Kong setup - Simpler deployment without a database
 # Uses only declarative configuration from kong.yml
 # Suitable for development and smaller deployments
-
-volumes:
-  fukuii-data:
-  prometheus-data:
-  grafana-data:
 
 networks:
   fukuii-network:
@@ -16,36 +12,36 @@ networks:
 services:
   # Kong API Gateway (DB-less mode)
   kong:
-    image: kong:3.5
+    image: kong:3.9
     container_name: fukuii-kong
     restart: unless-stopped
     environment:
       # DB-less configuration
-      - KONG_DATABASE=off
-      - KONG_DECLARATIVE_CONFIG=/etc/kong/kong.yml
+      KONG_DATABASE: off
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
       
       # Proxy configuration
-      - KONG_PROXY_ACCESS_LOG=/dev/stdout
-      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
-      - KONG_PROXY_ERROR_LOG=/dev/stderr
-      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
       
       # Admin API configuration
-      - KONG_ADMIN_LISTEN=0.0.0.0:8001, 0.0.0.0:8444 ssl
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl
       
       # Proxy listeners
-      - KONG_PROXY_LISTEN=0.0.0.0:8000, 0.0.0.0:8443 ssl
+      KONG_PROXY_LISTEN: 0.0.0.0:8000, 0.0.0.0:8443 ssl
       
       # Plugins
-      - KONG_PLUGINS=bundled,prometheus
+      KONG_PLUGINS: bundled,prometheus
       
       # Logging
-      - KONG_LOG_LEVEL=info
+      KONG_LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "8000:8000"   # Kong proxy HTTP
-      - "8443:8443"   # Kong proxy HTTPS
-      - "8001:8001"   # Kong Admin API HTTP
-      - "8444:8444"   # Kong Admin API HTTPS
+      - "${KONG_PROXY_HTTP_PORT:-8000}:8000"   # Kong proxy HTTP
+      - "${KONG_PROXY_HTTPS_PORT:-8443}:8443" # Kong proxy HTTPS
+      - "${KONG_ADMIN_HTTP_PORT:-8001}:8001"   # Kong Admin API HTTP
+      - "${KONG_ADMIN_HTTPS_PORT:-8444}:8444" # Kong Admin API HTTPS
     volumes:
       - ./kong.yml:/etc/kong/kong.yml:ro
     networks:
@@ -63,15 +59,15 @@ services:
     container_name: fukuii-primary
     restart: unless-stopped
     ports:
-      - "8545:8545"   # JSON-RPC HTTP (internal)
-      - "8546:8546"   # JSON-RPC WebSocket (internal)
-      - "30303:30303" # P2P
-      - "9095:9095"   # Metrics
+      - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"     # JSON-RPC HTTP (internal)
+      - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"       # JSON-RPC WebSocket (internal)
+      - "${FUKUII_PRIMARY_P2P_PORT:-30303}:30303"   # P2P
+      - "${FUKUII_PRIMARY_METRICS_PORT:-9095}:9095" # Metrics
     volumes:
-      - fukuii-data:/app/data
+      - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
       - ./fukuii-conf:/app/conf:ro
     environment:
-      - JAVA_OPTS=-Xmx4g -Xms4g
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
     networks:
       - fukuii-network
     healthcheck:
@@ -87,14 +83,15 @@ services:
     container_name: fukuii-secondary
     restart: unless-stopped
     ports:
-      - "8547:8545"   # JSON-RPC HTTP (internal)
-      - "8548:8546"   # JSON-RPC WebSocket (internal)
-      - "30304:30303" # P2P
-      - "9096:9095"   # Metrics
+      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"     # JSON-RPC HTTP (internal)
+      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"       # JSON-RPC WebSocket (internal)
+      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30303"   # P2P
+      - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095" # Metrics
     volumes:
+      - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
       - ./fukuii-conf:/app/conf:ro
     environment:
-      - JAVA_OPTS=-Xmx4g -Xms4g
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
     networks:
       - fukuii-network
     healthcheck:
@@ -117,10 +114,10 @@ services:
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - ${PROMETHEUS_DATA_DIR:-./data/prometheus}:/prometheus
     networks:
       - fukuii-network
     depends_on:
@@ -139,13 +136,13 @@ services:
     container_name: fukuii-grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-fukuii_grafana_admin}
       - GF_INSTALL_PLUGINS=
     volumes:
-      - grafana-data:/var/lib/grafana
+      - ${GRAFANA_DATA_DIR:-./data/grafana}:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:

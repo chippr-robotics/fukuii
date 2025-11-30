@@ -31,16 +31,16 @@ tmp/
 *.dump
 *.dmp
 
-# Cassandra data (managed by Docker volumes)
-cassandra-data/
+# Data directories (managed by host bindings)
+data/
 
-# Prometheus data (managed by Docker volumes)
+# Prometheus data (managed by host bindings)
 prometheus-data/
 
-# Grafana data (managed by Docker volumes)
+# Grafana data (managed by host bindings)
 grafana-data/
 
-# Fukuii data (managed by Docker volumes)
+# Fukuii data (managed by host bindings)
 fukuii-data/
 
 # IDE files

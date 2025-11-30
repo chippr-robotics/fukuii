@@ -8,11 +8,11 @@ This directory contains documentation for deploying and running Fukuii nodes usi
 - **[Docker Guide](docker.md)** - Comprehensive Docker deployment guide
 - **[Test Network](test-network.md)** - Setting up a test network with Docker Compose
 
-### Kong API Gateway
-- **[Kong Guide](kong.md)** - Kong API gateway integration
-- **[Kong Architecture](kong-architecture.md)** - Kong architecture and design
-- **[Kong Quickstart](kong-quickstart.md)** - Quick start guide for Kong
-- **[Kong Security](kong-security.md)** - Security considerations for Kong
+### Barad-dûr (Kong API Gateway)
+- **[Kong Guide](kong.md)** - Barad-dûr (Kong) API gateway integration
+- **[Kong Architecture](kong-architecture.md)** - Barad-dûr architecture and design
+- **[Kong Quickstart](kong-quickstart.md)** - Quick start guide for Barad-dûr
+- **[Kong Security](kong-security.md)** - Security considerations for Barad-dûr
 
 ### Client Comparisons
 - **[Besu Comparison](besu-comparison.md)** - Besu client setup for comparison testing

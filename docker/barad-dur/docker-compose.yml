@@ -1,99 +1,93 @@
-# Docker Compose file for Kong API Gateway with Fukuii
+# Barad-dûr: Docker Compose file for Kong API Gateway with Fukuii
+# Named after Sauron's Dark Tower - the fortified gateway to Fukuii
 # Compose file format: https://docs.docker.com/compose/compose-file/
-
-volumes:
-  fukuii-data:
-  cassandra-data:
-  prometheus-data:
-  grafana-data:
 
 networks:
   fukuii-network:
     driver: bridge
 
 services:
-  # Cassandra database for Kong
-  cassandra:
-    image: cassandra:4.1
-    container_name: fukuii-cassandra
+  # PostgreSQL database for Kong (replaces deprecated Cassandra support)
+  postgres:
+    image: postgres:16-alpine
+    container_name: fukuii-postgres
     restart: unless-stopped
     environment:
-      - CASSANDRA_CLUSTER_NAME=fukuii-kong-cluster
-      - CASSANDRA_DC=dc1
-      - CASSANDRA_RACK=rack1
-      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      POSTGRES_USER: ${POSTGRES_USER:-kong}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kong}
+      POSTGRES_DB: ${POSTGRES_DB:-kong}
     volumes:
-      - cassandra-data:/var/lib/cassandra
+      - ${POSTGRES_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
     networks:
       - fukuii-network
     healthcheck:
-      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kong}"]
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 120s
+      start_period: 30s
 
   # Kong database migration
   kong-migrations:
-    image: kong:3.5
+    image: kong:3.9
     container_name: fukuii-kong-migrations
     command: kong migrations bootstrap
     depends_on:
-      cassandra:
+      postgres:
         condition: service_healthy
     environment:
-      - KONG_DATABASE=cassandra
-      - KONG_CASSANDRA_CONTACT_POINTS=cassandra
-      - KONG_CASSANDRA_KEYSPACE=kong
-      - KONG_CASSANDRA_REPL_STRATEGY=SimpleStrategy
-      - KONG_CASSANDRA_REPL_FACTOR=1
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: ${POSTGRES_USER:-kong}
+      KONG_PG_PASSWORD: ${POSTGRES_PASSWORD:-kong}
+      KONG_PG_DATABASE: ${POSTGRES_DB:-kong}
     networks:
       - fukuii-network
     restart: on-failure
 
   # Kong API Gateway
   kong:
-    image: kong:3.5
+    image: kong:3.9
     container_name: fukuii-kong
     restart: unless-stopped
     depends_on:
-      cassandra:
+      postgres:
         condition: service_healthy
       kong-migrations:
         condition: service_completed_successfully
     environment:
-      # Database configuration
-      - KONG_DATABASE=cassandra
-      - KONG_CASSANDRA_CONTACT_POINTS=cassandra
-      - KONG_CASSANDRA_KEYSPACE=kong
-      - KONG_CASSANDRA_REPL_STRATEGY=SimpleStrategy
-      - KONG_CASSANDRA_REPL_FACTOR=1
+      # Database configuration (PostgreSQL)
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: ${POSTGRES_USER:-kong}
+      KONG_PG_PASSWORD: ${POSTGRES_PASSWORD:-kong}
+      KONG_PG_DATABASE: ${POSTGRES_DB:-kong}
       
       # Proxy configuration
-      - KONG_PROXY_ACCESS_LOG=/dev/stdout
-      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
-      - KONG_PROXY_ERROR_LOG=/dev/stderr
-      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
       
       # Admin API configuration
-      - KONG_ADMIN_LISTEN=0.0.0.0:8001, 0.0.0.0:8444 ssl
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl
       
       # Proxy listeners
-      - KONG_PROXY_LISTEN=0.0.0.0:8000, 0.0.0.0:8443 ssl
+      KONG_PROXY_LISTEN: 0.0.0.0:8000, 0.0.0.0:8443 ssl
       
       # Declarative configuration
-      - KONG_DECLARATIVE_CONFIG=/etc/kong/kong.yml
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
       
       # Plugins
-      - KONG_PLUGINS=bundled,prometheus
+      KONG_PLUGINS: bundled,prometheus
       
       # Logging
-      - KONG_LOG_LEVEL=info
+      KONG_LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "8000:8000"   # Kong proxy HTTP
-      - "8443:8443"   # Kong proxy HTTPS
-      - "8001:8001"   # Kong Admin API HTTP
-      - "8444:8444"   # Kong Admin API HTTPS
+      - "${KONG_PROXY_HTTP_PORT:-8000}:8000"   # Kong proxy HTTP
+      - "${KONG_PROXY_HTTPS_PORT:-8443}:8443" # Kong proxy HTTPS
+      - "${KONG_ADMIN_HTTP_PORT:-8001}:8001"   # Kong Admin API HTTP
+      - "${KONG_ADMIN_HTTPS_PORT:-8444}:8444" # Kong Admin API HTTPS
     volumes:
       - ./kong.yml:/etc/kong/kong.yml:ro
     networks:
@@ -111,15 +105,15 @@ services:
     container_name: fukuii-primary
     restart: unless-stopped
     ports:
-      - "8545:8545"   # JSON-RPC HTTP (internal)
-      - "8546:8546"   # JSON-RPC WebSocket (internal)
-      - "30303:30303" # P2P
-      - "9095:9095"   # Metrics
+      - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"     # JSON-RPC HTTP (internal)
+      - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"       # JSON-RPC WebSocket (internal)
+      - "${FUKUII_PRIMARY_P2P_PORT:-30303}:30303"   # P2P
+      - "${FUKUII_PRIMARY_METRICS_PORT:-9095}:9095" # Metrics
     volumes:
-      - fukuii-data:/app/data
+      - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
       - ./fukuii-conf:/app/conf:ro
     environment:
-      - JAVA_OPTS=-Xmx4g -Xms4g
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
     networks:
       - fukuii-network
     healthcheck:
@@ -135,14 +129,15 @@ services:
     container_name: fukuii-secondary
     restart: unless-stopped
     ports:
-      - "8547:8545"   # JSON-RPC HTTP (internal)
-      - "8548:8546"   # JSON-RPC WebSocket (internal)
-      - "30304:30303" # P2P
-      - "9096:9095"   # Metrics
+      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"     # JSON-RPC HTTP (internal)
+      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"       # JSON-RPC WebSocket (internal)
+      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30303"   # P2P
+      - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095" # Metrics
     volumes:
+      - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
       - ./fukuii-conf:/app/conf:ro
     environment:
-      - JAVA_OPTS=-Xmx4g -Xms4g
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
     networks:
       - fukuii-network
     healthcheck:
@@ -165,10 +160,10 @@ services:
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - ${PROMETHEUS_DATA_DIR:-./data/prometheus}:/prometheus
     networks:
       - fukuii-network
     depends_on:
@@ -187,13 +182,13 @@ services:
     container_name: fukuii-grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-fukuii_grafana_admin}
       - GF_INSTALL_PLUGINS=
     volumes:
-      - grafana-data:/var/lib/grafana
+      - ${GRAFANA_DATA_DIR:-./data/grafana}:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:

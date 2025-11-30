@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# Fukuii Kong API Gateway Setup Script
-# This script helps initialize and configure the Kong API Gateway for Fukuii
+# Barad-dûr (Kong API Gateway) Setup Script for Fukuii
+# Named after Sauron's Dark Tower - the fortified gateway to Fukuii
+# This script helps initialize and configure the Kong API Gateway
 
 set -e
 
@@ -15,7 +16,8 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Fukuii Kong API Gateway Setup${NC}"
+echo -e "${GREEN}Barad-dûr (Kong API Gateway) Setup${NC}"
+echo -e "${GREEN}Fortified Gateway to Fukuii${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 
@@ -50,13 +52,18 @@ else
     echo ""
 fi
 
-# Create required directories
+# Create required directories (using data directory bindings from .env)
 echo -e "${YELLOW}Creating required directories...${NC}"
 mkdir -p "$SCRIPT_DIR/fukuii-conf"
 mkdir -p "$SCRIPT_DIR/prometheus"
 mkdir -p "$SCRIPT_DIR/grafana/provisioning/datasources"
 mkdir -p "$SCRIPT_DIR/grafana/provisioning/dashboards"
 mkdir -p "$SCRIPT_DIR/grafana/dashboards"
+mkdir -p "$SCRIPT_DIR/data/fukuii"
+mkdir -p "$SCRIPT_DIR/data/fukuii-secondary"
+mkdir -p "$SCRIPT_DIR/data/postgres"
+mkdir -p "$SCRIPT_DIR/data/prometheus"
+mkdir -p "$SCRIPT_DIR/data/grafana"
 echo -e "${GREEN}✓ Directories created${NC}"
 echo ""
 
@@ -66,6 +73,7 @@ if grep -q "change_me_in_production" "$SCRIPT_DIR/.env" 2>/dev/null; then
     echo -e "${YELLOW}⚠ Warning: Default passwords detected in .env file${NC}"
     echo -e "${YELLOW}  Please update the following in .env:${NC}"
     echo -e "${YELLOW}  - KONG_ADMIN_PASSWORD${NC}"
+    echo -e "${YELLOW}  - POSTGRES_PASSWORD${NC}"
     echo -e "${YELLOW}  - BASIC_AUTH_ADMIN_PASSWORD${NC}"
     echo -e "${YELLOW}  - BASIC_AUTH_DEV_PASSWORD${NC}"
     echo -e "${YELLOW}  - API_KEY_ADMIN${NC}"
@@ -87,13 +95,14 @@ echo -e "  Docker Compose file: ${SCRIPT_DIR}/docker-compose.yml"
 echo -e "  Kong config: ${SCRIPT_DIR}/kong.yml"
 echo -e "  Prometheus config: ${SCRIPT_DIR}/prometheus/prometheus.yml"
 echo -e "  Fukuii config: ${SCRIPT_DIR}/fukuii-conf/app.conf"
+echo -e "  Data directories: ${SCRIPT_DIR}/data/"
 echo ""
 
 # Ask user if they want to start the stack
-read -p "Do you want to start the Kong stack now? (y/n) " -n 1 -r
+read -p "Do you want to start the Barad-dûr stack now? (y/n) " -n 1 -r
 echo ""
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}Starting Kong API Gateway stack...${NC}"
+    echo -e "${YELLOW}Starting Barad-dûr (Kong API Gateway) stack...${NC}"
     cd "$SCRIPT_DIR"
     
     # Pull images first
