@@ -2811,7 +2811,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "(sum(increase(app_network_messages_received_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=\"$node\"}[$__range])) - sum(increase(app_network_peers_highSeverityOffense_counter_total{instance=\"$node\"}[$__range])) - sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=\"$node\"}[$__range])) / 2) / (sum(increase(app_network_messages_received_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=\"$node\"}[$__range])))",
+          "expr": "(sum(increase(app_network_messages_received_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=~\"$node\"}[$__range])) - sum(increase(app_network_peers_highSeverityOffense_counter_total{instance=~\"$node\"}[$__range])) - sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_network_peers_lowSeverityOffense_counter_total{instance=~\"$node\"}[$__range])) / 2) / (sum(increase(app_network_messages_received_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_network_messages_sent_counter_total{instance=~\"$node\"}[$__range])))",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -2901,7 +2901,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "app_network_peers_blacklisted_gauge{instance=\"$node\"}",
+          "expr": "app_network_peers_blacklisted_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -4285,7 +4285,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_sync_block_minedBlocks_counter_total{instance=\"$node\"}[$__range]))) / (sum(increase(app_sync_block_minedBlocks_counter_total[$__range]))) * 100",
+              "expr": "(sum(increase(app_sync_block_minedBlocks_counter_total{instance=~\"$node\"}[$__range]))) / (sum(increase(app_sync_block_minedBlocks_counter_total[$__range]))) * 100",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4568,7 +4568,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "process_start_time_seconds{instance=\"$node\"}*1000",
+              "expr": "process_start_time_seconds{instance=~\"$node\"}*1000",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4658,7 +4658,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "process_start_time_seconds{instance=\"$node\"}*1000",
+              "expr": "process_start_time_seconds{instance=~\"$node\"}*1000",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4749,7 +4749,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "app_sync_block_number_gauge{instance=\"$node\"}",
+              "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4842,7 +4842,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=\"$node\"}",
+              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -4934,7 +4934,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=\"$node\"}",
+              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -5025,7 +5025,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(app_sync_block_checkpoint_number_gauge{instance=\"$node\"})",
+              "expr": "(app_sync_block_checkpoint_number_gauge{instance=~\"$node\"})",
               "refId": "A"
             }
           ],
@@ -5125,7 +5125,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "increase(logback_appender_total_counter{instance=\"$node\"}[1m])",
+              "expr": "increase(logback_appender_total_counter{instance=~\"$node\"}[1m])",
               "interval": "",
               "legendFormat": "{{level}}",
               "refId": "A"
@@ -5252,7 +5252,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) / 2) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])))",
+              "expr": "(sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) / 2) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])))",
               "interval": "",
               "legendFormat": "apdex_rpc_responses",
               "refId": "A"
@@ -5345,7 +5345,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])))) * 100",
+              "expr": "(sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])))) * 100",
               "interval": "",
               "legendFormat": "rpc_error_responses",
               "refId": "A"
@@ -5438,7 +5438,7 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "(sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=\"$node\"}[$__range])))) * 100",
+              "expr": "(sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])) / (sum(increase(app_json_rpc_methods_success_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_error_counter_total{instance=~\"$node\"}[$__range])) + sum(increase(app_json_rpc_methods_exception_counter_total{instance=~\"$node\"}[$__range])))) * 100",
               "interval": "",
               "legendFormat": "rpc_fatal_errors_responses",
               "refId": "A"
@@ -5631,7 +5631,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_threads_state{instance=\"$node\"}",
+              "expr": "jvm_threads_state{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "{{state}}",
               "refId": "A"
@@ -5728,13 +5728,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_threads_current{instance=\"$node\"}",
+              "expr": "jvm_threads_current{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "current",
               "refId": "A"
             },
             {
-              "expr": "jvm_threads_daemon{instance=\"$node\"}",
+              "expr": "jvm_threads_daemon{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "daemon",
               "refId": "B"
@@ -5831,7 +5831,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_memory_bytes_used{instance=\"$node\"}",
+              "expr": "jvm_memory_bytes_used{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "{{area}} memory",
               "refId": "A"
@@ -5926,7 +5926,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_classes_loaded{instance=\"$node\"}",
+              "expr": "jvm_classes_loaded{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "",
               "refId": "A"
@@ -6023,7 +6023,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "jvm_gc_collection_seconds_count{instance=\"$node\"}",
+              "expr": "jvm_gc_collection_seconds_count{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "{{gc}}",
               "refId": "A"
@@ -6120,7 +6120,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(jvm_gc_collection_seconds_sum{instance=\"$node\"}[1m])",
+              "expr": "rate(jvm_gc_collection_seconds_sum{instance=~\"$node\"}[1m])",
               "interval": "",
               "legendFormat": "{{gc}}",
               "refId": "A"
@@ -6230,13 +6230,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_open_fds{instance=\"$node\"}",
+              "expr": "process_open_fds{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "open",
               "refId": "A"
             },
             {
-              "expr": "process_max_fds{instance=\"$node\"}",
+              "expr": "process_max_fds{instance=~\"$node\"}",
               "interval": "",
               "legendFormat": "max",
               "refId": "B"
@@ -6375,12 +6375,12 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": " sum(rate(akka_system_unhandled_messages_total{instance=~\"$akka_node\", system=~\"$system\"}[$interval])) by (system)",
+              "expr": " sum(rate(pekko_system_unhandled_messages_total{instance=~\"$pekko_node\", system=~\"$system\"}[$interval])) by (system)",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "",
-              "metric": "akka_system_processed_messages_total",
+              "metric": "pekko_system_processed_messages_total",
               "refId": "A",
               "step": 40
             }
@@ -6467,11 +6467,11 @@
           "tableColumn": "",
           "targets": [
             {
-              "expr": "sum(rate(akka_system_dead_letters_total{instance=~\"$akka_node\", system=~\"$system\"}[$interval])) by (system)",
+              "expr": "sum(rate(pekko_system_dead_letters_total{instance=~\"$pekko_node\", system=~\"$system\"}[$interval])) by (system)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "",
-              "metric": "akka_system_dead_letters_total",
+              "metric": "pekko_system_dead_letters_total",
               "refId": "A",
               "step": 40
             }
@@ -6539,7 +6539,7 @@
           ],
           "targets": [
             {
-              "expr": "sum(rate(akka_system_active_actors_count{instance=\"$akka_node\", system=\"$system\"}[$interval])) by (system)",
+              "expr": "sum(rate(pekko_system_active_actors_count{instance=~\"$pekko_node\", system=\"$system\"}[$interval])) by (system)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "Active Actors",
@@ -6547,7 +6547,7 @@
               "step": 10
             },
             {
-              "expr": "sum(irate(akka_system_processed_messages_total{instance=\"$akka_node\",tracked=\"true\", system=\"$system\"}[$interval])) by (system)",
+              "expr": "sum(irate(pekko_system_processed_messages_total{instance=~\"$pekko_node\",tracked=\"true\", system=\"$system\"}[$interval])) by (system)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "Processed Messages (tracked=true)",
@@ -6555,7 +6555,7 @@
               "step": 10
             },
             {
-              "expr": "sum(irate(akka_system_processed_messages_total{instance=\"$akka_node\",tracked=\"false\", system=\"$system\"}[$interval])) by (system)",
+              "expr": "sum(irate(pekko_system_processed_messages_total{instance=~\"$pekko_node\",tracked=\"false\", system=\"$system\"}[$interval])) by (system)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "Processed Messages (tracked=false)",
@@ -6618,7 +6618,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "akka_group_errors_total",
+              "expr": "pekko_group_errors_total",
               "interval": "",
               "legendFormat": "{{group}}",
               "refId": "A"
@@ -6666,7 +6666,7 @@
           }
         }
       ],
-      "title": "Akka System Metrics",
+      "title": "Pekko System Metrics",
       "type": "row"
     },
     {
@@ -6737,7 +6737,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile($percentile, sum(rate(akka_group_processing_time_seconds_bucket{instance=~\"$akka_node\"}[$interval])) by (le, group)) * 1000",
+              "expr": "histogram_quantile($percentile, sum(rate(pekko_group_processing_time_seconds_bucket{instance=~\"$pekko_node\"}[$interval])) by (le, group)) * 1000",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -6844,7 +6844,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile($percentile, sum(rate(akka_group_time_in_mailbox_seconds_bucket{instance=~\"$akka_node\"}[$interval])) by (le, group))",
+              "expr": "histogram_quantile($percentile, sum(rate(pekko_group_time_in_mailbox_seconds_bucket{instance=~\"$pekko_node\"}[$interval])) by (le, group))",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "{{group}}",
@@ -6951,7 +6951,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(akka_group_mailbox_size_sum{instance=~\"$akka_node\"}[$interval]) / rate(akka_group_mailbox_size_count{instance=~\"$akka_node\"}[$interval])",
+              "expr": "rate(pekko_group_mailbox_size_sum{instance=~\"$pekko_node\"}[$interval]) / rate(pekko_group_mailbox_size_count{instance=~\"$pekko_node\"}[$interval])",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
@@ -6960,7 +6960,7 @@
               "step": 10
             },
             {
-              "expr": "rate(akka_group_members_sum{instance=~\"$akka_node\"}[$interval]) / rate(akka_group_members_count{instance=~\"$akka_node\"}[$interval])",
+              "expr": "rate(pekko_group_members_sum{instance=~\"$pekko_node\"}[$interval]) / rate(pekko_group_members_count{instance=~\"$pekko_node\"}[$interval])",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
@@ -7011,7 +7011,7 @@
           }
         }
       ],
-      "title": "Akka Group Metrics",
+      "title": "Pekko Group Metrics",
       "type": "row"
     },
     {
@@ -7077,10 +7077,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(executor_threads_total_count{instance=~\"$akka_node\"}[$interval]) / rate(executor_threads_total_sum{instance=~\"$akka_node\"}[$interval])",
+              "expr": "rate(executor_threads_total_count{instance=~\"$pekko_node\"}[$interval]) / rate(executor_threads_total_sum{instance=~\"$pekko_node\"}[$interval])",
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "System:{{akka_system}} - Name: {{name}} - Type: {{type}}",
+              "legendFormat": "System:{{pekko_system}} - Name: {{name}} - Type: {{type}}",
               "refId": "A",
               "step": 10
             }
@@ -7180,10 +7180,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(executor_tasks_completed_total{instance=~\"$akka_node\"}[$interval])",
+              "expr": "rate(executor_tasks_completed_total{instance=~\"$pekko_node\"}[$interval])",
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{ instance }}: {{ name }} ({{ type }}) {{akka_system}}",
+              "legendFormat": "{{ instance }}: {{ name }} ({{ type }}) {{pekko_system}}",
               "refId": "A",
               "step": 10
             }
@@ -7281,10 +7281,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(executor_queue_size_bucket{instance=~\"$akka_node\", le=\"+Inf\"}[$interval])",
+              "expr": "rate(executor_queue_size_bucket{instance=~\"$pekko_node\", le=\"+Inf\"}[$interval])",
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{ akka_system }}: {{ name }} ({{ type }})",
+              "legendFormat": "{{ pekko_system }}: {{ name }} ({{ type }})",
               "refId": "A",
               "step": 10
             }
@@ -7383,9 +7383,9 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "executor_threads_max{instance=~\"$akka_node\"}",
+              "expr": "executor_threads_max{instance=~\"$pekko_node\"}",
               "interval": "",
-              "legendFormat": "System: {{akka_system}} - Name: {{name}} - Type: {{type}}",
+              "legendFormat": "System: {{pekko_system}} - Name: {{name}} - Type: {{type}}",
               "refId": "A"
             }
           ],
@@ -7483,9 +7483,9 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "executor_threads_min{instance=~\"$akka_node\"}",
+              "expr": "executor_threads_min{instance=~\"$pekko_node\"}",
               "interval": "",
-              "legendFormat": "System: {{akka_system}} - Name: {{name}} - Type: {{type}}",
+              "legendFormat": "System: {{pekko_system}} - Name: {{name}} - Type: {{type}}",
               "refId": "A"
             }
           ],
@@ -7583,9 +7583,9 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "executor_parallelism{instance=~\"$akka_node\"}",
+              "expr": "executor_parallelism{instance=~\"$pekko_node\"}",
               "interval": "",
-              "legendFormat": "System: {{akka_system}} - Name: {{name}} - Type: {{type}}",
+              "legendFormat": "System: {{pekko_system}} - Name: {{name}} - Type: {{type}}",
               "refId": "A"
             }
           ],
@@ -7642,23 +7642,23 @@
   "templating": {
     "list": [
       {
-        "allValue": null,
+        "allValue": ".*",
         "current": {
-          "selected": false,
-          "text": "fukuii:13798",
-          "value": "fukuii:13798"
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(jvm_classes_loaded, instance)",
+        "definition": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
         "error": null,
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
         "label": null,
         "multi": false,
         "name": "node",
         "options": [],
-        "query": "label_values(jvm_classes_loaded, instance)",
-        "refresh": 1,
+        "query": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
         "sort": 1,
@@ -7669,23 +7669,23 @@
         "useTags": false
       },
       {
-        "allValue": null,
+        "allValue": ".*",
         "current": {
-          "selected": false,
-          "text": "fukuii:9095",
-          "value": "fukuii:9095"
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(akka_system_active_actors_count,instance)",
+        "definition": "label_values(up{job=~\".*fukuii.*|pekko\"}, instance)",
         "error": null,
         "hide": 0,
-        "includeAll": false,
-        "label": "akka_node",
+        "includeAll": true,
+        "label": "pekko_node",
         "multi": false,
-        "name": "akka_node",
+        "name": "pekko_node",
         "options": [],
-        "query": "label_values(akka_system_active_actors_count,instance)",
-        "refresh": 1,
+        "query": "label_values(up{job=~\".*fukuii.*|pekko\"}, instance)",
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
         "sort": 0,
@@ -7824,7 +7824,7 @@
           "value": "fukuii_system"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(akka_system_unhandled_messages_total, system)",
+        "definition": "label_values(pekko_system_unhandled_messages_total, system)",
         "error": null,
         "hide": 0,
         "includeAll": false,
@@ -7832,7 +7832,7 @@
         "multi": false,
         "name": "system",
         "options": [],
-        "query": "label_values(akka_system_unhandled_messages_total, system)",
+        "query": "label_values(pekko_system_unhandled_messages_total, system)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,

@@ -6,38 +6,78 @@ This directory contains operational configuration files and resources for runnin
 
 ```
 ops/
-├── grafana/              # Grafana dashboard configurations
-│   └── fukuii-dashboard.json
-└── README.md            # This file
+├── grafana/                                      # Grafana dashboard configurations
+│   ├── fukuii-dashboard.json                    # Control Tower - Main monitoring dashboard
+│   ├── fukuii-miners-dashboard.json             # Miners - Mining-focused metrics
+│   ├── fukuii-node-troubleshooting-dashboard.json  # Node Troubleshooting - Debug dashboard
+│   └── fukuii-casual-dashboard.json             # Casual View - Minimalist dashboard
+└── README.md                                     # This file
 ```
 
 ## Grafana
 
-The `grafana/` directory contains pre-configured Grafana dashboards for monitoring Fukuii nodes.
+The `grafana/` directory contains pre-configured Grafana dashboards for monitoring Fukuii nodes, designed for Barad-dûr integration.
 
 ### Available Dashboards
 
-- **fukuii-dashboard.json**: Main Fukuii node monitoring dashboard
-  - System overview and health
-  - Blockchain synchronization metrics
-  - Network peer and message statistics
-  - Mining metrics (if mining is enabled)
-  - Transaction pool status
-  - JVM metrics and performance
+#### Control Tower (fukuii-dashboard.json)
+Main Fukuii node monitoring dashboard - comprehensive view for operations:
+- System overview and health
+- Blockchain synchronization metrics (Regular Sync & Fast Sync)
+- Network peer and message statistics
+- Transaction pool status
+- JVM metrics and performance
+- Pekko actor system metrics
 
-### Using the Dashboard
+#### Miners Dashboard (fukuii-miners-dashboard.json)
+Focused dashboard for mining operations:
+- Block height and mining rate
+- Block generation time and difficulty
+- Gas usage and utilization
+- Block time statistics
+- Ommer (uncle/stale) block tracking
+- Transaction pool monitoring
 
-1. Import the dashboard into your Grafana instance:
+#### Node Troubleshooting (fukuii-node-troubleshooting-dashboard.json)
+Single-node focused dashboard for debugging:
+- Sync phase progress (Regular/Fast sync)
+- JVM heap memory usage
+- Garbage collection metrics (GC time, GC rate)
+- RPC latency and call rates
+- Peer churn tracking
+- Network message rates
+- File descriptor usage
+
+#### Casual View (fukuii-casual-dashboard.json)
+Minimalist at-a-glance dashboard:
+- Current block height
+- Connected peers count
+- Transaction pool size
+- Memory and gas usage gauges
+- Simple sync progress chart
+
+### Using the Dashboards
+
+1. Import the dashboards into your Grafana instance:
    - Navigate to Grafana UI (typically `http://localhost:3000`)
    - Go to Dashboards → Import
-   - Upload `ops/grafana/fukuii-dashboard.json`
+   - Upload any of the dashboard JSON files from `ops/grafana/`
    - Select your Prometheus datasource
    - Click Import
 
-2. The dashboard requires:
+2. The dashboards require:
    - Grafana 7.0 or later
    - Prometheus datasource configured
    - Fukuii metrics enabled (`fukuii.metrics.enabled = true`)
+
+### Recommended Setup
+
+| Use Case | Dashboard |
+|----------|-----------|
+| Day-to-day monitoring | Control Tower |
+| Mining operations | Miners |
+| Debugging issues | Node Troubleshooting |
+| Wall display / casual viewing | Casual View |
 
 ### Dashboard Requirements
 
