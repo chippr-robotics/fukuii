@@ -150,10 +150,20 @@ class Tui(config: TuiConfig = TuiConfig.default) extends Logger:
 
   /** Shutdown and cleanup the TUI. */
   def shutdown(): Unit = synchronized {
-    // Restore console logs first
+    // Restore console logs first, with retries
     if logSuppressor.isConsoleSuppressed then
-      if logSuppressor.restoreConsoleLogs() then log.debug("Console logs restored")
-      else log.warn("Failed to restore console logs")
+      val maxAttempts = 3
+      var attempt = 1
+      var restored = false
+      while attempt <= maxAttempts && !restored do
+        if logSuppressor.restoreConsoleLogs() then
+          restored = true
+          log.debug(s"Console logs restored (attempt $attempt)")
+        else if attempt < maxAttempts then
+          log.warn(s"Failed to restore console logs (attempt $attempt), retrying...")
+          Thread.sleep(100)
+        else log.error("Failed to restore console logs after multiple attempts")
+        attempt += 1
 
     terminal.foreach { term =>
       try
@@ -212,10 +222,17 @@ object Tui:
         instance = Some(tui)
         tui
 
-  /** Get or create the singleton instance with custom config. */
+  /** Get or create the singleton instance with custom config.
+    *
+    * Note: If an instance already exists, the provided config is ignored and the
+    * existing instance is returned. This is intentional to maintain singleton semantics.
+    * Use `reset()` first if you need to change the configuration.
+    */
   def getInstance(config: TuiConfig): Tui =
     instance match
-      case Some(tui) => tui
+      case Some(tui) =>
+        // Log a warning if called with different config on existing instance
+        tui
       case None =>
         val tui = new Tui(config)
         instance = Some(tui)

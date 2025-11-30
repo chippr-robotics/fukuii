@@ -18,8 +18,8 @@ import com.chipprbots.ethereum.utils.{Logger => FukuiiLogger}
   */
 class TuiLogSuppressor extends FukuiiLogger:
 
-  private var suppressedAppenders: Map[String, Appender[ILoggingEvent]] = Map.empty
-  private var isSuppressed: Boolean = false
+  @volatile private var suppressedAppenders: Map[String, Appender[ILoggingEvent]] = Map.empty
+  @volatile private var isSuppressed: Boolean = false
 
   /** Suppress console logs. File-based logging continues.
     *
@@ -48,9 +48,13 @@ class TuiLogSuppressor extends FukuiiLogger:
         suppressedAppenders = suppressedAppenders + (name -> appender)
       }
 
-      isSuppressed = true
-      log.debug(s"Suppressed ${consoleAppenders.size} console appenders")
-      true
+      if consoleAppenders.nonEmpty then
+        isSuppressed = true
+        log.debug(s"Suppressed ${consoleAppenders.size} console appenders")
+        true
+      else
+        log.debug("No console appenders found to suppress")
+        false
     catch
       case e: Exception =>
         log.error(s"Failed to suppress console logs: ${e.getMessage}", e)

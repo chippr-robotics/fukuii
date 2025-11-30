@@ -21,6 +21,9 @@ case class TuiState(
     startTime: Instant = Instant.now(),
     nodeSettings: NodeSettings = NodeSettings()
 ):
+
+  import TuiState.MinUptimeForEstimationSeconds
+
   /** Calculate sync progress as a percentage. */
   def syncProgress: Double =
     if bestBlock > 0 && currentBlock > 0 then (currentBlock.toDouble / bestBlock.toDouble) * 100.0
@@ -39,19 +42,23 @@ case class TuiState(
   def uptimeSeconds: Long =
     Duration.between(startTime, Instant.now()).getSeconds
 
-  /** Estimate sync time based on current progress. */
+  /** Estimate sync time based on current progress.
+    * Requires minimum uptime of MinUptimeForEstimationSeconds to provide accurate estimates.
+    */
   def estimatedSyncTimeSeconds: Option[Long] =
     val uptime = uptimeSeconds
-    if uptime > 10 && currentBlock > 0 then
+    if uptime > MinUptimeForEstimationSeconds && currentBlock > 0 then
       val blocksPerSecond = currentBlock.toDouble / uptime.toDouble
       if blocksPerSecond > 0 then Some((blocksRemaining / blocksPerSecond).toLong)
       else None
     else None
 
-  /** Calculate sync speed in blocks per second. */
+  /** Calculate sync speed in blocks per second.
+    * Requires minimum uptime of MinUptimeForEstimationSeconds to provide accurate estimates.
+    */
   def syncSpeedBlocksPerSec: Option[Double] =
     val uptime = uptimeSeconds
-    if uptime > 10 && currentBlock > 0 then Some(currentBlock.toDouble / uptime.toDouble)
+    if uptime > MinUptimeForEstimationSeconds && currentBlock > 0 then Some(currentBlock.toDouble / uptime.toDouble)
     else None
 
   // Update methods return new instances (immutable)
@@ -75,6 +82,11 @@ case class NodeSettings(
 )
 
 object TuiState:
+  /** Minimum uptime in seconds before sync estimates are provided.
+    * This ensures we have enough data points for accurate speed calculations.
+    */
+  val MinUptimeForEstimationSeconds: Long = 10
+
   /** Create an initial TUI state. */
   def initial: TuiState = TuiState()
 

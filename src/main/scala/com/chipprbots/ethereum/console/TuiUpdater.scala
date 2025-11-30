@@ -35,7 +35,7 @@ class TuiUpdater(
     tui.updateNetwork(networkName)
 
     // Start update thread
-    updateThread = Some(new Thread(() => updateLoop(), "tui-updater"))
+    updateThread = Some(new Thread(() => updateLoop(), "TuiUpdateThread"))
     updateThread.foreach(_.start())
 
   /** Stop the updater. */

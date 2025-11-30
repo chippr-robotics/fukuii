@@ -135,7 +135,9 @@ class TuiRenderer(config: TuiConfig):
   private def createProgressBar(label: String, percentage: Double, width: Int): AttributedString =
     val labelStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)
     val barWidth = Math.min(40, width - 30)
-    val filled = ((percentage / 100.0) * barWidth).toInt
+    // Clamp percentage to 0-100 range to prevent negative empty bar width
+    val clampedPercentage = Math.max(0.0, Math.min(100.0, percentage))
+    val filled = Math.min(((clampedPercentage / 100.0) * barWidth).toInt, barWidth)
     val empty = barWidth - filled
 
     val labelPart = new AttributedString(s"   $label: ", labelStyle)
