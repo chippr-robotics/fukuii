@@ -32,10 +32,8 @@ override_dh_auto_install:
 	# Install configuration files
 	cp -r target/universal/fukuii-*/conf/* debian/fukuii/etc/fukuii/
 	
-	# Create wrapper script
-	echo '#!/bin/bash' > debian/fukuii/usr/bin/fukuii
-	echo 'exec /usr/share/fukuii/bin/fukuii -Dconfig.file=/etc/fukuii/app.conf -Dlogback.configurationFile=/etc/fukuii/logback.xml "$$@"' >> debian/fukuii/usr/bin/fukuii
-	chmod +x debian/fukuii/usr/bin/fukuii
+	# Install wrapper script
+	install -m 755 debian/fukuii-wrapper.sh debian/fukuii/usr/bin/fukuii
 	
 	# Install documentation
 	cp README.md debian/fukuii/usr/share/doc/fukuii/
