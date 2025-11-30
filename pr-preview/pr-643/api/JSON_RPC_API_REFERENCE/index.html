@@ -2746,6 +2746,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#iele-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IELE Namespace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#rpc-namespace" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5842,6 +5853,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#iele-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IELE Namespace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#rpc-namespace" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7268,6 +7290,17 @@
 </span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7" href="#__codelineno-61-7"></a><span class="s1">    &quot;params&quot;: [&quot;0x...&quot;, [&quot;0x...signature1...&quot;, &quot;0x...signature2...&quot;]]</span>
 </span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8" href="#__codelineno-61-8"></a><span class="s1">  }&#39;</span>
 </span></code></pre></div></p>
+<hr />
+<h3 id="iele-namespace">IELE Namespace<a class="headerlink" href="#iele-namespace" title="Permanent link">&para;</a></h3>
+<p>The IELE namespace provides methods for interacting with the IELE Virtual Machine, an alternative VM for smart contract execution. IELE is a register-based virtual machine designed with formal verification in mind.</p>
+<p><strong>Note</strong>: The IELE namespace is only available when Fukuii is configured with IELE VM support. This is an experimental feature not commonly used in production.</p>
+<h4 id="iele_call">iele_call<a class="headerlink" href="#iele_call" title="Permanent link">&para;</a></h4>
+<p>Executes an IELE smart contract call.</p>
+<p><strong>Parameters</strong>:
+1. <code>Object</code> - The call object (similar to eth_call)
+2. <code>QUANTITY|TAG</code> - Block number or tag</p>
+<p><strong>Returns</strong>: <code>DATA</code> - The return value of the executed IELE contract</p>
+<p><strong>Note</strong>: This method is only available when IELE VM is enabled in configuration.</p>
 <hr />
 <h3 id="rpc-namespace">RPC Namespace<a class="headerlink" href="#rpc-namespace" title="Permanent link">&para;</a></h3>
 <h4 id="rpc_modules">rpc_modules<a class="headerlink" href="#rpc_modules" title="Permanent link">&para;</a></h4>
