@@ -34,6 +34,9 @@ object App extends Logger {
     val file = new File(configFile)
     if (file.exists()) {
       System.setProperty("config.file", configFile)
+    } else {
+      // Log warning when config file doesn't exist for a known network
+      log.warn(s"Config file '$configFile' not found for network '$network', using default config")
     }
   }
 
@@ -106,7 +109,9 @@ object App extends Logger {
         Fukuii.main(args.tail)
       case Some(`launchKeytool`) => KeyTool.main(args.tail)
       case Some(`downloadBootstrap`) =>
-        // Import Config only when needed, after any network config is set
+        // Import Config locally to ensure it's loaded after any network config is set.
+        // This delayed import is intentional - Config is a lazy-initialized object that
+        // reads config.file system property at initialization time.
         import com.chipprbots.ethereum.utils.Config
         Config.Db.dataSource match {
           case "rocksdb" => BootstrapDownload.main(args.tail :+ Config.Db.RocksDb.path)
