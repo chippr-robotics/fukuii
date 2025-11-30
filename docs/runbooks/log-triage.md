@@ -689,7 +689,7 @@ When investigating an issue:
 
 ### Example Analysis Reports
 
-- **[Sync Process Log Analysis](../analysis/sync-process-log-analysis.md)** - Analysis of a complete sync failure due to peer connection issues, including ForkId validation failures and remediation steps
+- Sync process issues are documented in the [Troubleshooting section](../troubleshooting/BLOCK_SYNC_TROUBLESHOOTING.md)
 
 ---
 
