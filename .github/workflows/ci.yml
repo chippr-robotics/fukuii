@@ -64,29 +64,39 @@ jobs:
         env:
           FUKUII_DEV: true
       
-      - name: Run All Tests with Coverage
+      - name: Run Essential Tests (Tier 1)
         run: |
           echo "=========================================="
-          echo "Running All Tests with Coverage"
-          echo "=========================================="
-          echo ""
-          echo "Tier 1: Essential Tests (< 5 minutes)"
-          echo "Tier 2: Standard Tests (< 30 minutes)"
+          echo "Running Essential Tests (< 5 minutes)"
           echo "=========================================="
           set -o pipefail
-          # Run all tests in a single sbt session with coverage enabled
-          # This ensures:
-          # 1. Coverage instrumentation is applied during compilation
-          # 2. All tests contribute to coverage data
-          # 3. Coverage reports are generated at the end
-          sbt -v "coverage; testEssential; testStandard; coverageReport; coverageAggregate" 2>&1 | tee /tmp/sbt-tests.log || {
-            echo "Tests failed — dumping 'last test'"
-            sbt 'last test' 2>&1 | tee /tmp/sbt-last-test.log || true
+          sbt -v testEssential 2>&1 | tee /tmp/sbt-testEssential.log || { 
+            echo "sbt testEssential failed — dumping 'last test'"
+            sbt 'last test' 2>&1 | tee /tmp/sbt-last-test-essential.log || true
             exit 1
           }
         env:
           FUKUII_DEV: true
-        timeout-minutes: 50
+        timeout-minutes: 10
+      
+      - name: Run Standard Tests with Coverage (Tier 2)
+        if: github.event_name == 'push'
+        run: |
+          echo "=========================================="
+          echo "Running Standard Tests with Coverage (< 30 minutes)"
+          echo "=========================================="
+          set -o pipefail
+          # Run tests with coverage in a single sbt session
+          # Use 'clean' to force recompilation with coverage instrumentation
+          # since Tier 1 compiled classes without instrumentation
+          sbt -v "clean; coverage; testStandard; coverageReport; coverageAggregate" 2>&1 | tee /tmp/sbt-testStandard.log || {
+            echo "sbt testStandard failed — dumping 'last test'"
+            sbt 'last test' 2>&1 | tee /tmp/sbt-last-test-standard.log || true
+            exit 1
+          }
+        env:
+          FUKUII_DEV: true
+        timeout-minutes: 45
       
       - name: Validate KPI Baselines
         run: |
@@ -119,7 +129,7 @@ jobs:
         timeout-minutes: 10
       
       - name: Upload coverage reports to Codecov
-        if: always()
+        if: always() && github.event_name == 'push'
         uses: codecov/codecov-action@v5
         with:
           # Specify the coverage file locations for scoverage
@@ -131,7 +141,7 @@ jobs:
           verbose: true
       
       - name: Upload coverage artifacts
-        if: always()
+        if: always() && github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports-jdk21-scala-3.3.4
