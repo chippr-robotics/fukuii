@@ -133,6 +133,7 @@ jobs:
         if: always() && github.event_name == 'push'
         uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           # Specify the coverage file locations for scoverage
           files: "**/target/scala-*/scoverage-report/scoverage.xml"
           directory: .
