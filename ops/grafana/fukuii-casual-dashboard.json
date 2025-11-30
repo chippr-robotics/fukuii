@@ -371,7 +371,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_sync_block_timeBetweenParent_seconds_gauge_gauge",
+          "expr": "app_sync_block_timeBetweenParent_seconds_gauge",
           "interval": "",
           "legendFormat": "Block Time",
           "refId": "A"

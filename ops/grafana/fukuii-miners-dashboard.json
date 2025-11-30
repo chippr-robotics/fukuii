@@ -625,7 +625,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_sync_block_timeBetweenParent_seconds_gauge_gauge",
+          "expr": "app_sync_block_timeBetweenParent_seconds_gauge",
           "interval": "",
           "legendFormat": "Block Time",
           "refId": "A"
@@ -827,7 +827,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_sync_block_transactions_gauge_gauge",
+          "expr": "app_sync_block_transactions_gauge",
           "interval": "",
           "legendFormat": "Transactions",
           "refId": "A"
