@@ -54,6 +54,8 @@ object App extends Logger {
         |  mordor                 Mordor testnet
         |  pottery                Pottery testnet
         |  sagano                 Sagano testnet
+        |  bootnode               Bootnode configuration (advanced)
+        |  testnet-internal-nomad Internal Nomad testnet (advanced)
         |
         |Commands:
         |  cli [subcommand]       Command-line utilities
@@ -75,6 +77,10 @@ object App extends Logger {
         |                         Shows real-time node status, peer count, sync progress
         |                         Console logs are suppressed while TUI is active
         |  --force-pivot-sync     Disable checkpoint bootstrapping and force pivot sync
+        |
+        |Custom Configuration:
+        |  Use JVM property to specify a custom config file:
+        |  java -Dconfig.file=/path/to/custom.conf -jar fukuii.jar
         |
         |Examples:
         |  fukuii                          # Start Ethereum Classic node (default)
@@ -106,7 +112,12 @@ object App extends Logger {
       case Some(`launchFukuii`) =>
         // Handle 'fukuii <network>' case - set config before launching
         args.tail.headOption.filter(isNetwork).foreach(setNetworkConfig)
-        Fukuii.main(args.tail)
+        // Filter out network name from remaining args to avoid passing it to Fukuii.main
+        val remainingArgs = args.tail.headOption.filter(isNetwork) match {
+          case Some(_) => args.tail.tail
+          case None    => args.tail
+        }
+        Fukuii.main(remainingArgs)
       case Some(`launchKeytool`) => KeyTool.main(args.tail)
       case Some(`downloadBootstrap`) =>
         // Import Config locally to ensure it's loaded after any network config is set.
