@@ -17,6 +17,8 @@ jobs:
   publish-to-launchpad:
     name: Publish to Launchpad PPA (${{ matrix.ubuntu_series }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -103,7 +105,7 @@ jobs:
           
           # Create the source package
           # Using -S for source-only (required for PPA), -sa to include orig tarball
-          dpkg-buildpackage -S -sa -k$GPG_KEY_ID
+          dpkg-buildpackage -S -sa -k"$GPG_KEY_ID"
       
       - name: Configure dput for Launchpad
         run: |
