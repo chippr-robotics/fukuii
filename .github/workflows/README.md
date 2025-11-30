@@ -176,6 +176,49 @@ git push origin v1.0.0
 
 ---
 
+### 📦 Launchpad PPA Workflow (`launchpad-ppa.yml`)
+
+**Triggers:** Release published, Manual dispatch
+
+**Purpose:** Publishes Fukuii packages to Ubuntu's Launchpad Personal Package Archive (PPA) for easy installation via `apt`
+
+**Steps:**
+1. Triggered automatically when a GitHub release is published
+2. Imports GPG signing key from repository secrets
+3. Updates debian/changelog for target Ubuntu series
+4. Builds source package with dpkg-buildpackage
+5. Signs package with GPG
+6. Uploads to Launchpad PPA via dput
+7. Launchpad builds and publishes the package
+
+**Target Ubuntu Series:**
+- Ubuntu 22.04 LTS (Jammy Jellyfish)
+- Ubuntu 24.04 LTS (Noble Numbat)
+
+**Required Secrets:**
+- `LAUNCHPAD_GPG_PRIVATE_KEY` - GPG private key for signing packages
+- `LAUNCHPAD_GPG_PASSPHRASE` - Passphrase for the GPG key
+
+**Installation (for end users):**
+```bash
+sudo add-apt-repository ppa:chippr-robotics/fukuii
+sudo apt-get update
+sudo apt-get install fukuii
+```
+
+**Manual Trigger:**
+```bash
+# Via GitHub UI: Actions → Launchpad PPA → Run workflow
+# Specify version (e.g., 0.1.71)
+```
+
+**Notes:**
+- Packages are built on Launchpad's infrastructure after upload
+- Build status can be monitored at https://launchpad.net/~chippr-robotics/+archive/ubuntu/fukuii
+- The PPA must be created manually on Launchpad before first use (see setup instructions below)
+
+---
+
 ### 📝 Release Drafter Workflow (`release-drafter.yml`)
 
 **Triggers:** Push to main/master/develop branches, Pull Request updates
@@ -326,6 +369,7 @@ Each release automatically includes:
 - ✅ **CHANGELOG.md** - Auto-generated from commit history
 - ✅ **SBOM** - Software Bill of Materials (CycloneDX JSON)
 - ✅ **Docker Image** - Signed with Cosign, includes provenance
+- ✅ **Ubuntu Package** - Published to Launchpad PPA (see [Launchpad PPA Setup](#launchpad-ppa-setup))
 
 ### Creating a Milestone
 
@@ -417,6 +461,10 @@ git commit -m "WIP"
 Some workflows may require secrets:
 
 - `GITHUB_TOKEN` - Automatically provided by GitHub
+- `LAUNCHPAD_GPG_PRIVATE_KEY` - GPG private key for signing Launchpad packages
+- `LAUNCHPAD_GPG_PASSPHRASE` - Passphrase for the GPG key
+- `DOCKERHUB_USERNAME` - Docker Hub username for image publishing
+- `DOCKERHUB_TOKEN` - Docker Hub access token for image publishing
 - Additional secrets can be added in **Settings** → **Secrets and variables** → **Actions**
 
 ### Workflow Permissions
@@ -425,6 +473,64 @@ Workflows use the following permissions:
 - `contents: read/write` - Read code, create releases
 - `packages: write` - Push Docker images
 - `pull-requests: write` - Comment on PRs, add labels
+
+---
+
+## Launchpad PPA Setup
+
+To enable Launchpad PPA publishing, follow these one-time setup steps:
+
+### 1. Create Launchpad Account and PPA
+
+1. Create an account on [Launchpad](https://launchpad.net/)
+2. Go to your profile and click "Create a new PPA"
+3. Name the PPA `fukuii` (to match the workflow configuration)
+4. The PPA URL will be: `ppa:chippr-robotics/fukuii`
+
+### 2. Generate GPG Key
+
+Generate a GPG key for signing packages:
+
+```bash
+# Generate a new GPG key
+gpg --full-generate-key
+# Choose: RSA and RSA, 4096 bits, does not expire
+# Use email: dev@chipprbots.com
+
+# Export the public key
+gpg --armor --export YOUR_KEY_ID > fukuii-ppa-public.asc
+
+# Export the private key (store securely!)
+gpg --armor --export-secret-keys YOUR_KEY_ID > fukuii-ppa-private.asc
+```
+
+### 3. Upload Public Key to Launchpad
+
+1. Go to your Launchpad profile → "OpenPGP keys"
+2. Click "Import an OpenPGP key"
+3. Paste the contents of `fukuii-ppa-public.asc`
+4. Verify the key via email confirmation
+
+### 4. Configure GitHub Secrets
+
+Add the following secrets to the repository:
+
+1. Go to **Settings** → **Secrets and variables** → **Actions**
+2. Add secret `LAUNCHPAD_GPG_PRIVATE_KEY`:
+   - Paste the entire contents of `fukuii-ppa-private.asc`
+3. Add secret `LAUNCHPAD_GPG_PASSPHRASE`:
+   - The passphrase used when generating the GPG key
+
+### 5. Test the Workflow
+
+After setup, create a test release to verify the workflow:
+
+```bash
+git tag -a v0.1.72 -m "Test Launchpad PPA"
+git push origin v0.1.72
+```
+
+Monitor the workflow run in GitHub Actions and check the Launchpad PPA page for build status.
 
 ---
 

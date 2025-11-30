@@ -1,0 +1,47 @@
+#!/usr/bin/make -f
+# Debian rules file for fukuii
+
+export DH_VERBOSE = 1
+
+# Set HOME for sbt to work properly
+export HOME := $(CURDIR)/debian/home
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	rm -rf target project/target project/project/target
+	rm -rf debian/home
+
+override_dh_auto_build:
+	mkdir -p $(HOME)/.sbt $(HOME)/.ivy2 $(HOME)/.cache
+	sbt dist
+	cd target/universal && unzip fukuii-*.zip
+
+override_dh_auto_install:
+	install -d debian/fukuii/usr/share/fukuii
+	install -d debian/fukuii/usr/bin
+	install -d debian/fukuii/etc/fukuii
+	install -d debian/fukuii/var/lib/fukuii
+	install -d debian/fukuii/usr/share/doc/fukuii
+	
+	# Install application files
+	cp -r target/universal/fukuii-*/lib debian/fukuii/usr/share/fukuii/
+	cp -r target/universal/fukuii-*/bin debian/fukuii/usr/share/fukuii/
+	
+	# Install configuration files
+	cp -r target/universal/fukuii-*/conf/* debian/fukuii/etc/fukuii/
+	
+	# Create wrapper script
+	echo '#!/bin/bash' > debian/fukuii/usr/bin/fukuii
+	echo 'exec /usr/share/fukuii/bin/fukuii -Dconfig.file=/etc/fukuii/app.conf -Dlogback.configurationFile=/etc/fukuii/logback.xml "$$@"' >> debian/fukuii/usr/bin/fukuii
+	chmod +x debian/fukuii/usr/bin/fukuii
+	
+	# Install documentation
+	cp README.md debian/fukuii/usr/share/doc/fukuii/
+	cp LICENSE debian/fukuii/usr/share/doc/fukuii/
+	cp NOTICE debian/fukuii/usr/share/doc/fukuii/
+
+override_dh_fixperms:
+	dh_fixperms
+	chmod +x debian/fukuii/usr/share/fukuii/bin/*
