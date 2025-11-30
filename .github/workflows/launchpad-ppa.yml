@@ -1,0 +1,150 @@
+name: Launchpad PPA
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.1.71)'
+        required: true
+
+env:
+  PPA_NAME: chippr-robotics/fukuii
+  PACKAGE_NAME: fukuii
+
+jobs:
+  publish-to-launchpad:
+    name: Publish to Launchpad PPA (${{ matrix.ubuntu_series }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu_series: [jammy, noble]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Extract version from release tag (remove 'v' prefix)
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            debhelper \
+            devscripts \
+            dput \
+            gnupg2 \
+            dpkg-dev \
+            fakeroot
+      
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.LAUNCHPAD_GPG_PRIVATE_KEY }}
+        run: |
+          # Import the GPG private key
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          
+          # Get the key ID and verify import was successful
+          GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format=long | grep sec | head -1 | awk '{print $2}' | cut -d'/' -f2)
+          if [ -z "$GPG_KEY_ID" ]; then
+            echo "Error: Failed to import GPG key"
+            exit 1
+          fi
+          echo "GPG_KEY_ID=$GPG_KEY_ID" >> $GITHUB_ENV
+          echo "Successfully imported GPG key: $GPG_KEY_ID"
+      
+      - name: Update changelog for Ubuntu series
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SERIES="${{ matrix.ubuntu_series }}"
+          TIMESTAMP=$(date -R)
+          
+          # Use dch (debchange) to properly update the changelog
+          # First, set the distribution to the target series
+          DEBEMAIL="dev@chipprbots.com" DEBFULLNAME="Chippr Robotics" \
+            dch --newversion "${VERSION}-1~${SERIES}1" \
+                --distribution "${SERIES}" \
+                --force-distribution \
+                "Release version ${VERSION}. See https://github.com/chippr-robotics/fukuii/releases/tag/v${VERSION}"
+      
+      - name: Build source package
+        env:
+          GPG_PASSPHRASE: ${{ secrets.LAUNCHPAD_GPG_PASSPHRASE }}
+        run: |
+          # Set up GPG agent for signing
+          export GPG_TTY=$(tty)
+          
+          # Start GPG agent and verify it's running
+          gpg-agent --daemon --allow-preset-passphrase 2>/dev/null || {
+            echo "Note: GPG agent may already be running"
+          }
+          
+          # Verify GPG key is available for signing
+          if ! gpg --list-secret-keys "$GPG_KEY_ID" > /dev/null 2>&1; then
+            echo "Error: GPG key $GPG_KEY_ID not found"
+            exit 1
+          fi
+          
+          # Create the source package
+          # Using -S for source-only (required for PPA), -sa to include orig tarball
+          dpkg-buildpackage -S -sa -k"$GPG_KEY_ID"
+      
+      - name: Configure dput for Launchpad
+        run: |
+          mkdir -p ~/.dput
+          cat > ~/.dput.cf << EOF
+          [fukuii-ppa]
+          fqdn = ppa.launchpad.net
+          method = ftp
+          incoming = ~${{ env.PPA_NAME }}/ubuntu/
+          login = anonymous
+          allow_unsigned_uploads = 0
+          EOF
+      
+      - name: Upload to Launchpad PPA
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SERIES="${{ matrix.ubuntu_series }}"
+          
+          # Upload the source package to Launchpad
+          cd ..
+          dput fukuii-ppa fukuii_${VERSION}-1~${SERIES}1_source.changes
+      
+      - name: Summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SERIES="${{ matrix.ubuntu_series }}"
+          
+          echo "## Launchpad PPA Upload Complete 📦" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ubuntu Series:** ${SERIES}" >> $GITHUB_STEP_SUMMARY
+          echo "**PPA:** ppa:${{ env.PPA_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Installation" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "sudo add-apt-repository ppa:${{ env.PPA_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "sudo apt-get update" >> $GITHUB_STEP_SUMMARY
+          echo "sudo apt-get install fukuii" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ Note: Build may take some time on Launchpad. Check status at:" >> $GITHUB_STEP_SUMMARY
+          echo "https://launchpad.net/~${{ env.PPA_NAME }}/+archive/ubuntu/fukuii" >> $GITHUB_STEP_SUMMARY

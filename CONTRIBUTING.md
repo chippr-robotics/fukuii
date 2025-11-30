@@ -509,6 +509,7 @@ When a release is created (via git tag `vX.Y.Z`), the release workflow automatic
 - ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/overview/) (keyless, GitHub OIDC)
 - ✅ Generates SLSA Level 3 provenance attestations
 - ✅ Outputs immutable digest references for tamper-proof deployments
+- ✅ Publishes to Ubuntu Launchpad PPA for easy installation
 - ✅ Closes matching milestone
 
 **Release Artifacts:**
@@ -518,6 +519,7 @@ Each release includes:
 - CHANGELOG.md with categorized changes
 - SBOM (Software Bill of Materials)
 - Signed Docker images with provenance
+- Ubuntu/Debian packages via Launchpad PPA
 
 **Making a Release:**
 ```bash
@@ -532,6 +534,13 @@ cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+```
+
+**Install from Ubuntu PPA:**
+```bash
+sudo add-apt-repository ppa:chippr-robotics/fukuii
+sudo apt-get update
+sudo apt-get install fukuii
 ```
 
 **Release Drafter:**
