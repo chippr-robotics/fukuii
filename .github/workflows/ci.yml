@@ -89,7 +89,8 @@ jobs:
           # Run tests with coverage in a single sbt session
           # Use 'clean' to force recompilation with coverage instrumentation
           # since Tier 1 compiled classes without instrumentation
-          sbt -v "clean; coverage; testStandard; coverageReport; coverageAggregate" 2>&1 | tee /tmp/sbt-testStandard.log || {
+          # Include both testEssential and testStandard for comprehensive coverage
+          sbt -v "clean; coverage; testEssential; testStandard; coverageReport; coverageAggregate" 2>&1 | tee /tmp/sbt-testStandard.log || {
             echo "sbt testStandard failed — dumping 'last test'"
             sbt 'last test' 2>&1 | tee /tmp/sbt-last-test-standard.log || true
             exit 1
