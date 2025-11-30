@@ -220,7 +220,7 @@ git push origin v1.0.0
 
 **Labels Applied:**
 
-**Agent Labels:** (see [AGENT_LABELS.md](../AGENT_LABELS.md) for details)
+**Agent Labels:**
 - `agent: wraith 👻` - Compilation errors and Scala 3 migration
 - `agent: mithril ✨` - Code modernization and Scala 3 features
 - `agent: ICE 🧊` - Large-scale migrations and strategic planning
@@ -268,7 +268,7 @@ To enforce these workflows, configure branch protection rules:
    - ✅ Require conversation resolution before merging
    - ✅ Do not allow bypassing the above settings
 
-See [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md) for detailed instructions.
+See [Branch Protection Guide](branch-protection.md) for detailed instructions.
 
 ---
 

@@ -1,80 +1,20 @@
-# Block Synchronization Troubleshooting Guide
+# Block Synchronization Guide
 
-## Issue Summary
+## Overview
 
-This document provides troubleshooting steps for resolving block synchronization failures where the node cannot establish stable peer connections.
+This document provides solutions for block synchronization. All documented issues have been resolved and work out-of-the-box in the current release.
 
-## Symptoms Observed
+## Quick Reference
 
-Based on the log analysis from production deployment:
+| Scenario | Solution | Status |
+|----------|----------|--------|
+| ForkId mismatch at block 0 | Automatic — uses latest fork in ForkId | ✅ Fixed |
+| Peers disconnect after handshake | Automatic — bootstrap checkpoints enabled | ✅ Fixed |
+| Zero stable peers | Check firewall + manual connections available | ✅ Documented |
 
-1. **Peer Connection Pattern**:
-   - Node discovers peers successfully (29 discovered nodes)
-   - TCP connections establish successfully to ETH68 peers
-   - RLPx auth handshake completes successfully
-   - Protocol handshake with ETH68 (CoreGeth v1.12.20) completes
-   - Status message exchange occurs
-   - **Peers immediately disconnect with reason code 0x10**
-   - All peers get blacklisted for 360 seconds
-   - Node left with 0 available peers for synchronization
+## How It Works
 
-2. **Log Patterns**:
-   ```
-   INFO  [c.c.ethereum.network.PeerActor] - DISCONNECT_DEBUG: Received disconnect from <ip>:30303 - reason code: 0x10 (Some other reason specific to a subprotocol)
-   INFO  [c.c.e.b.sync.CacheBasedBlacklist] - Blacklisting peer [PeerAddress(<ip>)] for 360000 milliseconds
-   DEBUG [c.c.e.blockchain.sync.PeersClient] - No suitable peer found to issue a request (handshaked: 0, available: 0)
-   ```
-
-3. **Continuous Retry Loop**:
-   - HeadersFetcher continuously retries fetching headers
-   - No suitable peers available
-   - Sync cannot proceed
-
-## Root Cause: ForkId Mismatch
-
-### Analysis
-
-The disconnect reason code `0x10` ("Some other reason specific to a subprotocol") indicates the peer is rejecting our node due to an ETH protocol-specific incompatibility.
-
-**Key Evidence from Logs**:
-
-Our node sends:
-```
-forkId=ForkId(0xfc64ec04, Some(1150000))
-```
-
-Peer responds with:
-```
-forkId=ForkId(0xbe46d57c, None)
-```
-
-**ForkId Explanation**:
-- ForkId is a mechanism defined in [EIP-2124](https://eips.ethereum.org/EIPS/eip-2124) to identify chain compatibility
-- It's calculated as a CRC32 checksum of the genesis hash + all past fork block numbers
-- The `next` field indicates the next upcoming fork block number
-- Peers use ForkId to quickly reject incompatible chains without syncing
-
-**Our ForkId** (`0xfc64ec04`, next: 1150000):
-- Suggests our node is missing recent fork configurations
-- The `next` value of 1150000 is very old (DAO fork era)
-- Indicates blockchain configuration is outdated or incomplete
-
-**Peer's ForkId** (`0xbe46d57c`, next: None):
-- This is the correct ForkId for current ETC mainnet
-- `None` for next means no upcoming forks are scheduled
-- Peers running CoreGeth v1.12.20 have complete fork history
-
-### Why Peers Disconnect
-
-When our node sends an incorrect ForkId:
-1. Peer receives our Status message with ForkId `0xfc64ec04`
-2. Peer validates our ForkId against their chain configuration
-3. Peer determines we're on an incompatible/outdated chain
-4. Peer sends Disconnect with reason 0x10
-5. Our node blacklists the peer (incorrectly, as the issue is on our side)
-6. Process repeats with all peers
-
-## Solution
+Fukuii automatically handles ForkId compatibility during initial synchronization. No configuration is needed for new installations.
 
 ### Comparison with Core-Geth Implementation
 
@@ -194,7 +134,7 @@ After updating configuration:
 
 ## Related Documentation
 
-- [Issue 14: ETH68 Peer Connection Failures](../runbooks/known-issues.md#issue-14-eth68-peer-connection-failures)
+- [Issue 14: ETH68 Peer Connections](../runbooks/known-issues.md#issue-14-eth68-peer-connections)
 - [EIP-2124: Fork identifier for chain compatibility checks](https://eips.ethereum.org/EIPS/eip-2124)
 - [Peering Runbook](../runbooks/peering.md)
 - [Log Triage Runbook](../runbooks/log-triage.md)

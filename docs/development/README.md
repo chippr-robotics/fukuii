@@ -13,15 +13,15 @@ This directory contains documentation for developers working on the Fukuii codeb
 
 ## Related Documentation
 
-- [Contributing Guide](../../CONTRIBUTING.md) - How to contribute to the project
-- [Testing Documentation](../testing/) - Testing strategies and guides
-- [ADRs](../adr/) - Architecture Decision Records
+- [Contributing Guide](contributing.md) - How to contribute to the project
+- [Testing Documentation](../testing/README.md) - Testing strategies and guides
+- [ADRs](../adr/README.md) - Architecture Decision Records
 
 ## Getting Started
 
 1. Review the [Repository Structure](REPOSITORY_STRUCTURE.md) to understand the codebase layout
-2. Follow the [Contributing Guide](../../CONTRIBUTING.md) for development setup
-3. Check [ADRs](../adr/) for architectural decisions that affect your work
+2. Follow the [Contributing Guide](contributing.md) for development setup
+3. Check [ADRs](../adr/README.md) for architectural decisions that affect your work
 
 ## Development Workflow
 
@@ -43,4 +43,4 @@ sbt pp  # "prepare PR" - formats, checks, and tests
 sbt dist
 ```
 
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for more details.
+See the [Contributing Guide](contributing.md) for more details.

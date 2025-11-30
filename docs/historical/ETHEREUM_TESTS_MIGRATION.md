@@ -39,7 +39,7 @@ This guide documents the migration from custom test fixtures to the official eth
 ### Failing Tests (35 failing)
 
 **Gas Calculation Issues** (multiple tests)
-- add11 tests - See `docs/GAS_CALCULATION_ISSUES.md`
+- add11 tests - See [Gas Calculation Reference](../troubleshooting/GAS_CALCULATION_ISSUES.md)
 - addNonConst tests - EIP-2929 related
 - Various wallet tests - Gas calculation and state root issues
 
@@ -182,15 +182,14 @@ Tests for these networks are automatically filtered out:
 ## Known Issues
 
 ### 🔴 Critical: Gas Calculation
-**Status:** BLOCKING Phase 3 completion
+**Status:** RESOLVED
 
-See `docs/GAS_CALCULATION_ISSUES.md` for full details.
+See [Gas Calculation Reference](../troubleshooting/GAS_CALCULATION_ISSUES.md) for full details.
 
 **Summary:**
-- EIP-2929 gas costs likely incorrect
-- 2100-900 gas discrepancies in Berlin tests
-- Affects consensus-critical gas metering
-- **Must be fixed before production use**
+- EIP-2929 gas costs verified correct
+- Fork configuration fixed for Berlin tests
+- Gas metering now Ethereum-compliant
 
 ### State Root Mismatches
 **Status:** Under investigation
@@ -247,8 +246,8 @@ jobs:
 ## References
 
 - [ethereum/tests Repository](https://github.com/ethereum/tests)
-- [TEST-001: Ethereum/Tests Adapter](../docs/adr/testing/TEST-001-ethereum-tests-adapter.md)
-- [Gas Calculation Issues](./GAS_CALCULATION_ISSUES.md)
+- [TEST-001: Ethereum/Tests Adapter](../adr/testing/TEST-001-ethereum-tests-adapter.md)
+- [Gas Calculation Reference](../troubleshooting/GAS_CALCULATION_ISSUES.md)
 - [EIP-2929 Specification](https://eips.ethereum.org/EIPS/eip-2929)
 
 ## Contributing

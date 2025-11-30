@@ -592,5 +592,5 @@ docker-compose up -d kong
 
 For security-related questions or to report vulnerabilities:
 
-- Email: security@your-organization.com
-- Responsible Disclosure: See [SECURITY.md](../../SECURITY.md) in the main repository
+- Email: security@chippr-robotics.io
+- Responsible Disclosure: See the SECURITY.md file in the repository root

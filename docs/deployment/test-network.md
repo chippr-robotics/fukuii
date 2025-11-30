@@ -317,11 +317,11 @@ docker-compose down -v
 
 For issues specific to this test network setup:
 - Check the logs in `./captured-logs/`
-- Review the [main documentation](../../README.md)
+- Review the [Documentation Home](../index.md)
 - Open an issue on GitHub with captured logs
 
 ## Related Documentation
 
-- [Fukuii Main README](../../README.md)
-- [Docker Images Documentation](../README.md)
+- [Fukuii Documentation](../index.md)
+- [Docker Deployment Guide](docker.md)
 - [Core-Geth Documentation](https://core-geth.org/)

@@ -1,8 +1,8 @@
-# Quick Guide: Addressing Compilation Warnings
+# Code Quality Guide: Keeping Your Codebase Clean
 
-This guide helps you quickly address the 121 compilation warnings documented in the codebase.
+This guide provides best practices for maintaining a clean, warning-free codebase using automated tools and manual techniques.
 
-## Quick Wins (Automated)
+## Automated Code Quality Tools
 
 ### 1. Remove Unused Imports (65+ instances)
 
@@ -230,27 +230,27 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 // Just remove the line
 ```
 
-## Priority Order
+## Recommended Approach
 
-Work through warnings in this order:
+When improving code quality, follow this order:
 
-1. **Formatting issues** (build blocking) ✅ DONE
-2. **Unused imports** (easy, safe, automated)
-3. **Unused privates** (easy, check for usage first)
-4. **Mutable vars → vals** (medium, test after change)
-5. **Unused parameters** (harder, may need API discussion)
-6. **Enable prevention** (add compiler flags, CI checks)
+1. **Formatting** - Run `sbt formatAll` to ensure consistent style
+2. **Unused imports** - Easy wins with automated Scalafix rules
+3. **Unused privates** - Check for usage before removing
+4. **Mutable vars → vals** - Test after changes to ensure correctness
+5. **Unused parameters** - May require API discussion for public methods
+6. **Prevention** - Enable compiler flags and CI checks to catch issues early
 
 ## Resources
 
-- **Full Analysis:** See `SILENT_ERRORS_REPORT.md`
 - **Scalafix Docs:** https://scalacenter.github.io/scalafix/
 - **Scalafmt Docs:** https://scalameta.org/scalafmt/
+- **Static Analysis Inventory:** See [Static Analysis Inventory](../reports/STATIC_ANALYSIS_INVENTORY.md) for our complete code quality toolchain
 
-## Questions?
+## Best Practices
 
-If unsure about a warning:
-1. Search codebase for usage
-2. Check git history for context
-3. Ask team if it's needed for compatibility
-4. When in doubt, mark with underscore prefix instead of removing
+When reviewing code quality:
+1. Search the codebase for usage patterns
+2. Check git history for context on design decisions
+3. Discuss with the team if needed for compatibility
+4. When in doubt, mark with underscore prefix to indicate intentional non-use

@@ -1,22 +1,16 @@
 # Test Tagging Action Plan
 
+> **Note**: This is a historical reference document from our test infrastructure improvement project.
+
 **Repository:** chippr-robotics/fukuii  
 **Generated:** 2025-11-18  
-**Purpose:** Systematic plan to complete test tagging and configure isolated logging
+**Status:** ✅ Reference document
 
 ---
 
 ## Overview
 
-This document provides a step-by-step action plan to complete the test tagging exercise for the Fukuii Ethereum Classic client. It complements the comprehensive test inventory (TEST_INVENTORY.md) and categorization spreadsheet (TEST_CATEGORIZATION.csv).
-
-### Current Status
-- ✅ **328 total test files** identified and categorized
-- ✅ **519 tests already tagged** with ScalaTest tags
-- ✅ **Comprehensive tag infrastructure** exists (Tags.scala with ADR-017)
-- ⏳ **Remaining work:** Apply tags to untagged tests and configure isolated logging
-
----
+This document provides guidance for test tagging in the Fukuii codebase. For current test documentation, see [Testing Documentation](../testing/README.md).
 
 ## Phase 1: Complete Test Tagging
 

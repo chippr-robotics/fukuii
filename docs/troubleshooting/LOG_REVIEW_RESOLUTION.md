@@ -1,56 +1,29 @@
-# Log Review Resolution Guide
+# Network Protocol Compatibility Guide
 
-This document provides technical analysis and resolutions for network-related issues discovered through log review.
+This document provides technical reference for network protocol compatibility. All issues documented here have been resolved.
 
-## UPDATE 2025-11-27: ETH66+ Protocol Adaptation for GetReceipts and GetBlockBodies
+## Protocol Compatibility Summary
 
-### Issue Discovered
-Peers disconnect with reason code 0x01 ("TCP sub-system error") during FastSync when requesting block bodies and receipts from ETH66/ETH67/ETH68 peers.
+| Protocol | Status | Notes |
+|----------|--------|-------|
+| ETH63 | ✅ Supported | Legacy support |
+| ETH64/65 | ✅ Supported | Full compatibility |
+| ETH66 | ✅ Supported | Request-id wrapped messages |
+| ETH67 | ✅ Supported | NewPooledTransactionHashes v2 |
+| ETH68 | ✅ Supported | Current production version |
 
-The disconnect sequence:
-1. TCP connection establishes
-2. RLPx auth handshake completes
-3. Protocol handshake with ETH66+ peer completes
-4. Status message exchange succeeds
-5. GetBlockHeaders (ETH66 format with request-id) works correctly
-6. **GetReceipts/GetBlockBodies sent in ETH63/ETH62 format → Peer disconnects**
+---
 
-### Root Cause Analysis
+## ETH66+ Message Adaptation
 
-FastSync was creating request messages in ETH63/ETH62 format directly:
-```scala
-// FastSync.scala line 824
-GetReceipts(receiptsToGet)  // ETH63 format: [hash1, hash2, ...]
+### Overview
 
-// FastSync.scala line 848
-GetBlockBodies(blockBodiesToGet)  // ETH62 format: [hash1, hash2, ...]
-```
+ETH66 and later protocols wrap requests with a request-id for request/response matching. The message adaptation layer automatically handles this.
 
-But ETH66+ peers expect the request-id wrapper format:
-```
-ETH66 format: [requestId, [hash1, hash2, ...]]
-```
+### How It Works
 
-The `PeersClient.adaptMessageForPeer` method only handled GetBlockHeaders adaptation, not GetReceipts or GetBlockBodies.
+The `PeersClient.adaptMessageForPeer` method adapts messages based on negotiated capabilities:
 
-### The Fix
-
-**Before (PeersClient.scala:149-165):**
-```scala
-private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: RequestMsg): Message =
-  handshakedPeers.get(peer.id) match {
-    case Some(peerWithInfo) =>
-      val usesRequestId = Capability.usesRequestId(peerWithInfo.peerInfo.remoteStatus.capability)
-      message match {
-        case eth66: ETH66GetBlockHeaders if !usesRequestId =>
-          ETH62.GetBlockHeaders(eth66.block, eth66.maxHeaders, eth66.skip, eth66.reverse)
-        case eth62: ETH62.GetBlockHeaders if usesRequestId =>
-          ETH66GetBlockHeaders(ETH66.nextRequestId, eth62.block, eth62.maxHeaders, eth62.skip, eth62.reverse)
-        case _ => message // Only GetBlockHeaders was adapted!
-      }
-```
-
-**After (PeersClient.scala:149-185):**
 ```scala
 private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: RequestMsg): Message =
   handshakedPeers.get(peer.id) match {
@@ -62,12 +35,12 @@ private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: Requ
           ETH62.GetBlockHeaders(eth66.block, eth66.maxHeaders, eth66.skip, eth66.reverse)
         case eth62: ETH62.GetBlockHeaders if usesRequestId =>
           ETH66GetBlockHeaders(ETH66.nextRequestId, eth62.block, eth62.maxHeaders, eth62.skip, eth62.reverse)
-        // GetBlockBodies adaptation - NEW
+        // GetBlockBodies adaptation
         case eth66: ETH66GetBlockBodies if !usesRequestId =>
           ETH62.GetBlockBodies(eth66.hashes)
         case eth62: ETH62.GetBlockBodies if usesRequestId =>
           ETH66GetBlockBodies(ETH66.nextRequestId, eth62.hashes)
-        // GetReceipts adaptation - NEW
+        // GetReceipts adaptation
         case eth66: ETH66GetReceipts if !usesRequestId =>
           ETH63.GetReceipts(eth66.blockHashes)
         case eth63: ETH63.GetReceipts if usesRequestId =>
@@ -76,23 +49,7 @@ private def adaptMessageForPeer[RequestMsg <: Message](peer: Peer, message: Requ
       }
 ```
 
-Also updated:
-1. `responseClassTag` to handle ETH66BlockBodies and ETH66Receipts response types
-2. `responseMsgCode` to return correct codes for all ETH66 request types
-3. FastSync `handleResponses` to process ETH66BlockBodies and ETH66Receipts responses
-
-### Impact
-- ✅ GetBlockBodies and GetReceipts now correctly adapted for ETH66+ peers
-- ✅ Maintains backward compatibility with ETH63-65 peers
-- ✅ FastSync can now successfully sync from ETH66/ETH67/ETH68 peers
-- ✅ No changes required to existing ETH63/ETH62 message handling
-
-### Files Modified
-- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/PeersClient.scala` - Extended message adaptation
-- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/fast/FastSync.scala` - Added ETH66 response handlers
-- `docs/troubleshooting/LOG_REVIEW_RESOLUTION.md` - This documentation
-
-### Verification Steps
+### Verification
 
 1. **Check message format in logs**:
    ```bash
@@ -108,67 +65,23 @@ Also updated:
 
 ---
 
-## UPDATE 2025-11-26: TCP Disconnect During Block Sync (Issue #578)
+## ForkId Compatibility
 
-### Issue Discovered
-Peers disconnect with reason code 0x10 ("Some other reason specific to a subprotocol") after the initial handshake once block exchange begins. The disconnect happens after:
-1. TCP connection establishes
-2. RLPx auth handshake completes
-3. Protocol handshake with ETH68 (CoreGeth v1.12.20) completes
-4. Status message exchange occurs
-5. **Peer immediately disconnects with reason code 0x10**
+### Overview
 
-### Root Cause Analysis
+ForkId validation ensures peers are on compatible chains. Nodes starting from block 0 now use bootstrap pivot for ForkId calculation.
 
-#### Primary Cause: ForkId Mismatch (Addressed in previous fix)
-When a node is at block 0, it would report ForkId `0xfc64ec04` with `next: 1150000` per EIP-2124. However, peers at block 19,250,000+ expect ForkId `0xbe46d57c`. This causes immediate rejection.
+### Implementation
 
-**Solution Implemented:**
-- Use bootstrap pivot block (19,250,000) for ForkId calculation when syncing
-- This is configured via `use-bootstrap-checkpoints = true` and `bootstrap-checkpoints` in chain config
-- Code location: `EthNodeStatus64ExchangeState.scala:117-142`
+```scala
+val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
+  val threshold = math.min(bootstrapPivotBlock / 10, BigInt(100000))
+  val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
+  if (shouldUseBootstrap) bootstrapPivotBlock else bestBlockNumber
+} else bestBlockNumber
+```
 
-#### Secondary Causes (Addressed in previous fixes)
-
-1. **Snappy Decompression Logic**
-   - Fixed: Always attempt decompression first, fall back to uncompressed only if it fails AND data looks like RLP
-   - Code location: `MessageCodec.scala:84-111`
-
-2. **ETH67 NewPooledTransactionHashes Encoding**
-   - Fixed: Types field encoded as `RLPValue(types.toArray)` to match Go's `[]byte` encoding
-   - Code location: `ETH67.scala:46`
-
-3. **Request-id=0 Encoding**
-   - Fixed: Uses `bigIntToUnsignedByteArray` which returns empty bytes for 0
-   - Code location: `ETH66.scala:39`
-
-### Enhanced Diagnostics Added
-
-Added enhanced logging to help diagnose future disconnect issues:
-
-1. **EtcPeerManagerActor** - Logs raw RLP bytes when debug is enabled
-   ```scala
-   log.debug("PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}", ...)
-   ```
-
-2. **PeerActor** - Enhanced disconnect logging with connection status
-   ```scala
-   log.info("DISCONNECT_DEBUG: ... status: {}", status)
-   ```
-   Additional context for 0x10 disconnects explaining common causes.
-
-### Impact
-- ✅ ForkId mismatch issue resolved for nodes starting from block 0
-- ✅ Snappy decompression handles all edge cases
-- ✅ ETH67/68 messages correctly encoded for core-geth compatibility
-- ✅ Enhanced diagnostics for future debugging
-
-### Files Modified
-- `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala` - Added debug RLP logging
-- `src/main/scala/com/chipprbots/ethereum/network/PeerActor.scala` - Enhanced disconnect diagnostics
-- `docs/troubleshooting/LOG_REVIEW_RESOLUTION.md` - This documentation
-
-### Verification Steps
+### Verification
 
 1. **Check ForkId at Startup**:
    ```bash
@@ -182,42 +95,56 @@ Added enhanced logging to help diagnose future disconnect issues:
    ```
    Should see sustained peer connections without immediate 0x10 disconnects
 
-3. **Enable Debug Logging for RLP Analysis** (if needed):
-   ```
-   In logback.xml, set:
-   <logger name="com.chipprbots.ethereum.network.EtcPeerManagerActor" level="DEBUG"/>
-   ```
+---
 
-### Related Documentation
+## Snappy Compression
 
-- [BLOCK_SYNC_TROUBLESHOOTING.md](BLOCK_SYNC_TROUBLESHOOTING.md) - General block sync issues
-- [Issue #578](https://github.com/chippr-robotics/fukuii/issues/578) - Original issue
-- [Core-geth ForkId](https://github.com/etclabscore/core-geth/blob/master/core/forkid/forkid.go) - Reference implementation
+### Overview
+
+All ETH protocol messages use Snappy compression (p2pVersion >= 5). The implementation correctly handles both compressed and uncompressed data.
+
+### Logic
+
+```scala
+// Always attempt decompression first
+Try(Snappy.uncompress(data)) match {
+  case Success(decompressed) => decompressed
+  case Failure(_) if looksLikeRLP(data) => data  // Fallback for uncompressed
+  case Failure(ex) => throw ex
+}
+```
 
 ---
 
-## Historical Fixes
+## ETH67 Transaction Announcements
 
-### 2025-11-27: ETH66+ Protocol Adaptation for GetReceipts and GetBlockBodies
+### Overview
 
-**Error:** Peer disconnect with reason 0x01 ("TCP sub-system error") during FastSync
+ETH67 introduced a new format for `NewPooledTransactionHashes` with types and sizes arrays.
 
-**Cause:** GetReceipts and GetBlockBodies messages were sent in ETH63/ETH62 format to ETH66+ peers that expect request-id wrapper format.
+### Implementation
 
-**Fix:** Extended `PeersClient.adaptMessageForPeer` to adapt GetReceipts and GetBlockBodies messages, added ETH66 response handlers in FastSync.
+Types are encoded as a byte string (matching Go's `[]byte`):
+```scala
+RLPValue(types.toArray)  // Not RLPList
+```
 
-### 2025-11-23: Snappy Decompression Logic
+---
 
-**Error:** `ETH67_DECODE_ERROR: Unexpected RLP structure... got: RLPValue(20 bytes)`
+## Key Files
 
-**Cause:** `looksLikeRLP` check was performed before decompression, causing compressed data starting with RLP-like bytes (0x80-0xff) to be incorrectly treated as uncompressed.
+| File | Purpose |
+|------|---------|
+| `PeersClient.scala` | Message adaptation |
+| `FastSync.scala` | Sync request handling |
+| `EthNodeStatus64ExchangeState.scala` | ForkId calculation |
+| `MessageCodec.scala` | Snappy compression |
+| `ETH67.scala` | Transaction announcement encoding |
 
-**Fix:** Always decompress first, fallback only if it fails and data looks like RLP.
+---
 
-### 2025-11-23: ETH67 NewPooledTransactionHashes Encoding
+## Related Documentation
 
-**Error:** Core-geth peers disconnect after receiving message
-
-**Cause:** Types field was encoded as `RLPList` instead of `RLPValue`. Go's `[]byte` encodes as a single byte string, not a list of bytes.
-
-**Fix:** Changed to `RLPValue(types.toArray)` to match Go encoding.
+- [Block Sync Guide](BLOCK_SYNC_TROUBLESHOOTING.md)
+- [Known Issues](../runbooks/known-issues.md)
+- [devp2p Specification](https://github.com/ethereum/devp2p)

@@ -353,7 +353,7 @@ Potential improvements for future releases:
 
 ## Related ADRs
 
-- [ADR-001: Scala 3 Migration](001-scala-3-migration.md) - Scala 3 context for implementation
+- [INF-001: Scala 3 Migration](../infrastructure/INF-001-scala-3-migration.md) - Scala 3 context for implementation
 
 ## Changelog
 

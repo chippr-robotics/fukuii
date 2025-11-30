@@ -12,7 +12,7 @@ Default credentials that MUST be changed:
 - JWT secrets
 - Grafana admin password
 
-See [SECURITY.md](SECURITY.md) for detailed instructions on securing your deployment.
+See [Kong Security Guide](kong-security.md) for detailed instructions on securing your deployment.
 
 ## Overview
 
@@ -679,7 +679,7 @@ For multi-region HADR:
 
 ## Support and Resources
 
-- **Fukuii Documentation**: [Main README](../../README.md)
+- **Fukuii Documentation**: [Documentation Home](../index.md)
 - **Kong Documentation**: https://docs.konghq.com/
 - **Kong Plugins**: https://docs.konghq.com/hub/
 - **Prometheus**: https://prometheus.io/docs/
