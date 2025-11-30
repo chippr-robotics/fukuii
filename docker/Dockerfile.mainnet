@@ -135,6 +135,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD ["/usr/local/bin/healthcheck.sh"]
 
 # Set entrypoint to the fukuii binary with ETC mainnet
-# Override default config paths to use /app/conf (volume-mountable)
+# Uses network-specific config file (etc.conf for Ethereum Classic mainnet)
 ENTRYPOINT ["/app/fukuii/bin/fukuii"]
-CMD ["-Dconfig.file=/app/conf/app.conf", "-Dlogback.configurationFile=/app/conf/logback.xml", "etc"]
+CMD ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]

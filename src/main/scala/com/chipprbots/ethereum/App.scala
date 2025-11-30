@@ -1,25 +1,63 @@
 package com.chipprbots.ethereum
 
+import java.io.File
+
 import com.chipprbots.ethereum.cli.CliLauncher
 import com.chipprbots.ethereum.crypto.EcKeyGen
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
-import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 
 object App extends Logger {
+
+  // Known network names that correspond to config files in conf/ directory
+  private val knownNetworks = Set(
+    "etc",
+    "eth",
+    "mordor",
+    "pottery",
+    "sagano",
+    "bootnode",
+    "testnet-internal-nomad"
+  )
+
+  /** Check if argument is an option flag (starts with -) */
+  private def isOptionFlag(arg: String): Boolean = arg.startsWith("-")
+
+  /** Check if argument is a known network name */
+  private def isNetwork(arg: String): Boolean = knownNetworks.contains(arg)
+
+  /** Set config file for the specified network (must be called before Config is accessed) */
+  private def setNetworkConfig(network: String): Unit = {
+    val configFile = s"conf/$network.conf"
+    // Only set if the config file exists
+    val file = new File(configFile)
+    if (file.exists()) {
+      System.setProperty("config.file", configFile)
+    } else {
+      // Log warning when config file doesn't exist for a known network
+      log.warn(s"Config file '$configFile' not found for network '$network', using default config")
+    }
+  }
 
   private def showHelp(): Unit =
     println(
       """
         |Fukuii Ethereum Client
         |
-        |Usage: fukuii [command] [options]
+        |Usage: fukuii [network] [options]
+        |   or: fukuii [command] [options]
+        |
+        |Networks:
+        |  etc                    Ethereum Classic mainnet (default)
+        |  eth                    Ethereum mainnet
+        |  mordor                 Mordor testnet
+        |  pottery                Pottery testnet
+        |  sagano                 Sagano testnet
+        |  bootnode               Bootnode configuration (advanced)
+        |  testnet-internal-nomad Internal Nomad testnet (advanced)
         |
         |Commands:
-        |  fukuii [network]       Start Fukuii node (default command)
-        |                         Networks: etc, eth, mordor, testnet-internal
-        |
         |  cli [subcommand]       Command-line utilities
         |                         Run 'fukuii cli --help' for more information
         |
@@ -40,9 +78,15 @@ object App extends Logger {
         |                         Console logs are suppressed while TUI is active
         |  --force-pivot-sync     Disable checkpoint bootstrapping and force pivot sync
         |
+        |Custom Configuration:
+        |  Use JVM property to specify a custom config file:
+        |  java -Dconfig.file=/path/to/custom.conf -jar fukuii.jar
+        |
         |Examples:
-        |  fukuii etc                      # Start Ethereum Classic node with standard logging
+        |  fukuii                          # Start Ethereum Classic node (default)
+        |  fukuii etc                      # Start Ethereum Classic node
         |  fukuii etc --tui                # Start with Terminal UI enabled
+        |  fukuii mordor                   # Start Mordor testnet node
         |  fukuii cli --help               # Show CLI utilities help
         |  fukuii cli generate-private-key # Generate a new private key
         |
@@ -65,9 +109,21 @@ object App extends Logger {
     args.headOption match {
       case None                  => Fukuii.main(args)
       case Some("--help" | "-h") => showHelp()
-      case Some(`launchFukuii`)  => Fukuii.main(args.tail)
+      case Some(`launchFukuii`) =>
+        // Handle 'fukuii <network>' case - set config before launching
+        args.tail.headOption.filter(isNetwork).foreach(setNetworkConfig)
+        // Filter out network name from remaining args to avoid passing it to Fukuii.main
+        val remainingArgs = args.tail.headOption.filter(isNetwork) match {
+          case Some(_) => args.tail.tail
+          case None    => args.tail
+        }
+        Fukuii.main(remainingArgs)
       case Some(`launchKeytool`) => KeyTool.main(args.tail)
       case Some(`downloadBootstrap`) =>
+        // Import Config locally to ensure it's loaded after any network config is set.
+        // This delayed import is intentional - Config is a lazy-initialized object that
+        // reads config.file system property at initialization time.
+        import com.chipprbots.ethereum.utils.Config
         Config.Db.dataSource match {
           case "rocksdb" => BootstrapDownload.main(args.tail :+ Config.Db.RocksDb.path)
         }
@@ -77,6 +133,13 @@ object App extends Logger {
       case Some(`ecKeyGen`)     => EcKeyGen.main(args.tail)
       case Some(`sigValidator`) => SignatureValidator.main(args.tail)
       case Some(`cli`)          => CliLauncher.main(args.tail)
+      case Some(network) if isNetwork(network) =>
+        // Network name specified - set config and launch Fukuii
+        setNetworkConfig(network)
+        Fukuii.main(args.tail)
+      case Some(arg) if isOptionFlag(arg) =>
+        // Option flags (starting with -) are passed directly to Fukuii
+        Fukuii.main(args)
       case Some(unknown) =>
         log.error(
           s"Unrecognised launcher option: $unknown\n" +

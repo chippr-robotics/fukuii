@@ -98,9 +98,10 @@ ENV JAVA_OPTS="-Xms2g -Xmx4g"
 # Set entrypoint to Java with the main class
 # Distroless images don't have bash, so we must invoke Java directly
 # The classpath includes all jars from the lib directory and the main application jar
+# Uses etc.conf for Ethereum Classic mainnet by default
 ENTRYPOINT ["java", \
-    "-Dconfig.file=/app/fukuii/conf/app.conf", \
+    "-Dconfig.file=/app/fukuii/conf/etc.conf", \
     "-Dlogback.configurationFile=/app/fukuii/conf/logback.xml", \
     "-cp", "/app/fukuii/lib/*", \
     "com.chipprbots.ethereum.App"]
-CMD ["etc"]
+CMD []
