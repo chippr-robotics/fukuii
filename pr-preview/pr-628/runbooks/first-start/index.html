@@ -5752,7 +5752,7 @@
 <li>Wait for the environment to initialize</li>
 <li>Run <code>sbt dist</code> to build</li>
 </ol>
-<p>See <a href="../../.devcontainer/README.md">.devcontainer/README.md</a> for details.</p>
+<p>See the <a href="../../development/codespaces/">Codespaces Setup</a> for details.</p>
 <h3 id="method-3-building-from-source">Method 3: Building from Source<a class="headerlink" href="#method-3-building-from-source" title="Permanent link">&para;</a></h3>
 <h4 id="step-1-install-dependencies">Step 1: Install Dependencies<a class="headerlink" href="#step-1-install-dependencies" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Install JDK 21</span>
@@ -5990,7 +5990,7 @@
 </ol>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>curl<span class="w"> </span>http://localhost:9095/metrics
 </span></code></pre></div>
-<p>See <a href="../../docker/fukuii/docker-compose.yml">docker/fukuii/docker-compose.yml</a> for a complete monitoring stack with Prometheus and Grafana.</p>
+<p>See the <a href="../../deployment/docker/">Docker Deployment Guide</a> for a complete monitoring stack with Prometheus and Grafana.</p>
 <h3 id="configure-firewall">Configure Firewall<a class="headerlink" href="#configure-firewall" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Ubuntu/Debian with ufw</span>
 </span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>sudo<span class="w"> </span>ufw<span class="w"> </span>allow<span class="w"> </span><span class="m">30303</span>/udp<span class="w"> </span>comment<span class="w"> </span><span class="s2">&quot;Fukuii discovery&quot;</span>

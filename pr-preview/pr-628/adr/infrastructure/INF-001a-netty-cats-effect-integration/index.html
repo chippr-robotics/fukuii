@@ -5327,7 +5327,7 @@
 <h1 id="adr-001a-netty-channel-lifecycle-with-cats-effect-io">ADR-001a: Netty Channel Lifecycle with Cats Effect IO<a class="headerlink" href="#adr-001a-netty-channel-lifecycle-with-cats-effect-io" title="Permanent link">&para;</a></h1>
 <p><strong>Status</strong>: Accepted</p>
 <p><strong>Date</strong>: November 2025</p>
-<p><strong>Parent ADR</strong>: <a href="001-scala-3-migration.md">ADR-001: Scala 3 Migration</a></p>
+<p><strong>Parent ADR</strong>: <a href="../INF-001-scala-3-migration/">INF-001: Scala 3 Migration</a></p>
 <p><strong>Deciders</strong>: Chippr Robotics LLC Engineering Team</p>
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
 <p>During the Scala 3 and Cats Effect 3 migration (ADR-001), we encountered a critical issue with the vendored scalanet library's UDP channel management. Channels were reporting as "CLOSED" during peer enrollment despite successful bind operations, preventing peer discovery from functioning.</p>
@@ -5600,7 +5600,7 @@ All three unit tests now pass reliably after fixing the shutdown race condition:
 <li><a href="https://github.com/input-output-hk/scalanet">Original IOHK scalanet v0.8.0</a></li>
 <li><a href="https://netty.io/wiki/user-guide-for-4.x.html">Netty User Guide - Channel Lifecycle</a></li>
 <li><a href="https://typelevel.org/cats-effect/docs/std/resource">Cats Effect 3 Documentation - Resource</a></li>
-<li><a href="001-scala-3-migration.md">ADR-001: Scala 3 Migration</a></li>
+<li><a href="../INF-001-scala-3-migration/">INF-001: Scala 3 Migration</a></li>
 </ul>
 <h2 id="review-and-update">Review and Update<a class="headerlink" href="#review-and-update" title="Permanent link">&para;</a></h2>
 <p>This ADR should be reviewed when:

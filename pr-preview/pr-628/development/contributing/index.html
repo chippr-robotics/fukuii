@@ -5684,7 +5684,7 @@
 </li>
 </ol>
 <h3 id="quick-start-with-github-codespaces">Quick Start with GitHub Codespaces<a class="headerlink" href="#quick-start-with-github-codespaces" title="Permanent link">&para;</a></h3>
-<p>For the fastest setup, use GitHub Codespaces which provides a pre-configured development environment. See <a href=".devcontainer/README.md">.devcontainer/README.md</a> for details.</p>
+<p>For the fastest setup, use GitHub Codespaces which provides a pre-configured development environment. See <a href="../codespaces/">Codespaces Setup</a> for details.</p>
 <h2 id="development-workflow">Development Workflow<a class="headerlink" href="#development-workflow" title="Permanent link">&para;</a></h2>
 <ol>
 <li>
@@ -5779,8 +5779,8 @@
 - The project is Scala 3 only (no cross-compilation)
 - All dependencies are Scala 3 compatible
 - CI pipeline tests on Scala 3.3.4 with JDK 21
-- See <a href="docs/adr/infrastructure/INF-001-scala-3-migration.md">INF-001: Scala 3 Migration</a> for the architectural decision
-- See <a href="docs/MIGRATION_HISTORY.md">Migration History</a> for details on the completed migration</p>
+- See <a href="../../adr/infrastructure/INF-001-scala-3-migration/">INF-001: Scala 3 Migration</a> for the architectural decision
+- See <a href="../../historical/MIGRATION_HISTORY/">Migration History</a> for details on the completed migration</p>
 <h2 id="pre-commit-hooks">Pre-commit Hooks<a class="headerlink" href="#pre-commit-hooks" title="Permanent link">&para;</a></h2>
 <p>To ensure code quality, we strongly recommend setting up pre-commit hooks that automatically check your code before each commit.</p>
 <h3 id="option-1-manual-git-hook-recommended">Option 1: Manual Git Hook (Recommended)<a class="headerlink" href="#option-1-manual-git-hook-recommended" title="Permanent link">&para;</a></h3>
@@ -6001,12 +6001,12 @@
 - <strong>Flaky tests</strong>: Tests that simulate errors may pass or fail unpredictably
 - <strong>Unclear contract</strong>: The error handling isn't explicit in the code</p>
 <p><strong>For more information:</strong>
-- <a href="docs/adr/infrastructure/INF-004-actor-io-error-handling.md">Actor IO Error Handling Pattern (INF-004)</a></p>
+- <a href="../../adr/infrastructure/INF-004-actor-io-error-handling/">Actor IO Error Handling Pattern (INF-004)</a></p>
 <p><strong>For more information on test strategy and KPI baselines:</strong>
-- <a href="docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md">Test Suite Strategy and KPIs (TEST-002)</a>
-- <a href="docs/testing/README.md">Testing Documentation</a>
-- <a href="docs/testing/KPI_BASELINES.md">KPI Baselines</a>
-- <a href="docs/testing/KPI_MONITORING_GUIDE.md">KPI Monitoring Guide</a></p>
+- <a href="../../adr/testing/TEST-002-test-suite-strategy-and-kpis/">Test Suite Strategy and KPIs (TEST-002)</a>
+- <a href="../../testing/">Testing Documentation</a>
+- <a href="../../testing/KPI_BASELINES/">KPI Baselines</a>
+- <a href="../../testing/KPI_MONITORING_GUIDE/">KPI Monitoring Guide</a></p>
 <h2 id="submitting-changes">Submitting Changes<a class="headerlink" href="#submitting-changes" title="Permanent link">&para;</a></h2>
 <ol>
 <li>
@@ -6088,7 +6088,7 @@ Release notes are automatically drafted as PRs are merged. Use descriptive commi
 - <code>fix:</code> for bug fixes
 - <code>security:</code> for security fixes
 - <code>docs:</code> for documentation</p>
-<p>See <a href=".github/workflows/README.md">.github/workflows/README.md</a> for detailed release process documentation.</p>
+<p>See the <a href="../ci-cd/">CI/CD Documentation</a> for detailed release process documentation.</p>
 <h2 id="guidelines-for-llm-agents">Guidelines for LLM Agents<a class="headerlink" href="#guidelines-for-llm-agents" title="Permanent link">&para;</a></h2>
 <p>This section provides rules, reminders, and prompts for LLM agents (AI coding assistants) working on this codebase to ensure consistency and quality.</p>
 <h3 id="core-principles">Core Principles<a class="headerlink" href="#core-principles" title="Permanent link">&para;</a></h3>
@@ -6201,12 +6201,12 @@ Release notes are automatically drafted as PRs are merged. Use descriptive commi
 <h2 id="additional-resources">Additional Resources<a class="headerlink" href="#additional-resources" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="https://chippr-robotics.github.io/fukuii/">📖 Hosted Documentation</a> - Browsable documentation site</li>
-<li><a href=".github/workflows/README.md">GitHub Workflow Documentation</a></li>
-<li><a href=".github/QUICKSTART.md">Quick Start Guide</a></li>
-<li><a href=".github/BRANCH_PROTECTION.md">Branch Protection Setup</a></li>
-<li><a href="docs/adr/README.md">Architectural Decision Records</a></li>
-<li><a href="docs/MIGRATION_HISTORY.md">Migration History</a></li>
-<li><a href="STATIC_ANALYSIS_INVENTORY.md">Static Analysis Inventory</a></li>
+<li><a href="../ci-cd/">CI/CD Documentation</a></li>
+<li><a href="../../getting-started/">Getting Started</a></li>
+<li><a href="../branch-protection/">Branch Protection</a></li>
+<li><a href="../../adr/">Architectural Decision Records</a></li>
+<li><a href="../../historical/MIGRATION_HISTORY/">Migration History</a></li>
+<li><a href="../static-analysis/">Static Analysis</a></li>
 <li><a href="https://scalameta.org/scalafmt/">Scalafmt Documentation</a></li>
 <li><a href="https://scalacenter.github.io/scalafix/">Scalafix Documentation</a></li>
 </ul>
