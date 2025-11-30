@@ -4,7 +4,7 @@
 
 **Date**: November 2025
 
-**Parent ADR**: [ADR-001: Scala 3 Migration](001-scala-3-migration.md)
+**Parent ADR**: [INF-001: Scala 3 Migration](INF-001-scala-3-migration.md)
 
 **Deciders**: Chippr Robotics LLC Engineering Team
 
@@ -289,7 +289,7 @@ If encountering similar issues elsewhere in the codebase:
 - [Original IOHK scalanet v0.8.0](https://github.com/input-output-hk/scalanet)
 - [Netty User Guide - Channel Lifecycle](https://netty.io/wiki/user-guide-for-4.x.html)
 - [Cats Effect 3 Documentation - Resource](https://typelevel.org/cats-effect/docs/std/resource)
-- [ADR-001: Scala 3 Migration](001-scala-3-migration.md)
+- [INF-001: Scala 3 Migration](INF-001-scala-3-migration.md)
 
 ## Review and Update
 

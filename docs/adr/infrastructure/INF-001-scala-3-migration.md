@@ -191,7 +191,7 @@ The migration was executed in phases:
 4. **Phase 5**: Compilation error resolution (508 errors)
 5. **Phase 6**: Monix to Cats Effect IO migration (~100 files)
 
-For detailed technical information, see [Migration History](../MIGRATION_HISTORY.md).
+For detailed technical information, see [Migration History](../../historical/MIGRATION_HISTORY.md).
 
 ## Alternatives Considered
 
@@ -221,7 +221,7 @@ For detailed technical information, see [Migration History](../MIGRATION_HISTORY
 - [JDK 21 Release Notes](https://openjdk.org/projects/jdk/21/)
 - [Cats Effect 3 Documentation](https://typelevel.org/cats-effect/)
 - [Apache Pekko](https://pekko.apache.org/)
-- [Migration History](../MIGRATION_HISTORY.md)
+- [Migration History](../../historical/MIGRATION_HISTORY.md)
 
 ## Review and Update
 

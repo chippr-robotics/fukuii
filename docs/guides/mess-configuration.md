@@ -4,7 +4,7 @@
 
 MESS (Modified Exponential Subjective Scoring) is a consensus enhancement for Ethereum Classic that provides protection against long-range reorganization attacks by applying time-based penalties to blocks that are received late by the node.
 
-For detailed technical information, see [CON-004: MESS Implementation](adr/consensus/CON-004-mess-implementation.md).
+For detailed technical information, see [CON-004: MESS Implementation](../adr/consensus/CON-004-mess-implementation.md).
 
 ## Quick Start
 

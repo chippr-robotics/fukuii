@@ -296,8 +296,8 @@ When adding new E2E tests:
 ## References
 
 - [Issue: E2E testing for blockchain synchronization](https://github.com/chippr-robotics/fukuii/issues/459)
-- [Test Tagging Guide](../../docs/testing/TEST_TAGGING_GUIDE.md)
-- [Integration Test Documentation](../../docs/testing/README.md)
+- [Test Tagging Guide](TEST_TAGGING_GUIDE.md)
+- [Testing Documentation](README.md)
 - [Sync Architecture](../architecture/architecture-overview.md)
 
 ## Revision History

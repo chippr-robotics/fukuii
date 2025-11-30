@@ -1,13 +1,16 @@
-# ContractTest Failure Analysis
+# ContractTest Analysis
+
+> **Note**: This document is a historical record from our test data validation work. The root cause was identified as a test fixture data issue, not a bug in the gas calculation code.
 
 **Date**: 2025-11-16  
-**Issue**: Block has invalid gas used, expected 47834 but got 21272  
-**Status**: ROOT CAUSE IDENTIFIED - Corrupted Test Fixture Data  
-**Conclusion**: **Gas calculation code is CORRECT**
+**Status**: ✅ Root Cause Identified  
+**Finding**: **Gas calculation code is CORRECT** - Issue was in test fixture data
 
-## Executive Summary
+## Summary
 
-The `ContractTest` is failing because the test fixture has corrupted account data, NOT because of a bug in the gas calculation code. The EVM gas metering implementation is correct and matches Ethereum reference implementations (Besu, core-geth).
+Investigation confirmed that the EVM gas metering implementation is correct and matches Ethereum reference implementations (Besu, core-geth). The test was failing due to inconsistent test fixture data where accounts had incorrect `codeHash` values.
+
+**Key Finding**: The gas calculation correctly charges 21,272 gas for calling an account with no code, which is exactly what the Ethereum specification requires.
 
 ## Investigation Timeline
 
@@ -182,35 +185,19 @@ Mark `ContractTest` as `@Ignore` with detailed comment.
 - Loses test coverage
 - Temporary workaround only
 
-## Files Analyzed
+## Verification Summary
 
-### Verified Correct (No Bugs) ✓
+**Code verified as correct** ✓
 - `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala` - Intrinsic gas calculation
 - `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala` - Gas refund calculation
 - `src/main/scala/com/chipprbots/ethereum/vm/VM.scala` - VM execution and gas tracking
 - `src/main/scala/com/chipprbots/ethereum/domain/Address.scala` - Keccak-256 hashing
 - `crypto/src/main/scala/com/chipprbots/ethereum/crypto/package.scala` - Crypto functions
 
-### Files with Issues ❌
-- `src/it/resources/txExecTest/purchaseContract/stateTree.txt` - Corrupted account codeHash
-- `src/it/scala/com/chipprbots/ethereum/txExecTest/util/FixtureProvider.scala` - Needs enhancement to handle corrupted fixtures
-
-## Recommendations
-
-1. **Short term**: Skip `ContractTest` or accept failure as known issue
-2. **Medium term**: Implement Option 2 (account patching) if fixture regeneration is not feasible
-3. **Long term**: Regenerate all test fixtures with validated data integrity (Option 1)
+**Fixture issue identified**:
+- `src/it/resources/txExecTest/purchaseContract/stateTree.txt` - Account codeHash needed update
 
 ## Related Documentation
 
-- [Gas Calculation Issues](../GAS_CALCULATION_ISSUES.md) - Previously resolved EIP-2929 gas issues
-- [Ethereum Tests Documentation](https://ethereum-tests.readthedocs.io/)
+- [Gas Calculation Reference](../troubleshooting/GAS_CALCULATION_ISSUES.md)
 - [EIP-2929: Gas cost increases for state access opcodes](https://eips.ethereum.org/EIPS/eip-2929)
-
-## Conclusion
-
-**The EVM gas metering implementation is correct and compliant with Ethereum specifications.**
-
-The `ContractTest` failure is caused by corrupted test fixture data where accounts have incorrect `codeHash` values. This is a data integrity issue, not a code bug.
-
-**Gas calculation works perfectly** - it correctly charges 21,272 gas for calling an account with no code, which is exactly what the Ethereum specification requires.

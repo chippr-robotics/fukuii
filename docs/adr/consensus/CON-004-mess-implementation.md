@@ -356,8 +356,8 @@ Based on the core-geth implementation and Ethereum Classic community discussions
 - **ECIP-1097/ECBP-1100**: https://github.com/ethereumclassic/ECIPs/pull/373
 - **core-geth Implementation**: https://github.com/etclabscore/core-geth
 - **Related ADRs**:
-  - [ADR-012: Bootstrap Checkpoints](012-bootstrap-checkpoints.md) - Complementary security enhancement
-  - [ADR-013: Block Sync Improvements](013-block-sync-improvements.md) - Related sync mechanism work
+  - [CON-002: Bootstrap Checkpoints](CON-002-bootstrap-checkpoints.md) - Complementary security enhancement
+  - [CON-003: Block Sync Improvements](CON-003-block-sync-improvements.md) - Related sync mechanism work
 
 ## Rollout Strategy
 

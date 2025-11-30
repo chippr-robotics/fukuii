@@ -271,10 +271,10 @@ sbt "testOnly -- -n IntegrationTest"
 
 ## References
 
-- [TEST-001: Ethereum/Tests Adapter](docs/adr/testing/TEST-001-ethereum-tests-adapter.md)
-- [TEST-002: Test Suite Strategy and KPIs](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
-- [Test Tagging Guide](docs/testing/TEST_TAGGING_GUIDE.md)
-- [Tags Object Source](src/test/scala/com/chipprbots/ethereum/testing/Tags.scala)
+- [TEST-001: Ethereum/Tests Adapter](../adr/testing/TEST-001-ethereum-tests-adapter.md)
+- [TEST-002: Test Suite Strategy and KPIs](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
+- [Test Tagging Guide](TEST_TAGGING_GUIDE.md)
+- Tags Object Source: `src/test/scala/com/chipprbots/ethereum/testing/Tags.scala`
 
 ## Author
 

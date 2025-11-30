@@ -69,7 +69,7 @@ Ethereum Test Suite (ETS) integration:
 - `ets/retesteth` - Wrapper script for running tests
 - `test-ets.sh` - CI script for running the full test suite
 
-See [ets/README.md](../../ets/README.md) for details on running ETS tests.
+See the [Testing Documentation](../testing/README.md) for details on running tests.
 
 #### `tls/`
 TLS certificates and scripts for secure RPC testing:
@@ -93,7 +93,7 @@ See [Docker Documentation](../deployment/docker.md) for comprehensive Docker doc
 Operational configurations for production deployments:
 - `ops/grafana/` - Pre-configured Grafana dashboards for monitoring Fukuii nodes
 
-See [ops/README.md](../../ops/README.md) and [metrics-and-monitoring.md](../operations/metrics-and-monitoring.md) for details.
+See [Metrics and Monitoring](../operations/metrics-and-monitoring.md) for details.
 
 #### `docs/`
 Comprehensive documentation:
@@ -227,7 +227,7 @@ This repository is a continuation of the Mantis Ethereum Classic client original
    - Scala 2.13 → Scala 3.3.4 (LTS)
    - Akka → Apache Pekko
    - Monix → Cats Effect 3
-   - See [docs/adr/infrastructure/INF-001-scala-3-migration.md](docs/adr/infrastructure/INF-001-scala-3-migration.md)
+   - See [INF-001: Scala 3 Migration](../adr/infrastructure/INF-001-scala-3-migration.md)
 
 3. **Vendored Dependencies**
    - scalanet: Networking library (needed for Scala 3 compatibility)
@@ -235,13 +235,10 @@ This repository is a continuation of the Mantis Ethereum Classic client original
 
 ## Related Documentation
 
-- [README.md](README.md) - Getting started and features
-- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Contribution guidelines
-- [CHANGELOG.md](../../CHANGELOG.md) - Version history
-- [ARCHITECTURE_DIAGRAMS.md](../architecture/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
-- [VENDORED_MODULES_INTEGRATION_PLAN.md](VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
-- [LICENSE](../../LICENSE) - Apache 2.0 license
-- [NOTICE](../../NOTICE) - Attribution and notices
+- [Getting Started](../getting-started/index.md) - Getting started and features
+- [Contributing Guide](contributing.md) - Contribution guidelines
+- [Architecture Diagrams](../architecture/ARCHITECTURE_DIAGRAMS.md) - C4 architecture diagrams
+- [Vendored Modules Plan](VENDORED_MODULES_INTEGRATION_PLAN.md) - Plan for integrating vendored modules
 
 ## Questions?
 
@@ -249,5 +246,5 @@ For questions about the repository structure or where to add new code:
 
 1. Check existing code for similar functionality
 2. Follow the package structure in `src/main/scala/`
-3. Refer to [CONTRIBUTING.md](../../CONTRIBUTING.md)
+3. Refer to [Contributing Guide](contributing.md)
 4. Ask in GitHub Discussions or open an issue

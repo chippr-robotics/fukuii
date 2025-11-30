@@ -80,6 +80,6 @@ git submodule update --init --recursive
 
 ## More Information
 
-- [Fukuii Quick Start Guide](../.github/QUICKSTART.md)
-- [Main README](../README.md)
+- [Getting Started](../getting-started/index.md)
+- [Main Documentation](../index.md)
 - [GitHub Codespaces Documentation](https://docs.github.com/en/codespaces)
