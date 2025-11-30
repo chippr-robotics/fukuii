@@ -12,7 +12,7 @@
       }
     ]
   },
-  "description": "Fukuii Minimal Dashboard - Simple at-a-glance node status for Barad-dûr integration",
+  "description": "Fukuii Minimal Dashboard - Simple at-a-glance node status for Barad-d\u00fbr integration",
   "editable": true,
   "gnetId": null,
   "graphTooltip": 0,
@@ -53,7 +53,9 @@
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -62,13 +64,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_sync_block_number_gauge",
+          "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Block Height",
           "refId": "A"
         }
       ],
-      "title": "🔗 Block Height",
+      "title": "\ud83d\udd17 Block Height",
       "type": "stat"
     },
     {
@@ -114,7 +116,9 @@
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -123,13 +127,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_network_peers_incoming_handshaked_gauge + app_network_peers_outgoing_handshaked_gauge",
+          "expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"$node\"} + app_network_peers_outgoing_handshaked_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Peers",
           "refId": "A"
         }
       ],
-      "title": "👥 Connected Peers",
+      "title": "\ud83d\udc65 Connected Peers",
       "type": "stat"
     },
     {
@@ -175,7 +179,9 @@
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -184,13 +190,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_transactions_pool_size_gauge",
+          "expr": "app_transactions_pool_size_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Pending TXs",
           "refId": "A"
         }
       ],
-      "title": "📝 Transaction Pool",
+      "title": "\ud83d\udcdd Transaction Pool",
       "type": "stat"
     },
     {
@@ -235,7 +241,9 @@
       "options": {
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -245,13 +253,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "jvm_memory_bytes_used{area=\"heap\"} / jvm_memory_bytes_max{area=\"heap\"} * 100",
+          "expr": "jvm_memory_bytes_used{instance=~\"$node\", area=\"heap\"} / jvm_memory_bytes_max{instance=~\"$node\", area=\"heap\"} * 100",
           "interval": "",
           "legendFormat": "Memory %",
           "refId": "A"
         }
       ],
-      "title": "💾 Memory Usage",
+      "title": "\ud83d\udcbe Memory Usage",
       "type": "gauge"
     },
     {
@@ -300,7 +308,9 @@
       "options": {
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -310,13 +320,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_sync_block_gasUsed_gauge / app_sync_block_gasLimit_gauge * 100",
+          "expr": "app_sync_block_gasUsed_gauge{instance=~\"$node\"} / app_sync_block_gasLimit_gauge{instance=~\"$node\"} * 100",
           "interval": "",
           "legendFormat": "Gas %",
           "refId": "A"
         }
       ],
-      "title": "⛽ Gas Usage",
+      "title": "\u26fd Gas Usage",
       "type": "gauge"
     },
     {
@@ -362,7 +372,9 @@
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["mean"],
+          "calcs": [
+            "mean"
+          ],
           "fields": "",
           "values": false
         },
@@ -371,13 +383,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_sync_block_timeBetweenParent_seconds_gauge",
+          "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Block Time",
           "refId": "A"
         }
       ],
-      "title": "⏱️ Block Time",
+      "title": "\u23f1\ufe0f Block Time",
       "type": "stat"
     },
     {
@@ -427,7 +439,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_sync_block_number_gauge",
+          "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Block Height",
           "refId": "A"
@@ -437,7 +449,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "📈 Sync Progress",
+      "title": "\ud83d\udcc8 Sync Progress",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -478,9 +490,41 @@
   "refresh": "30s",
   "schemaVersion": 26,
   "style": "dark",
-  "tags": ["fukuii", "minimal", "barad-dur"],
+  "tags": [
+    "fukuii",
+    "minimal",
+    "barad-dur"
+  ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "error": null,
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node",
+        "multi": false,
+        "name": "node",
+        "options": [],
+        "query": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      }
+    ]
   },
   "time": {
     "from": "now-3h",

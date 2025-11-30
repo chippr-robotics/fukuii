@@ -7642,23 +7642,23 @@
   "templating": {
     "list": [
       {
-        "allValue": null,
+        "allValue": ".*",
         "current": {
-          "selected": false,
-          "text": "fukuii:13798",
-          "value": "fukuii:13798"
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(jvm_classes_loaded, instance)",
+        "definition": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
         "error": null,
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
         "label": null,
         "multi": false,
         "name": "node",
         "options": [],
-        "query": "label_values(jvm_classes_loaded, instance)",
-        "refresh": 1,
+        "query": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
         "sort": 1,
@@ -7669,23 +7669,23 @@
         "useTags": false
       },
       {
-        "allValue": null,
+        "allValue": ".*",
         "current": {
-          "selected": false,
-          "text": "fukuii:9095",
-          "value": "fukuii:9095"
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(pekko_system_active_actors_count,instance)",
+        "definition": "label_values(up{job=~\".*fukuii.*|pekko\"}, instance)",
         "error": null,
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
         "label": "pekko_node",
         "multi": false,
         "name": "pekko_node",
         "options": [],
-        "query": "label_values(pekko_system_active_actors_count,instance)",
-        "refresh": 1,
+        "query": "label_values(up{job=~\".*fukuii.*|pekko\"}, instance)",
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
         "sort": 0,

@@ -12,7 +12,7 @@
       }
     ]
   },
-  "description": "Fukuii Node Troubleshooting Dashboard - Focused on sync phase, IO, GC, RPC latency, and peer churn for Barad-dûr integration",
+  "description": "Fukuii Node Troubleshooting Dashboard - Focused on sync phase, IO, GC, RPC latency, and peer churn for Barad-d\u00fbr integration",
   "editable": true,
   "gnetId": null,
   "graphTooltip": 0,
@@ -67,7 +67,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -120,7 +122,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -173,7 +177,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -226,7 +232,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -989,7 +997,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1049,7 +1059,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1109,7 +1121,9 @@
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -1747,27 +1761,31 @@
   "refresh": "10s",
   "schemaVersion": 26,
   "style": "dark",
-  "tags": ["fukuii", "troubleshooting", "barad-dur"],
+  "tags": [
+    "fukuii",
+    "troubleshooting",
+    "barad-dur"
+  ],
   "templating": {
     "list": [
       {
-        "allValue": null,
+        "allValue": ".*",
         "current": {
-          "selected": false,
-          "text": "fukuii:13798",
-          "value": "fukuii:13798"
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(jvm_classes_loaded, instance)",
+        "definition": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
         "error": null,
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
         "label": "Node",
         "multi": false,
         "name": "node",
         "options": [],
-        "query": "label_values(jvm_classes_loaded, instance)",
-        "refresh": 1,
+        "query": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
         "sort": 1,
