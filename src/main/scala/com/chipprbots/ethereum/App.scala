@@ -35,12 +35,14 @@ object App extends Logger {
         |
         |Options:
         |  --help, -h             Show this help message
-        |  --tui                  Enable the console UI (disabled by default)
+        |  --tui                  Enable the Terminal UI (disabled by default)
+        |                         Shows real-time node status, peer count, sync progress
+        |                         Console logs are suppressed while TUI is active
         |  --force-pivot-sync     Disable checkpoint bootstrapping and force pivot sync
         |
         |Examples:
         |  fukuii etc                      # Start Ethereum Classic node with standard logging
-        |  fukuii etc --tui                # Start with console UI enabled
+        |  fukuii etc --tui                # Start with Terminal UI enabled
         |  fukuii cli --help               # Show CLI utilities help
         |  fukuii cli generate-private-key # Generate a new private key
         |
