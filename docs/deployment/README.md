@@ -38,3 +38,23 @@ docker-compose up -d
 ```
 
 See the [Docker Guide](docker.md) for detailed instructions.
+
+## Troubleshooting
+
+Common deployment issues and their solutions:
+
+### Docker Issues
+
+- **Container won't start**: Check logs with `docker-compose logs -f`
+- **Port conflicts**: Verify no other services are using the required ports
+- **Permission errors**: Ensure proper ownership of data directories
+
+### Network Issues
+
+- **Node not syncing**: Check peer connectivity and firewall settings
+- **RPC not responding**: Verify the service is running and port is exposed
+
+For detailed troubleshooting, see:
+- [Known Issues](../runbooks/known-issues.md)
+- [Log Triage](../runbooks/log-triage.md)
+- [Barad-dûr Operations](../runbooks/barad-dur-operations.md)

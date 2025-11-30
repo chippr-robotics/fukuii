@@ -1746,6 +1746,26 @@ curl -X POST http://localhost:8546 \
 
 ---
 
+### IELE Namespace
+
+The IELE namespace provides methods for interacting with the IELE Virtual Machine, an alternative VM for smart contract execution. IELE is a register-based virtual machine designed with formal verification in mind.
+
+**Note**: The IELE namespace is only available when Fukuii is configured with IELE VM support. This is an experimental feature not commonly used in production.
+
+#### iele_call
+
+Executes an IELE smart contract call.
+
+**Parameters**:
+1. `Object` - The call object (similar to eth_call)
+2. `QUANTITY|TAG` - Block number or tag
+
+**Returns**: `DATA` - The return value of the executed IELE contract
+
+**Note**: This method is only available when IELE VM is enabled in configuration.
+
+---
+
 ### RPC Namespace
 
 #### rpc_modules

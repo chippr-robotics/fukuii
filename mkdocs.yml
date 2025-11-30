@@ -136,6 +136,7 @@ nav:
     - for-operators/index.md
     - Docker Compose: deployment/docker.md
     - Kong API Gateway: deployment/kong.md
+    - Barad-dûr Operations: runbooks/barad-dur-operations.md
     - Test Network: deployment/test-network.md
     - Metrics & Monitoring: operations/metrics-and-monitoring.md
     - Log Triage: runbooks/log-triage.md
