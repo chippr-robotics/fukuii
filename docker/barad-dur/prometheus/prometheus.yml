@@ -2,7 +2,7 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    monitor: 'fukuii-kong-monitor'
+    monitor: 'fukuii-barad-dur-monitor'
     cluster: 'fukuii-production'
 
 # Alerting configuration (optional - can be configured later)
@@ -64,13 +64,13 @@ scrape_configs:
           environment: 'production'
     metrics_path: '/metrics'
 
-  # Cassandra metrics (if exposed via JMX exporter)
-  # - job_name: 'cassandra'
+  # PostgreSQL metrics (if exposed via postgres_exporter)
+  # - job_name: 'postgres'
   #   scrape_interval: 30s
   #   static_configs:
-  #     - targets: ['cassandra-exporter:9404']
+  #     - targets: ['postgres-exporter:9187']
   #       labels:
-  #         instance: 'cassandra'
+  #         instance: 'postgres'
   #         role: 'database'
 
   # Grafana metrics

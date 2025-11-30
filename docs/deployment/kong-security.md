@@ -1,6 +1,6 @@
-# Security Guide for Kong API Gateway
+# Security Guide for Barad-dûr (Kong API Gateway)
 
-This document outlines security best practices and configurations for deploying Kong API Gateway with Fukuii in production environments.
+This document outlines security best practices and configurations for deploying Barad-dûr (Kong API Gateway) with Fukuii in production environments.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ This document outlines security best practices and configurations for deploying 
 
 ## Security Overview
 
-The Kong setup provides multiple layers of security:
+The Barad-dûr (Kong) setup provides multiple layers of security:
 
 ```
 ┌─────────────────────────────────────────────────┐

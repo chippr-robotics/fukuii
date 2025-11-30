@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Kong API Gateway Test Script
+# Barad-dûr (Kong API Gateway) Test Script
 # Tests various endpoints and authentication methods
 
 set -e
@@ -19,7 +19,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-fukuii_admin_password}"
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}Kong API Gateway Test Suite${NC}"
+echo -e "${BLUE}Barad-dûr (Kong API Gateway) Test Suite${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
@@ -162,5 +162,5 @@ echo -e "${YELLOW}Additional Manual Tests:${NC}"
 echo -e "1. Check Grafana dashboards: http://localhost:3000"
 echo -e "2. Check Prometheus targets: http://localhost:9090/targets"
 echo -e "3. View Kong logs: docker-compose logs kong"
-echo -e "4. Check Cassandra: docker exec -it fukuii-cassandra cqlsh"
+echo -e "4. Check PostgreSQL: docker exec -it fukuii-postgres psql -U \${POSTGRES_USER:-kong}"
 echo ""

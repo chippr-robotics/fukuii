@@ -1,6 +1,6 @@
-# Kong API Gateway Architecture for Fukuii
+# Barad-dûr (Kong API Gateway) Architecture for Fukuii
 
-This document describes the architecture of the Kong API Gateway setup for Fukuii Ethereum Classic nodes.
+This document describes the architecture of the Barad-dûr (Kong API Gateway) setup for Fukuii Ethereum Classic nodes.
 
 ## High-Level Architecture
 
@@ -59,7 +59,7 @@ This document describes the architecture of the Kong API Gateway setup for Fukui
                                        │
                          ┌─────────────┴─────────────┐
                          │                           │
-                         │   Cassandra Database      │
+                         │   PostgreSQL Database     │
                          │   (Kong Configuration)    │
                          │                           │
                          └───────────────────────────┘
@@ -134,7 +134,7 @@ This document describes the architecture of the Kong API Gateway setup for Fukui
 - `8001`: Admin API (internal)
 - `8444`: Admin API HTTPS (internal)
 
-### Cassandra Database
+### PostgreSQL Database
 
 **Role**: Persistent storage for Kong configuration
 
@@ -145,25 +145,18 @@ This document describes the architecture of the Kong API Gateway setup for Fukui
 - Log plugin data
 
 **Configuration**:
-- Keyspace: `kong`
-- Replication Strategy: SimpleStrategy (development)
-- Replication Factor: 1 (increase for production)
+- Database: `kong`
+- User: `kong` (configurable via POSTGRES_USER)
 
 **Scaling**:
-For production, configure multi-node Cassandra cluster:
+For production, consider using managed PostgreSQL services (AWS RDS, Cloud SQL, etc.) or configure PostgreSQL replication:
 ```yaml
-cassandra-1:
+postgres-primary:
   environment:
-    - CASSANDRA_SEEDS=cassandra-1,cassandra-2,cassandra-3
-    - CASSANDRA_REPL_FACTOR=3
-
-cassandra-2:
-  environment:
-    - CASSANDRA_SEEDS=cassandra-1,cassandra-2,cassandra-3
-
-cassandra-3:
-  environment:
-    - CASSANDRA_SEEDS=cassandra-1,cassandra-2,cassandra-3
+    - POSTGRES_USER=kong
+    - POSTGRES_PASSWORD=secure_password
+    - POSTGRES_DB=kong
+  # Configure streaming replication for HA
 ```
 
 ### Fukuii Instances
