@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.console
 
-import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.LoggerContext
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.Appender
@@ -34,7 +33,7 @@ class TuiLogSuppressor extends FukuiiLogger:
 
     try
       val loggerContext = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
-      val rootLogger = loggerContext.getLogger(Logger.ROOT_LOGGER_NAME)
+      val rootLogger = loggerContext.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
 
       // Find and detach console appenders
       val appenders = rootLogger.iteratorForAppenders().asScala.toList
@@ -69,7 +68,7 @@ class TuiLogSuppressor extends FukuiiLogger:
 
     try
       val loggerContext = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
-      val rootLogger = loggerContext.getLogger(Logger.ROOT_LOGGER_NAME)
+      val rootLogger = loggerContext.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
 
       // Reattach previously suppressed console appenders
       suppressedAppenders.foreach { case (name, appender) =>
