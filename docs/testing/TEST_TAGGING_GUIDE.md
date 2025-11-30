@@ -46,4 +46,4 @@ See the Tags.scala file for complete documentation of all available tags.
 
 - [TEST-001](../adr/testing/TEST-001-ethereum-tests-adapter.md)
 - [TEST-002](../adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
-- [Tags Source](../../src/test/scala/com/chipprbots/ethereum/testing/Tags.scala)
+- Tags Source: `src/test/scala/com/chipprbots/ethereum/testing/Tags.scala`

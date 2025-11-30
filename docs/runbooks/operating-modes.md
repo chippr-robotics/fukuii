@@ -1623,7 +1623,7 @@ jstat -gc <PID> 1000
 - [Ethereum Classic Documentation](https://ethereumclassic.org/)
 - [Fukuii GitHub Repository](https://github.com/chippr-robotics/fukuii)
 - [Docker Documentation](../deployment/docker.md)
-- [Architecture Overview](../architecture-overview.md)
+- [Architecture Overview](../architecture/architecture-overview.md)
 
 ---
 

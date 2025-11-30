@@ -114,7 +114,7 @@ For development and testing:
 4. Wait for the environment to initialize
 5. Run `sbt dist` to build
 
-See [.devcontainer/README.md](../../.devcontainer/README.md) for details.
+See the [Codespaces Setup](../development/codespaces.md) for details.
 
 ### Method 3: Building from Source
 
@@ -448,7 +448,7 @@ fukuii {
 curl http://localhost:9095/metrics
 ```
 
-See [docker/fukuii/docker-compose.yml](../../docker/fukuii/docker-compose.yml) for a complete monitoring stack with Prometheus and Grafana.
+See the [Docker Deployment Guide](../deployment/docker.md) for a complete monitoring stack with Prometheus and Grafana.
 
 ### Configure Firewall
 

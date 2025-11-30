@@ -6,7 +6,7 @@
 
 This issue is now documented in:
 
-**[docs/runbooks/known-issues.md - Issue 13: Network Sync Error - Zero Length BigInteger](../runbooks/known-issues.md#issue-13-network-sync-error---zero-length-biginteger)**
+**[docs/runbooks/known-issues.md - Issue 13: Network Sync Error - Zero Length BigInteger](../runbooks/known-issues.md#issue-13-network-sync-zero-length-biginteger)**
 
 ## Quick Reference
 
@@ -33,4 +33,4 @@ For complete details including:
 - Verification procedures
 - Related issues and references
 
-See: **[docs/runbooks/known-issues.md#issue-13](../runbooks/known-issues.md#issue-13-network-sync-error---zero-length-biginteger)**
+See: **[docs/runbooks/known-issues.md#issue-13](../runbooks/known-issues.md#issue-13-network-sync-zero-length-biginteger)**

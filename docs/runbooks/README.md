@@ -74,10 +74,10 @@ Usage:
 ## Support
 
 For additional support:
-- Review the main [README.md](../../README.md)
-- Check the [Architecture Overview](../architecture-overview.md)
+- Review the [Documentation Home](../index.md)
+- Check the [Architecture Overview](../architecture/architecture-overview.md)
 - Visit the [GitHub Issues](https://github.com/chippr-robotics/fukuii/issues) page
-- Review the [Contributing Guide](../../CONTRIBUTING.md)
+- Review the [Contributing Guide](../development/contributing.md)
 
 ## Document Status
 

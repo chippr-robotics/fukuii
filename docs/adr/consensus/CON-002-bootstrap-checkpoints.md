@@ -170,7 +170,7 @@ We will implement a bootstrap checkpoint system that provides trusted block refe
 ## References
 
 - **Issue**: Bootstrap problem - network unable to sync due to peer wait requirement
-- **Related**: [ADR-011: RLPx Protocol Deviations and Peer Bootstrap Challenge](011-rlpx-protocol-deviations-and-peer-bootstrap.md)
+- **Related**: [CON-001: RLPx Protocol Deviations and Peer Bootstrap Challenge](CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md)
 - **Ethereum Classic ECIPs**:
   - [ECIP-1088: Phoenix](https://ecips.ethereumclassic.org/ECIPs/ecip-1088)
   - [ECIP-1103: Magneto](https://ecips.ethereumclassic.org/ECIPs/ecip-1103)

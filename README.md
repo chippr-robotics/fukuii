@@ -9,24 +9,21 @@
 [![Nightly Build](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml)
 [![codecov](https://codecov.io/gh/chippr-robotics/fukuii/graph/badge.svg)](https://codecov.io/gh/chippr-robotics/fukuii)
 
-Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Fukuii was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
+Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Mantis was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
 
-Fukuii retains the robust architecture and ETC compatibility of Fukuii while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
+Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
+- Executable scripts are renamed from fukuii to fukuii.
+- Java/Scala packages under io.iohk have been moved to com.chipprbots.
+- Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
 
-Executable scripts are renamed from fukuii to fukuii.
+#### Important Notes
 
-Java/Scala packages under io.iohk have been moved to com.chipprbots.
+<b>Licence:</b> This project continues to be distributed under the Apache 2.0 licence. A copy of the licence is included in the LICENSE file. The original NOTICE file from IOHK is preserved as required by the licence, and Chippr Robotics LLC has added its own attribution.
 
-Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
-
-Important Notes
-
-Licence: This project continues to be distributed under the Apache 2.0 licence. A copy of the licence is included in the LICENSE file. The original NOTICE file from IOHK is preserved as required by the licence, and Chippr Robotics LLC has added its own attribution.
-
-Origin: Fukuii is derived from the Mantis
+<b>Origin:</b> Fukuii is derived from the Mantis
  client. Mantis is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
 
-Chordoes Fukuii is a worm which controls a zombie mantis.
+<b>Chordoes Fukuii is a worm which controls a zombie mantis.</b>
 
 ## CI/CD and Project Hygiene
 
@@ -119,13 +116,13 @@ docker run -d \
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # Verify the image signature (requires cosign)
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # Or pull the latest development version
 docker pull ghcr.io/chippr-robotics/fukuii:develop
@@ -138,10 +135,10 @@ docker run -d \
   -p 30303:30303 \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
-**Security Note:** Release images published to `ghcr.io/chippr-robotics/chordodes_fukuii` are:
+**Security Note:** Release images published to `ghcr.io/chippr-robotics/fukuii` are:
 - ✅ Signed with [Cosign](https://github.com/sigstore/cosign) (keyless, using GitHub OIDC)
 - ✅ Include SLSA provenance attestations for supply chain verification
 - ✅ Include Software Bill of Materials (SBOM)
@@ -249,16 +246,6 @@ For detailed CLI documentation, see the [Node Configuration Runbook](docs/runboo
 Configuration and Environment
 
 Many configuration properties begin with the prefix fukuii instead of mantis. For example, the RPC settings are controlled by keys like fukuii.network.rpc.http.mode. Similarly, the environment variable FUKUII_DEV=true enables developer‑friendly settings during the build.
-
-Migrating from Mantis
-
-If you have an existing deployment of Mantis, follow these steps to migrate:
-
-Update your configuration files by replacing mantis with fukuii in key names and environment variables.
-
-Rename any directories or files under ~/.mantis to ~/.fukuii. The layout of the data directory remains the same.
-
-Review custom scripts or automation to ensure they invoke fukuii instead of mantis.
 
 Contributing
 

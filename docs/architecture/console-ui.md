@@ -219,6 +219,6 @@ nohup ./bin/fukuii etc > fukuii.log 2>&1 &
 
 ## See Also
 
-- [First Start Guide](runbooks/first-start.md)
-- [Operations Runbooks](runbooks/README.md)
-- [Metrics & Monitoring](operations/metrics-and-monitoring.md)
+- [First Start Guide](../runbooks/first-start.md)
+- [Operations Runbooks](../runbooks/README.md)
+- [Metrics & Monitoring](../operations/metrics-and-monitoring.md)
