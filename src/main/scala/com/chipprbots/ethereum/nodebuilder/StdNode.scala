@@ -11,8 +11,9 @@ import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
-import com.chipprbots.ethereum.console.ConsoleUI
-import com.chipprbots.ethereum.console.ConsoleUIUpdater
+import com.chipprbots.ethereum.console.Tui
+import com.chipprbots.ethereum.console.TuiConfig
+import com.chipprbots.ethereum.console.TuiUpdater
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -33,7 +34,7 @@ import com.chipprbots.ethereum.utils.Hex
   */
 abstract class BaseNode extends Node {
 
-  private var consoleUIUpdater: Option[ConsoleUIUpdater] = None
+  private var tuiUpdater: Option[TuiUpdater] = None
 
   def start(): Unit = {
     startMetricsClient()
@@ -62,7 +63,7 @@ abstract class BaseNode extends Node {
 
     startPeriodicDBConsistencyCheck()
 
-    startConsoleUIUpdater()
+    startTuiUpdater()
   }
 
   private[this] def startMetricsClient(): Unit = {
@@ -122,18 +123,19 @@ abstract class BaseNode extends Node {
         "PeriodicDBConsistencyCheck"
       )
 
-  private[this] def startConsoleUIUpdater(): Unit = {
-    val consoleUI = ConsoleUI.getInstance()
-    if (consoleUI.isEnabled) {
-      log.info("Starting Console UI updater")
-      val updater = new ConsoleUIUpdater(
-        consoleUI,
+  private[this] def startTuiUpdater(): Unit = {
+    val tui = Tui.getInstance()
+    if (tui.isEnabled) {
+      log.info("Starting TUI updater")
+      val updater = TuiUpdater(
+        tui,
+        TuiConfig.default,
         Some(peerManager),
         Some(syncController),
         Config.blockchains.network,
         shutdown
-      )(system)
-      consoleUIUpdater = Some(updater)
+      )(using system)
+      tuiUpdater = Some(updater)
       updater.start()
     }
   }
@@ -144,8 +146,8 @@ abstract class BaseNode extends Node {
       case Success(_) =>
     }
 
-    tryAndLogFailure(() => consoleUIUpdater.foreach(_.stop()))
-    tryAndLogFailure(() => ConsoleUI.getInstance().shutdown())
+    tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
+    tryAndLogFailure(() => Tui.getInstance().shutdown())
     tryAndLogFailure(() => peerDiscoveryManager ! PeerDiscoveryManager.Stop)
     tryAndLogFailure(() => mining.stopProtocol())
     tryAndLogFailure(() =>
