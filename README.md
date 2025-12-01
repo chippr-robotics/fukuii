@@ -12,7 +12,7 @@
 Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Mantis was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
 
 Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
-- Executable scripts are renamed from fukuii to fukuii.
+- Executable scripts are renamed from mantis to fukuii.
 - Java/Scala packages under io.iohk have been moved to com.chipprbots.
 - Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
 
