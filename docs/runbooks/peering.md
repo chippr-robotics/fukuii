@@ -361,13 +361,13 @@ Ensure you're running the correct network:
 
 **C. Increase timeouts (if network latency is high)**
 
-In your configuration:
+In your configuration (values shown are examples of increased timeouts):
 ```hocon
 fukuii.network.peer {
-  wait-for-hello-timeout = 10.seconds  # default: 5
-  wait-for-status-timeout = 45.seconds  # default: 30
-  wait-for-handshake-timeout = 15.seconds  # default: 10
-  wait-for-tcp-ack-timeout = 20.seconds  # default: 15
+  wait-for-hello-timeout = 10.seconds     # increase from default 5s
+  wait-for-status-timeout = 45.seconds    # increase from default 30s
+  wait-for-handshake-timeout = 15.seconds # increase from default 10s
+  wait-for-tcp-ack-timeout = 20.seconds   # increase from default 15s
 }
 ```
 
