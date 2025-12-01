@@ -292,43 +292,6 @@ lazy val node = {
       buildInfoPackage := "com.chipprbots.ethereum.utils",
       (Test / fork) := true,
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap,
-      // Temporarily exclude test files with MockFactory compilation issues (Scala 3 migration)
-      // 
-      // DISABLED TESTS DOCUMENTATION:
-      // All 13 originally disabled tests have been FIXED using the abstract mock members pattern.
-      // The pattern works by moving mock creation to the test class level (which has MockFactory)
-      // and providing abstract members that inner classes can implement.
-      //
-      // FLAKY TESTS (marked with @Ignore annotation - need further investigation):
-      // - PoWMiningCoordinatorSpec.scala - Actor timing/lifecycle issues in CI
-      // - MockedMinerSpec.scala - Actor timing/lifecycle issues in CI
-      // - JsonRpcHttpServerSpec.scala - HTTP server lifecycle issues in CI
-      // - EthashMinerSpec.scala - Real Ethash mining/DAG work too slow for CI
-      (Test / excludeFilter) := {
-        val base = (Test / excludeFilter).value
-        val disabledTests = Seq(
-          // ALL TESTS FIXED - using abstract mock members pattern:
-          // "BranchResolutionSpec.scala",
-          // "ConsensusAdapterSpec.scala",
-          // "BlockExecutionSpec.scala",         // DaoForkTestSetup refactored to abstract mock pattern
-          // "JsonRpcHttpServerSpec.scala",      // TestSetup converted to class (@Ignore - flaky)
-          // "ConsensusImplSpec.scala",          // ConsensusSetup moved inside test class
-          // "FastSyncBranchResolverActorSpec.scala", // No MockFactory usage
-          // "PoWMiningSpec.scala",              // Added ioRuntime override
-          // "MessageHandlerSpec.scala",         // Added Product trait methods
-          // "QaJRCSpec.scala",                  // TestSetup converted to class
-          // "EthProofServiceSpec.scala",        // MockFactory works at class level
-          // "LegacyTransactionHistoryServiceSpec.scala", // No MockFactory usage
-          // "PoWMiningCoordinatorSpec.scala",   // MinerSpecSetup refactored (@Ignore - flaky)
-          // "EthashMinerSpec.scala",            // MinerSpecSetup refactored (@Ignore - flaky, real mining too slow)
-          // "KeccakMinerSpec.scala",            // MinerSpecSetup refactored to abstract mock pattern
-          // "MockedMinerSpec.scala",            // MinerSpecSetup refactored (@Ignore - flaky)
-        )
-        
-        disabledTests.foldLeft(base) { (filter, testFile) =>
-          filter || new SimpleFileFilter(_.getName == testFile)
-        }
-      }
     )
     .settings(commonSettings("fukuii"): _*)
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
