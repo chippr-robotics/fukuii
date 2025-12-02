@@ -9,6 +9,10 @@ import org.apache.pekko.http.scaladsl.model._
 import org.apache.pekko.http.scaladsl.unmarshalling.Unmarshal
 import org.apache.pekko.http.scaladsl.settings.ConnectionPoolSettings
 import org.apache.pekko.util.ByteString
+import org.bouncycastle.util.encoders.Hex
+
+import io.circe.parser._
+import io.circe.generic.auto._
 
 import com.chipprbots.ethereum.utils.Logger
 
@@ -104,51 +108,65 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
       }
   }
 
+  /** Case class for checkpoint JSON representation
+    *
+    * Note: Using String for blockNumber to avoid Long overflow issues with very large block numbers. Will be converted
+    * to BigInt when creating BootstrapCheckpoint.
+    */
+  private case class CheckpointJson(blockNumber: String, blockHash: String)
+
+  /** Case class for checkpoints response */
+  private case class CheckpointsResponse(network: String, checkpoints: Seq[CheckpointJson])
+
   /** Parse checkpoints from JSON response
     *
     * Expected format: { "network": "etc-mainnet", "checkpoints": [ {"blockNumber": 19250000, "blockHash": "0x..."},
     * {"blockNumber": 14525000, "blockHash": "0x..."} ] }
     */
   private def parseCheckpointsFromJson(json: String): Either[String, Seq[BootstrapCheckpoint]] =
-    try {
-      // Note: In production, use proper JSON library (circe, play-json, etc.)
-      // This is a simplified implementation for demonstration
-      val checkpoints = parseSimpleJson(json)
-      Right(checkpoints)
-    } catch {
-      case ex: Exception => Left(ex.getMessage)
-    }
+    decode[CheckpointsResponse](json) match {
+      case Right(response) =>
+        try {
+          val checkpoints = response.checkpoints.zipWithIndex.map { case (cp, idx) =>
+            // Validate and parse block number
+            val blockNumber = try {
+              BigInt(cp.blockNumber)
+            } catch {
+              case _: NumberFormatException =>
+                throw new IllegalArgumentException(
+                  s"Invalid block number at checkpoint $idx: '${cp.blockNumber}' is not a valid number"
+                )
+            }
 
-  /** Simplified JSON parsing (replace with proper library in production)
-    *
-    * IMPORTANT: This is a placeholder implementation that returns empty sequences. Before using this feature in
-    * production, implement proper JSON parsing using circe or play-json. The expected JSON format is documented above.
-    *
-    * Example implementation with circe:
-    * {{{
-    * import io.circe.parser._
-    * import io.circe.generic.auto._
-    *
-    * case class CheckpointJson(blockNumber: Long, blockHash: String)
-    * case class CheckpointsResponse(network: String, checkpoints: Seq[CheckpointJson])
-    *
-    * decode[CheckpointsResponse](json).map { response =>
-    *   response.checkpoints.map { cp =>
-    *     BootstrapCheckpoint(
-    *       BigInt(cp.blockNumber),
-    *       ByteString(hexStringToBytes(cp.blockHash))
-    *     )
-    *   }
-    * }
-    * }}}
-    */
-  private def parseSimpleJson(_json: String): Seq[BootstrapCheckpoint] = {
-    log.warn(
-      "JSON parsing not implemented - returning empty checkpoint list. " +
-        "Implement parseSimpleJson with circe or play-json before using in production."
-    )
-    Seq.empty
-  }
+            // Validate and decode block hash
+            val hexString = cp.blockHash.stripPrefix("0x")
+            if (hexString.length != 64) {
+              throw new IllegalArgumentException(
+                s"Invalid block hash at checkpoint $idx: expected 64 hex characters, got ${hexString.length}"
+              )
+            }
+            val hashBytes = try {
+              Hex.decode(hexString)
+            } catch {
+              case _: Exception =>
+                throw new IllegalArgumentException(
+                  s"Invalid block hash at checkpoint $idx: '${hexString}' contains invalid hex characters"
+                )
+            }
+
+            BootstrapCheckpoint(blockNumber, ByteString(hashBytes))
+          }
+          log.debug(s"Successfully parsed ${checkpoints.size} checkpoints from JSON for network: ${response.network}")
+          Right(checkpoints)
+        } catch {
+          case ex: IllegalArgumentException =>
+            Left(s"Validation error: ${ex.getMessage}")
+          case ex: Exception =>
+            Left(s"Failed to convert checkpoint data: ${ex.getMessage}")
+        }
+      case Left(error) =>
+        Left(s"JSON parsing error: ${error.getMessage}")
+    }
 
   /** Verify checkpoints using quorum consensus
     *
