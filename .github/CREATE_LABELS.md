@@ -19,6 +19,8 @@ This guide explains how to create the agent labels in your GitHub repository.
 | `agent: ICE 🧊` | Large-scale migrations and strategic planning | `#0E8A16` (green) | 🧊 |
 | `agent: eye 👁️` | Testing, validation, and quality assurance | `#1D76DB` (blue) | 👁️ |
 | `agent: forge 🔨` | Consensus-critical code (EVM, mining, crypto) | `#D93F0B` (orange) | 🔨 |
+| `agent: herald 🧭` | Network protocol and peer communication | `#5319E7` (purple) | 🧭 |
+| `agent: Q 🎯` | Process guardian and quality discipline | `#C5DEF5` (light blue) | 🎯 |
 
 ## Creating Labels via GitHub CLI
 
@@ -34,6 +36,8 @@ gh label create "agent: mithril ✨" --description "Code modernization and Scala
 gh label create "agent: ICE 🧊" --description "Large-scale migrations and strategic planning" --color "0E8A16"
 gh label create "agent: eye 👁️" --description "Testing, validation, and quality assurance" --color "1D76DB"
 gh label create "agent: forge 🔨" --description "Consensus-critical code (EVM, mining, crypto)" --color "D93F0B"
+gh label create "agent: herald 🧭" --description "Network protocol and peer communication" --color "5319E7"
+gh label create "agent: Q 🎯" --description "Process guardian and quality discipline" --color "C5DEF5"
 ```
 
 ## Creating Labels via API
@@ -100,6 +104,28 @@ curl -X POST \
     "description": "Consensus-critical code (EVM, mining, crypto)",
     "color": "D93F0B"
   }'
+
+# Create herald label
+curl -X POST \
+  -H "Authorization: token $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  https://api.github.com/repos/$OWNER/$REPO/labels \
+  -d '{
+    "name": "agent: herald 🧭",
+    "description": "Network protocol and peer communication",
+    "color": "5319E7"
+  }'
+
+# Create Q label
+curl -X POST \
+  -H "Authorization: token $TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  https://api.github.com/repos/$OWNER/$REPO/labels \
+  -d '{
+    "name": "agent: Q 🎯",
+    "description": "Process guardian and quality discipline",
+    "color": "C5DEF5"
+  }'
 ```
 
 ## Verifying Labels
@@ -107,7 +133,7 @@ curl -X POST \
 After creating the labels, verify they appear correctly:
 
 1. Go to your repository's **Labels** page
-2. Check that all 5 agent labels are present with their emojis
+2. Check that all 7 agent labels are present with their emojis
 3. Verify the descriptions are correct
 4. Test by manually adding a label to an issue or PR
 
@@ -119,6 +145,8 @@ The colors are chosen to indicate priority and risk level:
 - **Green** (ICE): Strategic planning and long-term work
 - **Blue** (eye): Quality assurance and validation
 - **Orange** (forge): Critical, consensus-affecting changes
+- **Purple** (herald): Network protocol and peer communication
+- **Light Blue** (Q): Methodical process and quality oversight
 
 ## Next Steps
 

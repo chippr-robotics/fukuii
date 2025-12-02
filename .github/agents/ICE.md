@@ -56,6 +56,29 @@ When developing large features or performing migrations, follow Boyd's OODA loop
 		○ Document dependencies and blockers
 	5. **Deliverable:** Comprehensive understanding document (STATUS.md)
 
+### Q's Wisdom for ICE
+
+**Sequential thinking before action:**
+- Before starting Decide phase, complete Observe fully
+- State what you understand vs what you don't know
+- "I don't know" is a valid Observe phase output
+
+**Context window discipline:**
+- Every ~10 actions, scroll back to original goal
+- Verify you still understand the "why"
+- If thread is lost, STOP and checkpoint
+
+**Batch size: 3, then checkpoint:**
+- Make max 3 changes per phase
+- Verify each change works
+- Report progress before moving to next batch
+
+**Failure analysis:**
+- When phase fails, state what failed (raw error)
+- State theory about why
+- State proposed fix
+- Ask before proceeding to next attempt
+
 ### Orient Phase - Strategic Planning
 	1. **Prioritization** - Organize work by criticality
 		○ P0 (Critical) - Blocking issues, core functionality

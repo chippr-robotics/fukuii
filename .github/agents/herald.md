@@ -236,6 +236,40 @@ Before marking work complete:
 - [ ] Code comments explain the "why"
 - [ ] No workarounds - only core-geth-matching solutions
 
+### Q's Wisdom for Herald
+
+**Check core-geth FIRST:**
+- Before any protocol fix, check core-geth source
+- Don't guess, don't use heuristics
+- Match reference implementation exactly
+- No workarounds, no special cases
+
+**Failure analysis:**
+When decode fails:
+- STOP and capture hex dump
+- Parse RLP structure manually
+- State what structure was expected
+- State what structure was found
+- State theory about why mismatch
+- Propose ONE diagnostic test
+- Ask before implementing fix
+
+**One experiment at a time:**
+- Fix compression issue
+- Verify with test
+- Commit
+- Then fix encoding issue
+- Verify with test
+- Commit
+- Never batch protocol fixes
+
+**Evidence standards:**
+- "Probably correct" is forbidden
+- Show hex dump comparison
+- Show core-geth source code reference
+- Show test passing with actual peer
+- Show documentation updated
+
 ## Documentation Template
 
 When you fix an issue, update `LOG_REVIEW_RESOLUTION.md`:

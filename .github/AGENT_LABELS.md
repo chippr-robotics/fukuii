@@ -106,6 +106,48 @@ This document describes the automated agent labels used in the fukuii project. W
 
 ---
 
+### 🧭 agent: herald
+**Description:** Network protocol debugging expert - fixes RLPx/ETH message encoding, Snappy compression, and peer communication issues
+
+**Domain:** Peer-to-peer networking, protocol debugging, message encoding
+
+**Applied When:**
+- Fixing network protocol issues
+- Debugging peer connection problems
+- Resolving message encoding/decoding errors
+- Working on RLPx/ETH protocol code
+
+**Expertise:**
+- RLPx message encoding/decoding
+- Snappy compression/decompression
+- ETH protocol versions (ETH62, ETH66, ETH67, ETH68)
+- Core-geth compatibility
+- Peer handshake and status exchange
+
+---
+
+### 🎯 agent: Q
+**Description:** Pragmatic shepherd of agents - the methodical voice ensuring quality, clarity, and disciplined execution
+
+**Domain:** Meta-agent, process guardian, methodology, verification, quality assurance
+
+**Applied When:**
+- Coordinating work across multiple agents
+- Ensuring disciplined, methodical execution
+- Guiding complex multi-phase tasks
+- Enforcing quality standards and verification protocols
+
+**Expertise:**
+- Sequential thinking and planning
+- Epistemic hygiene and verification
+- Root cause analysis
+- Incremental progress with checkpoints
+- Failure analysis and adaptation
+- Autonomy boundary detection
+- Process discipline and handoff protocols
+
+---
+
 ## How Agent Labels Work
 
 ### Automatic vs Manual Labeling
@@ -131,6 +173,8 @@ The other agent labels are typically applied manually:
 - **`agent: mithril ✨`** - Manually add when refactoring code to use modern Scala 3 features
 - **`agent: ICE 🧊`** - Manually add for large-scale migration planning and documentation tasks
 - **`agent: eye 👁️`** - Manually add when the focus is on testing, validation, or quality assurance
+- **`agent: herald 🧭`** - Manually add when fixing network protocol or peer communication issues
+- **`agent: Q 🎯`** - Manually add when coordinating complex multi-phase work or enforcing quality discipline
 
 ### When to Apply Agent Labels Manually
 
@@ -143,6 +187,8 @@ For example:
 - An issue about fixing 50 compilation errors → Add `agent: wraith 👻`
 - An issue about improving test coverage → Add `agent: eye 👁️`
 - A PR that modernizes implicit syntax → Add `agent: mithril ✨`
+- An issue about network peer disconnections → Add `agent: herald 🧭`
+- A complex multi-phase migration task → Add `agent: Q 🎯`
 
 ## Agent Label Guidelines
 
@@ -161,6 +207,8 @@ When reviewing PRs with agent labels:
 - **agent: ICE 🧊**: Ensure migration strategy is sound and documentation is complete
 - **agent: eye 👁️**: Verify all tests pass and new tests are added for new functionality
 - **agent: forge 🔨**: Extra scrutiny required - verify deterministic behavior and consensus compatibility
+- **agent: herald 🧭**: Verify network protocol changes match reference implementations (core-geth)
+- **agent: Q 🎯**: Verify methodology was followed, verification steps completed, and handoff is clear
 
 ### Priority and Risk
 
@@ -172,10 +220,12 @@ Agent labels also indicate risk level:
 **High Risk:**
 - 👁️ **eye**: Testing changes affect quality assurance
 - 👻 **wraith**: Compilation fixes must not introduce regressions
+- 🧭 **herald**: Network protocol changes can break peer connectivity
 
 **Medium Risk:**
 - 🧊 **ICE**: Large-scale migrations need careful planning
 - ✨ **mithril**: Refactoring must preserve functionality
+- 🎯 **Q**: Process and quality enforcement, coordinates other agents
 
 ## Creating Labels in GitHub
 
