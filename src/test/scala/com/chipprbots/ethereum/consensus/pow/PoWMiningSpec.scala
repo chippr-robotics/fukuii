@@ -3,8 +3,6 @@ package com.chipprbots.ethereum.consensus.pow
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.TestKit
 
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
-import org.scalamock.scalatest.MockFactory
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 

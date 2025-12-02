@@ -9,7 +9,6 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.HashNode
-import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.Logger
 
 /** Merkle proof verifier for SNAP sync

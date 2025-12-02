@@ -4,8 +4,6 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 
 import cats.effect.IO
 
-import scala.concurrent.duration.Duration
-import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.duration._
 
 import org.scalamock.handlers.CallHandler4
