@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.network.Peer
 
 /** Account range task for SNAP sync
   *

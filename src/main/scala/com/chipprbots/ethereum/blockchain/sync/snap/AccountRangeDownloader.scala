@@ -22,7 +22,7 @@ class AccountRangeDownloader(
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     concurrency: Int = 16
-)(implicit scheduler: Scheduler) extends Logger {
+) extends Logger {
 
   import AccountRangeDownloader._
 
@@ -48,12 +48,6 @@ class AccountRangeDownloader(
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
     import com.chipprbots.ethereum.mpt.{byteStringSerializer, MerklePatriciaTrie}
     import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
-    
-    // Create ByteArraySerializable for Account using the existing RLP encoding
-    implicit val accountSerializer: ByteArraySerializable[Account] = new ByteArraySerializable[Account] {
-      override def toBytes(account: Account): Array[Byte] = account.toBytes
-      override def fromBytes(bytes: Array[Byte]): Account = bytes.toAccount
-    }
     
     // Initialize trie with the state root if it exists, otherwise create empty trie
     if (stateRoot.isEmpty || stateRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
@@ -238,13 +232,6 @@ class AccountRangeDownloader(
   private def storeAccounts(accounts: Seq[(ByteString, Account)]): Either[String, Unit] = {
     try {
       import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
-      import com.chipprbots.ethereum.mpt.byteStringSerializer
-      
-      // Create ByteArraySerializable for Account using the existing RLP encoding
-      implicit val accountSerializer: ByteArraySerializable[Account] = new ByteArraySerializable[Account] {
-        override def toBytes(account: Account): Array[Byte] = account.toBytes
-        override def fromBytes(bytes: Array[Byte]): Account = bytes.toAccount
-      }
       
       // Synchronize on this instance to protect stateTrie variable
       this.synchronized {

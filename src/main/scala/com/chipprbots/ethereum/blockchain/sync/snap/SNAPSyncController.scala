@@ -8,8 +8,8 @@ import scala.concurrent.ExecutionContext
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, MptStorage}
-import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
-import com.chipprbots.ethereum.network.p2p.messages.{Capability, SNAP}
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -216,7 +216,7 @@ class SNAPSyncController(
         requestTracker = requestTracker,
         mptStorage = mptStorage,
         concurrency = snapSyncConfig.accountConcurrency
-      )(scheduler)
+      )
     )
 
     progressMonitor.startPhase(AccountRangeSync)
@@ -273,7 +273,7 @@ class SNAPSyncController(
           requestTracker = requestTracker,
           mptStorage = mptStorage,
           maxAccountsPerBatch = snapSyncConfig.storageBatchSize
-        )(scheduler)
+        )
       )
 
       progressMonitor.startPhase(StorageRangeSync)
@@ -544,7 +544,7 @@ object SNAPSyncConfig {
   }
 }
 
-class StateValidator(mptStorage: MptStorage) {
+class StateValidator(_mptStorage: MptStorage) {
   
   def validateAccountTrie(stateRoot: ByteString): Either[String, Unit] = {
     Right(())
@@ -555,7 +555,7 @@ class StateValidator(mptStorage: MptStorage) {
   }
 }
 
-class SyncProgressMonitor(scheduler: Scheduler) {
+class SyncProgressMonitor(_scheduler: Scheduler) {
   
   import SNAPSyncController._
   
@@ -563,7 +563,7 @@ class SyncProgressMonitor(scheduler: Scheduler) {
   private var accountsSynced: Long = 0
   private var storageSlotsSynced: Long = 0
   private var nodesHealed: Long = 0
-  private var startTime: Long = System.currentTimeMillis()
+  private val startTime: Long = System.currentTimeMillis()
   private var phaseStartTime: Long = System.currentTimeMillis()
 
   def startPhase(phase: SyncPhase): Unit = {
