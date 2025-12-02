@@ -31,6 +31,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
@@ -44,7 +46,8 @@ class EtcPeerManagerActor(
     peerManagerActor: ActorRef,
     peerEventBusActor: ActorRef,
     appStateStorage: AppStateStorage,
-    forkResolverOpt: Option[ForkResolver]
+    forkResolverOpt: Option[ForkResolver],
+    initialSnapSyncControllerOpt: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
 
@@ -52,6 +55,9 @@ class EtcPeerManagerActor(
   
   // Maximum length for hex string in debug logs (to avoid very long log lines)
   private val MaxHexLogLength = 200
+  
+  // Mutable reference to SNAPSyncController that can be set after initialization
+  private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -87,6 +93,10 @@ class EtcPeerManagerActor(
     case PeerInfoRequest(peerId) =>
       val peerInfoOpt = peersWithInfo.get(peerId).map { case PeerWithInfo(_, peerInfo) => peerInfo }
       sender() ! PeerInfoResponse(peerInfoOpt)
+      
+    case RegisterSnapSyncController(snapSyncController) =>
+      log.info("Registering SNAPSyncController for message routing")
+      snapSyncControllerOpt = Some(snapSyncController)
 
     case EtcPeerManagerActor.SendMessage(message, peerId) =>
       NetworkMetrics.SentMessagesCounter.increment()
@@ -109,6 +119,27 @@ class EtcPeerManagerActor(
   private def handlePeersInfoEvents(peersWithInfo: PeersWithInfo): Receive = {
 
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
+      // Route SNAP protocol messages to SNAPSyncController
+      message match {
+        case msg: AccountRange =>
+          log.debug("Routing AccountRange message to SNAPSyncController from peer {}", peerId)
+          snapSyncControllerOpt.foreach(_ ! msg)
+        
+        case msg: StorageRanges =>
+          log.debug("Routing StorageRanges message to SNAPSyncController from peer {}", peerId)
+          snapSyncControllerOpt.foreach(_ ! msg)
+        
+        case msg: TrieNodes =>
+          log.debug("Routing TrieNodes message to SNAPSyncController from peer {}", peerId)
+          snapSyncControllerOpt.foreach(_ ! msg)
+        
+        case msg: ByteCodes =>
+          log.debug("Routing ByteCodes message to SNAPSyncController from peer {}", peerId)
+          snapSyncControllerOpt.foreach(_ ! msg)
+        
+        case _ => // ETH protocol messages - no special routing needed
+      }
+      
       val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
       NetworkMetrics.ReceivedMessagesCounter.increment()
       context.become(handleMessages(newPeersWithInfo))
@@ -345,7 +376,16 @@ class EtcPeerManagerActor(
 
 object EtcPeerManagerActor {
 
-  val msgCodesWithInfo: Set[Int] = Set(Codes.BlockHeadersCode, Codes.NewBlockCode, Codes.NewBlockHashesCode)
+  val msgCodesWithInfo: Set[Int] = Set(
+    Codes.BlockHeadersCode, 
+    Codes.NewBlockCode, 
+    Codes.NewBlockHashesCode,
+    // SNAP protocol response codes (responses we receive from peers)
+    SNAP.Codes.AccountRangeCode,
+    SNAP.Codes.StorageRangesCode,
+    SNAP.Codes.TrieNodesCode,
+    SNAP.Codes.ByteCodesCode
+  )
 
   /** RemoteStatus was created to decouple status information from protocol status messages (they are different versions
     * of Status msg)
@@ -459,13 +499,17 @@ object EtcPeerManagerActor {
   case class PeerInfoResponse(peerInfo: Option[PeerInfo])
 
   case class SendMessage(message: MessageSerializable, peerId: PeerId)
+  
+  /** Register the SNAPSyncController actor for message routing */
+  case class RegisterSnapSyncController(snapSyncController: ActorRef)
 
   def props(
       peerManagerActor: ActorRef,
       peerEventBusActor: ActorRef,
       appStateStorage: AppStateStorage,
-      forkResolverOpt: Option[ForkResolver]
+      forkResolverOpt: Option[ForkResolver],
+      snapSyncControllerOpt: Option[ActorRef] = None
   ): Props =
-    Props(new EtcPeerManagerActor(peerManagerActor, peerEventBusActor, appStateStorage, forkResolverOpt))
+    Props(new EtcPeerManagerActor(peerManagerActor, peerEventBusActor, appStateStorage, forkResolverOpt, snapSyncControllerOpt))
 
 }

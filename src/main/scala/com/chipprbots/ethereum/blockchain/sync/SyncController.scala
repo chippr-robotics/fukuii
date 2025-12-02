@@ -162,6 +162,10 @@ class SyncController(
       ),
       "snap-sync"
     )
+    
+    // Register SNAPSyncController with EtcPeerManagerActor for message routing
+    etcPeerManager ! com.chipprbots.ethereum.network.EtcPeerManagerActor.RegisterSnapSyncController(snapSync)
+    
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
   }
