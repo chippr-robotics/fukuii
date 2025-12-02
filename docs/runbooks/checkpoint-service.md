@@ -369,7 +369,7 @@ system.scheduler.scheduleAtFixedRate(
 
 ## Related Documentation
 
-- [ADR-012: Bootstrap Checkpoints](../adr/consensus/CON-002-bootstrap-checkpoints.md) - Architecture decision record
+- [CON-002: Bootstrap Checkpoints](../adr/consensus/CON-002-bootstrap-checkpoints.md) - Architecture decision record
 - [Node Configuration](node-configuration.md) - Configuring bootstrap checkpoints
 - [First Start Guide](first-start.md) - Initial node setup with checkpoints
 

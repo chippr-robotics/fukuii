@@ -12,7 +12,7 @@ import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
 
 import io.circe.parser._
-import io.circe.{Decoder, DecodingFailure, HCursor}
+import io.circe.generic.auto._
 
 import com.chipprbots.ethereum.utils.Logger
 
@@ -113,20 +113,6 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
 
   /** Case class for checkpoints response */
   private case class CheckpointsResponse(network: String, checkpoints: Seq[CheckpointJson])
-
-  /** Custom decoder for CheckpointJson to handle hex string conversion */
-  private implicit val checkpointJsonDecoder: Decoder[CheckpointJson] = (c: HCursor) =>
-    for {
-      blockNumber <- c.downField("blockNumber").as[Long]
-      blockHash <- c.downField("blockHash").as[String]
-    } yield CheckpointJson(blockNumber, blockHash)
-
-  /** Custom decoder for CheckpointsResponse */
-  private implicit val checkpointsResponseDecoder: Decoder[CheckpointsResponse] = (c: HCursor) =>
-    for {
-      network <- c.downField("network").as[String]
-      checkpoints <- c.downField("checkpoints").as[Seq[CheckpointJson]]
-    } yield CheckpointsResponse(network, checkpoints)
 
   /** Parse checkpoints from JSON response
     *

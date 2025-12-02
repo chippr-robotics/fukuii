@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.data
 
-import scala.concurrent.{ExecutionContext, Future}
-import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext
 
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.TestKit
