@@ -30,21 +30,37 @@ class CheckpointUpdateServiceSpec
     super.afterAll()
   }
 
+  /** Helper method to invoke private parseCheckpointsFromJson method */
+  private def parseCheckpoints(service: CheckpointUpdateService, json: String): Either[String, Seq[BootstrapCheckpoint]] = {
+    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
+    parseMethod.setAccessible(true)
+    parseMethod.invoke(service, json).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+  }
+
+  /** Helper method to invoke private verifyWithQuorum method */
+  private def verifyWithQuorum(
+      service: CheckpointUpdateService,
+      checkpointSets: Seq[Seq[BootstrapCheckpoint]],
+      quorum: Int
+  ): Seq[VerifiedCheckpoint] = {
+    val verifyMethod =
+      service.getClass.getDeclaredMethod("verifyWithQuorum", classOf[Seq[Seq[BootstrapCheckpoint]]], classOf[Int])
+    verifyMethod.setAccessible(true)
+    verifyMethod.invoke(service, checkpointSets, quorum).asInstanceOf[Seq[VerifiedCheckpoint]]
+  }
+
   "CheckpointUpdateService" should "parse valid JSON checkpoint response" taggedAs (UnitTest, SyncTest) in {
     val service = new CheckpointUpdateService()
 
     val validJson = """{
       "network": "etc-mainnet",
       "checkpoints": [
-        {"blockNumber": 19250000, "blockHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"},
-        {"blockNumber": 14525000, "blockHash": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"}
+        {"blockNumber": "19250000", "blockHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"},
+        {"blockNumber": "14525000", "blockHash": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"}
       ]
     }"""
 
-    // Use reflection to call private method for testing
-    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
-    parseMethod.setAccessible(true)
-    val result = parseMethod.invoke(service, validJson).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+    val result = parseCheckpoints(service, validJson)
 
     result shouldBe a[Right[_, _]]
     result.getOrElse(Seq.empty) should have size 2
@@ -66,13 +82,11 @@ class CheckpointUpdateServiceSpec
     val jsonWithPrefix = """{
       "network": "mordor",
       "checkpoints": [
-        {"blockNumber": 9957000, "blockHash": "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"}
+        {"blockNumber": "9957000", "blockHash": "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"}
       ]
     }"""
 
-    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
-    parseMethod.setAccessible(true)
-    val result = parseMethod.invoke(service, jsonWithPrefix).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+    val result = parseCheckpoints(service, jsonWithPrefix)
 
     result shouldBe a[Right[_, _]]
     val checkpoints = result.getOrElse(Seq.empty)
@@ -86,13 +100,11 @@ class CheckpointUpdateServiceSpec
     val jsonWithoutPrefix = """{
       "network": "mordor",
       "checkpoints": [
-        {"blockNumber": 9957000, "blockHash": "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"}
+        {"blockNumber": "9957000", "blockHash": "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"}
       ]
     }"""
 
-    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
-    parseMethod.setAccessible(true)
-    val result = parseMethod.invoke(service, jsonWithoutPrefix).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+    val result = parseCheckpoints(service, jsonWithoutPrefix)
 
     result shouldBe a[Right[_, _]]
     val checkpoints = result.getOrElse(Seq.empty)
@@ -100,14 +112,30 @@ class CheckpointUpdateServiceSpec
     checkpoints(0).blockNumber shouldEqual BigInt(9957000)
   }
 
+  it should "handle very large block numbers" taggedAs (UnitTest, SyncTest) in {
+    val service = new CheckpointUpdateService()
+
+    val largeBlockJson = """{
+      "network": "test",
+      "checkpoints": [
+        {"blockNumber": "999999999999999999", "blockHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"}
+      ]
+    }"""
+
+    val result = parseCheckpoints(service, largeBlockJson)
+
+    result shouldBe a[Right[_, _]]
+    val checkpoints = result.getOrElse(Seq.empty)
+    checkpoints should have size 1
+    checkpoints(0).blockNumber shouldEqual BigInt("999999999999999999")
+  }
+
   it should "return error for invalid JSON" taggedAs (UnitTest, SyncTest) in {
     val service = new CheckpointUpdateService()
 
     val invalidJson = """{"invalid": "json without required fields"}"""
 
-    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
-    parseMethod.setAccessible(true)
-    val result = parseMethod.invoke(service, invalidJson).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+    val result = parseCheckpoints(service, invalidJson)
 
     result shouldBe a[Left[_, _]]
     result.left.getOrElse("") should include("JSON parsing error")
@@ -118,9 +146,7 @@ class CheckpointUpdateServiceSpec
 
     val malformedJson = """{"network": "etc-mainnet", "checkpoints": ["""
 
-    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
-    parseMethod.setAccessible(true)
-    val result = parseMethod.invoke(service, malformedJson).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+    val result = parseCheckpoints(service, malformedJson)
 
     result shouldBe a[Left[_, _]]
     result.left.getOrElse("") should include("JSON parsing error")
@@ -132,16 +158,46 @@ class CheckpointUpdateServiceSpec
     val invalidHexJson = """{
       "network": "etc-mainnet",
       "checkpoints": [
-        {"blockNumber": 19250000, "blockHash": "0xINVALIDHEXSTRING"}
+        {"blockNumber": "19250000", "blockHash": "0xINVALIDHEXSTRING"}
       ]
     }"""
 
-    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
-    parseMethod.setAccessible(true)
-    val result = parseMethod.invoke(service, invalidHexJson).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+    val result = parseCheckpoints(service, invalidHexJson)
 
     result shouldBe a[Left[_, _]]
-    result.left.getOrElse("") should include("Failed to convert checkpoint data")
+    result.left.getOrElse("") should include("Validation error")
+  }
+
+  it should "return error for wrong length block hash" taggedAs (UnitTest, SyncTest) in {
+    val service = new CheckpointUpdateService()
+
+    val wrongLengthJson = """{
+      "network": "etc-mainnet",
+      "checkpoints": [
+        {"blockNumber": "19250000", "blockHash": "0x1234"}
+      ]
+    }"""
+
+    val result = parseCheckpoints(service, wrongLengthJson)
+
+    result shouldBe a[Left[_, _]]
+    result.left.getOrElse("") should include("expected 64 hex characters")
+  }
+
+  it should "return error for invalid block number" taggedAs (UnitTest, SyncTest) in {
+    val service = new CheckpointUpdateService()
+
+    val invalidBlockNumberJson = """{
+      "network": "etc-mainnet",
+      "checkpoints": [
+        {"blockNumber": "not-a-number", "blockHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"}
+      ]
+    }"""
+
+    val result = parseCheckpoints(service, invalidBlockNumberJson)
+
+    result shouldBe a[Left[_, _]]
+    result.left.getOrElse("") should include("Invalid block number")
   }
 
   it should "handle empty checkpoints array" taggedAs (UnitTest, SyncTest) in {
@@ -152,9 +208,7 @@ class CheckpointUpdateServiceSpec
       "checkpoints": []
     }"""
 
-    val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
-    parseMethod.setAccessible(true)
-    val result = parseMethod.invoke(service, emptyCheckpointsJson).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]
+    val result = parseCheckpoints(service, emptyCheckpointsJson)
 
     result shouldBe a[Right[_, _]]
     result.getOrElse(Seq.empty) should have size 0
@@ -180,10 +234,7 @@ class CheckpointUpdateServiceSpec
 
     val checkpointSets = Seq(Seq(checkpoint1), Seq(checkpoint2), Seq(checkpoint3))
 
-    val verifyMethod =
-      service.getClass.getDeclaredMethod("verifyWithQuorum", classOf[Seq[Seq[BootstrapCheckpoint]]], classOf[Int])
-    verifyMethod.setAccessible(true)
-    val result = verifyMethod.invoke(service, checkpointSets, 2).asInstanceOf[Seq[VerifiedCheckpoint]]
+    val result = verifyWithQuorum(service, checkpointSets, 2)
 
     result should have size 1
     result(0).blockNumber shouldEqual BigInt(19250000)
@@ -211,10 +262,7 @@ class CheckpointUpdateServiceSpec
 
     val checkpointSets = Seq(Seq(checkpoint1), Seq(checkpoint2), Seq(checkpoint3))
 
-    val verifyMethod =
-      service.getClass.getDeclaredMethod("verifyWithQuorum", classOf[Seq[Seq[BootstrapCheckpoint]]], classOf[Int])
-    verifyMethod.setAccessible(true)
-    val result = verifyMethod.invoke(service, checkpointSets, 2).asInstanceOf[Seq[VerifiedCheckpoint]]
+    val result = verifyWithQuorum(service, checkpointSets, 2)
 
     result should have size 0
   }

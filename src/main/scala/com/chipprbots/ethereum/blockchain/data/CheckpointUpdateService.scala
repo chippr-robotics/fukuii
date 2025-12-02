@@ -108,8 +108,12 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
       }
   }
 
-  /** Case class for checkpoint JSON representation */
-  private case class CheckpointJson(blockNumber: Long, blockHash: String)
+  /** Case class for checkpoint JSON representation
+    *
+    * Note: Using String for blockNumber to avoid Long overflow issues with very large block numbers. Will be converted
+    * to BigInt when creating BootstrapCheckpoint.
+    */
+  private case class CheckpointJson(blockNumber: String, blockHash: String)
 
   /** Case class for checkpoints response */
   private case class CheckpointsResponse(network: String, checkpoints: Seq[CheckpointJson])
@@ -123,16 +127,40 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
     decode[CheckpointsResponse](json) match {
       case Right(response) =>
         try {
-          val checkpoints = response.checkpoints.map { cp =>
-            val hashBytes = Hex.decode(cp.blockHash.stripPrefix("0x"))
-            BootstrapCheckpoint(
-              BigInt(cp.blockNumber),
-              ByteString(hashBytes)
-            )
+          val checkpoints = response.checkpoints.zipWithIndex.map { case (cp, idx) =>
+            // Validate and parse block number
+            val blockNumber = try {
+              BigInt(cp.blockNumber)
+            } catch {
+              case _: NumberFormatException =>
+                throw new IllegalArgumentException(
+                  s"Invalid block number at checkpoint $idx: '${cp.blockNumber}' is not a valid number"
+                )
+            }
+
+            // Validate and decode block hash
+            val hexString = cp.blockHash.stripPrefix("0x")
+            if (hexString.length != 64) {
+              throw new IllegalArgumentException(
+                s"Invalid block hash at checkpoint $idx: expected 64 hex characters, got ${hexString.length}"
+              )
+            }
+            val hashBytes = try {
+              Hex.decode(hexString)
+            } catch {
+              case _: Exception =>
+                throw new IllegalArgumentException(
+                  s"Invalid block hash at checkpoint $idx: '${hexString}' contains invalid hex characters"
+                )
+            }
+
+            BootstrapCheckpoint(blockNumber, ByteString(hashBytes))
           }
           log.debug(s"Successfully parsed ${checkpoints.size} checkpoints from JSON for network: ${response.network}")
           Right(checkpoints)
         } catch {
+          case ex: IllegalArgumentException =>
+            Left(s"Validation error: ${ex.getMessage}")
           case ex: Exception =>
             Left(s"Failed to convert checkpoint data: ${ex.getMessage}")
         }
