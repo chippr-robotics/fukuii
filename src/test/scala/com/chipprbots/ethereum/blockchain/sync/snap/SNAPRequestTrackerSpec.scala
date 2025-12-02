@@ -1,6 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.actor.ActorSystem
+import java.net.InetSocketAddress
+
+import org.apache.pekko.actor.{ActorRef, ActorSystem}
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.ByteString
 
@@ -26,7 +28,16 @@ class SNAPRequestTrackerSpec
     TestKit.shutdownActorSystem(system)
   }
 
-  implicit val scheduler = system.scheduler
+  implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
+
+  def createTestPeer(id: String, ref: ActorRef): Peer = {
+    Peer(
+      id = PeerId(id),
+      remoteAddress = new InetSocketAddress("127.0.0.1", 30303),
+      ref = ref,
+      incomingConnection = false
+    )
+  }
 
   "SNAPRequestTracker" should "generate unique request IDs" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
@@ -44,7 +55,7 @@ class SNAPRequestTrackerSpec
   it should "track pending requests" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     val requestId = tracker.generateRequestId()
     tracker.isPending(requestId) shouldBe false
@@ -63,7 +74,7 @@ class SNAPRequestTrackerSpec
   it should "complete pending requests" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     val requestId = tracker.generateRequestId()
     tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
@@ -78,7 +89,7 @@ class SNAPRequestTrackerSpec
   it should "trigger timeout callback after configured duration" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     var timeoutCalled = false
     val requestId = tracker.generateRequestId()
@@ -95,7 +106,7 @@ class SNAPRequestTrackerSpec
   it should "not trigger timeout if request is completed before timeout" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     var timeoutCalled = false
     val requestId = tracker.generateRequestId()
@@ -113,7 +124,7 @@ class SNAPRequestTrackerSpec
   it should "validate AccountRange response with monotonic ordering" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     val requestId = tracker.generateRequestId()
     tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
@@ -135,7 +146,7 @@ class SNAPRequestTrackerSpec
   it should "reject AccountRange response with non-monotonic ordering" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     val requestId = tracker.generateRequestId()
     tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {}
@@ -173,7 +184,7 @@ class SNAPRequestTrackerSpec
   it should "validate StorageRanges response with monotonic ordering" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     val requestId = tracker.generateRequestId()
     tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetStorageRanges) {}
@@ -195,7 +206,7 @@ class SNAPRequestTrackerSpec
   it should "reject StorageRanges response with non-monotonic ordering" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     val requestId = tracker.generateRequestId()
     tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetStorageRanges) {}
@@ -218,7 +229,7 @@ class SNAPRequestTrackerSpec
   it should "validate ByteCodes response" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer = Peer(PeerId("test-peer"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", testProbe.ref)
 
     val requestId = tracker.generateRequestId()
     tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetByteCodes) {}
@@ -235,8 +246,8 @@ class SNAPRequestTrackerSpec
   it should "handle multiple concurrent pending requests" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
-    val peer1 = Peer(PeerId("peer1"), testProbe.ref, testProbe.ref, inbound = false)
-    val peer2 = Peer(PeerId("peer2"), testProbe.ref, testProbe.ref, inbound = false)
+    val peer1 = createTestPeer("peer1", testProbe.ref)
+    val peer2 = createTestPeer("peer2", testProbe.ref)
 
     val id1 = tracker.generateRequestId()
     val id2 = tracker.generateRequestId()

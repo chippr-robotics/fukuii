@@ -1,6 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.actor.ActorSystem
+import java.net.InetSocketAddress
+
+import org.apache.pekko.actor.{ActorRef, ActorSystem}
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.ByteString
 
@@ -27,7 +29,16 @@ class StorageRangeDownloaderSpec
     TestKit.shutdownActorSystem(system)
   }
 
-  implicit val scheduler = system.scheduler
+  implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
+
+  def createTestPeer(id: String, ref: ActorRef): Peer = {
+    Peer(
+      id = PeerId(id),
+      remoteAddress = new InetSocketAddress("127.0.0.1", 30303),
+      ref = ref,
+      incomingConnection = false
+    )
+  }
 
   "StorageRangeDownloader" should "initialize with proper state" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
@@ -80,7 +91,7 @@ class StorageRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
@@ -114,7 +125,7 @@ class StorageRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
@@ -150,7 +161,7 @@ class StorageRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
@@ -298,7 +309,7 @@ class StorageRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,

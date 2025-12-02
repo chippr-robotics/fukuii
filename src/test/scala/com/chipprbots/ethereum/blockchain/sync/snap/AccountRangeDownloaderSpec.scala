@@ -1,6 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.actor.ActorSystem
+import java.net.InetSocketAddress
+
+import org.apache.pekko.actor.{ActorRef, ActorSystem}
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.ByteString
 
@@ -28,7 +30,16 @@ class AccountRangeDownloaderSpec
     TestKit.shutdownActorSystem(system)
   }
 
-  implicit val scheduler = system.scheduler
+  implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
+
+  def createTestPeer(id: String, ref: ActorRef): Peer = {
+    Peer(
+      id = PeerId(id),
+      remoteAddress = new InetSocketAddress("127.0.0.1", 30303),
+      ref = ref,
+      incomingConnection = false
+    )
+  }
 
   "AccountRangeDownloader" should "initialize with proper state" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
@@ -56,7 +67,7 @@ class AccountRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
@@ -81,8 +92,8 @@ class AccountRangeDownloaderSpec
     val peerProbe1 = TestProbe()
     val peerProbe2 = TestProbe()
 
-    val peer1 = Peer(PeerId("peer1"), peerProbe1.ref, peerProbe1.ref, inbound = false)
-    val peer2 = Peer(PeerId("peer2"), peerProbe2.ref, peerProbe2.ref, inbound = false)
+    val peer1 = createTestPeer("peer1", peerProbe1.ref)
+    val peer2 = createTestPeer("peer2", peerProbe2.ref)
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
@@ -111,7 +122,7 @@ class AccountRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
@@ -181,7 +192,7 @@ class AccountRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
@@ -245,7 +256,7 @@ class AccountRangeDownloaderSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = Peer(PeerId("test-peer"), peerProbe.ref, peerProbe.ref, inbound = false)
+    val peer = createTestPeer("test-peer", peerProbe.ref)
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,

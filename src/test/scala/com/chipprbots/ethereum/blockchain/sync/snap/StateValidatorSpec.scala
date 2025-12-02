@@ -190,61 +190,61 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
     
     // Should detect the missing storage root for account2
     result match {
-      case Right(missingNodes) =>
-        missingNodes should not be empty
-        missingNodes should contain (missingStorageRoot)
-      case Left(error) =>
-        fail(s"Expected to detect missing storage root, but got error: $error")
+      case Right(foundMissingNodes) =>
+        foundMissingNodes should not be empty
+        foundMissingNodes should contain (missingStorageRoot)
+      case Left(foundError) =>
+        fail(s"Expected to detect missing storage root, but got error: $foundError")
     }
   }
-}
 
-/** Simple in-memory test storage for MPT nodes */
-class TestMptStorage extends MptStorage {
-  private val nodes = mutable.Map[ByteString, MptNode]()
-  
-  override def get(key: Array[Byte]): MptNode = {
-    val keyStr = ByteString(key)
-    nodes.get(keyStr)
-      .getOrElse {
-        throw new MerklePatriciaTrie.MissingNodeException(keyStr)
+  /** Simple in-memory test storage for MPT nodes */
+  private class TestMptStorage extends MptStorage {
+    private val nodes = mutable.Map[ByteString, MptNode]()
+    
+    override def get(key: Array[Byte]): MptNode = {
+      val keyStr = ByteString(key)
+      nodes.get(keyStr)
+        .getOrElse {
+          throw new MerklePatriciaTrie.MissingNodeException(keyStr)
+        }
+    }
+    
+    def putNode(node: MptNode): Unit = {
+      val hash = ByteString(node.hash)
+      nodes(hash) = node
+    }
+    
+    override def updateNodesInStorage(
+        newRoot: Option[MptNode],
+        toRemove: Seq[MptNode]
+    ): Option[MptNode] = {
+      // Store the new root and related nodes
+      newRoot.foreach { root =>
+        storeNodeRecursively(root)
       }
-  }
-  
-  def putNode(node: MptNode): Unit = {
-    val hash = ByteString(node.hash)
-    nodes(hash) = node
-  }
-  
-  override def updateNodesInStorage(
-      newRoot: Option[MptNode],
-      toRemove: Seq[MptNode]
-  ): Option[MptNode] = {
-    // Store the new root and related nodes
-    newRoot.foreach { root =>
-      storeNodeRecursively(root)
+      newRoot
     }
-    newRoot
-  }
-  
-  private def storeNodeRecursively(node: MptNode): Unit = {
-    node match {
-      case leaf: LeafNode =>
-        putNode(leaf)
-      case ext: ExtensionNode =>
-        putNode(ext)
-        storeNodeRecursively(ext.next)
-      case branch: BranchNode =>
-        putNode(branch)
-        branch.children.foreach(storeNodeRecursively)
-      case hash: HashNode =>
-        putNode(hash)
-      case NullNode =>
-        // Nothing to store
+    
+    private def storeNodeRecursively(node: MptNode): Unit = {
+      node match {
+        case leaf: LeafNode =>
+          putNode(leaf)
+        case ext: ExtensionNode =>
+          putNode(ext)
+          storeNodeRecursively(ext.next)
+        case branch: BranchNode =>
+          putNode(branch)
+          branch.children.foreach(storeNodeRecursively)
+        case hash: HashNode =>
+          putNode(hash)
+        case NullNode =>
+          // Nothing to store
+      }
     }
-  }
-  
-  override def persist(): Unit = {
-    // No-op for in-memory storage
+    
+    override def persist(): Unit = {
+      // No-op for in-memory storage
+    }
   }
 }
