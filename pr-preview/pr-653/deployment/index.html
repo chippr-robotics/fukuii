@@ -1090,6 +1090,8 @@
       
         
       
+        
+      
     
     
     
@@ -1189,6 +1191,34 @@
     
   
     Kong API Gateway
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/barad-dur-operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Barad-dûr Operations
   
 
     
@@ -4690,6 +4720,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#docker-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4759,6 +4828,23 @@
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
 </span></code></pre></div>
 <p>See the <a href="docker/">Docker Guide</a> for detailed instructions.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<p>Common deployment issues and their solutions:</p>
+<h3 id="docker-issues">Docker Issues<a class="headerlink" href="#docker-issues" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Container won't start</strong>: Check logs with <code>docker-compose logs -f</code></li>
+<li><strong>Port conflicts</strong>: Verify no other services are using the required ports</li>
+<li><strong>Permission errors</strong>: Ensure proper ownership of data directories</li>
+</ul>
+<h3 id="network-issues">Network Issues<a class="headerlink" href="#network-issues" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Node not syncing</strong>: Check peer connectivity and firewall settings</li>
+<li><strong>RPC not responding</strong>: Verify the service is running and port is exposed</li>
+</ul>
+<p>For detailed troubleshooting, see:
+- <a href="../runbooks/known-issues/">Known Issues</a>
+- <a href="../runbooks/log-triage/">Log Triage</a>
+- <a href="../runbooks/barad-dur-operations/">Barad-dûr Operations</a></p>
 
 
 

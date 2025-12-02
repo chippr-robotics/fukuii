@@ -12,13 +12,13 @@
         <meta name="author" content="Chippr Robotics LLC">
       
       
-        <link rel="canonical" href="https://chippr-robotics.github.io/fukuii/deployment/kong/">
+        <link rel="canonical" href="https://chippr-robotics.github.io/fukuii/runbooks/barad-dur-operations/">
       
       
-        <link rel="prev" href="../docker/">
+        <link rel="prev" href="../../deployment/kong/">
       
       
-        <link rel="next" href="../../runbooks/barad-dur-operations/">
+        <link rel="next" href="../../deployment/test-network/">
       
       
         
@@ -29,7 +29,7 @@
     
     
       
-        <title>Kong API Gateway - Fukuii Documentation</title>
+        <title>Barad-dûr Operations - Fukuii Documentation</title>
       
     
     
@@ -92,7 +92,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#barad-dur-kong-api-gateway-for-fukuii" class="md-skip">
+        <a href="#barad-dur-operations-runbook" class="md-skip">
           Skip to content
         </a>
       
@@ -128,7 +128,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Kong API Gateway
+              Barad-dûr Operations
             
           </span>
         </div>
@@ -641,7 +641,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../docker/" class="md-nav__link">
+      <a href="../../deployment/docker/" class="md-nav__link">
         
   
   
@@ -819,7 +819,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/first-start/" class="md-nav__link">
+      <a href="../first-start/" class="md-nav__link">
         
   
   
@@ -847,7 +847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/node-configuration/" class="md-nav__link">
+      <a href="../node-configuration/" class="md-nav__link">
         
   
   
@@ -875,7 +875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/operating-modes/" class="md-nav__link">
+      <a href="../operating-modes/" class="md-nav__link">
         
   
   
@@ -903,7 +903,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/security/" class="md-nav__link">
+      <a href="../security/" class="md-nav__link">
         
   
   
@@ -931,7 +931,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/peering/" class="md-nav__link">
+      <a href="../peering/" class="md-nav__link">
         
   
   
@@ -959,7 +959,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/disk-management/" class="md-nav__link">
+      <a href="../disk-management/" class="md-nav__link">
         
   
   
@@ -987,7 +987,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/backup-restore/" class="md-nav__link">
+      <a href="../backup-restore/" class="md-nav__link">
         
   
   
@@ -1015,7 +1015,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/tls-operations/" class="md-nav__link">
+      <a href="../tls-operations/" class="md-nav__link">
         
   
   
@@ -1043,7 +1043,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/known-issues/" class="md-nav__link">
+      <a href="../known-issues/" class="md-nav__link">
         
   
   
@@ -1164,7 +1164,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../docker/" class="md-nav__link">
+      <a href="../../deployment/docker/" class="md-nav__link">
         
   
   
@@ -1172,6 +1172,34 @@
     
   
     Docker Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/kong/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kong API Gateway
   
 
     
@@ -1208,7 +1236,7 @@
   <span class="md-ellipsis">
     
   
-    Kong API Gateway
+    Barad-dûr Operations
   
 
     
@@ -1226,7 +1254,7 @@
   <span class="md-ellipsis">
     
   
-    Kong API Gateway
+    Barad-dûr Operations
   
 
     
@@ -1252,10 +1280,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#critical-security-notice" class="md-nav__link">
+  <a href="#table-of-contents" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ⚠️ CRITICAL SECURITY NOTICE
+        Table of Contents
       
     </span>
   </a>
@@ -1271,36 +1299,14 @@
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#architecture" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Architecture
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#services" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Services
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Services">
+    <nav class="md-nav" aria-label="Overview">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#kong-gateway" class="md-nav__link">
+  <a href="#what-is-barad-dur" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Kong Gateway
+        What is Barad-dûr?
       
     </span>
   </a>
@@ -1308,10 +1314,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#postgresql-database" class="md-nav__link">
+  <a href="#component-ports" class="md-nav__link">
     <span class="md-ellipsis">
       
-        PostgreSQL Database
+        Component Ports
       
     </span>
   </a>
@@ -1319,32 +1325,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fukuii-nodes" class="md-nav__link">
+  <a href="#directory-structure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fukuii Nodes
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#prometheus" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prometheus
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#grafana" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Grafana
+        Directory Structure
       
     </span>
   </a>
@@ -1357,22 +1341,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quick-start" class="md-nav__link">
+  <a href="#daily-operations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quick Start
+        Daily Operations
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Quick Start">
+    <nav class="md-nav" aria-label="Daily Operations">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#morning-checklist" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Morning Checklist
       
     </span>
   </a>
@@ -1380,21 +1364,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#start-the-stack" class="md-nav__link">
+  <a href="#health-check-commands" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Start the Stack
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#verify-services" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verify Services
+        Health Check Commands
       
     </span>
   </a>
@@ -1407,22 +1380,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#api-endpoints" class="md-nav__link">
+  <a href="#startup-and-shutdown" class="md-nav__link">
     <span class="md-ellipsis">
       
-        API Endpoints
+        Startup and Shutdown
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="API Endpoints">
+    <nav class="md-nav" aria-label="Startup and Shutdown">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#json-rpc-endpoints" class="md-nav__link">
+  <a href="#normal-startup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        JSON-RPC Endpoints
+        Normal Startup
       
     </span>
   </a>
@@ -1430,10 +1403,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#health-readiness-endpoints" class="md-nav__link">
+  <a href="#graceful-shutdown" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Health &amp; Readiness Endpoints
+        Graceful Shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emergency-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emergency Shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restarting-individual-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restarting Individual Services
       
     </span>
   </a>
@@ -1446,22 +1441,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#security" class="md-nav__link">
+  <a href="#health-monitoring" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Security
+        Health Monitoring
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Security">
+    <nav class="md-nav" aria-label="Health Monitoring">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#authentication-methods" class="md-nav__link">
+  <a href="#key-metrics-to-monitor" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authentication Methods
+        Key Metrics to Monitor
       
     </span>
   </a>
@@ -1469,10 +1464,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#changing-default-credentials" class="md-nav__link">
+  <a href="#prometheus-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Changing Default Credentials
+        Prometheus Queries
       
     </span>
   </a>
@@ -1480,32 +1475,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#rate-limiting" class="md-nav__link">
+  <a href="#setting-up-alerts" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rate Limiting
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cors-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CORS Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ip-restriction-optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        IP Restriction (Optional)
+        Setting Up Alerts
       
     </span>
   </a>
@@ -1518,22 +1491,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#high-availability-disaster-recovery-hadr" class="md-nav__link">
+  <a href="#incident-response" class="md-nav__link">
     <span class="md-ellipsis">
       
-        High Availability &amp; Disaster Recovery (HADR)
+        Incident Response
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="High Availability &amp; Disaster Recovery (HADR)">
+    <nav class="md-nav" aria-label="Incident Response">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#load-balancing" class="md-nav__link">
+  <a href="#service-down-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Load Balancing
+        Service Down Procedures
       
     </span>
   </a>
@@ -1541,32 +1514,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#active-health-checks" class="md-nav__link">
+  <a href="#escalation-matrix" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Active Health Checks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#passive-health-checks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Passive Health Checks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#adding-more-fukuii-instances" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Adding More Fukuii Instances
+        Escalation Matrix
       
     </span>
   </a>
@@ -1579,22 +1530,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#monitoring" class="md-nav__link">
+  <a href="#backup-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Monitoring
+        Backup and Recovery
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Monitoring">
+    <nav class="md-nav" aria-label="Backup and Recovery">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#prometheus-metrics" class="md-nav__link">
+  <a href="#what-to-back-up" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prometheus Metrics
+        What to Back Up
       
     </span>
   </a>
@@ -1602,10 +1553,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#grafana-dashboards" class="md-nav__link">
+  <a href="#backup-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grafana Dashboards
+        Backup Procedures
       
     </span>
   </a>
@@ -1613,10 +1564,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#log-management" class="md-nav__link">
+  <a href="#recovery-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Log Management
+        Recovery Procedures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup-schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup Schedule
       
     </span>
   </a>
@@ -1629,22 +1591,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
+  <a href="#scaling-operations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration
+        Scaling Operations
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration">
+    <nav class="md-nav" aria-label="Scaling Operations">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#kong-configuration-kongyml" class="md-nav__link">
+  <a href="#horizontal-scaling-add-instances" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Kong Configuration (kong.yml)
+        Horizontal Scaling (Add Instances)
       
     </span>
   </a>
@@ -1652,10 +1614,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fukuii-configuration" class="md-nav__link">
+  <a href="#vertical-scaling-increase-resources" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fukuii Configuration
+        Vertical Scaling (Increase Resources)
       
     </span>
   </a>
@@ -1663,10 +1625,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#prometheus-configuration" class="md-nav__link">
+  <a href="#traffic-management-during-scaling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prometheus Configuration
+        Traffic Management During Scaling
       
     </span>
   </a>
@@ -1679,22 +1641,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#backup-and-restore" class="md-nav__link">
+  <a href="#maintenance-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup and Restore
+        Maintenance Procedures
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Backup and Restore">
+    <nav class="md-nav" aria-label="Maintenance Procedures">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#backup-postgresql-data" class="md-nav__link">
+  <a href="#updating-kong-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup PostgreSQL Data
+        Updating Kong Configuration
       
     </span>
   </a>
@@ -1702,10 +1664,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#backup-fukuii-data" class="md-nav__link">
+  <a href="#updating-fukuii" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup Fukuii Data
+        Updating Fukuii
       
     </span>
   </a>
@@ -1713,10 +1675,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#restore-from-backup" class="md-nav__link">
+  <a href="#certificate-renewal" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Restore from Backup
+        Certificate Renewal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database Maintenance
       
     </span>
   </a>
@@ -1729,22 +1702,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
+  <a href="#troubleshooting-guide" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Troubleshooting
+        Troubleshooting Guide
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Troubleshooting">
+    <nav class="md-nav" aria-label="Troubleshooting Guide">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#kong-not-starting" class="md-nav__link">
+  <a href="#common-issues" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Kong Not Starting
+        Common Issues
       
     </span>
   </a>
@@ -1752,10 +1725,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fukuii-nodes-not-syncing" class="md-nav__link">
+  <a href="#diagnostic-commands" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fukuii Nodes Not Syncing
+        Diagnostic Commands
       
     </span>
   </a>
@@ -1763,32 +1736,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#load-balancing-not-working" class="md-nav__link">
+  <a href="#log-locations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Load Balancing Not Working
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#high-memory-usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        High Memory Usage
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#authentication-issues" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Authentication Issues
+        Log Locations
       
     </span>
   </a>
@@ -1801,82 +1752,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#production-deployment-checklist" class="md-nav__link">
+  <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Production Deployment Checklist
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#advanced-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Advanced Configuration
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Advanced Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#using-kong-in-db-less-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Using Kong in DB-less Mode
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-plugins" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom Plugins
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#multi-region-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Multi-Region Deployment
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#support-and-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Support and Resources
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#license" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        License
+        Related Documentation
       
     </span>
   </a>
@@ -1899,35 +1778,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/barad-dur-operations/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Barad-dûr Operations
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../test-network/" class="md-nav__link">
+      <a href="../../deployment/test-network/" class="md-nav__link">
         
   
   
@@ -1983,7 +1834,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/log-triage/" class="md-nav__link">
+      <a href="../log-triage/" class="md-nav__link">
         
   
   
@@ -5337,10 +5188,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#critical-security-notice" class="md-nav__link">
+  <a href="#table-of-contents" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ⚠️ CRITICAL SECURITY NOTICE
+        Table of Contents
       
     </span>
   </a>
@@ -5356,36 +5207,14 @@
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#architecture" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Architecture
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#services" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Services
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Services">
+    <nav class="md-nav" aria-label="Overview">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#kong-gateway" class="md-nav__link">
+  <a href="#what-is-barad-dur" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Kong Gateway
+        What is Barad-dûr?
       
     </span>
   </a>
@@ -5393,10 +5222,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#postgresql-database" class="md-nav__link">
+  <a href="#component-ports" class="md-nav__link">
     <span class="md-ellipsis">
       
-        PostgreSQL Database
+        Component Ports
       
     </span>
   </a>
@@ -5404,32 +5233,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fukuii-nodes" class="md-nav__link">
+  <a href="#directory-structure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fukuii Nodes
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#prometheus" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prometheus
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#grafana" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Grafana
+        Directory Structure
       
     </span>
   </a>
@@ -5442,22 +5249,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quick-start" class="md-nav__link">
+  <a href="#daily-operations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quick Start
+        Daily Operations
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Quick Start">
+    <nav class="md-nav" aria-label="Daily Operations">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#morning-checklist" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Morning Checklist
       
     </span>
   </a>
@@ -5465,21 +5272,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#start-the-stack" class="md-nav__link">
+  <a href="#health-check-commands" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Start the Stack
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#verify-services" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verify Services
+        Health Check Commands
       
     </span>
   </a>
@@ -5492,22 +5288,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#api-endpoints" class="md-nav__link">
+  <a href="#startup-and-shutdown" class="md-nav__link">
     <span class="md-ellipsis">
       
-        API Endpoints
+        Startup and Shutdown
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="API Endpoints">
+    <nav class="md-nav" aria-label="Startup and Shutdown">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#json-rpc-endpoints" class="md-nav__link">
+  <a href="#normal-startup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        JSON-RPC Endpoints
+        Normal Startup
       
     </span>
   </a>
@@ -5515,10 +5311,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#health-readiness-endpoints" class="md-nav__link">
+  <a href="#graceful-shutdown" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Health &amp; Readiness Endpoints
+        Graceful Shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emergency-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emergency Shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restarting-individual-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restarting Individual Services
       
     </span>
   </a>
@@ -5531,22 +5349,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#security" class="md-nav__link">
+  <a href="#health-monitoring" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Security
+        Health Monitoring
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Security">
+    <nav class="md-nav" aria-label="Health Monitoring">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#authentication-methods" class="md-nav__link">
+  <a href="#key-metrics-to-monitor" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authentication Methods
+        Key Metrics to Monitor
       
     </span>
   </a>
@@ -5554,10 +5372,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#changing-default-credentials" class="md-nav__link">
+  <a href="#prometheus-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Changing Default Credentials
+        Prometheus Queries
       
     </span>
   </a>
@@ -5565,32 +5383,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#rate-limiting" class="md-nav__link">
+  <a href="#setting-up-alerts" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rate Limiting
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cors-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CORS Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ip-restriction-optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        IP Restriction (Optional)
+        Setting Up Alerts
       
     </span>
   </a>
@@ -5603,22 +5399,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#high-availability-disaster-recovery-hadr" class="md-nav__link">
+  <a href="#incident-response" class="md-nav__link">
     <span class="md-ellipsis">
       
-        High Availability &amp; Disaster Recovery (HADR)
+        Incident Response
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="High Availability &amp; Disaster Recovery (HADR)">
+    <nav class="md-nav" aria-label="Incident Response">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#load-balancing" class="md-nav__link">
+  <a href="#service-down-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Load Balancing
+        Service Down Procedures
       
     </span>
   </a>
@@ -5626,32 +5422,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#active-health-checks" class="md-nav__link">
+  <a href="#escalation-matrix" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Active Health Checks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#passive-health-checks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Passive Health Checks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#adding-more-fukuii-instances" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Adding More Fukuii Instances
+        Escalation Matrix
       
     </span>
   </a>
@@ -5664,22 +5438,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#monitoring" class="md-nav__link">
+  <a href="#backup-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Monitoring
+        Backup and Recovery
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Monitoring">
+    <nav class="md-nav" aria-label="Backup and Recovery">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#prometheus-metrics" class="md-nav__link">
+  <a href="#what-to-back-up" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prometheus Metrics
+        What to Back Up
       
     </span>
   </a>
@@ -5687,10 +5461,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#grafana-dashboards" class="md-nav__link">
+  <a href="#backup-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grafana Dashboards
+        Backup Procedures
       
     </span>
   </a>
@@ -5698,10 +5472,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#log-management" class="md-nav__link">
+  <a href="#recovery-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Log Management
+        Recovery Procedures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup-schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup Schedule
       
     </span>
   </a>
@@ -5714,22 +5499,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
+  <a href="#scaling-operations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration
+        Scaling Operations
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration">
+    <nav class="md-nav" aria-label="Scaling Operations">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#kong-configuration-kongyml" class="md-nav__link">
+  <a href="#horizontal-scaling-add-instances" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Kong Configuration (kong.yml)
+        Horizontal Scaling (Add Instances)
       
     </span>
   </a>
@@ -5737,10 +5522,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fukuii-configuration" class="md-nav__link">
+  <a href="#vertical-scaling-increase-resources" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fukuii Configuration
+        Vertical Scaling (Increase Resources)
       
     </span>
   </a>
@@ -5748,10 +5533,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#prometheus-configuration" class="md-nav__link">
+  <a href="#traffic-management-during-scaling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prometheus Configuration
+        Traffic Management During Scaling
       
     </span>
   </a>
@@ -5764,22 +5549,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#backup-and-restore" class="md-nav__link">
+  <a href="#maintenance-procedures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup and Restore
+        Maintenance Procedures
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Backup and Restore">
+    <nav class="md-nav" aria-label="Maintenance Procedures">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#backup-postgresql-data" class="md-nav__link">
+  <a href="#updating-kong-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup PostgreSQL Data
+        Updating Kong Configuration
       
     </span>
   </a>
@@ -5787,10 +5572,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#backup-fukuii-data" class="md-nav__link">
+  <a href="#updating-fukuii" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup Fukuii Data
+        Updating Fukuii
       
     </span>
   </a>
@@ -5798,10 +5583,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#restore-from-backup" class="md-nav__link">
+  <a href="#certificate-renewal" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Restore from Backup
+        Certificate Renewal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Database Maintenance
       
     </span>
   </a>
@@ -5814,22 +5610,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
+  <a href="#troubleshooting-guide" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Troubleshooting
+        Troubleshooting Guide
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Troubleshooting">
+    <nav class="md-nav" aria-label="Troubleshooting Guide">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#kong-not-starting" class="md-nav__link">
+  <a href="#common-issues" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Kong Not Starting
+        Common Issues
       
     </span>
   </a>
@@ -5837,10 +5633,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#fukuii-nodes-not-syncing" class="md-nav__link">
+  <a href="#diagnostic-commands" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fukuii Nodes Not Syncing
+        Diagnostic Commands
       
     </span>
   </a>
@@ -5848,32 +5644,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#load-balancing-not-working" class="md-nav__link">
+  <a href="#log-locations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Load Balancing Not Working
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#high-memory-usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        High Memory Usage
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#authentication-issues" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Authentication Issues
+        Log Locations
       
     </span>
   </a>
@@ -5886,82 +5660,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#production-deployment-checklist" class="md-nav__link">
+  <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Production Deployment Checklist
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#advanced-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Advanced Configuration
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Advanced Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#using-kong-in-db-less-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Using Kong in DB-less Mode
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#custom-plugins" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom Plugins
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#multi-region-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Multi-Region Deployment
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#support-and-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Support and Resources
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#license" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        License
+        Related Documentation
       
     </span>
   </a>
@@ -6033,7 +5735,7 @@
 
 
   
-    <a href="https://github.com/chippr-robotics/fukuii/edit/develop/docs/deployment/kong.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/chippr-robotics/fukuii/edit/develop/docs/runbooks/barad-dur-operations.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -6041,580 +5743,749 @@
   
 
 
-<h1 id="barad-dur-kong-api-gateway-for-fukuii">Barad-dûr (Kong API Gateway) for Fukuii<a class="headerlink" href="#barad-dur-kong-api-gateway-for-fukuii" title="Permanent link">&para;</a></h1>
-<p>This directory contains a complete Kong API Gateway setup (named Barad-dûr, Sauron's Dark Tower) for managing Fukuii Ethereum Classic nodes with high availability, security, and monitoring capabilities.</p>
-<h2 id="critical-security-notice">⚠️ CRITICAL SECURITY NOTICE<a class="headerlink" href="#critical-security-notice" title="Permanent link">&para;</a></h2>
-<p><strong>This setup includes EXAMPLE CREDENTIALS for demonstration purposes. These MUST be changed before any production deployment!</strong></p>
-<p>Default credentials that MUST be changed:
-- Basic Auth passwords
-- API keys<br />
-- JWT secrets
-- Grafana admin password
-- PostgreSQL password</p>
-<p>See <a href="../kong-security/">Kong Security Guide</a> for detailed instructions on securing your deployment.</p>
+<h1 id="barad-dur-operations-runbook">Barad-dûr Operations Runbook<a class="headerlink" href="#barad-dur-operations-runbook" title="Permanent link">&para;</a></h1>
+<p>This runbook provides operational procedures for running and maintaining the Barad-dûr (Kong API Gateway) stack with Fukuii Ethereum Classic nodes.</p>
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#overview">Overview</a></li>
+<li><a href="#daily-operations">Daily Operations</a></li>
+<li><a href="#startup-and-shutdown">Startup and Shutdown</a></li>
+<li><a href="#health-monitoring">Health Monitoring</a></li>
+<li><a href="#incident-response">Incident Response</a></li>
+<li><a href="#backup-and-recovery">Backup and Recovery</a></li>
+<li><a href="#scaling-operations">Scaling Operations</a></li>
+<li><a href="#maintenance-procedures">Maintenance Procedures</a></li>
+<li><a href="#troubleshooting-guide">Troubleshooting Guide</a></li>
+</ol>
+<hr />
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>The Barad-dûr (Kong) setup provides:</p>
-<ul>
-<li><strong>API Gateway</strong>: Kong Gateway for routing and managing all traffic to Fukuii nodes</li>
-<li><strong>High Availability</strong>: Load balancing across multiple Fukuii instances with health checks</li>
-<li><strong>Database</strong>: PostgreSQL for Kong's configuration and state (replaces deprecated Cassandra support)</li>
-<li><strong>Security</strong>: Basic Auth, JWT, rate limiting, and CORS support</li>
-<li><strong>Monitoring</strong>: Prometheus metrics collection and Grafana dashboards</li>
-<li><strong>Multi-Network Support</strong>: HD wallet hierarchy routing for Bitcoin, Ethereum, and Ethereum Classic</li>
-<li><strong>Data Directory Bindings</strong>: Configurable host directories for persistent data</li>
-</ul>
-<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌─────────────┐
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│   Clients   │
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>└──────┬──────┘
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>       │
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>       ▼
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>┌─────────────────────────────────────────────┐
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>│            Kong API Gateway                  │
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│  - Authentication (Basic Auth / JWT)        │
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>│  - Rate Limiting                             │
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>│  - Load Balancing                            │
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>│  - CORS Support                              │
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>│  - Metrics Export                            │
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>└──────┬──────────────────────────────────────┘
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>       │
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>       ├──────────────┬──────────────┐
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>       ▼              ▼              ▼
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>┌──────────┐   ┌──────────┐   ┌──────────┐
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>│ Fukuii   │   │ Fukuii   │   │ Fukuii   │
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>│ Primary  │   │Secondary │   │  ...     │
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>└──────────┘   └──────────┘   └──────────┘
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>       │              │              │
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>       └──────────────┴──────────────┘
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>                      │
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>       ┌──────────────┴──────────────┐
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>       ▼                             ▼
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>┌──────────────┐              ┌─────────────┐
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>│  Prometheus  │              │   Grafana   │
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>│   Metrics    │◄─────────────┤  Dashboard  │
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>└──────────────┘              └─────────────┘
+<h3 id="what-is-barad-dur">What is Barad-dûr?<a class="headerlink" href="#what-is-barad-dur" title="Permanent link">&para;</a></h3>
+<p>Barad-dûr is a production-ready API ops stack that combines:
+- <strong>Kong API Gateway</strong> for request routing, authentication, and rate limiting
+- <strong>Multiple Fukuii instances</strong> for high availability
+- <strong>PostgreSQL</strong> for Kong configuration storage
+- <strong>Prometheus</strong> for metrics collection
+- <strong>Grafana</strong> for visualization</p>
+<h3 id="component-ports">Component Ports<a class="headerlink" href="#component-ports" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Port</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kong Proxy</td>
+<td>8000</td>
+<td>HTTP API endpoint</td>
+</tr>
+<tr>
+<td>Kong Proxy HTTPS</td>
+<td>8443</td>
+<td>HTTPS API endpoint</td>
+</tr>
+<tr>
+<td>Kong Admin</td>
+<td>8001</td>
+<td>Admin API (internal)</td>
+</tr>
+<tr>
+<td>Fukuii Primary</td>
+<td>8545</td>
+<td>JSON-RPC (direct)</td>
+</tr>
+<tr>
+<td>Fukuii Primary</td>
+<td>8546</td>
+<td>WebSocket (direct)</td>
+</tr>
+<tr>
+<td>Fukuii Primary</td>
+<td>30303</td>
+<td>P2P network</td>
+</tr>
+<tr>
+<td>Fukuii Secondary</td>
+<td>8547</td>
+<td>JSON-RPC (direct)</td>
+</tr>
+<tr>
+<td>Fukuii Secondary</td>
+<td>8548</td>
+<td>WebSocket (direct)</td>
+</tr>
+<tr>
+<td>Fukuii Secondary</td>
+<td>30304</td>
+<td>P2P network</td>
+</tr>
+<tr>
+<td>Prometheus</td>
+<td>9090</td>
+<td>Metrics UI</td>
+</tr>
+<tr>
+<td>Grafana</td>
+<td>3000</td>
+<td>Dashboards</td>
+</tr>
+</tbody>
+</table>
+<h3 id="directory-structure">Directory Structure<a class="headerlink" href="#directory-structure" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker/barad-dur/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── docker-compose.yml          # Full stack configuration
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── docker-compose-dbless.yml   # DB-less Kong variant
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├── kong.yml                    # Kong declarative config
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── .env                        # Environment variables
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── fukuii-conf/                # Fukuii configuration
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── prometheus/                 # Prometheus config
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>├── grafana/                    # Grafana dashboards
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>└── data/                       # Persistent data
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    ├── fukuii/                 # Primary node data
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    ├── fukuii-secondary/       # Secondary node data
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    ├── postgres/               # PostgreSQL data
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    ├── prometheus/             # Prometheus data
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    └── grafana/                # Grafana data
 </span></code></pre></div>
-<h2 id="services">Services<a class="headerlink" href="#services" title="Permanent link">&para;</a></h2>
-<h3 id="kong-gateway">Kong Gateway<a class="headerlink" href="#kong-gateway" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>Ports</strong>: </li>
-<li><code>8000</code> - HTTP Proxy</li>
-<li><code>8443</code> - HTTPS Proxy</li>
-<li><code>8001</code> - Admin API</li>
-<li><code>8444</code> - Admin API HTTPS</li>
-<li><strong>Features</strong>: Load balancing, authentication, rate limiting, monitoring</li>
-</ul>
-<h3 id="postgresql-database">PostgreSQL Database<a class="headerlink" href="#postgresql-database" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>Port</strong>: <code>5432</code> (internal)</li>
-<li><strong>Purpose</strong>: Kong's configuration and state storage</li>
-<li><strong>Note</strong>: Replaces Cassandra which is no longer supported in Kong 3.x+</li>
-</ul>
-<h3 id="fukuii-nodes">Fukuii Nodes<a class="headerlink" href="#fukuii-nodes" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>Primary Instance</strong>:</li>
-<li>JSON-RPC HTTP: <code>8545</code></li>
-<li>JSON-RPC WebSocket: <code>8546</code></li>
-<li>P2P: <code>30303</code></li>
+<hr />
+<h2 id="daily-operations">Daily Operations<a class="headerlink" href="#daily-operations" title="Permanent link">&para;</a></h2>
+<h3 id="morning-checklist">Morning Checklist<a class="headerlink" href="#morning-checklist" title="Permanent link">&para;</a></h3>
+<ol>
 <li>
-<p>Metrics: <code>9095</code></p>
+<p><strong>Check Service Health</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>docker/barad-dur
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>docker-compose<span class="w"> </span>ps
+</span></code></pre></div>
+   All services should show <code>Up (healthy)</code>.</p>
 </li>
 <li>
-<p><strong>Secondary Instance</strong>:</p>
+<p><strong>Verify Kong Gateway</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8001/status<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</span></code></pre></div>
+   Expected: <code>"database": {"reachable": true}</code></p>
 </li>
-<li>JSON-RPC HTTP: <code>8547</code></li>
-<li>JSON-RPC WebSocket: <code>8548</code></li>
-<li>P2P: <code>30304</code></li>
-<li>Metrics: <code>9096</code></li>
-</ul>
-<h3 id="prometheus">Prometheus<a class="headerlink" href="#prometheus" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>Port</strong>: <code>9090</code></li>
-<li><strong>Purpose</strong>: Metrics collection and storage</li>
-<li><strong>Retention</strong>: 30 days (configurable)</li>
-</ul>
-<h3 id="grafana">Grafana<a class="headerlink" href="#grafana" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>Port</strong>: <code>3000</code></li>
-<li><strong>Default Credentials</strong>: </li>
-<li>Username: <code>admin</code></li>
-<li>Password: <code>fukuii_grafana_admin</code></li>
-</ul>
-<h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
-<h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Docker 20.10+</li>
-<li>Docker Compose 2.0+</li>
-<li>At least 8GB RAM available</li>
-<li>20GB free disk space</li>
-</ul>
-<h3 id="start-the-stack">Start the Stack<a class="headerlink" href="#start-the-stack" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Navigate to the Barad-dûr directory</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">cd</span><span class="w"> </span>docker/barad-dur
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Start all services</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Check service status</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>docker-compose<span class="w"> </span>ps
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># View logs</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>-f
+<li>
+<p><strong>Check Fukuii Sync Status</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-u<span class="w"> </span>admin:YOUR_PASSWORD<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_syncing&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
 </span></code></pre></div>
-<h3 id="verify-services">Verify Services<a class="headerlink" href="#verify-services" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Check Kong is running</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>curl<span class="w"> </span>-i<span class="w"> </span>http://localhost:8001/status
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Check Fukuii via Kong</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># Check health endpoint</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>curl<span class="w"> </span>http://localhost:8000/health
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># Access Grafana</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>open<span class="w"> </span>http://localhost:3000
-</span></code></pre></div>
-<h2 id="api-endpoints">API Endpoints<a class="headerlink" href="#api-endpoints" title="Permanent link">&para;</a></h2>
-<h3 id="json-rpc-endpoints">JSON-RPC Endpoints<a class="headerlink" href="#json-rpc-endpoints" title="Permanent link">&para;</a></h3>
-<p>All endpoints require authentication (see Security section below).</p>
-<h4 id="main-json-rpc-endpoint">Main JSON-RPC Endpoint<a class="headerlink" href="#main-json-rpc-endpoint" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Standard Ethereum JSON-RPC calls</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Alternative path</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/rpc<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span></code></pre></div>
-<h4 id="hd-wallet-multi-network-support">HD Wallet Multi-Network Support<a class="headerlink" href="#hd-wallet-multi-network-support" title="Permanent link">&para;</a></h4>
-<h5 id="bitcoin">Bitcoin<a class="headerlink" href="#bitcoin" title="Permanent link">&para;</a></h5>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/bitcoin<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
+   Expected: <code>"result": false</code> (if synced) or sync progress details.</p>
+</li>
+<li>
+<p><strong>Verify Peer Connectivity</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-u<span class="w"> </span>admin:YOUR_PASSWORD<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;getblockcount&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Alternative: /btc</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/btc<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;getblockcount&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;net_peerCount&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
 </span></code></pre></div>
-<h5 id="ethereum">Ethereum<a class="headerlink" href="#ethereum" title="Permanent link">&para;</a></h5>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/ethereum<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># Alternative: /eth</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/eth<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
+   Expected: At least 5-10 peers.</p>
+</li>
+<li>
+<p><strong>Review Grafana Dashboards</strong></p>
+</li>
+<li>Open http://localhost:3000</li>
+<li>Check Kong request rate and latency</li>
+<li>Verify Fukuii node metrics</li>
+</ol>
+<h3 id="health-check-commands">Health Check Commands<a class="headerlink" href="#health-check-commands" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Quick health check</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>./test-api.sh
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Detailed health status</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>curl<span class="w"> </span>http://localhost:8000/healthcheck<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># Kong upstream health</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>curl<span class="w"> </span>http://localhost:8001/upstreams/fukuii-cluster/health<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </span></code></pre></div>
-<h5 id="ethereum-classic">Ethereum Classic<a class="headerlink" href="#ethereum-classic" title="Permanent link">&para;</a></h5>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/etc<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
+<hr />
+<h2 id="startup-and-shutdown">Startup and Shutdown<a class="headerlink" href="#startup-and-shutdown" title="Permanent link">&para;</a></h2>
+<h3 id="normal-startup">Normal Startup<a class="headerlink" href="#normal-startup" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">cd</span><span class="w"> </span>docker/barad-dur
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># Pull latest images (optional)</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>docker-compose<span class="w"> </span>pull
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># Alternative: /ethereum-classic</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/ethereum-classic<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># Start all services</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Wait for health checks to pass (2-3 minutes)</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>watch<span class="w"> </span>docker-compose<span class="w"> </span>ps
 </span></code></pre></div>
-<h3 id="health-readiness-endpoints">Health &amp; Readiness Endpoints<a class="headerlink" href="#health-readiness-endpoints" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Health check (no auth required)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>curl<span class="w"> </span>http://localhost:8000/health
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Readiness check (no auth required)</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>curl<span class="w"> </span>http://localhost:8000/readiness
+<p><strong>Startup Order:</strong>
+1. PostgreSQL starts and becomes healthy
+2. Kong migrations run
+3. Kong starts and connects to PostgreSQL
+4. Fukuii nodes start syncing
+5. Prometheus starts scraping
+6. Grafana becomes available</p>
+<h3 id="graceful-shutdown">Graceful Shutdown<a class="headerlink" href="#graceful-shutdown" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">cd</span><span class="w"> </span>docker/barad-dur
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># Graceful shutdown (allows connections to drain)</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>docker-compose<span class="w"> </span>stop
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="c1"># Remove containers but keep data</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>docker-compose<span class="w"> </span>down
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="c1"># Remove containers AND volumes (data loss)</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>docker-compose<span class="w"> </span>down<span class="w"> </span>-v
 </span></code></pre></div>
-<h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
-<h3 id="authentication-methods">Authentication Methods<a class="headerlink" href="#authentication-methods" title="Permanent link">&para;</a></h3>
-<h4 id="1-basic-authentication-default">1. Basic Authentication (Default)<a class="headerlink" href="#1-basic-authentication-default" title="Permanent link">&para;</a></h4>
-<p>Basic Auth is enabled by default with two pre-configured users:</p>
-<p><strong>Admin User:</strong>
-- Username: <code>admin</code>
-- Password: <code>fukuii_admin_password</code></p>
-<p><strong>Developer User:</strong>
-- Username: <code>developer</code>
-- Password: <code>fukuii_dev_password</code></p>
-<p>Usage:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span></code></pre></div></p>
-<h4 id="2-api-key-authentication">2. API Key Authentication<a class="headerlink" href="#2-api-key-authentication" title="Permanent link">&para;</a></h4>
-<p>Each consumer has an API key for programmatic access:</p>
-<p><strong>Admin API Key:</strong> <code>admin_api_key_change_me</code>
-<strong>Developer API Key:</strong> <code>dev_api_key_change_me</code></p>
-<p>Usage:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;apikey: admin_api_key_change_me&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span></code></pre></div></p>
-<h4 id="3-jwt-authentication-optional">3. JWT Authentication (Optional)<a class="headerlink" href="#3-jwt-authentication-optional" title="Permanent link">&para;</a></h4>
-<p>JWT authentication is configured but not enforced by default. To use JWT:</p>
-<ol>
-<li>Generate a JWT token with the configured secret</li>
-<li>Include the token in the Authorization header</li>
-</ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Example JWT token generation (using a JWT library)</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="c1"># Token should be signed with: your_jwt_secret_change_me</span>
+<h3 id="emergency-shutdown">Emergency Shutdown<a class="headerlink" href="#emergency-shutdown" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Force stop all containers immediately</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>docker-compose<span class="w"> </span><span class="nb">kill</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Remove all containers</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>docker-compose<span class="w"> </span>down<span class="w"> </span>--remove-orphans
+</span></code></pre></div>
+<h3 id="restarting-individual-services">Restarting Individual Services<a class="headerlink" href="#restarting-individual-services" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Restart Kong (after config changes)</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>kong
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Restart Fukuii nodes</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>fukuii-primary<span class="w"> </span>fukuii-secondary
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="c1"># Restart monitoring stack</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>prometheus<span class="w"> </span>grafana
+</span></code></pre></div>
+<hr />
+<h2 id="health-monitoring">Health Monitoring<a class="headerlink" href="#health-monitoring" title="Permanent link">&para;</a></h2>
+<h3 id="key-metrics-to-monitor">Key Metrics to Monitor<a class="headerlink" href="#key-metrics-to-monitor" title="Permanent link">&para;</a></h3>
+<h4 id="kong-gateway-metrics">Kong Gateway Metrics<a class="headerlink" href="#kong-gateway-metrics" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Warning Threshold</th>
+<th>Critical Threshold</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Request rate (5xx errors)</td>
+<td>&gt; 1%</td>
+<td>&gt; 5%</td>
+</tr>
+<tr>
+<td>Request latency (p95)</td>
+<td>&gt; 2s</td>
+<td>&gt; 5s</td>
+</tr>
+<tr>
+<td>Rate limit violations</td>
+<td>&gt; 10/min</td>
+<td>&gt; 50/min</td>
+</tr>
+<tr>
+<td>Authentication failures</td>
+<td>&gt; 5/min</td>
+<td>&gt; 20/min</td>
+</tr>
+</tbody>
+</table>
+<h4 id="fukuii-node-metrics">Fukuii Node Metrics<a class="headerlink" href="#fukuii-node-metrics" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Warning Threshold</th>
+<th>Critical Threshold</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Peer count</td>
+<td>&lt; 5</td>
+<td>&lt; 2</td>
+</tr>
+<tr>
+<td>Sync lag (blocks behind)</td>
+<td>&gt; 100</td>
+<td>&gt; 1000</td>
+</tr>
+<tr>
+<td>Block processing time</td>
+<td>&gt; 1s</td>
+<td>&gt; 5s</td>
+</tr>
+<tr>
+<td>Memory usage</td>
+<td>&gt; 80%</td>
+<td>&gt; 95%</td>
+</tr>
+</tbody>
+</table>
+<h3 id="prometheus-queries">Prometheus Queries<a class="headerlink" href="#prometheus-queries" title="Permanent link">&para;</a></h3>
+<div class="language-promql highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Kong request rate</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kr">rate</span><span class="o">(</span><span class="nv">kong_http_requests_total</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span>
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer YOUR_JWT_TOKEN&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_blockNumber&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Kong error rate</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="kr">rate</span><span class="o">(</span><span class="nv">kong_http_requests_total</span><span class="p">{</span><span class="nl">code</span><span class="o">=~</span><span class="p">&quot;</span><span class="s">5..</span><span class="p">&quot;}[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="kr">rate</span><span class="o">(</span><span class="nv">kong_http_requests_total</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># Kong p95 latency</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="kr">histogram_quantile</span><span class="o">(</span><span class="mf">0.95</span><span class="p">,</span><span class="w"> </span><span class="kr">rate</span><span class="o">(</span><span class="nv">kong_latency_bucket</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="c1"># Upstream health status</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="nv">kong_upstream_target_health</span>
 </span></code></pre></div>
-<h3 id="changing-default-credentials">Changing Default Credentials<a class="headerlink" href="#changing-default-credentials" title="Permanent link">&para;</a></h3>
-<p>⚠️ <strong>IMPORTANT</strong>: Change default passwords and API keys before deploying to production!</p>
-<p>Edit <code>kong.yml</code> and update:
-- <code>basicauth_credentials</code> passwords
-- <code>keyauth_credentials</code> keys
-- <code>jwt_secrets</code> secrets</p>
-<p>Then restart Kong:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>kong
+<h3 id="setting-up-alerts">Setting Up Alerts<a class="headerlink" href="#setting-up-alerts" title="Permanent link">&para;</a></h3>
+<p>Create <code>/docker/barad-dur/prometheus/alert_rules.yml</code>:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">groups</span><span class="p">:</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">barad-dur-alerts</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="nt">rules</span><span class="p">:</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">KongHighErrorRate</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rate(kong_http_requests_total{code=~&quot;5..&quot;}[5m]) &gt; 0.05</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">        </span><span class="nt">labels</span><span class="p">:</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">          </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">critical</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Kong</span><span class="nv"> </span><span class="s">high</span><span class="nv"> </span><span class="s">error</span><span class="nv"> </span><span class="s">rate</span><span class="nv"> </span><span class="s">detected&quot;</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FukuiiLowPeerCount</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii_peer_count &lt; 5</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="w">        </span><span class="nt">labels</span><span class="p">:</span>
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="w">          </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">warning</span>
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Fukuii</span><span class="nv"> </span><span class="s">peer</span><span class="nv"> </span><span class="s">count</span><span class="nv"> </span><span class="s">is</span><span class="nv"> </span><span class="s">low&quot;</span>
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>
+</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">alert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FukuiiNotSyncing</span>
+</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a><span class="w">        </span><span class="nt">expr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">increase(fukuii_best_block_number[30m]) == 0</span>
+</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a><span class="w">        </span><span class="nt">for</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30m</span>
+</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23" href="#__codelineno-11-23"></a><span class="w">        </span><span class="nt">labels</span><span class="p">:</span>
+</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24" href="#__codelineno-11-24"></a><span class="w">          </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">critical</span>
+</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25" href="#__codelineno-11-25"></a><span class="w">        </span><span class="nt">annotations</span><span class="p">:</span>
+</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26" href="#__codelineno-11-26"></a><span class="w">          </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Fukuii</span><span class="nv"> </span><span class="s">node</span><span class="nv"> </span><span class="s">stopped</span><span class="nv"> </span><span class="s">syncing&quot;</span>
+</span></code></pre></div>
+<hr />
+<h2 id="incident-response">Incident Response<a class="headerlink" href="#incident-response" title="Permanent link">&para;</a></h2>
+<h3 id="service-down-procedures">Service Down Procedures<a class="headerlink" href="#service-down-procedures" title="Permanent link">&para;</a></h3>
+<h4 id="kong-not-responding">Kong Not Responding<a class="headerlink" href="#kong-not-responding" title="Permanent link">&para;</a></h4>
+<ol>
+<li>
+<p><strong>Check container status:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>docker-compose<span class="w"> </span>ps<span class="w"> </span>kong
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">50</span><span class="w"> </span>kong
 </span></code></pre></div></p>
-<h3 id="rate-limiting">Rate Limiting<a class="headerlink" href="#rate-limiting" title="Permanent link">&para;</a></h3>
-<p>Rate limits are configured per service:
-- 100 requests per minute
-- 5000 requests per hour</p>
-<p>To adjust, edit the <code>rate-limiting</code> plugin configuration in <code>kong.yml</code>.</p>
-<h3 id="cors-configuration">CORS Configuration<a class="headerlink" href="#cors-configuration" title="Permanent link">&para;</a></h3>
-<p>CORS is enabled for all origins by default. For production:</p>
-<ol>
-<li>Edit <code>kong.yml</code></li>
-<li>Update the <code>cors</code> plugin configuration</li>
-<li>Set specific <code>origins</code> instead of <code>"*"</code></li>
+</li>
+<li>
+<p><strong>Check PostgreSQL connectivity:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>docker-compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>kong<span class="w"> </span>kong<span class="w"> </span>health
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">50</span><span class="w"> </span>postgres
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>Restart Kong:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>kong
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>If migrations failed:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>docker-compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>kong-migrations
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>kong
+</span></code></pre></div></p>
+</li>
 </ol>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">plugins</span><span class="p">:</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cors</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">config</span><span class="p">:</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">      </span><span class="nt">origins</span><span class="p">:</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;https://your-frontend-domain.com&quot;</span>
-</span></code></pre></div>
-<h3 id="ip-restriction-optional">IP Restriction (Optional)<a class="headerlink" href="#ip-restriction-optional" title="Permanent link">&para;</a></h3>
-<p>Uncomment the <code>ip-restriction</code> plugin in <code>kong.yml</code> to whitelist specific IP ranges:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">plugins</span><span class="p">:</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ip-restriction</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="nt">config</span><span class="p">:</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">      </span><span class="nt">allow</span><span class="p">:</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.0/8</span>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">172.16.0.0/12</span>
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">192.168.0.0/16</span>
-</span></code></pre></div>
-<h2 id="high-availability-disaster-recovery-hadr">High Availability &amp; Disaster Recovery (HADR)<a class="headerlink" href="#high-availability-disaster-recovery-hadr" title="Permanent link">&para;</a></h2>
-<h3 id="load-balancing">Load Balancing<a class="headerlink" href="#load-balancing" title="Permanent link">&para;</a></h3>
-<p>Kong automatically load balances requests across all healthy Fukuii instances using:</p>
-<ul>
-<li><strong>Algorithm</strong>: Round-robin</li>
-<li><strong>Health Checks</strong>: Active and passive</li>
-<li><strong>Failover</strong>: Automatic removal of unhealthy instances</li>
-</ul>
-<h3 id="active-health-checks">Active Health Checks<a class="headerlink" href="#active-health-checks" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>Interval</strong>: Every 10 seconds</li>
-<li><strong>Endpoint</strong>: <code>/health</code></li>
-<li><strong>Success Threshold</strong>: 2 consecutive successes</li>
-<li><strong>Failure Threshold</strong>: 3 consecutive failures</li>
-</ul>
-<h3 id="passive-health-checks">Passive Health Checks<a class="headerlink" href="#passive-health-checks" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>HTTP Failures</strong>: 5 failures mark instance as unhealthy</li>
-<li><strong>Timeouts</strong>: 2 timeouts mark instance as unhealthy</li>
-</ul>
-<h3 id="adding-more-fukuii-instances">Adding More Fukuii Instances<a class="headerlink" href="#adding-more-fukuii-instances" title="Permanent link">&para;</a></h3>
-<p>To add additional Fukuii instances for higher availability:</p>
+<h4 id="fukuii-node-not-syncing">Fukuii Node Not Syncing<a class="headerlink" href="#fukuii-node-not-syncing" title="Permanent link">&para;</a></h4>
 <ol>
-<li>Add the service to <code>docker-compose.yml</code>:</li>
+<li>
+<p><strong>Check sync status:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">100</span><span class="w"> </span>fukuii-primary
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>Verify peer connectivity:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-primary<span class="w"> </span>netstat<span class="w"> </span>-an<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">30303</span>
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>Check disk space:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>df<span class="w"> </span>-h<span class="w"> </span><span class="k">$(</span>docker<span class="w"> </span>volume<span class="w"> </span>inspect<span class="w"> </span>barad-dur_fukuii-data<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.[0].Mountpoint&#39;</span><span class="k">)</span>
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>Restart with fresh peer connections:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>fukuii-primary
+</span></code></pre></div></p>
+</li>
 </ol>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nt">fukuii-tertiary</span><span class="p">:</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">chipprbots/fukuii:latest</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-tertiary</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8549:8545&quot;</span>
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8550:8546&quot;</span>
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;30305:30303&quot;</span>
-</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9097:9095&quot;</span>
-</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">  </span><span class="nt">networks</span><span class="p">:</span>
-</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-network</span>
-</span></code></pre></div>
+<h4 id="high-latency">High Latency<a class="headerlink" href="#high-latency" title="Permanent link">&para;</a></h4>
 <ol>
-<li>Add the target to <code>kong.yml</code>:</li>
+<li>
+<p><strong>Check resource usage:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>docker<span class="w"> </span>stats
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>Review Kong plugins:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>curl<span class="w"> </span>http://localhost:8001/plugins<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.data[] | {name, enabled}&#39;</span>
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>Check upstream health:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>curl<span class="w"> </span>http://localhost:8001/upstreams/fukuii-cluster/health<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</span></code></pre></div></p>
+</li>
+<li>
+<p><strong>Consider scaling if load is high:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--scale<span class="w"> </span>fukuii-primary<span class="o">=</span><span class="m">2</span>
+</span></code></pre></div></p>
+</li>
 </ol>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nt">upstreams</span><span class="p">:</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-cluster</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">    </span><span class="nt">targets</span><span class="p">:</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-primary:8546</span>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">        </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-secondary:8546</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">        </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-tertiary:8546</span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">        </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
-</span></code></pre></div>
+<h3 id="escalation-matrix">Escalation Matrix<a class="headerlink" href="#escalation-matrix" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Severity</th>
+<th>Response Time</th>
+<th>Escalation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Critical</td>
+<td>15 minutes</td>
+<td>On-call + Team Lead</td>
+</tr>
+<tr>
+<td>High</td>
+<td>1 hour</td>
+<td>On-call engineer</td>
+</tr>
+<tr>
+<td>Medium</td>
+<td>4 hours</td>
+<td>Next available</td>
+</tr>
+<tr>
+<td>Low</td>
+<td>24 hours</td>
+<td>Standard queue</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="backup-and-recovery">Backup and Recovery<a class="headerlink" href="#backup-and-recovery" title="Permanent link">&para;</a></h2>
+<h3 id="what-to-back-up">What to Back Up<a class="headerlink" href="#what-to-back-up" title="Permanent link">&para;</a></h3>
 <ol>
-<li>Restart the stack:</li>
+<li><strong>PostgreSQL (Kong configuration)</strong></li>
+<li><strong>Fukuii blockchain data</strong></li>
+<li><strong>Configuration files</strong> (<code>kong.yml</code>, <code>.env</code>)</li>
+<li><strong>Grafana dashboards</strong></li>
 </ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
+<h3 id="backup-procedures">Backup Procedures<a class="headerlink" href="#backup-procedures" title="Permanent link">&para;</a></h3>
+<h4 id="postgresql-backup">PostgreSQL Backup<a class="headerlink" href="#postgresql-backup" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Create SQL dump</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-postgres<span class="w"> </span>pg_dump<span class="w"> </span>-U<span class="w"> </span>kong<span class="w"> </span>kong<span class="w"> </span>&gt;<span class="w"> </span>backup/kong-<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>.sql
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="c1"># Compressed backup</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-postgres<span class="w"> </span>pg_dump<span class="w"> </span>-U<span class="w"> </span>kong<span class="w"> </span>kong<span class="w"> </span><span class="p">|</span><span class="w"> </span>gzip<span class="w"> </span>&gt;<span class="w"> </span>backup/kong-<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>.sql.gz
 </span></code></pre></div>
-<h2 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h2>
-<h3 id="prometheus-metrics">Prometheus Metrics<a class="headerlink" href="#prometheus-metrics" title="Permanent link">&para;</a></h3>
-<p>Prometheus collects metrics from:
-- Kong API Gateway
-- Fukuii primary instance
-- Fukuii secondary instance
-- Grafana</p>
-<p>Access Prometheus at: http://localhost:9090</p>
-<h4 id="key-metrics">Key Metrics<a class="headerlink" href="#key-metrics" title="Permanent link">&para;</a></h4>
-<p><strong>Kong Metrics:</strong>
-- <code>kong_http_requests_total</code> - Total HTTP requests
-- <code>kong_latency</code> - Request latency
-- <code>kong_bandwidth_bytes</code> - Bandwidth usage
-- <code>kong_upstream_status</code> - Upstream service status</p>
-<p><strong>Fukuii Metrics:</strong>
-- Node sync status
-- Block height
-- Peer count
-- Transaction pool size</p>
-<h3 id="grafana-dashboards">Grafana Dashboards<a class="headerlink" href="#grafana-dashboards" title="Permanent link">&para;</a></h3>
-<p>Access Grafana at: http://localhost:3000</p>
-<p><strong>Default Login:</strong>
-- Username: <code>admin</code>
-- Password: <code>fukuii_grafana_admin</code></p>
-<p><strong>Pre-configured Dashboards:</strong>
-- Kong API Gateway metrics
-- Fukuii node metrics
-- System metrics</p>
-<h3 id="log-management">Log Management<a class="headerlink" href="#log-management" title="Permanent link">&para;</a></h3>
-<p>All services log to stdout/stderr. To view logs:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># All services</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>-f
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># Specific service</span>
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>kong
-</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>fukuii-primary
-</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>
-</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="c1"># With tail</span>
-</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>--tail<span class="o">=</span><span class="m">100</span><span class="w"> </span>kong
-</span></code></pre></div>
-<p>To export logs for external analysis:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Export Kong logs</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>--no-color<span class="w"> </span>kong<span class="w"> </span>&gt;<span class="w"> </span>kong-logs.txt
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
-</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1"># Export all logs</span>
-</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>--no-color<span class="w"> </span>&gt;<span class="w"> </span>all-logs.txt
-</span></code></pre></div>
-<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
-<h3 id="kong-configuration-kongyml">Kong Configuration (<code>kong.yml</code>)<a class="headerlink" href="#kong-configuration-kongyml" title="Permanent link">&para;</a></h3>
-<p>The <code>kong.yml</code> file uses Kong's declarative configuration format. Key sections:</p>
-<ul>
-<li><strong>Services</strong>: Define upstream APIs (Fukuii instances)</li>
-<li><strong>Routes</strong>: Map request paths to services</li>
-<li><strong>Upstreams</strong>: Configure load balancing</li>
-<li><strong>Consumers</strong>: Define users and authentication</li>
-<li><strong>Plugins</strong>: Configure features like auth, rate limiting, CORS</li>
-</ul>
-<p>To reload configuration after changes:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>kong
-</span></code></pre></div>
-<h3 id="fukuii-configuration">Fukuii Configuration<a class="headerlink" href="#fukuii-configuration" title="Permanent link">&para;</a></h3>
-<p>Place custom Fukuii configuration files in <code>fukuii-conf/</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>fukuii-conf
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>cp<span class="w"> </span>/path/to/your/app.conf<span class="w"> </span>fukuii-conf/
-</span></code></pre></div>
-<p>Then restart the Fukuii services:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>fukuii-primary<span class="w"> </span>fukuii-secondary
-</span></code></pre></div>
-<h3 id="prometheus-configuration">Prometheus Configuration<a class="headerlink" href="#prometheus-configuration" title="Permanent link">&para;</a></h3>
-<p>Edit <code>prometheus/prometheus.yml</code> to:
-- Add new scrape targets
-- Configure alerting rules
-- Set up remote storage</p>
-<p>After changes:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># Reload Prometheus configuration (no restart needed)</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:9090/-/reload
-</span></code></pre></div>
-<h2 id="backup-and-restore">Backup and Restore<a class="headerlink" href="#backup-and-restore" title="Permanent link">&para;</a></h2>
-<h3 id="backup-postgresql-data">Backup PostgreSQL Data<a class="headerlink" href="#backup-postgresql-data" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Create backup</span>
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-postgres<span class="w"> </span>pg_dump<span class="w"> </span>-U<span class="w"> </span>kong<span class="w"> </span>kong<span class="w"> </span>&gt;<span class="w"> </span>kong-backup.sql
-</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1"># Or use compressed backup</span>
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-postgres<span class="w"> </span>pg_dump<span class="w"> </span>-U<span class="w"> </span>kong<span class="w"> </span>kong<span class="w"> </span><span class="p">|</span><span class="w"> </span>gzip<span class="w"> </span>&gt;<span class="w"> </span>kong-backup.sql.gz
-</span></code></pre></div>
-<h3 id="backup-fukuii-data">Backup Fukuii Data<a class="headerlink" href="#backup-fukuii-data" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Backup primary instance data</span>
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span>-v<span class="w"> </span>fukuii-data:/source<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="w">  </span>-v<span class="w"> </span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>:/backup<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="w">  </span>alpine<span class="w"> </span>tar<span class="w"> </span>czf<span class="w"> </span>/backup/fukuii-data-backup.tar.gz<span class="w"> </span>-C<span class="w"> </span>/source<span class="w"> </span>.
-</span></code></pre></div>
-<h3 id="restore-from-backup">Restore from Backup<a class="headerlink" href="#restore-from-backup" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># Stop services</span>
-</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>docker-compose<span class="w"> </span>down
+<h4 id="fukuii-data-backup">Fukuii Data Backup<a class="headerlink" href="#fukuii-data-backup" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># Stop the node for consistent backup</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>docker-compose<span class="w"> </span>stop<span class="w"> </span>fukuii-primary
 </span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>
-</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="c1"># Restore data</span>
-</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="w">  </span>-v<span class="w"> </span>fukuii-data:/target<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a><span class="w">  </span>-v<span class="w"> </span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>:/backup<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a><span class="w">  </span>alpine<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;cd /target &amp;&amp; tar xzf /backup/fukuii-data-backup.tar.gz&quot;</span>
-</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a>
-</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a><span class="c1"># Start services</span>
-</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="c1"># Create tarball</span>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>tar<span class="w"> </span>-czf<span class="w"> </span>backup/fukuii-data-<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>.tar.gz<span class="w"> </span>data/fukuii/
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a><span class="c1"># Restart</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>docker-compose<span class="w"> </span>start<span class="w"> </span>fukuii-primary
 </span></code></pre></div>
-<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
-<h3 id="kong-not-starting">Kong Not Starting<a class="headerlink" href="#kong-not-starting" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p>Check PostgreSQL is healthy:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>docker-compose<span class="w"> </span>ps<span class="w"> </span>postgres
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>postgres
-</span></code></pre></div></p>
-</li>
-<li>
-<p>Run migrations manually:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>docker-compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>kong-migrations
-</span></code></pre></div></p>
-</li>
-</ol>
-<h3 id="fukuii-nodes-not-syncing">Fukuii Nodes Not Syncing<a class="headerlink" href="#fukuii-nodes-not-syncing" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p>Check node logs:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>fukuii-primary
-</span></code></pre></div></p>
-</li>
-<li>
-<p>Verify network connectivity:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-primary<span class="w"> </span>netstat<span class="w"> </span>-an<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">30303</span>
-</span></code></pre></div></p>
-</li>
-<li>
-<p>Check peer count via JSON-RPC:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span>-u<span class="w"> </span>admin:fukuii_admin_password<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;net_peerCount&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
-</span></code></pre></div></p>
-</li>
-</ol>
-<h3 id="load-balancing-not-working">Load Balancing Not Working<a class="headerlink" href="#load-balancing-not-working" title="Permanent link">&para;</a></h3>
-<ol>
-<li>
-<p>Check upstream health:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>curl<span class="w"> </span>http://localhost:8001/upstreams/fukuii-cluster/health
-</span></code></pre></div></p>
-</li>
-<li>
-<p>Check Kong logs:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>kong
-</span></code></pre></div></p>
-</li>
-<li>
-<p>Verify Fukuii health endpoints:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>curl<span class="w"> </span>http://localhost:8546/health
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>curl<span class="w"> </span>http://localhost:8548/health
-</span></code></pre></div></p>
-</li>
-</ol>
-<h3 id="high-memory-usage">High Memory Usage<a class="headerlink" href="#high-memory-usage" title="Permanent link">&para;</a></h3>
-<p>Adjust JVM memory settings for Fukuii:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="nt">environment</span><span class="p">:</span>
-</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">JAVA_OPTS=-Xmx8g -Xms8g</span><span class="w">  </span><span class="c1"># Increase from 4g to 8g</span>
+<h4 id="configuration-backup">Configuration Backup<a class="headerlink" href="#configuration-backup" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="c1"># Backup all configs</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>tar<span class="w"> </span>-czf<span class="w"> </span>backup/config-<span class="k">$(</span>date<span class="w"> </span>+%Y%m%d<span class="k">)</span>.tar.gz<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>kong.yml<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="w">  </span>.env<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a><span class="w">  </span>fukuii-conf/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a><span class="w">  </span>prometheus/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a><span class="w">  </span>grafana/
 </span></code></pre></div>
-<h3 id="authentication-issues">Authentication Issues<a class="headerlink" href="#authentication-issues" title="Permanent link">&para;</a></h3>
+<h3 id="recovery-procedures">Recovery Procedures<a class="headerlink" href="#recovery-procedures" title="Permanent link">&para;</a></h3>
+<h4 id="restore-postgresql">Restore PostgreSQL<a class="headerlink" href="#restore-postgresql" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Stop Kong</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker-compose<span class="w"> </span>stop<span class="w"> </span>kong
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="c1"># Restore database</span>
+</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a>cat<span class="w"> </span>backup/kong-YYYYMMDD.sql<span class="w"> </span><span class="p">|</span><span class="w"> </span>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-i<span class="w"> </span>fukuii-postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>kong<span class="w"> </span>kong
+</span><span id="__span-27-6"><a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a>
+</span><span id="__span-27-7"><a id="__codelineno-27-7" name="__codelineno-27-7" href="#__codelineno-27-7"></a><span class="c1"># Start Kong</span>
+</span><span id="__span-27-8"><a id="__codelineno-27-8" name="__codelineno-27-8" href="#__codelineno-27-8"></a>docker-compose<span class="w"> </span>start<span class="w"> </span>kong
+</span></code></pre></div>
+<h4 id="restore-fukuii-data">Restore Fukuii Data<a class="headerlink" href="#restore-fukuii-data" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Stop node</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker-compose<span class="w"> </span>stop<span class="w"> </span>fukuii-primary
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1"># Clear existing data</span>
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>rm<span class="w"> </span>-rf<span class="w"> </span>data/fukuii/*
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>
+</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a><span class="c1"># Restore from backup</span>
+</span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8" href="#__codelineno-28-8"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>backup/fukuii-data-YYYYMMDD.tar.gz<span class="w"> </span>-C<span class="w"> </span>data/
+</span><span id="__span-28-9"><a id="__codelineno-28-9" name="__codelineno-28-9" href="#__codelineno-28-9"></a>
+</span><span id="__span-28-10"><a id="__codelineno-28-10" name="__codelineno-28-10" href="#__codelineno-28-10"></a><span class="c1"># Start node</span>
+</span><span id="__span-28-11"><a id="__codelineno-28-11" name="__codelineno-28-11" href="#__codelineno-28-11"></a>docker-compose<span class="w"> </span>start<span class="w"> </span>fukuii-primary
+</span></code></pre></div>
+<h3 id="backup-schedule">Backup Schedule<a class="headerlink" href="#backup-schedule" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Data</th>
+<th>Frequency</th>
+<th>Retention</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PostgreSQL</td>
+<td>Daily</td>
+<td>30 days</td>
+</tr>
+<tr>
+<td>Fukuii blockchain</td>
+<td>Weekly</td>
+<td>4 weeks</td>
+</tr>
+<tr>
+<td>Configuration</td>
+<td>On change</td>
+<td>90 days</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="scaling-operations">Scaling Operations<a class="headerlink" href="#scaling-operations" title="Permanent link">&para;</a></h2>
+<h3 id="horizontal-scaling-add-instances">Horizontal Scaling (Add Instances)<a class="headerlink" href="#horizontal-scaling-add-instances" title="Permanent link">&para;</a></h3>
 <ol>
-<li>Verify credentials in <code>kong.yml</code></li>
+<li><strong>Add Fukuii instance to <code>docker-compose.yml</code>:</strong></li>
+</ol>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nt">fukuii-tertiary</span><span class="p">:</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="w">  </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">chipprbots/fukuii:latest</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">  </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-tertiary</span>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="w">  </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="w">  </span><span class="nt">ports</span><span class="p">:</span>
+</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8549:8545&quot;</span>
+</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8550:8546&quot;</span>
+</span><span id="__span-29-8"><a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;30305:30303&quot;</span>
+</span><span id="__span-29-9"><a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9097:9095&quot;</span>
+</span><span id="__span-29-10"><a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a><span class="w">  </span><span class="nt">volumes</span><span class="p">:</span>
+</span><span id="__span-29-11"><a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${FUKUII_TERTIARY_DATA_DIR:-./data/fukuii-tertiary}:/app/data</span>
+</span><span id="__span-29-12"><a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./fukuii-conf:/app/conf:ro</span>
+</span><span id="__span-29-13"><a id="__codelineno-29-13" name="__codelineno-29-13" href="#__codelineno-29-13"></a><span class="w">  </span><span class="nt">environment</span><span class="p">:</span>
+</span><span id="__span-29-14"><a id="__codelineno-29-14" name="__codelineno-29-14" href="#__codelineno-29-14"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}</span>
+</span><span id="__span-29-15"><a id="__codelineno-29-15" name="__codelineno-29-15" href="#__codelineno-29-15"></a><span class="w">  </span><span class="nt">networks</span><span class="p">:</span>
+</span><span id="__span-29-16"><a id="__codelineno-29-16" name="__codelineno-29-16" href="#__codelineno-29-16"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-network</span>
+</span><span id="__span-29-17"><a id="__codelineno-29-17" name="__codelineno-29-17" href="#__codelineno-29-17"></a><span class="w">  </span><span class="nt">healthcheck</span><span class="p">:</span>
+</span><span id="__span-29-18"><a id="__codelineno-29-18" name="__codelineno-29-18" href="#__codelineno-29-18"></a><span class="w">    </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;CMD&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;curl&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-f&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;http://localhost:8546/health&quot;</span><span class="p p-Indicator">]</span>
+</span><span id="__span-29-19"><a id="__codelineno-29-19" name="__codelineno-29-19" href="#__codelineno-29-19"></a><span class="w">    </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+</span><span id="__span-29-20"><a id="__codelineno-29-20" name="__codelineno-29-20" href="#__codelineno-29-20"></a><span class="w">    </span><span class="nt">timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10s</span>
+</span><span id="__span-29-21"><a id="__codelineno-29-21" name="__codelineno-29-21" href="#__codelineno-29-21"></a><span class="w">    </span><span class="nt">retries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</span><span id="__span-29-22"><a id="__codelineno-29-22" name="__codelineno-29-22" href="#__codelineno-29-22"></a><span class="w">    </span><span class="nt">start_period</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60s</span>
+</span></code></pre></div>
+<ol>
+<li><strong>Add target to Kong upstream in <code>kong.yml</code>:</strong></li>
+</ol>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="nt">upstreams</span><span class="p">:</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-cluster</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">    </span><span class="nt">targets</span><span class="p">:</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-primary:8546</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="w">        </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-secondary:8546</span>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a><span class="w">        </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fukuii-tertiary:8546</span>
+</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a><span class="w">        </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+</span></code></pre></div>
+<ol>
+<li><strong>Apply changes:</strong></li>
+</ol>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d
+</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>kong
+</span></code></pre></div>
+<h3 id="vertical-scaling-increase-resources">Vertical Scaling (Increase Resources)<a class="headerlink" href="#vertical-scaling-increase-resources" title="Permanent link">&para;</a></h3>
+<p>Modify resource limits in <code>docker-compose.yml</code>:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="nt">fukuii-primary</span><span class="p">:</span>
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="w">  </span><span class="nt">deploy</span><span class="p">:</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="w">    </span><span class="nt">resources</span><span class="p">:</span>
+</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="w">      </span><span class="nt">limits</span><span class="p">:</span>
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="w">        </span><span class="nt">cpus</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;4&#39;</span>
+</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a><span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16G</span>
+</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7" href="#__codelineno-32-7"></a><span class="w">      </span><span class="nt">reservations</span><span class="p">:</span>
+</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8" href="#__codelineno-32-8"></a><span class="w">        </span><span class="nt">cpus</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;2&#39;</span>
+</span><span id="__span-32-9"><a id="__codelineno-32-9" name="__codelineno-32-9" href="#__codelineno-32-9"></a><span class="w">        </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8G</span>
+</span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10" href="#__codelineno-32-10"></a><span class="w">  </span><span class="nt">environment</span><span class="p">:</span>
+</span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11" href="#__codelineno-32-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">JAVA_OPTS=-Xmx12g -Xms12g</span>
+</span></code></pre></div>
+<h3 id="traffic-management-during-scaling">Traffic Management During Scaling<a class="headerlink" href="#traffic-management-during-scaling" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="c1"># Drain a node before removing</span>
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>PATCH<span class="w"> </span>http://localhost:8001/upstreams/fukuii-cluster/targets/fukuii-primary:8546<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s2">&quot;weight=0&quot;</span>
+</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a>
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5" href="#__codelineno-33-5"></a><span class="c1"># Wait for connections to drain</span>
+</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6" href="#__codelineno-33-6"></a>sleep<span class="w"> </span><span class="m">60</span>
+</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7" href="#__codelineno-33-7"></a>
+</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8" href="#__codelineno-33-8"></a><span class="c1"># Remove or update the node</span>
+</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9" href="#__codelineno-33-9"></a>docker-compose<span class="w"> </span>stop<span class="w"> </span>fukuii-primary
+</span></code></pre></div>
+<hr />
+<h2 id="maintenance-procedures">Maintenance Procedures<a class="headerlink" href="#maintenance-procedures" title="Permanent link">&para;</a></h2>
+<h3 id="updating-kong-configuration">Updating Kong Configuration<a class="headerlink" href="#updating-kong-configuration" title="Permanent link">&para;</a></h3>
+<ol>
 <li>
-<p>Check Kong consumer configuration:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>curl<span class="w"> </span>http://localhost:8001/consumers
+<p><strong>Edit <code>kong.yml</code></strong></p>
+</li>
+<li>
+<p><strong>Validate configuration:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>docker-compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>kong<span class="w"> </span>kong<span class="w"> </span>config<span class="w"> </span>parse<span class="w"> </span>/etc/kong/kong.yml
 </span></code></pre></div></p>
 </li>
 <li>
-<p>Test without auth to isolate issue:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="c1"># Temporarily disable auth plugin in kong.yml for debugging</span>
+<p><strong>Reload Kong:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>kong
 </span></code></pre></div></p>
 </li>
 </ol>
-<h2 id="production-deployment-checklist">Production Deployment Checklist<a class="headerlink" href="#production-deployment-checklist" title="Permanent link">&para;</a></h2>
-<p>Before deploying to production:</p>
-<ul class="task-list">
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Change all default passwords and API keys</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Configure SSL/TLS certificates for HTTPS</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Set up proper CORS origins (not <code>"*"</code>)</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Enable IP restriction if needed</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Configure PostgreSQL backup strategy</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Set up monitoring alerts in Prometheus/Alertmanager</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Configure log aggregation and retention</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Set up automated backups</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Review and adjust rate limits</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Configure firewall rules</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Set up reverse proxy (e.g., nginx) if needed</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Enable additional Kong plugins as needed</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Document disaster recovery procedures</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Test failover scenarios</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Configure resource limits in Docker Compose</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Set up health check monitoring</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Review security headers and CSP</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Enable audit logging</li>
-</ul>
-<h2 id="advanced-configuration">Advanced Configuration<a class="headerlink" href="#advanced-configuration" title="Permanent link">&para;</a></h2>
-<h3 id="using-kong-in-db-less-mode">Using Kong in DB-less Mode<a class="headerlink" href="#using-kong-in-db-less-mode" title="Permanent link">&para;</a></h3>
-<p>For simpler deployments, Kong can run without PostgreSQL using declarative configuration only:</p>
-<ol>
-<li>Use <code>docker-compose-dbless.yml</code> instead of the main compose file</li>
-<li>This mode uses only the declarative configuration from <code>kong.yml</code></li>
-</ol>
-<h3 id="custom-plugins">Custom Plugins<a class="headerlink" href="#custom-plugins" title="Permanent link">&para;</a></h3>
-<p>To add custom Kong plugins:</p>
+<h3 id="updating-fukuii">Updating Fukuii<a class="headerlink" href="#updating-fukuii" title="Permanent link">&para;</a></h3>
 <ol>
 <li>
-<p>Create plugin directory:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>kong-plugins/my-plugin
+<p><strong>Pull new image:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>chipprbots/fukuii:latest
 </span></code></pre></div></p>
 </li>
 <li>
-<p>Mount plugin directory:
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="nt">volumes</span><span class="p">:</span>
-</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2" href="#__codelineno-38-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./kong-plugins:/usr/local/share/lua/5.1/kong/plugins</span>
+<p><strong>Rolling update (one at a time):</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a><span class="c1"># Update secondary first</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>fukuii-secondary
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4" href="#__codelineno-37-4"></a><span class="c1"># Wait 5-10 minutes and verify sync status</span>
+</span><span id="__span-37-5"><a id="__codelineno-37-5" name="__codelineno-37-5" href="#__codelineno-37-5"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8548/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6" href="#__codelineno-37-6"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7" href="#__codelineno-37-7"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;eth_syncing&quot;,&quot;params&quot;:[],&quot;id&quot;:1}&#39;</span>
+</span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8" href="#__codelineno-37-8"></a><span class="c1"># Expected: &quot;result&quot;: false (synced) or sync progress details</span>
+</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9" href="#__codelineno-37-9"></a>
+</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10" href="#__codelineno-37-10"></a><span class="c1"># Update primary after secondary is synced</span>
+</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11" href="#__codelineno-37-11"></a>docker-compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>fukuii-primary
+</span></code></pre></div></p>
+</li>
+</ol>
+<h3 id="certificate-renewal">Certificate Renewal<a class="headerlink" href="#certificate-renewal" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Generate new certificates:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>certbot<span class="w"> </span>renew
 </span></code></pre></div></p>
 </li>
 <li>
-<p>Enable plugin:
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a><span class="nt">environment</span><span class="p">:</span>
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">KONG_PLUGINS=bundled,my-plugin</span>
+<p><strong>Update Kong volumes:</strong>
+   <div class="language-bash highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>cp<span class="w"> </span>/etc/letsencrypt/live/your-domain/*<span class="w"> </span>ssl/
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2" href="#__codelineno-39-2"></a>docker-compose<span class="w"> </span>restart<span class="w"> </span>kong
 </span></code></pre></div></p>
 </li>
 </ol>
-<h3 id="multi-region-deployment">Multi-Region Deployment<a class="headerlink" href="#multi-region-deployment" title="Permanent link">&para;</a></h3>
-<p>For multi-region HADR:</p>
-<ol>
-<li>Deploy Barad-dûr (Kong) + Fukuii stack in each region</li>
-<li>Use PostgreSQL replication or external database service</li>
-<li>Configure DNS-based routing or global load balancer</li>
-<li>Set up cross-region monitoring</li>
-</ol>
-<h2 id="support-and-resources">Support and Resources<a class="headerlink" href="#support-and-resources" title="Permanent link">&para;</a></h2>
+<h3 id="database-maintenance">Database Maintenance<a class="headerlink" href="#database-maintenance" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a><span class="c1"># Vacuum PostgreSQL</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2" href="#__codelineno-40-2"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-postgres<span class="w"> </span>vacuumdb<span class="w"> </span>-U<span class="w"> </span>kong<span class="w"> </span>-a<span class="w"> </span>-z
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3" href="#__codelineno-40-3"></a>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4" href="#__codelineno-40-4"></a><span class="c1"># Check database size</span>
+</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5" href="#__codelineno-40-5"></a>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>fukuii-postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>kong<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT pg_size_pretty(pg_database_size(&#39;kong&#39;));&quot;</span>
+</span></code></pre></div>
+<hr />
+<h2 id="troubleshooting-guide">Troubleshooting Guide<a class="headerlink" href="#troubleshooting-guide" title="Permanent link">&para;</a></h2>
+<h3 id="common-issues">Common Issues<a class="headerlink" href="#common-issues" title="Permanent link">&para;</a></h3>
+<h4 id="issue-502-bad-gateway">Issue: 502 Bad Gateway<a class="headerlink" href="#issue-502-bad-gateway" title="Permanent link">&para;</a></h4>
+<p><strong>Cause:</strong> Upstream (Fukuii) is not responding.</p>
+<p><strong>Solution:</strong>
+1. Check Fukuii health: <code>curl http://localhost:8546/health</code>
+2. Check upstream status: <code>curl http://localhost:8001/upstreams/fukuii-cluster/health</code>
+3. Restart Fukuii: <code>docker-compose restart fukuii-primary fukuii-secondary</code></p>
+<h4 id="issue-429-too-many-requests">Issue: 429 Too Many Requests<a class="headerlink" href="#issue-429-too-many-requests" title="Permanent link">&para;</a></h4>
+<p><strong>Cause:</strong> Rate limit exceeded.</p>
+<p><strong>Solution:</strong>
+1. Check rate limit config in <code>kong.yml</code>
+2. Increase limits if legitimate traffic
+3. Consider adding more consumer tiers</p>
+<h4 id="issue-401-unauthorized">Issue: 401 Unauthorized<a class="headerlink" href="#issue-401-unauthorized" title="Permanent link">&para;</a></h4>
+<p><strong>Cause:</strong> Invalid or missing credentials.</p>
+<p><strong>Solution:</strong>
+1. Verify credentials in request
+2. Check consumer config: <code>curl http://localhost:8001/consumers</code>
+3. Verify credentials in <code>kong.yml</code></p>
+<h4 id="issue-high-memory-usage">Issue: High Memory Usage<a class="headerlink" href="#issue-high-memory-usage" title="Permanent link">&para;</a></h4>
+<p><strong>Cause:</strong> JVM heap or RocksDB cache.</p>
+<p><strong>Solution:</strong>
+1. Check current usage: <code>docker stats</code>
+2. Adjust JAVA_OPTS in <code>.env</code>
+3. Consider vertical scaling</p>
+<h4 id="issue-disk-full">Issue: Disk Full<a class="headerlink" href="#issue-disk-full" title="Permanent link">&para;</a></h4>
+<p><strong>Cause:</strong> Blockchain data growth.</p>
+<p><strong>Solution:</strong>
+1. Check disk usage: <code>df -h</code>
+2. Clean old logs: <code>docker-compose logs --tail=0</code>
+3. Consider pruning or archive node settings
+4. Expand storage</p>
+<h3 id="diagnostic-commands">Diagnostic Commands<a class="headerlink" href="#diagnostic-commands" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a><span class="c1"># Container resource usage</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2" href="#__codelineno-41-2"></a>docker<span class="w"> </span>stats
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3" href="#__codelineno-41-3"></a>
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4" href="#__codelineno-41-4"></a><span class="c1"># Check all logs</span>
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5" href="#__codelineno-41-5"></a>docker-compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">100</span>
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6" href="#__codelineno-41-6"></a>
+</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7" href="#__codelineno-41-7"></a><span class="c1"># Kong configuration validation</span>
+</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8" href="#__codelineno-41-8"></a>docker-compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>kong<span class="w"> </span>kong<span class="w"> </span>config<span class="w"> </span>parse<span class="w"> </span>/etc/kong/kong.yml
+</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9" href="#__codelineno-41-9"></a>
+</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10" href="#__codelineno-41-10"></a><span class="c1"># PostgreSQL connection check</span>
+</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11" href="#__codelineno-41-11"></a>docker-compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>postgres<span class="w"> </span>pg_isready
+</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12" href="#__codelineno-41-12"></a>
+</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13" href="#__codelineno-41-13"></a><span class="c1"># Network connectivity</span>
+</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14" href="#__codelineno-41-14"></a>docker-compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>kong<span class="w"> </span>ping<span class="w"> </span>fukuii-primary
+</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15" href="#__codelineno-41-15"></a>
+</span><span id="__span-41-16"><a id="__codelineno-41-16" name="__codelineno-41-16" href="#__codelineno-41-16"></a><span class="c1"># DNS resolution</span>
+</span><span id="__span-41-17"><a id="__codelineno-41-17" name="__codelineno-41-17" href="#__codelineno-41-17"></a>docker-compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>kong<span class="w"> </span>nslookup<span class="w"> </span>fukuii-primary
+</span></code></pre></div>
+<h3 id="log-locations">Log Locations<a class="headerlink" href="#log-locations" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Log Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kong</td>
+<td><code>docker-compose logs kong</code></td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td><code>docker-compose logs postgres</code></td>
+</tr>
+<tr>
+<td>Fukuii</td>
+<td><code>docker-compose logs fukuii-primary</code></td>
+</tr>
+<tr>
+<td>Prometheus</td>
+<td><code>docker-compose logs prometheus</code></td>
+</tr>
+<tr>
+<td>Grafana</td>
+<td><code>docker-compose logs grafana</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Fukuii Documentation</strong>: <a href="../../">Documentation Home</a></li>
-<li><strong>Kong Documentation</strong>: https://docs.konghq.com/</li>
-<li><strong>Kong Plugins</strong>: https://docs.konghq.com/hub/</li>
-<li><strong>Prometheus</strong>: https://prometheus.io/docs/</li>
-<li><strong>Grafana</strong>: https://grafana.com/docs/</li>
+<li><a href="https://github.com/chippr-robotics/fukuii/tree/develop/docker/barad-dur">Barad-dûr README</a> - Stack overview and quick start</li>
+<li><a href="../../deployment/kong/">Kong Guide</a> - Comprehensive Kong documentation</li>
+<li><a href="../../deployment/kong-architecture/">Kong Architecture</a> - Architecture details</li>
+<li><a href="../../deployment/kong-security/">Kong Security</a> - Security best practices</li>
+<li><a href="../../operations/metrics-and-monitoring/">Metrics &amp; Monitoring</a> - Monitoring setup</li>
+<li><a href="../backup-restore/">Backup &amp; Restore</a> - General backup procedures</li>
+<li><a href="../log-triage/">Log Triage</a> - Log analysis guide</li>
 </ul>
-<h2 id="license">License<a class="headerlink" href="#license" title="Permanent link">&para;</a></h2>
-<p>This Kong configuration is part of the Fukuii project and is distributed under the Apache 2.0 License.</p>
+<hr />
+<p><strong>Last Updated:</strong> 2025-11-30</p>
 
 
 
@@ -6654,7 +6525,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../docker/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Docker Quick Start">
+          <a href="../../deployment/kong/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Kong API Gateway">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -6664,20 +6535,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Docker Quick Start
+                Kong API Gateway
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../runbooks/barad-dur-operations/" class="md-footer__link md-footer__link--next" aria-label="Next: Barad-dûr Operations">
+          <a href="../../deployment/test-network/" class="md-footer__link md-footer__link--next" aria-label="Next: Test Network">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Barad-dûr Operations
+                Test Network
               </div>
             </div>
             <div class="md-footer__button md-icon">
