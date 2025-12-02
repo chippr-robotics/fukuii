@@ -307,6 +307,84 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
     requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> genesisInfo)))
   }
+  
+  it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetupWithSnapSync {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    
+    // Register SNAP sync controller
+    peersInfoHolder ! RegisterSnapSyncController(snapSyncController.ref)
+    
+    // Setup a peer
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    
+    // Create SNAP protocol messages
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+    
+    val accountRange = AccountRange(
+      requestId = BigInt(1),
+      accounts = Seq.empty,
+      proof = Seq.empty
+    )
+    
+    val storageRanges = StorageRanges(
+      requestId = BigInt(2),
+      slots = Seq.empty,
+      proof = Seq.empty
+    )
+    
+    val trieNodes = TrieNodes(
+      requestId = BigInt(3),
+      nodes = Seq.empty
+    )
+    
+    val byteCodes = ByteCodes(
+      requestId = BigInt(4),
+      codes = Seq.empty
+    )
+    
+    // When SNAP messages are received from peer
+    peersInfoHolder ! MessageFromPeer(accountRange, peer1.id)
+    peersInfoHolder ! MessageFromPeer(storageRanges, peer1.id)
+    peersInfoHolder ! MessageFromPeer(trieNodes, peer1.id)
+    peersInfoHolder ! MessageFromPeer(byteCodes, peer1.id)
+    
+    // Then they should be routed to SNAPSyncController
+    snapSyncController.expectMsg(accountRange)
+    snapSyncController.expectMsg(storageRanges)
+    snapSyncController.expectMsg(trieNodes)
+    snapSyncController.expectMsg(byteCodes)
+  }
+  
+  it should "handle SNAP messages gracefully when SNAPSyncController is not registered" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    
+    // Setup a peer without registering SNAP sync controller
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    
+    // Create a SNAP protocol message
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+    
+    val accountRange = AccountRange(
+      requestId = BigInt(1),
+      accounts = Seq.empty,
+      proof = Seq.empty
+    )
+    
+    // When SNAP message is received without registered controller
+    // It should not crash, just ignore the routing
+    peersInfoHolder ! MessageFromPeer(accountRange, peer1.id)
+    
+    // Peer info should still be updated normally
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    requestSender.expectMsg(PeerInfoResponse(Some(peer1Info)))
+  }
+
 
   trait TestSetup extends EphemBlockchainTestSetup {
     implicit override lazy val system: ActorSystem = ActorSystem("PeersInfoHolderSpec_System")
@@ -389,7 +467,16 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
       peerEventBus.expectMsg(
         Subscribe(
           MessageClassifier(
-            Set(Codes.BlockHeadersCode, Codes.NewBlockCode, Codes.NewBlockHashesCode),
+            Set(
+              Codes.BlockHeadersCode, 
+              Codes.NewBlockCode, 
+              Codes.NewBlockHashesCode,
+              // SNAP protocol response codes
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+            ),
             PeerSelector.WithId(peer.id)
           )
         )
@@ -398,6 +485,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
       // Peer should receive request for highest block
       peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
     }
+  }
+  
+  trait TestSetupWithSnapSync extends TestSetup {
+    val snapSyncController: TestProbe = TestProbe()
   }
 
 }
