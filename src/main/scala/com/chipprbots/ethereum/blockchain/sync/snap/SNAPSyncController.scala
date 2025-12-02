@@ -5,12 +5,14 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
+import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+import com.chipprbots.ethereum.utils.{Config, Logger}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -33,6 +35,14 @@ class SNAPSyncController(
 
   // Blacklist for PeerListSupportNg trait
   val blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
+  
+  // Error handler for retry logic and peer blacklisting
+  private val errorHandler = new SNAPErrorHandler(
+    maxRetries = snapSyncConfig.maxRetries,
+    initialBackoff = 1.second,
+    maxBackoff = 60.seconds,
+    circuitBreakerThreshold = 10
+  )
 
   private var accountRangeDownloader: Option[AccountRangeDownloader] = None
   private var bytecodeDownloader: Option[ByteCodeDownloader] = None
@@ -55,6 +65,7 @@ class SNAPSyncController(
   
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
+    progressMonitor.startPeriodicLogging()
   }
   
   override def postStop(): Unit = {
@@ -63,6 +74,16 @@ class SNAPSyncController(
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
+    progressMonitor.stopPeriodicLogging()
+    
+    // Log final error handler statistics
+    val retryStats = errorHandler.getRetryStatistics
+    val peerStats = errorHandler.getPeerStatistics
+    log.info(s"SNAP Sync error statistics: retries=${retryStats.totalRetryAttempts}, " +
+      s"failed_tasks=${retryStats.tasksAtMaxRetries}, " +
+      s"peer_failures=${peerStats.totalFailuresRecorded}, " +
+      s"peers_blacklisted=${peerStats.peersRecommendedForBlacklist}")
+    
     log.info("SNAP Sync Controller stopped")
   }
 
@@ -91,11 +112,19 @@ class SNAPSyncController(
     // Handle SNAP protocol responses
     case msg: AccountRange =>
       log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
+      
+      val taskId = s"account_range_${msg.requestId}"
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      
       accountRangeDownloader.foreach { downloader =>
         downloader.handleResponse(msg) match {
           case Right(count) =>
-            log.info(s"Successfully processed $count accounts")
+            log.info(s"Successfully processed $count accounts from peer $peerId")
             progressMonitor.incrementAccountsSynced(count)
+            errorHandler.resetRetries(taskId)
+            errorHandler.recordPeerSuccess(peerId)
+            errorHandler.recordCircuitBreakerSuccess("account_range_download")
+            
             // Check if account range sync is complete
             if (downloader.isComplete) {
               log.info("Account range sync complete!")
@@ -103,18 +132,54 @@ class SNAPSyncController(
               accountRangeRequestTask = None
               self ! AccountRangeSyncComplete
             }
+            
           case Left(error) =>
-            log.warning(s"Failed to process AccountRange: $error")
+            val context = errorHandler.createErrorContext(
+              phase = "AccountRangeSync",
+              peerId = Some(peerId),
+              requestId = Some(msg.requestId),
+              taskId = Some(taskId)
+            )
+            log.warning(s"Failed to process AccountRange: $error ($context)")
+            
+            // Determine error type and record appropriately
+            val errorType = if (error.contains("proof")) {
+              SNAPErrorHandler.ErrorType.InvalidProof
+            } else if (error.contains("malformed") || error.contains("validation")) {
+              SNAPErrorHandler.ErrorType.MalformedResponse
+            } else if (error.contains("storage")) {
+              SNAPErrorHandler.ErrorType.StorageError
+            } else {
+              "processing_error"
+            }
+            
+            errorHandler.recordPeerFailure(peerId, errorType, error)
+            errorHandler.recordRetry(taskId, error)
+            errorHandler.recordCircuitBreakerFailure("account_range_download")
+            
+            // Check if peer should be blacklisted
+            if (errorHandler.shouldBlacklistPeer(peerId)) {
+              log.error(s"Blacklisting peer $peerId due to repeated failures")
+              blacklist.add(peerId)
+            }
         }
       }
 
     case msg: ByteCodes =>
       log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
+      
+      val taskId = s"bytecode_${msg.requestId}"
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      
       bytecodeDownloader.foreach { downloader =>
         downloader.handleResponse(msg) match {
           case Right(count) =>
-            log.info(s"Successfully processed $count bytecodes")
+            log.info(s"Successfully processed $count bytecodes from peer $peerId")
             progressMonitor.incrementBytecodesDownloaded(count)
+            errorHandler.resetRetries(taskId)
+            errorHandler.recordPeerSuccess(peerId)
+            errorHandler.recordCircuitBreakerSuccess("bytecode_download")
+            
             // Check if bytecode sync is complete
             if (downloader.isComplete) {
               log.info("ByteCode sync complete!")
@@ -122,18 +187,50 @@ class SNAPSyncController(
               bytecodeRequestTask = None
               self ! ByteCodeSyncComplete
             }
+            
           case Left(error) =>
-            log.warning(s"Failed to process ByteCodes: $error")
+            val context = errorHandler.createErrorContext(
+              phase = "ByteCodeSync",
+              peerId = Some(peerId),
+              requestId = Some(msg.requestId),
+              taskId = Some(taskId)
+            )
+            log.warning(s"Failed to process ByteCodes: $error ($context)")
+            
+            val errorType = if (error.contains("hash")) {
+              "hash_mismatch"
+            } else if (error.contains("storage")) {
+              SNAPErrorHandler.ErrorType.StorageError
+            } else {
+              "processing_error"
+            }
+            
+            errorHandler.recordPeerFailure(peerId, errorType, error)
+            errorHandler.recordRetry(taskId, error)
+            errorHandler.recordCircuitBreakerFailure("bytecode_download")
+            
+            if (errorHandler.shouldBlacklistPeer(peerId)) {
+              log.error(s"Blacklisting peer $peerId due to repeated failures")
+              blacklist.add(peerId)
+            }
         }
       }
 
     case msg: StorageRanges =>
       log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
+      
+      val taskId = s"storage_range_${msg.requestId}"
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      
       storageRangeDownloader.foreach { downloader =>
         downloader.handleResponse(msg) match {
           case Right(count) =>
-            log.info(s"Successfully processed $count storage slots")
+            log.info(s"Successfully processed $count storage slots from peer $peerId")
             progressMonitor.incrementStorageSlotsSynced(count)
+            errorHandler.resetRetries(taskId)
+            errorHandler.recordPeerSuccess(peerId)
+            errorHandler.recordCircuitBreakerSuccess("storage_range_download")
+            
             // Check if storage range sync is complete
             if (downloader.isComplete) {
               log.info("Storage range sync complete!")
@@ -141,18 +238,50 @@ class SNAPSyncController(
               storageRangeRequestTask = None
               self ! StorageRangeSyncComplete
             }
+            
           case Left(error) =>
-            log.warning(s"Failed to process StorageRanges: $error")
+            val context = errorHandler.createErrorContext(
+              phase = "StorageRangeSync",
+              peerId = Some(peerId),
+              requestId = Some(msg.requestId),
+              taskId = Some(taskId)
+            )
+            log.warning(s"Failed to process StorageRanges: $error ($context)")
+            
+            val errorType = if (error.contains("proof")) {
+              SNAPErrorHandler.ErrorType.InvalidProof
+            } else if (error.contains("storage")) {
+              SNAPErrorHandler.ErrorType.StorageError
+            } else {
+              "processing_error"
+            }
+            
+            errorHandler.recordPeerFailure(peerId, errorType, error)
+            errorHandler.recordRetry(taskId, error)
+            errorHandler.recordCircuitBreakerFailure("storage_range_download")
+            
+            if (errorHandler.shouldBlacklistPeer(peerId)) {
+              log.error(s"Blacklisting peer $peerId due to repeated failures")
+              blacklist.add(peerId)
+            }
         }
       }
 
     case msg: TrieNodes =>
       log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
+      
+      val taskId = s"trie_nodes_${msg.requestId}"
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      
       trieNodeHealer.foreach { healer =>
         healer.handleResponse(msg) match {
           case Right(count) =>
-            log.info(s"Successfully healed $count trie nodes")
+            log.info(s"Successfully healed $count trie nodes from peer $peerId")
             progressMonitor.incrementNodesHealed(count)
+            errorHandler.resetRetries(taskId)
+            errorHandler.recordPeerSuccess(peerId)
+            errorHandler.recordCircuitBreakerSuccess("trie_node_healing")
+            
             // Check if healing is complete
             if (healer.isComplete) {
               log.info("State healing complete!")
@@ -160,28 +289,56 @@ class SNAPSyncController(
               healingRequestTask = None
               self ! StateHealingComplete
             }
+            
           case Left(error) =>
-            log.warning(s"Failed to process TrieNodes: $error")
+            val context = errorHandler.createErrorContext(
+              phase = "StateHealing",
+              peerId = Some(peerId),
+              requestId = Some(msg.requestId),
+              taskId = Some(taskId)
+            )
+            log.warning(s"Failed to process TrieNodes: $error ($context)")
+            
+            val errorType = if (error.contains("hash")) {
+              "hash_mismatch"
+            } else if (error.contains("storage")) {
+              SNAPErrorHandler.ErrorType.StorageError
+            } else {
+              "processing_error"
+            }
+            
+            errorHandler.recordPeerFailure(peerId, errorType, error)
+            errorHandler.recordRetry(taskId, error)
+            errorHandler.recordCircuitBreakerFailure("trie_node_healing")
+            
+            if (errorHandler.shouldBlacklistPeer(peerId)) {
+              log.error(s"Blacklisting peer $peerId due to repeated failures")
+              blacklist.add(peerId)
+            }
         }
       }
 
     case AccountRangeSyncComplete =>
       log.info("Account range sync complete. Starting bytecode sync...")
+      progressMonitor.startPhase(ByteCodeSync)
       currentPhase = ByteCodeSync
       startBytecodeSync()
 
     case ByteCodeSyncComplete =>
       log.info("ByteCode sync complete. Starting storage range sync...")
+      progressMonitor.startPhase(StorageRangeSync)
       currentPhase = StorageRangeSync
       startStorageRangeSync()
 
     case StorageRangeSyncComplete =>
       log.info("Storage range sync complete. Starting state healing...")
+      progressMonitor.startPhase(StateHealing)
       currentPhase = StateHealing
       startStateHealing()
 
     case StateHealingComplete =>
       log.info("State healing complete. Validating state...")
+      progressMonitor.startPhase(StateValidation)
       currentPhase = StateValidation
       validateState()
 
@@ -930,9 +1087,10 @@ class StateValidator(mptStorage: MptStorage) {
   }
 }
 
-class SyncProgressMonitor(_scheduler: Scheduler) {
+class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   
   import SNAPSyncController._
+  import scala.concurrent.ExecutionContext.Implicits.global
   
   private var currentPhaseState: SyncPhase = Idle
   private var accountsSynced: Long = 0
@@ -941,34 +1099,178 @@ class SyncProgressMonitor(_scheduler: Scheduler) {
   private var nodesHealed: Long = 0
   private val startTime: Long = System.currentTimeMillis()
   private var phaseStartTime: Long = System.currentTimeMillis()
+  
+  // Estimated totals for ETA calculation (updated during sync)
+  private var estimatedTotalAccounts: Long = 0
+  private var estimatedTotalBytecodes: Long = 0
+  private var estimatedTotalSlots: Long = 0
+  
+  // Periodic logging
+  private var lastLogTime: Long = System.currentTimeMillis()
+  private val logInterval: Long = 30000 // Log every 30 seconds
+  private var periodicLogTask: Option[Cancellable] = None
+  
+  // Metrics history for throughput averaging
+  private val metricsWindow = 60 // 60 seconds window for averaging
+  private val accountsHistory = mutable.Queue[(Long, Long)]() // (timestamp, count)
+  private val bytecodesHistory = mutable.Queue[(Long, Long)]()
+  private val slotsHistory = mutable.Queue[(Long, Long)]()
+  private val nodesHistory = mutable.Queue[(Long, Long)]()
+
+  /** Start periodic progress logging */
+  def startPeriodicLogging(): Unit = {
+    periodicLogTask = Some(_scheduler.scheduleAtFixedRate(30.seconds, 30.seconds) { () =>
+      logProgress()
+    })
+  }
+
+  /** Stop periodic progress logging */
+  def stopPeriodicLogging(): Unit = {
+    periodicLogTask.foreach(_.cancel())
+    periodicLogTask = None
+  }
 
   def startPhase(phase: SyncPhase): Unit = {
+    val previousPhase = currentPhaseState
     currentPhaseState = phase
     phaseStartTime = System.currentTimeMillis()
+    
+    log.info(s"📊 SNAP Sync phase transition: $previousPhase → $phase")
+    logProgress()
   }
 
   def complete(): Unit = {
     currentPhaseState = Completed
+    stopPeriodicLogging()
+    log.info("✅ SNAP Sync completed!")
+    logProgress()
   }
   
-  def incrementAccountsSynced(count: Long): Unit = {
+  def incrementAccountsSynced(count: Long): Unit = synchronized {
     accountsSynced += count
+    val now = System.currentTimeMillis()
+    accountsHistory.enqueue((now, accountsSynced))
+    cleanupHistory(accountsHistory, now)
   }
   
-  def incrementBytecodesDownloaded(count: Long): Unit = {
+  def incrementBytecodesDownloaded(count: Long): Unit = synchronized {
     bytecodesDownloaded += count
+    val now = System.currentTimeMillis()
+    bytecodesHistory.enqueue((now, bytecodesDownloaded))
+    cleanupHistory(bytecodesHistory, now)
   }
   
-  def incrementStorageSlotsSynced(count: Long): Unit = {
+  def incrementStorageSlotsSynced(count: Long): Unit = synchronized {
     storageSlotsSynced += count
+    val now = System.currentTimeMillis()
+    slotsHistory.enqueue((now, storageSlotsSynced))
+    cleanupHistory(slotsHistory, now)
   }
   
-  def incrementNodesHealed(count: Long): Unit = {
+  def incrementNodesHealed(count: Long): Unit = synchronized {
     nodesHealed += count
+    val now = System.currentTimeMillis()
+    nodesHistory.enqueue((now, nodesHealed))
+    cleanupHistory(nodesHistory, now)
+  }
+  
+  /** Update estimated totals for ETA calculation */
+  def updateEstimates(accounts: Long = 0, bytecodes: Long = 0, slots: Long = 0): Unit = {
+    if (accounts > 0) estimatedTotalAccounts = accounts
+    if (bytecodes > 0) estimatedTotalBytecodes = bytecodes
+    if (slots > 0) estimatedTotalSlots = slots
   }
 
-  def currentProgress: SyncProgress = {
+  /** Remove old entries from history (keep only last N seconds) */
+  private def cleanupHistory(history: mutable.Queue[(Long, Long)], now: Long): Unit = {
+    val cutoff = now - (metricsWindow * 1000)
+    while (history.nonEmpty && history.head._1 < cutoff) {
+      history.dequeue()
+    }
+  }
+
+  /** Calculate recent throughput from history */
+  private def calculateRecentThroughput(history: mutable.Queue[(Long, Long)]): Double = {
+    if (history.size < 2) return 0.0
+    
+    val oldest = history.head
+    val newest = history.last
+    val timeDiff = (newest._1 - oldest._1) / 1000.0
+    val countDiff = newest._2 - oldest._2
+    
+    if (timeDiff > 0) countDiff / timeDiff else 0.0
+  }
+
+  /** Calculate ETA in seconds based on current progress and throughput */
+  def calculateETA: Option[Long] = synchronized {
+    currentPhaseState match {
+      case AccountRangeSync if estimatedTotalAccounts > 0 =>
+        val remaining = estimatedTotalAccounts - accountsSynced
+        val throughput = calculateRecentThroughput(accountsHistory)
+        if (throughput > 0 && remaining > 0) {
+          Some((remaining / throughput).toLong)
+        } else None
+        
+      case ByteCodeSync if estimatedTotalBytecodes > 0 =>
+        val remaining = estimatedTotalBytecodes - bytecodesDownloaded
+        val throughput = calculateRecentThroughput(bytecodesHistory)
+        if (throughput > 0 && remaining > 0) {
+          Some((remaining / throughput).toLong)
+        } else None
+        
+      case StorageRangeSync if estimatedTotalSlots > 0 =>
+        val remaining = estimatedTotalSlots - storageSlotsSynced
+        val throughput = calculateRecentThroughput(slotsHistory)
+        if (throughput > 0 && remaining > 0) {
+          Some((remaining / throughput).toLong)
+        } else None
+        
+      case _ => None
+    }
+  }
+
+  /** Format ETA as human-readable string */
+  private def formatETA(seconds: Long): String = {
+    if (seconds < 60) s"${seconds}s"
+    else if (seconds < 3600) s"${seconds / 60}m ${seconds % 60}s"
+    else s"${seconds / 3600}h ${(seconds % 3600) / 60}m"
+  }
+
+  /** Log current progress */
+  def logProgress(): Unit = {
+    val progress = currentProgress
+    val etaStr = calculateETA.map(eta => s", ETA: ${formatETA(eta)}").getOrElse("")
+    
+    log.info(s"📈 SNAP Sync Progress: ${progress.formattedString}$etaStr")
+    lastLogTime = System.currentTimeMillis()
+  }
+
+  def currentProgress: SyncProgress = synchronized {
     val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+    val phaseElapsed = (System.currentTimeMillis() - phaseStartTime) / 1000.0
+    
+    // Calculate overall throughput (since start)
+    val overallAccountsPerSec = if (elapsed > 0) accountsSynced / elapsed else 0
+    val overallBytecodesPerSec = if (elapsed > 0) bytecodesDownloaded / elapsed else 0
+    val overallSlotsPerSec = if (elapsed > 0) storageSlotsSynced / elapsed else 0
+    val overallNodesPerSec = if (elapsed > 0) nodesHealed / elapsed else 0
+    
+    // Calculate recent throughput (last 60 seconds)
+    val recentAccountsPerSec = calculateRecentThroughput(accountsHistory)
+    val recentBytecodesPerSec = calculateRecentThroughput(bytecodesHistory)
+    val recentSlotsPerSec = calculateRecentThroughput(slotsHistory)
+    val recentNodesPerSec = calculateRecentThroughput(nodesHistory)
+    
+    // Calculate progress percentage for current phase
+    val phaseProgress = currentPhaseState match {
+      case AccountRangeSync if estimatedTotalAccounts > 0 =>
+        (accountsSynced.toDouble / estimatedTotalAccounts * 100).toInt
+      case ByteCodeSync if estimatedTotalBytecodes > 0 =>
+        (bytecodesDownloaded.toDouble / estimatedTotalBytecodes * 100).toInt
+      case StorageRangeSync if estimatedTotalSlots > 0 =>
+        (storageSlotsSynced.toDouble / estimatedTotalSlots * 100).toInt
+      case _ => 0
+    }
     
     SyncProgress(
       phase = currentPhaseState,
@@ -977,10 +1279,19 @@ class SyncProgressMonitor(_scheduler: Scheduler) {
       storageSlotsSynced = storageSlotsSynced,
       nodesHealed = nodesHealed,
       elapsedSeconds = elapsed,
-      accountsPerSec = if (elapsed > 0) accountsSynced / elapsed else 0,
-      bytecodesPerSec = if (elapsed > 0) bytecodesDownloaded / elapsed else 0,
-      slotsPerSec = if (elapsed > 0) storageSlotsSynced / elapsed else 0,
-      nodesPerSec = if (elapsed > 0) nodesHealed / elapsed else 0
+      phaseElapsedSeconds = phaseElapsed,
+      accountsPerSec = overallAccountsPerSec,
+      bytecodesPerSec = overallBytecodesPerSec,
+      slotsPerSec = overallSlotsPerSec,
+      nodesPerSec = overallNodesPerSec,
+      recentAccountsPerSec = recentAccountsPerSec,
+      recentBytecodesPerSec = recentBytecodesPerSec,
+      recentSlotsPerSec = recentSlotsPerSec,
+      recentNodesPerSec = recentNodesPerSec,
+      phaseProgress = phaseProgress,
+      estimatedTotalAccounts = estimatedTotalAccounts,
+      estimatedTotalBytecodes = estimatedTotalBytecodes,
+      estimatedTotalSlots = estimatedTotalSlots
     )
   }
 }
@@ -992,15 +1303,49 @@ case class SyncProgress(
     storageSlotsSynced: Long,
     nodesHealed: Long,
     elapsedSeconds: Double,
+    phaseElapsedSeconds: Double,
     accountsPerSec: Double,
     bytecodesPerSec: Double,
     slotsPerSec: Double,
-    nodesPerSec: Double
+    nodesPerSec: Double,
+    recentAccountsPerSec: Double,
+    recentBytecodesPerSec: Double,
+    recentSlotsPerSec: Double,
+    recentNodesPerSec: Double,
+    phaseProgress: Int,
+    estimatedTotalAccounts: Long,
+    estimatedTotalBytecodes: Long,
+    estimatedTotalSlots: Long
 ) {
   override def toString: String = {
     s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
       s"bytecodes=$bytecodesDownloaded (${bytecodesPerSec.toInt}/s), " +
       s"slots=$storageSlotsSynced (${slotsPerSec.toInt}/s), nodes=$nodesHealed (${nodesPerSec.toInt}/s), " +
       s"elapsed=${elapsedSeconds.toInt}s"
+  }
+  
+  def formattedString: String = {
+    phase match {
+      case SNAPSyncController.AccountRangeSync =>
+        val progressStr = if (estimatedTotalAccounts > 0) s" (${phaseProgress}%)" else ""
+        s"phase=AccountRange$progressStr, accounts=$accountsSynced@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        
+      case SNAPSyncController.ByteCodeSync =>
+        val progressStr = if (estimatedTotalBytecodes > 0) s" (${phaseProgress}%)" else ""
+        s"phase=ByteCode$progressStr, codes=$bytecodesDownloaded@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        
+      case SNAPSyncController.StorageRangeSync =>
+        val progressStr = if (estimatedTotalSlots > 0) s" (${phaseProgress}%)" else ""
+        s"phase=Storage$progressStr, slots=$storageSlotsSynced@${recentSlotsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        
+      case SNAPSyncController.StateHealing =>
+        s"phase=Healing, nodes=$nodesHealed@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        
+      case SNAPSyncController.StateValidation =>
+        s"phase=Validation, elapsed=${elapsedSeconds.toInt}s"
+        
+      case _ =>
+        s"phase=$phase, elapsed=${elapsedSeconds.toInt}s"
+    }
   }
 }
