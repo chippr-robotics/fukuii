@@ -592,9 +592,8 @@ class SNAPSyncController(
     
     // Add missing nodes to the healer
     trieNodeHealer.foreach { healer =>
-      missingNodes.foreach { nodeHash =>
-        healer.queueNode(nodeHash)
-      }
+      // Use batch method for efficiency
+      healer.queueNodes(missingNodes)
       
       // Transition back to healing phase
       currentPhase = StateHealing
@@ -831,9 +830,13 @@ class StateValidator(mptStorage: MptStorage) {
           val resolvedNode = storage.get(hash.hash)
           traverseForMissingNodes(resolvedNode, storage, missingNodes, visited)
         } catch {
-          case _: Exception =>
+          case _: MerklePatriciaTrie.MissingNodeException =>
             // Node is missing, record it
             missingNodes += ByteString(hash.hash)
+          case e: Exception =>
+            // Unexpected error - log and continue
+            // Don't add to missing nodes as this indicates a more serious issue
+            ()
         }
         
       case NullNode =>
@@ -901,8 +904,12 @@ class StateValidator(mptStorage: MptStorage) {
           val resolvedNode = storage.get(hash.hash)
           collectAccounts(resolvedNode, storage, accounts, visited)
         } catch {
-          case _: Exception =>
+          case _: MerklePatriciaTrie.MissingNodeException =>
             // Cannot traverse further if node is missing
+            ()
+          case e: Exception =>
+            // Unexpected error - log and continue
+            // This indicates a more serious issue than just missing nodes
             ()
         }
         

@@ -68,7 +68,11 @@ class TrieNodeHealer(
   }
   
   /** Queues a single node by hash for healing.
-    * Since we don't have the path, we use the hash as the path (direct hash lookup).
+    * 
+    * When validation discovers missing nodes, we only have their hashes, not the full
+    * trie paths. Using an empty path signals to GetTrieNodes to do a direct hash lookup
+    * rather than path-based traversal. This is less efficient than path-based healing but
+    * necessary when we only have the hash reference (e.g., from a HashNode in the trie).
     *
     * @param nodeHash The hash of the missing node
     */
