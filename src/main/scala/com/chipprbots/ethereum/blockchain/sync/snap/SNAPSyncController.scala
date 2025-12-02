@@ -240,7 +240,7 @@ class SNAPSyncController(
       // Get SNAP-capable peers
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo) 
-          if peerWithInfo.peerInfo.remoteStatus.capability == Capability.SNAP1 =>
+          if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
       
@@ -302,7 +302,7 @@ class SNAPSyncController(
       // Get SNAP-capable peers
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo) 
-          if peerWithInfo.peerInfo.remoteStatus.capability == Capability.SNAP1 =>
+          if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
       
@@ -372,7 +372,7 @@ class SNAPSyncController(
       // Get SNAP-capable peers
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo) 
-          if peerWithInfo.peerInfo.remoteStatus.capability == Capability.SNAP1 =>
+          if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
       

@@ -383,7 +383,8 @@ object EtcPeerManagerActor {
       networkId: Int,
       chainWeight: ChainWeight,
       bestHash: ByteString,
-      genesisHash: ByteString
+      genesisHash: ByteString,
+      supportsSnap: Boolean = false
   ) {
     override def toString: String =
       s"RemoteStatus { " +
@@ -391,18 +392,20 @@ object EtcPeerManagerActor {
         s"networkId: $networkId, " +
         s"chainWeight: $chainWeight, " +
         s"bestHash: ${ByteStringUtils.hash2string(bestHash)}, " +
-        s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}," +
+        s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}, " +
+        s"supportsSnap: $supportsSnap" +
         s"}"
   }
 
   object RemoteStatus {
-    def apply(status: ETH64.Status, negotiatedCapability: Capability): RemoteStatus =
+    def apply(status: ETH64.Status, negotiatedCapability: Capability, supportsSnap: Boolean = false): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
         status.networkId,
         ChainWeight.totalDifficultyOnly(status.totalDifficulty),
         status.bestHash,
-        status.genesisHash
+        status.genesisHash,
+        supportsSnap
       )
 
     def apply(status: ETH64.Status): RemoteStatus =
