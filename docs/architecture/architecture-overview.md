@@ -798,7 +798,7 @@ sequenceDiagram
 
 This section documents significant architectural decisions made during the development of Fukuii. Each entry should include the context, decision, and rationale.
 
-**Note:** Detailed ADRs are maintained in the [`docs/adr/`](adr/) directory. This section provides summaries of key decisions.
+**Note:** Detailed ADRs are maintained in the [`docs/adr/`](../adr/README.md) directory. This section provides summaries of key decisions.
 
 ### ADL-001: Continuation of Mantis as Fukuii
 
