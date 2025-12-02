@@ -63,13 +63,17 @@ class SyncController(
     case other => fastSync.forward(other)
   }
 
-  def runningSnapSync(): Receive = {
+  def runningSnapSync(snapSync: ActorRef): Receive = {
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      snapSync ! PoisonPill
+      log.info("SNAP sync completed, transitioning to regular sync")
+      startRegularSync()
+    
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
     
-    case other =>
-      log.warning(s"SNAP sync received unexpected message: $other")
-      startRegularSync()
+    case msg =>
+      snapSync.forward(msg)
   }
 
   def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
@@ -130,9 +134,36 @@ class SyncController(
   }
 
   def startSnapSync(): Unit = {
-    log.info("SNAP sync mode selected - transitioning to regular sync (full implementation pending)")
-    appStateStorage.snapSyncDone().commit()
-    startRegularSync()
+    import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
+    import com.chipprbots.ethereum.utils.Config
+    import scala.concurrent.ExecutionContext.Implicits.global
+    
+    log.info("Starting SNAP sync mode")
+    
+    val snapSyncConfig = try {
+      SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
+    } catch {
+      case e: Exception =>
+        log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
+        SNAPSyncConfig()
+    }
+    
+    val mptStorage = stateStorage.getReadOnlyStorage
+    
+    val snapSync = context.actorOf(
+      SNAPSyncController.props(
+        blockchainReader,
+        appStateStorage,
+        mptStorage,
+        etcPeerManager,
+        syncConfig,
+        snapSyncConfig,
+        scheduler
+      ),
+      "snap-sync"
+    )
+    snapSync ! SyncProtocol.Start
+    context.become(runningSnapSync(snapSync))
   }
 
   def startRegularSync(): Unit = {

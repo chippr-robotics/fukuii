@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Scheduler}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Scheduler}
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
@@ -243,7 +243,7 @@ class SNAPSyncController(
       log.info(progressMonitor.currentProgress.toString)
       
       context.become(completed)
-      context.parent ! SyncProtocol.Status.SyncDone
+      context.parent ! Done
     }
   }
 }
@@ -259,11 +259,33 @@ object SNAPSyncController {
   case object Completed extends SyncPhase
 
   case object Start
+  case object Done
   case object AccountRangeSyncComplete
   case object StorageRangeSyncComplete
   case object StateHealingComplete
   case object StateValidationComplete
   case object GetProgress
+  
+  def props(
+      blockchainReader: BlockchainReader,
+      appStateStorage: AppStateStorage,
+      mptStorage: MptStorage,
+      etcPeerManager: ActorRef,
+      syncConfig: SyncConfig,
+      snapSyncConfig: SNAPSyncConfig,
+      scheduler: Scheduler
+  )(implicit ec: ExecutionContext): Props =
+    Props(
+      new SNAPSyncController(
+        blockchainReader,
+        appStateStorage,
+        mptStorage,
+        etcPeerManager,
+        syncConfig,
+        snapSyncConfig,
+        scheduler
+      )
+    )
 }
 
 case class SNAPSyncConfig(
