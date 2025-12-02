@@ -8,8 +8,10 @@ import scala.concurrent.ExecutionContext
 import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
+import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.{Config, Logger}
@@ -160,7 +162,7 @@ class SNAPSyncController(
             // Check if peer should be blacklisted
             if (errorHandler.shouldBlacklistPeer(peerId)) {
               log.error(s"Blacklisting peer $peerId due to repeated failures")
-              blacklist.add(peerId)
+              blacklist.add(PeerId(peerId), syncConfig.blacklistDuration, InvalidStateResponse("SNAP sync repeated failures"))
             }
         }
       }
@@ -211,7 +213,7 @@ class SNAPSyncController(
             
             if (errorHandler.shouldBlacklistPeer(peerId)) {
               log.error(s"Blacklisting peer $peerId due to repeated failures")
-              blacklist.add(peerId)
+              blacklist.add(PeerId(peerId), syncConfig.blacklistDuration, InvalidStateResponse("SNAP sync repeated failures"))
             }
         }
       }
@@ -262,7 +264,7 @@ class SNAPSyncController(
             
             if (errorHandler.shouldBlacklistPeer(peerId)) {
               log.error(s"Blacklisting peer $peerId due to repeated failures")
-              blacklist.add(peerId)
+              blacklist.add(PeerId(peerId), syncConfig.blacklistDuration, InvalidStateResponse("SNAP sync repeated failures"))
             }
         }
       }
@@ -313,7 +315,7 @@ class SNAPSyncController(
             
             if (errorHandler.shouldBlacklistPeer(peerId)) {
               log.error(s"Blacklisting peer $peerId due to repeated failures")
-              blacklist.add(peerId)
+              blacklist.add(PeerId(peerId), syncConfig.blacklistDuration, InvalidStateResponse("SNAP sync repeated failures"))
             }
         }
       }
