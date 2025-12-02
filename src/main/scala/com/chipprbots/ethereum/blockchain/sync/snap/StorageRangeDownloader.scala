@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, ByteArraySerializable}
 
 /** Storage Range Downloader for SNAP sync
   *
@@ -65,6 +66,9 @@ class StorageRangeDownloader(
 
   /** Merkle proof verifier (created lazily per account) */
   private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
+
+  /** Per-account storage tries - maps accountHash to its storage trie */
+  private val storageTries = mutable.Map[ByteString, MerklePatriciaTrie[ByteString, ByteString]]()
 
   /** Add storage tasks to the download queue
     *
@@ -286,16 +290,15 @@ class StorageRangeDownloader(
 
   /** Store storage slots to MptStorage
     *
-    * Stores verified storage slots as individual MPT nodes indexed by account + slot hash.
+    * Inserts storage slots into per-account storage tries using proper MPT structure.
     * Thread-safe storage with synchronized access for concurrent task writes.
     *
     * Implementation approach:
-    * - Stores each storage slot as an RLP-encoded MPT leaf node
-    * - Uses composite key: accountHash + slotHash for retrieval
-    * - Persists changes to disk after batch write
-    *
-    * Note: This stores slots as individual nodes, not a complete storage trie per account.
-    * Full trie reconstruction is future work (Phase 6+).
+    * - Gets or creates a storage trie for the account using its storage root
+    * - Inserts each slot into that account's storage trie using trie.put()
+    * - The trie automatically maintains proper MPT structure and node relationships
+    * - Verifies the resulting trie root matches the account's storage root
+    * - Persists the trie after insertions
     *
     * @param accountHash Hash of the account owning this storage
     * @param slots Storage slots to store (slotHash -> slotValue)
@@ -306,36 +309,53 @@ class StorageRangeDownloader(
       slots: Seq[(ByteString, ByteString)]
   ): Either[String, Unit] = {
     try {
-      import com.chipprbots.ethereum.mpt.{LeafNode, MptNode}
+      import com.chipprbots.ethereum.mpt.byteStringSerializer
       
       // Synchronize on storage to ensure thread-safety for concurrent writes
       mptStorage.synchronized {
         if (slots.nonEmpty) {
-          // Convert storage slots to MPT leaf nodes
-          val storageNodes: Seq[MptNode] = slots.map { case (slotHash, slotValue) =>
+          // Get the storage task for this account to obtain storage root
+          val storageTask = tasks.find(_.accountHash == accountHash)
+            .orElse(activeTasks.values.flatten.find(_.accountHash == accountHash))
+            .orElse(completedTasks.find(_.accountHash == accountHash))
+            .getOrElse {
+              log.warn(s"No storage task found for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+              return Left(s"No storage task found for account")
+            }
+          
+          // Get or create storage trie for this account
+          val storageTrie = storageTries.getOrElseUpdate(accountHash, {
+            val storageRoot = storageTask.storageRoot
+            if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+              MerklePatriciaTrie[ByteString, ByteString](mptStorage)
+            } else {
+              MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
+            }
+          })
+          
+          // Insert each slot into the storage trie
+          var currentTrie = storageTrie
+          slots.foreach { case (slotHash, slotValue) =>
             log.debug(s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
               s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
             
-            // Create composite key: accountHash + slotHash
-            val compositeKey = accountHash ++ slotHash
-            
-            // Create leaf node with storage data
-            LeafNode(
-              key = compositeKey,
-              value = slotValue,
-              cachedHash = None,
-              cachedRlpEncoded = None,
-              parsedRlp = None
-            )
+            // Insert slot into trie - the trie will automatically update the MPT structure
+            currentTrie = currentTrie.put(slotHash, slotValue)
           }
           
-          // Update MPT storage with storage nodes
-          mptStorage.updateNodesInStorage(
-            newRoot = storageNodes.headOption, // Simplified: use first node as root
-            toRemove = Seq.empty // No nodes to remove
-          )
+          // Update the storage trie map with the new trie
+          storageTries(accountHash) = currentTrie
           
-          log.info(s"Stored ${storageNodes.size} storage nodes to MPT storage for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+          log.info(s"Inserted ${slots.size} storage slots into trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+          
+          // Verify the resulting trie root matches the account's storage root (optional validation)
+          val computedRoot = ByteString(currentTrie.getRootHash)
+          val expectedRoot = storageTask.storageRoot
+          if (computedRoot != expectedRoot) {
+            log.warn(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
+              s"computed=${computedRoot.take(4).toArray.map("%02x".format(_)).mkString}, " +
+              s"expected=${expectedRoot.take(4).toArray.map("%02x".format(_)).mkString}")
+          }
         }
         
         // Persist all changes to disk

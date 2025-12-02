@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, ByteArraySerializable}
 
 class AccountRangeDownloader(
     stateRoot: ByteString,
@@ -41,6 +42,25 @@ class AccountRangeDownloader(
 
   /** Merkle proof verifier */
   private val proofVerifier = MerkleProofVerifier(stateRoot)
+
+  /** State trie for storing accounts - initialized with existing state root or new trie */
+  private var stateTrie: MerklePatriciaTrie[ByteString, Account] = {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
+    import com.chipprbots.ethereum.mpt.byteStringSerializer
+    
+    // Create ByteArraySerializable for Account using the existing RLP encoding
+    implicit val accountSerializer: ByteArraySerializable[Account] = new ByteArraySerializable[Account] {
+      override def toBytes(account: Account): Array[Byte] = account.toBytes
+      override def fromBytes(bytes: Array[Byte]): Account = bytes.toAccount
+    }
+    
+    // Initialize trie with the state root if it exists, otherwise create empty trie
+    if (stateRoot.isEmpty || stateRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+      MerklePatriciaTrie[ByteString, Account](mptStorage)
+    } else {
+      MerklePatriciaTrie[ByteString, Account](stateRoot.toArray, mptStorage)
+    }
+  }
 
   /** Request next account range from available peer
     *
@@ -194,16 +214,14 @@ class AccountRangeDownloader(
 
   /** Store accounts to MptStorage
     *
-    * Stores verified accounts as individual MPT nodes indexed by hash.
+    * Inserts verified accounts into the state trie using proper MPT structure.
     * Thread-safe storage with synchronized access for concurrent task writes.
     *
     * Implementation approach:
-    * - Stores each account as an RLP-encoded MPT leaf node
-    * - Uses account hash as the node key for retrieval
-    * - Persists changes to disk after batch write
-    *
-    * Note: This stores accounts as individual nodes, not a complete state trie.
-    * Full trie reconstruction from account ranges is future work (Phase 6+).
+    * - Inserts each account into the state trie using trie.put()
+    * - The trie automatically maintains proper MPT structure and node relationships
+    * - Persists the trie after insertions
+    * - Handles empty storage and bytecode correctly
     *
     * @param accounts Accounts to store (accountHash -> account)
     * @return Either error or success
@@ -211,40 +229,29 @@ class AccountRangeDownloader(
   private def storeAccounts(accounts: Seq[(ByteString, Account)]): Either[String, Unit] = {
     try {
       import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
-      import com.chipprbots.ethereum.mpt.{LeafNode, MptNode}
+      import com.chipprbots.ethereum.mpt.byteStringSerializer
+      
+      // Create ByteArraySerializable for Account using the existing RLP encoding
+      implicit val accountSerializer: ByteArraySerializable[Account] = new ByteArraySerializable[Account] {
+        override def toBytes(account: Account): Array[Byte] = account.toBytes
+        override def fromBytes(bytes: Array[Byte]): Account = bytes.toAccount
+      }
       
       // Synchronize on storage to ensure thread-safety for concurrent writes
       mptStorage.synchronized {
         if (accounts.nonEmpty) {
-          // Convert accounts to MPT leaf nodes for storage
-          val accountNodes: Seq[MptNode] = accounts.map { case (accountHash, account) =>
-            // RLP encode the account for storage
-            val accountBytes = ByteString(account.toBytes)
-            
+          // Insert each account into the state trie
+          accounts.foreach { case (accountHash, account) =>
             log.debug(s"Storing account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} " +
               s"(balance: ${account.balance}, nonce: ${account.nonce}, " +
               s"storageRoot: ${account.storageRoot.take(4).toArray.map("%02x".format(_)).mkString}, " +
               s"codeHash: ${account.codeHash.take(4).toArray.map("%02x".format(_)).mkString})")
             
-            // Create leaf node with account data
-            // Key is the account hash, value is RLP-encoded account
-            LeafNode(
-              key = accountHash,
-              value = accountBytes,
-              cachedHash = None,
-              cachedRlpEncoded = None,
-              parsedRlp = None
-            )
+            // Insert account into trie - the trie will automatically update the MPT structure
+            stateTrie = stateTrie.put(accountHash, account)
           }
           
-          // Update MPT storage with account nodes
-          // Stores them as individual nodes retrievable by hash
-          mptStorage.updateNodesInStorage(
-            newRoot = accountNodes.headOption, // Simplified: use first node as root
-            toRemove = Seq.empty // No nodes to remove
-          )
-          
-          log.info(s"Stored ${accountNodes.size} account nodes to MPT storage")
+          log.info(s"Inserted ${accounts.size} accounts into state trie")
         }
         
         // Persist all changes to disk
@@ -297,6 +304,14 @@ class AccountRangeDownloader(
   /** Check if sync is complete */
   def isComplete: Boolean = synchronized {
     tasks.isEmpty && activeTasks.isEmpty
+  }
+
+  /** Get the current state root hash from the trie
+    *
+    * @return Current state root hash
+    */
+  def getStateRoot: ByteString = synchronized {
+    ByteString(stateTrie.getRootHash)
   }
 }
 
