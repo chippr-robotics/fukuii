@@ -50,6 +50,42 @@ class TuiRenderer(config: TuiConfig):
 
     lines += createSeparator(width)
 
+    // SNAP Sync section (if active)
+    state.snapSyncState.foreach { snapState =>
+      lines += createSectionHeader("SNAP SYNC", width)
+      lines += createInfoLine("Phase", snapState.phaseDescription, width)
+      
+      if config.showProgressBar && snapState.phaseProgress > 0 then
+        lines += createProgressBar(s"${snapState.phase} Progress", snapState.phaseProgress.toDouble, width)
+      
+      // Overall progress bar
+      if config.showProgressBar then
+        lines += createProgressBar("Overall Progress", snapState.overallProgress, width)
+      
+      // Show primary metric for current phase
+      val (metricName, metricValue, metricRate) = snapState.primaryMetric
+      lines += createInfoLine(metricName, formatNumber(metricValue), width)
+      lines += createInfoLine("Current Rate", f"${metricRate.toInt} $metricName/sec", width)
+      
+      // Show detailed metrics
+      if snapState.accountsSynced > 0 then
+        lines += createInfoLine("Accounts", f"${formatNumber(snapState.accountsSynced)} @ ${snapState.recentAccountsPerSec.toInt}/s", width)
+      if snapState.bytecodesDownloaded > 0 then
+        lines += createInfoLine("Bytecodes", f"${formatNumber(snapState.bytecodesDownloaded)} @ ${snapState.recentBytecodesPerSec.toInt}/s", width)
+      if snapState.storageSlotsSynced > 0 then
+        lines += createInfoLine("Storage Slots", f"${formatNumber(snapState.storageSlotsSynced)} @ ${snapState.recentSlotsPerSec.toInt}/s", width)
+      if snapState.nodesHealed > 0 then
+        lines += createInfoLine("Nodes Healed", f"${formatNumber(snapState.nodesHealed)} @ ${snapState.recentNodesPerSec.toInt}/s", width)
+      
+      // ETA if available
+      snapState.etaSeconds.foreach { eta =>
+        lines += createInfoLine("ETA", formatDuration(eta), width)
+      }
+      
+      lines += createInfoLine("Elapsed", formatDuration(snapState.elapsedSeconds.toLong), width)
+      lines += createSeparator(width)
+    }
+
     // Node Settings section (if enabled)
     if config.showNodeSettings && state.nodeSettings.network.nonEmpty then
       lines += createSectionHeader("NODE SETTINGS", width)
