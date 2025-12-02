@@ -20,6 +20,8 @@
 # - agent: mithril ✨ - For code modernization/refactoring (manual)
 # - agent: ICE 🧊 - For large-scale migration planning (manual)
 # - agent: eye 👁️ - For testing/validation focus (manual)
+# - agent: herald 🧭 - For network protocol debugging (manual)
+# - agent: Q 🎯 - For process coordination and quality enforcement (manual)
 
 'documentation':
   - changed-files:

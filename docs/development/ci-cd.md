@@ -226,6 +226,8 @@ git push origin v1.0.0
 - `agent: ICE 🧊` - Large-scale migrations and strategic planning
 - `agent: eye 👁️` - Testing, validation, and quality assurance
 - `agent: forge 🔨` - Consensus-critical code (EVM, mining, crypto)
+- `agent: herald 🧭` - Network protocol and peer communication
+- `agent: Q 🎯` - Process guardian and quality discipline
 
 **Standard Labels:**
 - `documentation` - Markdown and doc changes
