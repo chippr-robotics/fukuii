@@ -60,24 +60,29 @@ This document provides a comprehensive inventory of remaining implementation and
 
 ## Critical TODOs (Required for Basic Functionality)
 
-### 1. Message Handling Integration
+### 1. Message Handling Integration ✅
 
-**Current State:** Message decoder exists but messages aren't routed to SNAPSyncController
+**Current State:** COMPLETED - Message routing from EtcPeerManagerActor to SNAPSyncController is fully implemented
 
-**Required Work:**
-- [ ] Create SNAP message handler in EtcPeerManagerActor
-- [ ] Route AccountRange responses to AccountRangeDownloader
-- [ ] Route StorageRanges responses to StorageRangeDownloader
-- [ ] Route TrieNodes responses to TrieNodeHealer
-- [ ] Route ByteCodes responses to (new) ByteCodeDownloader
+**Completed Work:**
+- [x] Create SNAP message handler in EtcPeerManagerActor
+- [x] Route AccountRange responses to SNAPSyncController
+- [x] Route StorageRanges responses to SNAPSyncController
+- [x] Route TrieNodes responses to SNAPSyncController
+- [x] Route ByteCodes responses to SNAPSyncController
+- [x] Add RegisterSnapSyncController message for late binding
+- [x] Integrate registration in SyncController
+- [x] Create unit tests (2 new tests)
+- [x] Verify all existing tests pass (250 tests, 0 failures)
 - [ ] Handle GetAccountRange requests from peers (optional - we're primarily a client)
 - [ ] Handle GetStorageRanges requests from peers (optional)
 - [ ] Handle GetTrieNodes requests from peers (optional)
 - [ ] Handle GetByteCodes requests from peers (optional)
 
-**Files to Modify:**
+**Files Modified:**
 - `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
-- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
+- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala`
+- `src/test/scala/com/chipprbots/ethereum/network/EtcPeerManagerSpec.scala`
 
 **Implementation Notes:**
 - Add pattern matching for SNAP messages in EtcPeerManagerActor.receive

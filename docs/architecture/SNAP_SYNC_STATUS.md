@@ -1,12 +1,12 @@
 # SNAP Sync Implementation Status Report
 
 **Date:** 2025-12-02  
-**Status:** Active Development - Phase 1 Complete  
-**Overall Progress:** ~40% Complete
+**Status:** Active Development - Message Routing Complete  
+**Overall Progress:** ~55% Complete
 
 ## Executive Summary
 
-The SNAP sync implementation in Fukuii has a solid foundation with protocol infrastructure, message handling, and core sync components in place. This report documents the current state, recent progress, and remaining work to complete a production-ready SNAP sync implementation.
+The SNAP sync implementation in Fukuii has a solid foundation with protocol infrastructure, message handling, and core sync components in place. **Message routing from EtcPeerManagerActor to SNAPSyncController is now complete and tested.** This critical P0 task unblocks the next phase of peer communication integration. This report documents the current state, recent progress, and remaining work to complete a production-ready SNAP sync implementation.
 
 ### Recent Accomplishments (2025-12-02)
 
@@ -81,27 +81,30 @@ The SNAP sync implementation in Fukuii has a solid foundation with protocol infr
 - ✅ AppStateStorage methods for persistence
 - ✅ Comprehensive configuration in base.conf
 - ✅ SyncController integration complete
-- ⚠️ **TODO**: Message routing from EtcPeerManagerActor
+- ✅ **COMPLETED**: Message routing from EtcPeerManagerActor to SNAPSyncController
 - ⚠️ **TODO**: Actual state validation implementation
 
 ## Critical Gaps (P0 - Must Fix for Basic Functionality)
 
-### 1. Message Routing Integration ⏳
-**Status:** Not Started  
-**Effort:** 1 week  
-**Blocking:** Everything
+### 1. Message Routing Integration ✅
+**Status:** COMPLETED  
+**Effort:** 1 week (completed)  
+**Blocking:** Everything (unblocked)
 
-The SNAPMessageDecoder exists but messages aren't routed to SNAPSyncController.
+Message routing from EtcPeerManagerActor to SNAPSyncController is now fully implemented and tested.
 
-**Required Work:**
-- Add SNAP message handling to EtcPeerManagerActor
-- Route responses to appropriate SNAPSyncController components
-- Handle peer selection for SNAP requests
-- Implement proper error handling for invalid messages
+**Completed Work:**
+- ✅ Added SNAP message codes to EtcPeerManagerActor subscription list
+- ✅ Implemented message routing for AccountRange, StorageRanges, TrieNodes, ByteCodes
+- ✅ Added RegisterSnapSyncController message for late binding
+- ✅ Integrated SNAPSyncController registration in SyncController
+- ✅ Created unit tests for message routing (2 new tests)
+- ✅ All existing tests pass (250 tests, 0 failures)
 
-**Files:**
+**Files Modified:**
 - `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
-- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
+- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala`
+- `src/test/scala/com/chipprbots/ethereum/network/EtcPeerManagerSpec.scala`
 
 ### 2. Peer Communication Integration ⏳
 **Status:** Not Started  
@@ -316,7 +319,7 @@ Update developer documentation.
 - **P3 Documentation**: 2-3 weeks (40% complete)
 - **Total**: 10-15 weeks remaining
 
-**Overall Project Progress: ~50% complete**
+**Overall Project Progress: ~55% complete**
 
 ## Success Criteria
 
@@ -327,16 +330,15 @@ SNAP sync is production-ready when:
 3. ✅ Storage persistence complete
 4. ✅ Configuration management complete
 5. ✅ Sync mode selection working
-6. ⏳ Peer communication working
-7. ⏳ Successfully syncs Mordor testnet
-8. ⏳ State validation passes
-9. ⏳ 50%+ faster than fast sync
-10. ⏳ >80% test coverage
-11. ⏳ Documentation complete
+6. ✅ Message routing complete
+7. ⏳ Peer communication working
+8. ⏳ Successfully syncs Mordor testnet
+9. ⏳ State validation passes
+10. ⏳ 50%+ faster than fast sync
+11. ⏳ >80% test coverage
+12. ⏳ Documentation complete
 
-**Current: 5/11 criteria met (45%)**
-
-**Current: 4/11 criteria met (36%)**
+**Current: 6/12 criteria met (50%)**
 
 ## Technical Debt & Risks
 
