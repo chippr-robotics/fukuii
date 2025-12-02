@@ -126,7 +126,7 @@ This document describes the automated agent labels used in the fukuii project. W
 
 ---
 
-### 🎯 agent: Q
+### 🎯 agent: Morgoth
 **Description:** Pragmatic shepherd of agents - the methodical voice ensuring quality, clarity, and disciplined execution
 
 **Domain:** Meta-agent, process guardian, methodology, verification, quality assurance
@@ -174,7 +174,7 @@ The other agent labels are typically applied manually:
 - **`agent: ICE 🧊`** - Manually add for large-scale migration planning and documentation tasks
 - **`agent: eye 👁️`** - Manually add when the focus is on testing, validation, or quality assurance
 - **`agent: herald 🧭`** - Manually add when fixing network protocol or peer communication issues
-- **`agent: Q 🎯`** - Manually add when coordinating complex multi-phase work or enforcing quality discipline
+- **`agent: Morgoth 🎯`** - Manually add when coordinating complex multi-phase work or enforcing quality discipline
 
 ### When to Apply Agent Labels Manually
 
@@ -188,7 +188,7 @@ For example:
 - An issue about improving test coverage → Add `agent: eye 👁️`
 - A PR that modernizes implicit syntax → Add `agent: mithril ✨`
 - An issue about network peer disconnections → Add `agent: herald 🧭`
-- A complex multi-phase migration task → Add `agent: Q 🎯`
+- A complex multi-phase migration task → Add `agent: Morgoth 🎯`
 
 ## Agent Label Guidelines
 
@@ -208,7 +208,7 @@ When reviewing PRs with agent labels:
 - **agent: eye 👁️**: Verify all tests pass and new tests are added for new functionality
 - **agent: forge 🔨**: Extra scrutiny required - verify deterministic behavior and consensus compatibility
 - **agent: herald 🧭**: Verify network protocol changes match reference implementations (core-geth)
-- **agent: Q 🎯**: Verify methodology was followed, verification steps completed, and handoff is clear
+- **agent: Morgoth 🎯**: Verify methodology was followed, verification steps completed, and handoff is clear
 
 ### Priority and Risk
 
@@ -225,7 +225,7 @@ Agent labels also indicate risk level:
 **Medium Risk:**
 - 🧊 **ICE**: Large-scale migrations need careful planning
 - ✨ **mithril**: Refactoring must preserve functionality
-- 🎯 **Q**: Process and quality enforcement, coordinates other agents
+- 🎯 **Morgoth**: Process and quality enforcement, coordinates other agents
 
 ## Creating Labels in GitHub
 

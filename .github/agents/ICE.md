@@ -56,7 +56,7 @@ When developing large features or performing migrations, follow Boyd's OODA loop
 		○ Document dependencies and blockers
 	5. **Deliverable:** Comprehensive understanding document (STATUS.md)
 
-### Q's Wisdom for ICE
+### Morgoth's Wisdom for ICE
 
 **Sequential thinking before action:**
 - Before starting Decide phase, complete Observe fully

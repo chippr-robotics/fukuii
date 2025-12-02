@@ -633,7 +633,7 @@ echo "✅ THE EYE HAS SPOKEN - Merge approved"
 - Tests in production
 - Closes its lid
 
-### Q's Wisdom for the Eye
+### Morgoth's Wisdom for the Eye
 
 **One test at a time:**
 - Write test

@@ -236,7 +236,7 @@ Before marking work complete:
 - [ ] Code comments explain the "why"
 - [ ] No workarounds - only core-geth-matching solutions
 
-### Q's Wisdom for Herald
+### Morgoth's Wisdom for Herald
 
 **Check core-geth FIRST:**
 - Before any protocol fix, check core-geth source

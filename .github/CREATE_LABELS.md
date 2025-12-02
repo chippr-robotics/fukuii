@@ -20,7 +20,7 @@ This guide explains how to create the agent labels in your GitHub repository.
 | `agent: eye 👁️` | Testing, validation, and quality assurance | `#1D76DB` (blue) | 👁️ |
 | `agent: forge 🔨` | Consensus-critical code (EVM, mining, crypto) | `#D93F0B` (orange) | 🔨 |
 | `agent: herald 🧭` | Network protocol and peer communication | `#5319E7` (purple) | 🧭 |
-| `agent: Q 🎯` | Process guardian and quality discipline | `#C5DEF5` (light blue) | 🎯 |
+| `agent: Morgoth 🎯` | Process guardian and quality discipline | `#C5DEF5` (light blue) | 🎯 |
 
 ## Creating Labels via GitHub CLI
 
@@ -37,7 +37,7 @@ gh label create "agent: ICE 🧊" --description "Large-scale migrations and stra
 gh label create "agent: eye 👁️" --description "Testing, validation, and quality assurance" --color "1D76DB"
 gh label create "agent: forge 🔨" --description "Consensus-critical code (EVM, mining, crypto)" --color "D93F0B"
 gh label create "agent: herald 🧭" --description "Network protocol and peer communication" --color "5319E7"
-gh label create "agent: Q 🎯" --description "Process guardian and quality discipline" --color "C5DEF5"
+gh label create "agent: Morgoth 🎯" --description "Process guardian and quality discipline" --color "C5DEF5"
 ```
 
 ## Creating Labels via API
@@ -116,13 +116,13 @@ curl -X POST \
     "color": "5319E7"
   }'
 
-# Create Q label
+# Create Morgoth label
 curl -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$OWNER/$REPO/labels \
   -d '{
-    "name": "agent: Q 🎯",
+    "name": "agent: Morgoth 🎯",
     "description": "Process guardian and quality discipline",
     "color": "C5DEF5"
   }'
@@ -146,7 +146,7 @@ The colors are chosen to indicate priority and risk level:
 - **Blue** (eye): Quality assurance and validation
 - **Orange** (forge): Critical, consensus-affecting changes
 - **Purple** (herald): Network protocol and peer communication
-- **Light Blue** (Q): Methodical process and quality oversight
+- **Light Blue** (Morgoth): Methodical process and quality oversight
 
 ## Next Steps
 

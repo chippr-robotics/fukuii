@@ -296,7 +296,7 @@ def executeOpcode(opcode: OpCode, state: State): Either[Error, State] =
 3. Inline methods for compile-time optimization
 4. Leverage improved type inference
 
-### Q's Wisdom for Mithril
+### Morgoth's Wisdom for Mithril
 
 **One transformation at a time:**
 - Don't mix opaque types + enums + extensions in one change

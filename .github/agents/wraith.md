@@ -288,7 +288,7 @@ val NodeInsertResult(newBranchNode: BranchNode, ...) = (put(...): @unchecked)
 6. **Report progress** → Commit small, focused changes with clear descriptions
 7. **Learn and adapt** → Update patterns as new migration issues discovered
 
-### Q's Wisdom for the Wraith
+### Morgoth's Wisdom for the Wraith
 
 **When anything fails, STOP:**
 - Don't immediately try another fix

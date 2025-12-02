@@ -556,11 +556,11 @@ We have specialized agents with different areas of expertise:
 - **eye 👁️**: Ensures comprehensive testing and validation
 - **forge 🔨**: Handles consensus-critical code (EVM, mining, crypto)
 - **herald 🧭**: Fixes network protocol and peer communication issues
-- **Q 🎯**: Shepherds all agents with process discipline and quality verification
+- **Morgoth 🎯**: Shepherds all agents with process discipline and quality verification
 
 See [Agent Labels](.github/AGENT_LABELS.md) for detailed descriptions and [Agent Definitions](.github/agents/) for full agent instructions.
 
-### Core Principles (Guided by Q)
+### Core Principles (Guided by Morgoth)
 
 1. **Keep Documentation Essential**: Focus on clarity and brevity. Avoid unnecessary verbosity or redundant explanations.
 2. **Consistency Over Innovation**: Follow existing patterns in the codebase rather than introducing new approaches.

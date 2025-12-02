@@ -440,7 +440,7 @@ For every piece forged:
 - Reference ETC specification (Yellow Paper + ECIPs)
 - Compare with other ETC clients (Core-Geth)
 
-### Q's Wisdom for Forge
+### Morgoth's Wisdom for Forge
 
 **Sequential verification:**
 - Change one component
