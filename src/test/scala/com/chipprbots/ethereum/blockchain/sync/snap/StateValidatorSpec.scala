@@ -67,8 +67,12 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
   it should "validate storage tries for all accounts" taggedAs UnitTest in {
     val storage = new TestMptStorage()
     
-    // Create an account with non-empty storage root
-    val storageRoot = kec256(ByteString("storage"))
+    // Create storage trie first
+    val storageTrie = MerklePatriciaTrie[ByteString, ByteString](storage)
+      .put(ByteString("slot1"), ByteString("value1"))
+    val storageRoot = ByteString(storageTrie.getRootHash)
+    
+    // Create account with matching storage root
     val account = Account(
       nonce = 1,
       balance = 100,
@@ -82,18 +86,11 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
     
     val stateRoot = ByteString(trie.getRootHash)
     
-    // Create storage trie for the account
-    val storageTrie = MerklePatriciaTrie[ByteString, ByteString](storage)
-      .put(ByteString("slot1"), ByteString("value1"))
-    
-    // Ensure storage root matches
-    // Note: This is simplified - in real scenario, account.storageRoot should match storageTrie.getRootHash
-    
     val validator = new StateValidator(storage)
     val result = validator.validateAllStorageTries(stateRoot)
     
-    // Should return result (either empty or with missing nodes)
-    result.isRight shouldBe true
+    // Should succeed with no missing nodes since storage trie is complete
+    result shouldBe Right(Seq.empty)
   }
 
   it should "handle accounts with empty storage correctly" taggedAs UnitTest in {
@@ -159,18 +156,26 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
   it should "detect missing storage nodes across multiple accounts" taggedAs UnitTest in {
     val storage = new TestMptStorage()
     
-    // Create accounts with storage
+    // Create partial storage - root exists but some child nodes missing
+    val storage1Trie = MerklePatriciaTrie[ByteString, ByteString](storage)
+      .put(ByteString("slot1"), ByteString("value1"))
+      .put(ByteString("slot2"), ByteString("value2"))
+    val storage1Root = ByteString(storage1Trie.getRootHash)
+    
+    // For account2, intentionally use a non-existent storage root
+    val missingStorageRoot = kec256(ByteString("nonexistent"))
+    
     val account1 = Account(
       nonce = 1,
       balance = 100,
-      storageRoot = kec256(ByteString("storage1")),
+      storageRoot = storage1Root,
       codeHash = Account.EmptyCodeHash
     )
     
     val account2 = Account(
       nonce = 2,
       balance = 200,
-      storageRoot = kec256(ByteString("storage2")),
+      storageRoot = missingStorageRoot,
       codeHash = Account.EmptyCodeHash
     )
     
@@ -183,13 +188,13 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
     val validator = new StateValidator(storage)
     val result = validator.validateAllStorageTries(stateRoot)
     
+    // Should detect the missing storage root for account2
     result match {
       case Right(missingNodes) =>
-        // Should detect missing storage roots
-        missingNodes.size should be >= 0 // May or may not have missing nodes depending on implementation
+        missingNodes should not be empty
+        missingNodes should contain (missingStorageRoot)
       case Left(error) =>
-        // Also acceptable if traversal fails
-        succeed
+        fail(s"Expected to detect missing storage root, but got error: $error")
     }
   }
 }

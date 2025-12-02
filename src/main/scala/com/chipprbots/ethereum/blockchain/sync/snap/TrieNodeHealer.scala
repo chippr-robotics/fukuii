@@ -95,7 +95,17 @@ class TrieNodeHealer(
     * @param nodeHashes The hashes of missing nodes
     */
   def queueNodes(nodeHashes: Seq[ByteString]): Unit = synchronized {
-    nodeHashes.foreach(queueNode)
+    val tasks = nodeHashes.map { nodeHash =>
+      HealingTask(
+        path = Seq.empty,
+        hash = nodeHash,
+        rootHash = stateRoot,
+        pending = true,
+        done = false,
+        nodeData = None
+      )
+    }
+    pendingTasks = pendingTasks ++ tasks
     log.info(s"Queued ${nodeHashes.size} nodes for healing. Total pending: ${pendingTasks.size}")
   }
 

@@ -549,8 +549,10 @@ class SNAPSyncController(
                     
                   case Left(error) =>
                     log.error(s"Storage trie validation failed: $error")
-                    // Cannot proceed without valid storage
-                    log.error("Sync cannot complete - storage validation failed")
+                    log.error("Attempting to recover through healing phase")
+                    // Transition back to healing to attempt recovery
+                    currentPhase = StateHealing
+                    startStateHealing()
                 }
                 
               case Right(missingAccountNodes) =>
@@ -560,7 +562,9 @@ class SNAPSyncController(
                 
               case Left(error) =>
                 log.error(s"Account trie validation failed: $error")
-                log.error("Sync cannot complete - account trie validation failed")
+                log.error("Attempting to recover through healing phase")
+                currentPhase = StateHealing
+                startStateHealing()
             }
           } else {
             // CRITICAL: State root mismatch - block sync completion
@@ -590,19 +594,23 @@ class SNAPSyncController(
   private def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = {
     log.info(s"Queueing ${missingNodes.size} missing nodes for healing")
     
-    // Add missing nodes to the healer
-    trieNodeHealer.foreach { healer =>
-      // Use batch method for efficiency
-      healer.queueNodes(missingNodes)
-      
-      // Transition back to healing phase
-      currentPhase = StateHealing
-      log.info(s"Transitioning to StateHealing phase to heal ${missingNodes.size} missing nodes")
-      
-      // Start healing requests
-      scheduler.scheduleOnce(100.millis) {
-        self ! RequestTrieNodeHealing
-      }
+    // Add missing nodes to the healer, or log error if healer is not initialized
+    trieNodeHealer match {
+      case Some(healer) =>
+        // Use batch method for efficiency
+        healer.queueNodes(missingNodes)
+        
+        // Transition back to healing phase
+        currentPhase = StateHealing
+        log.info(s"Transitioning to StateHealing phase to heal ${missingNodes.size} missing nodes")
+        
+        // Start healing requests
+        scheduler.scheduleOnce(100.millis) {
+          self ! RequestTrieNodeHealing
+        }
+      case None =>
+        log.error("Cannot heal missing nodes - TrieNodeHealer not initialized")
+        log.error("Sync cannot complete - healing infrastructure unavailable")
     }
   }
 
@@ -768,8 +776,8 @@ class StateValidator(mptStorage: MptStorage) {
           } catch {
             case e: MerklePatriciaTrie.MissingNodeException =>
               missingStorageNodes += e.hash
-            case _: Exception =>
-              // Continue with other accounts
+            case e: Exception =>
+              // Continue with other accounts - log at caller level if needed
               ()
           }
         }
@@ -834,8 +842,7 @@ class StateValidator(mptStorage: MptStorage) {
             // Node is missing, record it
             missingNodes += ByteString(hash.hash)
           case e: Exception =>
-            // Unexpected error - log and continue
-            // Don't add to missing nodes as this indicates a more serious issue
+            // Unexpected error - don't add to missing nodes as this indicates a more serious issue
             ()
         }
         
@@ -876,7 +883,9 @@ class StateValidator(mptStorage: MptStorage) {
           val account = accountSerializer.fromBytes(leaf.value.toArray)
           accounts += account
         } catch {
-          case _: Exception => ()
+          case e: Exception =>
+            // Failed to deserialize - skip this leaf
+            ()
         }
         
       case ext: ExtensionNode =>
@@ -894,7 +903,9 @@ class StateValidator(mptStorage: MptStorage) {
             val account = accountSerializer.fromBytes(value.toArray)
             accounts += account
           } catch {
-            case _: Exception => ()
+            case e: Exception =>
+              // Failed to deserialize - skip this terminator
+              ()
           }
         }
         
@@ -908,8 +919,7 @@ class StateValidator(mptStorage: MptStorage) {
             // Cannot traverse further if node is missing
             ()
           case e: Exception =>
-            // Unexpected error - log and continue
-            // This indicates a more serious issue than just missing nodes
+            // Unexpected error - this indicates a more serious issue than just missing nodes
             ()
         }
         
