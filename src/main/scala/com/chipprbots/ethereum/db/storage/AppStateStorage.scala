@@ -149,18 +149,36 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
 
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
+    * 
+    * This method retrieves a JSON representation of the SNAP sync progress. The JSON format
+    * is flexible and not tied to any specific case class structure, allowing for evolution
+    * of the progress format over time without breaking compatibility.
+    * 
+    * Example JSON format:
+    * ```json
+    * {
+    *   "phase": "AccountRangeSync",
+    *   "accountsSynced": 1000,
+    *   "bytecodesDownloaded": 50,
+    *   "storageSlotsSynced": 200,
+    *   "nodesHealed": 10
+    * }
+    * ```
+    * 
     * @return
-    *   Optional SyncProgress if saved, None otherwise
+    *   Optional JSON string if progress has been saved, None otherwise
     */
   def getSnapSyncProgress(): Option[String] =
     get(Keys.SnapSyncProgress)
 
   /** Store the SNAP sync progress (optional - for progress persistence across restarts)
-    * Note: This stores a JSON representation of the SyncProgress.
-    * The actual SyncProgress case class is in SNAPSyncController.
+    * 
+    * This method stores a JSON representation of the SNAP sync progress. The JSON format
+    * is flexible and allows the caller to determine what fields to include. This design
+    * provides forward/backward compatibility as the progress tracking evolves.
     * 
     * @param progressJson
-    *   JSON string representation of SyncProgress
+    *   JSON string representation of the sync progress
     * @return
     *   DataSourceBatchUpdate for committing
     */
