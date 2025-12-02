@@ -108,6 +108,12 @@ class ByteCodeDownloader(
     requestTracker.validateByteCodes(response) match {
       case Left(error) =>
         log.warn(s"Invalid ByteCodes response: $error")
+        // Find and re-queue the task if it exists
+        activeTasks.remove(response.requestId).foreach { task =>
+          task.pending = false
+          tasks.enqueue(task)
+          log.debug(s"Re-queued task ${task.taskString} after validation failure")
+        }
         return Left(error)
       
       case Right(validResponse) =>
@@ -115,6 +121,12 @@ class ByteCodeDownloader(
         requestTracker.completeRequest(response.requestId) match {
           case None =>
             log.warn(s"Received response for unknown request ID ${response.requestId}")
+            // Find and re-queue the task if it exists
+            activeTasks.remove(response.requestId).foreach { task =>
+              task.pending = false
+              tasks.enqueue(task)
+              log.debug(s"Re-queued task ${task.taskString} after unknown request ID")
+            }
             return Left(s"Unknown request ID: ${response.requestId}")
           
           case Some(pendingReq) =>
@@ -149,6 +161,9 @@ class ByteCodeDownloader(
     verifyBytecodes(task.codeHashes, response.codes) match {
       case Left(error) =>
         log.warn(s"Bytecode verification failed: $error")
+        task.pending = false
+        tasks.enqueue(task)
+        log.debug(s"Re-queued task ${task.taskString} after verification failure")
         return Left(s"Verification failed: $error")
       case Right(_) =>
         log.debug(s"Bytecode hashes verified successfully for ${bytecodeCount} codes")
@@ -158,24 +173,50 @@ class ByteCodeDownloader(
     storeBytecodes(response.codes) match {
       case Left(error) =>
         log.warn(s"Failed to store bytecodes: $error")
+        task.pending = false
+        tasks.enqueue(task)
+        log.debug(s"Re-queued task ${task.taskString} after storage failure")
         return Left(s"Storage failed: $error")
       case Right(_) =>
         log.debug(s"Successfully stored ${bytecodeCount} bytecodes")
     }
     
-    // Update statistics
-    bytecodesDownloaded += bytecodeCount
-    val totalBytes = response.codes.map(_.size).sum
-    bytesDownloaded += totalBytes
-    
-    // Mark task as done
-    task.done = true
-    task.pending = false
-    completedTasks += task
-    
-    log.debug(s"Completed bytecode task ${task.taskString} with ${bytecodeCount} codes")
-    
-    Right(bytecodeCount)
+    // Only mark task as done if all requested bytecodes were received
+    if (response.codes.size == task.codeHashes.size) {
+      // Update statistics
+      bytecodesDownloaded += bytecodeCount
+      val totalBytes = response.codes.map(_.size).sum
+      bytesDownloaded += totalBytes
+      
+      task.done = true
+      task.pending = false
+      completedTasks += task
+      
+      log.debug(s"Completed bytecode task ${task.taskString} with ${bytecodeCount} codes")
+      
+      Right(bytecodeCount)
+    } else {
+      // Partial response - identify missing hashes and requeue them
+      val receivedCount = response.codes.size
+      val missingHashes = task.codeHashes.drop(receivedCount)
+      log.warn(s"Received only $receivedCount/${task.codeHashes.size} bytecodes for task ${task.taskString}. Requeuing ${missingHashes.size} missing hashes.")
+      
+      // Update statistics for what we did receive
+      bytecodesDownloaded += bytecodeCount
+      val totalBytes = response.codes.map(_.size).sum
+      bytesDownloaded += totalBytes
+      
+      // Create a new task for the missing hashes
+      val missingTask = ByteCodeTask(missingHashes)
+      tasks.enqueue(missingTask)
+      
+      // Mark original task as done since we processed what we received
+      task.done = true
+      task.pending = false
+      completedTasks += task
+      
+      Right(bytecodeCount)
+    }
   }
 
   /** Verify that downloaded bytecodes match their expected hashes
@@ -188,7 +229,12 @@ class ByteCodeDownloader(
       expectedHashes: Seq[ByteString],
       bytecodes: Seq[ByteString]
   ): Either[String, Unit] = {
-    // Check count matches
+    // For partial responses, we only verify what we received
+    // The caller will handle creating continuation tasks for missing bytecodes
+    if (bytecodes.isEmpty) {
+      return Left(s"Empty response: received 0 bytecodes, expected ${expectedHashes.size}")
+    }
+    
     if (bytecodes.size > expectedHashes.size) {
       return Left(s"Received ${bytecodes.size} bytecodes but expected at most ${expectedHashes.size}")
     }
@@ -215,22 +261,26 @@ class ByteCodeDownloader(
 
   /** Store bytecodes to EvmCodeStorage
     *
+    * Stores bytecodes in a single batch update for better performance.
+    * The commit is called once for all bytecodes in the batch.
+    *
     * @param bytecodes Bytecodes to store
     * @return Either error or success
     */
   private def storeBytecodes(bytecodes: Seq[ByteString]): Either[String, Unit] = {
     try {
       evmCodeStorage.synchronized {
-        bytecodes.foreach { code =>
+        // Build up batch updates
+        val updates = bytecodes.foldLeft(evmCodeStorage.emptyBatchUpdate) { (batchUpdate, code) =>
           val codeHash = kec256(code)
           log.debug(s"Storing bytecode ${codeHash.take(4).toArray.map("%02x".format(_)).mkString} (${code.size} bytes)")
           
-          // Store code by its hash
-          evmCodeStorage.put(codeHash, code)
+          // Add to batch update
+          batchUpdate.and(evmCodeStorage.put(codeHash, code))
         }
         
-        // Persist to disk
-        evmCodeStorage.persist()
+        // Commit all updates in one transaction
+        updates.commit()
       }
       
       log.info(s"Successfully persisted ${bytecodes.size} bytecodes to storage")

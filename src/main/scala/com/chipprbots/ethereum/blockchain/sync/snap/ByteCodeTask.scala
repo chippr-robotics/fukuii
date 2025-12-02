@@ -8,9 +8,9 @@ import org.apache.pekko.util.ByteString
   * Follows core-geth patterns from eth/protocols/snap/sync.go
   *
   * Unlike AccountTask and StorageTask which represent ranges, ByteCodeTask
-  * represents a specific set of bytecode hashes to download for contract accounts.
+  * represents a specific sequence of bytecode hashes to download for contract accounts.
   *
-  * @param codeHashes Set of bytecode hashes to download
+  * @param codeHashes Sequence of bytecode hashes to download
   * @param accountHashes Corresponding account hashes (for logging/debugging)
   */
 case class ByteCodeTask(
