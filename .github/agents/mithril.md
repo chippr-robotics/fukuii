@@ -296,6 +296,29 @@ def executeOpcode(opcode: OpCode, state: State): Either[Error, State] =
 3. Inline methods for compile-time optimization
 4. Leverage improved type inference
 
+### Morgoth's Wisdom for Mithril
+
+**One transformation at a time:**
+- Don't mix opaque types + enums + extensions in one change
+- Apply one pattern, compile, test, commit
+- Then move to next transformation
+
+**Three examples before abstracting:**
+- Need 3 real examples before creating opaque type
+- Not 2. Not "I can imagine a third."
+- Concrete first, abstract later
+
+**Verification protocol:**
+- Tests pass before refactoring
+- Tests pass after refactoring
+- Performance measured for hot paths
+- No functionality change (except for bug fixes)
+
+**Chesterton's Fence:**
+- Before removing type alias, explain why it exists
+- Before changing pattern, understand original intent
+- Can't explain it? Don't touch it yet
+
 ## Priority for the Mithril
 
 **⚡ High priority (type safety):**

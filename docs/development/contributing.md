@@ -547,11 +547,26 @@ See the [CI/CD Documentation](ci-cd.md) for detailed release process documentati
 
 This section provides rules, reminders, and prompts for LLM agents (AI coding assistants) working on this codebase to ensure consistency and quality.
 
-### Core Principles
+### Agent Roles
+
+We have specialized agents with different areas of expertise:
+- **wraith 👻**: Hunts down compilation errors and Scala 3 migration issues
+- **mithril ✨**: Transforms code using modern Scala 3 features
+- **ICE 🧊**: Manages large-scale migrations and strategic planning
+- **eye 👁️**: Ensures comprehensive testing and validation
+- **forge 🔨**: Handles consensus-critical code (EVM, mining, crypto)
+- **herald 🧭**: Fixes network protocol and peer communication issues
+- **Morgoth 🎯**: Shepherds all agents with process discipline and quality verification
+
+See [Agent Labels](.github/AGENT_LABELS.md) for detailed descriptions and [Agent Definitions](.github/agents/) for full agent instructions.
+
+### Core Principles (Guided by Morgoth)
 
 1. **Keep Documentation Essential**: Focus on clarity and brevity. Avoid unnecessary verbosity or redundant explanations.
 2. **Consistency Over Innovation**: Follow existing patterns in the codebase rather than introducing new approaches.
 3. **Minimal Changes**: Make the smallest possible changes to achieve the goal. Don't refactor unrelated code.
+4. **Verify Before Proceeding**: When anything fails, stop and analyze before trying another approach.
+5. **Incremental Progress**: Make 3 changes, then verify. Don't accumulate unverified work.
 
 ### Rules
 
