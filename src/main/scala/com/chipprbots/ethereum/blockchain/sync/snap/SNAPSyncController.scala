@@ -163,7 +163,8 @@ class SNAPSyncController(
             errorHandler.recordCircuitBreakerFailure("account_range_download")
             
             // Check if circuit breaker is open and fallback if needed
-            if (checkCircuitBreakerAndFallback("account_range_download", error)) {
+            // Early return is intentional - if fallback is triggered, stop processing
+            if (checkCircuitBreakerAndTriggerFallback("account_range_download", error)) {
               return
             }
             
@@ -422,15 +423,15 @@ class SNAPSyncController(
     }
   }
 
-  /** Check if circuit breaker is open and record critical failure if needed.
+  /** Check if circuit breaker is open and trigger fallback if needed.
     * This is a reusable helper for checking circuit breaker state across different
     * download types (account range, storage, bytecode, healing).
     * 
     * @param circuitName The name of the circuit to check
     * @param errorContext Context about the error for logging
-    * @return true if fallback to fast sync was triggered
+    * @return true if fallback to fast sync was triggered (caller should return early)
     */
-  private def checkCircuitBreakerAndFallback(circuitName: String, errorContext: String): Boolean = {
+  private def checkCircuitBreakerAndTriggerFallback(circuitName: String, errorContext: String): Boolean = {
     if (errorHandler.isCircuitOpen(circuitName)) {
       if (recordCriticalFailure(s"Circuit breaker open for $circuitName: $errorContext")) {
         fallbackToFastSync()
