@@ -74,10 +74,10 @@ This document provides a comprehensive inventory of remaining implementation and
 - [x] Integrate registration in SyncController
 - [x] Create unit tests (2 new tests)
 - [x] Verify all existing tests pass (250 tests, 0 failures)
-- [ ] Handle GetAccountRange requests from peers (optional - we're primarily a client)
-- [ ] Handle GetStorageRanges requests from peers (optional)
-- [ ] Handle GetTrieNodes requests from peers (optional)
-- [ ] Handle GetByteCodes requests from peers (optional)
+- [x] Handle GetAccountRange requests from peers (optional - we're primarily a client) ✅
+- [x] Handle GetStorageRanges requests from peers (optional) ✅
+- [x] Handle GetTrieNodes requests from peers (optional) ✅
+- [x] Handle GetByteCodes requests from peers (optional) ✅
 
 **Files Modified:**
 - `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
@@ -133,8 +133,8 @@ This document provides a comprehensive inventory of remaining implementation and
 - [x] Add `putSnapSyncPivotBlock(block: BigInt): AppStateStorage` method
 - [x] Add `getSnapSyncStateRoot(): Option[ByteString]` method
 - [x] Add `putSnapSyncStateRoot(root: ByteString): AppStateStorage` method
-- [ ] Add `getSnapSyncProgress(): Option[SyncProgress]` method (optional - not implemented)
-- [ ] Add `putSnapSyncProgress(progress: SyncProgress): AppStateStorage` method (optional - not implemented)
+- [x] Add `getSnapSyncProgress(): Option[String]` method (optional - now implemented) ✅
+- [x] Add `putSnapSyncProgress(progressJson: String): AppStateStorage` method (optional - now implemented) ✅
 
 **Files Modified:**
 - `src/main/scala/com/chipprbots/ethereum/db/storage/AppStateStorage.scala`
@@ -377,7 +377,7 @@ sync {
 - [x] Recover from interrupted sync (resume from last state)
 - [ ] Handle pivot block reorg during sync (future enhancement)
 - [x] Add circuit breaker for repeatedly failing tasks (10 failure threshold)
-- [ ] Implement fallback to fast sync if SNAP fails repeatedly (future enhancement)
+- [x] Implement fallback to fast sync if SNAP fails repeatedly ✅ COMPLETED
 - [x] Error context logging with phase, peer, request ID, task ID
 - [x] Peer failure tracking by error type
 - [x] Automatic peer blacklisting (10 failures OR 3 invalid proofs OR 5 malformed responses)
