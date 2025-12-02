@@ -15,7 +15,8 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 case class EthNodeStatus64ExchangeState(
     handshakerConfiguration: EtcHandshakerConfiguration,
-    negotiatedCapability: Capability
+    negotiatedCapability: Capability,
+    supportsSnap: Boolean = false
 ) extends EtcNodeStatusExchangeState[ETH64.Status] {
 
   import handshakerConfiguration._
@@ -69,7 +70,7 @@ case class EthNodeStatus64ExchangeState(
             // When ForkId validation passes, we go directly to connected state
             // without needing to do the old-style fork block handshake
             log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)")
-            ConnectedState(PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability)))
+            ConnectedState(PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap)))
           case other =>
             log.warn(
               "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",

@@ -104,7 +104,9 @@ class TrieNodeHealer(
     }
 
     // Send request to peer
-    etcPeerManager ! EtcPeerManagerActor.SendMessage(request, peer.id)
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
+    val messageSerializable: com.chipprbots.ethereum.network.p2p.MessageSerializable = new GetTrieNodesEnc(request)
+    etcPeerManager ! EtcPeerManagerActor.SendMessage(messageSerializable, peer.id)
 
     log.debug(
       s"Requested ${batch.size} trie nodes from peer $peer " +

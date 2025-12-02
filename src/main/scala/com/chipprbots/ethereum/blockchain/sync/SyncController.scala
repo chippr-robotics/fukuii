@@ -156,6 +156,7 @@ class SyncController(
         appStateStorage,
         mptStorage,
         etcPeerManager,
+        peerEventBus,
         syncConfig,
         snapSyncConfig,
         scheduler
