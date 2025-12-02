@@ -12,6 +12,8 @@ out/
 .idea/
 .metals/
 metals.sbt
+project/metals.sbt
+project/project/
 .vscode/
 
 # intellij scala worksheet

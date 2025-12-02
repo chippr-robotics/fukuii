@@ -12,16 +12,16 @@ Welcome to the Fukuii troubleshooting guides! This directory contains step-by-st
 
 ## Quick Links
 
-- [Operations Runbooks](../runbooks/) — Day-to-day operational guides
+- [Operations Runbooks](../runbooks/README.md) — Day-to-day operational guides
 - [Known Issues & Solutions](../runbooks/known-issues.md) — Common scenarios with solutions
 - [Log Analysis](../runbooks/log-triage.md) — Understanding log messages
-- [Investigation Reports](../investigation/) — Historical issue investigations
+- [Investigation Reports](../investigation/README.md) — Historical issue investigations
 
 ## Getting Help
 
 If you can't find what you're looking for:
 
 1. Check the [Known Issues](../runbooks/known-issues.md) list
-2. Review relevant [Investigation Reports](../investigation/)
+2. Review relevant [Investigation Reports](../investigation/README.md)
 3. Search [GitHub Issues](https://github.com/chippr-robotics/fukuii/issues)
 4. Open a new issue with detailed information — we're happy to help!
