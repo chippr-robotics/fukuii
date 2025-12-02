@@ -66,6 +66,48 @@ class TrieNodeHealer(
     pendingTasks = pendingTasks ++ newTasks
     log.info(s"Added ${newTasks.size} missing nodes to healing queue. Total pending: ${pendingTasks.size}")
   }
+  
+  /** Queues a single node by hash for healing.
+    * 
+    * When validation discovers missing nodes, we only have their hashes, not the full
+    * trie paths. Using an empty path signals to GetTrieNodes to do a direct hash lookup
+    * rather than path-based traversal. This is less efficient than path-based healing but
+    * necessary when we only have the hash reference (e.g., from a HashNode in the trie).
+    *
+    * @param nodeHash The hash of the missing node
+    */
+  def queueNode(nodeHash: ByteString): Unit = synchronized {
+    // Create a healing task with empty path (direct hash lookup)
+    val task = HealingTask(
+      path = Seq.empty,
+      hash = nodeHash,
+      rootHash = stateRoot,
+      pending = true,
+      done = false,
+      nodeData = None
+    )
+    pendingTasks = pendingTasks :+ task
+    log.debug(s"Queued node for healing: hash=${nodeHash.take(4).toHex}")
+  }
+  
+  /** Queues multiple nodes by hash for healing.
+    *
+    * @param nodeHashes The hashes of missing nodes
+    */
+  def queueNodes(nodeHashes: Seq[ByteString]): Unit = synchronized {
+    val tasks = nodeHashes.map { nodeHash =>
+      HealingTask(
+        path = Seq.empty,
+        hash = nodeHash,
+        rootHash = stateRoot,
+        pending = true,
+        done = false,
+        nodeData = None
+      )
+    }
+    pendingTasks = pendingTasks ++ tasks
+    log.info(s"Queued ${nodeHashes.size} nodes for healing. Total pending: ${pendingTasks.size}")
+  }
 
   /** Requests the next batch of trie nodes from a peer.
     *

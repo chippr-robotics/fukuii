@@ -529,20 +529,42 @@ class SNAPSyncController(
             
             // Proceed with full trie validation
             val validator = new StateValidator(mptStorage)
+            
+            // Validate account trie and collect missing nodes
             validator.validateAccountTrie(expectedRoot) match {
-              case Right(_) =>
-                log.info("Account trie validation successful")
-                validator.validateAllStorageTries() match {
-                  case Right(_) =>
-                    log.info("Storage trie validation successful")
+              case Right(missingAccountNodes) if missingAccountNodes.isEmpty =>
+                log.info("Account trie validation successful - no missing nodes")
+                
+                // Now validate storage tries
+                validator.validateAllStorageTries(expectedRoot) match {
+                  case Right(missingStorageNodes) if missingStorageNodes.isEmpty =>
+                    log.info("Storage trie validation successful - no missing nodes")
+                    log.info("✅ State validation COMPLETE - all tries are intact")
                     self ! StateValidationComplete
+                    
+                  case Right(missingStorageNodes) =>
+                    log.warning(s"Storage trie validation found ${missingStorageNodes.size} missing nodes")
+                    log.info("Triggering additional healing iteration for missing storage nodes...")
+                    triggerHealingForMissingNodes(missingStorageNodes)
+                    
                   case Left(error) =>
                     log.error(s"Storage trie validation failed: $error")
-                    self ! StateValidationComplete  // TODO: Trigger healing
+                    log.error("Attempting to recover through healing phase")
+                    // Transition back to healing to attempt recovery
+                    currentPhase = StateHealing
+                    startStateHealing()
                 }
+                
+              case Right(missingAccountNodes) =>
+                log.warning(s"Account trie validation found ${missingAccountNodes.size} missing nodes")
+                log.info("Triggering additional healing iteration for missing account nodes...")
+                triggerHealingForMissingNodes(missingAccountNodes)
+                
               case Left(error) =>
                 log.error(s"Account trie validation failed: $error")
-                self ! StateValidationComplete  // TODO: Trigger healing
+                log.error("Attempting to recover through healing phase")
+                currentPhase = StateHealing
+                startStateHealing()
             }
           } else {
             // CRITICAL: State root mismatch - block sync completion
@@ -552,15 +574,43 @@ class SNAPSyncController(
             log.error(s"  Sync cannot complete with mismatched state root - this indicates incomplete or corrupted state")
             
             // DO NOT send StateValidationComplete - sync must not proceed
-            // TODO: Trigger healing phase to fix the mismatch
             log.warning("State root mismatch detected - sync blocked until healing completes")
+            
+            // Trigger healing to fix the mismatch
+            log.info("Transitioning back to healing phase to fix state root mismatch")
+            currentPhase = StateHealing
+            startStateHealing()
           }
         }
       
       case _ =>
         log.error("Missing state root or pivot block for validation")
         // Fail sync - we cannot proceed without validation
-        self ! StateValidationComplete  // For now, but should fail
+        log.error("Sync cannot complete - missing state root or pivot block")
+    }
+  }
+  
+  /** Trigger healing for a list of missing node hashes */
+  private def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = {
+    log.info(s"Queueing ${missingNodes.size} missing nodes for healing")
+    
+    // Add missing nodes to the healer, or log error if healer is not initialized
+    trieNodeHealer match {
+      case Some(healer) =>
+        // Use batch method for efficiency
+        healer.queueNodes(missingNodes)
+        
+        // Transition back to healing phase
+        currentPhase = StateHealing
+        log.info(s"Transitioning to StateHealing phase to heal ${missingNodes.size} missing nodes")
+        
+        // Start healing requests
+        scheduler.scheduleOnce(100.millis) {
+          self ! RequestTrieNodeHealing
+        }
+      case None =>
+        log.error("Cannot heal missing nodes - TrieNodeHealer not initialized")
+        log.error("Sync cannot complete - healing infrastructure unavailable")
     }
   }
 
@@ -656,14 +706,227 @@ object SNAPSyncConfig {
   }
 }
 
-class StateValidator(_mptStorage: MptStorage) {
+class StateValidator(mptStorage: MptStorage) {
   
-  def validateAccountTrie(stateRoot: ByteString): Either[String, Unit] = {
-    Right(())
+  import com.chipprbots.ethereum.mpt._
+  import com.chipprbots.ethereum.domain.Account
+  import scala.collection.mutable
+  
+  /** Validate the account trie by traversing it and detecting missing nodes.
+    * 
+    * @param stateRoot The expected state root hash
+    * @return Right with missing node hashes if any, or Left with error message
+    */
+  def validateAccountTrie(stateRoot: ByteString): Either[String, Seq[ByteString]] = {
+    try {
+      val missingNodes = mutable.ArrayBuffer[ByteString]()
+      
+      // Try to load the root node from storage
+      try {
+        val rootNode = mptStorage.get(stateRoot.toArray)
+        
+        // Traverse the trie and collect missing nodes
+        traverseForMissingNodes(rootNode, mptStorage, missingNodes)
+        
+        if (missingNodes.isEmpty) {
+          Right(Seq.empty)
+        } else {
+          Right(missingNodes.toSeq)
+        }
+        
+      } catch {
+        case e: MerklePatriciaTrie.MissingNodeException =>
+          // Root node itself is missing
+          Left(s"Missing root node: ${stateRoot.take(8).toHex}")
+        case e: Exception =>
+          Left(s"Failed to load root node: ${e.getMessage}")
+      }
+      
+    } catch {
+      case e: Exception =>
+        Left(s"Validation error: ${e.getMessage}")
+    }
   }
 
-  def validateAllStorageTries(): Either[String, Unit] = {
-    Right(())
+  /** Validate all storage tries by walking through all accounts and checking their storage.
+    * 
+    * @param stateRoot The state root to validate from
+    * @return Right with missing node hashes if any, or Left with error message
+    */
+  def validateAllStorageTries(stateRoot: ByteString): Either[String, Seq[ByteString]] = {
+    try {
+      val missingStorageNodes = mutable.ArrayBuffer[ByteString]()
+      val accounts = mutable.ArrayBuffer[Account]()
+      
+      // First, collect all accounts by traversing the account trie
+      try {
+        val rootNode = mptStorage.get(stateRoot.toArray)
+        collectAccounts(rootNode, mptStorage, accounts)
+      } catch {
+        case _: Exception =>
+          return Left("Cannot validate storage tries: failed to traverse account trie")
+      }
+      
+      // Now validate each account's storage trie
+      accounts.foreach { account =>
+        if (account.storageRoot != Account.EmptyStorageRootHash) {
+          try {
+            val storageRootNode = mptStorage.get(account.storageRoot.toArray)
+            traverseForMissingNodes(storageRootNode, mptStorage, missingStorageNodes)
+          } catch {
+            case e: MerklePatriciaTrie.MissingNodeException =>
+              missingStorageNodes += e.hash
+            case e: Exception =>
+              // Continue with other accounts - log at caller level if needed
+              ()
+          }
+        }
+      }
+      
+      if (missingStorageNodes.isEmpty) {
+        Right(Seq.empty)
+      } else {
+        Right(missingStorageNodes.toSeq)
+      }
+      
+    } catch {
+      case e: Exception =>
+        Left(s"Storage validation error: ${e.getMessage}")
+    }
+  }
+  
+  /** Recursively traverse a trie and collect missing node hashes.
+    *
+    * @param node The current node being traversed
+    * @param storage The storage to lookup nodes from
+    * @param missingNodes Buffer to collect missing node hashes
+    * @param visited Set of visited node hashes to prevent infinite loops
+    */
+  private def traverseForMissingNodes(
+      node: MptNode,
+      storage: MptStorage,
+      missingNodes: mutable.ArrayBuffer[ByteString],
+      visited: mutable.Set[ByteString] = mutable.Set.empty
+  ): Unit = {
+    // Get the hash of the current node
+    val nodeHash = ByteString(node.hash)
+    
+    // Skip if already visited (prevent infinite loops)
+    if (visited.contains(nodeHash)) {
+      return
+    }
+    visited += nodeHash
+    
+    node match {
+      case _: LeafNode =>
+        // Leaf nodes have no children, done
+        ()
+        
+      case ext: ExtensionNode =>
+        // Extension nodes have one child
+        traverseForMissingNodes(ext.next, storage, missingNodes, visited)
+        
+      case branch: BranchNode =>
+        // Branch nodes have up to 16 children
+        branch.children.foreach { child =>
+          traverseForMissingNodes(child, storage, missingNodes, visited)
+        }
+        
+      case hash: HashNode =>
+        // Hash node - need to resolve it from storage
+        try {
+          val resolvedNode = storage.get(hash.hash)
+          traverseForMissingNodes(resolvedNode, storage, missingNodes, visited)
+        } catch {
+          case _: MerklePatriciaTrie.MissingNodeException =>
+            // Node is missing, record it
+            missingNodes += ByteString(hash.hash)
+          case e: Exception =>
+            // Unexpected error - don't add to missing nodes as this indicates a more serious issue
+            ()
+        }
+        
+      case NullNode =>
+        // Null nodes have no children, done
+        ()
+    }
+  }
+  
+  /** Recursively collect all accounts from a trie.
+    *
+    * @param node The current node being traversed
+    * @param storage The storage to lookup nodes from
+    * @param accounts Buffer to collect accounts
+    * @param visited Set of visited node hashes to prevent infinite loops
+    */
+  private def collectAccounts(
+      node: MptNode,
+      storage: MptStorage,
+      accounts: mutable.ArrayBuffer[Account],
+      visited: mutable.Set[ByteString] = mutable.Set.empty
+  ): Unit = {
+    import com.chipprbots.ethereum.domain.Account.accountSerializer
+    
+    // Get the hash of the current node
+    val nodeHash = ByteString(node.hash)
+    
+    // Skip if already visited (prevent infinite loops)
+    if (visited.contains(nodeHash)) {
+      return
+    }
+    visited += nodeHash
+    
+    node match {
+      case leaf: LeafNode =>
+        // Leaf node contains an account
+        try {
+          val account = accountSerializer.fromBytes(leaf.value.toArray)
+          accounts += account
+        } catch {
+          case e: Exception =>
+            // Failed to deserialize - skip this leaf
+            ()
+        }
+        
+      case ext: ExtensionNode =>
+        // Extension nodes point to the next node
+        collectAccounts(ext.next, storage, accounts, visited)
+        
+      case branch: BranchNode =>
+        // Branch nodes have up to 16 children
+        branch.children.foreach { child =>
+          collectAccounts(child, storage, accounts, visited)
+        }
+        // Branch node can also have a value (account) at its terminator
+        branch.terminator.foreach { value =>
+          try {
+            val account = accountSerializer.fromBytes(value.toArray)
+            accounts += account
+          } catch {
+            case e: Exception =>
+              // Failed to deserialize - skip this terminator
+              ()
+          }
+        }
+        
+      case hash: HashNode =>
+        // Hash node - need to resolve it from storage
+        try {
+          val resolvedNode = storage.get(hash.hash)
+          collectAccounts(resolvedNode, storage, accounts, visited)
+        } catch {
+          case _: MerklePatriciaTrie.MissingNodeException =>
+            // Cannot traverse further if node is missing
+            ()
+          case e: Exception =>
+            // Unexpected error - this indicates a more serious issue than just missing nodes
+            ()
+        }
+        
+      case NullNode =>
+        // Null nodes have no children, done
+        ()
+    }
   }
 }
 
