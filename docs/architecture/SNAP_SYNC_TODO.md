@@ -605,8 +605,8 @@ SNAP sync implementation is considered complete when:
 - [Core-Geth Syncer](https://github.com/etclabscore/core-geth/blob/master/eth/syncer.go)
 - [Core-Geth SNAP Handler](https://github.com/etclabscore/core-geth/blob/master/eth/protocols/snap/handler.go)
 - [Besu SNAP Sync](https://github.com/hyperledger/besu/tree/main/ethereum/eth/src/main/java/org/hyperledger/besu/ethereum/eth/sync/snapsync)
-- [ADR-SNAP-001](../../adr/protocols/ADR-SNAP-001-protocol-infrastructure.md)
-- [ADR-SNAP-002](../../adr/protocols/ADR-SNAP-002-integration-architecture.md)
+- [ADR-SNAP-001](../adr/protocols/ADR-SNAP-001-protocol-infrastructure.md)
+- [ADR-SNAP-002](../adr/protocols/ADR-SNAP-002-integration-architecture.md)
 - [SNAP Sync Implementation Guide](./SNAP_SYNC_IMPLEMENTATION.md)
 
 ---
