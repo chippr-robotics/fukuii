@@ -15,25 +15,6 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.utils.Logger
 
-/** Account Range Downloader for SNAP sync
-  *
-  * Downloads account ranges from peers in parallel, verifies Merkle proofs,
-  * and stores accounts locally. Follows core-geth snap sync patterns.
-  *
-  * Features:
-  * - Parallel account range downloads from multiple peers
-  * - Merkle proof verification using MerkleProofVerifier
-  * - Account storage using MptStorage
-  * - Progress tracking and reporting
-  * - Task continuation on timeout/failure
-  * - Configurable concurrency
-  *
-  * @param stateRoot State root hash to sync against
-  * @param etcPeerManager Actor for peer communication
-  * @param requestTracker Request/response tracker
-  * @param mptStorage Storage for persisting downloaded accounts
-  * @param concurrency Number of parallel download tasks (default 16)
-  */
 class AccountRangeDownloader(
     stateRoot: ByteString,
     etcPeerManager: ActorRef,
@@ -44,13 +25,10 @@ class AccountRangeDownloader(
 
   import AccountRangeDownloader._
 
-  /** Active account tasks */
   private val tasks = mutable.Queue[AccountTask](AccountTask.createInitialTasks(stateRoot, concurrency): _*)
 
-  /** Tasks currently being downloaded */
-  private val activeTasks = mutable.Map[BigInt, AccountTask]() // requestId -> task
+  private val activeTasks = mutable.Map[BigInt, AccountTask]()
 
-  /** Completed tasks */
   private val completedTasks = mutable.ArrayBuffer[AccountTask]()
 
   /** Statistics */

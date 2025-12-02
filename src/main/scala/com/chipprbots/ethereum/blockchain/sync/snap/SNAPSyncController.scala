@@ -12,18 +12,6 @@ import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
-/**
-  * SNAP Sync Controller - Main coordinator for SNAP sync process
-  * 
-  * Orchestrates the complete SNAP sync workflow:
-  * 1. Account Range Sync - Download account ranges with Merkle proofs
-  * 2. Storage Range Sync - Download storage slots for contract accounts
-  * 3. State Healing - Fill missing trie nodes through iterative healing
-  * 4. State Validation - Verify state completeness before transition
-  * 5. Transition to Regular Sync - Complete SNAP sync and continue with regular sync
-  * 
-  * Reference: core-geth eth/syncer.go
-  */
 class SNAPSyncController(
     blockchainReader: BlockchainReader,
     appStateStorage: AppStateStorage,
@@ -38,20 +26,16 @@ class SNAPSyncController(
 
   import SNAPSyncController._
 
-  // Coordinators for each sync phase
   private var accountRangeDownloader: Option[AccountRangeDownloader] = None
   private var storageRangeDownloader: Option[StorageRangeDownloader] = None
   private var trieNodeHealer: Option[TrieNodeHealer] = None
   
-  // Request tracker for all SNAP requests
   private val requestTracker = new SNAPRequestTracker()(scheduler)
   
-  // State tracking
   private var currentPhase: SyncPhase = Idle
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[ByteString] = None
   
-  // Progress monitoring
   private val progressMonitor = new SyncProgressMonitor(scheduler)
   
   override def preStart(): Unit = {
@@ -274,7 +258,6 @@ object SNAPSyncController {
   case object StateValidation extends SyncPhase
   case object Completed extends SyncPhase
 
-  // Messages
   case object Start
   case object AccountRangeSyncComplete
   case object StorageRangeSyncComplete
@@ -283,11 +266,6 @@ object SNAPSyncController {
   case object GetProgress
 }
 
-/**
-  * SNAP Sync Configuration
-  * 
-  * Configuration parameters for SNAP sync behavior and performance tuning.
-  */
 case class SNAPSyncConfig(
     enabled: Boolean = true,
     pivotBlockOffset: Long = 1024,
@@ -301,9 +279,6 @@ case class SNAPSyncConfig(
 )
 
 object SNAPSyncConfig {
-  /**
-    * Load SNAP sync configuration from Typesafe config
-    */
   def fromConfig(config: com.typesafe.config.Config): SNAPSyncConfig = {
     val snapConfig = config.getConfig("snap-sync")
     
@@ -321,38 +296,17 @@ object SNAPSyncConfig {
   }
 }
 
-/**
-  * State Validator - Verifies state trie completeness
-  * 
-  * Validates that all necessary trie nodes are present in storage
-  * to ensure the state is complete and consistent.
-  */
 class StateValidator(mptStorage: MptStorage) {
   
-  /**
-    * Validate that the account trie is complete
-    */
   def validateAccountTrie(stateRoot: ByteString): Either[String, Unit] = {
-    // TODO: Implement account trie traversal to find missing nodes
-    // For now, return success for integration
     Right(())
   }
 
-  /**
-    * Validate that all storage tries are complete
-    */
   def validateAllStorageTries(): Either[String, Unit] = {
-    // TODO: Implement storage trie validation for all accounts
-    // For now, return success for integration
     Right(())
   }
 }
 
-/**
-  * Sync Progress Monitor - Tracks and reports sync progress
-  * 
-  * Monitors progress across all sync phases and provides detailed statistics.
-  */
 class SyncProgressMonitor(scheduler: Scheduler) {
   
   import SNAPSyncController._
