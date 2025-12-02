@@ -90,7 +90,9 @@ fukuii.network {
   discovery {
     discovery-enabled = true
     reuse-known-nodes = true
-    scan-interval = 1.minutes
+    scan-interval = 2.minutes        # Reduced network overhead
+    request-timeout = 3.seconds      # More tolerant of latency
+    kademlia-timeout = 10.seconds    # More time for responses
     kademlia-bucket-size = 16
   }
   
@@ -98,14 +100,26 @@ fukuii.network {
     min-outgoing-peers = 20
     max-outgoing-peers = 50
     max-incoming-peers = 30
-    connect-retry-delay = 5.seconds
-    connect-max-retries = 1
+    connect-retry-delay = 15.seconds  # Reduced connection churn
+    connect-max-retries = 2           # Fail faster, try new peers
+    wait-for-handshake-timeout = 10.seconds  # More tolerant of latency
+    wait-for-tcp-ack-timeout = 15.seconds    # Prevent premature failures
+    update-nodes-interval = 60.seconds       # Reduced reconnection attempts
+    short-blacklist-duration = 3.minutes     # Faster retry for TooManyPeers
+    long-blacklist-duration = 60.minutes     # Reasonable recovery time
   }
   
   known-nodes {
     persist-interval = 20.seconds
     max-persisted-nodes = 200
   }
+}
+
+fukuii.sync {
+  peers-scan-interval = 5.seconds        # Reduced overhead
+  blacklist-duration = 120.seconds       # Faster retry for transient issues
+  critical-blacklist-duration = 60.minutes  # Still a penalty but allows recovery
+  peer-response-timeout = 45.seconds     # More tolerant of peer load
 }
 ```
 
@@ -347,11 +361,13 @@ Ensure you're running the correct network:
 
 **C. Increase timeouts (if network latency is high)**
 
-In your configuration:
+In your configuration (values shown are examples of increased timeouts):
 ```hocon
 fukuii.network.peer {
-  wait-for-hello-timeout = 5.seconds  # default: 3
-  wait-for-status-timeout = 45.seconds  # default: 30
+  wait-for-hello-timeout = 10.seconds     # increase from default 5s
+  wait-for-status-timeout = 45.seconds    # increase from default 30s
+  wait-for-handshake-timeout = 15.seconds # increase from default 10s
+  wait-for-tcp-ack-timeout = 20.seconds   # increase from default 15s
 }
 ```
 
@@ -453,16 +469,16 @@ For specialized network environments:
 
 ```hocon
 fukuii.network.discovery {
-  # Increase scan frequency for faster peer discovery
-  scan-interval = 30.seconds  # default: 1.minute
+  # Increase scan frequency for faster peer discovery (not recommended for production)
+  scan-interval = 1.minute  # default: 2.minutes
   
   # Adjust Kademlia parameters
   kademlia-bucket-size = 20  # default: 16
   kademlia-alpha = 5  # default: 3 (higher = more aggressive discovery)
   
   # Adjust timeouts for high-latency networks
-  request-timeout = 2.seconds  # default: 1.second
-  kademlia-timeout = 4.seconds  # default: 2.seconds
+  request-timeout = 5.seconds  # default: 3.seconds
+  kademlia-timeout = 15.seconds  # default: 10.seconds
 }
 ```
 
@@ -564,6 +580,6 @@ Example Prometheus alert:
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: 2025-11-02  
+**Document Version**: 1.1  
+**Last Updated**: 2025-12-01  
 **Maintainer**: Chippr Robotics LLC
