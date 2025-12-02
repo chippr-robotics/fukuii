@@ -19,7 +19,8 @@ case class TuiState(
     bestBlock: Long = 0,
     syncStatus: String = "Starting...",
     startTime: Instant = Instant.now(),
-    nodeSettings: NodeSettings = NodeSettings()
+    nodeSettings: NodeSettings = NodeSettings(),
+    snapSyncState: Option[SnapSyncState] = None
 ):
 
   import TuiState.MinUptimeForEstimationSeconds
@@ -68,6 +69,8 @@ case class TuiState(
   def withBlockInfo(current: Long, best: Long): TuiState = copy(currentBlock = current, bestBlock = best)
   def withSyncStatus(status: String): TuiState = copy(syncStatus = status)
   def withNodeSettings(settings: NodeSettings): TuiState = copy(nodeSettings = settings)
+  def withSnapSyncState(state: SnapSyncState): TuiState = copy(snapSyncState = Some(state))
+  def clearSnapSyncState(): TuiState = copy(snapSyncState = None)
 
 /** Node settings displayed in the TUI. */
 case class NodeSettings(
@@ -80,6 +83,60 @@ case class NodeSettings(
     rpcPort: Int = 0,
     miningEnabled: Boolean = false
 )
+
+/** SNAP sync state displayed in the TUI. */
+case class SnapSyncState(
+    phase: String = "Idle",
+    accountsSynced: Long = 0,
+    bytecodesDownloaded: Long = 0,
+    storageSlotsSynced: Long = 0,
+    nodesHealed: Long = 0,
+    elapsedSeconds: Double = 0,
+    accountsPerSec: Double = 0,
+    bytecodesPerSec: Double = 0,
+    slotsPerSec: Double = 0,
+    nodesPerSec: Double = 0,
+    recentAccountsPerSec: Double = 0,
+    recentBytecodesPerSec: Double = 0,
+    recentSlotsPerSec: Double = 0,
+    recentNodesPerSec: Double = 0,
+    phaseProgress: Int = 0,
+    estimatedTotalAccounts: Long = 0,
+    estimatedTotalBytecodes: Long = 0,
+    estimatedTotalSlots: Long = 0,
+    etaSeconds: Option[Long] = None
+):
+  /** Calculate overall progress across all phases (rough estimate). */
+  def overallProgress: Double =
+    phase match
+      case "AccountRangeSync" if estimatedTotalAccounts > 0 =>
+        (accountsSynced.toDouble / estimatedTotalAccounts * 25.0) // 25% of total
+      case "ByteCodeSync" if estimatedTotalBytecodes > 0 =>
+        25.0 + (bytecodesDownloaded.toDouble / estimatedTotalBytecodes * 15.0) // 15% of total
+      case "StorageRangeSync" if estimatedTotalSlots > 0 =>
+        40.0 + (storageSlotsSynced.toDouble / estimatedTotalSlots * 40.0) // 40% of total
+      case "StateHealing" => 80.0 // Healing is variable but assume 80-95%
+      case "StateValidation" => 95.0
+      case "Completed" => 100.0
+      case _ => 0.0
+
+  /** Get formatted phase description. */
+  def phaseDescription: String = phase match
+    case "AccountRangeSync" => "📦 Downloading accounts"
+    case "ByteCodeSync" => "💾 Downloading bytecodes"
+    case "StorageRangeSync" => "🗄️  Downloading storage"
+    case "StateHealing" => "🔧 Healing trie nodes"
+    case "StateValidation" => "✓ Validating state"
+    case "Completed" => "✅ SNAP sync complete"
+    case _ => "⏸️  Idle"
+
+  /** Get primary metric for current phase. */
+  def primaryMetric: (String, Long, Double) = phase match
+    case "AccountRangeSync" => ("Accounts", accountsSynced, recentAccountsPerSec)
+    case "ByteCodeSync" => ("Bytecodes", bytecodesDownloaded, recentBytecodesPerSec)
+    case "StorageRangeSync" => ("Slots", storageSlotsSynced, recentSlotsPerSec)
+    case "StateHealing" => ("Nodes", nodesHealed, recentNodesPerSec)
+    case _ => ("Items", 0L, 0.0)
 
 object TuiState:
   /** Minimum uptime in seconds before sync estimates are provided.
