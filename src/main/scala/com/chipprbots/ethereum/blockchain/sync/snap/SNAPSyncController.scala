@@ -114,7 +114,7 @@ class SNAPSyncController(
       log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
       
       val taskId = s"account_range_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
       
       accountRangeDownloader.foreach { downloader =>
         downloader.handleResponse(msg) match {
@@ -169,7 +169,7 @@ class SNAPSyncController(
       log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
       
       val taskId = s"bytecode_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
       
       bytecodeDownloader.foreach { downloader =>
         downloader.handleResponse(msg) match {
@@ -220,7 +220,7 @@ class SNAPSyncController(
       log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
       
       val taskId = s"storage_range_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
       
       storageRangeDownloader.foreach { downloader =>
         downloader.handleResponse(msg) match {
@@ -271,7 +271,7 @@ class SNAPSyncController(
       log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
       
       val taskId = s"trie_nodes_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id).getOrElse("unknown")
+      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
       
       trieNodeHealer.foreach { healer =>
         healer.handleResponse(msg) match {
