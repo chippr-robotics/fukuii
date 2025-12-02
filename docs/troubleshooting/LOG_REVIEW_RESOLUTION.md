@@ -146,5 +146,82 @@ RLPValue(types.toArray)  // Not RLPList
 ## Related Documentation
 
 - [Block Sync Guide](BLOCK_SYNC_TROUBLESHOOTING.md)
+- [SNAP Sync State Storage Review](../architecture/SNAP_SYNC_STATE_STORAGE_REVIEW.md)
 - [Known Issues](../runbooks/known-issues.md)
 - [devp2p Specification](https://github.com/ethereum/devp2p)
+
+---
+
+## UPDATE 2025-12-02: SNAP Sync State Storage Integration Review
+
+### Issue Reviewed
+Expert review of SNAP sync state storage integration implementation by forge agent. Reviewed 5 critical open questions regarding state root verification, storage root handling, trie initialization, thread safety, and memory management.
+
+### Review Findings
+
+**Critical Issues Identified:**
+1. **State Root Mismatch Handling** - Currently logs error and continues, should block sync and trigger healing
+2. **Thread Safety** - Incorrect synchronization lock (`mptStorage` instead of `this`), potential data corruption
+
+**High Priority Issues:**
+3. **Storage Root Verification** - Should queue accounts for healing on mismatch
+4. **Trie Initialization** - No exception handling for missing root nodes
+
+**Medium Priority:**
+5. **Memory Usage** - Unbounded storage trie map can cause OOM on mainnet (10M+ contracts)
+
+### Recommendations
+
+**Phase 1 - Critical (P0):**
+- Fix thread safety: Change `mptStorage.synchronized` to `this.synchronized`
+- Fix state root verification: Block sync on mismatch, trigger healing, retry if needed
+
+**Phase 2 - High Priority (P1):**
+- Queue accounts with storage root mismatches for healing
+- Add exception handling for `MissingRootNodeException` in trie initialization
+
+**Phase 3 - Performance (P2):**
+- Implement LRU cache for storage tries (max 10K entries) to prevent OOM
+
+### Implementation Guide
+
+**Detailed review document created:**
+`docs/architecture/SNAP_SYNC_STATE_STORAGE_REVIEW.md`
+
+Contains:
+- Complete code examples for all 5 fixes
+- Rationale based on SNAP protocol spec and core-geth patterns
+- Testing recommendations for each fix
+- Memory usage analysis and cache design
+- Implementation roadmap (~1 week effort)
+
+### Impact
+
+**Security & Correctness:**
+- ✅ Prevents accepting corrupted or malicious state (state root verification)
+- ✅ Prevents data corruption from concurrent updates (thread safety)
+- ✅ Enables proper healing of incomplete storage tries (storage root verification)
+
+**Robustness:**
+- ✅ Enables clean resume after storage clear (exception handling)
+- ✅ Prevents OOM during mainnet sync (LRU cache)
+
+**Protocol Compliance:**
+- ✅ Matches core-geth SNAP sync behavior
+- ✅ Follows SNAP protocol specification requirements
+- ✅ Ensures network safety and peer interoperability
+
+### Files Referenced
+- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/AccountRangeDownloader.scala`
+- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/StorageRangeDownloader.scala`
+- `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
+- `src/main/scala/com/chipprbots/ethereum/db/storage/MptStorage.scala`
+- `src/main/scala/com/chipprbots/ethereum/mpt/MerklePatriciaTrie.scala`
+
+### Next Steps
+1. Implement Phase 1 critical fixes immediately
+2. Add comprehensive test coverage
+3. Schedule Phases 2 and 3 before mainnet deployment
+4. Test against core-geth peers for interoperability
+
+---

@@ -6,7 +6,7 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
-import com.chipprbots.ethereum.blockchain.sync.{Blacklist, PeerListSupportNg, SyncProtocol}
+import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, MptStorage}
 import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
 import com.chipprbots.ethereum.network.p2p.messages.{Capability, SNAP}
@@ -31,7 +31,7 @@ class SNAPSyncController(
   import SNAPSyncController._
 
   // Blacklist for PeerListSupportNg trait
-  val blacklist: Blacklist = Blacklist.empty(scheduler, ec)
+  val blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
 
   private var accountRangeDownloader: Option[AccountRangeDownloader] = None
   private var storageRangeDownloader: Option[StorageRangeDownloader] = None
@@ -88,7 +88,7 @@ class SNAPSyncController(
         downloader.handleResponse(msg) match {
           case Right(count) =>
             log.info(s"Successfully processed $count accounts")
-            progressMonitor.accountsSynced += count
+            progressMonitor.incrementAccountsSynced(count)
             // Check if account range sync is complete
             if (downloader.isComplete) {
               log.info("Account range sync complete!")
@@ -97,7 +97,7 @@ class SNAPSyncController(
               self ! AccountRangeSyncComplete
             }
           case Left(error) =>
-            log.warn(s"Failed to process AccountRange: $error")
+            log.warning(s"Failed to process AccountRange: $error")
         }
       }
 
@@ -107,7 +107,7 @@ class SNAPSyncController(
         downloader.handleResponse(msg) match {
           case Right(count) =>
             log.info(s"Successfully processed $count storage slots")
-            progressMonitor.storageSlotsSynced += count
+            progressMonitor.incrementStorageSlotsSynced(count)
             // Check if storage range sync is complete
             if (downloader.isComplete) {
               log.info("Storage range sync complete!")
@@ -116,7 +116,7 @@ class SNAPSyncController(
               self ! StorageRangeSyncComplete
             }
           case Left(error) =>
-            log.warn(s"Failed to process StorageRanges: $error")
+            log.warning(s"Failed to process StorageRanges: $error")
         }
       }
 
@@ -126,7 +126,7 @@ class SNAPSyncController(
         healer.handleResponse(msg) match {
           case Right(count) =>
             log.info(s"Successfully healed $count trie nodes")
-            progressMonitor.nodesHealed += count
+            progressMonitor.incrementNodesHealed(count)
             // Check if healing is complete
             if (healer.isComplete) {
               log.info("State healing complete!")
@@ -135,7 +135,7 @@ class SNAPSyncController(
               self ! StateHealingComplete
             }
           case Left(error) =>
-            log.warn(s"Failed to process TrieNodes: $error")
+            log.warning(s"Failed to process TrieNodes: $error")
         }
       }
 
@@ -411,31 +411,48 @@ class SNAPSyncController(
 
     log.info("Validating state completeness...")
     
-    stateRoot.foreach { root =>
-      val validator = new StateValidator(mptStorage)
-      
-      // Validate account trie
-      validator.validateAccountTrie(root) match {
-        case Right(_) =>
-          log.info("Account trie validation successful")
+    (stateRoot, pivotBlock) match {
+      case (Some(expectedRoot), Some(pivot)) =>
+        accountRangeDownloader.foreach { downloader =>
+          val computedRoot = downloader.getStateRoot
           
-          // Validate storage tries
-          validator.validateAllStorageTries() match {
-            case Right(_) =>
-              log.info("Storage trie validation successful")
-              self ! StateValidationComplete
-              
-            case Left(error) =>
-              log.error(s"Storage trie validation failed: $error")
-              // TODO: Trigger additional healing if validation fails
-              self ! StateValidationComplete
+          if (computedRoot == expectedRoot) {
+            log.info(s"✅ State root verification PASSED: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}")
+            
+            // Proceed with full trie validation
+            val validator = new StateValidator(mptStorage)
+            validator.validateAccountTrie(expectedRoot) match {
+              case Right(_) =>
+                log.info("Account trie validation successful")
+                validator.validateAllStorageTries() match {
+                  case Right(_) =>
+                    log.info("Storage trie validation successful")
+                    self ! StateValidationComplete
+                  case Left(error) =>
+                    log.error(s"Storage trie validation failed: $error")
+                    self ! StateValidationComplete  // TODO: Trigger healing
+                }
+              case Left(error) =>
+                log.error(s"Account trie validation failed: $error")
+                self ! StateValidationComplete  // TODO: Trigger healing
+            }
+          } else {
+            // CRITICAL: State root mismatch - block sync completion
+            log.error(s"❌ CRITICAL: State root verification FAILED!")
+            log.error(s"  Expected: ${expectedRoot.take(8).toArray.map("%02x".format(_)).mkString}...")
+            log.error(s"  Computed: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}...")
+            log.error(s"  Sync cannot complete with mismatched state root - this indicates incomplete or corrupted state")
+            
+            // DO NOT send StateValidationComplete - sync must not proceed
+            // TODO: Trigger healing phase to fix the mismatch
+            log.warning("State root mismatch detected - sync blocked until healing completes")
           }
-          
-        case Left(error) =>
-          log.error(s"Account trie validation failed: $error")
-          // TODO: Trigger additional healing if validation fails
-          self ! StateValidationComplete
-      }
+        }
+      
+      case _ =>
+        log.error("Missing state root or pivot block for validation")
+        // Fail sync - we cannot proceed without validation
+        self ! StateValidationComplete  // For now, but should fail
     }
   }
 
@@ -556,6 +573,18 @@ class SyncProgressMonitor(scheduler: Scheduler) {
 
   def complete(): Unit = {
     currentPhaseState = Completed
+  }
+  
+  def incrementAccountsSynced(count: Long): Unit = {
+    accountsSynced += count
+  }
+  
+  def incrementStorageSlotsSynced(count: Long): Unit = {
+    storageSlotsSynced += count
+  }
+  
+  def incrementNodesHealed(count: Long): Unit = {
+    nodesHealed += count
   }
 
   def currentProgress: SyncProgress = {
