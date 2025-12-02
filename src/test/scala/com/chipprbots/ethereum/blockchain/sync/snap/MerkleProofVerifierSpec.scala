@@ -232,7 +232,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
   }
 
   /** Helper class for test storage */
-  class TestMptStorage extends MptStorage {
+  private class TestMptStorage extends MptStorage {
     private val nodes = mutable.Map[ByteString, MptNode]()
     
     override def get(key: Array[Byte]): MptNode = {
