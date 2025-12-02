@@ -7,8 +7,11 @@ import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
+import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -22,6 +25,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class SyncController(
@@ -134,10 +138,6 @@ class SyncController(
   }
 
   def startSnapSync(): Unit = {
-    import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
-    import com.chipprbots.ethereum.utils.Config
-    import scala.concurrent.ExecutionContext.Implicits.global
-    
     log.info("Starting SNAP sync mode")
     
     val snapSyncConfig = try {
@@ -162,7 +162,7 @@ class SyncController(
       ),
       "snap-sync"
     )
-    snapSync ! SyncProtocol.Start
+    snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
   }
 
