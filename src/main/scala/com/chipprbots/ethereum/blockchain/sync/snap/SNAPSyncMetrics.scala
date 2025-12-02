@@ -230,25 +230,25 @@ object SNAPSyncMetrics extends MetricsContainer {
     // Accounts
     AccountsSyncedGauge.set(progress.accountsSynced)
     AccountsEstimatedTotalGauge.set(progress.estimatedTotalAccounts)
-    AccountsThroughputOverallGauge.set(progress.accountsThroughputOverall)
-    AccountsThroughputRecentGauge.set(progress.accountsThroughputRecent)
+    AccountsThroughputOverallGauge.set(progress.accountsPerSec)
+    AccountsThroughputRecentGauge.set(progress.recentAccountsPerSec)
 
     // ByteCodes
     BytecodesDownloadedGauge.set(progress.bytecodesDownloaded)
     BytecodesEstimatedTotalGauge.set(progress.estimatedTotalBytecodes)
-    BytecodesThroughputOverallGauge.set(progress.bytecodesThroughputOverall)
-    BytecodesThroughputRecentGauge.set(progress.bytecodesThroughputRecent)
+    BytecodesThroughputOverallGauge.set(progress.bytecodesPerSec)
+    BytecodesThroughputRecentGauge.set(progress.recentBytecodesPerSec)
 
     // Storage
     StorageSlotsSyncedGauge.set(progress.storageSlotsSynced)
     StorageSlotsEstimatedTotalGauge.set(progress.estimatedTotalSlots)
-    StorageSlotsThroughputOverallGauge.set(progress.storageSlotsThroughputOverall)
-    StorageSlotsThroughputRecentGauge.set(progress.storageSlotsThroughputRecent)
+    StorageSlotsThroughputOverallGauge.set(progress.slotsPerSec)
+    StorageSlotsThroughputRecentGauge.set(progress.recentSlotsPerSec)
 
     // Healing
     NodesHealedGauge.set(progress.nodesHealed)
-    NodesHealingThroughputOverallGauge.set(progress.nodesHealingThroughputOverall)
-    NodesHealingThroughputRecentGauge.set(progress.nodesHealingThroughputRecent)
+    NodesHealingThroughputOverallGauge.set(progress.nodesPerSec)
+    NodesHealingThroughputRecentGauge.set(progress.recentNodesPerSec)
 
     // Time
     val totalMinutes = (System.currentTimeMillis() - progress.startTime) / 60000.0

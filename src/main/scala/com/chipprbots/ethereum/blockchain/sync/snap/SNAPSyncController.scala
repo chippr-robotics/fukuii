@@ -1312,15 +1312,7 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
       estimatedTotalBytecodes = estimatedTotalBytecodes,
       estimatedTotalSlots = estimatedTotalSlots,
       startTime = startTime,
-      phaseStartTime = phaseStartTime,
-      accountsThroughputOverall = overallAccountsPerSec,
-      accountsThroughputRecent = recentAccountsPerSec,
-      bytecodesThroughputOverall = overallBytecodesPerSec,
-      bytecodesThroughputRecent = recentBytecodesPerSec,
-      storageSlotsThroughputOverall = overallSlotsPerSec,
-      storageSlotsThroughputRecent = recentSlotsPerSec,
-      nodesHealingThroughputOverall = overallNodesPerSec,
-      nodesHealingThroughputRecent = recentNodesPerSec
+      phaseStartTime = phaseStartTime
     )
   }
 }
@@ -1345,17 +1337,8 @@ case class SyncProgress(
     estimatedTotalAccounts: Long,
     estimatedTotalBytecodes: Long,
     estimatedTotalSlots: Long,
-    // Additional fields for metrics
     startTime: Long,
-    phaseStartTime: Long,
-    accountsThroughputOverall: Double,
-    accountsThroughputRecent: Double,
-    bytecodesThroughputOverall: Double,
-    bytecodesThroughputRecent: Double,
-    storageSlotsThroughputOverall: Double,
-    storageSlotsThroughputRecent: Double,
-    nodesHealingThroughputOverall: Double,
-    nodesHealingThroughputRecent: Double
+    phaseStartTime: Long
 ) {
   override def toString: String = {
     s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
