@@ -97,7 +97,7 @@ class SNAPSyncController(
               self ! AccountRangeSyncComplete
             }
           case Left(error) =>
-            log.warn(s"Failed to process AccountRange: $error")
+            log.warning(s"Failed to process AccountRange: $error")
         }
       }
 
@@ -116,7 +116,7 @@ class SNAPSyncController(
               self ! StorageRangeSyncComplete
             }
           case Left(error) =>
-            log.warn(s"Failed to process StorageRanges: $error")
+            log.warning(s"Failed to process StorageRanges: $error")
         }
       }
 
@@ -135,7 +135,7 @@ class SNAPSyncController(
               self ! StateHealingComplete
             }
           case Left(error) =>
-            log.warn(s"Failed to process TrieNodes: $error")
+            log.warning(s"Failed to process TrieNodes: $error")
         }
       }
 
@@ -445,7 +445,7 @@ class SNAPSyncController(
             
             // DO NOT send StateValidationComplete - sync must not proceed
             // TODO: Trigger healing phase to fix the mismatch
-            log.warn("State root mismatch detected - sync blocked until healing completes")
+            log.warning("State root mismatch detected - sync blocked until healing completes")
           }
         }
       
