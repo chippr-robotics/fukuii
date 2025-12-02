@@ -413,49 +413,46 @@ class SNAPSyncController(
     
     (stateRoot, pivotBlock) match {
       case (Some(expectedRoot), Some(pivot)) =>
-        // Get the computed state root from the account range downloader
         accountRangeDownloader.foreach { downloader =>
           val computedRoot = downloader.getStateRoot
           
-          // Verify the state root matches the pivot block's expected state root
           if (computedRoot == expectedRoot) {
-            log.info(s"State root verification PASSED: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}")
+            log.info(s"✅ State root verification PASSED: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}")
+            
+            // Proceed with full trie validation
+            val validator = new StateValidator(mptStorage)
+            validator.validateAccountTrie(expectedRoot) match {
+              case Right(_) =>
+                log.info("Account trie validation successful")
+                validator.validateAllStorageTries() match {
+                  case Right(_) =>
+                    log.info("Storage trie validation successful")
+                    self ! StateValidationComplete
+                  case Left(error) =>
+                    log.error(s"Storage trie validation failed: $error")
+                    self ! StateValidationComplete  // TODO: Trigger healing
+                }
+              case Left(error) =>
+                log.error(s"Account trie validation failed: $error")
+                self ! StateValidationComplete  // TODO: Trigger healing
+            }
           } else {
-            log.error(s"State root verification FAILED!")
+            // CRITICAL: State root mismatch - block sync completion
+            log.error(s"❌ CRITICAL: State root verification FAILED!")
             log.error(s"  Expected: ${expectedRoot.take(8).toArray.map("%02x".format(_)).mkString}...")
             log.error(s"  Computed: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}...")
-            // Continue anyway for now - in production this should trigger re-sync or healing
+            log.error(s"  Sync cannot complete with mismatched state root - this indicates incomplete or corrupted state")
+            
+            // DO NOT send StateValidationComplete - sync must not proceed
+            // TODO: Trigger healing phase to fix the mismatch
+            log.warn("State root mismatch detected - sync blocked until healing completes")
           }
-        }
-        
-        val validator = new StateValidator(mptStorage)
-        
-        // Validate account trie
-        validator.validateAccountTrie(expectedRoot) match {
-          case Right(_) =>
-            log.info("Account trie validation successful")
-            
-            // Validate storage tries
-            validator.validateAllStorageTries() match {
-              case Right(_) =>
-                log.info("Storage trie validation successful")
-                self ! StateValidationComplete
-                
-              case Left(error) =>
-                log.error(s"Storage trie validation failed: $error")
-                // TODO: Trigger additional healing if validation fails
-                self ! StateValidationComplete
-            }
-            
-          case Left(error) =>
-            log.error(s"Account trie validation failed: $error")
-            // TODO: Trigger additional healing if validation fails
-            self ! StateValidationComplete
         }
       
       case _ =>
-        log.warn("Missing state root or pivot block for validation")
-        self ! StateValidationComplete
+        log.error("Missing state root or pivot block for validation")
+        // Fail sync - we cannot proceed without validation
+        self ! StateValidationComplete  // For now, but should fail
     }
   }
 

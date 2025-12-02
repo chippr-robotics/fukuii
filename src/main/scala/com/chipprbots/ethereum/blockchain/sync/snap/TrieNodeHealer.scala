@@ -188,6 +188,9 @@ class TrieNodeHealer(
       }
 
       // Store node in MptStorage
+      // TODO: Properly integrate healed node into state/storage tries
+      // Currently stores as individual node - should rebuild trie path
+      // This requires coordination with AccountRangeDownloader/StorageRangeDownloader
       storeTrieNode(nodeData, nodeHash)
 
       log.debug(s"Stored healed trie node: hash=${nodeHash.take(4).toHex}, size=${nodeData.length} bytes")

@@ -46,7 +46,8 @@ class AccountRangeDownloader(
   /** State trie for storing accounts - initialized with existing state root or new trie */
   private var stateTrie: MerklePatriciaTrie[ByteString, Account] = {
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
-    import com.chipprbots.ethereum.mpt.byteStringSerializer
+    import com.chipprbots.ethereum.mpt.{byteStringSerializer, MerklePatriciaTrie}
+    import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
     
     // Create ByteArraySerializable for Account using the existing RLP encoding
     implicit val accountSerializer: ByteArraySerializable[Account] = new ByteArraySerializable[Account] {
@@ -56,9 +57,17 @@ class AccountRangeDownloader(
     
     // Initialize trie with the state root if it exists, otherwise create empty trie
     if (stateRoot.isEmpty || stateRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+      log.info("Initializing new empty state trie")
       MerklePatriciaTrie[ByteString, Account](mptStorage)
     } else {
-      MerklePatriciaTrie[ByteString, Account](stateRoot.toArray, mptStorage)
+      try {
+        log.info(s"Loading existing state trie with root ${stateRoot.take(8).toArray.map("%02x".format(_)).mkString}...")
+        MerklePatriciaTrie[ByteString, Account](stateRoot.toArray, mptStorage)
+      } catch {
+        case e: MissingRootNodeException =>
+          log.warn(s"State root not found in storage, creating new trie")
+          MerklePatriciaTrie[ByteString, Account](mptStorage)
+      }
     }
   }
 
@@ -237,25 +246,31 @@ class AccountRangeDownloader(
         override def fromBytes(bytes: Array[Byte]): Account = bytes.toAccount
       }
       
-      // Synchronize on storage to ensure thread-safety for concurrent writes
-      mptStorage.synchronized {
+      // Synchronize on this instance to protect stateTrie variable
+      this.synchronized {
         if (accounts.nonEmpty) {
-          // Insert each account into the state trie
+          // Build new trie by folding over accounts
+          var currentTrie = stateTrie
           accounts.foreach { case (accountHash, account) =>
             log.debug(s"Storing account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} " +
               s"(balance: ${account.balance}, nonce: ${account.nonce}, " +
               s"storageRoot: ${account.storageRoot.take(4).toArray.map("%02x".format(_)).mkString}, " +
               s"codeHash: ${account.codeHash.take(4).toArray.map("%02x".format(_)).mkString})")
             
-            // Insert account into trie - the trie will automatically update the MPT structure
-            stateTrie = stateTrie.put(accountHash, account)
+            // Create new trie version - MPT is immutable
+            currentTrie = currentTrie.put(accountHash, account)
           }
+          
+          // Update stateTrie atomically within synchronized block
+          stateTrie = currentTrie
           
           log.info(s"Inserted ${accounts.size} accounts into state trie")
         }
         
-        // Persist all changes to disk
-        mptStorage.persist()
+        // Persist after updating - synchronize on storage for this operation
+        mptStorage.synchronized {
+          mptStorage.persist()
+        }
         
         log.info(s"Successfully persisted ${accounts.size} accounts to storage")
         Right(())

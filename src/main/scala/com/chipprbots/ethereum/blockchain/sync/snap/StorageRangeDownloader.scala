@@ -15,6 +15,29 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, ByteArraySerializable}
 
+/** LRU cache for storage tries to limit memory usage */
+private class StorageTrieCache(maxSize: Int = 10000) {
+  private val cache = scala.collection.mutable.LinkedHashMap[ByteString, MerklePatriciaTrie[ByteString, ByteString]]()
+  
+  def get(key: ByteString): Option[MerklePatriciaTrie[ByteString, ByteString]] = {
+    cache.get(key).map { trie =>
+      cache.remove(key)
+      cache.put(key, trie)
+      trie
+    }
+  }
+  
+  def put(key: ByteString, trie: MerklePatriciaTrie[ByteString, ByteString]): Unit = {
+    cache.remove(key)
+    if (cache.size >= maxSize) {
+      cache.remove(cache.head._1)
+    }
+    cache.put(key, trie)
+  }
+  
+  def size: Int = cache.size
+}
+
 /** Storage Range Downloader for SNAP sync
   *
   * Downloads storage ranges for contract accounts in parallel, verifies storage proofs,
@@ -67,8 +90,8 @@ class StorageRangeDownloader(
   /** Merkle proof verifier (created lazily per account) */
   private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
 
-  /** Per-account storage tries - maps accountHash to its storage trie */
-  private val storageTries = mutable.Map[ByteString, MerklePatriciaTrie[ByteString, ByteString]]()
+  /** Per-account storage tries - LRU cache to limit memory usage */
+  private val storageTrieCache = new StorageTrieCache(10000)
 
   /** Add storage tasks to the download queue
     *
@@ -309,10 +332,11 @@ class StorageRangeDownloader(
       slots: Seq[(ByteString, ByteString)]
   ): Either[String, Unit] = {
     try {
-      import com.chipprbots.ethereum.mpt.byteStringSerializer
+      import com.chipprbots.ethereum.mpt.{byteStringSerializer, MerklePatriciaTrie}
+      import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
       
-      // Synchronize on storage to ensure thread-safety for concurrent writes
-      mptStorage.synchronized {
+      // Synchronize on this instance to protect storageTrieCache
+      this.synchronized {
         if (slots.nonEmpty) {
           // Get the storage task for this account to obtain storage root
           val storageTask = tasks.find(_.accountHash == accountHash)
@@ -323,43 +347,52 @@ class StorageRangeDownloader(
               return Left(s"No storage task found for account")
             }
           
-          // Get or create storage trie for this account
-          val storageTrie = storageTries.getOrElseUpdate(accountHash, {
+          // Get or create storage trie with exception handling
+          val storageTrie = storageTrieCache.get(accountHash).getOrElse {
             val storageRoot = storageTask.storageRoot
-            if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+            val newTrie = if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+              log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
               MerklePatriciaTrie[ByteString, ByteString](mptStorage)
             } else {
-              MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
+              try {
+                log.debug(s"Loading storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+                MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
+              } catch {
+                case e: MissingRootNodeException =>
+                  log.warn(s"Storage root not found for account, creating new trie")
+                  MerklePatriciaTrie[ByteString, ByteString](mptStorage)
+              }
             }
-          })
+            newTrie
+          }
           
-          // Insert each slot into the storage trie
+          // Insert slots
           var currentTrie = storageTrie
           slots.foreach { case (slotHash, slotValue) =>
             log.debug(s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
               s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
             
-            // Insert slot into trie - the trie will automatically update the MPT structure
             currentTrie = currentTrie.put(slotHash, slotValue)
           }
           
-          // Update the storage trie map with the new trie
-          storageTries(accountHash) = currentTrie
+          // Update cache
+          storageTrieCache.put(accountHash, currentTrie)
           
-          log.info(s"Inserted ${slots.size} storage slots into trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+          log.info(s"Inserted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} (cache size: ${storageTrieCache.size})")
           
-          // Verify the resulting trie root matches the account's storage root (optional validation)
+          // Verify storage root
           val computedRoot = ByteString(currentTrie.getRootHash)
           val expectedRoot = storageTask.storageRoot
           if (computedRoot != expectedRoot) {
-            log.warn(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
-              s"computed=${computedRoot.take(4).toArray.map("%02x".format(_)).mkString}, " +
-              s"expected=${expectedRoot.take(4).toArray.map("%02x".format(_)).mkString}")
+            log.warn(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+            // TODO: Queue for healing in future enhancement
           }
         }
         
-        // Persist all changes to disk
-        mptStorage.persist()
+        // Persist with separate lock
+        mptStorage.synchronized {
+          mptStorage.persist()
+        }
         
         log.info(s"Successfully persisted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
         Right(())
