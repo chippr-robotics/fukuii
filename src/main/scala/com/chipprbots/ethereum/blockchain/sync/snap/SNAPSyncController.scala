@@ -125,9 +125,8 @@ class SNAPSyncController(
     blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
       case Some(header) =>
         stateRoot = Some(header.stateRoot)
-        // TODO: Add AppStateStorage methods for SNAP sync state tracking
-        // appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
-        // appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+        appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
+        appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
         
         log.info(s"SNAP sync pivot block: $pivotBlockNumber, state root: ${header.stateRoot.toHex}")
         
@@ -251,8 +250,7 @@ class SNAPSyncController(
 
   private def completeSnapSync(): Unit = {
     pivotBlock.foreach { pivot =>
-      // TODO: Add AppStateStorage method for SNAP sync completion tracking
-      // appStateStorage.putSnapSyncDone(true).commit()
+      appStateStorage.snapSyncDone().commit()
       appStateStorage.putBestBlockNumber(pivot).commit()
       
       progressMonitor.complete()

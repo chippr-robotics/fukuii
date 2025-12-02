@@ -101,6 +101,52 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putBootstrapPivotBlock(number: BigInt, hash: ByteString): DataSourceBatchUpdate =
     put(Keys.BootstrapPivotBlock, number.toString)
       .and(put(Keys.BootstrapPivotBlockHash, Hex.toHexString(hash.toArray)))
+
+  /** Check if SNAP sync has completed
+    * @return
+    *   true if SNAP sync is done, false otherwise
+    */
+  def isSnapSyncDone(): Boolean =
+    get(Keys.SnapSyncDone).exists(_.toBoolean)
+
+  /** Mark SNAP sync as completed
+    * @return
+    *   DataSourceBatchUpdate for committing
+    */
+  def snapSyncDone(): DataSourceBatchUpdate =
+    put(Keys.SnapSyncDone, true.toString)
+
+  /** Get the SNAP sync pivot block number
+    * @return
+    *   SNAP sync pivot block number, or None if not set
+    */
+  def getSnapSyncPivotBlock(): Option[BigInt] =
+    get(Keys.SnapSyncPivotBlock).map(BigInt(_))
+
+  /** Store the SNAP sync pivot block number
+    * @param pivotBlock
+    *   The block number to use as the pivot for SNAP sync
+    * @return
+    *   DataSourceBatchUpdate for committing
+    */
+  def putSnapSyncPivotBlock(pivotBlock: BigInt): DataSourceBatchUpdate =
+    put(Keys.SnapSyncPivotBlock, pivotBlock.toString)
+
+  /** Get the SNAP sync state root hash
+    * @return
+    *   SNAP sync state root hash, or None if not set
+    */
+  def getSnapSyncStateRoot(): Option[ByteString] =
+    get(Keys.SnapSyncStateRoot).map(v => ByteString(Hex.decode(v)))
+
+  /** Store the SNAP sync state root hash
+    * @param stateRoot
+    *   The state root hash for SNAP sync
+    * @return
+    *   DataSourceBatchUpdate for committing
+    */
+  def putSnapSyncStateRoot(stateRoot: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
 }
 
 object AppStateStorage {
@@ -116,6 +162,9 @@ object AppStateStorage {
     val LatestCheckpointBlockNumber = "LatestCheckpointBlockNumber"
     val BootstrapPivotBlock = "BootstrapPivotBlock"
     val BootstrapPivotBlockHash = "BootstrapPivotBlockHash"
+    val SnapSyncDone = "SnapSyncDone"
+    val SnapSyncPivotBlock = "SnapSyncPivotBlock"
+    val SnapSyncStateRoot = "SnapSyncStateRoot"
   }
 
 }
