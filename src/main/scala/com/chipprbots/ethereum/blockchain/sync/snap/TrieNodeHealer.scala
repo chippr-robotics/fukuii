@@ -7,7 +7,6 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.network.EtcPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps

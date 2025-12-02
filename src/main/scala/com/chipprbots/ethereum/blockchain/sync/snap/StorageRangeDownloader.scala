@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.utils.Logger
-import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, ByteArraySerializable}
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 
 /** LRU cache for storage tries to limit memory usage
   * 
@@ -85,7 +85,7 @@ class StorageRangeDownloader(
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     maxAccountsPerBatch: Int = 8
-)(implicit scheduler: Scheduler) extends Logger {
+) extends Logger {
 
   import StorageRangeDownloader._
 
@@ -358,53 +358,59 @@ class StorageRangeDownloader(
       this.synchronized {
         if (slots.nonEmpty) {
           // Get the storage task for this account to obtain storage root
-          val storageTask = tasks.find(_.accountHash == accountHash)
+          val storageTaskOpt = tasks.find(_.accountHash == accountHash)
             .orElse(activeTasks.values.flatten.find(_.accountHash == accountHash))
             .orElse(completedTasks.find(_.accountHash == accountHash))
-            .getOrElse {
+          
+          storageTaskOpt match {
+            case None =>
               log.warn(s"No storage task found for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-              return Left(s"No storage task found for account")
-            }
-          
-          // Get or create storage trie with exception handling
-          val storageTrie = storageTrieCache.getOrElseUpdate(accountHash, {
-            val storageRoot = storageTask.storageRoot
-            if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
-              log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-              MerklePatriciaTrie[ByteString, ByteString](mptStorage)
-            } else {
-              try {
-                log.debug(s"Loading storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-                MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
-              } catch {
-                case e: MissingRootNodeException =>
-                  log.warn(s"Storage root not found for account, creating new trie")
+              Left(s"No storage task found for account")
+            case Some(storageTask) =>
+              // Get or create storage trie with exception handling
+              val storageTrie = storageTrieCache.getOrElseUpdate(accountHash, {
+                val storageRoot = storageTask.storageRoot
+                if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+                  log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
                   MerklePatriciaTrie[ByteString, ByteString](mptStorage)
+                } else {
+                  try {
+                    log.debug(s"Loading storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+                    MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
+                  } catch {
+                    case e: MissingRootNodeException =>
+                      log.warn(s"Storage root not found for account, creating new trie")
+                      MerklePatriciaTrie[ByteString, ByteString](mptStorage)
+                  }
+                }
+              })
+              
+              // Insert slots
+              var currentTrie = storageTrie
+              slots.foreach { case (slotHash, slotValue) =>
+                log.debug(s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
+                  s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+                
+                currentTrie = currentTrie.put(slotHash, slotValue)
               }
-            }
-          })
-          
-          // Insert slots
-          var currentTrie = storageTrie
-          slots.foreach { case (slotHash, slotValue) =>
-            log.debug(s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
-              s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-            
-            currentTrie = currentTrie.put(slotHash, slotValue)
+              
+              // Update cache
+              storageTrieCache.put(accountHash, currentTrie)
+              
+              log.info(s"Inserted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} (cache size: ${storageTrieCache.size})")
+              
+              // Verify storage root
+              val computedRoot = ByteString(currentTrie.getRootHash)
+              val expectedRoot = storageTask.storageRoot
+              if (computedRoot != expectedRoot) {
+                log.warn(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+                // TODO: Queue for healing in future enhancement
+              }
+              
+              Right(())
           }
-          
-          // Update cache
-          storageTrieCache.put(accountHash, currentTrie)
-          
-          log.info(s"Inserted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} (cache size: ${storageTrieCache.size})")
-          
-          // Verify storage root
-          val computedRoot = ByteString(currentTrie.getRootHash)
-          val expectedRoot = storageTask.storageRoot
-          if (computedRoot != expectedRoot) {
-            log.warn(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-            // TODO: Queue for healing in future enhancement
-          }
+        } else {
+          Right(())
         }
       }
       

@@ -18,7 +18,6 @@ import org.scalamock.handlers.CallHandler6
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.FullMiningConfig
 import com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder
@@ -30,7 +29,6 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthMiningService
-import com.chipprbots.ethereum.jsonrpc.EthMiningService.SubmitHashRateResponse
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder

@@ -29,11 +29,6 @@ import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator._
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.BlockchainImpl
-import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.domain.SignedTransaction
-import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthMiningService
 import com.chipprbots.ethereum.jsonrpc.EthMiningService.SubmitHashRateResponse
