@@ -11,6 +11,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[Configuration Tool](../tools/fukuii-configurator.html)** - Interactive web-based configuration generator (open in browser)
 - **[Security](security.md)** - Node security, firewall configuration, and security best practices
 - **[TLS Operations](tls-operations.md)** - TLS/HTTPS configuration for secure JSON-RPC connections
+- **[Checkpoint Service](checkpoint-service.md)** - Running and using the checkpoint update service for production
 
 ### Operations
 - **[Peering](peering.md)** - Peer discovery, network connectivity, and peering troubleshooting
