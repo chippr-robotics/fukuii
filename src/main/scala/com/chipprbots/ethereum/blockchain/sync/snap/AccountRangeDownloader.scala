@@ -37,6 +37,9 @@ class AccountRangeDownloader(
   private var bytesDownloaded: Long = 0
   private val startTime = System.currentTimeMillis()
 
+  /** Contract accounts (accountHash, codeHash) for bytecode download */
+  private val contractAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
+
   /** Maximum response size in bytes (512 KB like core-geth) */
   private val maxResponseSize: BigInt = 512 * 1024
 
@@ -171,6 +174,9 @@ class AccountRangeDownloader(
       case Right(_) =>
         log.debug(s"Merkle proof verified successfully for ${accountCount} accounts")
     }
+    
+    // Identify contract accounts (those with non-empty code hash)
+    identifyContractAccounts(response.accounts)
     
     // Store accounts to database
     storeAccounts(response.accounts) match {
@@ -312,6 +318,45 @@ class AccountRangeDownloader(
     */
   def getStateRoot: ByteString = synchronized {
     ByteString(stateTrie.getRootHash)
+  }
+
+  /** Identify contract accounts (those with non-empty code hash)
+    *
+    * Contract accounts are identified by codeHash != Account.EmptyCodeHash.
+    * These accounts need their bytecode downloaded separately.
+    *
+    * @param accounts Accounts to scan for contracts
+    */
+  private def identifyContractAccounts(accounts: Seq[(ByteString, Account)]): Unit = synchronized {
+    val contracts = accounts.collect {
+      case (accountHash, account) if account.codeHash != Account.EmptyCodeHash =>
+        (accountHash, account.codeHash)
+    }
+    
+    if (contracts.nonEmpty) {
+      contractAccounts.appendAll(contracts)
+      log.info(s"Identified ${contracts.size} contract accounts (total: ${contractAccounts.size})")
+    }
+  }
+
+  /** Get all collected contract accounts for bytecode download
+    *
+    * Returns the list of (accountHash, codeHash) pairs for contract accounts
+    * discovered during account range sync. This list should be used to queue
+    * bytecode download tasks.
+    *
+    * @return Sequence of (accountHash, codeHash) for contract accounts
+    */
+  def getContractAccounts: Seq[(ByteString, ByteString)] = synchronized {
+    contractAccounts.toSeq
+  }
+
+  /** Get count of contract accounts discovered
+    *
+    * @return Number of contract accounts
+    */
+  def getContractAccountCount: Int = synchronized {
+    contractAccounts.size
   }
 }
 

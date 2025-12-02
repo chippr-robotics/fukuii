@@ -558,7 +558,7 @@ We have specialized agents with different areas of expertise:
 - **herald 🧭**: Fixes network protocol and peer communication issues
 - **Morgoth 🎯**: Shepherds all agents with process discipline and quality verification
 
-See [Agent Labels](.github/AGENT_LABELS.md) for detailed descriptions and [Agent Definitions](.github/agents/) for full agent instructions.
+See [Agent Labels](../../.github/AGENT_LABELS.md) for detailed descriptions and [Agent Definitions](../../.github/agents/) for full agent instructions.
 
 ### Core Principles (Guided by Morgoth)
 
