@@ -348,9 +348,9 @@ class StorageRangeDownloader(
             }
           
           // Get or create storage trie with exception handling
-          val storageTrie = storageTrieCache.get(accountHash).getOrElse {
+          val storageTrie = storageTrieCache.getOrElseUpdate(accountHash, {
             val storageRoot = storageTask.storageRoot
-            val newTrie = if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+            if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
               log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
               MerklePatriciaTrie[ByteString, ByteString](mptStorage)
             } else {
@@ -363,8 +363,7 @@ class StorageRangeDownloader(
                   MerklePatriciaTrie[ByteString, ByteString](mptStorage)
               }
             }
-            newTrie
-          }
+          })
           
           // Insert slots
           var currentTrie = storageTrie
@@ -388,15 +387,15 @@ class StorageRangeDownloader(
             // TODO: Queue for healing in future enhancement
           }
         }
-        
-        // Persist with separate lock
-        mptStorage.synchronized {
-          mptStorage.persist()
-        }
-        
-        log.info(s"Successfully persisted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-        Right(())
       }
+      
+      // Persist after releasing this.synchronized to avoid nested locks
+      mptStorage.synchronized {
+        mptStorage.persist()
+      }
+      
+      log.info(s"Successfully persisted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+      Right(())
     } catch {
       case e: Exception =>
         log.error(s"Failed to store storage slots: ${e.getMessage}", e)

@@ -266,15 +266,15 @@ class AccountRangeDownloader(
           
           log.info(s"Inserted ${accounts.size} accounts into state trie")
         }
-        
-        // Persist after updating - synchronize on storage for this operation
-        mptStorage.synchronized {
-          mptStorage.persist()
-        }
-        
-        log.info(s"Successfully persisted ${accounts.size} accounts to storage")
-        Right(())
       }
+      
+      // Persist after releasing this.synchronized to avoid nested locks
+      mptStorage.synchronized {
+        mptStorage.persist()
+      }
+      
+      log.info(s"Successfully persisted ${accounts.size} accounts to storage")
+      Right(())
     } catch {
       case e: Exception =>
         log.error(s"Failed to store accounts: ${e.getMessage}", e)
