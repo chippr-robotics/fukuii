@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import java.net.InetSocketAddress
 
-import org.apache.pekko.actor.{ActorRef, ActorSystem}
+
+import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.ByteString
 
@@ -10,14 +10,12 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
-import scala.collection.mutable
 
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.network.{Peer, PeerId}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 
 class TrieNodeHealerSpec
     extends TestKit(ActorSystem("TrieNodeHealerSpec"))
@@ -31,14 +29,6 @@ class TrieNodeHealerSpec
 
   implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
 
-  def createTestPeer(id: String, ref: ActorRef): Peer = {
-    Peer(
-      id = PeerId(id),
-      remoteAddress = new InetSocketAddress("127.0.0.1", 30303),
-      ref = ref,
-      incomingConnection = false
-    )
-  }
 
   "TrieNodeHealer" should "initialize with proper state" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
@@ -107,7 +97,7 @@ class TrieNodeHealerSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = createTestPeer("test-peer", peerProbe.ref)
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
@@ -137,7 +127,7 @@ class TrieNodeHealerSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = createTestPeer("test-peer", peerProbe.ref)
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
@@ -158,7 +148,7 @@ class TrieNodeHealerSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = createTestPeer("test-peer", peerProbe.ref)
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
     val batchSize = 10
     val healer = new TrieNodeHealer(
@@ -203,7 +193,7 @@ class TrieNodeHealerSpec
     val etcPeerManager = TestProbe()
     val peerProbe = TestProbe()
 
-    val peer = createTestPeer("test-peer", peerProbe.ref)
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
@@ -324,8 +314,8 @@ class TrieNodeHealerSpec
     val peerProbe1 = TestProbe()
     val peerProbe2 = TestProbe()
 
-    val peer1 = createTestPeer("peer1", peerProbe1.ref)
-    val peer2 = createTestPeer("peer2", peerProbe2.ref)
+    val peer1 = PeerTestHelpers.createTestPeer("peer1", peerProbe1.ref)
+    val peer2 = PeerTestHelpers.createTestPeer("peer2", peerProbe2.ref)
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
@@ -356,51 +346,4 @@ class TrieNodeHealerSpec
   }
 
   /** Helper class for test storage */
-  private class TestMptStorage extends MptStorage {
-    private val nodes = mutable.Map[ByteString, MptNode]()
-    
-    override def get(key: Array[Byte]): MptNode = {
-      val keyStr = ByteString(key)
-      nodes.get(keyStr)
-        .getOrElse {
-          throw new MerklePatriciaTrie.MissingNodeException(keyStr)
-        }
-    }
-    
-    def putNode(node: MptNode): Unit = {
-      val hash = ByteString(node.hash)
-      nodes(hash) = node
-    }
-    
-    override def updateNodesInStorage(
-        newRoot: Option[MptNode],
-        toRemove: Seq[MptNode]
-    ): Option[MptNode] = {
-      newRoot.foreach { root =>
-        storeNodeRecursively(root)
-      }
-      newRoot
-    }
-    
-    private def storeNodeRecursively(node: MptNode): Unit = {
-      node match {
-        case leaf: LeafNode =>
-          putNode(leaf)
-        case ext: ExtensionNode =>
-          putNode(ext)
-          storeNodeRecursively(ext.next)
-        case branch: BranchNode =>
-          putNode(branch)
-          branch.children.foreach(storeNodeRecursively)
-        case hash: HashNode =>
-          putNode(hash)
-        case NullNode =>
-          // Nothing to store
-      }
-    }
-    
-    override def persist(): Unit = {
-      // No-op for in-memory storage
-    }
-  }
 }

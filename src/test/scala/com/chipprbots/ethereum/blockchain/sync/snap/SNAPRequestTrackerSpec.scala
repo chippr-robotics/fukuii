@@ -1,8 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import java.net.InetSocketAddress
-
-import org.apache.pekko.actor.{ActorRef, ActorSystem}
+import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.ByteString
 
@@ -17,6 +15,7 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.{Peer, PeerId}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.testing.PeerTestHelpers._
 
 class SNAPRequestTrackerSpec
     extends TestKit(ActorSystem("SNAPRequestTrackerSpec"))
@@ -29,15 +28,6 @@ class SNAPRequestTrackerSpec
   }
 
   implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
-
-  def createTestPeer(id: String, ref: ActorRef): Peer = {
-    Peer(
-      id = PeerId(id),
-      remoteAddress = new InetSocketAddress("127.0.0.1", 30303),
-      ref = ref,
-      incomingConnection = false
-    )
-  }
 
   "SNAPRequestTracker" should "generate unique request IDs" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
@@ -98,7 +88,10 @@ class SNAPRequestTrackerSpec
     }
 
     tracker.isPending(requestId) shouldBe true
-    Thread.sleep(200)
+    
+    // Wait for timeout to trigger using awaitCond
+    awaitCond(!tracker.isPending(requestId), max = 300.millis)
+    
     tracker.isPending(requestId) shouldBe false
     timeoutCalled shouldBe true
   }
@@ -114,9 +107,13 @@ class SNAPRequestTrackerSpec
       timeoutCalled = true
     }
 
-    Thread.sleep(50)
-    tracker.completeRequest(requestId)
-    Thread.sleep(200)
+    // Complete the request quickly
+    within(100.millis) {
+      tracker.completeRequest(requestId)
+    }
+    
+    // Wait a bit longer than timeout to ensure callback doesn't fire
+    awaitCond(true, max = 300.millis)
 
     timeoutCalled shouldBe false
   }
