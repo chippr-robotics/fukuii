@@ -1,9 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.util.ByteString
 import scala.concurrent.duration._
 import scala.collection.mutable
-import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.utils.Logger
 
 /** Error handling and recovery for SNAP sync
@@ -71,7 +69,7 @@ class SNAPErrorHandler(
     taskRetries.put(taskId, newState)
 
     if (newAttempt >= maxRetries) {
-      log.warning(s"Task $taskId exceeded max retries ($maxRetries). Last error: $error")
+      log.warn(s"Task $taskId exceeded max retries ($maxRetries). Last error: $error")
     } else {
       log.info(s"Task $taskId retry $newAttempt/$maxRetries scheduled in ${backoff.toSeconds}s. Error: $error")
     }
@@ -140,7 +138,7 @@ class SNAPErrorHandler(
     peerFailures.put(peerId, newState)
 
     val contextStr = if (context.nonEmpty) s" ($context)" else ""
-    log.warning(s"Peer $peerId failure: $errorType$contextStr. Total failures: ${newState.totalFailures}")
+    log.warn(s"Peer $peerId failure: $errorType$contextStr. Total failures: ${newState.totalFailures}")
 
     newState
   }
@@ -395,5 +393,7 @@ object SNAPErrorHandler {
     val ProofVerificationFailed = "proof_verification_failed"
     val StateRootMismatch = "state_root_mismatch"
     val PeerDisconnected = "peer_disconnected"
+    val HashMismatch = "hash_mismatch"
+    val ProcessingError = "processing_error"
   }
 }

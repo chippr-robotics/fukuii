@@ -150,7 +150,7 @@ class SNAPSyncController(
             } else if (error.contains("storage")) {
               SNAPErrorHandler.ErrorType.StorageError
             } else {
-              "processing_error"
+              SNAPErrorHandler.ErrorType.ProcessingError
             }
             
             errorHandler.recordPeerFailure(peerId, errorType, error)
@@ -198,11 +198,11 @@ class SNAPSyncController(
             log.warning(s"Failed to process ByteCodes: $error ($context)")
             
             val errorType = if (error.contains("hash")) {
-              "hash_mismatch"
+              SNAPErrorHandler.ErrorType.HashMismatch
             } else if (error.contains("storage")) {
               SNAPErrorHandler.ErrorType.StorageError
             } else {
-              "processing_error"
+              SNAPErrorHandler.ErrorType.ProcessingError
             }
             
             errorHandler.recordPeerFailure(peerId, errorType, error)
@@ -253,7 +253,7 @@ class SNAPSyncController(
             } else if (error.contains("storage")) {
               SNAPErrorHandler.ErrorType.StorageError
             } else {
-              "processing_error"
+              SNAPErrorHandler.ErrorType.ProcessingError
             }
             
             errorHandler.recordPeerFailure(peerId, errorType, error)
@@ -300,11 +300,11 @@ class SNAPSyncController(
             log.warning(s"Failed to process TrieNodes: $error ($context)")
             
             val errorType = if (error.contains("hash")) {
-              "hash_mismatch"
+              SNAPErrorHandler.ErrorType.HashMismatch
             } else if (error.contains("storage")) {
               SNAPErrorHandler.ErrorType.StorageError
             } else {
-              "processing_error"
+              SNAPErrorHandler.ErrorType.ProcessingError
             }
             
             errorHandler.recordPeerFailure(peerId, errorType, error)
@@ -1175,7 +1175,7 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   }
   
   /** Update estimated totals for ETA calculation */
-  def updateEstimates(accounts: Long = 0, bytecodes: Long = 0, slots: Long = 0): Unit = {
+  def updateEstimates(accounts: Long = 0, bytecodes: Long = 0, slots: Long = 0): Unit = synchronized {
     if (accounts > 0) estimatedTotalAccounts = accounts
     if (bytecodes > 0) estimatedTotalBytecodes = bytecodes
     if (slots > 0) estimatedTotalSlots = slots
@@ -1189,7 +1189,11 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     }
   }
 
-  /** Calculate recent throughput from history */
+  /** Calculate recent throughput from history.
+    * 
+    * NOTE: This method must only be called from synchronized contexts (calculateETA, currentProgress).
+    * It accesses mutable collections that are modified by synchronized methods.
+    */
   private def calculateRecentThroughput(history: mutable.Queue[(Long, Long)]): Double = {
     if (history.size < 2) return 0.0
     
@@ -1236,8 +1240,11 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     else s"${seconds / 3600}h ${(seconds % 3600) / 60}m"
   }
 
-  /** Log current progress */
-  def logProgress(): Unit = {
+  /** Log current progress.
+    * 
+    * Synchronized to ensure consistent snapshot of state when logging.
+    */
+  def logProgress(): Unit = synchronized {
     val progress = currentProgress
     val etaStr = calculateETA.map(eta => s", ETA: ${formatETA(eta)}").getOrElse("")
     
