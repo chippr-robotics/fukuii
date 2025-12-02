@@ -66,6 +66,34 @@ class TrieNodeHealer(
     pendingTasks = pendingTasks ++ newTasks
     log.info(s"Added ${newTasks.size} missing nodes to healing queue. Total pending: ${pendingTasks.size}")
   }
+  
+  /** Queues a single node by hash for healing.
+    * Since we don't have the path, we use the hash as the path (direct hash lookup).
+    *
+    * @param nodeHash The hash of the missing node
+    */
+  def queueNode(nodeHash: ByteString): Unit = synchronized {
+    // Create a healing task with empty path (direct hash lookup)
+    val task = HealingTask(
+      path = Seq.empty,
+      hash = nodeHash,
+      rootHash = stateRoot,
+      pending = true,
+      done = false,
+      nodeData = None
+    )
+    pendingTasks = pendingTasks :+ task
+    log.debug(s"Queued node for healing: hash=${nodeHash.take(4).toHex}")
+  }
+  
+  /** Queues multiple nodes by hash for healing.
+    *
+    * @param nodeHashes The hashes of missing nodes
+    */
+  def queueNodes(nodeHashes: Seq[ByteString]): Unit = synchronized {
+    nodeHashes.foreach(queueNode)
+    log.info(s"Queued ${nodeHashes.size} nodes for healing. Total pending: ${pendingTasks.size}")
+  }
 
   /** Requests the next batch of trie nodes from a peer.
     *
