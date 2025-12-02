@@ -7,7 +7,7 @@ import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
 import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
 import com.chipprbots.ethereum.network.p2p.messages.{Capability, SNAP}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -18,6 +18,7 @@ class SNAPSyncController(
     blockchainReader: BlockchainReader,
     appStateStorage: AppStateStorage,
     mptStorage: MptStorage,
+    evmCodeStorage: EvmCodeStorage,
     val etcPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val syncConfig: SyncConfig,
@@ -34,6 +35,7 @@ class SNAPSyncController(
   val blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
 
   private var accountRangeDownloader: Option[AccountRangeDownloader] = None
+  private var bytecodeDownloader: Option[ByteCodeDownloader] = None
   private var storageRangeDownloader: Option[StorageRangeDownloader] = None
   private var trieNodeHealer: Option[TrieNodeHealer] = None
   
@@ -47,6 +49,7 @@ class SNAPSyncController(
   
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
+  private var bytecodeRequestTask: Option[Cancellable] = None
   private var storageRangeRequestTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   
@@ -57,6 +60,7 @@ class SNAPSyncController(
   override def postStop(): Unit = {
     // Cancel all scheduled tasks
     accountRangeRequestTask.foreach(_.cancel())
+    bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     log.info("SNAP Sync Controller stopped")
@@ -74,6 +78,9 @@ class SNAPSyncController(
     // Periodic request triggers
     case RequestAccountRanges =>
       requestAccountRanges()
+    
+    case RequestByteCodes =>
+      requestByteCodes()
     
     case RequestStorageRanges =>
       requestStorageRanges()
@@ -98,6 +105,25 @@ class SNAPSyncController(
             }
           case Left(error) =>
             log.warning(s"Failed to process AccountRange: $error")
+        }
+      }
+
+    case msg: ByteCodes =>
+      log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
+      bytecodeDownloader.foreach { downloader =>
+        downloader.handleResponse(msg) match {
+          case Right(count) =>
+            log.info(s"Successfully processed $count bytecodes")
+            progressMonitor.incrementBytecodesDownloaded(count)
+            // Check if bytecode sync is complete
+            if (downloader.isComplete) {
+              log.info("ByteCode sync complete!")
+              bytecodeRequestTask.foreach(_.cancel())
+              bytecodeRequestTask = None
+              self ! ByteCodeSyncComplete
+            }
+          case Left(error) =>
+            log.warning(s"Failed to process ByteCodes: $error")
         }
       }
 
@@ -140,7 +166,12 @@ class SNAPSyncController(
       }
 
     case AccountRangeSyncComplete =>
-      log.info("Account range sync complete. Starting storage range sync...")
+      log.info("Account range sync complete. Starting bytecode sync...")
+      currentPhase = ByteCodeSync
+      startBytecodeSync()
+
+    case ByteCodeSyncComplete =>
+      log.info("ByteCode sync complete. Starting storage range sync...")
       currentPhase = StorageRangeSync
       startStorageRangeSync()
 
@@ -258,6 +289,83 @@ class SNAPSyncController(
               log.debug(s"No more account ranges to request")
           }
         }
+      }
+    }
+  }
+
+  private def startBytecodeSync(): Unit = {
+    log.info(s"Starting bytecode sync with batch size ${ByteCodeTask.DEFAULT_BATCH_SIZE}")
+    
+    // Get contract accounts from account range downloader
+    val contractAccounts = accountRangeDownloader.map(_.getContractAccounts).getOrElse(Seq.empty)
+    
+    if (contractAccounts.isEmpty) {
+      log.info("No contract accounts found, skipping bytecode sync")
+      self ! ByteCodeSyncComplete
+      return
+    }
+    
+    log.info(s"Found ${contractAccounts.size} contract accounts for bytecode download")
+    
+    bytecodeDownloader = Some(
+      new ByteCodeDownloader(
+        evmCodeStorage = evmCodeStorage,
+        etcPeerManager = etcPeerManager,
+        requestTracker = requestTracker,
+        batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE
+      )(scheduler)
+    )
+    
+    // Queue contract accounts for download
+    bytecodeDownloader.foreach(_.queueContracts(contractAccounts))
+    
+    progressMonitor.startPhase(ByteCodeSync)
+    
+    // Start periodic task to request bytecodes from peers
+    bytecodeRequestTask = Some(
+      scheduler.scheduleWithFixedDelay(
+        0.seconds,
+        1.second,
+        self,
+        RequestByteCodes
+      )(ec)
+    )
+  }
+  
+  // Internal message for periodic bytecode requests
+  private case object RequestByteCodes
+  
+  private def requestByteCodes(): Unit = {
+    bytecodeDownloader.foreach { downloader =>
+      // Get SNAP-capable peers
+      val snapPeers = peersToDownloadFrom.collect {
+        case (peerId, peerWithInfo) 
+          if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+          peerWithInfo.peer
+      }
+      
+      if (snapPeers.isEmpty) {
+        log.debug("No SNAP-capable peers available for bytecode requests")
+      } else {
+        log.debug(s"Requesting bytecodes from ${snapPeers.size} SNAP peers")
+        
+        // Request from each available peer
+        snapPeers.foreach { peer =>
+          downloader.requestNextBatch(peer) match {
+            case Some(requestId) =>
+              log.debug(s"Sent bytecode request $requestId to peer ${peer.id}")
+            case None =>
+              log.debug(s"No more bytecodes to request")
+          }
+        }
+      }
+      
+      // If no tasks and downloader is complete, trigger completion immediately
+      if (downloader.isComplete) {
+        log.info("ByteCode sync complete (no more bytecodes)")
+        bytecodeRequestTask.foreach(_.cancel())
+        bytecodeRequestTask = None
+        self ! ByteCodeSyncComplete
       }
     }
   }
@@ -477,6 +585,7 @@ object SNAPSyncController {
   sealed trait SyncPhase
   case object Idle extends SyncPhase
   case object AccountRangeSync extends SyncPhase
+  case object ByteCodeSync extends SyncPhase
   case object StorageRangeSync extends SyncPhase
   case object StateHealing extends SyncPhase
   case object StateValidation extends SyncPhase
@@ -485,6 +594,7 @@ object SNAPSyncController {
   case object Start
   case object Done
   case object AccountRangeSyncComplete
+  case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete
   case object StateHealingComplete
   case object StateValidationComplete
@@ -494,6 +604,7 @@ object SNAPSyncController {
       blockchainReader: BlockchainReader,
       appStateStorage: AppStateStorage,
       mptStorage: MptStorage,
+      evmCodeStorage: EvmCodeStorage,
       etcPeerManager: ActorRef,
       peerEventBus: ActorRef,
       syncConfig: SyncConfig,
@@ -505,6 +616,7 @@ object SNAPSyncController {
         blockchainReader,
         appStateStorage,
         mptStorage,
+        evmCodeStorage,
         etcPeerManager,
         peerEventBus,
         syncConfig,
@@ -561,6 +673,7 @@ class SyncProgressMonitor(scheduler: Scheduler) {
   
   private var currentPhaseState: SyncPhase = Idle
   private var accountsSynced: Long = 0
+  private var bytecodesDownloaded: Long = 0
   private var storageSlotsSynced: Long = 0
   private var nodesHealed: Long = 0
   private var startTime: Long = System.currentTimeMillis()
@@ -579,6 +692,10 @@ class SyncProgressMonitor(scheduler: Scheduler) {
     accountsSynced += count
   }
   
+  def incrementBytecodesDownloaded(count: Long): Unit = {
+    bytecodesDownloaded += count
+  }
+  
   def incrementStorageSlotsSynced(count: Long): Unit = {
     storageSlotsSynced += count
   }
@@ -593,10 +710,12 @@ class SyncProgressMonitor(scheduler: Scheduler) {
     SyncProgress(
       phase = currentPhaseState,
       accountsSynced = accountsSynced,
+      bytecodesDownloaded = bytecodesDownloaded,
       storageSlotsSynced = storageSlotsSynced,
       nodesHealed = nodesHealed,
       elapsedSeconds = elapsed,
       accountsPerSec = if (elapsed > 0) accountsSynced / elapsed else 0,
+      bytecodesPerSec = if (elapsed > 0) bytecodesDownloaded / elapsed else 0,
       slotsPerSec = if (elapsed > 0) storageSlotsSynced / elapsed else 0,
       nodesPerSec = if (elapsed > 0) nodesHealed / elapsed else 0
     )
@@ -606,15 +725,18 @@ class SyncProgressMonitor(scheduler: Scheduler) {
 case class SyncProgress(
     phase: SNAPSyncController.SyncPhase,
     accountsSynced: Long,
+    bytecodesDownloaded: Long,
     storageSlotsSynced: Long,
     nodesHealed: Long,
     elapsedSeconds: Double,
     accountsPerSec: Double,
+    bytecodesPerSec: Double,
     slotsPerSec: Double,
     nodesPerSec: Double
 ) {
   override def toString: String = {
     s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
+      s"bytecodes=$bytecodesDownloaded (${bytecodesPerSec.toInt}/s), " +
       s"slots=$storageSlotsSynced (${slotsPerSec.toInt}/s), nodes=$nodesHealed (${nodesPerSec.toInt}/s), " +
       s"elapsed=${elapsedSeconds.toInt}s"
   }

@@ -155,6 +155,7 @@ class SyncController(
         blockchainReader,
         appStateStorage,
         mptStorage,
+        evmCodeStorage,
         etcPeerManager,
         peerEventBus,
         syncConfig,
