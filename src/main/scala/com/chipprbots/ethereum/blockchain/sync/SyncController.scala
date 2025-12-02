@@ -63,30 +63,40 @@ class SyncController(
     case other => fastSync.forward(other)
   }
 
+  def runningSnapSync(): Receive = {
+    case SyncProtocol.Status.Progress(_, _) =>
+      log.debug("SNAP sync in progress")
+    
+    case other =>
+      log.warning(s"SNAP sync received unexpected message: $other")
+      startRegularSync()
+  }
+
   def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
     regularSync.forward(other)
   }
 
   def start(): Unit = {
-    import syncConfig.doFastSync
+    import syncConfig.{doFastSync, doSnapSync}
 
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
-    (appStateStorage.isFastSyncDone(), doFastSync) match {
-      case (false, true) =>
+    
+    (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
+      case (false, _, true, _) =>
+        startSnapSync()
+      case (true, _, true, _) =>
+        log.warning("do-snap-sync is true but SNAP sync already completed")
+        startRegularSync()
+      case (_, false, false, true) =>
         startFastSync()
-      case (true, true) =>
-        log.warning(
-          s"do-fast-sync is set to $doFastSync but fast sync cannot start because it has already been completed"
-        )
+      case (_, true, false, true) =>
+        log.warning("do-fast-sync is true but fast sync already completed")
         startRegularSync()
-      case (true, false) =>
+      case (_, true, false, false) =>
         startRegularSync()
-      case (false, false) =>
-        // Check whether fast sync was started before
+      case (_, false, false, false) =>
         if (fastSyncStateStorage.getSyncState().isDefined) {
-          log.warning(
-            s"do-fast-sync is set to $doFastSync but regular sync cannot start because fast sync hasn't completed"
-          )
+          log.warning("do-fast-sync is false but fast sync hasn't completed")
           startFastSync()
         } else
           startRegularSync()
@@ -117,6 +127,12 @@ class SyncController(
     )
     fastSync ! SyncProtocol.Start
     context.become(runningFastSync(fastSync))
+  }
+
+  def startSnapSync(): Unit = {
+    log.info("SNAP sync mode selected - transitioning to regular sync (full implementation pending)")
+    appStateStorage.snapSyncDone().commit()
+    startRegularSync()
   }
 
   def startRegularSync(): Unit = {

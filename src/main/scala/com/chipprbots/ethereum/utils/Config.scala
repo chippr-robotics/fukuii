@@ -106,6 +106,7 @@ object Config {
 
   case class SyncConfig(
       doFastSync: Boolean,
+      doSnapSync: Boolean,
       peersScanInterval: FiniteDuration,
       blacklistDuration: FiniteDuration,
       criticalBlacklistDuration: FiniteDuration,
@@ -153,6 +154,7 @@ object Config {
       val syncConfig = etcClientConfig.getConfig("sync")
       SyncConfig(
         doFastSync = syncConfig.getBoolean("do-fast-sync"),
+        doSnapSync = syncConfig.getBoolean("do-snap-sync"),
         peersScanInterval = syncConfig.getDuration("peers-scan-interval").toMillis.millis,
         blacklistDuration = syncConfig.getDuration("blacklist-duration").toMillis.millis,
         criticalBlacklistDuration = syncConfig.getDuration("critical-blacklist-duration").toMillis.millis,
