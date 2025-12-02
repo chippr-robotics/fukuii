@@ -43,3 +43,6 @@ target/scala-*/scoverage-report/
 
 # MkDocs build output
 site/
+
+# RPM repository configuration files
+*.repo
