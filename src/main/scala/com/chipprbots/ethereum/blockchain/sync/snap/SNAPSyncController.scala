@@ -793,12 +793,23 @@ class StateValidator(mptStorage: MptStorage) {
     * @param node The current node being traversed
     * @param storage The storage to lookup nodes from
     * @param missingNodes Buffer to collect missing node hashes
+    * @param visited Set of visited node hashes to prevent infinite loops
     */
   private def traverseForMissingNodes(
       node: MptNode,
       storage: MptStorage,
-      missingNodes: mutable.ArrayBuffer[ByteString]
+      missingNodes: mutable.ArrayBuffer[ByteString],
+      visited: mutable.Set[ByteString] = mutable.Set.empty
   ): Unit = {
+    // Get the hash of the current node
+    val nodeHash = ByteString(node.hash)
+    
+    // Skip if already visited (prevent infinite loops)
+    if (visited.contains(nodeHash)) {
+      return
+    }
+    visited += nodeHash
+    
     node match {
       case _: LeafNode =>
         // Leaf nodes have no children, done
@@ -806,19 +817,19 @@ class StateValidator(mptStorage: MptStorage) {
         
       case ext: ExtensionNode =>
         // Extension nodes have one child
-        traverseForMissingNodes(ext.next, storage, missingNodes)
+        traverseForMissingNodes(ext.next, storage, missingNodes, visited)
         
       case branch: BranchNode =>
         // Branch nodes have up to 16 children
         branch.children.foreach { child =>
-          traverseForMissingNodes(child, storage, missingNodes)
+          traverseForMissingNodes(child, storage, missingNodes, visited)
         }
         
       case hash: HashNode =>
         // Hash node - need to resolve it from storage
         try {
           val resolvedNode = storage.get(hash.hash)
-          traverseForMissingNodes(resolvedNode, storage, missingNodes)
+          traverseForMissingNodes(resolvedNode, storage, missingNodes, visited)
         } catch {
           case _: Exception =>
             // Node is missing, record it
@@ -836,13 +847,24 @@ class StateValidator(mptStorage: MptStorage) {
     * @param node The current node being traversed
     * @param storage The storage to lookup nodes from
     * @param accounts Buffer to collect accounts
+    * @param visited Set of visited node hashes to prevent infinite loops
     */
   private def collectAccounts(
       node: MptNode,
       storage: MptStorage,
-      accounts: mutable.ArrayBuffer[Account]
+      accounts: mutable.ArrayBuffer[Account],
+      visited: mutable.Set[ByteString] = mutable.Set.empty
   ): Unit = {
     import com.chipprbots.ethereum.domain.Account.accountSerializer
+    
+    // Get the hash of the current node
+    val nodeHash = ByteString(node.hash)
+    
+    // Skip if already visited (prevent infinite loops)
+    if (visited.contains(nodeHash)) {
+      return
+    }
+    visited += nodeHash
     
     node match {
       case leaf: LeafNode =>
@@ -856,12 +878,12 @@ class StateValidator(mptStorage: MptStorage) {
         
       case ext: ExtensionNode =>
         // Extension nodes point to the next node
-        collectAccounts(ext.next, storage, accounts)
+        collectAccounts(ext.next, storage, accounts, visited)
         
       case branch: BranchNode =>
         // Branch nodes have up to 16 children
         branch.children.foreach { child =>
-          collectAccounts(child, storage, accounts)
+          collectAccounts(child, storage, accounts, visited)
         }
         // Branch node can also have a value (account) at its terminator
         branch.terminator.foreach { value =>
@@ -877,7 +899,7 @@ class StateValidator(mptStorage: MptStorage) {
         // Hash node - need to resolve it from storage
         try {
           val resolvedNode = storage.get(hash.hash)
-          collectAccounts(resolvedNode, storage, accounts)
+          collectAccounts(resolvedNode, storage, accounts, visited)
         } catch {
           case _: Exception =>
             // Cannot traverse further if node is missing
