@@ -20,7 +20,7 @@ This directory contains documentation for deploying and running Fukuii nodes usi
 
 ## Related Documentation
 
-- [Operations Runbooks](../runbooks/) - Operational guides for running nodes
+- [Operations Runbooks](../runbooks/README.md) - Operational guides for running nodes
 - [Operations Monitoring](../operations/metrics-and-monitoring.md) - Metrics and monitoring setup
 - [Architecture Overview](../architecture/architecture-overview.md) - System architecture
 

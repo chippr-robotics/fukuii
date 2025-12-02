@@ -23,7 +23,6 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 
 ### Reference
 - **[Known Issues](known-issues.md)** - Common issues with RocksDB, temporary directories, JVM flags, and their solutions
-- **[Log Analysis Reports](../analysis/)** - Detailed analysis of production issues and operational incidents
 
 ## Quick Reference
 

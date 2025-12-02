@@ -9,9 +9,9 @@ This directory contains user guides and configuration documentation for Fukuii.
 
 ## Related Documentation
 
-- [Operations Runbooks](../runbooks/) - Operational guides for running nodes
-- [Tools](../tools/) - Interactive configuration tools
-- [Deployment](../deployment/) - Deployment guides
+- [Operations Runbooks](../runbooks/README.md) - Operational guides for running nodes
+- [Tools](../tools/README.md) - Interactive configuration tools
+- [Deployment](../deployment/README.md) - Deployment guides
 
 ## Quick Links
 

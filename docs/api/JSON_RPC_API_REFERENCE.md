@@ -1746,6 +1746,250 @@ curl -X POST http://localhost:8546 \
 
 ---
 
+### QA Namespace: Testing
+
+**⚠️ Development/Testing Only**: The QA namespace should be **disabled in production**. These methods are for testing and quality assurance purposes only.
+
+#### qa_mineBlocks
+
+Mines a specified number of blocks for testing purposes.
+
+**Parameters**:
+1. `QUANTITY` - Number of blocks to mine
+
+**Returns**: `Boolean` - `true` if blocks were mined successfully
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "qa_mineBlocks",
+    "params": [10]
+  }'
+```
+
+**Note**: Only available in development/testing mode.
+
+---
+
+#### qa_generateCheckpoint
+
+Generates a checkpoint for testing checkpointing functionality.
+
+**Parameters**: None
+
+**Returns**: `Object` - Checkpoint information
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "qa_generateCheckpoint",
+    "params": []
+  }'
+```
+
+---
+
+#### qa_getFederationMembersInfo
+
+Returns information about federation members for checkpoint testing.
+
+**Parameters**: None
+
+**Returns**: `Array` - Array of federation member information objects
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "qa_getFederationMembersInfo",
+    "params": []
+  }'
+```
+
+---
+
+### TEST Namespace: Testing
+
+**⚠️ Development/Testing Only**: The TEST namespace should be **disabled in production**. These methods allow chain manipulation for testing purposes and can compromise blockchain integrity.
+
+#### test_setChainParams
+
+Sets chain parameters for testing.
+
+**Parameters**:
+1. `Object` - Chain parameters configuration
+
+**Returns**: `Boolean` - `true` if parameters were set successfully
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "test_setChainParams",
+    "params": [{"chainId": "0x3f"}]
+  }'
+```
+
+**Security Warning**: This method allows modification of chain parameters and should never be exposed in production.
+
+---
+
+#### test_mineBlocks
+
+Mines a specified number of blocks for testing.
+
+**Parameters**:
+1. `QUANTITY` - Number of blocks to mine
+
+**Returns**: `Boolean` - `true` if blocks were mined successfully
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "test_mineBlocks",
+    "params": [5]
+  }'
+```
+
+---
+
+#### test_modifyTimestamp
+
+Modifies the timestamp for testing time-dependent contract behavior.
+
+**Parameters**:
+1. `QUANTITY` - New timestamp value
+
+**Returns**: `Boolean` - `true` if timestamp was modified successfully
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "test_modifyTimestamp",
+    "params": [1700000000]
+  }'
+```
+
+---
+
+#### test_rewindToBlock
+
+Rewinds the blockchain to a specific block number for testing reorganizations.
+
+**Parameters**:
+1. `QUANTITY` - Block number to rewind to
+
+**Returns**: `Boolean` - `true` if rewind was successful
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "test_rewindToBlock",
+    "params": [100]
+  }'
+```
+
+**Security Warning**: This method modifies blockchain state and should never be exposed in production.
+
+---
+
+#### test_importRawBlock
+
+Imports a raw block for testing purposes.
+
+**Parameters**:
+1. `DATA` - RLP-encoded block data
+
+**Returns**: `Boolean` - `true` if block was imported successfully
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "test_importRawBlock",
+    "params": ["0x..."]
+  }'
+```
+
+---
+
+#### test_getLogHash
+
+Returns the hash of logs for verification in testing.
+
+**Parameters**:
+1. `QUANTITY` - Block number
+
+**Returns**: `DATA`, 32 Bytes - Hash of the logs
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "test_getLogHash",
+    "params": [1000]
+  }'
+```
+
+---
+
+#### miner_setEtherbase
+
+Sets the etherbase (coinbase) address for mining rewards.
+
+**Parameters**:
+1. `DATA`, 20 Bytes - Address to receive mining rewards
+
+**Returns**: `Boolean` - `true` if etherbase was set successfully
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "miner_setEtherbase",
+    "params": ["0x..."]
+  }'
+```
+
+**Note**: While this method is in the TEST namespace category, it uses the `miner_` prefix for compatibility.
+
+---
+
 ### IELE Namespace
 
 The IELE namespace provides methods for interacting with the IELE Virtual Machine, an alternative VM for smart contract execution. IELE is a register-based virtual machine designed with formal verification in mind.
