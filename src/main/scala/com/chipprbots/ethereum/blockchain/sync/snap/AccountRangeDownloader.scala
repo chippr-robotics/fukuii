@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.utils.Logger
-import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, ByteArraySerializable}
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 
 class AccountRangeDownloader(
     stateRoot: ByteString,
@@ -45,7 +45,6 @@ class AccountRangeDownloader(
 
   /** State trie for storing accounts - initialized with existing state root or new trie */
   private var stateTrie: MerklePatriciaTrie[ByteString, Account] = {
-    import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
     import com.chipprbots.ethereum.mpt.{byteStringSerializer, MerklePatriciaTrie}
     import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
     
@@ -231,7 +230,6 @@ class AccountRangeDownloader(
     */
   private def storeAccounts(accounts: Seq[(ByteString, Account)]): Either[String, Unit] = {
     try {
-      import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
       
       // Synchronize on this instance to protect stateTrie variable
       this.synchronized {
