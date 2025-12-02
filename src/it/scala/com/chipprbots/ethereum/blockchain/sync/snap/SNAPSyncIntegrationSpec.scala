@@ -16,7 +16,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.FreeSpecBase
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage}
-import com.chipprbots.ethereum.domain.{Account, BlockHeader, BlockchainReader}
+import com.chipprbots.ethereum.domain.{Account, BlockHeader, BlockchainReader, UInt256}
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
@@ -374,8 +374,6 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
         SyncTest
       ) in testCaseM[IO] {
         IO {
-          import com.chipprbots.ethereum.domain.UInt256
-          
           val contractAccount = Account(
             nonce = UInt256.Zero,
             balance = UInt256(1000),
@@ -405,8 +403,6 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
         SyncTest
       ) in testCaseM[IO] {
         IO {
-          import com.chipprbots.ethereum.domain.UInt256
-          
           // Test bytecode hash validation logic used during ByteCode download
           val bytecode = ByteString("test contract bytecode")
           val computedHash = kec256(bytecode)
