@@ -6,7 +6,7 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
-import com.chipprbots.ethereum.blockchain.sync.{Blacklist, PeerListSupportNg, SyncProtocol}
+import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, MptStorage}
 import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
 import com.chipprbots.ethereum.network.p2p.messages.{Capability, SNAP}
@@ -31,7 +31,7 @@ class SNAPSyncController(
   import SNAPSyncController._
 
   // Blacklist for PeerListSupportNg trait
-  val blacklist: Blacklist = Blacklist.empty(scheduler, ec)
+  val blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
 
   private var accountRangeDownloader: Option[AccountRangeDownloader] = None
   private var storageRangeDownloader: Option[StorageRangeDownloader] = None
@@ -88,7 +88,7 @@ class SNAPSyncController(
         downloader.handleResponse(msg) match {
           case Right(count) =>
             log.info(s"Successfully processed $count accounts")
-            progressMonitor.accountsSynced += count
+            progressMonitor.incrementAccountsSynced(count)
             // Check if account range sync is complete
             if (downloader.isComplete) {
               log.info("Account range sync complete!")
@@ -107,7 +107,7 @@ class SNAPSyncController(
         downloader.handleResponse(msg) match {
           case Right(count) =>
             log.info(s"Successfully processed $count storage slots")
-            progressMonitor.storageSlotsSynced += count
+            progressMonitor.incrementStorageSlotsSynced(count)
             // Check if storage range sync is complete
             if (downloader.isComplete) {
               log.info("Storage range sync complete!")
@@ -126,7 +126,7 @@ class SNAPSyncController(
         healer.handleResponse(msg) match {
           case Right(count) =>
             log.info(s"Successfully healed $count trie nodes")
-            progressMonitor.nodesHealed += count
+            progressMonitor.incrementNodesHealed(count)
             // Check if healing is complete
             if (healer.isComplete) {
               log.info("State healing complete!")
