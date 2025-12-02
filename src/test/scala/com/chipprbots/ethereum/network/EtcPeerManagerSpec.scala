@@ -468,8 +468,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
         Subscribe(
           MessageClassifier(
             Set(
-              Codes.BlockHeadersCode, 
-              Codes.NewBlockCode, 
+              Codes.BlockHeadersCode,
+              Codes.NewBlockCode,
               Codes.NewBlockHashesCode,
               // SNAP protocol response codes
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,

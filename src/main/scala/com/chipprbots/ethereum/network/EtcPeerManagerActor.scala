@@ -365,8 +365,8 @@ class EtcPeerManagerActor(
 object EtcPeerManagerActor {
 
   val msgCodesWithInfo: Set[Int] = Set(
-    Codes.BlockHeadersCode, 
-    Codes.NewBlockCode, 
+    Codes.BlockHeadersCode,
+    Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
     // SNAP protocol response codes (responses we receive from peers)
     SNAP.Codes.AccountRangeCode,
