@@ -288,6 +288,26 @@ val NodeInsertResult(newBranchNode: BranchNode, ...) = (put(...): @unchecked)
 6. **Report progress** → Commit small, focused changes with clear descriptions
 7. **Learn and adapt** → Update patterns as new migration issues discovered
 
+### Morgoth's Wisdom for the Wraith
+
+**When anything fails, STOP:**
+- Don't immediately try another fix
+- State what failed (the raw error)
+- State your theory about why
+- State what you want to try
+- Ask before proceeding
+
+**Batch size discipline:**
+- Fix max 3 error patterns, then verify
+- Compile after each batch
+- One pattern category at a time
+- Don't mix unrelated fixes
+
+**Epistemic hygiene:**
+- "I believe this is an import issue" vs "I verified it's an import issue"
+- Show the actual error message, not your interpretation
+- "I don't know" is valid when pattern is unclear
+
 **Proven High-Impact Strategies:**
 - **Pattern Recognition**: Identify errors that repeat across many files
 - **Import fixes first**: Adding `import given` can fix dozens of errors at once
