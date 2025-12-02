@@ -112,74 +112,9 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
       }
     }
 
-    "State Persistence" - {
-
-      "should support pivot block storage interface" taggedAs (
-        IntegrationTest,
-        SyncTest
-      ) in testCaseM[IO] {
-        IO {
-          // This test verifies the interface exists
-          // Actual storage tests would require database setup with FakePeer
-          val testValue = BigInt(1000)
-          testValue shouldBe BigInt(1000)
-          succeed
-        }
-      }
-
-      "should support SNAP sync completion tracking" taggedAs (
-        IntegrationTest,
-        SyncTest
-      ) in testCaseM[IO] {
-        IO {
-          // This test verifies the interface exists
-          // Actual storage tests would require database setup with FakePeer
-          val testBool = true
-          testBool shouldBe true
-          succeed
-        }
-      }
-    }
-
-    "Pivot Block Selection" - {
-
-      "should select pivot block with correct offset" taggedAs (
-        IntegrationTest,
-        SyncTest
-      ) in testCaseM[IO] {
-        IO {
-          val bestBlock = BigInt(2000)
-          val pivotOffset = 128
-          val expectedPivot = bestBlock - pivotOffset
-          
-          // Pivot block should be calculated as bestBlock - offset
-          val calculatedPivot = bestBlock - pivotOffset
-          calculatedPivot shouldBe expectedPivot
-          
-          succeed
-        }
-      }
-
-      "should handle different pivot block offsets" taggedAs (
-        IntegrationTest,
-        SyncTest
-      ) in testCaseM[IO] {
-        IO {
-          val testCases = Seq(
-            (BigInt(1000), 64, BigInt(936)),
-            (BigInt(5000), 128, BigInt(4872)),
-            (BigInt(10000), 1024, BigInt(8976))
-          )
-          
-          testCases.foreach { case (bestBlock, offset, expectedPivot) =>
-            val calculatedPivot = bestBlock - offset
-            calculatedPivot shouldBe expectedPivot
-          }
-          
-          succeed
-        }
-      }
-    }
+    // Note: State persistence and pivot block selection tests are intentionally omitted
+    // as they require full database setup with FakePeer infrastructure. These aspects
+    // are covered by end-to-end integration tests that use the complete sync pipeline.
 
     "Healing Process" - {
 
@@ -220,6 +155,10 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
             batchSize = 16
           )
           
+          // Initially, healer should have no pending tasks
+          healer.pendingCount shouldBe 0
+          healer.isComplete shouldBe true
+          
           // Queue missing nodes for healing
           val missingNode1 = kec256(ByteString("missing1"))
           val missingNode2 = kec256(ByteString("missing2"))
@@ -227,7 +166,15 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
           healer.queueNode(missingNode1)
           healer.queueNode(missingNode2)
           
-          // Healing tasks should be queued
+          // Verify that healing tasks were queued
+          healer.pendingCount shouldBe 2
+          healer.isComplete shouldBe false
+          
+          // Verify statistics reflect the queued tasks
+          val stats = healer.statistics
+          stats.pendingTasks shouldBe 2
+          stats.activeTasks shouldBe 0
+          
           succeed
         }
       }
@@ -453,18 +400,31 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
         }
       }
 
-      "should verify bytecode storage interface" taggedAs (
+      "should validate bytecode hash matches keccak256" taggedAs (
         IntegrationTest,
         SyncTest
       ) in testCaseM[IO] {
         IO {
-          // This test verifies the interface exists
-          // Actual storage tests would require database setup with FakePeer
-          val codeHash = kec256(ByteString("test-code"))
-          val bytecode = ByteString("test-code")
+          import com.chipprbots.ethereum.domain.UInt256
           
-          codeHash.length should be > 0
-          bytecode.length should be > 0
+          // Test bytecode hash validation logic used during ByteCode download
+          val bytecode = ByteString("test contract bytecode")
+          val computedHash = kec256(bytecode)
+          
+          // Create a contract account with the computed code hash
+          val contractAccount = Account(
+            nonce = UInt256.Zero,
+            balance = UInt256(1000),
+            storageRoot = ByteString(MerklePatriciaTrie.EmptyRootHash),
+            codeHash = computedHash
+          )
+          
+          // Verify that the code hash can be validated against bytecode
+          kec256(bytecode) shouldBe contractAccount.codeHash
+          
+          // Verify different bytecode produces different hash
+          val differentBytecode = ByteString("different bytecode")
+          kec256(differentBytecode) should not equal contractAccount.codeHash
           
           succeed
         }
