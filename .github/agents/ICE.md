@@ -33,41 +33,154 @@ Tools Used & Rationale:
 	• edit: Surgical code changes maintaining minimal scope
 	• report_progress: Frequent commits with detailed documentation after validation
 	• reply_to_comment: Structured communication with stakeholders
-Abstract Steps for Similar Tasks:
-	1. Understand the Problem Space
+## OODA Loop for Complex Feature Development
+
+When developing large features or performing migrations, follow Boyd's OODA loop:
+
+### Observe Phase - Comprehensive Understanding
+	1. **Code Review** - Read all related files to understand architecture
+		○ Map existing components and their interactions
+		○ Identify patterns and conventions used
+		○ Note incomplete implementations and TODOs
+	2. **Documentation Review** - Check ADRs, specs, implementation guides
+		○ Review architectural decision records
+		○ Read existing documentation for context
+		○ Understand design decisions and constraints
+	3. **Research** - Study reference implementations and best practices
+		○ How do core-geth, besu handle this?
+		○ What are industry best practices?
+		○ Are there security considerations?
+	4. **Gap Analysis** - What exists vs. what's needed
+		○ Identify completed work
+		○ List missing components
+		○ Document dependencies and blockers
+	5. **Deliverable:** Comprehensive understanding document (STATUS.md)
+
+### Orient Phase - Strategic Planning
+	1. **Prioritization** - Organize work by criticality
+		○ P0 (Critical) - Blocking issues, core functionality
+		○ P1 (Important) - Production readiness, error handling
+		○ P2 (Testing) - Validation, integration tests
+		○ P3 (Polish) - Documentation, optimization
+	2. **Dependencies** - Identify what blocks what
+		○ Map prerequisite relationships
+		○ Identify critical path
+		○ Note parallel workstreams
+	3. **Timeline** - Estimate effort realistically
+		○ Based on complexity, not wishful thinking
+		○ Include buffer for unknowns (20-30%)
+		○ Define phases with clear milestones
+	4. **Boundaries** - Recognize natural stopping points
+		○ Infrastructure vs. network integration
+		○ Compilation vs. testing
+		○ What requires external resources (live network, etc.)
+	5. **Deliverable:** TODO document with prioritized work items
+
+### Decide Phase - Action Planning
+	1. **Scope** - What to do now vs. later
+		○ Focus on high-value, low-risk work first
+		○ Complete logical phases before moving on
+		○ Don't start work that can't be finished
+	2. **Risk Assessment** - Evaluate each decision's impact
+		○ What could break? (consensus, compatibility)
+		○ What's the rollback plan?
+		○ What validation is needed?
+	3. **Value Prioritization** - High-value, low-risk first
+		○ Fix critical bugs immediately
+		○ Implement infrastructure before integration
+		○ Defer optimization until functionality works
+	4. **Constraints** - Work within limitations
+		○ Respect maintainer requirements (minimal docs)
+		○ Work within available resources (no live network yet)
+		○ Maintain backward compatibility
+	5. **Deliverable:** Clear action plan with phases
+
+### Act Phase - Validated Implementation
+	1. **Incremental Changes** - Small, focused commits
+		○ One logical change per commit
+		○ Keep scope minimal (change as few lines as possible)
+		○ Make changes reversible
+	2. **Frequent Validation** - Compile and test continuously
+		○ Compile after every change
+		○ Run relevant tests frequently
+		○ Check for regressions early
+	3. **Report Progress** - Commit after each verified unit
+		○ Use report_progress tool frequently
+		○ Update tracking docs (TODO, STATUS)
+		○ Keep stakeholders informed
+	4. **Documentation** - Keep external docs current
+		○ Minimal inline documentation (per maintainer requirement)
+		○ Comprehensive planning docs (TODO, STATUS, SUMMARY)
+		○ Update progress continuously
+	5. **Deliverable:** Working, validated, documented code
+
+### Critical Path Validation Pattern
+Before deep implementation, validate critical assumptions:
+```scala
+// Smoke test critical integration points
+object CriticalPathValidation {
+  // Can core components instantiate?
+  val controller = ComponentUnderDevelopment.props(...)
+  
+  // Do message types match?
+  controller ! CorrectMessageType.Start  // Not wrong one!
+  
+  // Does configuration load?
+  val config = Config.fromTypesafe(...)
+  
+  println("✅ Critical path validated")
+}
+```
+
+### Success Pattern for Complex Features
+	• Multiple OODA loops per feature
+	• Each loop builds on previous understanding
+	• Validate assumptions early (Observe phase)
+	• Plan thoroughly before coding (Orient/Decide)
+	• Execute incrementally with frequent validation (Act)
+	• Loop back when new information emerges
+
+## Abstract Steps for Similar Tasks
+
+Following the OODA framework above:
+	1. **Understand the Problem Space** (Observe)
 		○ Run initial compilation to identify all errors
 		○ Categorize errors by type (build config, API changes, type system)
 		○ Review migration guides for the technologies involved
-	2. Create a Migration Strategy
+	2. **Create a Migration Strategy** (Orient)
 		○ Document error categories and solutions in a structured plan
 		○ Identify dependencies between fixes (what must be done first)
 		○ Establish phases with clear success criteria
-	3. Fix Build Configuration First
+	3. **Fix Build Configuration First** (Decide/Act)
 		○ Resolve dependency conflicts and version issues
 		○ Fix build tool configuration (sbt, maven, gradle)
 		○ Ensure project structure is correct
-	4. Execute Phased Migration
+	4. **Execute Phased Migration** (Act)
 		○ Start with quick wins to reduce error count rapidly
 		○ Address API migrations systematically (simple → complex)
 		○ Fix type system issues last (they often resolve after API fixes)
-	5. Validate Iteratively
+	5. **Validate Iteratively** (Act)
 		○ Compile after each logical group of changes
 		○ Run tests incrementally to catch regressions early
 		○ Use version control strategically (commit working states)
-	6. Address Code Quality
+	6. **Address Code Quality** (Act)
 		○ Respond to code review feedback promptly
 		○ Enhance documentation for non-obvious decisions
 		○ Update security-critical dependencies
-	7. Document Decisions & Tradeoffs
+	7. **Document Decisions & Tradeoffs** (Act)
 		○ Explain why certain approaches were chosen
 		○ Document known limitations and technical debt
 		○ Provide guidance for future maintainers
-	8. Prepare for Verification
+	8. **Prepare for Verification** (Orient/Act)
 		○ Create testing plan for stakeholders
 		○ Document expected CI/CD outcomes
 		○ Provide rollback strategy if needed
-Key Success Factors:
-	• Small, incremental changes with frequent verification
-	• Clear communication through commit messages and PR updates
-	• Systematic approach prevents overlooking errors
-Documentation ensures knowledge transfer<img width="529" height="1657" alt="image" src="https://github.com/user-attachments/assets/54ddf899-9b6c-4515-83d8-e35204d8c9b3" />
+
+## Key Success Factors
+	• **OODA Loop Application:** Multiple cycles, each building understanding
+	• **Small, incremental changes** with frequent verification
+	• **Clear communication** through commit messages and PR updates
+	• **Systematic approach** prevents overlooking errors
+	• **Phase boundaries:** Complete logical units before moving forward
+	• **External documentation** ensures knowledge transfer
+	• **Critical path validation** catches blocking issues early<img width="529" height="1657" alt="image" src="https://github.com/user-attachments/assets/54ddf899-9b6c-4515-83d8-e35204d8c9b3" />

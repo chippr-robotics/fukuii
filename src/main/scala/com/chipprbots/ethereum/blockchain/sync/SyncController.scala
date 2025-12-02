@@ -7,8 +7,11 @@ import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 
+import scala.concurrent.ExecutionContext.Implicits.global
+
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
+import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -22,6 +25,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class SyncController(
@@ -63,30 +67,44 @@ class SyncController(
     case other => fastSync.forward(other)
   }
 
+  def runningSnapSync(snapSync: ActorRef): Receive = {
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      snapSync ! PoisonPill
+      log.info("SNAP sync completed, transitioning to regular sync")
+      startRegularSync()
+    
+    case SyncProtocol.Status.Progress(_, _) =>
+      log.debug("SNAP sync in progress")
+    
+    case msg =>
+      snapSync.forward(msg)
+  }
+
   def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
     regularSync.forward(other)
   }
 
   def start(): Unit = {
-    import syncConfig.doFastSync
+    import syncConfig.{doFastSync, doSnapSync}
 
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
-    (appStateStorage.isFastSyncDone(), doFastSync) match {
-      case (false, true) =>
+    
+    (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
+      case (false, _, true, _) =>
+        startSnapSync()
+      case (true, _, true, _) =>
+        log.warning("do-snap-sync is true but SNAP sync already completed")
+        startRegularSync()
+      case (_, false, false, true) =>
         startFastSync()
-      case (true, true) =>
-        log.warning(
-          s"do-fast-sync is set to $doFastSync but fast sync cannot start because it has already been completed"
-        )
+      case (_, true, false, true) =>
+        log.warning("do-fast-sync is true but fast sync already completed")
         startRegularSync()
-      case (true, false) =>
+      case (_, true, false, false) =>
         startRegularSync()
-      case (false, false) =>
-        // Check whether fast sync was started before
+      case (_, false, false, false) =>
         if (fastSyncStateStorage.getSyncState().isDefined) {
-          log.warning(
-            s"do-fast-sync is set to $doFastSync but regular sync cannot start because fast sync hasn't completed"
-          )
+          log.warning("do-fast-sync is false but fast sync hasn't completed")
           startFastSync()
         } else
           startRegularSync()
@@ -117,6 +135,35 @@ class SyncController(
     )
     fastSync ! SyncProtocol.Start
     context.become(runningFastSync(fastSync))
+  }
+
+  def startSnapSync(): Unit = {
+    log.info("Starting SNAP sync mode")
+    
+    val snapSyncConfig = try {
+      SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
+    } catch {
+      case e: Exception =>
+        log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
+        SNAPSyncConfig()
+    }
+    
+    val mptStorage = stateStorage.getReadOnlyStorage
+    
+    val snapSync = context.actorOf(
+      SNAPSyncController.props(
+        blockchainReader,
+        appStateStorage,
+        mptStorage,
+        etcPeerManager,
+        syncConfig,
+        snapSyncConfig,
+        scheduler
+      ),
+      "snap-sync"
+    )
+    snapSync ! SNAPSyncController.Start
+    context.become(runningSnapSync(snapSync))
   }
 
   def startRegularSync(): Unit = {
