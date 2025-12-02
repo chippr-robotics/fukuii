@@ -19,9 +19,11 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[Backup & Restore](backup-restore.md)** - Backup strategies, data recovery, and disaster recovery procedures
 - **[Log Triage](log-triage.md)** - Logging configuration, log analysis, and troubleshooting from logs
 
+### API Operations (Barad-dûr)
+- **[Barad-dûr Operations](barad-dur-operations.md)** - Kong API Gateway stack operations, monitoring, and maintenance
+
 ### Reference
 - **[Known Issues](known-issues.md)** - Common issues with RocksDB, temporary directories, JVM flags, and their solutions
-- **[Log Analysis Reports](../analysis/)** - Detailed analysis of production issues and operational incidents
 
 ## Quick Reference
 
@@ -87,4 +89,4 @@ These runbooks are living documents. If you encounter issues not covered here or
 2. Submit a pull request with corrections or improvements
 3. Contact the maintainers at Chippr Robotics LLC
 
-**Last Updated**: 2025-11-06
+**Last Updated**: 2025-11-30
