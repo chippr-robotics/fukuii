@@ -1,0 +1,115 @@
+# Prometheus Alert Rules for SNAP Sync
+#
+# This file defines Prometheus alerting rules for monitoring SNAP sync health,
+# performance, and security in Fukuii.
+#
+# Add to Prometheus configuration:
+#   rule_files:
+#     - "snap_sync_alerts.yml"
+
+groups:
+  - name: snap_sync_connectivity
+    interval: 30s
+    rules:
+      - alert: SnapSyncNoPeers
+        expr: app_snapsync_peers_capable_gauge == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: snap-sync
+        annotations:
+          summary: "No SNAP-capable peers connected"
+          description: "SNAP sync cannot proceed without SNAP-capable peers. Check network connectivity and firewall rules."
+
+  - name: snap_sync_progress
+    interval: 30s
+    rules:
+      - alert: SnapSyncAccountRangeStalled
+        expr: rate(app_snapsync_accounts_synced_gauge[5m]) == 0 and app_snapsync_phase_current_gauge == 1 and app_snapsync_accounts_synced_gauge > 0
+        for: 10m
+        labels:
+          severity: critical
+          component: snap-sync
+        annotations:
+          summary: "SNAP sync account range download stalled"
+          description: "No accounts synced in the last 10 minutes during AccountRangeSync phase. Check peers and database."
+
+      - alert: SnapSyncStorageStalled
+        expr: rate(app_snapsync_storage_slots_synced_gauge[5m]) == 0 and app_snapsync_phase_current_gauge == 3 and app_snapsync_storage_slots_synced_gauge > 0
+        for: 10m
+        labels:
+          severity: critical
+          component: snap-sync
+        annotations:
+          summary: "SNAP sync storage range download stalled"
+          description: "No storage slots synced in the last 10 minutes during StorageRangeSync phase."
+
+  - name: snap_sync_errors
+    interval: 30s
+    rules:
+      - alert: SnapSyncHighErrorRate
+        expr: rate(app_snapsync_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: snap-sync
+        annotations:
+          summary: "High SNAP sync error rate"
+          description: "More than 1 error per second in the last 5 minutes. Review logs for error details."
+
+      - alert: SnapSyncInvalidProofs
+        expr: rate(app_snapsync_proofs_invalid_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: snap-sync
+          category: security
+        annotations:
+          summary: "SNAP sync receiving invalid Merkle proofs"
+          description: "SECURITY ALERT: Peers are sending invalid Merkle proofs. Review blacklisted peers and consider stricter filtering."
+
+      - alert: SnapSyncValidationFailures
+        expr: rate(app_snapsync_validation_failures_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: snap-sync
+        annotations:
+          summary: "SNAP sync state validation failing"
+          description: "State validation is failing - sync may be incomplete. Review state healing metrics."
+
+  - name: snap_sync_performance
+    interval: 30s
+    rules:
+      - alert: SnapSyncHighTimeoutRate
+        expr: rate(app_snapsync_requests_timeouts_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: snap-sync
+        annotations:
+          summary: "High SNAP sync request timeout rate"
+          description: "More than 5 request timeouts per second. Check network latency and peer quality."
+
+      - alert: SnapSyncLowAccountThroughput
+        expr: app_snapsync_accounts_throughput_recent_gauge < 100 and app_snapsync_phase_current_gauge == 1 and app_snapsync_accounts_synced_gauge > 1000
+        for: 10m
+        labels:
+          severity: warning
+          component: snap-sync
+        annotations:
+          summary: "SNAP sync account throughput is low"
+          description: "Account sync throughput is below 100 accounts/sec. Consider increasing concurrency or adding peers."
+
+  - name: snap_sync_completion
+    interval: 60s
+    rules:
+      - alert: SnapSyncCompleted
+        expr: app_snapsync_phase_current_gauge == 6
+        for: 1m
+        labels:
+          severity: info
+          component: snap-sync
+        annotations:
+          summary: "SNAP sync completed successfully"
+          description: "SNAP sync has completed. Node is now transitioning to regular sync mode."
