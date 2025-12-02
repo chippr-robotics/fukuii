@@ -2110,10 +2110,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#core-principles" class="md-nav__link">
+  <a href="#agent-roles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Core Principles
+        Agent Roles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#core-principles-guided-by-morgoth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Principles (Guided by Morgoth)
       
     </span>
   </a>
@@ -5496,10 +5507,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#core-principles" class="md-nav__link">
+  <a href="#agent-roles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Core Principles
+        Agent Roles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#core-principles-guided-by-morgoth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Principles (Guided by Morgoth)
       
     </span>
   </a>
@@ -6121,11 +6143,23 @@ Release notes are automatically drafted as PRs are merged. Use descriptive commi
 <p>See the <a href="../ci-cd/">CI/CD Documentation</a> for detailed release process documentation.</p>
 <h2 id="guidelines-for-llm-agents">Guidelines for LLM Agents<a class="headerlink" href="#guidelines-for-llm-agents" title="Permanent link">&para;</a></h2>
 <p>This section provides rules, reminders, and prompts for LLM agents (AI coding assistants) working on this codebase to ensure consistency and quality.</p>
-<h3 id="core-principles">Core Principles<a class="headerlink" href="#core-principles" title="Permanent link">&para;</a></h3>
+<h3 id="agent-roles">Agent Roles<a class="headerlink" href="#agent-roles" title="Permanent link">&para;</a></h3>
+<p>We have specialized agents with different areas of expertise:
+- <strong>wraith 👻</strong>: Hunts down compilation errors and Scala 3 migration issues
+- <strong>mithril ✨</strong>: Transforms code using modern Scala 3 features
+- <strong>ICE 🧊</strong>: Manages large-scale migrations and strategic planning
+- <strong>eye 👁️</strong>: Ensures comprehensive testing and validation
+- <strong>forge 🔨</strong>: Handles consensus-critical code (EVM, mining, crypto)
+- <strong>herald 🧭</strong>: Fixes network protocol and peer communication issues
+- <strong>Morgoth 🎯</strong>: Shepherds all agents with process discipline and quality verification</p>
+<p>See <a href=".github/AGENT_LABELS.md">Agent Labels</a> for detailed descriptions and <a href=".github/agents/">Agent Definitions</a> for full agent instructions.</p>
+<h3 id="core-principles-guided-by-morgoth">Core Principles (Guided by Morgoth)<a class="headerlink" href="#core-principles-guided-by-morgoth" title="Permanent link">&para;</a></h3>
 <ol>
 <li><strong>Keep Documentation Essential</strong>: Focus on clarity and brevity. Avoid unnecessary verbosity or redundant explanations.</li>
 <li><strong>Consistency Over Innovation</strong>: Follow existing patterns in the codebase rather than introducing new approaches.</li>
 <li><strong>Minimal Changes</strong>: Make the smallest possible changes to achieve the goal. Don't refactor unrelated code.</li>
+<li><strong>Verify Before Proceeding</strong>: When anything fails, stop and analyze before trying another approach.</li>
+<li><strong>Incremental Progress</strong>: Make 3 changes, then verify. Don't accumulate unverified work.</li>
 </ol>
 <h3 id="rules">Rules<a class="headerlink" href="#rules" title="Permanent link">&para;</a></h3>
 <ol>
