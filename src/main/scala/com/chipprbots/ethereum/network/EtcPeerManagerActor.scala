@@ -121,20 +121,8 @@ class EtcPeerManagerActor(
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
       // Route SNAP protocol messages to SNAPSyncController
       message match {
-        case msg: AccountRange =>
-          log.debug("Routing AccountRange message to SNAPSyncController from peer {}", peerId)
-          snapSyncControllerOpt.foreach(_ ! msg)
-        
-        case msg: StorageRanges =>
-          log.debug("Routing StorageRanges message to SNAPSyncController from peer {}", peerId)
-          snapSyncControllerOpt.foreach(_ ! msg)
-        
-        case msg: TrieNodes =>
-          log.debug("Routing TrieNodes message to SNAPSyncController from peer {}", peerId)
-          snapSyncControllerOpt.foreach(_ ! msg)
-        
-        case msg: ByteCodes =>
-          log.debug("Routing ByteCodes message to SNAPSyncController from peer {}", peerId)
+        case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
+          log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
           snapSyncControllerOpt.foreach(_ ! msg)
         
         case _ => // ETH protocol messages - no special routing needed
