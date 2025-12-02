@@ -125,6 +125,19 @@ class EtcPeerManagerActor(
           log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
           snapSyncControllerOpt.foreach(_ ! msg)
         
+        // Handle incoming SNAP request messages (server-side)
+        case msg: GetAccountRange =>
+          handleGetAccountRange(msg, peerId, peersWithInfo.get(peerId))
+        
+        case msg: GetStorageRanges =>
+          handleGetStorageRanges(msg, peerId, peersWithInfo.get(peerId))
+        
+        case msg: GetTrieNodes =>
+          handleGetTrieNodes(msg, peerId, peersWithInfo.get(peerId))
+        
+        case msg: GetByteCodes =>
+          handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
+        
         case _ => // ETH protocol messages - no special routing needed
       }
       
@@ -357,6 +370,153 @@ class EtcPeerManagerActor(
       case m: NewBlockHashes =>
         update(m.hashes.map(h => (h.number, h.hash)))
       case _ => initialPeerInfo
+    }
+  }
+
+  /** Handle incoming GetAccountRange request from a peer (server-side)
+    * 
+    * @param msg The GetAccountRange request
+    * @param peerId The peer that sent the request
+    * @param peerWithInfo Optional peer information
+    */
+  private def handleGetAccountRange(
+      msg: GetAccountRange,
+      peerId: PeerId,
+      peerWithInfo: Option[PeerWithInfo]
+  ): Unit = {
+    // Note: This is an optional server-side implementation
+    // Fukuii primarily acts as a client, so we log and ignore for now
+    log.debug(
+      "Received GetAccountRange request from peer {}: requestId={}, root={}, start={}, limit={}, bytes={}",
+      peerId,
+      msg.requestId,
+      msg.rootHash.take(4).toHex,
+      msg.startingHash.take(4).toHex,
+      msg.limitHash.take(4).toHex,
+      msg.responseBytes
+    )
+    
+    // TODO: Implement server-side account range retrieval
+    // 1. Verify we have the requested state root
+    // 2. Retrieve accounts from startingHash to limitHash (up to responseBytes)
+    // 3. Generate Merkle proofs for the range
+    // 4. Send AccountRange response
+    
+    // For now, send an empty response to indicate we don't serve SNAP data
+    peerWithInfo.foreach { pwi =>
+      val emptyResponse = AccountRange(
+        requestId = msg.requestId,
+        accounts = Seq.empty,
+        proof = Seq.empty
+      )
+      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+    }
+  }
+
+  /** Handle incoming GetStorageRanges request from a peer (server-side)
+    * 
+    * @param msg The GetStorageRanges request
+    * @param peerId The peer that sent the request
+    * @param peerWithInfo Optional peer information
+    */
+  private def handleGetStorageRanges(
+      msg: GetStorageRanges,
+      peerId: PeerId,
+      peerWithInfo: Option[PeerWithInfo]
+  ): Unit = {
+    log.debug(
+      "Received GetStorageRanges request from peer {}: requestId={}, root={}, accounts={}, start={}, limit={}, bytes={}",
+      peerId,
+      msg.requestId,
+      msg.rootHash.take(4).toHex,
+      msg.accounts.size,
+      msg.startingHash.take(4).toHex,
+      msg.limitHash.take(4).toHex,
+      msg.responseBytes
+    )
+    
+    // TODO: Implement server-side storage range retrieval
+    // 1. Verify we have the requested state root
+    // 2. For each account, retrieve storage slots from startingHash to limitHash
+    // 3. Generate Merkle proofs for each account's storage
+    // 4. Send StorageRanges response
+    
+    // For now, send an empty response
+    peerWithInfo.foreach { pwi =>
+      val emptyResponse = StorageRanges(
+        requestId = msg.requestId,
+        slots = Seq.empty,
+        proof = Seq.empty
+      )
+      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+    }
+  }
+
+  /** Handle incoming GetTrieNodes request from a peer (server-side)
+    * 
+    * @param msg The GetTrieNodes request
+    * @param peerId The peer that sent the request
+    * @param peerWithInfo Optional peer information
+    */
+  private def handleGetTrieNodes(
+      msg: GetTrieNodes,
+      peerId: PeerId,
+      peerWithInfo: Option[PeerWithInfo]
+  ): Unit = {
+    log.debug(
+      "Received GetTrieNodes request from peer {}: requestId={}, root={}, paths={}, bytes={}",
+      peerId,
+      msg.requestId,
+      msg.rootHash.take(4).toHex,
+      msg.paths.size,
+      msg.responseBytes
+    )
+    
+    // TODO: Implement server-side trie node retrieval
+    // 1. Verify we have the requested state root
+    // 2. For each path, retrieve the trie node
+    // 3. Send TrieNodes response
+    
+    // For now, send an empty response
+    peerWithInfo.foreach { pwi =>
+      val emptyResponse = TrieNodes(
+        requestId = msg.requestId,
+        nodes = Seq.empty
+      )
+      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+    }
+  }
+
+  /** Handle incoming GetByteCodes request from a peer (server-side)
+    * 
+    * @param msg The GetByteCodes request
+    * @param peerId The peer that sent the request
+    * @param peerWithInfo Optional peer information
+    */
+  private def handleGetByteCodes(
+      msg: GetByteCodes,
+      peerId: PeerId,
+      peerWithInfo: Option[PeerWithInfo]
+  ): Unit = {
+    log.debug(
+      "Received GetByteCodes request from peer {}: requestId={}, hashes={}, bytes={}",
+      peerId,
+      msg.requestId,
+      msg.hashes.size,
+      msg.responseBytes
+    )
+    
+    // TODO: Implement server-side bytecode retrieval
+    // 1. For each code hash, retrieve the bytecode from EvmCodeStorage
+    // 2. Send ByteCodes response (up to responseBytes limit)
+    
+    // For now, send an empty response
+    peerWithInfo.foreach { pwi =>
+      val emptyResponse = ByteCodes(
+        requestId = msg.requestId,
+        codes = Seq.empty
+      )
+      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
     }
   }
 

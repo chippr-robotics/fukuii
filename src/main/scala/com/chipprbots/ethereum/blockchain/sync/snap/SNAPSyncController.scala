@@ -59,6 +59,9 @@ class SNAPSyncController(
   
   private val progressMonitor = new SyncProgressMonitor(scheduler)
   
+  // Failure tracking for fallback to fast sync
+  private var criticalFailureCount: Int = 0
+  
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
@@ -158,6 +161,14 @@ class SNAPSyncController(
             errorHandler.recordPeerFailure(peerId, errorType, error)
             errorHandler.recordRetry(taskId, error)
             errorHandler.recordCircuitBreakerFailure("account_range_download")
+            
+            // Check if circuit breaker is open (indicating critical failure)
+            if (errorHandler.isCircuitOpen("account_range_download")) {
+              if (recordCriticalFailure(s"Account range download circuit breaker open: $error")) {
+                fallbackToFastSync()
+                return
+              }
+            }
             
             // Check if peer should be blacklisted
             if (errorHandler.shouldBlacklistPeer(peerId)) {
@@ -394,6 +405,48 @@ class SNAPSyncController(
         log.error(s"Cannot get header for pivot block $pivotBlockNumber")
         context.parent ! SyncProtocol.Status.SyncDone
     }
+  }
+
+  /** Record a critical failure and check if we should fallback to fast sync.
+    * Critical failures are those that indicate SNAP sync cannot proceed.
+    * 
+    * @param reason Description of the failure
+    * @return true if we should fallback to fast sync
+    */
+  private def recordCriticalFailure(reason: String): Boolean = {
+    criticalFailureCount += 1
+    log.warning(s"Critical SNAP sync failure ($criticalFailureCount/${snapSyncConfig.maxSnapSyncFailures}): $reason")
+    
+    if (criticalFailureCount >= snapSyncConfig.maxSnapSyncFailures) {
+      log.error(s"SNAP sync failed ${criticalFailureCount} times, falling back to fast sync")
+      true
+    } else {
+      false
+    }
+  }
+
+  /** Trigger fallback to fast sync due to repeated SNAP sync failures */
+  private def fallbackToFastSync(): Unit = {
+    log.warning("Triggering fallback to fast sync due to repeated SNAP sync failures")
+    
+    // Cancel all scheduled tasks
+    accountRangeRequestTask.foreach(_.cancel())
+    bytecodeRequestTask.foreach(_.cancel())
+    storageRangeRequestTask.foreach(_.cancel())
+    healingRequestTask.foreach(_.cancel())
+    
+    // Clear downloaders
+    accountRangeDownloader = None
+    bytecodeDownloader = None
+    storageRangeDownloader = None
+    trieNodeHealer = None
+    
+    // Stop progress monitoring
+    progressMonitor.stopPeriodicLogging()
+    
+    // Notify parent controller to switch to fast sync
+    context.parent ! FallbackToFastSync
+    context.become(completed)
   }
 
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
@@ -802,6 +855,7 @@ object SNAPSyncController {
 
   case object Start
   case object Done
+  case object FallbackToFastSync  // Signal to fallback to fast sync due to repeated failures
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete
@@ -844,7 +898,8 @@ case class SNAPSyncConfig(
     healingBatchSize: Int = 16,
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
-    timeout: FiniteDuration = 30.seconds
+    timeout: FiniteDuration = 30.seconds,
+    maxSnapSyncFailures: Int = 5 // Max failures before fallback to fast sync
 )
 
 object SNAPSyncConfig {
@@ -860,7 +915,9 @@ object SNAPSyncConfig {
       healingBatchSize = snapConfig.getInt("healing-batch-size"),
       stateValidationEnabled = snapConfig.getBoolean("state-validation-enabled"),
       maxRetries = snapConfig.getInt("max-retries"),
-      timeout = snapConfig.getDuration("timeout").toMillis.millis
+      timeout = snapConfig.getDuration("timeout").toMillis.millis,
+      maxSnapSyncFailures = if (snapConfig.hasPath("max-snap-sync-failures")) 
+        snapConfig.getInt("max-snap-sync-failures") else 5
     )
   }
 }

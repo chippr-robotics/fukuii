@@ -147,6 +147,25 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def putSnapSyncStateRoot(stateRoot: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
+
+  /** Get the SNAP sync progress (optional - for progress persistence across restarts)
+    * @return
+    *   Optional SyncProgress if saved, None otherwise
+    */
+  def getSnapSyncProgress(): Option[String] =
+    get(Keys.SnapSyncProgress)
+
+  /** Store the SNAP sync progress (optional - for progress persistence across restarts)
+    * Note: This stores a JSON representation of the SyncProgress.
+    * The actual SyncProgress case class is in SNAPSyncController.
+    * 
+    * @param progressJson
+    *   JSON string representation of SyncProgress
+    * @return
+    *   DataSourceBatchUpdate for committing
+    */
+  def putSnapSyncProgress(progressJson: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncProgress, progressJson)
 }
 
 object AppStateStorage {
@@ -165,6 +184,7 @@ object AppStateStorage {
     val SnapSyncDone = "SnapSyncDone"
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
+    val SnapSyncProgress = "SnapSyncProgress"
   }
 
 }
