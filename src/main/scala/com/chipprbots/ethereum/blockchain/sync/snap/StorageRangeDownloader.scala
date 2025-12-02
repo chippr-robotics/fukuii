@@ -15,9 +15,28 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, ByteArraySerializable}
 
-/** LRU cache for storage tries to limit memory usage */
+/** LRU cache for storage tries to limit memory usage
+  * 
+  * LinkedHashMap maintains insertion order. For LRU, we move accessed items to end.
+  * When cache is full, we evict the head (oldest/least recently used).
+  */
 private class StorageTrieCache(maxSize: Int = 10000) {
   private val cache = scala.collection.mutable.LinkedHashMap[ByteString, MerklePatriciaTrie[ByteString, ByteString]]()
+  
+  def getOrElseUpdate(key: ByteString, default: => MerklePatriciaTrie[ByteString, ByteString]): MerklePatriciaTrie[ByteString, ByteString] = {
+    cache.get(key) match {
+      case Some(trie) =>
+        // Move to end (most recently used)
+        cache.remove(key)
+        cache.put(key, trie)
+        trie
+      case None =>
+        // Create new entry
+        val trie = default
+        put(key, trie)
+        trie
+    }
+  }
   
   def get(key: ByteString): Option[MerklePatriciaTrie[ByteString, ByteString]] = {
     cache.get(key).map { trie =>

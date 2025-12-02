@@ -574,6 +574,18 @@ class SyncProgressMonitor(scheduler: Scheduler) {
   def complete(): Unit = {
     currentPhaseState = Completed
   }
+  
+  def incrementAccountsSynced(count: Long): Unit = {
+    accountsSynced += count
+  }
+  
+  def incrementStorageSlotsSynced(count: Long): Unit = {
+    storageSlotsSynced += count
+  }
+  
+  def incrementNodesHealed(count: Long): Unit = {
+    nodesHealed += count
+  }
 
   def currentProgress: SyncProgress = {
     val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
