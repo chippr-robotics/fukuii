@@ -1,14 +1,16 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Scheduler}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Scheduler, Cancellable}
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
-import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.{Blacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, MptStorage}
 import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
+import com.chipprbots.ethereum.network.p2p.messages.{Capability, SNAP}
+import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -16,15 +18,20 @@ class SNAPSyncController(
     blockchainReader: BlockchainReader,
     appStateStorage: AppStateStorage,
     mptStorage: MptStorage,
-    etcPeerManager: ActorRef,
-    syncConfig: SyncConfig,
+    val etcPeerManager: ActorRef,
+    val peerEventBus: ActorRef,
+    val syncConfig: SyncConfig,
     snapSyncConfig: SNAPSyncConfig,
-    scheduler: Scheduler
+    val scheduler: Scheduler
 )(implicit ec: ExecutionContext)
     extends Actor
-    with ActorLogging {
+    with ActorLogging
+    with PeerListSupportNg {
 
   import SNAPSyncController._
+
+  // Blacklist for PeerListSupportNg trait
+  val blacklist: Blacklist = Blacklist.empty(scheduler, ec)
 
   private var accountRangeDownloader: Option[AccountRangeDownloader] = None
   private var storageRangeDownloader: Option[StorageRangeDownloader] = None
@@ -38,8 +45,21 @@ class SNAPSyncController(
   
   private val progressMonitor = new SyncProgressMonitor(scheduler)
   
+  // Scheduled tasks for periodic peer requests
+  private var accountRangeRequestTask: Option[Cancellable] = None
+  private var storageRangeRequestTask: Option[Cancellable] = None
+  private var healingRequestTask: Option[Cancellable] = None
+  
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
+  }
+  
+  override def postStop(): Unit = {
+    // Cancel all scheduled tasks
+    accountRangeRequestTask.foreach(_.cancel())
+    storageRangeRequestTask.foreach(_.cancel())
+    healingRequestTask.foreach(_.cancel())
+    log.info("SNAP Sync Controller stopped")
   }
 
   override def receive: Receive = idle
@@ -50,7 +70,75 @@ class SNAPSyncController(
       startSnapSync()
   }
 
-  def syncing: Receive = {
+  def syncing: Receive = handlePeerListMessages.orElse {
+    // Periodic request triggers
+    case RequestAccountRanges =>
+      requestAccountRanges()
+    
+    case RequestStorageRanges =>
+      requestStorageRanges()
+    
+    case RequestTrieNodeHealing =>
+      requestTrieNodeHealing()
+    
+    // Handle SNAP protocol responses
+    case msg: AccountRange =>
+      log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
+      accountRangeDownloader.foreach { downloader =>
+        downloader.handleResponse(msg) match {
+          case Right(count) =>
+            log.info(s"Successfully processed $count accounts")
+            progressMonitor.accountsSynced += count
+            // Check if account range sync is complete
+            if (downloader.isComplete) {
+              log.info("Account range sync complete!")
+              accountRangeRequestTask.foreach(_.cancel())
+              accountRangeRequestTask = None
+              self ! AccountRangeSyncComplete
+            }
+          case Left(error) =>
+            log.warn(s"Failed to process AccountRange: $error")
+        }
+      }
+
+    case msg: StorageRanges =>
+      log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
+      storageRangeDownloader.foreach { downloader =>
+        downloader.handleResponse(msg) match {
+          case Right(count) =>
+            log.info(s"Successfully processed $count storage slots")
+            progressMonitor.storageSlotsSynced += count
+            // Check if storage range sync is complete
+            if (downloader.isComplete) {
+              log.info("Storage range sync complete!")
+              storageRangeRequestTask.foreach(_.cancel())
+              storageRangeRequestTask = None
+              self ! StorageRangeSyncComplete
+            }
+          case Left(error) =>
+            log.warn(s"Failed to process StorageRanges: $error")
+        }
+      }
+
+    case msg: TrieNodes =>
+      log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
+      trieNodeHealer.foreach { healer =>
+        healer.handleResponse(msg) match {
+          case Right(count) =>
+            log.info(s"Successfully healed $count trie nodes")
+            progressMonitor.nodesHealed += count
+            // Check if healing is complete
+            if (healer.isComplete) {
+              log.info("State healing complete!")
+              healingRequestTask.foreach(_.cancel())
+              healingRequestTask = None
+              self ! StateHealingComplete
+            }
+          case Left(error) =>
+            log.warn(s"Failed to process TrieNodes: $error")
+        }
+      }
+
     case AccountRangeSyncComplete =>
       log.info("Account range sync complete. Starting storage range sync...")
       currentPhase = StorageRangeSync
@@ -74,14 +162,7 @@ class SNAPSyncController(
       sender() ! progressMonitor.currentProgress
 
     case msg =>
-      log.debug(s"Forwarding message to active sync phase: $msg")
-      // Forward to appropriate coordinator based on current phase
-      currentPhase match {
-        case AccountRangeSync => accountRangeDownloader.foreach(_ => ()) // Handle message
-        case StorageRangeSync => storageRangeDownloader.foreach(_ => ())
-        case StateHealing => trieNodeHealer.foreach(_ => ())
-        case _ => log.warning(s"Received message in unexpected phase $currentPhase: $msg")
-      }
+      log.debug(s"Unhandled message in syncing state: $msg")
   }
 
   def completed: Receive = {
@@ -140,10 +221,44 @@ class SNAPSyncController(
 
     progressMonitor.startPhase(AccountRangeSync)
     
-    // TODO: Integrate with EtcPeerManager to start requesting account ranges
-    // For now, simulate completion after timeout for integration testing
-    scheduler.scheduleOnce(5.seconds) {
-      self ! AccountRangeSyncComplete
+    // Start periodic task to request account ranges from peers
+    accountRangeRequestTask = Some(
+      scheduler.scheduleWithFixedDelay(
+        0.seconds,
+        1.second,
+        self,
+        RequestAccountRanges
+      )(ec)
+    )
+  }
+  
+  // Internal message for periodic account range requests
+  private case object RequestAccountRanges
+  
+  private def requestAccountRanges(): Unit = {
+    accountRangeDownloader.foreach { downloader =>
+      // Get SNAP-capable peers
+      val snapPeers = peersToDownloadFrom.collect {
+        case (peerId, peerWithInfo) 
+          if peerWithInfo.peerInfo.remoteStatus.capability == Capability.SNAP1 =>
+          peerWithInfo.peer
+      }
+      
+      if (snapPeers.isEmpty) {
+        log.debug("No SNAP-capable peers available for account range requests")
+      } else {
+        log.debug(s"Requesting account ranges from ${snapPeers.size} SNAP peers")
+        
+        // Request from each available peer
+        snapPeers.foreach { peer =>
+          downloader.requestNextRange(peer) match {
+            case Some(requestId) =>
+              log.debug(s"Sent account range request $requestId to peer ${peer.id}")
+            case None =>
+              log.debug(s"No more account ranges to request")
+          }
+        }
+      }
     }
   }
 
@@ -163,9 +278,55 @@ class SNAPSyncController(
 
       progressMonitor.startPhase(StorageRangeSync)
       
-      // TODO: Integrate with account range results to identify accounts with storage
-      // For now, simulate completion
-      scheduler.scheduleOnce(3.seconds) {
+      // TODO: In a complete implementation, we would identify accounts with storage
+      // from the account range sync results and add them as tasks to the downloader.
+      // For now, we start the request loop which will complete immediately if no tasks.
+      
+      // Start periodic task to request storage ranges from peers
+      storageRangeRequestTask = Some(
+        scheduler.scheduleWithFixedDelay(
+          0.seconds,
+          1.second,
+          self,
+          RequestStorageRanges
+        )(ec)
+      )
+    }
+  }
+  
+  // Internal message for periodic storage range requests
+  private case object RequestStorageRanges
+  
+  private def requestStorageRanges(): Unit = {
+    storageRangeDownloader.foreach { downloader =>
+      // Get SNAP-capable peers
+      val snapPeers = peersToDownloadFrom.collect {
+        case (peerId, peerWithInfo) 
+          if peerWithInfo.peerInfo.remoteStatus.capability == Capability.SNAP1 =>
+          peerWithInfo.peer
+      }
+      
+      if (snapPeers.isEmpty) {
+        log.debug("No SNAP-capable peers available for storage range requests")
+      } else {
+        log.debug(s"Requesting storage ranges from ${snapPeers.size} SNAP peers")
+        
+        // Request from each available peer
+        snapPeers.foreach { peer =>
+          downloader.requestNextRanges(peer) match {
+            case Some(requestId) =>
+              log.debug(s"Sent storage range request $requestId to peer ${peer.id}")
+            case None =>
+              log.debug(s"No more storage ranges to request")
+          }
+        }
+      }
+      
+      // If no tasks and downloader is complete, trigger completion immediately
+      if (downloader.isComplete) {
+        log.info("Storage range sync complete (no storage tasks)")
+        storageRangeRequestTask.foreach(_.cancel())
+        storageRangeRequestTask = None
         self ! StorageRangeSyncComplete
       }
     }
@@ -187,9 +348,55 @@ class SNAPSyncController(
 
       progressMonitor.startPhase(StateHealing)
       
-      // TODO: Integrate with missing node detection from account/storage sync
-      // For now, simulate completion
-      scheduler.scheduleOnce(2.seconds) {
+      // TODO: In a complete implementation, we would detect missing nodes from
+      // account/storage sync and add them to the healer. For now, we start the
+      // request loop which will complete immediately if no missing nodes.
+      
+      // Start periodic task to request trie node healing from peers
+      healingRequestTask = Some(
+        scheduler.scheduleWithFixedDelay(
+          0.seconds,
+          1.second,
+          self,
+          RequestTrieNodeHealing
+        )(ec)
+      )
+    }
+  }
+  
+  // Internal message for periodic healing requests
+  private case object RequestTrieNodeHealing
+  
+  private def requestTrieNodeHealing(): Unit = {
+    trieNodeHealer.foreach { healer =>
+      // Get SNAP-capable peers
+      val snapPeers = peersToDownloadFrom.collect {
+        case (peerId, peerWithInfo) 
+          if peerWithInfo.peerInfo.remoteStatus.capability == Capability.SNAP1 =>
+          peerWithInfo.peer
+      }
+      
+      if (snapPeers.isEmpty) {
+        log.debug("No SNAP-capable peers available for healing requests")
+      } else {
+        log.debug(s"Requesting trie node healing from ${snapPeers.size} SNAP peers")
+        
+        // Request from each available peer
+        snapPeers.foreach { peer =>
+          healer.requestNextBatch(peer) match {
+            case Some(requestId) =>
+              log.debug(s"Sent healing request $requestId to peer ${peer.id}")
+            case None =>
+              log.debug(s"No more nodes to heal")
+          }
+        }
+      }
+      
+      // If no tasks and healer is complete, trigger completion immediately
+      if (healer.isComplete) {
+        log.info("State healing complete (no missing nodes)")
+        healingRequestTask.foreach(_.cancel())
+        healingRequestTask = None
         self ! StateHealingComplete
       }
     }
@@ -271,6 +478,7 @@ object SNAPSyncController {
       appStateStorage: AppStateStorage,
       mptStorage: MptStorage,
       etcPeerManager: ActorRef,
+      peerEventBus: ActorRef,
       syncConfig: SyncConfig,
       snapSyncConfig: SNAPSyncConfig,
       scheduler: Scheduler
@@ -281,6 +489,7 @@ object SNAPSyncController {
         appStateStorage,
         mptStorage,
         etcPeerManager,
+        peerEventBus,
         syncConfig,
         snapSyncConfig,
         scheduler
