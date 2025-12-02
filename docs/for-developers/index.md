@@ -163,11 +163,11 @@ ADRs document significant architectural decisions:
 
 | Category | Description |
 |----------|-------------|
-| [Infrastructure](../adr/infrastructure/) | Platform, runtime, and build decisions |
-| [Consensus](../adr/consensus/) | Protocol and networking decisions |
-| [VM](../adr/vm/) | EVM and EIP implementations |
-| [Testing](../adr/testing/) | Testing strategy and frameworks |
-| [Operations](../adr/operations/) | Operational tooling decisions |
+| [Infrastructure](../adr/infrastructure/README.md) | Platform, runtime, and build decisions |
+| [Consensus](../adr/consensus/README.md) | Protocol and networking decisions |
+| [VM](../adr/vm/README.md) | EVM and EIP implementations |
+| [Testing](../adr/testing/README.md) | Testing strategy and frameworks |
+| [Operations](../adr/operations/README.md) | Operational tooling decisions |
 
 ### Recent ADRs
 

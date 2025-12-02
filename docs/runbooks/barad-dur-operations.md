@@ -663,7 +663,7 @@ docker-compose exec kong nslookup fukuii-primary
 
 ## Related Documentation
 
-- [Barad-dûr README](../../docker/barad-dur/README.md) - Stack overview and quick start
+- [Barad-dûr README](https://github.com/chippr-robotics/fukuii/tree/develop/docker/barad-dur) - Stack overview and quick start
 - [Kong Guide](../deployment/kong.md) - Comprehensive Kong documentation
 - [Kong Architecture](../deployment/kong-architecture.md) - Architecture details
 - [Kong Security](../deployment/kong-security.md) - Security best practices

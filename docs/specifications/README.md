@@ -12,12 +12,12 @@ This directory contains technical specifications and protocol documentation for 
 
 ## Related Documentation
 
-- [ADRs](../adr/) - Architecture Decision Records
-- [VM ADRs](../adr/vm/) - EVM-specific implementation decisions
-- [Consensus ADRs](../adr/consensus/) - Consensus and protocol decisions
+- [ADRs](../adr/README.md) - Architecture Decision Records
+- [VM ADRs](../adr/vm/README.md) - EVM-specific implementation decisions
+- [Consensus ADRs](../adr/consensus/README.md) - Consensus and protocol decisions
 
 ## See Also
 
 For Ethereum Improvement Proposal (EIP) implementations, see:
-- [VM ADRs](../adr/vm/) - EIP implementation decisions
-- [Consensus ADRs](../adr/consensus/) - Protocol-level specifications
+- [VM ADRs](../adr/vm/README.md) - EIP implementation decisions
+- [Consensus ADRs](../adr/consensus/README.md) - Protocol-level specifications
