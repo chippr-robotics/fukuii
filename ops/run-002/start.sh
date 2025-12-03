@@ -1,11 +1,11 @@
 #!/bin/bash
-# Quick start script for Run 001 configuration
+# Quick start script for Run 002 configuration
 # Fukuii node on Mordor testnet with debug sync/snap logging
 
 set -e
 
 echo "==================================================================="
-echo "  Fukuii Run 001 - Mordor Testnet with Debug Sync/Snap Logging"
+echo "  Fukuii Run 002 - Mordor Testnet with Debug Sync/Snap Logging"
 echo "==================================================================="
 echo ""
 
@@ -37,11 +37,11 @@ ACTION="${1:-up}"
 
 case "$ACTION" in
     up|start)
-        echo "Starting Fukuii Run 001..."
+        echo "Starting Fukuii Run 002..."
         echo ""
         $COMPOSE_CMD up -d
         echo ""
-        echo "✓ Fukuii Run 001 started successfully!"
+        echo "✓ Fukuii Run 002 started successfully!"
         echo ""
         echo "Monitoring commands:"
         echo "  - View logs:          $COMPOSE_CMD logs -f fukuii"
@@ -52,15 +52,15 @@ case "$ACTION" in
         ;;
     
     down|stop)
-        echo "Stopping Fukuii Run 001..."
+        echo "Stopping Fukuii Run 002..."
         $COMPOSE_CMD down
-        echo "✓ Fukuii Run 001 stopped."
+        echo "✓ Fukuii Run 002 stopped."
         ;;
     
     restart)
-        echo "Restarting Fukuii Run 001..."
+        echo "Restarting Fukuii Run 002..."
         $COMPOSE_CMD restart
-        echo "✓ Fukuii Run 001 restarted."
+        echo "✓ Fukuii Run 002 restarted."
         ;;
     
     logs)
@@ -70,7 +70,7 @@ case "$ACTION" in
         ;;
     
     status)
-        echo "Checking Fukuii Run 001 status..."
+        echo "Checking Fukuii Run 002 status..."
         echo ""
         $COMPOSE_CMD ps
         echo ""
