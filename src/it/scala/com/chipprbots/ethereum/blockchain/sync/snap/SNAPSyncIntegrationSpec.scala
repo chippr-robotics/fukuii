@@ -335,7 +335,9 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
             phaseProgress = 50,
             estimatedTotalAccounts = 1000,
             estimatedTotalBytecodes = 100,
-            estimatedTotalSlots = 200
+            estimatedTotalSlots = 200,
+            startTime = System.currentTimeMillis(),
+            phaseStartTime = System.currentTimeMillis()
           )
           
           progress.phase shouldBe AccountRangeSync
