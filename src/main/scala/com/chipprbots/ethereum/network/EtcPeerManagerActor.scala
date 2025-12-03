@@ -388,13 +388,7 @@ class EtcPeerManagerActor(
     // Note: This is an optional server-side implementation
     // Fukuii primarily acts as a client, so we log and ignore for now
     log.debug(
-      "Received GetAccountRange request from peer {}: requestId={}, root={}, start={}, limit={}, bytes={}",
-      peerId,
-      msg.requestId,
-      msg.rootHash.take(4).toHex,
-      msg.startingHash.take(4).toHex,
-      msg.limitHash.take(4).toHex,
-      msg.responseBytes
+      s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
     
     // TODO: Implement server-side account range retrieval
@@ -426,14 +420,7 @@ class EtcPeerManagerActor(
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
     log.debug(
-      "Received GetStorageRanges request from peer {}: requestId={}, root={}, accounts={}, start={}, limit={}, bytes={}",
-      peerId,
-      msg.requestId,
-      msg.rootHash.take(4).toHex,
-      msg.accounts.size,
-      msg.startingHash.take(4).toHex,
-      msg.limitHash.take(4).toHex,
-      msg.responseBytes
+      s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
     
     // TODO: Implement server-side storage range retrieval
@@ -465,12 +452,7 @@ class EtcPeerManagerActor(
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
     log.debug(
-      "Received GetTrieNodes request from peer {}: requestId={}, root={}, paths={}, bytes={}",
-      peerId,
-      msg.requestId,
-      msg.rootHash.take(4).toHex,
-      msg.paths.size,
-      msg.responseBytes
+      s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
     
     // TODO: Implement server-side trie node retrieval
@@ -500,11 +482,7 @@ class EtcPeerManagerActor(
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
     log.debug(
-      "Received GetByteCodes request from peer {}: requestId={}, hashes={}, bytes={}",
-      peerId,
-      msg.requestId,
-      msg.hashes.size,
-      msg.responseBytes
+      s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
     
     // TODO: Implement server-side bytecode retrieval
