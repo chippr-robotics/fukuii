@@ -147,6 +147,49 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def putSnapSyncStateRoot(stateRoot: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
+
+  /** Get the SNAP sync progress (optional - for progress persistence across restarts)
+    * 
+    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController.
+    * Integration is planned to enable resumable SNAP sync after process restarts.
+    * 
+    * This method retrieves a JSON representation of the SNAP sync progress. The JSON format
+    * is flexible and not tied to any specific case class structure, allowing for evolution
+    * of the progress format over time without breaking compatibility.
+    * 
+    * Example JSON format:
+    * ```json
+    * {
+    *   "phase": "AccountRangeSync",
+    *   "accountsSynced": 1000,
+    *   "bytecodesDownloaded": 50,
+    *   "storageSlotsSynced": 200,
+    *   "nodesHealed": 10
+    * }
+    * ```
+    * 
+    * @return
+    *   Optional JSON string if progress has been saved, None otherwise
+    */
+  def getSnapSyncProgress(): Option[String] =
+    get(Keys.SnapSyncProgress)
+
+  /** Store the SNAP sync progress (optional - for progress persistence across restarts)
+    * 
+    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController.
+    * Integration is planned to enable resumable SNAP sync after process restarts.
+    * 
+    * This method stores a JSON representation of the SNAP sync progress. The JSON format
+    * is flexible and allows the caller to determine what fields to include. This design
+    * provides forward/backward compatibility as the progress tracking evolves.
+    * 
+    * @param progressJson
+    *   JSON string representation of the sync progress
+    * @return
+    *   DataSourceBatchUpdate for committing
+    */
+  def putSnapSyncProgress(progressJson: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncProgress, progressJson)
 }
 
 object AppStateStorage {
@@ -165,6 +208,7 @@ object AppStateStorage {
     val SnapSyncDone = "SnapSyncDone"
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
+    val SnapSyncProgress = "SnapSyncProgress"
   }
 
 }
