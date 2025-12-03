@@ -1,6 +1,7 @@
 # Run 006 Docker Compose Configuration
-# Fukuii node configured for ETC mainnet with FastSync
-# Addressing SNAP sync peer availability issues identified in run-005
+# Fukuii node configured for ETC mainnet SNAP sync testing
+# Core-geth node added for SNAP sync comparison
+# Focus: Validate SNAP protocol implementation and capture detailed logs
 
 networks:
   fukuii-run006:
@@ -42,6 +43,47 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  core-geth:
+    image: etclabscore/core-geth:latest
+    container_name: core-geth-run-006
+    restart: unless-stopped
+    networks:
+      - fukuii-run006
+    ports:
+      # JSON-RPC HTTP (different port to avoid conflict)
+      - "8555:8545"
+      # JSON-RPC WebSocket (different port to avoid conflict)
+      - "8556:8546"
+      # P2P networking (different port to avoid conflict)
+      - "30313:30303/tcp"
+      - "30313:30303/udp"
+    volumes:
+      # Data directory mapped to host (for analysis)
+      - ../data/geth:/root/.ethereum
+    command:
+      - "--classic"
+      - "--syncmode=snap"
+      - "--http"
+      - "--http.addr=0.0.0.0"
+      - "--http.port=8545"
+      - "--http.api=eth,net,web3"
+      - "--http.corsdomain=*"
+      - "--ws"
+      - "--ws.addr=0.0.0.0"
+      - "--ws.port=8546"
+      - "--ws.api=eth,net,web3"
+      - "--ws.origins=*"
+      - "--port=30303"
+      - "--maxpeers=50"
+      - "--cache=2048"
+      - "--verbosity=3"
+    healthcheck:
+      test: ["CMD-SHELL", "geth attach --exec eth.syncing http://localhost:8545 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
 volumes:
   fukuii-run006-data:

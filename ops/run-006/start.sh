@@ -1,11 +1,11 @@
 #!/bin/bash
 # Quick start script for Run 006 configuration
-# Fukuii node on ETC mainnet with FastSync
+# Fukuii node on ETC mainnet - SNAP sync testing
 
 set -euo pipefail
 
 echo "==================================================================="
-echo "  Fukuii Run 006 - ETC Mainnet with FastSync"
+echo "  Fukuii Run 006 - ETC Mainnet SNAP Sync Testing"
 echo "==================================================================="
 echo ""
 

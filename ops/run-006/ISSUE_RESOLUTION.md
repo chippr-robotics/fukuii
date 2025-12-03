@@ -1,4 +1,303 @@
-# Run 006 - SNAP Sync Not Viable on ETC Mainnet
+# Run 006 - SNAP Sync Protocol Validation Testing
+
+## Issue ID
+- **GitHub Issue**: #704
+- **Title**: run 006 - SNAP sync testing and protocol validation
+
+## Purpose
+
+Run 006 is a **SNAP protocol validation test**, not a production sync attempt. After run 005 showed zero SNAP sync progress, run 006 continues testing to:
+
+1. **Validate SNAP implementation** - Confirm our SNAP protocol code works correctly
+2. **Capture detailed logs** - Analyze capability exchange and message flows  
+3. **Understand peer behavior** - Document why ETC peers don't advertise snap/1
+4. **Test error handling** - Verify graceful handling of missing SNAP support
+
+## Background from Run 005
+
+Run 005 attempted SNAP sync on ETC mainnet but made zero progress:
+
+```
+21:25:54 - SNAP sync started
+21:25:54 - accounts=0@0/s
+21:27:15 - GetAccountRange requests sent to peers
+21:27:45 - All requests timed out (no responses)
+... pattern continued with 0 progress
+```
+
+**Key observations:**
+- All connected peers advertised only "Capability: ETH68"
+- No peers advertised "snap/1" capability
+- 100% of GetAccountRange requests timed out
+- Zero account responses received
+
+## Investigation Summary
+
+While run 005 logs suggest ETC mainnet peers don't support SNAP, we need to:
+
+1. **Verify the finding** - Confirm capability exchange is working correctly
+2. **Test our implementation** - Validate SNAP protocol message handling
+3. **Capture diagnostics** - Get detailed logs for root cause analysis
+4. **Document behavior** - Record how our code handles missing SNAP support
+
+This is why run 006 **enables SNAP sync** with detailed logging, rather than switching to FastSync.
+
+## Configuration for Run 006
+
+### SNAP Sync: ENABLED (Primary Test Target)
+
+```hocon
+fukuii {
+  sync {
+    # SNAP sync is the unit under test
+    do-snap-sync = true
+    
+    # Disable FastSync to isolate SNAP behavior
+    do-fast-sync = false
+    
+    # Extended timeouts to capture full request lifecycle
+    peer-response-timeout = 90.seconds
+    
+    snap-sync {
+      request-timeout = 60.seconds
+    }
+  }
+}
+```
+
+**Rationale:** We're testing SNAP protocol implementation, not trying to achieve sync.
+
+### Logging: Focused on SNAP Protocol
+
+```xml
+<!-- PRIMARY FOCUS: SNAP sync components -->
+<logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
+<logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="DEBUG" />
+<logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="DEBUG" />
+<logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="DEBUG" />
+
+<!-- CRITICAL: Capability exchange and handshake -->
+<logger name="com.chipprbots.ethereum.network.handshaker" level="DEBUG" />
+<logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="DEBUG" />
+
+<!-- IMPORTANT: RLPx message encoding/decoding -->
+<logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
+<logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="DEBUG" />
+
+<!-- REDUCED: Non-SNAP components to minimize noise -->
+<logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="INFO" />
+<logger name="com.chipprbots.scalanet" level="INFO" />
+```
+
+**Rationale:** Focus logs on SNAP-related flows, suppress unrelated components.
+
+## Expected Behavior (Test Success Criteria)
+
+Since run 005 showed peers don't advertise snap/1, run 006 is expected to:
+
+✅ **Connect to peers** - Network layer functions correctly  
+✅ **Complete handshakes** - Capability exchange works  
+✅ **Log peer capabilities** - Capture what peers advertise  
+✅ **Initialize SNAP sync** - Our SNAP code starts correctly  
+✅ **Send GetAccountRange** - SNAP messages are formatted properly  
+✅ **Timeout gracefully** - Handle missing SNAP support correctly  
+✅ **Generate detailed logs** - Provide data for analysis  
+
+**Note:** Zero sync progress is EXPECTED for this test. We're validating implementation, not attempting to sync.
+
+## Analysis Goals
+
+Run 006 logs should answer:
+
+### 1. Capability Advertisement
+- What capabilities do ETC peers actually advertise?
+- Do ANY peers advertise snap/1?
+- Is capability negotiation working correctly in our code?
+
+### 2. SNAP Message Handling
+- Are GetAccountRange messages formatted per spec?
+- Is RLP encoding correct?
+- Are message codes matching SNAP protocol?
+
+### 3. Error Handling
+- How does our code handle missing SNAP support?
+- Are timeout messages clear and actionable?
+- Do we blacklist peers appropriately?
+
+### 4. Protocol Implementation
+- Does our SNAP code initialize correctly?
+- Are request IDs managed properly?
+- Is the request tracking working?
+
+## Monitoring Commands
+
+### Capture Peer Capabilities
+```bash
+docker compose logs fukuii | grep "PEER_HANDSHAKE_SUCCESS" > peer_capabilities.log
+
+# Analyze capability distribution
+grep -o "Capability: [A-Z0-9]*" peer_capabilities.log | sort | uniq -c
+```
+
+### Track SNAP Message Flow  
+```bash
+# See SNAP requests
+docker compose logs fukuii | grep "GetAccountRange" > snap_requests.log
+
+# Check for responses (likely none)
+docker compose logs fukuii | grep "AccountRange.*response" > snap_responses.log
+
+# Analyze timeouts
+docker compose logs fukuii | grep "SNAP request.*timeout" > snap_timeouts.log
+```
+
+### Verify Handshake Details
+```bash
+# Detailed capability exchange
+docker compose logs fukuii | grep -i "hello\|capability" > handshake_details.log
+```
+
+## Test Validation Checklist
+
+After run 006 completes, verify:
+
+- [ ] Peers connected successfully (5+ peers)
+- [ ] Handshakes completed (PEER_HANDSHAKE_SUCCESS logged)
+- [ ] Peer capabilities captured (ETH68, snap/1 status documented)
+- [ ] SNAP sync initialized (controller started)
+- [ ] GetAccountRange requests sent (messages logged)
+- [ ] Timeouts occurred as expected (60s timeout logged)
+- [ ] No unexpected errors (crashes, panics, etc.)
+- [ ] Logs are analyzable (not too noisy, not missing key events)
+
+## Comparison: Run 005 vs Run 006
+
+| Aspect | Run 005 | Run 006 |
+|--------|---------|---------|
+| **SNAP Sync** | Enabled | Enabled |
+| **Purpose** | Attempt sync | Test implementation |
+| **SNAP Logging** | DEBUG | DEBUG |
+| **Non-SNAP Logging** | DEBUG (all) | INFO/WARN (reduced) |
+| **FastSync** | Disabled | Disabled |
+| **Success = Sync?** | Yes | No - success = good logs |
+| **Expected Progress** | Unknown | Zero (expected) |
+| **Focus** | Making progress | Understanding behavior |
+
+## Potential Outcomes
+
+### Outcome 1: Peers Don't Support SNAP (Most Likely)
+
+**Evidence:**
+- All peers advertise only ETH68
+- Zero snap/1 capabilities observed
+- All GetAccountRange timeout
+
+**Conclusion:**
+- ETC mainnet doesn't use SNAP protocol
+- Our implementation handles this correctly
+- FastSync is appropriate for ETC sync
+
+**Action:**
+- Document finding for future reference
+- Use FastSync for production ETC deployments
+- Consider this test successful (implementation validated)
+
+### Outcome 2: Implementation Issue Found
+
+**Evidence:**
+- Errors in SNAP message encoding
+- Incorrect RLP serialization
+- Protocol violations in logs
+
+**Conclusion:**
+- Bug in our SNAP implementation
+- Needs fixing regardless of peer support
+
+**Action:**
+- Fix identified issues
+- Re-test with corrections
+- Validate against SNAP spec
+
+### Outcome 3: Some Peers Support SNAP (Unexpected)
+
+**Evidence:**
+- >0% of peers advertise snap/1
+- Some GetAccountRange responses received
+- Partial sync progress
+
+**Conclusion:**
+- SNAP is partially available on ETC
+- Need to investigate further
+
+**Action:**
+- Analyze which peers support SNAP
+- Continue testing to see full behavior
+- May enable actual sync progress
+
+## Log Analysis Commands
+
+After collecting run 006 logs:
+
+```bash
+# Capability distribution
+grep "PEER_HANDSHAKE_SUCCESS" run006.log | \
+  grep -o "Capability: [A-Z0-9]*" | \
+  sort | uniq -c | sort -rn
+
+# SNAP message count
+echo "GetAccountRange sent:"
+grep -c "GetAccountRange" run006.log
+
+echo "AccountRange responses:"
+grep -c "AccountRange.*response" run006.log
+
+# Timeout analysis
+grep "SNAP request.*timeout" run006.log | \
+  awk '{print $NF}' | \
+  sort | uniq -c
+
+# Disconnect reasons
+grep -i "disconnect\|blacklist" run006.log | \
+  grep -o "Reason: [^\"]*" | \
+  sort | uniq -c
+```
+
+## Success Criteria
+
+Run 006 is successful if we obtain:
+
+✅ Clear evidence of peer capability support (or lack thereof)  
+✅ Detailed SNAP protocol message flows  
+✅ Validation that our implementation handles the scenario correctly  
+✅ Actionable insights for next steps  
+✅ Clean logs focused on SNAP-related events  
+
+Progress through sync is NOT required for success.
+
+## Related Files
+
+- `ops/run-006/conf/etc.conf` - SNAP sync enabled configuration
+- `ops/run-006/conf/logback.xml` - SNAP-focused logging
+- `ops/run-006/README.md` - Detailed testing guide
+
+## References
+
+- [SNAP Protocol Specification](https://github.com/ethereum/devp2p/blob/master/caps/snap.md)
+- [Run 005 Logs](https://github.com/user-attachments/files/23917208/run005.log)
+- [Core-Geth SNAP Implementation](https://github.com/etclabscore/core-geth/tree/master/eth/protocols/snap)
+
+## Conclusion
+
+Run 006 is configured as a SNAP protocol validation test. SNAP sync is ENABLED with detailed logging to:
+- Validate our SNAP implementation works correctly
+- Capture comprehensive logs for analysis
+- Understand peer capability behavior on ETC mainnet
+- Document how our code handles scenarios where peers don't support SNAP
+
+Success is measured by log quality and implementation validation, not by sync progress.
+
+**Status**: Ready for testing - configuration validates SNAP implementation.
+
 
 ## Issue ID
 - **GitHub Issue**: Related to run 005 follow-up
