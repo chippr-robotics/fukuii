@@ -1,12 +1,13 @@
 # Run 001 Configuration
 
-This configuration sets up a Fukuii Ethereum Classic node with specific requirements:
+This configuration sets up a Fukuii node on the **Mordor testnet** (Ethereum Classic testnet) with specific requirements for safe debugging and development.
 
 ## Configuration Details
 
 ### Network Configuration
-- **Network**: Ethereum Classic (ETC)
+- **Network**: Mordor (Ethereum Classic testnet)
 - **Purpose**: Development/debugging environment for sync troubleshooting
+- **Safety**: Uses testnet instead of mainnet to avoid risks with real funds
 
 ### Logging Configuration
 The following components have DEBUG-level logging enabled:
@@ -35,7 +36,7 @@ All other components remain at INFO level for optimal performance.
 ```
 ops/run-001/
 ├── conf/
-│   ├── etc.conf          # Network configuration (ETC)
+│   ├── mordor.conf       # Network configuration (Mordor testnet)
 │   └── logback.xml       # Logging configuration (DEBUG for sync/snap)
 ├── docker-compose.yml    # Docker Compose deployment file
 ├── start.sh             # Quick start/stop script
@@ -103,13 +104,13 @@ If running Fukuii outside of Docker:
 
 1. Copy the configuration files to your Fukuii installation:
    ```bash
-   cp conf/etc.conf /path/to/fukuii/conf/
+   cp conf/mordor.conf /path/to/fukuii/conf/
    cp conf/logback.xml /path/to/fukuii/conf/
    ```
 
 2. Start Fukuii with the custom logback configuration:
    ```bash
-   ./bin/fukuii etc -Dlogback.configurationFile=conf/logback.xml
+   ./bin/fukuii mordor -Dlogback.configurationFile=conf/logback.xml
    ```
 
 ## Monitoring
@@ -174,15 +175,17 @@ Edit `conf/logback.xml` and change the level attribute for specific loggers:
 
 ### Switching Networks
 
-Edit `conf/etc.conf` to change the network:
+Edit `conf/mordor.conf` to change the network:
 
 ```hocon
 fukuii {
   blockchains {
-    network = "mordor"  # Change to mordor, eth, etc.
+    network = "etc"  # Change to etc (mainnet), mordor (testnet), etc.
   }
 }
 ```
+
+⚠️ **Note**: This configuration uses Mordor testnet by default for safety. Only switch to mainnet if you understand the implications.
 
 ## Troubleshooting
 

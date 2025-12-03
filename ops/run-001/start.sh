@@ -1,10 +1,11 @@
 #!/bin/bash
 # Quick start script for Run 001 configuration
+# Fukuii node on Mordor testnet with debug sync/snap logging
 
 set -e
 
 echo "==================================================================="
-echo "  Fukuii Run 001 - ETC with Debug Sync/Snap Logging"
+echo "  Fukuii Run 001 - Mordor Testnet with Debug Sync/Snap Logging"
 echo "==================================================================="
 echo ""
 

@@ -1,5 +1,6 @@
 # Run 001 Docker Compose Configuration
-# Fukuii node configured for ETC network with debug logging for sync/snap
+# Fukuii node configured for Mordor testnet with debug logging for sync/snap
+# Using Mordor (ETC testnet) for safety instead of mainnet
 
 version: '3.8'
 
@@ -24,7 +25,7 @@ services:
       - "30303:30303/udp"
     volumes:
       # Configuration files
-      - ./conf/etc.conf:/app/conf/etc.conf:ro
+      - ./conf/mordor.conf:/app/conf/mordor.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
       # Data directory (persistent)
       - fukuii-run001-data:/app/data
@@ -36,7 +37,7 @@ services:
       # Set node identifier for logging
       - FUKUII_NODE_ID=run-001
       - FUKUII_ENV=run-001-debug
-    command: ["etc"]
+    command: ["mordor"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
