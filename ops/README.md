@@ -12,9 +12,9 @@ ops/
 │   ├── fukuii-node-troubleshooting-dashboard.json  # Node Troubleshooting - Debug dashboard
 │   └── fukuii-casual-dashboard.json             # Casual View - Minimalist dashboard
 ├── prometheus/                                   # Prometheus configuration
-├── run-001/                                      # Run 001 - ETC with debug sync/snap logging
+├── run-001/                                      # Run 001 - Mordor testnet with debug sync/snap logging
 │   ├── conf/
-│   │   ├── etc.conf                              # ETC network configuration
+│   │   ├── mordor.conf                           # Mordor testnet configuration
 │   │   └── logback.xml                           # DEBUG logging for sync/snap
 │   ├── docker-compose.yml                        # Docker Compose deployment
 │   ├── start.sh                                  # Quick start/stop script
