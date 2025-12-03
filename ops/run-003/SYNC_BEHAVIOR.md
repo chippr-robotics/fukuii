@@ -76,12 +76,24 @@ This is **expected behavior**. Once a sync mode starts, it continues until compl
 
 ### If You Want SNAP Sync
 
-Ensure the configuration has:
+For run-003, the configuration is set for pure SNAP sync testing:
 ```hocon
 fukuii {
   sync {
     do-snap-sync = true
-    do-fast-sync = true  # Kept as fallback
+    do-fast-sync = false  # Disabled for run-003 to test SNAP sync exclusively
+  }
+}
+```
+
+**Note**: Fast sync is disabled in run-003 because SNAP sync and fast sync are independent features. This configuration tests SNAP sync without any fallback to fast sync.
+
+For configurations that want fallback capability:
+```hocon
+fukuii {
+  sync {
+    do-snap-sync = true
+    do-fast-sync = true  # Keep as fallback option
   }
 }
 ```

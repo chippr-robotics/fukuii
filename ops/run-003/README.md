@@ -205,14 +205,16 @@ Based on run-002 notes, we're investigating:
 
 ## Configuration Adjustments from Base
 
-This configuration overrides base.conf settings to be **less aggressive with peer blacklisting** based on run-002 feedback:
+This configuration overrides base.conf settings to be **less aggressive with peer blacklisting** and **focuses exclusively on SNAP sync testing** based on run-002 feedback:
 
 ### Sync Configuration
-- `sync.do-fast-sync = true` (from base.conf)
-- `sync.do-snap-sync = true` (from base.conf)
+- `sync.do-fast-sync = false` (disabled - focusing on SNAP sync only)
+- `sync.do-snap-sync = true` (enabled - primary focus of run-003)
 - `sync.blacklist-duration = 60.seconds` (reduced from base 120s, originally 200s)
 - `sync.critical-blacklist-duration = 30.minutes` (reduced from base 60 minutes, originally 240 minutes)
 - `sync.peer-response-timeout = 60.seconds` (increased from base 45s, originally 30s)
+
+**Note**: Fast sync is disabled because SNAP sync and fast sync are independent features with no interdependence. This allows pure SNAP sync testing without fallback to fast sync.
 
 ### Network Configuration
 - `network.peer.update-nodes-interval = 60.seconds` (from base, increased from original 30s)
