@@ -19,6 +19,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
+import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder._
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
