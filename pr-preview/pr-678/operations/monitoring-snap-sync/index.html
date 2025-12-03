@@ -5091,7 +5091,7 @@
 <h3 id="component-hierarchy">Component Hierarchy<a class="headerlink" href="#component-hierarchy" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>SNAPSyncController (Pekko Actor)
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── AccountRangeDownloader
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── ByteCodeDownloader
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── BytecodeDownloader
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├── StorageRangeDownloader
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── TrieNodeHealer
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── SyncProgressMonitor
@@ -5102,7 +5102,7 @@
 <ol>
 <li><strong>Idle</strong> (0): Not started</li>
 <li><strong>AccountRangeSync</strong> (1): Downloading account ranges with Merkle proofs</li>
-<li><strong>ByteCodeSync</strong> (2): Downloading smart contract bytecodes</li>
+<li><strong>BytecodeSync</strong> (2): Downloading smart contract bytecodes</li>
 <li><strong>StorageRangeSync</strong> (3): Downloading storage slots for contracts</li>
 <li><strong>StateHealing</strong> (4): Filling missing trie nodes</li>
 <li><strong>StateValidation</strong> (5): Verifying state completeness</li>
@@ -5209,7 +5209,7 @@
 </tr>
 </tbody>
 </table>
-<h4 id="bytecode-download-metrics">ByteCode Download Metrics<a class="headerlink" href="#bytecode-download-metrics" title="Permanent link">&para;</a></h4>
+<h4 id="bytecode-download-metrics">Bytecode Download Metrics<a class="headerlink" href="#bytecode-download-metrics" title="Permanent link">&para;</a></h4>
 <table>
 <thead>
 <tr>
@@ -5242,7 +5242,7 @@
 <tr>
 <td><code>app_snapsync_bytecodes_download_timer</code></td>
 <td>Timer</td>
-<td>ByteCode download time</td>
+<td>Bytecode download time</td>
 </tr>
 <tr>
 <td><code>app_snapsync_bytecodes_requests_total</code></td>
@@ -5473,9 +5473,9 @@
 <li><strong>Request Success Rate</strong>: Percentage of successful requests</li>
 <li><strong>Account Range Download Time</strong>: Histogram</li>
 </ul>
-<h4 id="3-bytecode-download">3. ByteCode Download<a class="headerlink" href="#3-bytecode-download" title="Permanent link">&para;</a></h4>
+<h4 id="3-bytecode-download">3. Bytecode Download<a class="headerlink" href="#3-bytecode-download" title="Permanent link">&para;</a></h4>
 <ul>
-<li><strong>ByteCodes Downloaded</strong>: Progress graph</li>
+<li><strong>Bytecodes Downloaded</strong>: Progress graph</li>
 <li><strong>Download Throughput</strong>: Codes/sec</li>
 <li><strong>Failure Rate</strong>: Failed requests over time</li>
 </ul>
