@@ -46,3 +46,8 @@ site/
 
 # RPM repository configuration files
 *.repo
+
+# Ops data directories
+ops/data/
+ops/*/captured-logs/
+
