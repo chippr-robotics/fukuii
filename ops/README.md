@@ -11,12 +11,44 @@ ops/
 │   ├── fukuii-miners-dashboard.json             # Miners - Mining-focused metrics
 │   ├── fukuii-node-troubleshooting-dashboard.json  # Node Troubleshooting - Debug dashboard
 │   └── fukuii-casual-dashboard.json             # Casual View - Minimalist dashboard
+├── prometheus/                                   # Prometheus configuration
+├── run-001/                                      # Run 001 - ETC with debug sync/snap logging
+│   ├── conf/
+│   │   ├── etc.conf                              # ETC network configuration
+│   │   └── logback.xml                           # DEBUG logging for sync/snap
+│   ├── docker-compose.yml                        # Docker Compose deployment
+│   ├── start.sh                                  # Quick start/stop script
+│   └── README.md                                 # Run 001 documentation
 └── README.md                                     # This file
 ```
 
 ## Grafana
 
 The `grafana/` directory contains pre-configured Grafana dashboards for monitoring Fukuii nodes, designed for Barad-dûr integration.
+
+## Run Configurations
+
+### Run 001 - ETC with Debug Logging
+
+The `run-001/` directory contains a complete deployment configuration for running a Fukuii node on the Ethereum Classic (ETC) network with enhanced debug logging for sync and snap components.
+
+**Purpose**: Development and debugging environment for troubleshooting synchronization issues.
+
+**Features**:
+- Network: Ethereum Classic (ETC)
+- DEBUG logging enabled for all sync components (regular, fast, snap)
+- Docker Compose deployment ready
+- Quick start script for easy management
+
+**Quick Start**:
+```bash
+cd ops/run-001
+./start.sh start
+```
+
+For detailed information, see [run-001/README.md](run-001/README.md).
+
+⚠️ **Note**: This configuration is optimized for debugging and should not be used in production due to verbose logging.
 
 ### Available Dashboards
 
