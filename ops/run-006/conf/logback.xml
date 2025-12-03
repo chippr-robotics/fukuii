@@ -93,7 +93,7 @@
     <!-- LOGGING LEVEL CONFIGURATION FOR RUN 006                             -->
     <!-- =================================================================== -->
     <!-- 
-         This configuration is based on run-005 with changes to support
+         This configuration is based on run 005 with changes to support
          FastSync instead of SNAP sync.
          
          Run 005 Analysis:
@@ -102,7 +102,7 @@
          - ETC mainnet peers only advertise ETH68, not snap/1
          - Root cause: SNAP protocol not supported by ETC mainnet peers
          
-         Changes in run-006:
+         Changes in run 006:
          - SNAP sync disabled (do-snap-sync = false)
          - FastSync enabled (do-fast-sync = true)
          - Logging adjusted to focus on FastSync components
@@ -166,14 +166,14 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="DEBUG" />
     
-    <!-- BLACKLIST - DEBUG ENABLED FOR RUN 005 (INVESTIGATING PREMATURE BLACKLISTING) -->
+    <!-- BLACKLIST - DEBUG ENABLED FOR RUN 006 (INVESTIGATING PREMATURE BLACKLISTING) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist" level="DEBUG" />
     
     <logger name="com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor" level="DEBUG" />
     
-    <!-- Fast sync - INFO level per run-003 requirements (was DEBUG in run-002) -->
-    <!-- Changed to INFO to reduce log verbosity as per run-002 feedback -->
+    <!-- Fast sync - INFO level per run 003 requirements (was DEBUG in run 002) -->
+    <!-- Changed to INFO to reduce log verbosity as per run 002 feedback -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector" level="INFO" />
@@ -191,7 +191,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BodiesFetcher" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="DEBUG" />
     
-    <!-- SNAP sync - DEBUG ENABLED FOR RUN 005 (PRIMARY FOCUS)               -->
+    <!-- SNAP sync - DEBUG ENABLED FOR RUN 006 (PRIMARY FOCUS)               -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="DEBUG" />
@@ -199,7 +199,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="DEBUG" />
     
-    <!-- SNAP request tracking - DEBUG ENABLED FOR RUN 005 (INVESTIGATING TIMEOUTS) -->
+    <!-- SNAP request tracking - DEBUG ENABLED FOR RUN 006 (INVESTIGATING TIMEOUTS) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="DEBUG" />
     
