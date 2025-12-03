@@ -421,15 +421,23 @@ Monitor these metrics during SNAP sync:
 **JVM Profiling:**
 
 ```bash
-# Enable JMX for monitoring
+# Enable JMX for secure local monitoring
 export JAVA_OPTS="-Dcom.sun.management.jmxremote \
+  -Dcom.sun.management.jmxremote.host=127.0.0.1 \
   -Dcom.sun.management.jmxremote.port=9999 \
-  -Dcom.sun.management.jmxremote.authenticate=false \
-  -Dcom.sun.management.jmxremote.ssl=false"
+  -Dcom.sun.management.jmxremote.rmi.port=9999 \
+  -Dcom.sun.management.jmxremote.authenticate=true \
+  -Dcom.sun.management.jmxremote.password.file=/path/jmxremote.password \
+  -Dcom.sun.management.jmxremote.access.file=/path/jmxremote.access \
+  -Dcom.sun.management.jmxremote.ssl=true"
 
 # Use VisualVM or JConsole to connect
-visualvm --openjmx localhost:9999
+visualvm --openjmx 127.0.0.1:9999
 ```
+
+> **Note:**  
+> Replace `/path/jmxremote.password` and `/path/jmxremote.access` with the actual paths to your JMX password and access files.  
+> For remote access, use an SSH tunnel and restrict port 9999 to trusted hosts via firewall.
 
 **CPU Profiling:**
 
