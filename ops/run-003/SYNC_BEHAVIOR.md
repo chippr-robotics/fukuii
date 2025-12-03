@@ -88,7 +88,8 @@ fukuii {
 
 And ensure no persistent sync state exists from a previous fast sync run. You can:
 - Start with a fresh data directory, or
-- Delete the fast sync state: `rm -rf ~/.fukuii/etc/fast-sync-state.rlp`
+- Delete the fast sync state (local installation): `rm -rf ~/.fukuii/etc/fast-sync-state.rlp`
+- For Docker deployments: `docker compose down -v` to remove volumes with sync state
 
 ### Restart After Initial Sync
 

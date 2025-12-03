@@ -221,7 +221,7 @@ This configuration overrides base.conf settings to be **less aggressive with pee
 
 **Rationale**: Run-002 feedback indicated "we are being overly aggressive with blacklisting as we seemingly have low peer counts at all times". These adjustments allow faster peer retry and should maintain higher peer counts.
 
-See `/home/runner/work/fukuii/fukuii/src/main/resources/conf/base.conf` for full base configuration details.
+See `src/main/resources/conf/base.conf` in the repository for full base configuration details.
 
 ## Performance Considerations
 
