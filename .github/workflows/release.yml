@@ -6,6 +6,11 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Ensure only one release build at a time
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: chippr-robotics/chordodes_fukuii
