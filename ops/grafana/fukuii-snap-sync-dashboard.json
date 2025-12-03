@@ -12,6 +12,7 @@
       }
     ]
   },
+  "description": "Fukuii SNAP Sync Dashboard - Monitor snap synchronization progress for Barad-dûr integration",
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
@@ -33,7 +34,7 @@
   "panels": [
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "Prometheus",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -46,7 +47,7 @@
       "type": "row"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Current SNAP sync phase",
       "fieldConfig": {
         "defaults": {
@@ -109,7 +110,9 @@
         "justifyMode": "center",
         "orientation": "horizontal",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -118,7 +121,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_current_phase_gauge",
+          "expr": "app_snapsync_phase_current_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
@@ -126,7 +129,7 @@
       "type": "stat"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Overall SNAP sync progress percentage",
       "fieldConfig": {
         "defaults": {
@@ -165,7 +168,9 @@
       "options": {
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -176,7 +181,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_overall_progress_percent_gauge",
+          "expr": "clamp_max(app_snapsync_accounts_synced_gauge{instance=~\"$node\"} / clamp_min(app_snapsync_accounts_estimated_total_gauge{instance=~\"$node\"}, 1) * 100, 100) or vector(0)",
           "refId": "A"
         }
       ],
@@ -184,8 +189,8 @@
       "type": "gauge"
     },
     {
-      "datasource": null,
-      "description": "Estimated time remaining for current phase",
+      "datasource": "Prometheus",
+      "description": "Time spent in current phase (seconds)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -216,7 +221,9 @@
         "justifyMode": "center",
         "orientation": "horizontal",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -225,15 +232,15 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_eta_seconds_gauge",
+          "expr": "app_snapsync_phase_time_seconds_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
-      "title": "ETA",
+      "title": "Phase Time",
       "type": "stat"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Total elapsed time for SNAP sync",
       "fieldConfig": {
         "defaults": {
@@ -265,7 +272,9 @@
         "justifyMode": "center",
         "orientation": "horizontal",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -274,7 +283,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_elapsed_seconds_gauge",
+          "expr": "app_snapsync_totaltime_minutes_gauge{instance=~\"$node\"} * 60",
           "refId": "A"
         }
       ],
@@ -283,7 +292,7 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "Prometheus",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -296,7 +305,7 @@
       "type": "row"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Number of accounts synced over time",
       "fieldConfig": {
         "defaults": {
@@ -352,7 +361,10 @@
       "id": 111,
       "options": {
         "legend": {
-          "calcs": ["last", "max"],
+          "calcs": [
+            "last",
+            "max"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -363,7 +375,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_accounts_synced_total",
+          "expr": "app_snapsync_accounts_synced_gauge{instance=~\"$node\"}",
           "legendFormat": "Accounts Synced",
           "refId": "A"
         }
@@ -372,7 +384,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Account sync rate over time",
       "fieldConfig": {
         "defaults": {
@@ -428,7 +440,10 @@
       "id": 112,
       "options": {
         "legend": {
-          "calcs": ["mean", "last"],
+          "calcs": [
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -439,12 +454,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "rate(app_snapsync_accounts_synced_total[$__rate_interval])",
-          "legendFormat": "Account Rate",
+          "expr": "app_snapsync_accounts_throughput_overall_gauge{instance=~\"$node\"}",
+          "legendFormat": "Account Rate (Overall)",
           "refId": "A"
         },
         {
-          "expr": "app_snapsync_accounts_per_sec_gauge",
+          "expr": "app_snapsync_accounts_throughput_recent_gauge{instance=~\"$node\"}",
           "legendFormat": "Recent Rate (60s)",
           "refId": "B"
         }
@@ -454,7 +469,7 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "Prometheus",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -467,7 +482,7 @@
       "type": "row"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Bytecodes and storage slots synced over time",
       "fieldConfig": {
         "defaults": {
@@ -523,7 +538,10 @@
       "id": 121,
       "options": {
         "legend": {
-          "calcs": ["last", "max"],
+          "calcs": [
+            "last",
+            "max"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -534,12 +552,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_bytecodes_downloaded_total",
+          "expr": "app_snapsync_bytecodes_downloaded_gauge{instance=~\"$node\"}",
           "legendFormat": "Bytecodes",
           "refId": "A"
         },
         {
-          "expr": "app_snapsync_storage_slots_synced_total",
+          "expr": "app_snapsync_storage_slots_synced_gauge{instance=~\"$node\"}",
           "legendFormat": "Storage Slots",
           "refId": "B"
         }
@@ -548,7 +566,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Download rates for bytecodes and storage",
       "fieldConfig": {
         "defaults": {
@@ -604,7 +622,10 @@
       "id": 122,
       "options": {
         "legend": {
-          "calcs": ["mean", "last"],
+          "calcs": [
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -615,12 +636,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "rate(app_snapsync_bytecodes_downloaded_total[$__rate_interval])",
+          "expr": "app_snapsync_bytecodes_throughput_recent_gauge{instance=~\"$node\"}",
           "legendFormat": "ByteCode Rate",
           "refId": "A"
         },
         {
-          "expr": "rate(app_snapsync_storage_slots_synced_total[$__rate_interval])",
+          "expr": "app_snapsync_storage_throughput_recent_gauge{instance=~\"$node\"}",
           "legendFormat": "Storage Rate",
           "refId": "B"
         }
@@ -630,7 +651,7 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "Prometheus",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -643,7 +664,7 @@
       "type": "row"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Number of trie nodes healed",
       "fieldConfig": {
         "defaults": {
@@ -699,7 +720,10 @@
       "id": 131,
       "options": {
         "legend": {
-          "calcs": ["last", "max"],
+          "calcs": [
+            "last",
+            "max"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -710,7 +734,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_nodes_healed_total",
+          "expr": "app_snapsync_healing_nodes_healed_gauge{instance=~\"$node\"}",
           "legendFormat": "Nodes Healed",
           "refId": "A"
         }
@@ -719,7 +743,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Healing rate over time",
       "fieldConfig": {
         "defaults": {
@@ -775,7 +799,10 @@
       "id": 132,
       "options": {
         "legend": {
-          "calcs": ["mean", "last"],
+          "calcs": [
+            "mean",
+            "last"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -786,7 +813,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "rate(app_snapsync_nodes_healed_total[$__rate_interval])",
+          "expr": "app_snapsync_healing_throughput_recent_gauge{instance=~\"$node\"}",
           "legendFormat": "Healing Rate",
           "refId": "A"
         }
@@ -796,7 +823,7 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "Prometheus",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -809,7 +836,7 @@
       "type": "row"
     },
     {
-      "datasource": null,
+      "datasource": "Prometheus",
       "description": "Total retry attempts and failures",
       "fieldConfig": {
         "defaults": {
@@ -865,7 +892,9 @@
       "id": 141,
       "options": {
         "legend": {
-          "calcs": ["sum"],
+          "calcs": [
+            "sum"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -876,12 +905,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "increase(app_snapsync_retries_total[$__range])",
+          "expr": "increase(app_snapsync_requests_retries_total{instance=~\"$node\"}[$__range])",
           "legendFormat": "Total Retries",
           "refId": "A"
         },
         {
-          "expr": "increase(app_snapsync_failures_total[$__range])",
+          "expr": "increase(app_snapsync_errors_total{instance=~\"$node\"}[$__range])",
           "legendFormat": "Failed Tasks",
           "refId": "B"
         }
@@ -890,8 +919,8 @@
       "type": "timeseries"
     },
     {
-      "datasource": null,
-      "description": "Peer failures and blacklist events",
+      "datasource": "Prometheus",
+      "description": "Request timeouts and peer blacklist events",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -946,7 +975,9 @@
       "id": 142,
       "options": {
         "legend": {
-          "calcs": ["sum"],
+          "calcs": [
+            "sum"
+          ],
           "displayMode": "table",
           "placement": "bottom"
         },
@@ -957,17 +988,17 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "increase(app_snapsync_peer_failures_total[$__range])",
-          "legendFormat": "Peer Failures",
+          "expr": "increase(app_snapsync_requests_timeouts_total{instance=~\"$node\"}[$__range])",
+          "legendFormat": "Request Timeouts",
           "refId": "A"
         },
         {
-          "expr": "increase(app_snapsync_peers_blacklisted_total[$__range])",
+          "expr": "increase(app_snapsync_peers_blacklisted_total{instance=~\"$node\"}[$__range])",
           "legendFormat": "Peers Blacklisted",
           "refId": "B"
         }
       ],
-      "title": "Peer Performance",
+      "title": "Request Timeouts & Peer Blacklisting",
       "type": "timeseries"
     }
   ],
@@ -978,10 +1009,39 @@
     "fukuii",
     "snap",
     "sync",
-    "ethereum"
+    "ethereum",
+    "barad-dur"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "error": null,
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node",
+        "multi": false,
+        "name": "node",
+        "options": [],
+        "query": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      }
+    ]
   },
   "time": {
     "from": "now-1h",
