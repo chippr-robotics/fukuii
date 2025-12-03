@@ -220,6 +220,11 @@ class SNAPSyncController(
             errorHandler.recordRetry(taskId, error)
             errorHandler.recordCircuitBreakerFailure("bytecode_download")
             
+            // Check if circuit breaker is open and fallback if needed
+            if (checkCircuitBreakerAndTriggerFallback("bytecode_download", error)) {
+              return
+            }
+            
             if (errorHandler.shouldBlacklistPeer(peerId)) {
               log.error(s"Blacklisting peer $peerId due to repeated failures")
               blacklist.add(PeerId(peerId), syncConfig.blacklistDuration, InvalidStateResponse("SNAP sync repeated failures"))
@@ -271,6 +276,11 @@ class SNAPSyncController(
             errorHandler.recordRetry(taskId, error)
             errorHandler.recordCircuitBreakerFailure("storage_range_download")
             
+            // Check if circuit breaker is open and fallback if needed
+            if (checkCircuitBreakerAndTriggerFallback("storage_range_download", error)) {
+              return
+            }
+            
             if (errorHandler.shouldBlacklistPeer(peerId)) {
               log.error(s"Blacklisting peer $peerId due to repeated failures")
               blacklist.add(PeerId(peerId), syncConfig.blacklistDuration, InvalidStateResponse("SNAP sync repeated failures"))
@@ -321,6 +331,11 @@ class SNAPSyncController(
             errorHandler.recordPeerFailure(peerId, errorType, error)
             errorHandler.recordRetry(taskId, error)
             errorHandler.recordCircuitBreakerFailure("trie_node_healing")
+            
+            // Check if circuit breaker is open and fallback if needed
+            if (checkCircuitBreakerAndTriggerFallback("trie_node_healing", error)) {
+              return
+            }
             
             if (errorHandler.shouldBlacklistPeer(peerId)) {
               log.error(s"Blacklisting peer $peerId due to repeated failures")

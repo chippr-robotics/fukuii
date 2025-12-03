@@ -150,6 +150,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
     * 
+    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController.
+    * Integration is planned to enable resumable SNAP sync after process restarts.
+    * 
     * This method retrieves a JSON representation of the SNAP sync progress. The JSON format
     * is flexible and not tied to any specific case class structure, allowing for evolution
     * of the progress format over time without breaking compatibility.
@@ -172,6 +175,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     get(Keys.SnapSyncProgress)
 
   /** Store the SNAP sync progress (optional - for progress persistence across restarts)
+    * 
+    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController.
+    * Integration is planned to enable resumable SNAP sync after process restarts.
     * 
     * This method stores a JSON representation of the SNAP sync progress. The JSON format
     * is flexible and allows the caller to determine what fields to include. This design
