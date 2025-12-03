@@ -9,17 +9,17 @@ echo "  Fukuii Run 006 - ETC Mainnet with FastSync"
 echo "==================================================================="
 echo ""
 
-# Check if docker-compose is available
-if ! command -v docker-compose &> /dev/null && ! command -v docker &> /dev/null; then
-    echo "Error: Neither docker-compose nor docker is installed."
-    echo "Please install Docker to use this configuration."
+# Check if docker-compose or docker compose is available
+if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null 2>&1; then
+    echo "Error: Neither docker-compose nor docker compose is available."
+    echo "Please install Docker Compose to use this configuration."
     exit 1
 fi
 
 # Determine which command to use
 if command -v docker-compose &> /dev/null; then
     COMPOSE_CMD="docker-compose"
-elif docker compose version &> /dev/null; then
+elif docker compose version &> /dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
 else
     echo "Error: Docker Compose is not available."
@@ -92,7 +92,7 @@ case "$ACTION" in
         echo "WARNING: This will remove all data including the blockchain!"
         read -p "Are you sure? (yes/no): " -r
         echo ""
-        if [[ $REPLY =~ ^[Yy](es)?$ ]]; then
+        if [[ $REPLY =~ ^[Yy]([Ee][Ss])?$ ]]; then
             echo "Stopping and removing all data..."
             $COMPOSE_CMD down -v
             echo "✓ All data removed."
