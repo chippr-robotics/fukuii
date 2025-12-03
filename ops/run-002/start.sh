@@ -92,7 +92,7 @@ case "$ACTION" in
         echo "WARNING: This will remove all data including the blockchain!"
         read -p "Are you sure? (yes/no): " -r
         echo ""
-        if [[ $REPLY =~ ^[Yy] ]]; then
+        if [[ $REPLY =~ ^[Yy](es)?$ ]]; then
             echo "Stopping and removing all data..."
             $COMPOSE_CMD down -v
             echo "✓ All data removed."
