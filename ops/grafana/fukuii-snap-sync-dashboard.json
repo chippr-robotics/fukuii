@@ -12,6 +12,7 @@
       }
     ]
   },
+  "description": "Fukuii SNAP Sync Dashboard - Monitor snap synchronization progress for Barad-dûr integration",
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
@@ -118,7 +119,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_current_phase_gauge",
+          "expr": "app_snapsync_current_phase_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
@@ -176,7 +177,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_overall_progress_percent_gauge",
+          "expr": "app_snapsync_overall_progress_percent_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
@@ -225,7 +226,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_eta_seconds_gauge",
+          "expr": "app_snapsync_eta_seconds_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
@@ -274,7 +275,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_elapsed_seconds_gauge",
+          "expr": "app_snapsync_elapsed_seconds_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
@@ -363,7 +364,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_accounts_synced_total",
+          "expr": "app_snapsync_accounts_synced_total{instance=~\"$node\"}",
           "legendFormat": "Accounts Synced",
           "refId": "A"
         }
@@ -439,12 +440,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "rate(app_snapsync_accounts_synced_total[$__rate_interval])",
+          "expr": "rate(app_snapsync_accounts_synced_total{instance=~\"$node\"}[$__rate_interval])",
           "legendFormat": "Account Rate",
           "refId": "A"
         },
         {
-          "expr": "app_snapsync_accounts_per_sec_gauge",
+          "expr": "app_snapsync_accounts_per_sec_gauge{instance=~\"$node\"}",
           "legendFormat": "Recent Rate (60s)",
           "refId": "B"
         }
@@ -534,12 +535,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_bytecodes_downloaded_total",
+          "expr": "app_snapsync_bytecodes_downloaded_total{instance=~\"$node\"}",
           "legendFormat": "Bytecodes",
           "refId": "A"
         },
         {
-          "expr": "app_snapsync_storage_slots_synced_total",
+          "expr": "app_snapsync_storage_slots_synced_total{instance=~\"$node\"}",
           "legendFormat": "Storage Slots",
           "refId": "B"
         }
@@ -615,12 +616,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "rate(app_snapsync_bytecodes_downloaded_total[$__rate_interval])",
+          "expr": "rate(app_snapsync_bytecodes_downloaded_total{instance=~\"$node\"}[$__rate_interval])",
           "legendFormat": "ByteCode Rate",
           "refId": "A"
         },
         {
-          "expr": "rate(app_snapsync_storage_slots_synced_total[$__rate_interval])",
+          "expr": "rate(app_snapsync_storage_slots_synced_total{instance=~\"$node\"}[$__rate_interval])",
           "legendFormat": "Storage Rate",
           "refId": "B"
         }
@@ -710,7 +711,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_snapsync_nodes_healed_total",
+          "expr": "app_snapsync_nodes_healed_total{instance=~\"$node\"}",
           "legendFormat": "Nodes Healed",
           "refId": "A"
         }
@@ -786,7 +787,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "rate(app_snapsync_nodes_healed_total[$__rate_interval])",
+          "expr": "rate(app_snapsync_nodes_healed_total{instance=~\"$node\"}[$__rate_interval])",
           "legendFormat": "Healing Rate",
           "refId": "A"
         }
@@ -876,12 +877,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "increase(app_snapsync_retries_total[$__range])",
+          "expr": "increase(app_snapsync_retries_total{instance=~\"$node\"}[$__range])",
           "legendFormat": "Total Retries",
           "refId": "A"
         },
         {
-          "expr": "increase(app_snapsync_failures_total[$__range])",
+          "expr": "increase(app_snapsync_failures_total{instance=~\"$node\"}[$__range])",
           "legendFormat": "Failed Tasks",
           "refId": "B"
         }
@@ -957,12 +958,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "increase(app_snapsync_peer_failures_total[$__range])",
+          "expr": "increase(app_snapsync_peer_failures_total{instance=~\"$node\"}[$__range])",
           "legendFormat": "Peer Failures",
           "refId": "A"
         },
         {
-          "expr": "increase(app_snapsync_peers_blacklisted_total[$__range])",
+          "expr": "increase(app_snapsync_peers_blacklisted_total{instance=~\"$node\"}[$__range])",
           "legendFormat": "Peers Blacklisted",
           "refId": "B"
         }
@@ -978,10 +979,39 @@
     "fukuii",
     "snap",
     "sync",
-    "ethereum"
+    "ethereum",
+    "barad-dur"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "error": null,
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node",
+        "multi": false,
+        "name": "node",
+        "options": [],
+        "query": "label_values(up{job=~\".*fukuii.*|node|pekko\"}, instance)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      }
+    ]
   },
   "time": {
     "from": "now-1h",
