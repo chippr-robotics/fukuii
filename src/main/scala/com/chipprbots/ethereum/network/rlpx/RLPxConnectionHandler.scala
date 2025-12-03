@@ -19,6 +19,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
+import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder._
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
@@ -321,19 +322,35 @@ class RLPxConnectionHandler(
         context.parent ! MessageReceived(message)
 
       case Left(ex) =>
-        val errorMsg = Option(ex.getMessage).getOrElse(ex.toString)
-        log.error("Cannot decode message from {}, because of {}", peerId, errorMsg)
-        // Enhanced debugging for decompression failures
-        if (errorMsg.contains("FAILED_TO_UNCOMPRESS")) {
-          log.error(
-            "DECODE_ERROR_DEBUG: Peer {} failed message decode - connection will be closed. Error details: {}",
+        // Use type-safe error checking instead of string matching
+        val isDecompressionFailure = MessageDecoder.isDecompressionFailure(ex)
+        
+        if (isDecompressionFailure) {
+          // Log detailed debugging information for decompression failures
+          log.warning(
+            "DECODE_ERROR: Peer {} sent message that failed to decompress. " +
+              "This may indicate the peer sent malformed compressed data or there's a protocol mismatch. " +
+              "Skipping this message but keeping connection alive. Error: {}",
             peerId,
-            errorMsg
+            ex.getMessage
           )
+          // Note: We do NOT close the connection for decompression failures.
+          // This is important for SNAP protocol compatibility where some peers may send
+          // messages with compression issues. The message will be skipped, but the peer
+          // can continue sending other messages. If this becomes a pattern (multiple failures),
+          // the peer will eventually be blacklisted through other mechanisms (timeouts, etc.)
+        } else {
+          // For other decoding errors (truly malformed RLP, unknown message types, etc.),
+          // close the connection to protect against attacks
+          log.error(
+            "DECODE_ERROR: Cannot decode message from {} - connection will be closed. Error: {}",
+            peerId,
+            ex.getMessage
+          )
+          // break connection in case of failed decoding, to avoid attack which would send us garbage
+          connection ! Close
         }
-        // break connection in case of failed decoding, to avoid attack which would send us garbage
-        connection ! Close
-      // Let handleConnectionTerminated clean up after TCP connection closes
+      // Let handleConnectionTerminated clean up after TCP connection closes (if closed)
     }
 
     /** Handles sending and receiving messages from the Akka TCP connection, while also handling acknowledgement of

@@ -76,22 +76,26 @@ class MessageCodec(
       // RLP encoding has predictable first-byte patterns:
       // - 0x80-0xbf: RLP string (0x80 = empty string, 0x81-0xb7 = short string, 0xb8-0xbf = long string)
       // - 0xc0-0xff: RLP list (0xc0 = empty list, 0xc1-0xf7 = short list, 0xf8-0xff = long list)
+      // - 0x00-0x7f: Single byte value (direct value encoding)
       // This is used as a fallback check after decompression fails to handle protocol deviations
       // where peers send uncompressed RLP data when compression is expected.
       def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
-        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
+        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127, so this masks to 0-255 range for comparison with RLP encoding markers)
         val firstByte = data(0) & 0xff
+        // Accept values >= 0x80 (RLP strings 0x80-0xbf and lists 0xc0-0xff).
+        // Note: Single-byte values 0x00-0x7f are also valid RLP but excluded here as they're less common in SNAP messages.
         firstByte >= 0x80
       }
 
       val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
 
       log.debug(
-        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, shouldCompress={}, payloadLooksLikeRLP={}",
+        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, shouldCompress={}, payloadSize={}, payloadLooksLikeRLP={}",
         frame.`type`.toHexString,
         isWireProtocolMessage,
         remotePeer2PeerVersion,
         shouldCompress,
+        frameData.length,
         looksLikeRLP(frameData)
       )
 
@@ -102,15 +106,24 @@ class MessageCodec(
           decompressData(frameData, frame).recoverWith { case ex =>
             if (looksLikeRLP(frameData)) {
               log.warn(
-                "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). Error: {}",
+                "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). " +
+                  "This may indicate the peer sent uncompressed data. Error: {}",
                 frame.`type`.toHexString,
                 ex.getMessage
               )
               Success(frameData)
             } else {
+              // For better diagnostics, log the frame type and data sample
+              val dataSample = if (frameData.length > 0) {
+                s"firstByte=0x${Integer.toHexString(frameData(0) & 0xff)}, size=${frameData.length}"
+              } else {
+                "empty"
+              }
               log.error(
-                "Frame type 0x{}: Decompression failed and data doesn't look like RLP - rejecting. Error: {}",
+                "Frame type 0x{}: Decompression failed and data doesn't look like RLP ({}). " +
+                  "This may indicate corrupt data or protocol mismatch. Error: {}",
                 frame.`type`.toHexString,
+                dataSample,
                 ex.getMessage
               )
               Failure(ex)
@@ -124,9 +137,18 @@ class MessageCodec(
           Success(frameData)
         }
 
-      payloadTry.toEither.flatMap { payload =>
-        messageDecoder.fromBytes(frame.`type`, payload)
-      }
+      payloadTry.toEither
+        .left.map {
+          // Wrap decompression exceptions in DecompressionFailure for type-safe error handling
+          case ex: RuntimeException if ex.getMessage != null && ex.getMessage.contains("FAILED_TO_UNCOMPRESS") =>
+            MessageDecoder.DecompressionFailure(ex.getMessage, ex)
+          case ex =>
+            // Other errors are wrapped as MalformedMessageError
+            MessageDecoder.MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        }
+        .flatMap { payload =>
+          messageDecoder.fromBytes(frame.`type`, payload)
+        }
     }
 
   private def decompressData(data: Array[Byte], frame: Frame): Try[Array[Byte]] = {
