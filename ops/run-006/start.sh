@@ -39,8 +39,11 @@ capture_container_logs() {
     
     echo "  Capturing logs from $container_name..."
     if docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
-        docker logs "$container_name" > "$log_file" 2>&1
-        echo "    ✓ Saved to: $log_file"
+        if docker logs "$container_name" > "$log_file" 2>&1; then
+            echo "    ✓ Saved to: $log_file"
+        else
+            echo "    ✗ Failed to capture logs from $container_name"
+        fi
     else
         echo "    ✗ $container_name is not running"
     fi
@@ -97,7 +100,7 @@ collect_logs() {
       http://localhost:8546 2>/dev/null | grep -o '"result":"[^"]*"' || echo "Unable to get peer count"
     
     echo -n "  Core-geth: "
-    docker exec core-geth-run-006 geth attach --exec "admin.peers.length" http://localhost:8545 2>/dev/null || echo "Unable to get peer count"
+    docker exec core-geth-run-006 geth attach --exec "admin.peers.length" http://localhost:8545 2>/dev/null || echo "Unable to get peer count (geth uses container internal port)"
     echo ""
     
     # Display recent SNAP-related errors from fukuii
@@ -209,10 +212,16 @@ case "$ACTION" in
             $COMPOSE_CMD down -v
             
             # Also remove the host-mounted geth data
-            if [ -d "../data/geth" ]; then
+            GETH_DATA_DIR="../data/geth"
+            if [ -d "$GETH_DATA_DIR" ]; then
                 echo "Removing core-geth data directory..."
-                rm -rf ../data/geth/*
-                echo "  ✓ Core-geth data removed"
+                # Safety check: ensure we're in the right directory
+                if [[ "$GETH_DATA_DIR" == *"ops/data/geth"* ]] || [[ "$GETH_DATA_DIR" == "../data/geth" ]]; then
+                    find "$GETH_DATA_DIR" -mindepth 1 -delete 2>/dev/null || rm -rf "${GETH_DATA_DIR:?}"/*
+                    echo "  ✓ Core-geth data removed"
+                else
+                    echo "  ✗ Unexpected data directory path, skipping removal for safety"
+                fi
             fi
             
             echo "✓ All data removed."
