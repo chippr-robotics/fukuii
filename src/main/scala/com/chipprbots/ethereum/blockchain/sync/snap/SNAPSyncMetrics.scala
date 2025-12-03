@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.metrics.MetricsContainer
   * Provides comprehensive observability for SNAP synchronization including:
   * - Sync phase tracking
   * - Account range download progress
-  * - ByteCode download progress
+  * - Bytecode download progress
   * - Storage range download progress
   * - State healing progress
   * - Peer performance metrics
@@ -25,7 +25,7 @@ object SNAPSyncMetrics extends MetricsContainer {
 
   // ===== Sync Phase Metrics =====
   
-  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=ByteCode, 3=StorageRange, 4=StateHealing, 5=StateValidation, 6=Completed) */
+  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=Bytecode, 3=StorageRange, 4=StateHealing, 5=StateValidation, 6=Completed) */
   final private val CurrentPhaseGauge =
     metrics.registry.gauge("snapsync.phase.current.gauge", new AtomicDouble(0d))
 
@@ -73,7 +73,7 @@ object SNAPSyncMetrics extends MetricsContainer {
   final private val AccountRangeFailuresCounter =
     metrics.counter("snapsync.accounts.requests.failed")
 
-  // ===== ByteCode Download Metrics =====
+  // ===== Bytecode Download Metrics =====
   
   /** Total bytecodes downloaded */
   final private val BytecodesDownloadedGauge =
@@ -83,24 +83,24 @@ object SNAPSyncMetrics extends MetricsContainer {
   final private val BytecodesEstimatedTotalGauge =
     metrics.registry.gauge("snapsync.bytecodes.estimated.total.gauge", new AtomicLong(0L))
 
-  /** ByteCode download throughput (codes/second) - overall */
+  /** Bytecode download throughput (codes/second) - overall */
   final private val BytecodesThroughputOverallGauge =
     metrics.registry.gauge("snapsync.bytecodes.throughput.overall.gauge", new AtomicDouble(0d))
 
-  /** ByteCode download throughput (codes/second) - recent (last 60s) */
+  /** Bytecode download throughput (codes/second) - recent (last 60s) */
   final private val BytecodesThroughputRecentGauge =
     metrics.registry.gauge("snapsync.bytecodes.throughput.recent.gauge", new AtomicDouble(0d))
 
-  /** ByteCode download timer */
-  final private val ByteCodeDownloadTimer =
+  /** Bytecode download timer */
+  final private val BytecodeDownloadTimer =
     metrics.registry.timer("snapsync.bytecodes.download.timer")
 
   /** Counter for total bytecode requests */
-  final private val ByteCodeRequestsCounter =
+  final private val BytecodeRequestsCounter =
     metrics.counter("snapsync.bytecodes.requests.total")
 
   /** Counter for failed bytecode requests */
-  final private val ByteCodeFailuresCounter =
+  final private val BytecodeFailuresCounter =
     metrics.counter("snapsync.bytecodes.requests.failed")
 
   // ===== Storage Range Sync Metrics =====
@@ -233,7 +233,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     AccountsThroughputOverallGauge.set(progress.accountsPerSec)
     AccountsThroughputRecentGauge.set(progress.recentAccountsPerSec)
 
-    // ByteCodes
+    // Bytecodes
     BytecodesDownloadedGauge.set(progress.bytecodesDownloaded)
     BytecodesEstimatedTotalGauge.set(progress.estimatedTotalBytecodes)
     BytecodesThroughputOverallGauge.set(progress.bytecodesPerSec)
@@ -261,7 +261,7 @@ object SNAPSyncMetrics extends MetricsContainer {
   // ===== Timers for Download Operations =====
 
   def recordAccountRangeDownloadTime(timeMs: Long): Unit = AccountRangeDownloadTimer.record(timeMs, MILLISECONDS)
-  def recordBytecodeDownloadTime(timeMs: Long): Unit = ByteCodeDownloadTimer.record(timeMs, MILLISECONDS)
+  def recordBytecodeDownloadTime(timeMs: Long): Unit = BytecodeDownloadTimer.record(timeMs, MILLISECONDS)
   def recordStorageRangeDownloadTime(timeMs: Long): Unit = StorageRangeDownloadTimer.record(timeMs, MILLISECONDS)
   def recordStateHealingTime(timeMs: Long): Unit = StateHealingTimer.record(timeMs, MILLISECONDS)
 
@@ -270,8 +270,8 @@ object SNAPSyncMetrics extends MetricsContainer {
   def incrementAccountRangeRequests(): Unit = AccountRangeRequestsCounter.increment()
   def incrementAccountRangeFailures(): Unit = AccountRangeFailuresCounter.increment()
 
-  def incrementBytecodeRequests(): Unit = ByteCodeRequestsCounter.increment()
-  def incrementBytecodeFailures(): Unit = ByteCodeFailuresCounter.increment()
+  def incrementBytecodeRequests(): Unit = BytecodeRequestsCounter.increment()
+  def incrementBytecodeFailures(): Unit = BytecodeFailuresCounter.increment()
 
   def incrementStorageRangeRequests(): Unit = StorageRangeRequestsCounter.increment()
   def incrementStorageRangeFailures(): Unit = StorageRangeFailuresCounter.increment()

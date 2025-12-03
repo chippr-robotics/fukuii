@@ -19,7 +19,7 @@ SNAP sync is monitored through multiple observability layers:
 ```
 SNAPSyncController (Pekko Actor)
 ├── AccountRangeDownloader
-├── ByteCodeDownloader
+├── BytecodeDownloader
 ├── StorageRangeDownloader
 ├── TrieNodeHealer
 ├── SyncProgressMonitor
@@ -32,7 +32,7 @@ SNAP sync progresses through the following phases:
 
 1. **Idle** (0): Not started
 2. **AccountRangeSync** (1): Downloading account ranges with Merkle proofs
-3. **ByteCodeSync** (2): Downloading smart contract bytecodes
+3. **BytecodeSync** (2): Downloading smart contract bytecodes
 4. **StorageRangeSync** (3): Downloading storage slots for contracts
 5. **StateHealing** (4): Filling missing trie nodes
 6. **StateValidation** (5): Verifying state completeness
@@ -81,7 +81,7 @@ Access metrics at: `http://localhost:13798/metrics`
 | `app_snapsync_accounts_requests_total` | Counter | Total account range requests |
 | `app_snapsync_accounts_requests_failed` | Counter | Failed account range requests |
 
-#### ByteCode Download Metrics
+#### Bytecode Download Metrics
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -89,7 +89,7 @@ Access metrics at: `http://localhost:13798/metrics`
 | `app_snapsync_bytecodes_estimated_total_gauge` | Gauge | Estimated total bytecodes |
 | `app_snapsync_bytecodes_throughput_overall_gauge` | Gauge | Codes/sec since start |
 | `app_snapsync_bytecodes_throughput_recent_gauge` | Gauge | Codes/sec (last 60s) |
-| `app_snapsync_bytecodes_download_timer` | Timer | ByteCode download time |
+| `app_snapsync_bytecodes_download_timer` | Timer | Bytecode download time |
 | `app_snapsync_bytecodes_requests_total` | Counter | Total bytecode requests |
 | `app_snapsync_bytecodes_requests_failed` | Counter | Failed bytecode requests |
 
@@ -189,9 +189,9 @@ The SNAP Sync dashboard includes the following sections:
 - **Request Success Rate**: Percentage of successful requests
 - **Account Range Download Time**: Histogram
 
-#### 3. ByteCode Download
+#### 3. Bytecode Download
 
-- **ByteCodes Downloaded**: Progress graph
+- **Bytecodes Downloaded**: Progress graph
 - **Download Throughput**: Codes/sec
 - **Failure Rate**: Failed requests over time
 

@@ -25,7 +25,7 @@ groups:
     interval: 30s
     rules:
       - alert: SnapSyncAccountRangeStalled
-        expr: rate(app_snapsync_accounts_synced_gauge[5m]) == 0 and app_snapsync_phase_current_gauge == 1 and app_snapsync_accounts_synced_gauge > 0
+        expr: increase(app_snapsync_accounts_synced_gauge[5m]) == 0 and app_snapsync_phase_current_gauge == 1 and app_snapsync_accounts_synced_gauge > 0
         for: 10m
         labels:
           severity: critical
@@ -35,7 +35,7 @@ groups:
           description: "No accounts synced in the last 10 minutes during AccountRangeSync phase. Check peers and database."
 
       - alert: SnapSyncStorageStalled
-        expr: rate(app_snapsync_storage_slots_synced_gauge[5m]) == 0 and app_snapsync_phase_current_gauge == 3 and app_snapsync_storage_slots_synced_gauge > 0
+        expr: increase(app_snapsync_storage_slots_synced_gauge[5m]) == 0 and app_snapsync_phase_current_gauge == 3 and app_snapsync_storage_slots_synced_gauge > 0
         for: 10m
         labels:
           severity: critical
