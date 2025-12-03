@@ -104,6 +104,22 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(storage.getBootstrapPivotBlock() == 0)
       assert(storage.getBootstrapPivotBlockHash() == ByteString.empty)
     }
+
+    "insert and get SNAP sync progress properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      val progressJson = """{"phase":"AccountRangeSync","accountsSynced":1000,"bytecodes":0}"""
+      
+      storage.putSnapSyncProgress(progressJson).commit()
+      
+      val retrieved = storage.getSnapSyncProgress()
+      assert(retrieved.isDefined)
+      assert(retrieved.get == progressJson)
+    }
+
+    "get None for SNAP sync progress when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(storage.getSnapSyncProgress().isEmpty)
+    }
   }
 
   trait Fixtures {

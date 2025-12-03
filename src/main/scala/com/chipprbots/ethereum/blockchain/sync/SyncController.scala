@@ -73,6 +73,11 @@ class SyncController(
       log.info("SNAP sync completed, transitioning to regular sync")
       startRegularSync()
     
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
+      snapSync ! PoisonPill
+      log.warning("SNAP sync failed repeatedly, falling back to fast sync")
+      startFastSync()
+    
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
     
