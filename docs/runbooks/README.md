@@ -19,6 +19,11 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[Backup & Restore](backup-restore.md)** - Backup strategies, data recovery, and disaster recovery procedures
 - **[Log Triage](log-triage.md)** - Logging configuration, log analysis, and troubleshooting from logs
 
+### SNAP Sync
+- **[SNAP Sync User Guide](snap-sync-user-guide.md)** - How to enable, configure, and monitor SNAP sync
+- **[SNAP Sync Performance Tuning](snap-sync-performance-tuning.md)** - Advanced optimization and tuning strategies
+- **[SNAP Sync FAQ](snap-sync-faq.md)** - Frequently asked questions about SNAP sync
+
 ### API Operations (Barad-dûr)
 - **[Barad-dûr Operations](barad-dur-operations.md)** - Kong API Gateway stack operations, monitoring, and maintenance
 
@@ -89,4 +94,4 @@ These runbooks are living documents. If you encounter issues not covered here or
 2. Submit a pull request with corrections or improvements
 3. Contact the maintainers at Chippr Robotics LLC
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2025-12-03
