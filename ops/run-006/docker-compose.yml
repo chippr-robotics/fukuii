@@ -79,7 +79,7 @@ services:
       - "--cache=2048"
       - "--verbosity=3"
     healthcheck:
-      test: ["CMD-SHELL", "geth attach --exec eth.syncing http://localhost:8545 || exit 1"]
+      test: ["CMD-SHELL", "geth attach --exec 'eth.blockNumber' http://localhost:8545 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
