@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.ByteStringUtils
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 import org.bouncycastle.util.encoders.Hex
 
