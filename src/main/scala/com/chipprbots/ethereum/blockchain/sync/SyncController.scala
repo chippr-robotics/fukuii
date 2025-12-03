@@ -53,6 +53,17 @@ class SyncController(
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(context.system.scheduler)
 
+  /** Load SNAP sync configuration with fallback to defaults */
+  private def loadSnapSyncConfig(): SNAPSyncConfig = {
+    try {
+      SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
+    } catch {
+      case e: Exception =>
+        log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
+        SNAPSyncConfig()
+    }
+  }
+
   override def receive: Receive = idle
 
   def idle: Receive = { case SyncProtocol.Start =>
@@ -86,7 +97,7 @@ class SyncController(
   }
 
   def runningRegularSync(regularSync: ActorRef): Receive = {
-    case SyncProtocol.Status.Progress(blocksProgress, stateNodesProgress) =>
+    case msg @ SyncProtocol.Status.Progress(blocksProgress, stateNodesProgress) =>
       // Check if we should transition from bootstrap regular sync to SNAP sync
       appStateStorage.getSnapSyncBootstrapTarget() match {
         case Some(targetBlock) if appStateStorage.getBestBlockNumber() >= targetBlock =>
@@ -98,8 +109,8 @@ class SyncController(
           regularSync ! PoisonPill
           startSnapSync()
         case _ =>
-          // Just forward progress normally
-          regularSync.forward(SyncProtocol.Status.Progress(blocksProgress, stateNodesProgress))
+          // No transition needed, message is already handled by regularSync
+          ()
       }
     
     case other =>
@@ -117,13 +128,7 @@ class SyncController(
       case (false, _, true, _) =>
         // Check if we have enough blocks to start SNAP sync
         // If not, we need to bootstrap with regular/fast sync first
-        val snapSyncConfig = try {
-          SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
-        } catch {
-          case e: Exception =>
-            log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
-            SNAPSyncConfig()
-        }
+        val snapSyncConfig = loadSnapSyncConfig()
         
         val minRequiredBlocks = snapSyncConfig.pivotBlockOffset + 1
         if (bestBlockNumber < minRequiredBlocks) {
@@ -183,13 +188,7 @@ class SyncController(
   def startSnapSync(): Unit = {
     log.info("Starting SNAP sync mode")
     
-    val snapSyncConfig = try {
-      SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
-    } catch {
-      case e: Exception =>
-        log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
-        SNAPSyncConfig()
-    }
+    val snapSyncConfig = loadSnapSyncConfig()
     
     val mptStorage = stateStorage.getReadOnlyStorage
     
