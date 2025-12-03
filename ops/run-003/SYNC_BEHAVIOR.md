@@ -188,7 +188,7 @@ docker compose logs fukuii | grep -i "starting.*sync"
 
 ## Related Documentation
 
-- [SyncController.scala](/home/runner/work/fukuii/fukuii/src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala)
-- [AdaptiveSyncStrategy.scala](/home/runner/work/fukuii/fukuii/src/main/scala/com/chipprbots/ethereum/blockchain/sync/AdaptiveSyncStrategy.scala)
+- [SyncController.scala](../../src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala)
+- [AdaptiveSyncStrategy.scala](../../src/main/scala/com/chipprbots/ethereum/blockchain/sync/AdaptiveSyncStrategy.scala)
 - [SNAP Sync Configuration](../../src/main/resources/conf/base.conf) (lines 366-416)
 - [Bootstrap Checkpoints ADR](../../docs/adr/consensus/CON-002-bootstrap-checkpoints.md)
