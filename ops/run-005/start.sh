@@ -1,11 +1,11 @@
 #!/bin/bash
-# Quick start script for Run 004 configuration
+# Quick start script for Run 005 configuration
 # Fukuii node on ETC mainnet with extended timeouts and enhanced debugging
 
 set -e
 
 echo "==================================================================="
-echo "  Fukuii Run 004 - ETC Mainnet with Extended Timeouts"
+echo "  Fukuii Run 005 - ETC Mainnet with Extended Timeouts"
 echo "==================================================================="
 echo ""
 
@@ -37,11 +37,11 @@ ACTION="${1:-up}"
 
 case "$ACTION" in
     up|start)
-        echo "Starting Fukuii Run 004..."
+        echo "Starting Fukuii Run 005..."
         echo ""
         $COMPOSE_CMD up -d
         echo ""
-        echo "✓ Fukuii Run 004 started successfully!"
+        echo "✓ Fukuii Run 005 started successfully!"
         echo ""
         echo "Monitoring commands:"
         echo "  - View logs:          $COMPOSE_CMD logs -f fukuii"
@@ -52,15 +52,15 @@ case "$ACTION" in
         ;;
     
     down|stop)
-        echo "Stopping Fukuii Run 004..."
+        echo "Stopping Fukuii Run 005..."
         $COMPOSE_CMD down
-        echo "✓ Fukuii Run 004 stopped."
+        echo "✓ Fukuii Run 005 stopped."
         ;;
     
     restart)
-        echo "Restarting Fukuii Run 004..."
+        echo "Restarting Fukuii Run 005..."
         $COMPOSE_CMD restart
-        echo "✓ Fukuii Run 004 restarted."
+        echo "✓ Fukuii Run 005 restarted."
         ;;
     
     logs)
@@ -70,7 +70,7 @@ case "$ACTION" in
         ;;
     
     status)
-        echo "Checking Fukuii Run 004 status..."
+        echo "Checking Fukuii Run 005 status..."
         echo ""
         $COMPOSE_CMD ps
         echo ""

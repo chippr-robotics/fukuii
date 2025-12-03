@@ -90,7 +90,7 @@
     </root>
 
     <!-- =================================================================== -->
-    <!-- LOGGING LEVEL CONFIGURATION FOR RUN 004                             -->
+    <!-- LOGGING LEVEL CONFIGURATION FOR RUN 005                             -->
     <!-- =================================================================== -->
     <!-- 
          This configuration is based on run-003 with targeted changes to
@@ -101,7 +101,7 @@
          - Blacklist reason: "Some other reason specific to a subprotocol"
          - SNAP request timeouts occur at 30 seconds
          - No AccountRange responses are received before timeout
-         - Hypothesis: Peers are blacklisted before they can respond
+         - Root cause identified: Snappy decompression failures causing connection closure
          
          Changes from run-003:
          - Added DEBUG logging for CacheBasedBlacklist to track blacklisting
@@ -109,6 +109,12 @@
          - Added DEBUG logging for snap protocol message handlers
          - Increased timeouts in etc.conf to give peers more time to respond
          - Keep all run-003 DEBUG levels for network, RLPx, and SNAP sync
+         
+         Changes in run-005:
+         - CODE FIX: Modified MessageCodec to tolerate Snappy decompression failures
+         - CODE FIX: Modified RLPxConnectionHandler to skip bad messages instead of closing connection
+         - Enhanced logging to distinguish decompression failures from other decode errors
+         - Connection stays alive even if individual SNAP messages fail decompression
     -->
     
     <!-- =================================================================== -->
@@ -167,7 +173,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="DEBUG" />
     
-    <!-- BLACKLIST - DEBUG ENABLED FOR RUN 004 (INVESTIGATING PREMATURE BLACKLISTING) -->
+    <!-- BLACKLIST - DEBUG ENABLED FOR RUN 005 (INVESTIGATING PREMATURE BLACKLISTING) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist" level="DEBUG" />
     
@@ -192,7 +198,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BodiesFetcher" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="DEBUG" />
     
-    <!-- SNAP sync - DEBUG ENABLED FOR RUN 004 (PRIMARY FOCUS)               -->
+    <!-- SNAP sync - DEBUG ENABLED FOR RUN 005 (PRIMARY FOCUS)               -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="DEBUG" />
@@ -200,7 +206,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="DEBUG" />
     
-    <!-- SNAP request tracking - DEBUG ENABLED FOR RUN 004 (INVESTIGATING TIMEOUTS) -->
+    <!-- SNAP request tracking - DEBUG ENABLED FOR RUN 005 (INVESTIGATING TIMEOUTS) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="DEBUG" />
     

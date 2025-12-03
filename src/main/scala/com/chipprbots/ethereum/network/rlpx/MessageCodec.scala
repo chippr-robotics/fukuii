@@ -76,16 +76,15 @@ class MessageCodec(
       // RLP encoding has predictable first-byte patterns:
       // - 0x80-0xbf: RLP string (0x80 = empty string, 0x81-0xb7 = short string, 0xb8-0xbf = long string)
       // - 0xc0-0xff: RLP list (0xc0 = empty list, 0xc1-0xf7 = short list, 0xf8-0xff = long list)
-      // - 0x00-0x7f: Single byte value (not an RLP structure, but valid in some contexts)
+      // - 0x00-0x7f: Single byte value (direct value encoding)
       // This is used as a fallback check after decompression fails to handle protocol deviations
       // where peers send uncompressed RLP data when compression is expected.
       def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
         // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
         val firstByte = data(0) & 0xff
-        // Accept values >= 0x80 (standard RLP markers)
-        // Also accept 0xc0+ (RLP list markers) even if below 0x80 due to signed byte representation
-        // For SNAP protocol messages, we're more lenient as they may have different RLP structures
-        firstByte >= 0x80 || (data.length > 1 && firstByte >= 0xc0)
+        // Accept values >= 0x80 (RLP string or list markers)
+        // Note: 0xc0-0xff are RLP lists, which are already included in >= 0x80 check
+        firstByte >= 0x80
       }
 
       val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
