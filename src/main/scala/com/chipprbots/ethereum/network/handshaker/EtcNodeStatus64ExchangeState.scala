@@ -9,13 +9,14 @@ import com.chipprbots.ethereum.network.p2p.messages.ETC64
 
 case class EtcNodeStatus64ExchangeState(
     handshakerConfiguration: EtcHandshakerConfiguration,
-    supportsSnap: Boolean = false
+    supportsSnap: Boolean = false,
+    peerCapabilities: List[Capability] = List.empty
 ) extends EtcNodeStatusExchangeState[ETC64.Status] {
 
   import handshakerConfiguration._
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETC64.Status =>
-    applyRemoteStatusMessage(RemoteStatus(status, Capability.ETC64, supportsSnap))
+    applyRemoteStatusMessage(RemoteStatus(status, Capability.ETC64, supportsSnap, peerCapabilities))
   }
 
   override protected def createStatusMsg(): MessageSerializable = {
