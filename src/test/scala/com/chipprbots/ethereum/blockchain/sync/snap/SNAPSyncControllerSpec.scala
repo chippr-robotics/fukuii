@@ -66,7 +66,9 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
       phaseProgress = 50,
       estimatedTotalAccounts = 2000,
       estimatedTotalBytecodes = 100,
-      estimatedTotalSlots = 400
+      estimatedTotalSlots = 400,
+      startTime = System.currentTimeMillis() - 60000,
+      phaseStartTime = System.currentTimeMillis() - 30000
     )
 
     val formattedString = progress.formattedString
@@ -99,7 +101,9 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
         phaseProgress = 0,
         estimatedTotalAccounts = 0,
         estimatedTotalBytecodes = 0,
-        estimatedTotalSlots = 0
+        estimatedTotalSlots = 0,
+        startTime = System.currentTimeMillis(),
+        phaseStartTime = System.currentTimeMillis()
       )
       
       progress.formattedString should not be empty

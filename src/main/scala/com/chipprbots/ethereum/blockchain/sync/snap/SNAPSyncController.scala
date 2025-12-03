@@ -400,6 +400,9 @@ class SNAPSyncController(
 
     pivotBlock = Some(pivotBlockNumber)
     
+    // Update metrics - pivot block
+    SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
+    
     // Get state root for pivot block
     blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
       case Some(header) =>
@@ -521,6 +524,9 @@ class SNAPSyncController(
           peerWithInfo.peer
       }
       
+      // Update metrics - SNAP-capable peer count
+      SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
+      
       if (snapPeers.isEmpty) {
         log.debug("No SNAP-capable peers available for account range requests")
       } else {
@@ -530,6 +536,7 @@ class SNAPSyncController(
         snapPeers.foreach { peer =>
           downloader.requestNextRange(peer) match {
             case Some(requestId) =>
+              SNAPSyncMetrics.incrementAccountRangeRequests()
               log.debug(s"Sent account range request $requestId to peer ${peer.id}")
             case None =>
               log.debug(s"No more account ranges to request")
@@ -1341,6 +1348,9 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     val progress = currentProgress
     val etaStr = calculateETA.map(eta => s", ETA: ${formatETA(eta)}").getOrElse("")
     
+    // Update Prometheus metrics
+    SNAPSyncMetrics.measure(progress)
+    
     log.info(s"📈 SNAP Sync Progress: ${progress.formattedString}$etaStr")
     lastLogTime = System.currentTimeMillis()
   }
@@ -1391,7 +1401,9 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
       phaseProgress = phaseProgress,
       estimatedTotalAccounts = estimatedTotalAccounts,
       estimatedTotalBytecodes = estimatedTotalBytecodes,
-      estimatedTotalSlots = estimatedTotalSlots
+      estimatedTotalSlots = estimatedTotalSlots,
+      startTime = startTime,
+      phaseStartTime = phaseStartTime
     )
   }
 }
@@ -1415,7 +1427,9 @@ case class SyncProgress(
     phaseProgress: Int,
     estimatedTotalAccounts: Long,
     estimatedTotalBytecodes: Long,
-    estimatedTotalSlots: Long
+    estimatedTotalSlots: Long,
+    startTime: Long,
+    phaseStartTime: Long
 ) {
   override def toString: String = {
     s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
