@@ -638,7 +638,12 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
       genesisHash = genesisBlock.header.hash
     )
 
-    val remoteStatus: RemoteStatus = RemoteStatus(remoteStatusMsg)
+    val remoteStatus: RemoteStatus = RemoteStatus(
+      remoteStatusMsg,
+      Capability.ETH63,
+      false,
+      Seq(Capability.ETH63).toList
+    )
   }
 
   trait RemotePeerETC64Setup extends RemotePeerSetup {
