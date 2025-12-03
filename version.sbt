@@ -3,4 +3,4 @@
 // - Increment by 0.1.0 at each milestone
 // - Version 1.0.0 at project completion
 
-(ThisBuild / version) := "0.1.99"
+(ThisBuild / version) := "0.1.100"
