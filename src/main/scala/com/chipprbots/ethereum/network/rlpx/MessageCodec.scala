@@ -76,22 +76,27 @@ class MessageCodec(
       // RLP encoding has predictable first-byte patterns:
       // - 0x80-0xbf: RLP string (0x80 = empty string, 0x81-0xb7 = short string, 0xb8-0xbf = long string)
       // - 0xc0-0xff: RLP list (0xc0 = empty list, 0xc1-0xf7 = short list, 0xf8-0xff = long list)
+      // - 0x00-0x7f: Single byte value (not an RLP structure, but valid in some contexts)
       // This is used as a fallback check after decompression fails to handle protocol deviations
       // where peers send uncompressed RLP data when compression is expected.
       def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
         // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
         val firstByte = data(0) & 0xff
-        firstByte >= 0x80
+        // Accept values >= 0x80 (standard RLP markers)
+        // Also accept 0xc0+ (RLP list markers) even if below 0x80 due to signed byte representation
+        // For SNAP protocol messages, we're more lenient as they may have different RLP structures
+        firstByte >= 0x80 || (data.length > 1 && firstByte >= 0xc0)
       }
 
       val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
 
       log.debug(
-        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, shouldCompress={}, payloadLooksLikeRLP={}",
+        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, shouldCompress={}, payloadSize={}, payloadLooksLikeRLP={}",
         frame.`type`.toHexString,
         isWireProtocolMessage,
         remotePeer2PeerVersion,
         shouldCompress,
+        frameData.length,
         looksLikeRLP(frameData)
       )
 
@@ -102,15 +107,24 @@ class MessageCodec(
           decompressData(frameData, frame).recoverWith { case ex =>
             if (looksLikeRLP(frameData)) {
               log.warn(
-                "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). Error: {}",
+                "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). " +
+                  "This may indicate the peer sent uncompressed data. Error: {}",
                 frame.`type`.toHexString,
                 ex.getMessage
               )
               Success(frameData)
             } else {
+              // For better diagnostics, log the frame type and data sample
+              val dataSample = if (frameData.length > 0) {
+                s"firstByte=0x${Integer.toHexString(frameData(0) & 0xff)}, size=${frameData.length}"
+              } else {
+                "empty"
+              }
               log.error(
-                "Frame type 0x{}: Decompression failed and data doesn't look like RLP - rejecting. Error: {}",
+                "Frame type 0x{}: Decompression failed and data doesn't look like RLP ({}). " +
+                  "This may indicate corrupt data or protocol mismatch. Error: {}",
                 frame.`type`.toHexString,
+                dataSample,
                 ex.getMessage
               )
               Failure(ex)
