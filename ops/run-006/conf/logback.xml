@@ -90,31 +90,24 @@
     </root>
 
     <!-- =================================================================== -->
-    <!-- LOGGING LEVEL CONFIGURATION FOR RUN 005                             -->
+    <!-- LOGGING LEVEL CONFIGURATION FOR RUN 006                             -->
     <!-- =================================================================== -->
     <!-- 
-         This configuration is based on run-003 with targeted changes to
-         diagnose the peer disconnection/timeout issue identified in run-003.
+         This configuration is based on run-005 with changes to support
+         FastSync instead of SNAP sync.
          
-         Run 003 Analysis:
-         - Peers are being blacklisted ~15 seconds after GetAccountRange requests
-         - Blacklist reason: "Some other reason specific to a subprotocol"
-         - SNAP request timeouts occur at 30 seconds
-         - No AccountRange responses are received before timeout
-         - Root cause identified: Snappy decompression failures causing connection closure
+         Run 005 Analysis:
+         - SNAP sync attempted but made zero progress
+         - All GetAccountRange requests timed out with no responses
+         - ETC mainnet peers only advertise ETH68, not snap/1
+         - Root cause: SNAP protocol not supported by ETC mainnet peers
          
-         Changes from run-003:
-         - Added DEBUG logging for CacheBasedBlacklist to track blacklisting
-         - Added DEBUG logging for SNAPRequestTracker to track request lifecycle
-         - Added DEBUG logging for snap protocol message handlers
-         - Increased timeouts in etc.conf to give peers more time to respond
-         - Keep all run-003 DEBUG levels for network, RLPx, and SNAP sync
-         
-         Changes in run-005:
-         - CODE FIX: Modified MessageCodec to tolerate Snappy decompression failures
-         - CODE FIX: Modified RLPxConnectionHandler to skip bad messages instead of closing connection
-         - Enhanced logging to distinguish decompression failures from other decode errors
-         - Connection stays alive even if individual SNAP messages fail decompression
+         Changes in run-006:
+         - SNAP sync disabled (do-snap-sync = false)
+         - FastSync enabled (do-fast-sync = true)
+         - Logging adjusted to focus on FastSync components
+         - Keep DEBUG levels for network, RLPx, and sync components
+         - Monitor FastSync progress instead of SNAP progress
     -->
     
     <!-- =================================================================== -->
@@ -127,14 +120,14 @@
     <logger name="org.jupnp.protocol.RetrieveRemoteDescriptors" level="ERROR" />
     
     <!-- =================================================================== -->
-    <!-- SCALANET - Low-level networking library (DEBUG FOR RUN 003)         -->
+    <!-- SCALANET - Low-level networking library (DEBUG FOR RUN 006)         -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.scalanet" level="DEBUG" />
     <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="DEBUG" />
     <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="DEBUG" />
     
     <!-- =================================================================== -->
-    <!-- NETWORK - Peer connections and communication (DEBUG FOR RUN 003)    -->
+    <!-- NETWORK - Peer connections and communication (DEBUG FOR RUN 006)    -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.PeerActor" level="DEBUG" />
@@ -143,18 +136,18 @@
     <logger name="com.chipprbots.ethereum.network.ServerActor" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="DEBUG" />
     
-    <!-- Network discovery (DEBUG FOR RUN 003) -->
+    <!-- Network discovery (DEBUG FOR RUN 006) -->
     <logger name="com.chipprbots.ethereum.network.discovery" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager" level="DEBUG" />
     
-    <!-- Network handshaking (DEBUG FOR RUN 003) -->
+    <!-- Network handshaking (DEBUG FOR RUN 006) -->
     <logger name="com.chipprbots.ethereum.network.handshaker" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="DEBUG" />
     
     <!-- =================================================================== -->
-    <!-- RLPX - Encrypted transport protocol (DEBUG FOR RUN 003)             -->
+    <!-- RLPX - Encrypted transport protocol (DEBUG FOR RUN 006)             -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
