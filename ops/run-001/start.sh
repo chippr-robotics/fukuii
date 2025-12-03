@@ -75,7 +75,13 @@ case "$ACTION" in
         echo ""
         if command -v curl &> /dev/null; then
             echo "Health check:"
-            curl -s http://localhost:8546/health | json_pp 2>/dev/null || curl -s http://localhost:8546/health
+            if command -v jq &> /dev/null; then
+                curl -s http://localhost:8546/health | jq
+            elif command -v json_pp &> /dev/null; then
+                curl -s http://localhost:8546/health | json_pp
+            else
+                curl -s http://localhost:8546/health
+            fi
         else
             echo "Install curl to check health endpoints"
         fi
