@@ -49,4 +49,5 @@ site/
 
 # Ops data directories
 ops/data/
+ops/*/captured-logs/
 
