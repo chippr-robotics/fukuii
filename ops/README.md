@@ -19,6 +19,30 @@ ops/
 │   ├── docker-compose.yml                        # Docker Compose deployment
 │   ├── start.sh                                  # Quick start/stop script
 │   └── README.md                                 # Run 001 documentation
+├── run-002/                                      # Run 002 - Mordor testnet with network diagnostics
+│   ├── conf/
+│   │   ├── mordor.conf                           # Mordor testnet configuration
+│   │   └── logback.xml                           # DEBUG logging for network + snap
+│   ├── docker-compose.yml                        # Docker Compose deployment
+│   ├── start.sh                                  # Quick start/stop script
+│   └── README.md                                 # Run 002 documentation
+├── run-003/                                      # Run 003 - ETC mainnet with SNAP sync focus
+│   ├── conf/
+│   │   ├── etc.conf                              # ETC mainnet configuration
+│   │   └── logback.xml                           # DEBUG logging for snap/network
+│   ├── docker-compose.yml                        # Docker Compose deployment
+│   ├── start.sh                                  # Quick start/stop script
+│   ├── README.md                                 # Run 003 documentation
+│   └── SYNC_BEHAVIOR.md                          # Sync mode switching behavior
+├── run-004/                                      # Run 004 - ETC mainnet with extended timeouts
+│   ├── conf/
+│   │   ├── etc.conf                              # ETC mainnet with extended timeouts
+│   │   └── logback.xml                           # Enhanced DEBUG logging
+│   ├── docker-compose.yml                        # Docker Compose deployment
+│   ├── start.sh                                  # Quick start/stop script
+│   ├── README.md                                 # Run 004 documentation
+│   ├── TIMEOUT_ANALYSIS.md                       # Analysis of run-003 timeout issue
+│   └── 003.log                                   # Run 003 log file (analyzed)
 └── README.md                                     # This file
 ```
 
@@ -49,6 +73,75 @@ cd ops/run-001
 For detailed information, see [run-001/README.md](run-001/README.md).
 
 ⚠️ **Note**: This configuration uses Mordor testnet for safety. It is optimized for debugging and should not be used in production due to verbose logging.
+
+### Run 002 - Mordor Testnet with Network Diagnostics
+
+The `run-002/` directory extends run-001 with enhanced network and RLPx protocol debugging.
+
+**Purpose**: Diagnose peer communication and network protocol issues.
+
+**Features**:
+- Network: Mordor (Ethereum Classic testnet)
+- DEBUG logging for network, RLPx, and peer discovery
+- Enhanced snap sync diagnostics
+- Docker Hub image (no authentication required)
+
+**Quick Start**:
+```bash
+cd ops/run-002
+./start.sh start
+```
+
+For detailed information, see [run-002/README.md](run-002/README.md).
+
+### Run 003 - ETC Mainnet with SNAP Sync Focus
+
+The `run-003/` directory focuses on SNAP sync testing on ETC mainnet with reduced blacklist durations.
+
+**Purpose**: Test SNAP sync protocol on mainnet with better peer availability.
+
+**Key Changes from Run 002**:
+- Network: ETC mainnet (better peer availability than Mordor)
+- FastSync logging reduced to INFO (too verbose)
+- SNAP sync exclusive focus (fast sync disabled)
+- Reduced blacklist durations for faster peer retry
+
+**Quick Start**:
+```bash
+cd ops/run-003
+./start.sh start
+```
+
+For detailed information, see [run-003/README.md](run-003/README.md) and [run-003/SYNC_BEHAVIOR.md](run-003/SYNC_BEHAVIOR.md).
+
+### Run 004 - ETC Mainnet with Extended Timeouts
+
+The `run-004/` directory addresses timeout and peer disconnection issues identified in run-003.
+
+**Purpose**: Diagnose and fix SNAP sync timeout/blacklist race condition.
+
+**Key Findings from Run 003**:
+- Peers blacklisted 15s after GetAccountRange requests
+- SNAP request timeouts at 30s (no responses received)
+- Root cause: Peers blacklisted before they can respond
+
+**Key Changes from Run 003**:
+- Extended timeouts: peer-response-timeout 60s → 90s, snap-sync.request-timeout 30s → 60s
+- Enhanced DEBUG logging for blacklist and request tracking
+- Focus on understanding "Some other reason specific to a subprotocol" blacklisting
+
+**Quick Start**:
+```bash
+cd ops/run-004
+./start.sh start
+```
+
+For detailed information, see:
+- [run-004/README.md](run-004/README.md) - Configuration and setup
+- [run-004/TIMEOUT_ANALYSIS.md](run-004/TIMEOUT_ANALYSIS.md) - Detailed analysis of run-003 issue
+- [run-004/003.log](run-004/003.log) - Original run-003 log file analyzed
+
+⚠️ **Note**: Run-004 uses extended timeouts which may result in slower failure detection. This is acceptable for diagnostic purposes.
 
 ### Available Dashboards
 
