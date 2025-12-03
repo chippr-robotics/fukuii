@@ -177,7 +177,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "((app_snapsync_accounts_synced_gauge{instance=~\"$node\"} / (app_snapsync_accounts_estimated_total_gauge{instance=~\"$node\"} or vector(0))) and (app_snapsync_accounts_estimated_total_gauge{instance=~\"$node\"} > 0)) * 100 or vector(0)",
+          "expr": "clamp_max(app_snapsync_accounts_synced_gauge{instance=~\"$node\"} / clamp_min(app_snapsync_accounts_estimated_total_gauge{instance=~\"$node\"}, 1) * 100, 100) or vector(0)",
           "refId": "A"
         }
       ],
