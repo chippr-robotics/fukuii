@@ -328,7 +328,7 @@ class RLPxConnectionHandler(
         
         if (isDecompressionFailure) {
           // Log detailed debugging information for decompression failures
-          log.warn(
+          log.warning(
             "DECODE_ERROR: Peer {} sent message that failed to decompress. " +
               "This may indicate the peer sent malformed compressed data or there's a protocol mismatch. " +
               "Skipping this message but keeping connection alive. Error: {}",

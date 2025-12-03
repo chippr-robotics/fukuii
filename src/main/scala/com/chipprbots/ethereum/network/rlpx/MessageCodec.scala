@@ -105,7 +105,7 @@ class MessageCodec(
           // If decompression fails, fall back to uncompressed data if it looks like valid RLP
           decompressData(frameData, frame).recoverWith { case ex =>
             if (looksLikeRLP(frameData)) {
-              log.warn(
+              log.warning(
                 "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). " +
                   "This may indicate the peer sent uncompressed data. Error: {}",
                 frame.`type`.toHexString,
@@ -175,7 +175,7 @@ class MessageCodec(
     result.recoverWith { case ex =>
       val hexData = truncateHex(data)
 
-      log.warn(
+      log.warning(
         "DECOMPRESSION_DEBUG: Failed to decompress frame - " +
           s"frameType: 0x${frame.`type`.toHexString}, " +
           s"frameSize: ${data.length}, " +
