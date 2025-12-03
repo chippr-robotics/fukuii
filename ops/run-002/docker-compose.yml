@@ -35,7 +35,7 @@ services:
       # Set node identifier for logging
       - FUKUII_NODE_ID=run-002
       - FUKUII_ENV=run-002-debug
-    command: ["-Dconfig.file=/app/conf/mordor.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
+    command: ["-Dconfig.file=/app/conf/mordor.conf"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
