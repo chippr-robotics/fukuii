@@ -80,10 +80,10 @@ class MessageCodec(
       // This is used as a fallback check after decompression fails to handle protocol deviations
       // where peers send uncompressed RLP data when compression is expected.
       def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
-        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
+        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127, so this masks to 0-255 range for comparison with RLP encoding markers)
         val firstByte = data(0) & 0xff
-        // Accept values >= 0x80 (RLP string or list markers)
-        // Note: 0xc0-0xff are RLP lists, which are already included in >= 0x80 check
+        // Accept values >= 0x80 (RLP strings 0x80-0xbf and lists 0xc0-0xff).
+        // Note: Single-byte values 0x00-0x7f are also valid RLP but excluded here as they're less common in SNAP messages.
         firstByte >= 0x80
       }
 
@@ -137,9 +137,18 @@ class MessageCodec(
           Success(frameData)
         }
 
-      payloadTry.toEither.flatMap { payload =>
-        messageDecoder.fromBytes(frame.`type`, payload)
-      }
+      payloadTry.toEither
+        .left.map {
+          // Wrap decompression exceptions in DecompressionFailure for type-safe error handling
+          case ex: RuntimeException if ex.getMessage != null && ex.getMessage.contains("FAILED_TO_UNCOMPRESS") =>
+            MessageDecoder.DecompressionFailure(ex.getMessage, ex)
+          case ex =>
+            // Other errors are wrapped as MalformedMessageError
+            MessageDecoder.MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        }
+        .flatMap { payload =>
+          messageDecoder.fromBytes(frame.`type`, payload)
+        }
     }
 
   private def decompressData(data: Array[Byte], frame: Frame): Try[Array[Byte]] = {

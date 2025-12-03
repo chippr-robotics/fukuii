@@ -2,7 +2,7 @@
 # Quick start script for Run 005 configuration
 # Fukuii node on ETC mainnet with extended timeouts and enhanced debugging
 
-set -e
+set -euo pipefail
 
 echo "==================================================================="
 echo "  Fukuii Run 005 - ETC Mainnet with Extended Timeouts"

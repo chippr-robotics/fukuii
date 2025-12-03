@@ -321,10 +321,8 @@ class RLPxConnectionHandler(
         context.parent ! MessageReceived(message)
 
       case Left(ex) =>
-        val errorMsg = Option(ex.getMessage).getOrElse(ex.toString)
-        
-        // Check if this is a decompression failure
-        val isDecompressionFailure = errorMsg.contains("FAILED_TO_UNCOMPRESS")
+        // Use type-safe error checking instead of string matching
+        val isDecompressionFailure = MessageDecoder.isDecompressionFailure(ex)
         
         if (isDecompressionFailure) {
           // Log detailed debugging information for decompression failures
@@ -333,7 +331,7 @@ class RLPxConnectionHandler(
               "This may indicate the peer sent malformed compressed data or there's a protocol mismatch. " +
               "Skipping this message but keeping connection alive. Error: {}",
             peerId,
-            errorMsg
+            ex.getMessage
           )
           // Note: We do NOT close the connection for decompression failures.
           // This is important for SNAP protocol compatibility where some peers may send
@@ -346,7 +344,7 @@ class RLPxConnectionHandler(
           log.error(
             "DECODE_ERROR: Cannot decode message from {} - connection will be closed. Error: {}",
             peerId,
-            errorMsg
+            ex.getMessage
           )
           // break connection in case of failed decoding, to avoid attack which would send us garbage
           connection ! Close
