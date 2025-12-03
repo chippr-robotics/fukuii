@@ -6,6 +6,11 @@ on:
       - main
       - master
       - develop
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.github/workflows/docs-*.yml'
+      - '.github/workflows/gh-pages.yml'
   pull_request:
     branches:
       - main
@@ -14,6 +19,11 @@ on:
 
 permissions:
   contents: read
+
+# Cancel in-progress runs for the same PR/branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
