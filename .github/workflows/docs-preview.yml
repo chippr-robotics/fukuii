@@ -13,6 +13,7 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - '.github/workflows/docs-preview.yml'
     types:
       - opened
       - reopened
@@ -23,21 +24,27 @@ permissions:
   contents: write
   pull-requests: write
 
-concurrency: preview-${{ github.ref }}
+# Ensure only one preview deployment per PR at a time
+concurrency: 
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   preview:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
+        if: github.event.action != 'closed'
         uses: actions/checkout@v4
 
       - name: Setup Python
+        if: github.event.action != 'closed'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Cache pip dependencies
+        if: github.event.action != 'closed'
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
@@ -46,10 +53,12 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
+        if: github.event.action != 'closed'
         run: pip install -r requirements-docs.txt
 
       - name: Build documentation
-        run: mkdocs build
+        if: github.event.action != 'closed'
+        run: mkdocs build --strict
 
       - name: Deploy Preview
         uses: rossjrw/pr-preview-action@v1

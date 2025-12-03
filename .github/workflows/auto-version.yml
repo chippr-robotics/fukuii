@@ -6,21 +6,23 @@ on:
       - main
       - master
       - develop
-  pull_request_target:
-    types: [closed]
-    branches:
-      - main
-      - master
-      - develop
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.github/workflows/docs-*.yml'
+      - '.github/workflows/gh-pages.yml'
+
+# Prevent duplicate runs when PR is merged (push event is sufficient)
+concurrency:
+  group: auto-version-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   auto-version:
     name: Auto Increment Version
     runs-on: ubuntu-latest
-    # Only run on merged PRs or direct pushes to main/master/develop
-    if: |
-      (github.event_name == 'push') ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true)
+    # Only run on push events to avoid duplicate runs
+    if: github.event_name == 'push'
     permissions:
       contents: write
     
@@ -39,19 +41,11 @@ jobs:
       - name: Determine version increment type
         id: version-type
         run: |
-          # Check if this is a milestone (look for milestone in commit message or PR labels)
+          # Check if this is a milestone (look for milestone in commit message)
           IS_MILESTONE=false
           
-          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
-            # Check PR labels for milestone marker
-            echo "${{ toJson(github.event.pull_request.labels) }}" | jq -r '.[].name' | grep -q "milestone" && IS_MILESTONE=true
-            
-            # Check PR title for milestone marker
-            echo "${{ github.event.pull_request.title }}" | grep -qi "milestone" && IS_MILESTONE=true
-          else
-            # Check commit message for milestone marker
-            git log -1 --pretty=%B | grep -qi "milestone" && IS_MILESTONE=true
-          fi
+          # Check commit message for milestone marker
+          git log -1 --pretty=%B | grep -qi "milestone" && IS_MILESTONE=true
           
           if [ "$IS_MILESTONE" = true ]; then
             echo "increment_type=minor" >> $GITHUB_OUTPUT
