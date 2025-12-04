@@ -70,7 +70,11 @@ class MessageCodec(
   def readFrames(frames: Seq[Frame]): Seq[Either[DecodingError, Message]] =
     frames.map { frame =>
       val frameData = frame.payload.toArray
-      val isWireProtocolMessage = frame.`type` >= 0x00 && frame.`type` <= 0x03
+      
+      // Core-geth compresses ALL messages when p2pVersion >= 5, including wire protocol messages
+      // Wire protocol messages (Hello 0x00, Disconnect 0x01, Ping 0x02, Pong 0x03) are also compressed
+      // Previous logic excluded wire protocol messages, causing incompatibility with core-geth
+      val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
 
       // Heuristic to check if data looks like RLP-encoded data
       // RLP encoding has predictable first-byte patterns:
@@ -87,16 +91,14 @@ class MessageCodec(
         firstByte >= 0x80
       }
 
-      val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
-
+      // Enhanced logging for compression decision
       log.debug(
-        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, shouldCompress={}, payloadSize={}, payloadLooksLikeRLP={}",
+        "COMPRESSION_DECISION: frame=0x{}, p2pVersion={}, shouldCompress={}, payloadSize={}, firstByte=0x{}",
         frame.`type`.toHexString,
-        isWireProtocolMessage,
         remotePeer2PeerVersion,
         shouldCompress,
         frameData.length,
-        looksLikeRLP(frameData)
+        if (frameData.length > 0) Integer.toHexString(frameData(0) & 0xff) else "N/A"
       )
 
       val payloadTry =
@@ -106,9 +108,13 @@ class MessageCodec(
           decompressData(frameData, frame).recoverWith { case ex =>
             if (looksLikeRLP(frameData)) {
               log.warn(
-                "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). " +
-                  "This may indicate the peer sent uncompressed data. Error: {}",
+                "COMPRESSION_FALLBACK: Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed. " +
+                  "This indicates peer sent uncompressed data despite p2pVersion={} (compression expected). " +
+                  "firstByte=0x{}, size={}, error: {}",
                 frame.`type`.toHexString,
+                remotePeer2PeerVersion,
+                Integer.toHexString(frameData(0) & 0xff),
+                frameData.length,
                 ex.getMessage
               )
               Success(frameData)
@@ -120,10 +126,11 @@ class MessageCodec(
                 "empty"
               }
               log.error(
-                "Frame type 0x{}: Decompression failed and data doesn't look like RLP ({}). " +
-                  "This may indicate corrupt data or protocol mismatch. Error: {}",
+                "COMPRESSION_ERROR: Frame type 0x{}: Decompression failed and data doesn't look like RLP ({}). " +
+                  "This may indicate corrupt data or protocol mismatch. p2pVersion={}, error: {}",
                 frame.`type`.toHexString,
                 dataSample,
+                remotePeer2PeerVersion,
                 ex.getMessage
               )
               Failure(ex)
@@ -131,8 +138,10 @@ class MessageCodec(
           }
         } else {
           log.debug(
-            "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 5)",
-            frame.`type`.toHexString
+            "COMPRESSION_SKIP: Frame type 0x{} - skipping decompression (p2pVersion={} < {})",
+            frame.`type`.toHexString,
+            remotePeer2PeerVersion,
+            EtcHelloExchangeState.P2pVersion
           )
           Success(frameData)
         }
@@ -223,27 +232,33 @@ class MessageCodec(
 
     val frames = (0 until numFrames).map { frameNo =>
       val framedPayload = encoded.drop(frameNo * MaxFramePayloadSize).take(MaxFramePayloadSize)
-      val isWireProtocolMessage = serializable.code >= 0x00 && serializable.code <= 0x03
-      val shouldCompressThis = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
+      
+      // Core-geth compresses ALL messages when p2pVersion >= 5, including wire protocol messages
+      // Matches core-geth behavior: no exceptions for wire protocol (Ping, Pong, etc.)
+      val shouldCompressThis = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
+      
       val payload =
         if (shouldCompressThis) {
           val compressed = Snappy.compress(framedPayload)
           // Safe compression ratio calculation (avoid division by zero)
           val ratio = if (framedPayload.length > 0) compressed.length.toDouble / framedPayload.length else 0.0
           log.debug(
-            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {:.2f})",
+            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {:.2f}), code=0x{}, p2pVersion={}",
             frameNo,
             framedPayload.length,
             compressed.length,
-            ratio
+            ratio,
+            serializable.code.toHexString,
+            remotePeer2PeerVersion
           )
           compressed
         } else {
           log.debug(
-            "ENCODE_MSG: Skipping compression for frame {} (wireProtocol={}, p2pVersion={})",
+            "ENCODE_MSG: Skipping compression for frame {} (p2pVersion={} < {}), code=0x{}",
             frameNo,
-            isWireProtocolMessage,
-            remotePeer2PeerVersion
+            remotePeer2PeerVersion,
+            EtcHelloExchangeState.P2pVersion,
+            serializable.code.toHexString
           )
           framedPayload
         }
