@@ -26,11 +26,15 @@ object ETC64 {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
+        // Use bigIntToUnsignedByteArray for proper RLP integer encoding
+        // BigInt.toByteArray uses two's complement which adds leading zeros for
+        // values with high bit set (e.g., 128 -> [0x00, 0x80] instead of [0x80])
+        // RLP specification requires integers to have no leading zeros
         RLPList(
-          protocolVersion,
-          networkId,
-          chainWeight.totalDifficulty,
-          chainWeight.lastCheckpointNumber,
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(protocolVersion))),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(networkId))),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainWeight.totalDifficulty)),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainWeight.lastCheckpointNumber)),
           RLPValue(bestHash.toArray[Byte]),
           RLPValue(genesisHash.toArray[Byte])
         )
@@ -96,14 +100,18 @@ object ETC64 {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
+        // Use bigIntToUnsignedByteArray for proper RLP integer encoding
+        // BigInt.toByteArray uses two's complement which adds leading zeros for
+        // values with high bit set (e.g., 128 -> [0x00, 0x80] instead of [0x80])
+        // RLP specification requires integers to have no leading zeros
         RLPList(
           RLPList(
             block.header.toRLPEncodable,
             RLPList(block.body.transactionList.map(_.toRLPEncodable): _*),
             RLPList(block.body.uncleNodesList.map(_.toRLPEncodable): _*)
           ),
-          chainWeight.totalDifficulty,
-          chainWeight.lastCheckpointNumber
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainWeight.totalDifficulty)),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainWeight.lastCheckpointNumber))
         )
       }
     }

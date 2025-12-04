@@ -87,6 +87,23 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         val msg = ETC64.Status(1, 2, ChainWeight(2, 5), ByteString("HASH"), ByteString("HASH2"))
         verify(msg, (m: ETC64.Status) => m.toBytes, Codes.StatusCode, Capability.ETC64)
       }
+
+      // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
+      // BigInt.toByteArray uses two's complement which adds leading 0x00 for values with high bit set
+      // (e.g., 128 -> [0x00, 0x80] instead of [0x80]). This tests the fix using bigIntToUnsignedByteArray.
+      "handle values >= 128 correctly (two's complement edge case)" in {
+        val msg = ETC64.Status(
+          protocolVersion = 128,  // Tests high bit in single byte
+          networkId = 256,        // Tests value requiring 2 bytes
+          chainWeight = ChainWeight(
+            lastCheckpointNumber = BigInt("9000000000000000", 16), // Tests high bit in checkpoint
+            totalDifficulty = BigInt("8000000000000000", 16)       // Tests high bit in difficulty
+          ),
+          bestHash = ByteString("HASH"),
+          genesisHash = ByteString("HASH2")
+        )
+        verify(msg, (m: ETC64.Status) => m.toBytes, Codes.StatusCode, Capability.ETC64)
+      }
     }
 
     "encoding and decoding NewBlock" should {
