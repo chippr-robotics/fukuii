@@ -78,7 +78,7 @@ trait PayloadCodecs {
   
   /** Codec for NODES message (0x04) */
   given nodesCodec: Codec[Nodes] = {
-    (requestIdCodec :: uint8 :: listOfN(uint8, enrCodec)).xmap(
+    (requestIdCodec :: uint16 :: listOfN(uint16, enrCodec)).xmap(
       { case (reqId, total, enrs) => Nodes(reqId, total, enrs) },
       (nodes: Nodes) => (nodes.requestId, nodes.total, nodes.enrs)
     )
