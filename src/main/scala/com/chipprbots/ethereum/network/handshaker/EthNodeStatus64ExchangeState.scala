@@ -93,21 +93,42 @@ case class EthNodeStatus64ExchangeState(
     
     val genesisHash = blockchainReader.genesisHeader.hash
     
-    // ALIGNMENT WITH CORE-GETH: Use actual current block number for ForkId calculation
-    // Core-geth implementation (eth/handler.go):
-    //   head = h.chain.CurrentHeader()
-    //   number = head.Number.Uint64()
-    //   forkID := forkid.NewID(h.chain.Config(), genesis, number, head.Time)
+    // Bootstrap pivot block handling for ForkId calculation
+    // When syncing from a low block number after bootstrap, we need to use the bootstrap
+    // pivot block for ForkId calculation to ensure compatibility with synced peers.
+    // This prevents disconnections due to ForkId mismatches during regular sync.
     //
-    // Core-geth does NOT use checkpoints or pivot blocks for status messages.
-    // It always uses the actual current block for both bestHash and ForkId calculation.
-    //
-    // Previous implementation used bootstrap pivot block for ForkId to avoid peer
-    // disconnections at genesis, but this creates a mismatch with core-geth behavior
-    // where ForkId and bestHash refer to different blocks.
-    //
-    // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
-    val forkIdBlockNumber = bestBlockNumber
+    // Logic:
+    // 1. Get bootstrap pivot block from appStateStorage (if set)
+    // 2. Calculate threshold = min(pivot / 10, 100000)
+    // 3. If bestBlockNumber < (pivot - threshold), use pivot for ForkId
+    // 4. Otherwise, use bestBlockNumber for ForkId
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
+      val threshold = (bootstrapPivotBlock / 10).min(BigInt(100000))
+      if (bestBlockNumber < (bootstrapPivotBlock - threshold)) {
+        log.debug(
+          "Using bootstrap pivot block {} for ForkId (bestBlock={}, threshold={}, switch point={})",
+          bootstrapPivotBlock,
+          bestBlockNumber,
+          threshold,
+          bootstrapPivotBlock - threshold
+        )
+        bootstrapPivotBlock
+      } else {
+        log.debug(
+          "Using actual block number {} for ForkId (bestBlock={}, pivot={}, threshold={}, switch point={})",
+          bestBlockNumber,
+          bestBlockNumber,
+          bootstrapPivotBlock,
+          threshold,
+          bootstrapPivotBlock - threshold
+        )
+        bestBlockNumber
+      }
+    } else {
+      bestBlockNumber
+    }
     val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber)
 
     val status = ETH64.Status(
