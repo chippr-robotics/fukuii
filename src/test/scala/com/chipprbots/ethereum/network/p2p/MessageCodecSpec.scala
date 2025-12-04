@@ -8,8 +8,11 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
+import com.chipprbots.ethereum.network.rlpx.Frame
 import com.chipprbots.ethereum.network.rlpx.FrameCodec
+import com.chipprbots.ethereum.network.rlpx.Header
 import com.chipprbots.ethereum.network.rlpx.MessageCodec
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
@@ -127,10 +130,6 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     // Now simulate core-geth sending an UNCOMPRESSED status message
     // even though compression was agreed upon
     // We manually create an uncompressed frame
-    import com.chipprbots.ethereum.network.rlpx.Frame
-    import com.chipprbots.ethereum.network.rlpx.Header
-    import com.chipprbots.ethereum.network.p2p.messages.Codes
-    
     val statusBytes = status.toBytes
     val uncompressedFrame = Frame(
       Header(statusBytes.length, 0, None, None),

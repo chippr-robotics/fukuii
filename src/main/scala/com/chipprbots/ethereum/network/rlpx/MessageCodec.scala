@@ -95,14 +95,16 @@ class MessageCodec(
           decompressData(frameData, frame).recoverWith { case ex =>
             log.warn(
               "COMPRESSION_FALLBACK: Frame type 0x{}: Decompression failed - treating as uncompressed data. " +
-                "This indicates peer sent uncompressed data despite p2pVersion={} (compression expected). " +
-                "firstByte=0x{}, size={}, error: {}. " +
-                "The RLP decoder will validate if this is legitimate uncompressed data.",
+                "Peer sent uncompressed despite p2pVersion={}. firstByte=0x{}, size={}, error: {}",
               frame.`type`.toHexString,
               remotePeer2PeerVersion,
               if (frameData.length > 0) Integer.toHexString(frameData(0) & 0xff) else "N/A",
               frameData.length,
               ex.getMessage
+            )
+            log.debug(
+              "COMPRESSION_FALLBACK: The RLP decoder will validate if this is legitimate uncompressed data. " +
+                "This approach is safer than guessing based on first byte patterns."
             )
             // Always fall back to uncompressed data when decompression fails
             // Let the RLP decoder validate whether it's actually valid RLP
