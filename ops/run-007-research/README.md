@@ -70,12 +70,33 @@ The `looksLikeRLP` heuristic had critical bugs that caused peer disconnections:
 2. ✅ **Advertise snap/1 on ETC** - enables future peer compatibility
 3. ✅ **SNAP sync disabled for now** - will auto-enable when peers support it
 4. ✅ **FastSync active for ETC** - proven reliable fallback
-5. ✅ **Bootstrap checkpoints** - already configured correctly
-6. ✅ **Documentation** - comprehensive research findings captured
+5. ✅ **Bootstrap checkpoints** - configured and hash verified
+6. ✅ **Fixed Phoenix checkpoint hash** - was using Magneto hash causing potential peer issues
+7. ✅ **Documentation** - comprehensive research findings captured
+
+## Critical Fix: Phoenix Bootstrap Checkpoint Hash
+
+**Issue Discovered**: Phoenix fork block (10,500,839) had incorrect hash in bootstrap-checkpoints configuration.
+
+**Problem**:
+- Configured hash: `0x85f67d6db616637bd8b3bf32cea92873f91bac977859e387ad341c1726c14b45` (Magneto hash)
+- Correct hash: `0x41f1cd4d338eeaf25f4060570c21e8fee86fc704c63bcae6c9f8387a6ff9fe43` (Phoenix hash)
+
+**Impact**: This inaccurate block number/hash pair could cause:
+- ForkId calculation mismatch
+- Peer disconnections during initial handshake
+- Status message inconsistency
+- Bootstrap checkpoint loader using wrong reference
+
+**Verification**: Block hashes verified against https://etc.blockscout.com API:
+- ✅ Spiral (19,250,000): Correct
+- ✅ Mystique (14,525,000): Correct  
+- ✅ Magneto (13,189,133): Correct
+- ❌ Phoenix (10,500,839): **FIXED** - was duplicate of Magneto hash
 
 ## Changes Made
 
-### Configuration Update
+### 1. Configuration Update - Capabilities
 
 **File**: `src/main/resources/conf/chains/etc-chain.conf`
 
@@ -84,19 +105,46 @@ Restored snap/1 capability advertisement for future interoperability:
 ```hocon
 # Advertise snap/1 for future compatibility
 capabilities = ["eth/63", ..., "eth/68", "snap/1"]
+```
 
-# Explicit sync configuration
+### 2. Configuration Update - Sync Mode
+
+**File**: `src/main/resources/conf/chains/etc-chain.conf`
+
+Explicit sync configuration:
+
+```hocon
 sync {
   do-snap-sync = false    # Disabled until ETC peers support it
   do-fast-sync = true     # Current proven solution
 }
 ```
 
+### 3. CRITICAL FIX - Phoenix Bootstrap Checkpoint Hash
+
+**File**: `src/main/resources/conf/chains/etc-chain.conf`
+
+Fixed incorrect block hash for Phoenix fork checkpoint:
+
+```hocon
+# Before (WRONG - was using Magneto hash):
+"10500839:0x85f67d6db616637bd8b3bf32cea92873f91bac977859e387ad341c1726c14b45"
+
+# After (CORRECT - Phoenix hash):
+"10500839:0x41f1cd4d338eeaf25f4060570c21e8fee86fc704c63bcae6c9f8387a6ff9fe43"
+```
+
+**Impact**: This fix prevents peer disconnections caused by:
+- ForkId calculation using incorrect reference block
+- Bootstrap checkpoint loader advertising wrong block hash
+- Status message inconsistency during handshake
+
 **Rationale**: 
 - Core-geth implements SNAP/1 protocol
 - Advertising snap/1 enables future peer compatibility
 - Capability negotiation will handle current lack of peer support
 - When ETC peers eventually support SNAP, Fukuii will be ready
+- **Phoenix checkpoint must have correct hash to avoid peer disconnect issues**
 
 ## Related Documentation
 
