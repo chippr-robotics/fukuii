@@ -28,25 +28,29 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
 
   override def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case hello: Hello =>
     log.debug("Protocol handshake finished with peer ({})", hello)
+    // Store full capability list from peer
+    val peerCapabilities = hello.capabilities.toList
+    log.debug("Peer capabilities: {}", peerCapabilities.mkString(", "))
+    
     // Check if peer supports SNAP/1 protocol
-    val supportsSnap = hello.capabilities.contains(Capability.SNAP1)
+    val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
     if (supportsSnap) {
       log.debug("Peer supports SNAP/1 protocol")
     }
     
     // FIXME in principle this should be already negotiated
-    Capability.negotiate(hello.capabilities.toList, handshakerConfiguration.blockchainConfig.capabilities) match {
+    Capability.negotiate(peerCapabilities, handshakerConfiguration.blockchainConfig.capabilities) match {
       case Some(Capability.ETC64) =>
         log.debug("Negotiated protocol version with client {} is etc/64", hello.clientId)
-        EtcNodeStatus64ExchangeState(handshakerConfiguration, supportsSnap)
+        EtcNodeStatus64ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
       case Some(Capability.ETH63) =>
         log.debug("Negotiated protocol version with client {} is eth/63", hello.clientId)
-        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap)
+        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
           ) =>
         log.debug("Negotiated protocol version with client {} is {}", hello.clientId, negotiated)
-        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap)
+        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities)
       case _ =>
         log.debug(
           s"Connected peer does not support eth/63-68 or etc/64 protocol. Disconnecting."

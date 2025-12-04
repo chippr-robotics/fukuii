@@ -523,7 +523,8 @@ object EtcPeerManagerActor {
       chainWeight: ChainWeight,
       bestHash: ByteString,
       genesisHash: ByteString,
-      supportsSnap: Boolean = false
+      supportsSnap: Boolean = false,
+      capabilities: List[Capability] = List.empty
   ) {
     override def toString: String =
       s"RemoteStatus { " +
@@ -532,19 +533,21 @@ object EtcPeerManagerActor {
         s"chainWeight: $chainWeight, " +
         s"bestHash: ${ByteStringUtils.hash2string(bestHash)}, " +
         s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}, " +
-        s"supportsSnap: $supportsSnap" +
+        s"supportsSnap: $supportsSnap, " +
+        s"capabilities: ${capabilities.mkString("[", ", ", "]")}" +
         s"}"
   }
 
   object RemoteStatus {
-    def apply(status: ETH64.Status, negotiatedCapability: Capability, supportsSnap: Boolean): RemoteStatus =
+    def apply(status: ETH64.Status, negotiatedCapability: Capability, supportsSnap: Boolean, capabilities: List[Capability]): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
         status.networkId,
         ChainWeight.totalDifficultyOnly(status.totalDifficulty),
         status.bestHash,
         status.genesisHash,
-        supportsSnap
+        supportsSnap,
+        capabilities
       )
 
     def apply(status: ETH64.Status): RemoteStatus =
@@ -554,17 +557,19 @@ object EtcPeerManagerActor {
         ChainWeight.totalDifficultyOnly(status.totalDifficulty),
         status.bestHash,
         status.genesisHash,
-        false  // supportsSnap defaults to false
+        false,  // supportsSnap defaults to false
+        List.empty
       )
 
-    def apply(status: ETC64.Status, negotiatedCapability: Capability, supportsSnap: Boolean): RemoteStatus =
+    def apply(status: ETC64.Status, negotiatedCapability: Capability, supportsSnap: Boolean, capabilities: List[Capability]): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
         status.networkId,
         status.chainWeight,
         status.bestHash,
         status.genesisHash,
-        supportsSnap
+        supportsSnap,
+        capabilities
       )
 
     def apply(status: ETC64.Status): RemoteStatus =
@@ -574,17 +579,19 @@ object EtcPeerManagerActor {
         status.chainWeight,
         status.bestHash,
         status.genesisHash,
-        false  // supportsSnap defaults to false
+        false,  // supportsSnap defaults to false
+        List.empty
       )
 
-    def apply(status: BaseETH6XMessages.Status, negotiatedCapability: Capability, supportsSnap: Boolean): RemoteStatus =
+    def apply(status: BaseETH6XMessages.Status, negotiatedCapability: Capability, supportsSnap: Boolean, capabilities: List[Capability]): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
         status.networkId,
         ChainWeight.totalDifficultyOnly(status.totalDifficulty),
         status.bestHash,
         status.genesisHash,
-        supportsSnap
+        supportsSnap,
+        capabilities
       )
 
     def apply(status: BaseETH6XMessages.Status): RemoteStatus =
@@ -594,7 +601,8 @@ object EtcPeerManagerActor {
         ChainWeight.totalDifficultyOnly(status.totalDifficulty),
         status.bestHash,
         status.genesisHash,
-        false  // supportsSnap defaults to false
+        false,  // supportsSnap defaults to false
+        List.empty
       )
   }
 

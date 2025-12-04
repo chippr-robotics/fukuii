@@ -53,6 +53,17 @@ class SyncController(
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(context.system.scheduler)
 
+  /** Load SNAP sync configuration with fallback to defaults */
+  private def loadSnapSyncConfig(): SNAPSyncConfig = {
+    try {
+      SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
+    } catch {
+      case e: Exception =>
+        log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
+        SNAPSyncConfig()
+    }
+  }
+
   override def receive: Receive = idle
 
   def idle: Receive = { case SyncProtocol.Start =>
@@ -85,8 +96,25 @@ class SyncController(
       snapSync.forward(msg)
   }
 
-  def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
-    regularSync.forward(other)
+  def runningRegularSync(regularSync: ActorRef): Receive = {
+    case msg @ SyncProtocol.Status.Progress(blocksProgress, stateNodesProgress) =>
+      // Check if we should transition from bootstrap regular sync to SNAP sync
+      appStateStorage.getSnapSyncBootstrapTarget() match {
+        case Some(targetBlock) if appStateStorage.getBestBlockNumber() >= targetBlock =>
+          log.info(s"Bootstrap target block $targetBlock reached (current: ${appStateStorage.getBestBlockNumber()})")
+          log.info("Transitioning from regular sync to SNAP sync")
+          // Clear the bootstrap target
+          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          // Stop regular sync and start SNAP sync
+          regularSync ! PoisonPill
+          startSnapSync()
+        case _ =>
+          // No transition needed, message is already handled by regularSync
+          ()
+      }
+    
+    case other =>
+      regularSync.forward(other)
   }
 
   def start(): Unit = {
@@ -94,9 +122,24 @@ class SyncController(
 
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
     
+    val bestBlockNumber = appStateStorage.getBestBlockNumber()
+    
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
       case (false, _, true, _) =>
-        startSnapSync()
+        // Check if we have enough blocks to start SNAP sync
+        // If not, we need to bootstrap with regular/fast sync first
+        val snapSyncConfig = loadSnapSyncConfig()
+        
+        val minRequiredBlocks = snapSyncConfig.pivotBlockOffset + 1
+        if (bestBlockNumber < minRequiredBlocks) {
+          log.info(s"SNAP sync requires at least $minRequiredBlocks blocks, but only $bestBlockNumber blocks available")
+          log.info(s"Starting hybrid sync: will sync to block $minRequiredBlocks using regular sync, then engage SNAP sync")
+          // Store the intent to switch to SNAP sync later
+          appStateStorage.putSnapSyncBootstrapTarget(minRequiredBlocks).commit()
+          startRegularSync()
+        } else {
+          startSnapSync()
+        }
       case (true, _, true, _) =>
         log.warning("do-snap-sync is true but SNAP sync already completed")
         startRegularSync()
@@ -145,13 +188,7 @@ class SyncController(
   def startSnapSync(): Unit = {
     log.info("Starting SNAP sync mode")
     
-    val snapSyncConfig = try {
-      SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
-    } catch {
-      case e: Exception =>
-        log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
-        SNAPSyncConfig()
-    }
+    val snapSyncConfig = loadSnapSyncConfig()
     
     val mptStorage = stateStorage.getReadOnlyStorage
     

@@ -190,6 +190,31 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def putSnapSyncProgress(progressJson: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncProgress, progressJson)
+  
+  /** Get the target block number for SNAP sync bootstrap via regular sync.
+    * This is used when SNAP sync requires a minimum number of blocks to start.
+    * @return
+    *   Target block number for bootstrap, or None if not set
+    */
+  def getSnapSyncBootstrapTarget(): Option[BigInt] =
+    get(Keys.SnapSyncBootstrapTarget).map(BigInt(_))
+  
+  /** Store the target block number for SNAP sync bootstrap.
+    * Regular sync will sync to this block number before transitioning to SNAP sync.
+    * @param targetBlock
+    *   The block number to reach before starting SNAP sync
+    * @return
+    *   DataSourceBatchUpdate for chaining
+    */
+  def putSnapSyncBootstrapTarget(targetBlock: BigInt): DataSourceBatchUpdate =
+    put(Keys.SnapSyncBootstrapTarget, targetBlock.toString)
+  
+  /** Clear the SNAP sync bootstrap target (called after transition to SNAP sync)
+    * @return
+    *   DataSourceBatchUpdate for chaining
+    */
+  def clearSnapSyncBootstrapTarget(): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.SnapSyncBootstrapTarget), toUpsert = Nil)
 }
 
 object AppStateStorage {
@@ -209,6 +234,7 @@ object AppStateStorage {
     val SnapSyncPivotBlock = "SnapSyncPivotBlock"
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
+    val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
   }
 
 }
