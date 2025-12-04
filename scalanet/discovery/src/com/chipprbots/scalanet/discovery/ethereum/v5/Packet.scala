@@ -1,9 +1,9 @@
 package com.chipprbots.scalanet.discovery.ethereum.v5
 
 import cats.Show
-import com.chipprbots.scalanet.discovery.hash.Hash
-import scodec.{Attempt, Codec, DecodeResult, Decoder, Encoder, Err}
+import scodec.{Attempt, DecodeResult, Err}
 import scodec.bits.{BitVector, ByteVector}
+import java.security.SecureRandom
 
 /** Discovery v5 wire format from https://github.com/ethereum/devp2p/blob/master/discv5/discv5-wire.md
   *
@@ -98,8 +98,10 @@ object Packet {
   
   /** Generate a random nonce for packet */
   def randomNonce: ByteVector = {
-    val random = new scala.util.Random()
-    ByteVector.view(Array.fill(NonceSize)(random.nextInt(256).toByte))
+    val bytes = Array.ofDim[Byte](NonceSize)
+    val random = new SecureRandom()
+    random.nextBytes(bytes)
+    ByteVector.view(bytes)
   }
   
   /** Encode a packet to wire format */

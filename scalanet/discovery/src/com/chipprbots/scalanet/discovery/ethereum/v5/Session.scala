@@ -10,6 +10,7 @@ import scala.util.Try
 import cats.effect.{IO, Ref}
 import cats.implicits._
 import com.chipprbots.scalanet.discovery.hash.Keccak256
+import java.security.SecureRandom
 
 /** Session management for Discovery v5
   * 
@@ -146,8 +147,10 @@ object Session {
   
   /** Generate a random ID nonce for WHOAREYOU challenge */
   def randomIdNonce: ByteVector = {
-    val random = new scala.util.Random()
-    ByteVector.view(Array.fill(16)(random.nextInt(256).toByte))
+    val bytes = Array.ofDim[Byte](16)
+    val random = new SecureRandom()
+    random.nextBytes(bytes)
+    ByteVector.view(bytes)
   }
   
   /** Compute node ID from public key using keccak256 */

@@ -1,8 +1,8 @@
 package com.chipprbots.scalanet.discovery.ethereum.v5
 
-import com.chipprbots.scalanet.discovery.crypto.PublicKey
 import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
 import scodec.bits.ByteVector
+import java.security.SecureRandom
 
 /** Discovery v5 protocol messages from https://github.com/ethereum/devp2p/blob/master/discv5/discv5-wire.md
   *
@@ -147,7 +147,9 @@ object Payload {
   
   /** Generate a random 8-byte request ID */
   def randomRequestId: ByteVector = {
-    val random = new scala.util.Random()
-    ByteVector.view(Array.fill(8)(random.nextInt(256).toByte))
+    val bytes = Array.ofDim[Byte](8)
+    val random = new SecureRandom()
+    random.nextBytes(bytes)
+    ByteVector.view(bytes)
   }
 }

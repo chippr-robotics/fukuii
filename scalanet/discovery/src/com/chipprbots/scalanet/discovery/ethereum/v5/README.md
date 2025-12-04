@@ -1,6 +1,6 @@
 # Discovery v5 Protocol Implementation
 
-This directory contains the implementation of the Discovery v5 protocol for fukuii (Ethereum Classic client).
+This directory contains the implementation of the Discovery v5 protocol for Fukuii (Ethereum Classic client).
 
 ## Overview
 
