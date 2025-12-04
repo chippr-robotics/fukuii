@@ -90,7 +90,7 @@ class MessageCodec(
         if (shouldCompress) {
           // Always attempt decompression when compression is expected (p2pVersion >= 5)
           // If decompression fails, fall back to treating the data as uncompressed
-          // This handles core-geth's protocol deviation where it advertises compression support
+          // This handles CoreGeth's protocol deviation where it advertises compression support
           // but sends uncompressed messages
           decompressData(frameData, frame).recoverWith { case ex =>
             log.warn(

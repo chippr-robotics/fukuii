@@ -117,7 +117,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    // This test simulates core-geth's protocol deviation where it advertises p2pVersion=5
+    // This test simulates CoreGeth's protocol deviation where it advertises p2pVersion=5
     // (compression enabled) but sends uncompressed messages
     
     // Both peers exchange v5 hellos, agreeing on compression
@@ -127,7 +127,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val localHello: ByteString = messageCodec.encodeMessage(helloV5)
     remoteMessageCodec.readMessages(localHello)
 
-    // Now simulate core-geth sending an UNCOMPRESSED status message
+    // Now simulate CoreGeth sending an UNCOMPRESSED status message
     // even though compression was agreed upon
     // We manually create an uncompressed frame
     val statusBytes = status.toBytes
