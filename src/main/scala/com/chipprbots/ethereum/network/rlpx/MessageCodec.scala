@@ -21,8 +21,9 @@ import com.chipprbots.ethereum.utils.Logger
 
 object MessageCodec {
   val MaxFramePayloadSize: Int = Int.MaxValue // no framing
-  // 16Mb in base 2
-  val MaxDecompressedLength = 16777216
+  // maxUint24 = 16,777,215 bytes (matching Core-Geth standard)
+  // Core-Geth uses maxUint24 (2^24 - 1) for maximum message size
+  val MaxDecompressedLength = 16777215
   // Maximum bytes to show fully in hex strings (larger data will be truncated)
   val MaxFullHexLength = 64
 

@@ -1,4 +1,4 @@
-# Run 006 Configuration - SNAP Sync Testing
+# Testbed Configuration - SNAP Sync Testing
 
 This configuration continues SNAP sync testing from run-005 to validate the SNAP protocol implementation and analyze peer capability exchange behavior.
 
@@ -96,7 +96,7 @@ This is **expected behavior for a test** - we're validating that our implementat
 ### Quick Start
 
 ```bash
-cd ops/run-006
+cd ops/testbed
 
 # Start both nodes (fukuii and core-geth)
 ./start.sh start
@@ -478,7 +478,7 @@ docker compose logs fukuii | grep -i "progress\|downloaded"
 ### Quick Start
 
 ```bash
-cd ops/run-006
+cd ops/testbed
 
 # Start the node
 ./start.sh start

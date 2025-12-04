@@ -1,8 +1,8 @@
-# Run 006 - SNAP Sync Protocol Validation Testing
+# Testbed - SNAP Sync Protocol Validation Testing
 
 ## Issue ID
 - **GitHub Issue**: #704
-- **Title**: run 006 - SNAP sync testing and protocol validation
+- **Title**: testbed - SNAP sync testing and protocol validation
 
 ## Purpose
 
@@ -301,7 +301,7 @@ Success is measured by log quality and implementation validation, not by sync pr
 
 ## Issue ID
 - **GitHub Issue**: Related to run 005 follow-up
-- **Title**: run 006 - SNAP sync investigation and FastSync configuration
+- **Title**: testbed - SNAP sync investigation and FastSync configuration
 
 ## Problem Statement
 
