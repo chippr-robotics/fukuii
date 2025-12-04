@@ -10,6 +10,8 @@ This investigation was triggered by concerns that removing the `looksLikeRLP` he
 
 **The removal of `looksLikeRLP` was correct and necessary.** The current implementation is superior to previous versions. Peer connectivity issues at genesis are NOT related to compression but are instead due to the bootstrap challenge, which is already solved by bootstrap checkpoints (CON-002).
 
+**CRITICAL ALIGNMENT ISSUE DISCOVERED**: Fukuii was using bootstrap pivot block for ForkId calculation while core-geth uses actual current block. This mismatch has been corrected to align with core-geth behavior.
+
 ## Key Findings
 
 ### Finding 1: Core-Geth Compression Behavior - ALL Messages Compressed
@@ -64,6 +66,43 @@ The `looksLikeRLP` heuristic had critical bugs that caused peer disconnections:
 - Even if current peers don't support it, future peers might
 - Advertising doesn't hurt, only enables future compatibility
 
+### Finding 5: CRITICAL - Core-Geth Uses Actual Current Block, NOT Checkpoints
+
+**Research Question**: Does core-geth use genesis or checkpoints for ForkId calculation?
+
+**Answer**: Core-geth uses **ACTUAL CURRENT BLOCK** for status messages and ForkId calculation.
+
+**Core-geth Implementation** (`eth/handler.go` lines 312-318):
+```go
+// Execute the Ethereum handshake
+var (
+    genesis = h.chain.Genesis()
+    head    = h.chain.CurrentHeader()    // ACTUAL current block
+    hash    = head.Hash()                // ACTUAL current block hash
+    number  = head.Number.Uint64()      // ACTUAL current block number
+    td      = h.chain.GetTd(hash, number)
+)
+forkID := forkid.NewID(h.chain.Config(), genesis, number, head.Time)
+if err := peer.Handshake(h.networkID, td, hash, genesis.Hash(), forkID, h.forkFilter); err != nil {
+```
+
+**Key Points**:
+- Core-geth uses `CurrentHeader()` - the actual current/best block
+- ForkId is calculated using `number = head.Number.Uint64()` - actual block number
+- Status message sends `hash = head.Hash()` - actual block hash
+- **NO checkpoint or pivot block is used** for status messages
+
+**Fukuii Previous Behavior** (INCORRECT):
+- Was using bootstrap pivot block (19,250,000) for ForkId calculation
+- While sending actual bestHash (genesis or block 1)
+- This created mismatch: ForkId says "I'm at 19M" but bestHash says "I'm at genesis"
+- Could cause peer disconnections due to inconsistency
+
+**Fukuii Corrected Behavior** (NOW ALIGNED):
+- Uses actual current block number for both ForkId and bestHash
+- Matches core-geth behavior exactly
+- See commit in this PR for implementation
+
 ## Recommendations
 
 1. ✅ **Keep current MessageCodec** - compression logic matches core-geth perfectly
@@ -72,7 +111,8 @@ The `looksLikeRLP` heuristic had critical bugs that caused peer disconnections:
 4. ✅ **FastSync active for ETC** - proven reliable fallback
 5. ✅ **Bootstrap checkpoints** - configured and hash verified
 6. ✅ **Fixed Phoenix checkpoint hash** - was using Magneto hash causing potential peer issues
-7. ✅ **Documentation** - comprehensive research findings captured
+7. ✅ **CRITICAL: Aligned ForkId calculation with core-geth** - now uses actual current block
+8. ✅ **Documentation** - comprehensive research findings captured
 
 ## Critical Fix: Phoenix Bootstrap Checkpoint Hash
 
@@ -93,6 +133,37 @@ The `looksLikeRLP` heuristic had critical bugs that caused peer disconnections:
 - ✅ Mystique (14,525,000): Correct  
 - ✅ Magneto (13,189,133): Correct
 - ❌ Phoenix (10,500,839): **FIXED** - was duplicate of Magneto hash
+
+## CRITICAL Alignment Fix: ForkId Calculation to Match Core-Geth
+
+**Issue Discovered**: Fukuii was using bootstrap pivot block for ForkId calculation while core-geth uses actual current block.
+
+**Core-Geth Behavior** (verified from source code):
+```go
+// eth/handler.go
+head = h.chain.CurrentHeader()        // ACTUAL current block
+number = head.Number.Uint64()        // ACTUAL current block number
+forkID := forkid.NewID(..., number, head.Time)  // ForkId from ACTUAL block
+peer.Handshake(..., hash, ..., forkID, ...)     // Send ACTUAL block hash AND ForkId
+```
+
+**Fukuii Previous Behavior** (MISALIGNED):
+- Used bootstrap pivot block (19,250,000) for ForkId calculation
+- Sent actual bestHash (genesis or early block)
+- Created inconsistency: ForkId says "I'm at 19M" but bestHash says "I'm at genesis"
+
+**Fukuii Corrected Behavior** (NOW ALIGNED):
+- Uses actual current block number for ForkId calculation
+- Matches bestHash and ForkId to same block
+- Aligns perfectly with core-geth implementation
+
+**Impact of Fix**:
+- Eliminates ForkId/bestHash mismatch
+- Prevents peer confusion about node's actual state
+- Aligns with core-geth's established behavior
+- **Note**: At genesis, ForkId will indicate genesis state (correct per protocol)
+- Peers MAY still disconnect from genesis nodes (expected Ethereum behavior)
+- Bootstrap checkpoints remain useful for sync process, just not for status messages
 
 ## Changes Made
 
@@ -134,17 +205,40 @@ Fixed incorrect block hash for Phoenix fork checkpoint:
 "10500839:0x41f1cd4d338eeaf25f4060570c21e8fee86fc704c63bcae6c9f8387a6ff9fe43"
 ```
 
+### 4. CRITICAL FIX - ForkId Calculation Alignment with Core-Geth
+
+**File**: `src/main/scala/com/chipprbots/ethereum/network/handshaker/EthNodeStatus64ExchangeState.scala`
+
+Changed ForkId calculation to use actual current block instead of bootstrap pivot:
+
+```scala
+// Before (MISALIGNED with core-geth):
+val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
+  val threshold = (bootstrapPivotBlock / 10).min(MaxBootstrapPivotThreshold)
+  if (bestBlockNumber < (bootstrapPivotBlock - threshold)) {
+    bootstrapPivotBlock  // Use pivot for ForkId
+  } else {
+    bestBlockNumber
+  }
+} else {
+  bestBlockNumber
+}
+
+// After (ALIGNED with core-geth):
+val forkIdBlockNumber = bestBlockNumber  // Always use actual current block
+```
+
 **Impact**: This fix prevents peer disconnections caused by:
-- ForkId calculation using incorrect reference block
-- Bootstrap checkpoint loader advertising wrong block hash
-- Status message inconsistency during handshake
+- ForkId/bestHash inconsistency (ForkId says one block, bestHash says another)
+- Mismatch with core-geth's expected behavior
+- Status message confusion about node's actual state
 
 **Rationale**: 
-- Core-geth implements SNAP/1 protocol
-- Advertising snap/1 enables future peer compatibility
-- Capability negotiation will handle current lack of peer support
-- When ETC peers eventually support SNAP, Fukuii will be ready
-- **Phoenix checkpoint must have correct hash to avoid peer disconnect issues**
+- Core-geth uses actual CurrentHeader() for both bestHash and ForkId
+- Fukuii now matches this behavior exactly
+- Bootstrap checkpoints remain useful for sync process, just not for status messages
+- At genesis, both implementations will show genesis state (correct per protocol)
 
 ## Related Documentation
 
