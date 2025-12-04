@@ -110,6 +110,43 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     assert(remoteReadStatus.head == Right(status))
   }
 
+  it should "accept uncompressed messages from peers that advertise compression support (core-geth compatibility)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    // This test simulates core-geth's protocol deviation where it advertises p2pVersion=5
+    // (compression enabled) but sends uncompressed messages
+    
+    // Both peers exchange v5 hellos, agreeing on compression
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
+    messageCodec.readMessages(remoteHello)
+
+    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
+    remoteMessageCodec.readMessages(localHello)
+
+    // Now simulate core-geth sending an UNCOMPRESSED status message
+    // even though compression was agreed upon
+    // We manually create an uncompressed frame
+    import com.chipprbots.ethereum.network.rlpx.Frame
+    import com.chipprbots.ethereum.network.rlpx.Header
+    import com.chipprbots.ethereum.network.p2p.messages.Codes
+    
+    val statusBytes = status.toBytes
+    val uncompressedFrame = Frame(
+      Header(statusBytes.length, 0, None, None),
+      Codes.StatusCode,
+      ByteString(statusBytes)
+    )
+    val uncompressedFrameBytes = remoteFrameCodec.writeFrames(Seq(uncompressedFrame))
+    
+    // The messageCodec should accept this uncompressed message despite compression being enabled
+    val decodedMessages = messageCodec.readMessages(uncompressedFrameBytes)
+    
+    // Should successfully decode the uncompressed status message
+    assert(decodedMessages.size == 1)
+    assert(decodedMessages.head == Right(status))
+  }
+
   trait TestSetup extends SecureChannelSetup {
     val frameCodec = new FrameCodec(secrets)
     val remoteFrameCodec = new FrameCodec(remoteSecrets)

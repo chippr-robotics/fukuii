@@ -76,21 +76,6 @@ class MessageCodec(
       // Previous logic excluded wire protocol messages, causing incompatibility with core-geth
       val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
 
-      // Heuristic to check if data looks like RLP-encoded data
-      // RLP encoding has predictable first-byte patterns:
-      // - 0x80-0xbf: RLP string (0x80 = empty string, 0x81-0xb7 = short string, 0xb8-0xbf = long string)
-      // - 0xc0-0xff: RLP list (0xc0 = empty list, 0xc1-0xf7 = short list, 0xf8-0xff = long list)
-      // - 0x00-0x7f: Single byte value (direct value encoding)
-      // This is used as a fallback check after decompression fails to handle protocol deviations
-      // where peers send uncompressed RLP data when compression is expected.
-      def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
-        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127, so this masks to 0-255 range for comparison with RLP encoding markers)
-        val firstByte = data(0) & 0xff
-        // Accept values >= 0x80 (RLP strings 0x80-0xbf and lists 0xc0-0xff).
-        // Note: Single-byte values 0x00-0x7f are also valid RLP but excluded here as they're less common in SNAP messages.
-        firstByte >= 0x80
-      }
-
       // Enhanced logging for compression decision
       log.debug(
         "COMPRESSION_DECISION: frame=0x{}, p2pVersion={}, shouldCompress={}, payloadSize={}, firstByte=0x{}",
@@ -104,37 +89,28 @@ class MessageCodec(
       val payloadTry =
         if (shouldCompress) {
           // Always attempt decompression when compression is expected (p2pVersion >= 5)
-          // If decompression fails, fall back to uncompressed data if it looks like valid RLP
+          // If decompression fails, fall back to treating the data as uncompressed
+          // This handles core-geth's protocol deviation where it advertises compression support
+          // but sends uncompressed messages
           decompressData(frameData, frame).recoverWith { case ex =>
-            if (looksLikeRLP(frameData)) {
-              log.warn(
-                "COMPRESSION_FALLBACK: Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed. " +
-                  "This indicates peer sent uncompressed data despite p2pVersion={} (compression expected). " +
-                  "firstByte=0x{}, size={}, error: {}",
-                frame.`type`.toHexString,
-                remotePeer2PeerVersion,
-                Integer.toHexString(frameData(0) & 0xff),
-                frameData.length,
-                ex.getMessage
-              )
-              Success(frameData)
-            } else {
-              // For better diagnostics, log the frame type and data sample
-              val dataSample = if (frameData.length > 0) {
-                s"firstByte=0x${Integer.toHexString(frameData(0) & 0xff)}, size=${frameData.length}"
-              } else {
-                "empty"
-              }
-              log.error(
-                "COMPRESSION_ERROR: Frame type 0x{}: Decompression failed and data doesn't look like RLP ({}). " +
-                  "This may indicate corrupt data or protocol mismatch. p2pVersion={}, error: {}",
-                frame.`type`.toHexString,
-                dataSample,
-                remotePeer2PeerVersion,
-                ex.getMessage
-              )
-              Failure(ex)
-            }
+            log.warn(
+              "COMPRESSION_FALLBACK: Frame type 0x{}: Decompression failed - treating as uncompressed data. " +
+                "This indicates peer sent uncompressed data despite p2pVersion={} (compression expected). " +
+                "firstByte=0x{}, size={}, error: {}. " +
+                "The RLP decoder will validate if this is legitimate uncompressed data.",
+              frame.`type`.toHexString,
+              remotePeer2PeerVersion,
+              if (frameData.length > 0) Integer.toHexString(frameData(0) & 0xff) else "N/A",
+              frameData.length,
+              ex.getMessage
+            )
+            // Always fall back to uncompressed data when decompression fails
+            // Let the RLP decoder validate whether it's actually valid RLP
+            // This approach is safer than trying to guess based on first byte patterns because:
+            // 1. RLP can start with any byte 0x00-0xff (single byte values use 0x00-0x7f)
+            // 2. Snappy data can also start with 0x00-0x7f for small payloads
+            // 3. If it's invalid data, the RLP decoder will fail and close the connection
+            Success(frameData)
           }
         } else {
           log.debug(

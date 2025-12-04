@@ -390,3 +390,60 @@ if (shouldCompress) {
 - `LOG_REVIEW_RESOLUTION.md` (detailed analysis)
 
 **Reference**: See `LOG_REVIEW_RESOLUTION.md` for full technical analysis of the issue and fix.
+
+### Amendment 2025-12-04: Fix 2 Second Revision - Removing looksLikeRLP Heuristic
+
+**Issue Discovered**: The revised Fix 2 from Amendment 2025-11-23 still had a critical flaw. The `looksLikeRLP` heuristic only accepted RLP data starting with bytes >= 0x80, but valid RLP can also start with bytes 0x00-0x7f (single-byte values in RLP direct encoding).
+
+**Specific Case**: When CoreGeth sends uncompressed RLP messages that happen to encode with a first byte < 0x80:
+- Byte 0x00-0x7f is valid RLP (single-byte direct value encoding)
+- Decompression fails (as expected, since data is not compressed)
+- `looksLikeRLP` check returns false (because firstByte < 0x80)
+- Fallback rejects the data → MalformedMessageError
+- Connection closes, peer gets blacklisted
+
+**Root Cause Analysis**:
+1. RLP encoding allows ANY byte 0x00-0xff as first byte:
+   - 0x00-0x7f: Single byte values (direct encoding)
+   - 0x80-0xbf: RLP strings
+   - 0xc0-0xff: RLP lists
+2. The `looksLikeRLP` heuristic was trying to distinguish compressed from uncompressed data
+3. However, Snappy data can ALSO start with 0x00-0x7f (varint length encoding for small payloads)
+4. This makes first-byte heuristics unreliable for distinguishing Snappy from RLP
+
+**Revised Implementation**:
+```scala
+// NEW: Always fall back to uncompressed data when decompression fails
+// Let the RLP decoder validate whether it's actually valid RLP
+decompressData(frameData, frame).recoverWith { case ex =>
+  log.warn("Decompression failed - treating as uncompressed data")
+  Success(frameData)  // Always accept, let RLP decoder validate
+}
+```
+
+**Key Changes**:
+1. Removed `looksLikeRLP` heuristic entirely
+2. Always fall back to uncompressed data when decompression fails
+3. Let the RLP message decoder validate if the data is actually valid RLP
+4. If it's invalid data, the RLP decoder will fail with appropriate error
+
+**Why This Is Better**:
+- ✅ Accepts ALL valid uncompressed RLP from protocol-deviating peers (including 0x00-0x7f)
+- ✅ Still rejects truly invalid data (RLP decoder will fail)
+- ✅ Simpler logic with fewer edge cases
+- ✅ More robust than trying to guess data format from first byte
+- ✅ Aligns with defense-in-depth principle: each layer validates its own concerns
+
+**Impact**:
+- ✅ Fixes peer blacklisting when CoreGeth sends uncompressed messages starting with < 0x80
+- ✅ Maintains compatibility with all valid RLP encodings
+- ✅ Still protects against truly malformed data (validated by RLP decoder)
+- ✅ Resolves the "node is currently blacklisting all peers" issue
+
+**Files Modified**:
+- `src/main/scala/com/chipprbots/ethereum/network/rlpx/MessageCodec.scala`
+- `src/test/scala/com/chipprbots/ethereum/network/p2p/MessageCodecSpec.scala`
+
+**Testing**:
+- Added test case simulating CoreGeth sending uncompressed messages despite p2pVersion=5
+- Verified existing tests still pass with new logic
