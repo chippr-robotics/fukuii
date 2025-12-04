@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-Fukuii was excluding wire protocol messages (Ping 0x02, Pong 0x03, etc.) from Snappy compression, while core-geth compresses ALL messages when p2pVersion >= 5. This asymmetry caused:
+fukuii was excluding wire protocol messages (Ping 0x02, Pong 0x03, etc.) from Snappy compression, while core-geth compresses ALL messages when p2pVersion >= 5. This asymmetry caused:
 
 1. **Immediate disconnects** - Core-geth receives uncompressed Ping, tries to decompress, fails, disconnects
 2. **SNAP timeouts** - Connection breaks during Ping/Pong cycle (15s interval), appears as request timeout
@@ -63,7 +63,7 @@ func (c *Conn) Write(code uint64, data []byte) (uint32, error) {
 - Wire protocol messages (0x00-0x03) are compressed just like eth protocol messages (0x10+)
 - Strict: decompression failure = immediate disconnect
 
-## Fukuii's Incorrect Logic (Before Fix)
+## fukuii's Incorrect Logic (Before Fix)
 
 ### What We Were Doing Wrong
 
@@ -96,22 +96,22 @@ if (shouldCompress) {
 **Timeline of a disconnect:**
 
 1. **T=0s:** Connection established, p2pVersion=5 negotiated
-2. **T=1s:** Fukuii sends GetBlockHeaders (0x13) - compressed ✅
+2. **T=1s:** fukuii sends GetBlockHeaders (0x13) - compressed ✅
 3. **T=2s:** Core-geth responds with BlockHeaders (0x14) - compressed ✅
-4. **T=3s:** Fukuii sends GetBlockBodies (0x15) - compressed ✅
+4. **T=3s:** fukuii sends GetBlockBodies (0x15) - compressed ✅
 5. **T=15s:** Core-geth sends Ping (0x02) - **compressed** (per core-geth logic)
-6. **T=15.001s:** Fukuii receives Ping:
+6. **T=15.001s:** fukuii receives Ping:
    - Detects frame type 0x02 (wire protocol)
    - `shouldCompress = false` (our bug!)
    - Tries to RLP decode compressed Snappy data
    - **RLP decode fails** - invalid structure
-7. **T=15.002s:** Fukuii sends Pong (0x03) - **uncompressed** (our bug!)
+7. **T=15.002s:** fukuii sends Pong (0x03) - **uncompressed** (our bug!)
 8. **T=15.003s:** Core-geth receives Pong:
    - Has snappy enabled
    - Tries `snappy.DecodedLen(uncompressed_data)`
    - **Snappy decode fails** - not valid Snappy format
    - **DISCONNECTS peer** with error
-9. **T=15.004s:** Fukuii logs: "PEER_REQUEST_DISCONNECTED: reqType=GetBlockBodies"
+9. **T=15.004s:** fukuii logs: "PEER_REQUEST_DISCONNECTED: reqType=GetBlockBodies"
 
 **Result:** Appears as "TCP sub-system error" or "connection closed before response"
 
@@ -185,7 +185,7 @@ PEER_REQUEST_DISCONNECTED: ... reqType=GetBlockBodies, elapsed=15XXXms
 
 ## Comparison Table
 
-| Aspect | Core-Geth | Fukuii (Before) | Fukuii (After) |
+| Aspect | Core-Geth | fukuii (Before) | fukuii (After) |
 |--------|-----------|-----------------|----------------|
 | Snappy version | p2pVersion >= 5 | p2pVersion >= 5 | p2pVersion >= 5 |
 | Wire protocol (0x00-0x03) | **Compressed** | ❌ Uncompressed | ✅ **Compressed** |

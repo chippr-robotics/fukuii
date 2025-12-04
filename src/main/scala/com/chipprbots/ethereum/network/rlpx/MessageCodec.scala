@@ -243,11 +243,11 @@ class MessageCodec(
           // Safe compression ratio calculation (avoid division by zero)
           val ratio = if (framedPayload.length > 0) compressed.length.toDouble / framedPayload.length else 0.0
           log.debug(
-            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {:.2f}), code=0x{}, p2pVersion={}",
+            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {}), code=0x{}, p2pVersion={}",
             frameNo,
             framedPayload.length,
             compressed.length,
-            ratio,
+            "%.2f".format(ratio),
             serializable.code.toHexString,
             remotePeer2PeerVersion
           )
