@@ -663,6 +663,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
         bestHash = genesisBlock.header.hash,
         genesisHash = genesisBlock.header.hash
       )
+
+    val remoteStatus: RemoteStatus = RemoteStatus(remoteStatusMsg)
   }
 
   trait RemotePeerETH64Setup extends RemotePeerSetup {
