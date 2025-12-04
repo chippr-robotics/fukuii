@@ -71,7 +71,7 @@ def initiate(uri: URI): (ByteString, AuthHandshaker) = {
 **Key Features**:
 - Uses BouncyCastle for ECIES encryption
 - Supports both v1 and v4 handshake messages
-- Random padding (100-300 bytes) for auth messages
+- Variable padding (100-300 bytes) for auth messages
 - Size prefix in 2-byte big-endian format
 
 ### Core-Geth Implementation
@@ -128,7 +128,7 @@ public ByteBuf firstMessage() throws HandshakeException {
 |---------|--------|-----------|------|------------|
 | **ECIES Encryption** | BouncyCastle | Go crypto/ecies | BouncyCastle (Tuweni) | ✅ |
 | **Auth Message Format** | v4 (EIP-8) | v4 (EIP-8) | v1 & v4 | ✅ |
-| **Padding** | 100-300 bytes random | Variable | Variable | ✅ |
+| **Padding** | 100-300 bytes variable | Variable | Variable | ✅ |
 | **Size Prefix** | 2 bytes BE | 2 bytes BE | 2 bytes BE | ✅ |
 | **Nonce Size** | 32 bytes | 32 bytes | 32 bytes | ✅ |
 | **Ephemeral Keys** | ECDH secp256k1 | ECDH secp256k1 | ECDH secp256k1 | ✅ |
@@ -473,7 +473,7 @@ public byte[] decompress(final byte[] compressed) {
 | **Snappy Library** | Xerial | golang/snappy | Xerial | ✅ |
 | **Activation** | p2pVersion >= 5 | SetSnappy() call | enableCompression() | ✅ |
 | **Wire Protocol Compression** | YES (all messages) | YES (all messages) | YES (all messages) | ✅ |
-| **Max Decompressed Size** | 16MB | ~16MB (maxUint24) | No explicit limit | ⚠️ |
+| **Max Decompressed Size** | maxUint24 (16,777,215) | maxUint24 (16,777,215) | No explicit limit | ✅ |
 | **Decompression Fallback** | Always (graceful) | No | Conditional | ⚠️ |
 | **Error on Decompress Fail** | Warn + continue | Hard error | Hard error after first success | ⚠️ |
 
@@ -522,7 +522,7 @@ if (compressionSuccessful) {
 
 **Fukuii**:
 ```scala
-val MaxDecompressedLength = 16777216  // 16MB exactly
+val MaxDecompressedLength = 16777215  // maxUint24 (2^24 - 1), matching Core-Geth
 ```
 
 **Core-Geth**:
@@ -536,7 +536,7 @@ if actualSize > maxUint24 {  // 16,777,215 bytes
 - No explicit check in decompression
 - Relies on Snappy library internal limits
 
-**Impact**: Very minor - 1 byte difference is negligible
+**Impact**: Now aligned - Fukuii updated to use maxUint24 (16,777,215) matching Core-Geth standard
 
 ### 3. Compression Decision Logic
 
