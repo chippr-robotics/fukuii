@@ -1,19 +1,19 @@
-# Run 006 Docker Compose Configuration
-# Fukuii node configured for ETC mainnet SNAP sync testing
-# Core-geth node added for SNAP sync comparison
-# Focus: Validate SNAP protocol implementation and capture detailed logs
+# Testbed Docker Compose Configuration
+# Fukuii node configured for ETC mainnet testing
+# Core-geth node added for comparison
+# Focus: General testing and validation
 
 networks:
-  fukuii-run006:
+  fukuii-testbed:
     driver: bridge
 
 services:
   fukuii:
     image: ghcr.io/chippr-robotics/fukuii:latest
-    container_name: fukuii-run-006
+    container_name: fukuii-testbed
     restart: unless-stopped
     networks:
-      - fukuii-run006
+      - fukuii-testbed
     ports:
       # JSON-RPC HTTP
       - "8545:8545"
@@ -27,15 +27,15 @@ services:
       - ./conf/etc.conf:/app/conf/etc.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
       # Data directory (persistent)
-      - fukuii-run006-data:/app/data
+      - fukuii-testbed-data:/app/data
       # Logs directory
-      - fukuii-run006-logs:/app/logs
+      - fukuii-testbed-logs:/app/logs
     environment:
       # Use custom logback configuration
       - JAVA_OPTS=-Dlogback.configurationFile=/app/conf/logback.xml
       # Set node identifier for logging
-      - FUKUII_NODE_ID=run-006
-      - FUKUII_ENV=run-006-mainnet
+      - FUKUII_NODE_ID=testbed
+      - FUKUII_ENV=testbed-mainnet
     command: ["-Dconfig.file=/app/conf/etc.conf"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -46,10 +46,10 @@ services:
 
   core-geth:
     image: etclabscore/core-geth:latest
-    container_name: core-geth-run-006
+    container_name: core-geth-testbed
     restart: unless-stopped
     networks:
-      - fukuii-run006
+      - fukuii-testbed
     ports:
       # JSON-RPC HTTP (different port to avoid conflict)
       - "8555:8545"
@@ -86,7 +86,7 @@ services:
       start_period: 120s
 
 volumes:
-  fukuii-run006-data:
+  fukuii-testbed-data:
     driver: local
-  fukuii-run006-logs:
+  fukuii-testbed-logs:
     driver: local

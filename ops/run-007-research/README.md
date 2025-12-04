@@ -55,7 +55,7 @@ The `looksLikeRLP` heuristic had critical bugs that caused peer disconnections:
 
 **Core-geth SNAP Implementation**: Core-geth fully implements SNAP/1 protocol
 
-**ETC Mainnet Reality** (per run-006 empirical testing):
+**ETC Mainnet Reality** (per testbed empirical testing):
 - 0% of ETC peers currently advertise snap/1 in practice
 - All GetAccountRange requests timeout
 - FastSync is the current working solution
@@ -244,7 +244,7 @@ val forkIdBlockNumber = bestBlockNumber  // Always use actual current block
 
 - [CON-001: RLPx Protocol Deviations](../../docs/adr/consensus/CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md)
 - [CON-002: Bootstrap Checkpoints](../../docs/adr/consensus/CON-002-bootstrap-checkpoints.md)
-- [Run-006: SNAP to FastSync Migration](../run-006/README.md)
+- [Testbed: SNAP to FastSync Migration](../testbed/README.md)
 
 ## Conclusion
 
