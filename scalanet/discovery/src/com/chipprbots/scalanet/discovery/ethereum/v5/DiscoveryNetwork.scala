@@ -87,6 +87,15 @@ object DiscoveryNetwork {
       // Pending handshakes: nonce -> Deferred[HandshakeComplete]
       private val pendingHandshakes = Ref.unsafe[IO, Map[ByteVector, Deferred[IO, Session.ActiveSession]]](Map.empty)
       
+      // Track idNonce sent in WHOAREYOU for signature verification: remoteNodeId -> idNonce
+      private val sentIdNonces = Ref.unsafe[IO, Map[ByteVector, ByteVector]](Map.empty)
+      
+      // Node table for storing discovered nodes: nodeId -> Node
+      private val nodeTable = Ref.unsafe[IO, Map[Node.Id, Node]](Map.empty)
+      
+      // Topic table for storing topic registrations: topic -> Set[nodeId]
+      private val topicTable = Ref.unsafe[IO, Map[ByteVector, Set[Node.Id]]](Map.empty)
+      
       /** Send a PING and wait for PONG */
       override def ping(peer: Peer[A], localEnrSeq: Long): IO[Option[PingResult]] = {
         val requestId = Payload.randomRequestId
@@ -477,18 +486,56 @@ object DiscoveryNetwork {
           // 1. Extract source node ID from handshake auth data
           srcNodeId <- IO.pure(packet.handshakeAuthData.srcId)
           
-          // 2. Verify signature over id-nonce (would need the original idNonce we sent)
-          // For now, we'll accept it - in production, verify signature
+          // 2. Retrieve the idNonce we sent in WHOAREYOU
+          idNonceOpt <- sentIdNonces.get.map(_.get(srcNodeId))
           
-          // 3. The ephemeral public key is in the packet
-          ephemPubkey <- IO.pure(packet.handshakeAuthData.ephemPubkey)
-          
-          // 4. Perform ECDH with our node's private key
-          sharedSecret <- IO.pure(Session.performECDH(privateKey.value.bytes, ephemPubkey))
-          
-          // 5. Derive session keys (would need the original idNonce we sent in WHOAREYOU)
-          // For now, we'll skip session creation - in production, store idNonce and retrieve it
-          _ = logger.debug(s"Handshake message received but session creation skipped (need idNonce tracking)")
+          _ <- idNonceOpt match {
+            case None =>
+              logger.warn(s"Received handshake from $peer but no idNonce found - cannot verify")
+              IO.unit
+              
+            case Some(idNonce) =>
+              for {
+                // 3. Verify signature over id-nonce
+                idSignature <- IO.pure(packet.handshakeAuthData.idSignature)
+                peerPublicKey <- IO.pure(peer.id)
+                
+                isValid <- IO {
+                  sigalg.verify(peerPublicKey, com.chipprbots.scalanet.discovery.crypto.Signature(idSignature.bits), idNonce.bits)
+                }
+                
+                _ <- if (!isValid) {
+                  logger.error(s"Handshake signature verification failed for $peer")
+                  IO.raiseError(new PacketException(s"Invalid handshake signature from $peer"))
+                } else {
+                  for {
+                    _ <- IO(logger.debug(s"Handshake signature verified for $peer"))
+                    
+                    // 4. Extract ephemeral public key from packet
+                    ephemPubkey <- IO.pure(packet.handshakeAuthData.ephemPubkey)
+                    
+                    // 5. Perform ECDH with our node's private key
+                    sharedSecret <- IO.pure(Session.performECDH(privateKey.value.bytes, ephemPubkey))
+                    
+                    // 6. Derive session keys
+                    localNodeId <- IO.pure(Session.nodeIdFromPublicKey(sigalg.toPublicKey(privateKey).value.bytes))
+                    remoteNodeId <- IO.pure(srcNodeId)
+                    keys <- IO.pure(Session.deriveKeys(sharedSecret, remoteNodeId, localNodeId, idNonce))
+                    
+                    // 7. Create active session (we are the recipient, not the initiator)
+                    session <- IO.pure(Session.ActiveSession(keys, localNodeId, remoteNodeId, isInitiator = false))
+                    
+                    // 8. Store session in cache
+                    _ <- sessionCache.put(remoteNodeId, session)
+                    
+                    // 9. Cleanup idNonce
+                    _ <- sentIdNonces.update(_ - srcNodeId)
+                    
+                    _ <- IO(logger.debug(s"Session established as recipient with $peer"))
+                  } yield ()
+                }
+              } yield ()
+          }
         } yield ()
       }
       
@@ -502,14 +549,18 @@ object DiscoveryNetwork {
           enrSeq <- IO.pure(localEnrSeq)
           whoAreYouData <- IO.pure(Packet.WhoAreYouData(idNonce, enrSeq))
           
-          // 2. Create WHOAREYOU packet - echo the nonce from the triggering packet
+          // 2. Store idNonce for later signature verification
+          remoteNodeId <- IO.pure(Session.nodeIdFromPublicKey(peer.id.value.bytes))
+          _ <- sentIdNonces.update(_ + (remoteNodeId -> idNonce))
+          
+          // 3. Create WHOAREYOU packet - echo the nonce from the triggering packet
           whoAreYouPacket <- IO.pure(Packet.WhoAreYouPacket(
             nonce = triggeringNonce,  // Echo the original packet's nonce
             authDataSize = 24, // 16 bytes idNonce + 8 bytes enrSeq
             whoAreYouData = whoAreYouData
           ))
           
-          // 3. Send
+          // 4. Send
           _ <- peerGroup.client(peer.address).use { channel =>
             channel.sendMessage(whoAreYouPacket)
           }
@@ -529,13 +580,24 @@ object DiscoveryNetwork {
             }
             
           case nodes: Nodes =>
-            // Complete pending request
-            pendingRequests.get.flatMap { requests =>
-              requests.get(nodes.requestId) match {
-                case Some(deferred) => deferred.complete(nodes).void
-                case None => IO.unit
+            // Store received nodes in node table and complete pending request
+            for {
+              // Extract nodes from ENRs and store them
+              // Note: In production, properly extract node info from ENR
+              _ <- nodes.enrs.traverse_ { enr =>
+                // TODO: Extract actual node info from ENR
+                // For now, we skip storage since we don't have proper ENR parsing
+                IO.unit
               }
-            }
+              
+              // Complete pending request
+              _ <- pendingRequests.get.flatMap { requests =>
+                requests.get(nodes.requestId) match {
+                  case Some(deferred) => deferred.complete(nodes).void
+                  case None => IO.unit
+                }
+              }
+            } yield ()
             
           case talkResp: TalkResponse =>
             // Complete pending request
@@ -577,27 +639,45 @@ object DiscoveryNetwork {
             sendMessage(peer, pong)
             
           case findNode: FindNode =>
-            // Respond with NODES (empty for now - would lookup nodes at requested distances)
+            // Respond with NODES - lookup nodes at requested distances
             logger.debug(s"Received FINDNODE from $peer for distances ${findNode.distances}")
-            val enrsToReturn = List.empty[EthereumNodeRecord] // TODO: Replace with actual ENR lookup logic
             
-            if (enrsToReturn.nonEmpty) {
-              val nodes = Nodes(
-                requestId = findNode.requestId,
-                total = 1,
-                enrs = enrsToReturn
-              )
-              sendMessage(peer, nodes)
-            } else {
-              // No nodes to return - send empty response with total=0 or don't respond
-              logger.debug(s"No ENRs found for FINDNODE from $peer; sending empty NODES response")
-              val nodes = Nodes(
-                requestId = findNode.requestId,
-                total = 1,
-                enrs = List.empty
-              )
-              sendMessage(peer, nodes)
-            }
+            for {
+              // Get all known nodes from node table
+              allNodes <- nodeTable.get
+              
+              // For now, return all nodes (proper distance calculation would filter by kademlia distance)
+              // In production, calculate XOR distance and filter by requested distances
+              enrsToReturn = allNodes.values.toList.map { node =>
+                // Convert Node to EthereumNodeRecord
+                // For now, create a minimal ENR - in production, use proper ENR from node
+                EthereumNodeRecord(
+                  signature = com.chipprbots.scalanet.discovery.crypto.Signature(scodec.bits.BitVector.empty),
+                  content = EthereumNodeRecord.Content(
+                    seq = 0L,
+                    attrs = scala.collection.immutable.SortedMap.empty[ByteVector, ByteVector](using com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.byteVectorOrdering)
+                  )
+                )
+              }.take(config.maxNodesPerMessage)
+              
+              _ <- if (enrsToReturn.nonEmpty) {
+                val nodes = Nodes(
+                  requestId = findNode.requestId,
+                  total = 1,
+                  enrs = enrsToReturn
+                )
+                sendMessage(peer, nodes)
+              } else {
+                // No nodes to return - send empty NODES response
+                logger.debug(s"No ENRs found for FINDNODE from $peer; sending empty NODES response")
+                val nodes = Nodes(
+                  requestId = findNode.requestId,
+                  total = 1,
+                  enrs = List.empty
+                )
+                sendMessage(peer, nodes)
+              }
+            } yield ()
             
           case talkReq: TalkRequest =>
             // Respond with empty TALKRESP
@@ -609,14 +689,76 @@ object DiscoveryNetwork {
             sendMessage(peer, talkResp)
             
           case topicQuery: TopicQuery =>
-            // Respond with NODES (topic queries not implemented)
-            logger.debug(s"Received TOPICQUERY from $peer (not implemented)")
-            IO.unit
+            // Respond with NODES containing nodes registered for the topic
+            logger.debug(s"Received TOPICQUERY from $peer for topic ${topicQuery.topic.toHex.take(16)}")
+            
+            for {
+              // Get nodes registered for this topic
+              topicNodes <- topicTable.get.map(_.getOrElse(topicQuery.topic, Set.empty))
+              allNodes <- nodeTable.get
+              
+              // Get full node info for registered nodes
+              enrsToReturn = topicNodes.toList.flatMap { nodeId =>
+                allNodes.get(nodeId).map { node =>
+                  // Convert Node to EthereumNodeRecord
+                  EthereumNodeRecord(
+                    signature = com.chipprbots.scalanet.discovery.crypto.Signature(scodec.bits.BitVector.empty),
+                    content = EthereumNodeRecord.Content(
+                      seq = 0L,
+                      attrs = scala.collection.immutable.SortedMap.empty[ByteVector, ByteVector](using com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.byteVectorOrdering)
+                    )
+                  )
+                }
+              }.take(config.maxNodesPerMessage)
+              
+              _ <- if (enrsToReturn.nonEmpty) {
+                val nodes = Nodes(
+                  requestId = topicQuery.requestId,
+                  total = 1,
+                  enrs = enrsToReturn
+                )
+                sendMessage(peer, nodes)
+              } else {
+                logger.debug(s"No nodes registered for topic ${topicQuery.topic.toHex.take(16)}")
+                // Send empty NODES response
+                val nodes = Nodes(
+                  requestId = topicQuery.requestId,
+                  total = 1,
+                  enrs = List.empty
+                )
+                sendMessage(peer, nodes)
+              }
+            } yield ()
             
           case regTopic: RegTopic =>
-            // Respond with TICKET (topic registration not implemented)
-            logger.debug(s"Received REGTOPIC from $peer (not implemented)")
-            IO.unit
+            // Register topic and respond with TICKET
+            logger.debug(s"Received REGTOPIC from $peer for topic ${regTopic.topic.toHex.take(16)}")
+            
+            for {
+              // Register the peer for this topic
+              _ <- topicTable.update { table =>
+                val currentNodes = table.getOrElse(regTopic.topic, Set.empty)
+                table + (regTopic.topic -> (currentNodes + peer.id))
+              }
+              
+              // Store the node in our node table (extract from ENR)
+              node <- IO.pure(Node(peer.id, toNodeAddress(peer.address)))
+              _ <- nodeTable.update(_ + (peer.id -> node))
+              
+              // Generate a ticket (simplified - just use random bytes)
+              ticket <- IO.pure(Packet.randomNonce) // 12 bytes
+              waitTime <- IO.pure(10) // seconds
+              
+              // Send TICKET response
+              ticketResp <- IO.pure(Ticket(
+                requestId = regTopic.requestId,
+                ticket = ticket,
+                waitTime = waitTime
+              ))
+              
+              _ <- sendMessage(peer, ticketResp)
+              _ = logger.debug(s"Registered $peer for topic ${regTopic.topic.toHex.take(16)}")
+            } yield ()
         }
       }
       
