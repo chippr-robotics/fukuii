@@ -386,12 +386,11 @@ class SNAPSyncController(
     // Select pivot block
     val bestBlockNumber = appStateStorage.getBestBlockNumber()
     val pivotBlockNumber = bestBlockNumber - snapSyncConfig.pivotBlockOffset
-    val minRequiredBlocks = snapSyncConfig.pivotBlockOffset + 1
     
     if (pivotBlockNumber <= 0) {
-      log.info(s"Cannot start SNAP sync: best block ($bestBlockNumber) - pivot offset (${snapSyncConfig.pivotBlockOffset}) = $pivotBlockNumber <= 0")
-      log.info(s"Blockchain needs at least $minRequiredBlocks blocks to start SNAP sync")
-      log.info("Falling back to fast sync or regular sync to build blockchain first")
+      log.info(s"Cannot start SNAP sync: best block ($bestBlockNumber) - pivot offset (${snapSyncConfig.pivotBlockOffset}) = $pivotBlockNumber")
+      log.info(s"Blockchain needs at least ${snapSyncConfig.pivotBlockOffset + 1} blocks to start SNAP sync")
+      log.info("Falling back to fast sync to build initial blockchain")
       context.parent ! FallbackToFastSync
       return
     }
@@ -417,7 +416,8 @@ class SNAPSyncController(
 
       case None =>
         log.error(s"Cannot get header for pivot block $pivotBlockNumber")
-        context.parent ! SyncProtocol.Status.SyncDone
+        log.info("Pivot block header not available - falling back to fast sync")
+        context.parent ! FallbackToFastSync
     }
   }
 
