@@ -30,13 +30,19 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
     log.debug("Protocol handshake finished with peer ({})", hello)
     // Store full capability list from peer
     val peerCapabilities = hello.capabilities.toList
-    log.debug("Peer capabilities: {}", peerCapabilities.mkString(", "))
+    
+    // Enhanced logging for peer capabilities and protocol version
+    log.info("PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}]", 
+      hello.clientId, hello.p2pVersion, peerCapabilities.mkString(", "))
     
     // Check if peer supports SNAP/1 protocol
     val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
-    if (supportsSnap) {
-      log.debug("Peer supports SNAP/1 protocol")
-    }
+    log.info("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
+    
+    // Log compression decision based on p2p version
+    val compressionEnabled = hello.p2pVersion >= EtcHelloExchangeState.P2pVersion
+    log.info("COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressionEnabled={}", 
+      hello.p2pVersion, EtcHelloExchangeState.P2pVersion, compressionEnabled)
     
     // FIXME in principle this should be already negotiated
     Capability.negotiate(peerCapabilities, handshakerConfiguration.blockchainConfig.capabilities) match {
