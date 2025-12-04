@@ -160,6 +160,59 @@ object Session {
     hash.value.bytes
   }
   
+  /** Perform ECDH key exchange using secp256k1
+    * 
+    * @param privateKey Local private key (32 bytes)
+    * @param publicKey Remote public key (64 bytes uncompressed)
+    * @return Shared secret (32 bytes)
+    */
+  def performECDH(privateKey: ByteVector, publicKey: ByteVector): ByteVector = {
+    require(privateKey.size == 32, "privateKey must be 32 bytes")
+    require(publicKey.size == 64, "publicKey must be 64 bytes (uncompressed)")
+    
+    // Use BouncyCastle for ECDH
+    import org.bouncycastle.crypto.agreement.ECDHBasicAgreement
+    import org.bouncycastle.crypto.params.{ECPrivateKeyParameters, ECPublicKeyParameters}
+    import org.bouncycastle.asn1.sec.SECNamedCurves
+    import org.bouncycastle.math.ec.ECCurve
+    
+    val curveParams = SECNamedCurves.getByName("secp256k1")
+    val curve = new org.bouncycastle.crypto.params.ECDomainParameters(
+      curveParams.getCurve,
+      curveParams.getG,
+      curveParams.getN,
+      curveParams.getH
+    )
+    
+    // Convert private key bytes to EC private key
+    val privKeyBigInt = BigInt(1, privateKey.toArray)
+    val privKeyParams = new ECPrivateKeyParameters(privKeyBigInt.bigInteger, curve)
+    
+    // Convert public key bytes to EC public key point
+    // Public key is 64 bytes (x||y), prepend 0x04 for uncompressed format
+    val pubKeyBytes = (0x04.toByte +: publicKey.toArray)
+    val pubKeyPoint = curve.getCurve.decodePoint(pubKeyBytes)
+    val pubKeyParams = new ECPublicKeyParameters(pubKeyPoint, curve)
+    
+    // Perform ECDH
+    val agreement = new ECDHBasicAgreement()
+    agreement.init(privKeyParams)
+    val sharedSecret = agreement.calculateAgreement(pubKeyParams)
+    
+    // Convert to 32-byte ByteVector
+    val secretBytes = sharedSecret.toByteArray
+    // Ensure it's exactly 32 bytes (pad or trim if necessary)
+    val normalized = if (secretBytes.length < 32) {
+      Array.ofDim[Byte](32 - secretBytes.length) ++ secretBytes
+    } else if (secretBytes.length > 32) {
+      secretBytes.takeRight(32)
+    } else {
+      secretBytes
+    }
+    
+    ByteVector.view(normalized)
+  }
+  
   /** Session cache to store active sessions with peers */
   trait SessionCache {
     def get(nodeId: ByteVector): IO[Option[ActiveSession]]

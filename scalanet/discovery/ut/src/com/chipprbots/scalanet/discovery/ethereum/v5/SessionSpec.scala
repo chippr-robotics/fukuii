@@ -203,6 +203,28 @@ class SessionSpec extends AnyFlatSpec with Matchers {
     nodeId.size shouldBe 32 // Keccak256 output
   }
   
+  behavior of "ECDH key exchange"
+  
+  it should "perform ECDH and derive 32-byte shared secret" in {
+    // Generate test keys
+    val privateKey = randomBytes(32)
+    val publicKey = randomBytes(64)
+    
+    val sharedSecret = Session.performECDH(privateKey, publicKey)
+    
+    sharedSecret.size shouldBe 32
+  }
+  
+  it should "reject invalid key sizes for ECDH" in {
+    assertThrows[IllegalArgumentException] {
+      Session.performECDH(randomBytes(16), randomBytes(64)) // Short private key
+    }
+    
+    assertThrows[IllegalArgumentException] {
+      Session.performECDH(randomBytes(32), randomBytes(32)) // Short public key
+    }
+  }
+  
   it should "reject invalid input sizes" in {
     assertThrows[IllegalArgumentException] {
       Session.deriveKeys(randomBytes(32), randomBytes(16), randomBytes(32), randomBytes(16))

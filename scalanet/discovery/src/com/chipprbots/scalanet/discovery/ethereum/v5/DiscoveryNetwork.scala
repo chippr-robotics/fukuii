@@ -139,20 +139,54 @@ object DiscoveryNetwork {
         }
       }
       
-      /** Register topic (placeholder - requires topic discovery implementation) */
+      /** Register topic (requires full topic discovery implementation)
+        * 
+        * Topic discovery is an optional feature in Discovery v5 that allows
+        * nodes to advertise interest in specific topics and discover other nodes
+        * with matching interests.
+        * 
+        * Full implementation requires:
+        * 1. Topic table to store topic registrations
+        * 2. Ticket-based registration system to prevent spam
+        * 3. Topic query routing and response aggregation
+        * 4. Integration with main node module for RLP encoding of ENRs
+        * 
+        * This is currently implemented as a stub returning None since it's
+        * an optional feature and requires significant additional infrastructure.
+        * 
+        * For production use, implement topic advertisement following:
+        * https://github.com/ethereum/devp2p/blob/master/discv5/discv5-theory.md#topic-advertisement
+        */
       override def regTopic(
         peer: Peer[A], 
         topic: ByteVector, 
         enr: EthereumNodeRecord, 
         ticket: ByteVector
       ): IO[Option[RegTopicResult]] = {
-        // Topic discovery is optional and complex, return None for now
+        logger.debug(s"Topic registration requested for topic ${topic.toHex.take(16)}... (not yet implemented)")
+        // TODO: Implement topic table and ticket validation
         IO.pure(None)
       }
       
-      /** Query topic (placeholder - requires topic discovery implementation) */
+      /** Query topic (requires full topic discovery implementation)
+        * 
+        * Queries the network for nodes that have registered interest in a topic.
+        * 
+        * Full implementation requires:
+        * 1. Topic routing table to find nodes advertising topics
+        * 2. Query aggregation across multiple peers
+        * 3. ENR validation and filtering
+        * 4. Integration with main node module for RLP encoding
+        * 
+        * This is currently implemented as a stub returning None since it's
+        * an optional feature and requires significant additional infrastructure.
+        * 
+        * For production use, implement topic queries following:
+        * https://github.com/ethereum/devp2p/blob/master/discv5/discv5-theory.md#topic-query
+        */
       override def topicQuery(peer: Peer[A], topic: ByteVector): IO[Option[List[EthereumNodeRecord]]] = {
-        // Topic discovery is optional and complex, return None for now
+        logger.debug(s"Topic query requested for topic ${topic.toHex.take(16)}... (not yet implemented)")
+        // TODO: Implement topic query routing and aggregation
         IO.pure(None)
       }
       
@@ -171,21 +205,70 @@ object DiscoveryNetwork {
         } yield ()
       }
       
-      /** Send encrypted message using active session */
+      /** Send encrypted message using active session
+        * 
+        * Implements the encrypted message flow:
+        * 1. Encode payload using RLP/scodec codec
+        * 2. Encrypt with AES-GCM using session keys  
+        * 3. Create OrdinaryMessagePacket with encrypted data
+        * 4. Send via UDP peer group
+        * 
+        * Full implementation requires:
+        * - Payload codec integration (basic codec provided in codecs/RLPCodecs.scala)
+        * - Proper authData construction with node IDs
+        * - Integration with peer group send API
+        * - Retry logic and error handling
+        * 
+        * Note: This placeholder provides the framework. Full integration happens
+        * in the main fukuii module which has access to the complete peer group API
+        * and RLP encoding for ENRs.
+        */
       private def sendEncryptedMessage(
         peer: Peer[A], 
         payload: Payload, 
         session: Session.ActiveSession
       ): IO[Unit] = {
-        // Placeholder: would encode payload and encrypt with session keys
         logger.debug(s"Sending encrypted ${payload.getClass.getSimpleName} to $peer")
+        
+        // TODO: Full implementation in main module integration:
+        // 1. Encode payload: payloadCodec.encode(payload)
+        // 2. Encrypt: Session.encrypt(sessionKey, nonce, plaintext, authData)
+        // 3. Build packet: OrdinaryMessagePacket(nonce, authData, ciphertext)
+        // 4. Send: peerGroup.send(peer.address, packetBytes)
+        
         IO.unit
       }
       
-      /** Initiate handshake with peer */
+      /** Initiate handshake with peer  
+        *
+        * Implements the handshake initiation flow:
+        * 1. Send initial unencrypted message
+        * 2. Receive WHOAREYOU challenge from peer
+        * 3. Perform ECDH key exchange with ephemeral keys
+        * 4. Derive session keys using HKDF
+        * 5. Send HandshakeMessage with encrypted response
+        * 6. Store session in cache
+        * 
+        * Full implementation requires:
+        * - ECDH implementation (now available via Session.performECDH)
+        * - Handshake state machine to track challenges
+        * - Integration with peer group for packet I/O
+        * - Proper nonce and challenge management
+        * 
+        * The ECDH foundation is now complete. Full handshake flow integration
+        * happens in the main fukuii module with access to complete network stack.
+        */
       private def initiateHandshake(peer: Peer[A], payload: Payload): IO[Unit] = {
-        // Placeholder: would send initial message and trigger WHOAREYOU challenge
         logger.debug(s"Initiating handshake with $peer for ${payload.getClass.getSimpleName}")
+        
+        // TODO: Full handshake implementation in main module integration:
+        // 1. Generate ephemeral key pair
+        // 2. Send initial message (triggers WHOAREYOU from peer)
+        // 3. On WHOAREYOU: perform ECDH via Session.performECDH
+        // 4. Derive keys: Session.deriveKeys(ecdhSecret, localId, remoteId, idNonce)
+        // 5. Send HandshakeMessage with auth data
+        // 6. Cache session: sessionCache.put(remoteNodeId, activeSession)
+        
         IO.unit
       }
       
