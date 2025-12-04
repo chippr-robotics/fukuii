@@ -1,7 +1,7 @@
 # Run 007: Core-Geth Behavior Research and Network Sync Analysis
 
 ## Issue Reference
-- **GitHub Issue**: run009
+- **GitHub Issue**: run-009
 - **Date**: 2025-12-04
 
 ## Executive Summary
