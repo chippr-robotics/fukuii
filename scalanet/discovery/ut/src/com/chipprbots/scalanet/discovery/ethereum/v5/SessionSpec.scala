@@ -5,13 +5,15 @@ import cats.effect.unsafe.implicits.global
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.bits.ByteVector
-import scala.util.Random
+import java.security.SecureRandom
 
 class SessionSpec extends AnyFlatSpec with Matchers {
   
+  private val random = new SecureRandom()
+  
   def randomBytes(n: Int): ByteVector = {
     val bytes = Array.ofDim[Byte](n)
-    Random.nextBytes(bytes)
+    random.nextBytes(bytes)
     ByteVector.view(bytes)
   }
   
