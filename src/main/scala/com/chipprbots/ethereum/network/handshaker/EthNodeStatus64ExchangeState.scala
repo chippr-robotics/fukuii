@@ -117,8 +117,7 @@ case class EthNodeStatus64ExchangeState(
         bootstrapPivotBlock
       } else {
         log.debug(
-          "Using actual block number {} for ForkId (bestBlock={}, pivot={}, threshold={}, switch point={})",
-          bestBlockNumber,
+          "Using actual block number {} for ForkId (pivot={}, threshold={}, switch point={})",
           bestBlockNumber,
           bootstrapPivotBlock,
           threshold,
