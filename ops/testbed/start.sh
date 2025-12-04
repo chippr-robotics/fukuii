@@ -1,11 +1,11 @@
 #!/bin/bash
-# Quick start script for Run 006 configuration
+# Quick start script for Testbed configuration
 # Fukuii node on ETC mainnet - SNAP sync testing
 
 set -euo pipefail
 
 echo "==================================================================="
-echo "  Fukuii Run 006 - ETC Mainnet SNAP Sync Testing"
+echo "  Fukuii Testbed - ETC Mainnet SNAP Sync Testing"
 echo "==================================================================="
 echo ""
 
@@ -56,57 +56,57 @@ collect_logs() {
     mkdir -p "$LOG_DIR"
     
     echo "=================================="
-    echo "Run 006 Log Collection"
+    echo "Testbed Log Collection"
     echo "=================================="
     echo "Timestamp: $TIMESTAMP"
     echo ""
     
     # Check container status
     echo "Checking container status..."
-    docker ps --filter "name=fukuii-run-006" --filter "name=core-geth-run-006" --format "  {{.Names}}: {{.Status}}"
+    docker ps --filter "name=fukuii-testbed" --filter "name=core-geth-testbed" --format "  {{.Names}}: {{.Status}}"
     echo ""
     
     # Capture logs from both containers
     echo "Collecting logs..."
-    capture_container_logs "fukuii-run-006" "$LOG_DIR/fukuii_${TIMESTAMP}.log"
-    capture_container_logs "core-geth-run-006" "$LOG_DIR/core-geth_${TIMESTAMP}.log"
+    capture_container_logs "fukuii-testbed" "$LOG_DIR/fukuii_${TIMESTAMP}.log"
+    capture_container_logs "core-geth-testbed" "$LOG_DIR/core-geth_${TIMESTAMP}.log"
     echo ""
     
     # Get SNAP-specific information from fukuii
     echo "Fukuii SNAP Sync Status:"
     echo "------------------------"
-    docker logs fukuii-run-006 2>&1 | grep "SNAP Sync Progress" | tail -5 || echo "  No SNAP progress logs found"
+    docker logs fukuii-testbed 2>&1 | grep "SNAP Sync Progress" | tail -5 || echo "  No SNAP progress logs found"
     echo ""
     
     # Get peer capability information from fukuii
     echo "Fukuii Peer Capabilities:"
     echo "-------------------------"
-    docker logs fukuii-run-006 2>&1 | grep "PEER_HANDSHAKE_SUCCESS" | tail -10 || echo "  No handshake logs found"
+    docker logs fukuii-testbed 2>&1 | grep "PEER_HANDSHAKE_SUCCESS" | tail -10 || echo "  No handshake logs found"
     echo ""
     
     # Get sync status from core-geth
     echo "Core-Geth Sync Status:"
     echo "----------------------"
-    docker logs core-geth-run-006 2>&1 | grep -i "sync\|snap" | tail -10 || echo "  No sync logs found"
+    docker logs core-geth-testbed 2>&1 | grep -i "sync\|snap" | tail -10 || echo "  No sync logs found"
     echo ""
     
     # Get peer count from both nodes
     echo "Peer Count Comparison:"
     echo "----------------------"
     echo -n "  Fukuii: "
-    docker exec fukuii-run-006 curl -s -X POST \
+    docker exec fukuii-testbed curl -s -X POST \
       -H "Content-Type: application/json" \
       --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
       http://localhost:8546 2>/dev/null | grep -o '"result":"[^"]*"' || echo "Unable to get peer count"
     
     echo -n "  Core-geth: "
-    docker exec core-geth-run-006 geth attach --exec "admin.peers.length" http://localhost:8545 2>/dev/null || echo "Unable to get peer count (geth uses container internal port)"
+    docker exec core-geth-testbed geth attach --exec "admin.peers.length" http://localhost:8545 2>/dev/null || echo "Unable to get peer count (geth uses container internal port)"
     echo ""
     
     # Display recent SNAP-related errors from fukuii
     echo "Recent Fukuii SNAP Errors:"
     echo "--------------------------"
-    docker logs fukuii-run-006 2>&1 | grep -i "snap.*error\|snap.*timeout\|snap.*fail" | tail -10 || echo "  No SNAP errors found"
+    docker logs fukuii-testbed 2>&1 | grep -i "snap.*error\|snap.*timeout\|snap.*fail" | tail -10 || echo "  No SNAP errors found"
     echo ""
     
     echo "=================================="
@@ -130,11 +130,11 @@ ACTION="${1:-up}"
 
 case "$ACTION" in
     up|start)
-        echo "Starting Fukuii Run 006 (both fukuii and core-geth nodes)..."
+        echo "Starting Fukuii Testbed (both fukuii and core-geth nodes)..."
         echo ""
         $COMPOSE_CMD up -d
         echo ""
-        echo "✓ Fukuii Run 006 started successfully!"
+        echo "✓ Fukuii Testbed started successfully!"
         echo ""
         echo "Monitoring commands:"
         echo "  - View fukuii logs:   $COMPOSE_CMD logs -f fukuii"
@@ -147,15 +147,15 @@ case "$ACTION" in
         ;;
     
     down|stop)
-        echo "Stopping Fukuii Run 006 (both nodes)..."
+        echo "Stopping Fukuii Testbed (both nodes)..."
         $COMPOSE_CMD down
-        echo "✓ Fukuii Run 006 stopped."
+        echo "✓ Fukuii Testbed stopped."
         ;;
     
     restart)
-        echo "Restarting Fukuii Run 006 (both nodes)..."
+        echo "Restarting Fukuii Testbed (both nodes)..."
         $COMPOSE_CMD restart
-        echo "✓ Fukuii Run 006 restarted."
+        echo "✓ Fukuii Testbed restarted."
         ;;
     
     logs)
@@ -176,7 +176,7 @@ case "$ACTION" in
         ;;
     
     status)
-        echo "Checking Fukuii Run 006 status..."
+        echo "Checking Fukuii Testbed status..."
         echo ""
         $COMPOSE_CMD ps
         echo ""
