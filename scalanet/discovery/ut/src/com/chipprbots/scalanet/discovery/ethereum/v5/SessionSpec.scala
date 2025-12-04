@@ -1,0 +1,217 @@
+package com.chipprbots.scalanet.discovery.ethereum.v5
+
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
+import scodec.bits.ByteVector
+import scala.util.Random
+
+class SessionSpec extends AnyFlatSpec with Matchers {
+  
+  def randomBytes(n: Int): ByteVector = {
+    val bytes = Array.ofDim[Byte](n)
+    Random.nextBytes(bytes)
+    ByteVector.view(bytes)
+  }
+  
+  behavior of "Session key derivation"
+  
+  it should "derive session keys from ECDH shared secret" in {
+    val ephemeralKey = randomBytes(32)
+    val localNodeId = randomBytes(32)
+    val remoteNodeId = randomBytes(32)
+    val idNonce = randomBytes(16)
+    
+    val keys = Session.deriveKeys(ephemeralKey, localNodeId, remoteNodeId, idNonce)
+    
+    keys.initiatorKey.size shouldBe 16
+    keys.recipientKey.size shouldBe 16
+    keys.authRespKey.size shouldBe 16
+    
+    // Keys should be different
+    keys.initiatorKey should not equal keys.recipientKey
+    keys.initiatorKey should not equal keys.authRespKey
+    keys.recipientKey should not equal keys.authRespKey
+  }
+  
+  it should "produce deterministic keys from same inputs" in {
+    val ephemeralKey = randomBytes(32)
+    val localNodeId = randomBytes(32)
+    val remoteNodeId = randomBytes(32)
+    val idNonce = randomBytes(16)
+    
+    val keys1 = Session.deriveKeys(ephemeralKey, localNodeId, remoteNodeId, idNonce)
+    val keys2 = Session.deriveKeys(ephemeralKey, localNodeId, remoteNodeId, idNonce)
+    
+    keys1.initiatorKey shouldBe keys2.initiatorKey
+    keys1.recipientKey shouldBe keys2.recipientKey
+    keys1.authRespKey shouldBe keys2.authRespKey
+  }
+  
+  it should "produce different keys from different inputs" in {
+    val ephemeralKey = randomBytes(32)
+    val localNodeId = randomBytes(32)
+    val remoteNodeId = randomBytes(32)
+    val idNonce1 = randomBytes(16)
+    val idNonce2 = randomBytes(16)
+    
+    val keys1 = Session.deriveKeys(ephemeralKey, localNodeId, remoteNodeId, idNonce1)
+    val keys2 = Session.deriveKeys(ephemeralKey, localNodeId, remoteNodeId, idNonce2)
+    
+    keys1.initiatorKey should not equal keys2.initiatorKey
+    keys1.recipientKey should not equal keys2.recipientKey
+    keys1.authRespKey should not equal keys2.authRespKey
+  }
+  
+  behavior of "AES-GCM encryption/decryption"
+  
+  it should "encrypt and decrypt data successfully" in {
+    val key = randomBytes(16)
+    val nonce = randomBytes(12)
+    val plaintext = ByteVector("Hello, Discovery v5!".getBytes)
+    val authData = ByteVector("additional-auth-data".getBytes)
+    
+    val encrypted = Session.encrypt(key, nonce, plaintext, authData)
+    encrypted.isSuccess shouldBe true
+    
+    val ciphertext = encrypted.get
+    ciphertext should not equal plaintext
+    ciphertext.size should be > plaintext.size // Includes auth tag
+    
+    val decrypted = Session.decrypt(key, nonce, ciphertext, authData)
+    decrypted.isSuccess shouldBe true
+    decrypted.get shouldBe plaintext
+  }
+  
+  it should "fail decryption with wrong key" in {
+    val key1 = randomBytes(16)
+    val key2 = randomBytes(16)
+    val nonce = randomBytes(12)
+    val plaintext = ByteVector("Test data".getBytes)
+    val authData = ByteVector.empty
+    
+    val encrypted = Session.encrypt(key1, nonce, plaintext, authData).get
+    val decrypted = Session.decrypt(key2, nonce, encrypted, authData)
+    
+    decrypted.isSuccess shouldBe false
+  }
+  
+  it should "fail decryption with tampered ciphertext" in {
+    val key = randomBytes(16)
+    val nonce = randomBytes(12)
+    val plaintext = ByteVector("Test data".getBytes)
+    val authData = ByteVector.empty
+    
+    val encrypted = Session.encrypt(key, nonce, plaintext, authData).get
+    
+    // Tamper with ciphertext
+    val tampered = encrypted.update(0, (encrypted(0) ^ 0x01).toByte)
+    
+    val decrypted = Session.decrypt(key, nonce, tampered, authData)
+    decrypted.isSuccess shouldBe false
+  }
+  
+  it should "fail decryption with wrong auth data" in {
+    val key = randomBytes(16)
+    val nonce = randomBytes(12)
+    val plaintext = ByteVector("Test data".getBytes)
+    val authData1 = ByteVector("auth1".getBytes)
+    val authData2 = ByteVector("auth2".getBytes)
+    
+    val encrypted = Session.encrypt(key, nonce, plaintext, authData1).get
+    val decrypted = Session.decrypt(key, nonce, encrypted, authData2)
+    
+    decrypted.isSuccess shouldBe false
+  }
+  
+  behavior of "Session cache"
+  
+  it should "store and retrieve sessions" in {
+    val cache = Session.SessionCache().unsafeRunSync()
+    val nodeId = randomBytes(32)
+    val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    val session = Session.ActiveSession(keys, randomBytes(32), randomBytes(32))
+    
+    val test = for {
+      _ <- cache.put(nodeId, session)
+      retrieved <- cache.get(nodeId)
+    } yield retrieved
+    
+    val result = test.unsafeRunSync()
+    result shouldBe Some(session)
+  }
+  
+  it should "return None for missing sessions" in {
+    val cache = Session.SessionCache().unsafeRunSync()
+    val nodeId = randomBytes(32)
+    
+    val result = cache.get(nodeId).unsafeRunSync()
+    result shouldBe None
+  }
+  
+  it should "remove sessions" in {
+    val cache = Session.SessionCache().unsafeRunSync()
+    val nodeId = randomBytes(32)
+    val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    val session = Session.ActiveSession(keys, randomBytes(32), randomBytes(32))
+    
+    val test = for {
+      _ <- cache.put(nodeId, session)
+      _ <- cache.remove(nodeId)
+      retrieved <- cache.get(nodeId)
+    } yield retrieved
+    
+    val result = test.unsafeRunSync()
+    result shouldBe None
+  }
+  
+  it should "clear all sessions" in {
+    val cache = Session.SessionCache().unsafeRunSync()
+    val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    
+    val test = for {
+      _ <- cache.put(randomBytes(32), Session.ActiveSession(keys, randomBytes(32), randomBytes(32)))
+      _ <- cache.put(randomBytes(32), Session.ActiveSession(keys, randomBytes(32), randomBytes(32)))
+      _ <- cache.clear
+      node1 <- cache.get(randomBytes(32))
+      node2 <- cache.get(randomBytes(32))
+    } yield (node1, node2)
+    
+    val (result1, result2) = test.unsafeRunSync()
+    result1 shouldBe None
+    result2 shouldBe None
+  }
+  
+  behavior of "Utility functions"
+  
+  it should "generate random ID nonces" in {
+    val nonce1 = Session.randomIdNonce
+    val nonce2 = Session.randomIdNonce
+    
+    nonce1.size shouldBe 16
+    nonce2.size shouldBe 16
+    nonce1 should not equal nonce2
+  }
+  
+  it should "compute node ID from public key" in {
+    val publicKey = randomBytes(64)
+    val nodeId = Session.nodeIdFromPublicKey(publicKey)
+    
+    nodeId.size shouldBe 32 // Keccak256 output
+  }
+  
+  it should "reject invalid input sizes" in {
+    assertThrows[IllegalArgumentException] {
+      Session.deriveKeys(randomBytes(32), randomBytes(16), randomBytes(32), randomBytes(16))
+    }
+    
+    assertThrows[IllegalArgumentException] {
+      Session.encrypt(randomBytes(32), randomBytes(12), randomBytes(10), ByteVector.empty)
+    }
+    
+    assertThrows[IllegalArgumentException] {
+      Session.nodeIdFromPublicKey(randomBytes(32))
+    }
+  }
+}
