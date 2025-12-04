@@ -90,7 +90,7 @@
     </root>
 
     <!-- =================================================================== -->
-    <!-- LOGGING LEVEL CONFIGURATION FOR RUN 006                             -->
+    <!-- LOGGING LEVEL CONFIGURATION FOR TESTBED                             -->
     <!-- =================================================================== -->
     <!-- 
          This configuration continues SNAP sync testing from run 005.
@@ -132,7 +132,7 @@
     <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="INFO" />
     
     <!-- =================================================================== -->
-    <!-- NETWORK - Peer connections and communication (DEBUG FOR RUN 006)    -->
+    <!-- NETWORK - Peer connections and communication (DEBUG FOR TESTBED)    -->
     <!-- Focus on peer handshake and capability exchange                      -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network" level="INFO" />
@@ -154,7 +154,7 @@
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="DEBUG" />
     
     <!-- =================================================================== -->
-    <!-- RLPX - Encrypted transport protocol (DEBUG FOR RUN 006)             -->
+    <!-- RLPX - Encrypted transport protocol (DEBUG FOR TESTBED)             -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
@@ -173,7 +173,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="DEBUG" />
     
-    <!-- BLACKLIST - DEBUG ENABLED FOR RUN 006 (INVESTIGATING PREMATURE BLACKLISTING) -->
+    <!-- BLACKLIST - DEBUG ENABLED FOR TESTBED (INVESTIGATING PREMATURE BLACKLISTING) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist" level="DEBUG" />
     
@@ -200,7 +200,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="INFO" />
     
     <!-- =================================================================== -->
-    <!-- SNAP SYNC - PRIMARY FOCUS FOR RUN 006 (UNIT UNDER TEST)            -->
+    <!-- SNAP SYNC - PRIMARY FOCUS FOR TESTBED (UNIT UNDER TEST)            -->
     <!-- =================================================================== -->
     <!-- SNAP sync is enabled and DEBUG logging captures all protocol details -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
