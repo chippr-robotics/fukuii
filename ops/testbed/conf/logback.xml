@@ -93,26 +93,20 @@
     <!-- LOGGING LEVEL CONFIGURATION FOR TESTBED                             -->
     <!-- =================================================================== -->
     <!-- 
-         This configuration continues SNAP sync testing from run 005.
+         This configuration is for run 12 - Discovery v5 protocol testing.
          
-         Run 006 Purpose:
-         - SNAP sync is the UNIT UNDER TEST
-         - Focus on SNAP protocol implementation validation
-         - Capture detailed logs of capability exchange and SNAP message flows
-         - Suppress non-SNAP-related logging to reduce noise
+         Run 12 Purpose:
+         - Discovery v5 protocol is the UNIT UNDER TEST
+         - Focus on validating peer discovery and handshake with v5 protocol
+         - Capture detailed logs of discovery v5 operations and handshaking
+         - Suppress non-discovery-related logging to reduce noise
          
-         Run 005 Observations:
-         - SNAP sync made zero progress
-         - All GetAccountRange requests timed out with no responses
-         - ETC mainnet peers only advertise ETH68, not snap/1
-         - Need detailed logs to analyze the capability negotiation flow
-         
-         Changes in run 006:
-         - SNAP sync ENABLED (unit under test)
-         - FastSync DISABLED (isolate SNAP behavior)
-         - DEBUG logging for SNAP sync components
-         - DEBUG logging for peer handshake and capability exchange
-         - WARN/ERROR for non-SNAP-related components (reduce noise)
+         Run 12 Configuration:
+         - Discovery v5 - DEBUG ENABLED (unit under test)
+         - Peer handshake - DEBUG ENABLED (critical for peer connection)
+         - RLPx handshake - DEBUG ENABLED (critical for initial connection)
+         - Network discovery manager - DEBUG ENABLED (bridges v5 to network layer)
+         - All other systems - INFO or OFF (reduce noise)
     -->
     
     <!-- =================================================================== -->
@@ -132,19 +126,32 @@
     <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="INFO" />
     
     <!-- =================================================================== -->
+    <!-- DISCOVERY V5 - PRIMARY FOCUS FOR RUN 12 (DEBUG ENABLED)            -->
+    <!-- =================================================================== -->
+    <!-- Discovery v5 is the unit under test - enable DEBUG for all v5 components -->
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryService" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryNetwork" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryRPC" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.Session" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.Packet" level="DEBUG" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.Payload" level="DEBUG" />
+    
+    <!-- =================================================================== -->
     <!-- NETWORK - Peer connections and communication (DEBUG FOR TESTBED)    -->
     <!-- Focus on peer handshake and capability exchange                      -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerActor" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.EtcPeerManagerActor" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.ServerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.EtcPeerManagerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.ServerActor" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="INFO" />
     
-    <!-- Network discovery (INFO to reduce noise) -->
-    <logger name="com.chipprbots.ethereum.network.discovery" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager" level="INFO" />
+    <!-- Network discovery - set to DEBUG for peer discovery issues -->
+    <logger name="com.chipprbots.ethereum.network.discovery" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder" level="DEBUG" />
     
     <!-- Network handshaking - CRITICAL FOR SNAP TESTING (DEBUG) -->
     <!-- Captures capability exchange and protocol negotiation -->
@@ -163,25 +170,23 @@
     <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="DEBUG" />
     
     <!-- =================================================================== -->
-    <!-- SYNC - Block synchronization                                        -->
+    <!-- SYNC - Block synchronization (reduce noise for run 12)             -->
     <!-- =================================================================== -->
-    <!-- Core sync controller - DEBUG enabled for run-004 -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="DEBUG" />
+    <!-- Core sync controller - Set to INFO/WARN to reduce noise -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="INFO" />
     
-    <!-- BLACKLIST - DEBUG ENABLED FOR TESTBED (INVESTIGATING PREMATURE BLACKLISTING) -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist" level="DEBUG" />
+    <!-- BLACKLIST - INFO for run 12 (not under test) -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist" level="INFO" />
     
-    <logger name="com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor" level="INFO" />
     
-    <!-- Fast sync - INFO level per run 003 requirements (was DEBUG in run 002) -->
-    <!-- Changed to INFO to reduce log verbosity as per run 002 feedback -->
-    <!-- FastSync - Set to INFO to reduce noise (not under test in run 006) -->
+    <!-- Fast sync - INFO to reduce noise (not under test in run 12) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector" level="INFO" />
@@ -190,7 +195,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor" level="INFO" />
     
-    <!-- Regular sync - Set to INFO to reduce noise (not under test in run 006) -->
+    <!-- Regular sync - INFO to reduce noise (not under test in run 12) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.RegularSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher" level="INFO" />
@@ -200,19 +205,18 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="INFO" />
     
     <!-- =================================================================== -->
-    <!-- SNAP SYNC - PRIMARY FOCUS FOR TESTBED (UNIT UNDER TEST)            -->
+    <!-- SNAP SYNC - Set to INFO for run 12 (not under test)                -->
     <!-- =================================================================== -->
-    <!-- SNAP sync is enabled and DEBUG logging captures all protocol details -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="INFO" />
     
-    <!-- SNAP request tracking - DEBUG ENABLED to track request lifecycle -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="DEBUG" />
+    <!-- SNAP request tracking - INFO for run 12 -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="INFO" />
     
     <!-- =================================================================== -->
     <!-- LEDGER - Block execution and state management                       -->

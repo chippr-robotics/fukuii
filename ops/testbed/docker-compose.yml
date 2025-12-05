@@ -36,7 +36,7 @@ services:
       # Set node identifier for logging
       - FUKUII_NODE_ID=testbed
       - FUKUII_ENV=testbed-mainnet
-    command: ["-Dconfig.file=/app/conf/etc.conf"]
+    command: ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
