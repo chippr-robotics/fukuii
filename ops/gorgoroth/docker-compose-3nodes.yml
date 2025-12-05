@@ -1,0 +1,112 @@
+# Gorgoroth Internal Test Network - 3 Fukuii Nodes
+# Named after the plateau in Mordor where Sauron trained his armies
+# This configuration creates a private test network with 3 Fukuii nodes
+
+networks:
+  gorgoroth:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+services:
+  fukuii-node1:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node1
+    hostname: fukuii-node1
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.11
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+    volumes:
+      - ./conf/node1/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
+      - fukuii-node1-data:/app/data
+      - fukuii-node1-logs:/app/logs
+    environment:
+      - FUKUII_NODE_ID=node1
+      - FUKUII_ENV=gorgoroth
+    command: ["gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  fukuii-node2:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node2
+    hostname: fukuii-node2
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.12
+    ports:
+      - "8547:8545"
+      - "8548:8546"
+      - "30304:30303/tcp"
+      - "30304:30303/udp"
+    volumes:
+      - ./conf/node2/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
+      - fukuii-node2-data:/app/data
+      - fukuii-node2-logs:/app/logs
+    environment:
+      - FUKUII_NODE_ID=node2
+      - FUKUII_ENV=gorgoroth
+    command: ["gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  fukuii-node3:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node3
+    hostname: fukuii-node3
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.13
+    ports:
+      - "8549:8545"
+      - "8550:8546"
+      - "30305:30303/tcp"
+      - "30305:30303/udp"
+    volumes:
+      - ./conf/node3/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
+      - fukuii-node3-data:/app/data
+      - fukuii-node3-logs:/app/logs
+    environment:
+      - FUKUII_NODE_ID=node3
+      - FUKUII_ENV=gorgoroth
+    command: ["gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  fukuii-node1-data:
+    driver: local
+  fukuii-node1-logs:
+    driver: local
+  fukuii-node2-data:
+    driver: local
+  fukuii-node2-logs:
+    driver: local
+  fukuii-node3-data:
+    driver: local
+  fukuii-node3-logs:
+    driver: local
