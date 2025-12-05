@@ -124,6 +124,13 @@
     <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="INFO" />
     <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="INFO" />
     
+    <!-- Discovery v5 - set to DEBUG for v5 protocol diagnostics -->
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5" level="INFO" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryService" level="INFO" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryNetwork" level="INFO" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryRPC" level="INFO" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.Session" level="INFO" />
+    
     <!-- =================================================================== -->
     <!-- NETWORK - Peer connections and communication                        -->
     <!-- =================================================================== -->
