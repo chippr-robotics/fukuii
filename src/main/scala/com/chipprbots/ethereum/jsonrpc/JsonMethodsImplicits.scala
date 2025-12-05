@@ -237,7 +237,7 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
     new JsonMethodCodec[SignRequest, SignResponse] {
       override def encodeJson(t: SignResponse): JValue = {
         import t.signature._
-        encodeAsHex(ByteString(r.toUnsignedByteArray ++ s.toUnsignedByteArray :+ v))
+        encodeAsHex(ByteString(r.toUnsignedByteArray ++ s.toUnsignedByteArray ++ v.toUnsignedByteArray))
       }
 
       override def decodeJson(params: Option[JArray]): Either[JsonRpcError, SignRequest] =

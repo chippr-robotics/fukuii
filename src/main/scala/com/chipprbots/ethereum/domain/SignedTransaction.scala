@@ -58,7 +58,7 @@ object SignedTransaction {
     val txSignature = ECDSASignature(
       r = ByteUtils.bytesToBigInt(signatureRandom.toArray),
       s = ByteUtils.bytesToBigInt(signature.toArray),
-      v = pointSign
+      v = BigInt(pointSign)
     )
     SignedTransaction(tx, txSignature)
   }
@@ -131,16 +131,16 @@ object SignedTransaction {
     chainIdOpt match {
       // ignore chainId for unprotected negative y-parity in pre-eip155 signature
       case Some(_) if ethereumSignature.v == ECDSASignature.negativePointSign =>
-        ethereumSignature.copy(v = ECDSASignature.negativePointSign)
+        ethereumSignature.copy(v = BigInt(ECDSASignature.negativePointSign))
       // ignore chainId for unprotected positive y-parity in pre-eip155 signature
       case Some(_) if ethereumSignature.v == ECDSASignature.positivePointSign =>
-        ethereumSignature.copy(v = ECDSASignature.positivePointSign)
+        ethereumSignature.copy(v = BigInt(ECDSASignature.positivePointSign))
       // identify negative y-parity for protected post eip-155 signature
       case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155NegativePointSign) =>
-        ethereumSignature.copy(v = ECDSASignature.negativePointSign)
+        ethereumSignature.copy(v = BigInt(ECDSASignature.negativePointSign))
       // identify positive y-parity for protected post eip-155 signature
       case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155PositivePointSign) =>
-        ethereumSignature.copy(v = ECDSASignature.positivePointSign)
+        ethereumSignature.copy(v = BigInt(ECDSASignature.positivePointSign))
       // legacy pre-eip
       case None => ethereumSignature
       // unexpected chainId
@@ -162,8 +162,8 @@ object SignedTransaction {
     */
   private def getTWALRawSignature(ethereumSignature: ECDSASignature): ECDSASignature =
     ethereumSignature.v match {
-      case 0 => ethereumSignature.copy(v = ECDSASignature.negativePointSign)
-      case 1 => ethereumSignature.copy(v = ECDSASignature.positivePointSign)
+      case v if v == 0 => ethereumSignature.copy(v = BigInt(ECDSASignature.negativePointSign))
+      case v if v == 1 => ethereumSignature.copy(v = BigInt(ECDSASignature.positivePointSign))
       case _ =>
         throw new IllegalStateException(
           s"Unexpected pointSign for TransactionWithAccessList, ethereum.signature.v: ${ethereumSignature.v}"
@@ -238,10 +238,10 @@ object SignedTransaction {
     */
   private def getTWALEthereumSignature(rawSignature: ECDSASignature): ECDSASignature =
     rawSignature match {
-      case ECDSASignature(_, _, ECDSASignature.positivePointSign) =>
-        rawSignature.copy(v = ECDSASignature.positiveYParity)
-      case ECDSASignature(_, _, ECDSASignature.negativePointSign) =>
-        rawSignature.copy(v = ECDSASignature.negativeYParity)
+      case ECDSASignature(_, _, v) if v == ECDSASignature.positivePointSign =>
+        rawSignature.copy(v = BigInt(ECDSASignature.positiveYParity))
+      case ECDSASignature(_, _, v) if v == ECDSASignature.negativePointSign =>
+        rawSignature.copy(v = BigInt(ECDSASignature.negativeYParity))
       case _ =>
         throw new IllegalStateException(
           s"Unexpected pointSign. raw.signature.v: ${rawSignature.v}, authorized values are ${ECDSASignature.allowedPointSigns

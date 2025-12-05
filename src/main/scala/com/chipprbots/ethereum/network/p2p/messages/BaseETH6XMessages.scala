@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.network.p2p.Message
@@ -309,9 +310,11 @@ object BaseETH6XMessages {
               ByteString(payloadBytes),
               fromRlpList[AccessListItem](accessList).toList
             ),
-            ByteUtils.bytesToBigInt(pointSignBytes).toInt.toByte,
-            ByteString(signatureRandomBytes),
-            ByteString(signatureBytes)
+            ECDSASignature(
+              ByteUtils.bytesToBigInt(signatureRandomBytes),
+              ByteUtils.bytesToBigInt(signatureBytes),
+              ByteUtils.bytesToBigInt(pointSignBytes)
+            )
           )
 
         case RLPList(
@@ -335,9 +338,11 @@ object BaseETH6XMessages {
               ByteUtils.bytesToBigInt(valueBytes),
               ByteString(payloadBytes)
             ),
-            ByteUtils.bytesToBigInt(pointSignBytes).toInt.toByte,
-            ByteString(signatureRandomBytes),
-            ByteString(signatureBytes)
+            ECDSASignature(
+              ByteUtils.bytesToBigInt(signatureRandomBytes),
+              ByteUtils.bytesToBigInt(signatureBytes),
+              ByteUtils.bytesToBigInt(pointSignBytes)
+            )
           )
         case _ =>
           throw new RuntimeException("Cannot decode SignedTransaction")

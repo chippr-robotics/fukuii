@@ -170,7 +170,7 @@ trait ObjectGenerators {
     }
   }
 
-  def signedTxSeqGen(length: Int, secureRandom: SecureRandom, chainId: Option[Byte]): Gen[Seq[SignedTransaction]] = {
+  def signedTxSeqGen(length: Int, secureRandom: SecureRandom, chainId: Option[BigInt]): Gen[Seq[SignedTransaction]] = {
     val senderKeys = crypto.generateKeyPair(secureRandom)
     val txsSeqGen = Gen.listOfN(length, transactionGen)
     txsSeqGen.map { txs =>
@@ -180,7 +180,7 @@ trait ObjectGenerators {
     }
   }
 
-  def signedTxGen(secureRandom: SecureRandom, chainId: Option[Byte]): Gen[SignedTransaction] = {
+  def signedTxGen(secureRandom: SecureRandom, chainId: Option[BigInt]): Gen[SignedTransaction] = {
     val senderKeys = crypto.generateKeyPair(secureRandom)
     for {
       tx <- transactionGen
@@ -192,14 +192,14 @@ trait ObjectGenerators {
       crypto.generateKeyPair(rnd)
     }
 
-  def newBlockGen(secureRandom: SecureRandom, chainId: Option[Byte]): Gen[NewBlock] = for {
+  def newBlockGen(secureRandom: SecureRandom, chainId: Option[BigInt]): Gen[NewBlock] = for {
     blockHeader <- blockHeaderGen
     stxs <- signedTxSeqGen(10, secureRandom, chainId)
     uncles <- seqBlockHeaderGen
     td <- bigIntGen
   } yield NewBlock(Block(blockHeader, BlockBody(stxs, uncles)), td)
 
-  def newBlock64Gen(secureRandom: SecureRandom, chainId: Option[Byte]): Gen[ETC64.NewBlock] = for {
+  def newBlock64Gen(secureRandom: SecureRandom, chainId: Option[BigInt]): Gen[ETC64.NewBlock] = for {
     blockHeader <- blockHeaderGen
     stxs <- signedTxSeqGen(10, secureRandom, chainId)
     uncles <- seqBlockHeaderGen
@@ -266,7 +266,7 @@ trait ObjectGenerators {
       r <- bigIntGen
       s <- bigIntGen
       v <- byteGen
-    } yield ECDSASignature(r, s, v)
+    } yield ECDSASignature(r, s, BigInt(v))
 
   def listOfNodes(min: Int, max: Int): Gen[Seq[MptNode]] = for {
     size <- intGen(min, max)
