@@ -133,7 +133,7 @@ class SessionSpec extends AnyFlatSpec with Matchers {
     val cache = Session.SessionCache().unsafeRunSync()
     val nodeId = randomBytes(32)
     val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
-    val session = Session.ActiveSession(keys, randomBytes(32), randomBytes(32))
+    val session = Session.ActiveSession(keys, randomBytes(32), randomBytes(32), isInitiator = true)
     
     val test = for {
       _ <- cache.put(nodeId, session)
@@ -156,7 +156,7 @@ class SessionSpec extends AnyFlatSpec with Matchers {
     val cache = Session.SessionCache().unsafeRunSync()
     val nodeId = randomBytes(32)
     val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
-    val session = Session.ActiveSession(keys, randomBytes(32), randomBytes(32))
+    val session = Session.ActiveSession(keys, randomBytes(32), randomBytes(32), isInitiator = true)
     
     val test = for {
       _ <- cache.put(nodeId, session)
@@ -173,8 +173,8 @@ class SessionSpec extends AnyFlatSpec with Matchers {
     val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
     
     val test = for {
-      _ <- cache.put(randomBytes(32), Session.ActiveSession(keys, randomBytes(32), randomBytes(32)))
-      _ <- cache.put(randomBytes(32), Session.ActiveSession(keys, randomBytes(32), randomBytes(32)))
+      _ <- cache.put(randomBytes(32), Session.ActiveSession(keys, randomBytes(32), randomBytes(32), isInitiator = true))
+      _ <- cache.put(randomBytes(32), Session.ActiveSession(keys, randomBytes(32), randomBytes(32), isInitiator = true))
       _ <- cache.clear
       node1 <- cache.get(randomBytes(32))
       node2 <- cache.get(randomBytes(32))
@@ -236,6 +236,119 @@ class SessionSpec extends AnyFlatSpec with Matchers {
     
     assertThrows[IllegalArgumentException] {
       Session.nodeIdFromPublicKey(randomBytes(32))
+    }
+  }
+  
+  behavior of "Session lifecycle management"
+  
+  it should "create sessions with correct initiator flag" in {
+    val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    val localNodeId = randomBytes(32)
+    val remoteNodeId = randomBytes(32)
+    
+    val initiatorSession = Session.ActiveSession(keys, localNodeId, remoteNodeId, isInitiator = true)
+    val responderSession = Session.ActiveSession(keys, localNodeId, remoteNodeId, isInitiator = false)
+    
+    initiatorSession.isInitiator shouldBe true
+    responderSession.isInitiator shouldBe false
+  }
+  
+  it should "store multiple sessions with different node IDs" in {
+    val cache = Session.SessionCache().unsafeRunSync()
+    val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    
+    val nodeId1 = randomBytes(32)
+    val nodeId2 = randomBytes(32)
+    val nodeId3 = randomBytes(32)
+    
+    val session1 = Session.ActiveSession(keys, randomBytes(32), nodeId1, isInitiator = true)
+    val session2 = Session.ActiveSession(keys, randomBytes(32), nodeId2, isInitiator = false)
+    val session3 = Session.ActiveSession(keys, randomBytes(32), nodeId3, isInitiator = true)
+    
+    val test = for {
+      _ <- cache.put(nodeId1, session1)
+      _ <- cache.put(nodeId2, session2)
+      _ <- cache.put(nodeId3, session3)
+      retrieved1 <- cache.get(nodeId1)
+      retrieved2 <- cache.get(nodeId2)
+      retrieved3 <- cache.get(nodeId3)
+    } yield (retrieved1, retrieved2, retrieved3)
+    
+    val (r1, r2, r3) = test.unsafeRunSync()
+    r1 shouldBe Some(session1)
+    r2 shouldBe Some(session2)
+    r3 shouldBe Some(session3)
+  }
+  
+  it should "update existing session when same node ID is used" in {
+    val cache = Session.SessionCache().unsafeRunSync()
+    val nodeId = randomBytes(32)
+    val keys1 = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    val keys2 = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    
+    val session1 = Session.ActiveSession(keys1, randomBytes(32), nodeId, isInitiator = true)
+    val session2 = Session.ActiveSession(keys2, randomBytes(32), nodeId, isInitiator = false)
+    
+    val test = for {
+      _ <- cache.put(nodeId, session1)
+      retrieved1 <- cache.get(nodeId)
+      _ <- cache.put(nodeId, session2)
+      retrieved2 <- cache.get(nodeId)
+    } yield (retrieved1, retrieved2)
+    
+    val (r1, r2) = test.unsafeRunSync()
+    r1 shouldBe Some(session1)
+    r2 shouldBe Some(session2)
+  }
+  
+  it should "handle concurrent session operations" in {
+    val cache = Session.SessionCache().unsafeRunSync()
+    val keys = Session.SessionKeys(randomBytes(16), randomBytes(16), randomBytes(16))
+    
+    val nodeIds = (1 to 10).map(_ => randomBytes(32)).toList
+    val sessions = nodeIds.map(id => Session.ActiveSession(keys, randomBytes(32), id, isInitiator = true))
+    
+    val test = for {
+      _ <- IO.parTraverseN(4)(nodeIds.zip(sessions)) { case (id, session) =>
+        cache.put(id, session)
+      }
+      results <- IO.parTraverseN(4)(nodeIds)(cache.get)
+    } yield results
+    
+    val results = test.unsafeRunSync()
+    results.flatten.size shouldBe 10
+  }
+  
+  behavior of "Session key properties"
+  
+  it should "maintain session key immutability" in {
+    val initiatorKey = randomBytes(16)
+    val recipientKey = randomBytes(16)
+    val authRespKey = randomBytes(16)
+    
+    val keys = Session.SessionKeys(initiatorKey, recipientKey, authRespKey)
+    
+    // Keys should be the same references
+    keys.initiatorKey shouldBe initiatorKey
+    keys.recipientKey shouldBe recipientKey
+    keys.authRespKey shouldBe authRespKey
+  }
+  
+  it should "enforce correct key sizes in SessionKeys" in {
+    val shortKey = randomBytes(8)
+    val validKey1 = randomBytes(16)
+    val validKey2 = randomBytes(16)
+    
+    assertThrows[IllegalArgumentException] {
+      Session.SessionKeys(shortKey, validKey1, validKey2)
+    }
+    
+    assertThrows[IllegalArgumentException] {
+      Session.SessionKeys(validKey1, shortKey, validKey2)
+    }
+    
+    assertThrows[IllegalArgumentException] {
+      Session.SessionKeys(validKey1, validKey2, shortKey)
     }
   }
 }
