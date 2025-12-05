@@ -217,7 +217,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       authHandshaker,
       discoveryConfig,
       blacklist,
-      blockchainConfig.capabilities
+      Config.supportedCapabilities
     ),
     "peer-manager"
   )

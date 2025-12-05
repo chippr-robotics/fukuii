@@ -137,7 +137,7 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
       authHandshaker = authHandshaker,
       discoveryConfig = discoveryConfig,
       blacklist = blacklist,
-      capabilities = blockchainConfig.capabilities
+      capabilities = Config.supportedCapabilities
     ),
     "peer-manager"
   )
