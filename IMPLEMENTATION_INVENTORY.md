@@ -1,7 +1,32 @@
 # Implementation Inventory - TODOs, FIXMEs, and Incomplete Features
 
 **Generated:** 2025-12-05  
+**Last Updated:** 2025-12-05 (post PR #725 merge)  
 **Purpose:** Comprehensive inventory of incomplete implementations, TODOs, and areas marked for future work
+
+---
+
+## Recent Updates
+
+### ✅ Discovery v5 Testing Complete (PR #725 - Merged)
+**Status:** Major testing milestone achieved
+
+**Completed Work:**
+- Added 1,605 lines of comprehensive test code
+- Created 160+ test cases across 5 test files
+- Full protocol coverage: Codec, Encryption, Handshake, Session, Integration
+- All Discovery v5 message types tested (PING, PONG, FINDNODE, NODES, etc.)
+- Security testing: AES-128-GCM encryption, authentication tag integrity, ECDH validation
+- Integration testing: Full protocol flows, session establishment, encrypted communication
+
+**Impact on Inventory:**
+- Discovery v5 testing TODOs **resolved** ✅
+- Test coverage significantly improved for scalanet/discovery module
+- See [DISCV5_TESTING_SUMMARY.md](scalanet/discovery/DISCV5_TESTING_SUMMARY.md) for complete details
+
+**Remaining Discovery v5 Work:**
+- 3 TODOs in `DiscoveryNetwork.scala` for topic table and ENR parsing (implementation, not testing)
+- 5 TODOs in `KRouter.scala` for Kademlia optimizations (low priority)
 
 ---
 
@@ -172,6 +197,15 @@ The inventory is categorized by priority and functional area to support sprint p
 #### Regular Sync
 - **TODOs**: 2 items in integration tests
 - **Priority**: Low - Test improvements only
+
+#### Discovery v5 (Scalanet)
+- **Status**: ✅ **Testing Complete** (PR #725 merged)
+- **Test Coverage**: 160+ test cases, 1,605 lines of test code
+- **Remaining TODOs**: 8 items in implementation (not testing)
+  - 3 in `DiscoveryNetwork.scala`: Topic table and ENR parsing
+  - 5 in `KRouter.scala`: Kademlia optimizations
+- **Priority**: Low - Core protocol and testing complete, remaining are enhancements
+- **Details**: See [DISCV5_TESTING_SUMMARY.md](scalanet/discovery/DISCV5_TESTING_SUMMARY.md)
 
 ### 2. Consensus and Mining (Priority: Medium)
 
@@ -361,6 +395,10 @@ sbt "clean; coverage; testEssential; testStandard; coverageReport; coverageAggre
    - Implement sliding window persistence (EC-491)
    - Profile storage performance
 
+### ✅ Recently Completed
+
+- **Discovery v5 Testing** (PR #725) - Comprehensive test suite with 160+ test cases ✅
+
 ---
 
 ## Testing Coverage Goals
@@ -428,11 +466,14 @@ The Fukuii codebase is in **good health** with:
 - ✅ No critical P0 blockers for production
 - ✅ Core functionality complete and working
 - ✅ Test coverage infrastructure in place
+- ✅ **Discovery v5 testing complete** (PR #725: 160+ tests, 1,605 lines) 
 - ⏳ SNAP Sync 95% complete (testing phase)
 - ⏳ Some P1 items requiring attention (Fast Sync atomicity, VM optimizations)
 - ⏳ Significant P2/P3 tech debt to be addressed over time
 
 **Production Readiness**: The client is production-ready for ETC mainnet with standard fast/regular sync. SNAP Sync requires network testing before production use.
+
+**Recent Progress**: Discovery v5 testing comprehensively addressed, demonstrating strong commitment to test quality and protocol compliance.
 
 **Next Steps**: 
 1. Establish coverage baseline
