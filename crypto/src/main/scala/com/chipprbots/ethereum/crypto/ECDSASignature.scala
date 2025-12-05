@@ -59,7 +59,7 @@ object ECDSASignature {
     signer.init(true, keyPair.getPrivate)
     val components = signer.generateSignature(messageHash)
     val r = BigInt(components(0))
-    val s = BigInt(ECDSASignature.canonicalise(components(1)))
+    val s = ECDSASignature.canonicalise(BigInt(components(1)))
     val v = BigInt(ECDSASignature
       .calculateV(r, s, keyPair, messageHash)
       .getOrElse(throw new RuntimeException("Failed to calculate signature rec id")))
