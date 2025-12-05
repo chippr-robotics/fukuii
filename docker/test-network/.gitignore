@@ -1,9 +1,0 @@
-# Captured logs directory
-captured-logs/
-
-# Docker volumes data (if using bind mounts)
-data/
-
-# Temporary files
-*.tmp
-*.log
