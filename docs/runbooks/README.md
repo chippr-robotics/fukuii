@@ -8,6 +8,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[First Start](first-start.md)** - Initial node setup, configuration, and first-time startup procedures
 - **[Operating Modes](operating-modes.md)** - Comprehensive guide to full nodes, archive nodes, boot nodes, and mining nodes
 - **[Node Configuration](node-configuration.md)** - Chain configs, node configs, and command line options
+- **[Custom Networks](custom-networks.md)** - Deploy Fukuii on private or custom Ethereum networks
 - **[Configuration Tool](../tools/fukuii-configurator.html)** - Interactive web-based configuration generator (open in browser)
 - **[Security](security.md)** - Node security, firewall configuration, and security best practices
 - **[TLS Operations](tls-operations.md)** - TLS/HTTPS configuration for secure JSON-RPC connections

@@ -358,14 +358,51 @@ case class BlockchainsConfig(network: String, blockchains: Map[String, Blockchai
 }
 object BlockchainsConfig {
   private val networkKey = "network"
+  private val customChainsDirKey = "custom-chains-dir"
 
-  def apply(rawConfig: TypesafeConfig): BlockchainsConfig = BlockchainsConfig(
-    network = rawConfig.getString(networkKey),
-    blockchains = keys(rawConfig)
-      .filterNot(_ == networkKey)
+  def apply(rawConfig: TypesafeConfig): BlockchainsConfig = {
+    import java.io.File
+    import java.nio.file.{Files, Paths}
+    import com.typesafe.config.{ConfigFactory, ConfigParseOptions}
+    
+    // Get the network name first
+    val network = rawConfig.getString(networkKey)
+    
+    // Load built-in blockchain configs
+    val builtInBlockchains = keys(rawConfig)
+      .filterNot(k => k == networkKey || k == customChainsDirKey)
       .map(name => name -> BlockchainConfig.fromRawConfig(rawConfig.getConfig(name)))
       .toMap
-  )
+    
+    // Check for custom chains directory
+    val customBlockchains = if (rawConfig.hasPath(customChainsDirKey)) {
+      val customChainsDir = rawConfig.getString(customChainsDirKey)
+      val chainsDir = new File(customChainsDir)
+      
+      if (chainsDir.exists() && chainsDir.isDirectory) {
+        val chainFiles = chainsDir.listFiles().filter { f =>
+          f.isFile && f.getName.endsWith("-chain.conf")
+        }
+        
+        chainFiles.flatMap { chainFile =>
+          Try {
+            val chainName = chainFile.getName.stripSuffix("-chain.conf")
+            val chainConfig = ConfigFactory.parseFile(chainFile)
+            chainName -> BlockchainConfig.fromRawConfig(chainConfig)
+          }.toOption
+        }.toMap
+      } else {
+        Map.empty[String, BlockchainConfig]
+      }
+    } else {
+      Map.empty[String, BlockchainConfig]
+    }
+    
+    // Merge blockchains, with custom configs taking precedence
+    val allBlockchains = builtInBlockchains ++ customBlockchains
+    
+    BlockchainsConfig(network, allBlockchains)
+  }
 }
 
 case class MonetaryPolicyConfig(
