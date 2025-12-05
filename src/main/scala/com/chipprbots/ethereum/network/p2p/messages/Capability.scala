@@ -51,11 +51,41 @@ object Capability {
   def parseUnsafe(s: String): Capability =
     parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Fukuii"))
 
-  def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] =
-    c1.intersect(c2) match {
+  def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] = {
+    // ETH protocol versions are backward compatible
+    // If we advertise ETH68 and peer advertises ETH64, we should negotiate ETH64
+    // This means we need to find the highest common version for each protocol family
+    
+    val ethVersions1 = c1.collect {
+      case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) => cap
+    }
+    val ethVersions2 = c2.collect {
+      case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) => cap
+    }
+    
+    val etcVersions1 = c1.collect { case cap @ ETC64 => cap }
+    val etcVersions2 = c2.collect { case cap @ ETC64 => cap }
+    
+    val snapVersions1 = c1.collect { case cap @ SNAP1 => cap }
+    val snapVersions2 = c2.collect { case cap @ SNAP1 => cap }
+    
+    // For each protocol family, find the highest common version
+    val negotiatedCapabilities = List(
+      // ETH: if both support ETH, use the minimum of their highest versions
+      if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) 
+        Some(List(ethVersions1.maxBy(_.version), ethVersions2.maxBy(_.version)).minBy(_.version))
+      else None,
+      // ETC: exact match required
+      if (etcVersions1.intersect(etcVersions2).nonEmpty) Some(ETC64) else None,
+      // SNAP: exact match required
+      if (snapVersions1.intersect(snapVersions2).nonEmpty) Some(SNAP1) else None
+    ).flatten
+    
+    negotiatedCapabilities match {
       case Nil => None
       case l   => Some(best(l))
     }
+  }
 
   // TODO consider how this scoring should be handled with 'snap' and other extended protocols
   def best(capabilities: List[Capability]): Capability =
