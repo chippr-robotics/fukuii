@@ -152,7 +152,6 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
       bootstrapNodes = Set.empty,
       checkpointPubKeys = Set.empty,
       allowedMinersPublicKeys = Set.empty,
-      capabilities = List.empty,
       bootstrapCheckpoints = bootstrapCheckpoints,
       useBootstrapCheckpoints = useBootstrapCheckpoints
     )

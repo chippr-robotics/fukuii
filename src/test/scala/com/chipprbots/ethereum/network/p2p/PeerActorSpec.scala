@@ -593,7 +593,7 @@ class PeerActorSpec
       override val blockchain: Blockchain = self.blockchain
       override val blockchainReader: BlockchainReader = self.blockchainReader
       override val appStateStorage: AppStateStorage = self.storagesInstance.storages.appStateStorage
-      override val blockchainConfig: BlockchainConfig = self.blockchainConfig.copy(capabilities = List(protocol))
+      override val blockchainConfig: BlockchainConfig = self.blockchainConfig
     }
 
     val handshaker: EtcHandshaker = EtcHandshaker(handshakerConfiguration)
