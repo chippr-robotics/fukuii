@@ -27,7 +27,7 @@ class AuthInitiateMessageSpec extends AnyFlatSpec with Matchers with SecureRando
 
     val nonce = ByteUtils.randomBytes(AuthHandshaker.NonceSize)
 
-    val signature = ECDSASignature(BigInt("123"), BigInt("456"), 0.toByte)
+    val signature = ECDSASignature(BigInt("123"), BigInt("456"), BigInt(0))
 
     val msg = AuthInitiateMessage(
       signature,

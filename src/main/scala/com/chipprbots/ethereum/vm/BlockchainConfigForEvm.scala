@@ -42,7 +42,7 @@ case class BlockchainConfigForEvm(
     berlinBlockNumber: BigInt,
     mystiqueBlockNumber: BigInt,
     spiralBlockNumber: BigInt,
-    chainId: Byte
+    chainId: BigInt
 ) {
   def etcForkForBlockNumber(blockNumber: BigInt): EtcFork = blockNumber match {
     case _ if blockNumber < atlantisBlockNumber => BeforeAtlantis

@@ -228,7 +228,7 @@ object BaseETH6XMessages {
                 RLPValue(ByteUtils.bigIntToUnsignedByteArray(value)),
                 RLPValue(payload.toArray),
                 toRlpList(accessList),
-                RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(signedTx.signature.v))),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.v)),
                 RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.r)),
                 RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.s))
               )
@@ -242,7 +242,7 @@ object BaseETH6XMessages {
               receivingAddressBytes,
               RLPValue(ByteUtils.bigIntToUnsignedByteArray(value)),
               RLPValue(payload.toArray),
-              RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(signedTx.signature.v))),
+              RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.v)),
               RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.r)),
               RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.s))
             )
