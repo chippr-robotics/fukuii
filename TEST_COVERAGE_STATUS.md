@@ -96,7 +96,7 @@ coverageExcludedFiles := Seq(
 
 ## Test Tiers
 
-The project uses a three-tier testing strategy (defined in ADR-017):
+The project uses a three-tier testing strategy (defined in TEST-002: Test Suite Strategy and KPIs):
 
 ### Tier 1: Essential Tests
 - **Command:** `sbt testEssential`
@@ -129,8 +129,10 @@ The project uses a three-tier testing strategy (defined in ADR-017):
 sbt coverage
 
 # Run tests (coverage will be collected)
-sbt testEssential
-sbt testStandard
+sbt testAll              # All tests
+# Or run specific test tiers:
+sbt testEssential        # Tier 1 only
+sbt testStandard         # Tier 2 only
 
 # Generate coverage report
 sbt coverageReport
@@ -145,14 +147,14 @@ sbt coverageOff
 ### One-Step Coverage Analysis
 
 ```bash
-# Run complete coverage analysis
+# Run complete coverage analysis (recommended)
 sbt testCoverage
 
 # This executes:
-# 1. coverage
-# 2. testAll
-# 3. coverageReport
-# 4. coverageAggregate
+# 1. coverage              (enable instrumentation)
+# 2. testAll               (run all tests)
+# 3. coverageReport        (generate reports)
+# 4. coverageAggregate     (aggregate subprojects)
 ```
 
 ### View Reports
@@ -414,7 +416,7 @@ The `CODECOV_TOKEN` secret must be configured in GitHub repository settings:
 
 - [Scoverage GitHub](https://github.com/scoverage/sbt-scoverage)
 - [Codecov Documentation](https://docs.codecov.com/)
-- [ADR-017: Test Tagging Strategy](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
+- [TEST-002: Test Suite Strategy and KPIs](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
 
 ### Internal Docs
 
