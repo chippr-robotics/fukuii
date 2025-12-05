@@ -71,10 +71,15 @@ object Capability {
     
     // For each protocol family, find the highest common version
     val negotiatedCapabilities = List(
-      // ETH: if both support ETH, use the minimum of their highest versions
-      if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) 
-        Some(List(ethVersions1.maxBy(_.version), ethVersions2.maxBy(_.version)).minBy(_.version))
-      else None,
+      // ETH: if both support ETH, use the minimum of their maximum versions
+      if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) {
+        val maxVersion = math.min(
+          ethVersions1.maxBy(_.version).version,
+          ethVersions2.maxBy(_.version).version
+        )
+        // Find the capability with that version number
+        ethVersions1.find(_.version == maxVersion)
+      } else None,
       // ETC: exact match required
       if (etcVersions1.intersect(etcVersions2).nonEmpty) Some(ETC64) else None,
       // SNAP: exact match required
@@ -87,9 +92,23 @@ object Capability {
     }
   }
 
-  // TODO consider how this scoring should be handled with 'snap' and other extended protocols
-  def best(capabilities: List[Capability]): Capability =
-    capabilities.maxBy(_.version)
+  /** Select the best capability from a list, with protocol-family-aware scoring.
+    * Priority: ETC > ETH > SNAP (within each family, higher versions preferred)
+    */
+  def best(capabilities: List[Capability]): Capability = {
+    capabilities.groupBy {
+      case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 => "ETH"
+      case ETC64 => "ETC"
+      case SNAP1 => "SNAP"
+    }.toList.sortBy {
+      case ("ETC", _) => 0  // Highest priority
+      case ("ETH", _) => 1  // Medium priority
+      case ("SNAP", _) => 2 // Lowest priority
+      case _ => 3
+    }.headOption.map {
+      case (_, caps) => caps.maxBy(_.version)
+    }.getOrElse(capabilities.head)
+  }
 
   /** Determines if this capability uses RequestId wrapper in messages (ETH66+, SNAP1+)
     * ETH66, ETH67, ETH68, SNAP1 use RequestId wrapper
