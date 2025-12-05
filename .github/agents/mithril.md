@@ -339,7 +339,7 @@ def executeOpcode(opcode: OpCode, state: State): Either[Error, State] =
 - Type inference in private code
 
 **❌ Do not touch:**
-- Consensus-critical code without validation
+- Consensus-critical code without forge validation (see Morgoth's Consensus-Critical Change Protocol)
 - Changes that increase complexity
 - Style changes that reduce readability
 

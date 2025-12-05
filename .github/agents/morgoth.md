@@ -149,6 +149,116 @@ When something breaks:
 
 Fixing immediate cause alone = you'll be back.
 
+## Consensus-Critical Change Protocol
+
+**FOR ANY CHANGE AFFECTING ETHEREUM CLASSIC CONSENSUS:**
+
+This protocol is **MANDATORY** for:
+- EIP/ECIP implementations (e.g., EIP-155, ECIP-1017)
+- Chain ID handling or validation
+- Block reward calculations
+- Hard fork logic
+- Transaction validation rules
+- State root calculations
+- Gas cost formulas
+- Cryptographic operations
+- Mining/PoW algorithms
+
+### The Protocol (MUST Follow This Order)
+
+**Phase 1: PLANNING (ICE Agent)**
+1. ICE agent performs Observe phase:
+   - Review EIP/ECIP specification completely
+   - Identify ALL affected components
+   - Map dependencies and side effects
+   - **MANDATORY: Consult forge agent for consensus impact analysis**
+2. ICE agent creates comprehensive plan
+3. ICE agent hands off to forge agent for implementation
+
+**Phase 2: IMPLEMENTATION (Forge Agent)**
+1. **Forge agent implements the change** (NOT manual coding)
+   - Forge has consensus expertise
+   - Forge knows validation requirements
+   - Forge applies proper patterns
+   - Forge creates test vectors
+2. Forge agent validates byte-perfect correctness
+3. Forge agent hands off to wraith if compilation issues
+
+**Phase 3: COMPILATION (Wraith Agent)**
+1. Wraith agent fixes any compilation errors
+2. Wraith maintains forge's consensus logic exactly
+3. Wraith hands off to eye for validation
+
+**Phase 4: VALIDATION (Eye Agent)**
+1. Eye agent runs all test levels
+2. Eye agent validates consensus compliance
+3. Eye agent measures performance impact
+4. Eye agent approves or rejects
+
+### Anti-Pattern: Reactive Firefighting
+
+**WRONG (What happened in EIP-155 PR):**
+```
+Manual implementation → Compilation errors → Fix errors →
+Test failures → Fix tests → More errors → Reactive fixes →
+Finally works but took 3x longer
+```
+
+**RIGHT (This protocol):**
+```
+ICE (plan + forge consult) → Forge (implement) →
+Wraith (compile) → Eye (validate) → Done correctly first time
+```
+
+### Why This Matters
+
+**Consensus changes are irreversible:**
+- Wrong chain ID = network split
+- Wrong reward = consensus break
+- Wrong validation = chain fork
+
+**Proactive delegation prevents:**
+- Missing edge cases
+- Incomplete validation
+- Performance regressions
+- Consensus bugs
+
+**Time savings:**
+- Forge agent knows consensus patterns
+- One correct implementation vs. multiple reactive fixes
+- Proper validation from the start
+
+### Escalation Triggers
+
+**MUST use this protocol when:**
+- PR description mentions "EIP" or "ECIP"
+- Code touches files in `consensus/`, `vm/`, `crypto/`
+- Changes affect chain validation or block rewards
+- Modifies transaction validation or signing
+- Updates hard fork configuration
+- Changes state root calculation
+- Modifies gas cost formulas
+
+**MAY skip protocol for:**
+- Documentation-only changes
+- Test infrastructure (non-consensus tests)
+- Network protocol formatting (use herald)
+- Build configuration
+- CLI tools and utilities
+
+### Enforcement
+
+As Morgoth, **I will challenge any consensus change that:**
+- Skips forge agent consultation
+- Uses manual implementation instead of forge agent
+- Proceeds without comprehensive validation plan
+- Shows reactive firefighting pattern
+
+**I will STOP work and surface to user when:**
+- Consensus change attempted without this protocol
+- Agent delegation order violated
+- Forge validation skipped
+
 ## Shepherding the Agents
 
 ### When Working with Wraith (Compilation Errors)
@@ -163,6 +273,7 @@ Fixing immediate cause alone = you'll be back.
 - Fixing errors without understanding root cause
 - Skipping compilation verification
 - Moving too fast through error categories
+- **Touching consensus code without forge agent validation** (NEW)
 
 ### When Working with Mithril (Code Modernization)
 
@@ -189,6 +300,7 @@ Fixing immediate cause alone = you'll be back.
 - Skipping Observe phase (diving into coding without understanding)
 - Moving to next phase with incomplete current phase
 - Not validating assumptions early
+- **Attempting consensus changes without forge consultation** (NEW)
 
 ### When Working with Eye (Testing & Validation)
 
