@@ -384,15 +384,18 @@ object BlockchainsConfig extends Logger {
         }
         
         chainFiles.flatMap { chainFile =>
-          Try {
+          val result = Try {
             val chainName = chainFile.getName.stripSuffix("-chain.conf")
             log.info(s"Loading custom chain config: $chainName from ${chainFile.getName}")
             val chainConfig = ConfigFactory.parseFile(chainFile)
             chainName -> BlockchainConfig.fromRawConfig(chainConfig)
-          }.recover { case e: Exception =>
+          }
+          
+          result.failed.foreach { e =>
             log.error(s"Failed to load chain config from ${chainFile.getName}: ${e.getMessage}", e)
-            throw e
-          }.toOption
+          }
+          
+          result.toOption
         }.toMap
       } else {
         if (chainsDir.exists()) {
