@@ -38,9 +38,10 @@ services:
       # Set node identifier for logging
       - FUKUII_NODE_ID=testbed
       - FUKUII_ENV=testbed-mainnet
-    # Override config file to use etc.conf (default is app.conf)
-    # The logback.xml is already properly configured via bashScriptExtraDefines and volume mount
-    command: ["-Dconfig.file=/app/fukuii/conf/etc.conf"]
+    # Override JVM options to use testbed configuration files
+    # Explicitly set both config.file and logback.configurationFile for clarity
+    # Even though bashScriptExtraDefines sets logback path, being explicit is clearer
+    command: ["-Dconfig.file=/app/fukuii/conf/etc.conf", "-Dlogback.configurationFile=/app/fukuii/conf/logback.xml"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
