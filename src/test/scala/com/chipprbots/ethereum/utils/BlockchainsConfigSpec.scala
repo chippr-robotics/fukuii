@@ -39,7 +39,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       etc {
         network-id = 1
         chain-id = "0x3d"
-        capabilities = ["eth/68", "snap/1"]
         frontier-block-number = "0"
         homestead-block-number = "1150000"
         eip106-block-number = "1000000000000000000"
@@ -96,7 +95,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       {
         network-id = 9999
         chain-id = "0x270f"
-        capabilities = ["eth/68", "snap/1"]
         frontier-block-number = "0"
         homestead-block-number = "0"
         eip106-block-number = "1000000000000000000"
@@ -167,7 +165,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       {
         network-id = 99999
         chain-id = "0x3d"
-        capabilities = ["eth/68", "snap/1"]
         frontier-block-number = "0"
         homestead-block-number = "1150000"
         eip106-block-number = "1000000000000000000"
@@ -218,7 +215,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       etc {
         network-id = 1
         chain-id = "0x3d"
-        capabilities = ["eth/68", "snap/1"]
         frontier-block-number = "0"
         homestead-block-number = "1150000"
         eip106-block-number = "1000000000000000000"
@@ -272,7 +268,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       etc {
         network-id = 1
         chain-id = "0x3d"
-        capabilities = ["eth/68", "snap/1"]
         frontier-block-number = "0"
         homestead-block-number = "1150000"
         eip106-block-number = "1000000000000000000"
@@ -325,7 +320,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
       etc {
         network-id = 1
         chain-id = "0x3d"
-        capabilities = ["eth/68", "snap/1"]
         frontier-block-number = "0"
         homestead-block-number = "1150000"
         eip106-block-number = "1000000000000000000"

@@ -46,6 +46,13 @@ object Config {
     if (config.hasPath("secure-random-algo")) Some(config.getString("secure-random-algo"))
     else None
 
+  // Node capabilities - determined by what this version of Fukuii supports
+  // Per DevP2P spec: advertise only the highest version of each protocol family
+  // ETH versions are backward compatible (eth/68 includes eth/63-67)
+  // SNAP is a separate protocol
+  import com.chipprbots.ethereum.network.p2p.messages.Capability
+  val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.SNAP1)
+
   val blockchains: BlockchainsConfig = BlockchainsConfig(config.getConfig("blockchains"))
 
   object Network {

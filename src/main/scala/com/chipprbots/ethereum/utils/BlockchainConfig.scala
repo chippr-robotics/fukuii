@@ -32,7 +32,6 @@ case class BlockchainConfig(
     bootstrapNodes: Set[String],
     checkpointPubKeys: Set[ByteString] = Set.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
-    capabilities: List[Capability] = List.empty,
     bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
     useBootstrapCheckpoints: Boolean = true,
     messConfig: MESSConfig = MESSConfig()
@@ -186,9 +185,6 @@ object BlockchainConfig {
     val mystiqueBlockNumber: BigInt = BigInt(blockchainConfig.getString("mystique-block-number"))
     val spiralBlockNumber: BigInt = BigInt(blockchainConfig.getString("spiral-block-number"))
 
-    val capabilities: List[Capability] =
-      blockchainConfig.getStringList("capabilities").asScala.toList.map(Capability.parseUnsafe)
-
     val bootstrapCheckpoints: List[BootstrapCheckpoint] = ConfigUtils
       .getOptionalValue(blockchainConfig, _.getStringList, "bootstrap-checkpoints")
       .map(_.asScala.toList.flatMap(BootstrapCheckpoint.fromString))
@@ -251,7 +247,6 @@ object BlockchainConfig {
       bootstrapNodes = bootstrapNodes,
       checkpointPubKeys = checkpointPubKeys,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
-      capabilities = capabilities,
       bootstrapCheckpoints = bootstrapCheckpoints,
       useBootstrapCheckpoints = useBootstrapCheckpoints,
       messConfig = messConfig

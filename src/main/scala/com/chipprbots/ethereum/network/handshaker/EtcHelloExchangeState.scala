@@ -45,7 +45,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
       hello.p2pVersion, EtcHelloExchangeState.P2pVersion, compressionEnabled)
     
     // FIXME in principle this should be already negotiated
-    Capability.negotiate(peerCapabilities, handshakerConfiguration.blockchainConfig.capabilities) match {
+    Capability.negotiate(peerCapabilities, Config.supportedCapabilities) match {
       case Some(Capability.ETC64) =>
         log.debug("Negotiated protocol version with client {} is etc/64", hello.clientId)
         EtcNodeStatus64ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
@@ -79,7 +79,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
     Hello(
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = Config.clientId,
-      capabilities = handshakerConfiguration.blockchainConfig.capabilities,
+      capabilities = Config.supportedCapabilities,
       listenPort = listenPort,
       nodeId = ByteString(nodeStatus.nodeId)
     )

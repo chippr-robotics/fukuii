@@ -303,7 +303,7 @@ trait PeerManagerActorBuilder {
       authHandshaker,
       discoveryConfig,
       blacklist,
-      blockchainConfig.capabilities
+      Config.supportedCapabilities
     ),
     "peer-manager"
   )
@@ -457,7 +457,7 @@ trait EthInfoServiceBuilder {
     stxLedger,
     keyStore,
     syncController,
-    Capability.best(blockchainConfig.capabilities),
+    Capability.best(Config.supportedCapabilities),
     asyncConfig.askTimeout
   )
 }
