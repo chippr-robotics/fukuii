@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.utils
 
+import java.io.File
 import java.net.InetSocketAddress
 
 import org.apache.pekko.util.ByteString
@@ -22,6 +23,7 @@ import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguratio
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.utils.VmConfig.VmMode
+import com.chipprbots.ethereum.utils.Logger
 
 import ConfigUtils._
 
@@ -356,15 +358,11 @@ object DaoForkConfig {
 case class BlockchainsConfig(network: String, blockchains: Map[String, BlockchainConfig]) {
   val blockchainConfig: BlockchainConfig = blockchains(network)
 }
-object BlockchainsConfig {
+object BlockchainsConfig extends Logger {
   private val networkKey = "network"
   private val customChainsDirKey = "custom-chains-dir"
 
   def apply(rawConfig: TypesafeConfig): BlockchainsConfig = {
-    import java.io.File
-    import java.nio.file.{Files, Paths}
-    import com.typesafe.config.{ConfigFactory, ConfigParseOptions}
-    
     // Get the network name first
     val network = rawConfig.getString(networkKey)
     
@@ -380,6 +378,7 @@ object BlockchainsConfig {
       val chainsDir = new File(customChainsDir)
       
       if (chainsDir.exists() && chainsDir.isDirectory) {
+        log.info(s"Loading custom chain configurations from: $customChainsDir")
         val chainFiles = chainsDir.listFiles().filter { f =>
           f.isFile && f.getName.endsWith("-chain.conf")
         }
@@ -387,11 +386,20 @@ object BlockchainsConfig {
         chainFiles.flatMap { chainFile =>
           Try {
             val chainName = chainFile.getName.stripSuffix("-chain.conf")
+            log.info(s"Loading custom chain config: $chainName from ${chainFile.getName}")
             val chainConfig = ConfigFactory.parseFile(chainFile)
             chainName -> BlockchainConfig.fromRawConfig(chainConfig)
+          }.recover { case e: Exception =>
+            log.error(s"Failed to load chain config from ${chainFile.getName}: ${e.getMessage}", e)
+            throw e
           }.toOption
         }.toMap
       } else {
+        if (chainsDir.exists()) {
+          log.warn(s"Custom chains directory is not a directory: $customChainsDir")
+        } else {
+          log.warn(s"Custom chains directory does not exist: $customChainsDir")
+        }
         Map.empty[String, BlockchainConfig]
       }
     } else {
@@ -400,6 +408,10 @@ object BlockchainsConfig {
     
     // Merge blockchains, with custom configs taking precedence
     val allBlockchains = builtInBlockchains ++ customBlockchains
+    
+    if (customBlockchains.nonEmpty) {
+      log.info(s"Loaded ${customBlockchains.size} custom chain configuration(s): ${customBlockchains.keys.mkString(", ")}")
+    }
     
     BlockchainsConfig(network, allBlockchains)
   }
