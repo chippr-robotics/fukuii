@@ -1,0 +1,206 @@
+# Gorgoroth Internal Test Network - 3 Fukuii + 3 Besu Nodes
+# This configuration creates a private test network with mixed client implementations
+
+networks:
+  gorgoroth:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+services:
+  # Fukuii Nodes
+  fukuii-node1:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node1
+    hostname: fukuii-node1
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.11
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+    volumes:
+      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
+      - ./conf/node1/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - fukuii-node1-data:/app/data
+      - fukuii-node1-logs:/app/logs
+    environment:
+      - FUKUII_NODE_ID=node1
+      - FUKUII_ENV=gorgoroth
+    command: ["gorgoroth"]
+
+  fukuii-node2:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node2
+    hostname: fukuii-node2
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.12
+    ports:
+      - "8547:8545"
+      - "8548:8546"
+      - "30304:30303/tcp"
+      - "30304:30303/udp"
+    volumes:
+      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
+      - ./conf/node2/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - fukuii-node2-data:/app/data
+      - fukuii-node2-logs:/app/logs
+    environment:
+      - FUKUII_NODE_ID=node2
+      - FUKUII_ENV=gorgoroth
+    command: ["gorgoroth"]
+
+  fukuii-node3:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node3
+    hostname: fukuii-node3
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.13
+    ports:
+      - "8549:8545"
+      - "8550:8546"
+      - "30305:30303/tcp"
+      - "30305:30303/udp"
+    volumes:
+      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
+      - ./conf/node3/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - fukuii-node3-data:/app/data
+      - fukuii-node3-logs:/app/logs
+    environment:
+      - FUKUII_NODE_ID=node3
+      - FUKUII_ENV=gorgoroth
+    command: ["gorgoroth"]
+
+  # Besu Nodes
+  besu-node1:
+    image: hyperledger/besu:latest
+    container_name: gorgoroth-besu-node1
+    hostname: besu-node1
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.31
+    ports:
+      - "8551:8545"
+      - "8552:8546"
+      - "30306:30303/tcp"
+      - "30306:30303/udp"
+    volumes:
+      - ./conf/besu/genesis.json:/genesis.json:ro
+      - besu-node1-data:/opt/besu/data
+    command:
+      - "--genesis-file=/genesis.json"
+      - "--network-id=1337"
+      - "--data-path=/opt/besu/data"
+      - "--rpc-http-enabled"
+      - "--rpc-http-host=0.0.0.0"
+      - "--rpc-http-port=8545"
+      - "--rpc-http-api=ETH,NET,WEB3,ADMIN,DEBUG"
+      - "--rpc-http-cors-origins=*"
+      - "--rpc-ws-enabled"
+      - "--rpc-ws-host=0.0.0.0"
+      - "--rpc-ws-port=8546"
+      - "--rpc-ws-api=ETH,NET,WEB3"
+      - "--p2p-port=30303"
+      - "--discovery-enabled=false"
+      - "--max-peers=25"
+      - "--miner-enabled"
+      - "--miner-coinbase=0x4000000000000000000000000000000000000004"
+
+  besu-node2:
+    image: hyperledger/besu:latest
+    container_name: gorgoroth-besu-node2
+    hostname: besu-node2
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.32
+    ports:
+      - "8553:8545"
+      - "8554:8546"
+      - "30307:30303/tcp"
+      - "30307:30303/udp"
+    volumes:
+      - ./conf/besu/genesis.json:/genesis.json:ro
+      - besu-node2-data:/opt/besu/data
+    command:
+      - "--genesis-file=/genesis.json"
+      - "--network-id=1337"
+      - "--data-path=/opt/besu/data"
+      - "--rpc-http-enabled"
+      - "--rpc-http-host=0.0.0.0"
+      - "--rpc-http-port=8545"
+      - "--rpc-http-api=ETH,NET,WEB3,ADMIN,DEBUG"
+      - "--rpc-http-cors-origins=*"
+      - "--rpc-ws-enabled"
+      - "--rpc-ws-host=0.0.0.0"
+      - "--rpc-ws-port=8546"
+      - "--rpc-ws-api=ETH,NET,WEB3"
+      - "--p2p-port=30303"
+      - "--discovery-enabled=false"
+      - "--max-peers=25"
+      - "--miner-enabled"
+      - "--miner-coinbase=0x5000000000000000000000000000000000000005"
+
+  besu-node3:
+    image: hyperledger/besu:latest
+    container_name: gorgoroth-besu-node3
+    hostname: besu-node3
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.33
+    ports:
+      - "8555:8545"
+      - "8556:8546"
+      - "30308:30303/tcp"
+      - "30308:30303/udp"
+    volumes:
+      - ./conf/besu/genesis.json:/genesis.json:ro
+      - besu-node3-data:/opt/besu/data
+    command:
+      - "--genesis-file=/genesis.json"
+      - "--network-id=1337"
+      - "--data-path=/opt/besu/data"
+      - "--rpc-http-enabled"
+      - "--rpc-http-host=0.0.0.0"
+      - "--rpc-http-port=8545"
+      - "--rpc-http-api=ETH,NET,WEB3,ADMIN,DEBUG"
+      - "--rpc-http-cors-origins=*"
+      - "--rpc-ws-enabled"
+      - "--rpc-ws-host=0.0.0.0"
+      - "--rpc-ws-port=8546"
+      - "--rpc-ws-api=ETH,NET,WEB3"
+      - "--p2p-port=30303"
+      - "--discovery-enabled=false"
+      - "--max-peers=25"
+      - "--miner-enabled"
+      - "--miner-coinbase=0x6000000000000000000000000000000000000006"
+
+volumes:
+  fukuii-node1-data:
+    driver: local
+  fukuii-node1-logs:
+    driver: local
+  fukuii-node2-data:
+    driver: local
+  fukuii-node2-logs:
+    driver: local
+  fukuii-node3-data:
+    driver: local
+  fukuii-node3-logs:
+    driver: local
+  besu-node1-data:
+    driver: local
+  besu-node2-data:
+    driver: local
+  besu-node3-data:
+    driver: local

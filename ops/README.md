@@ -20,6 +20,16 @@ ops/
 │   ├── start.sh                                  # Quick start/stop script
 │   ├── README.md                                 # Testbed documentation
 │   └── ISSUE_RESOLUTION.md                       # Issue tracking and resolution notes
+├── gorgoroth/                                    # Gorgoroth - Internal test network
+│   ├── conf/                                     # Configuration files for all nodes
+│   ├── docker-compose-3nodes.yml                 # 3 Fukuii nodes
+│   ├── docker-compose-6nodes.yml                 # 6 Fukuii nodes
+│   ├── docker-compose-fukuii-geth.yml            # 3 Fukuii + 3 Core-Geth
+│   ├── docker-compose-fukuii-besu.yml            # 3 Fukuii + 3 Besu
+│   ├── docker-compose-mixed.yml                  # 3 Fukuii + 3 Besu + 3 Core-Geth
+│   ├── deploy.sh                                 # Deployment management script
+│   ├── collect-logs.sh                           # Log collection script
+│   └── README.md                                 # Gorgoroth documentation
 ├── run-007-research/                             # Research directory for investigations
 └── README.md                                     # This file
 ```
@@ -53,6 +63,32 @@ cd ops/testbed
 For detailed information, see [testbed/README.md](testbed/README.md) and [testbed/ISSUE_RESOLUTION.md](testbed/ISSUE_RESOLUTION.md).
 
 ⚠️ **Note**: The testbed is the primary environment for all testing activities. Previous run-001 through run-005 folders have been retired.
+
+### Gorgoroth - Internal Test Network
+
+The `gorgoroth/` directory contains configurations for an internal private test network, named after the plateau in Mordor where Sauron trained his armies.
+
+**Purpose**: Private network testing for multi-client interoperability and Fukuii validation.
+
+**Features**:
+- Network: Private test network (Chain ID: 1337)
+- Discovery disabled (static peer connections)
+- Multiple deployment configurations:
+  - 3 Fukuii nodes
+  - 6 Fukuii nodes
+  - 3 Fukuii + 3 Core-Geth
+  - 3 Fukuii + 3 Besu
+  - 3 Fukuii + 3 Besu + 3 Core-Geth (mixed)
+- Easy deployment and log collection scripts
+- Pre-configured genesis with funded accounts
+
+**Quick Start**:
+```bash
+cd ops/gorgoroth
+./deploy.sh start 3nodes
+```
+
+For detailed information, see [gorgoroth/README.md](gorgoroth/README.md).
 
 ### Run 007 - Research
 
