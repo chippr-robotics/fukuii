@@ -11,7 +11,7 @@ object ECDSASignatureImplicits {
   implicit val ecdsaSignatureDec: RLPDecoder[ECDSASignature] = new RLPDecoder[ECDSASignature] {
     override def decode(rlp: RLPEncodeable): ECDSASignature = rlp match {
       case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) if v.nonEmpty =>
-        ECDSASignature(ByteString(r), ByteString(s), ByteString(v))
+        ECDSASignature(ByteString(r), ByteString(s), v.head)
       case RLPList(RLPValue(r), RLPValue(s), RLPValue(v)) if v.isEmpty =>
         // Empty v component represents yParity=0 in EIP-2930 transaction RLP encoding
         // In RLP, the integer 0 is encoded as an empty byte string (0x80)
