@@ -224,9 +224,12 @@ object BlockHeaderImplicits {
               nonce,
               encodedCheckpoint
             ) =>
-          val extraFields = HefPostEcip1097(
-            checkpointOptionDecoder.decode(encodedCheckpoint)
-          )
+          val decodedCheckpoint = checkpointOptionDecoder.decode(encodedCheckpoint)
+          // Normalize: HefPostEcip1097(None) should be HefEmpty for consistency
+          val extraFields = decodedCheckpoint match {
+            case None => HefEmpty
+            case Some(_) => HefPostEcip1097(decodedCheckpoint)
+          }
           BlockHeader(
             byteStringFromEncodeable(parentHash),
             byteStringFromEncodeable(ommersHash),
