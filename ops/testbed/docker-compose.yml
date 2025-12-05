@@ -24,19 +24,23 @@ services:
       - "30303:30303/udp"
     volumes:
       # Configuration files
+      # Mount at both /app/conf/ (for Dockerfile CMD) and /app/fukuii/conf/ (for bashScriptExtraDefines)
+      # This ensures the testbed configuration is loaded regardless of which path is used
       - ./conf/etc.conf:/app/conf/etc.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
+      - ./conf/etc.conf:/app/fukuii/conf/etc.conf:ro
+      - ./conf/logback.xml:/app/fukuii/conf/logback.xml:ro
       # Data directory (persistent)
       - fukuii-testbed-data:/app/data
       # Logs directory
       - fukuii-testbed-logs:/app/logs
     environment:
-      # Use custom logback configuration
-      - JAVA_OPTS=-Dlogback.configurationFile=/app/conf/logback.xml
       # Set node identifier for logging
       - FUKUII_NODE_ID=testbed
       - FUKUII_ENV=testbed-mainnet
-    command: ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
+    # Override config file to use etc.conf (default is app.conf)
+    # The logback.xml is already properly configured via bashScriptExtraDefines and volume mount
+    command: ["-Dconfig.file=/app/fukuii/conf/etc.conf"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
