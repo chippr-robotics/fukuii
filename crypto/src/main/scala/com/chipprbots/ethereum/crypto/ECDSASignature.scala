@@ -58,11 +58,11 @@ object ECDSASignature {
     val signer = new ECDSASigner(new HMacDSAKCalculator(new SHA256Digest))
     signer.init(true, keyPair.getPrivate)
     val components = signer.generateSignature(messageHash)
-    val r = components(0)
-    val s = ECDSASignature.canonicalise(components(1))
-    val v = ECDSASignature
+    val r = BigInt(components(0))
+    val s = BigInt(ECDSASignature.canonicalise(components(1)))
+    val v = BigInt(ECDSASignature
       .calculateV(r, s, keyPair, messageHash)
-      .getOrElse(throw new RuntimeException("Failed to calculate signature rec id"))
+      .getOrElse(throw new RuntimeException("Failed to calculate signature rec id")))
 
     ECDSASignature(r, s, v)
   }

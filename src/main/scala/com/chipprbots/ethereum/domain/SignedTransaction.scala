@@ -316,7 +316,7 @@ object SignedTransaction {
     * @return
     *   the transaction payload for Legacy transaction
     */
-  private def chainSpecificTransactionBytes(tx: Transaction, chainId: Byte): Array[Byte] = {
+  private def chainSpecificTransactionBytes(tx: Transaction, chainId: BigInt): Array[Byte] = {
     val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.emptyByteArray)
     crypto.kec256(
       rlpEncode(

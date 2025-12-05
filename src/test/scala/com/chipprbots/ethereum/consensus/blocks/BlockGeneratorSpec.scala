@@ -229,7 +229,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     ConsensusTest
   ) in new TestSetup {
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
@@ -308,7 +308,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         difficultyBombRemovalBlockNumber = 5900000,
         eip161BlockNumber = 0
       ),
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
@@ -708,7 +708,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         difficultyBombContinueBlockNumber = 5000000,
         difficultyBombRemovalBlockNumber = 5900000
       ),
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,

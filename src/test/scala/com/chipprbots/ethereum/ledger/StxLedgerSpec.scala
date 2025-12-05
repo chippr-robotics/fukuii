@@ -154,7 +154,7 @@ trait ScenarioSetup extends EphemBlockchainTestSetup {
       ecip1098BlockNumber = 0,
       ecip1097BlockNumber = 0
     ),
-    chainId = 0x03.toByte,
+    chainId = 0x03,
     networkId = 1,
     maxCodeSize = None,
     customGenesisFileOpt = None,

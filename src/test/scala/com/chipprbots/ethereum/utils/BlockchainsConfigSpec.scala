@@ -85,8 +85,8 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     blockchainsConfig.network shouldBe "etc"
     blockchainsConfig.blockchains should contain key "etc"
     blockchainsConfig.blockchainConfig.networkId shouldBe 1
-    // Chain ID 0x3d (61 in decimal) fits within byte range and is the ETC mainnet chain ID
-    blockchainsConfig.blockchainConfig.chainId shouldBe 0x3d.toByte
+    // Chain ID 0x3d (61 in decimal) is the ETC mainnet chain ID
+    blockchainsConfig.blockchainConfig.chainId shouldBe 0x3d
   }
 
   it should "load custom blockchain configurations from external directory" taggedAs (UnitTest) in {
@@ -153,10 +153,8 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     blockchainsConfig.network shouldBe "customnet"
     blockchainsConfig.blockchains should contain key "customnet"
     blockchainsConfig.blockchainConfig.networkId shouldBe 9999
-    // Chain ID 0x270f (9999) when converted to byte:
-    // 9999 % 256 = 15, which fits in the positive range of signed byte (0 to 127)
-    // So the result is 15
-    blockchainsConfig.blockchainConfig.chainId shouldBe 15.toByte
+    // Chain ID 0x270f (9999) is now properly stored as BigInt
+    blockchainsConfig.blockchainConfig.chainId shouldBe 9999
   }
 
   it should "give priority to custom configurations over built-in ones" taggedAs (UnitTest) in {
