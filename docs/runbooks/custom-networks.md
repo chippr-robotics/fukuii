@@ -183,34 +183,6 @@ Chain configurations define the fundamental parameters and rules for a blockchai
   - Common values: 1 (ETH), 61/0x3d (ETC), 63/0x3f (Mordor)
   - For custom networks, use values like 77/0x4D, 80/0x50, 100/0x64, 123/0x7B
 
-### Protocol Capabilities
-
-**Important**: Protocol capabilities are **not** configured per chain. They are determined by the Fukuii node implementation itself and represent what protocols the node software supports.
-
-Fukuii automatically advertises the protocols it supports based on its implementation:
-- `eth/68`: Latest ETH protocol (backward compatible with eth/63-67)
-- `snap/1`: SNAP sync protocol for faster state synchronization  
-- `etc/64`: ETC-specific protocol variant (when appropriate)
-
-Per the [DevP2P specification](https://github.com/ethereum/devp2p/blob/master/caps/eth.md):
-- ETH protocol versions are **backward compatible**
-- Nodes advertise **only the highest version** of each protocol family
-- When a node advertises `eth/68`, peers understand it supports all previous ETH versions (eth/63 through eth/67)
-- SNAP is a **separate protocol** from ETH
-
-**You do not need to configure capabilities in your chain config files** - the node will automatically use the correct capabilities based on what this version of Fukuii supports.
-
-This design ensures:
-- **Consistency**: All nodes running the same Fukuii version advertise the same capabilities
-- **Correctness**: Capabilities match what the code actually implements
-- **Simplicity**: Network operators don't need to understand protocol versioning details
-- **Upgrades**: Capability support is upgraded when you upgrade Fukuii, not when you edit config files
-
-**Incorrect old approach** (do not do this):
-```hocon
-# Don't add this to chain configs - capabilities are node-level, not chain-level
-```
-
 ### Fork Activation Blocks
 
 Fork block numbers determine when specific protocol upgrades activate. Common forks include:
@@ -449,8 +421,6 @@ volumes:
 |-----------|------|----------|-------------|
 | `network-id` | Integer | Yes | Network identifier for peer discovery |
 | `chain-id` | String (hex) | Yes | Chain ID for EIP-155 transaction signing |
-
-**Note**: Protocol capabilities are **not** part of chain configuration - they are determined by the Fukuii node implementation and advertised automatically.
 
 ### Fork Block Numbers
 
