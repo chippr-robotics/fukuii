@@ -45,9 +45,9 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
   network-id = 12345
   
   # Chain ID for transaction signing (EIP-155)
-  # IMPORTANT: Chain IDs are stored as signed bytes (-128 to 127)
-  # Choose a value in this range to avoid overflow issues
-  # Use hex format: "0x7B" = 123 in decimal
+  # IMPORTANT: Chain IDs are stored as positive integers (BigInt) for full EIP-155 compliance.
+  # You may use any valid positive integer value for chain-id, e.g. 1 (mainnet), 1337 (Gorgoroth), 42161 (Arbitrum).
+  # Use hex format if desired: "0x7B" = 123 in decimal, "0xA4B1" = 42161.
   chain-id = "0x7B"
   
   # Fork block numbers - set to 0 or appropriate values for your network
@@ -178,10 +178,10 @@ Chain configurations define the fundamental parameters and rules for a blockchai
 
 - **network-id**: Used for peer discovery and handshaking. Each network should have a unique ID.
 - **chain-id**: Used for transaction signing (EIP-155). Prevents replay attacks across different chains.
-  - **Important**: Chain IDs are stored as signed bytes in Fukuii (range: -128 to 127)
-  - Choose values within this range to avoid overflow issues
-  - Common values: 1 (ETH), 61/0x3d (ETC), 63/0x3f (Mordor)
-  - For custom networks, use values like 77/0x4D, 80/0x50, 100/0x64, 123/0x7B
+  - **Important**: Chain IDs are now stored as positive integers (BigInt) for full EIP-155 compliance.
+  - You may use any positive integer value for chain IDs, including large values for custom or public networks.
+  - Common values: 1 (ETH), 61/0x3d (ETC), 63/0x3f (Mordor), 1337 (Gorgoroth), 42161 (Arbitrum)
+  - For custom networks, choose any positive integer (e.g., 77/0x4D, 80/0x50, 100/0x64, 123/0x7B, 1337, 42161)
 
 ### Fork Activation Blocks
 
@@ -323,7 +323,7 @@ mkdir -p /opt/fukuii/chains
 cat > /opt/fukuii/chains/mynetwork-chain.conf << 'EOF'
 {
   network-id = 12345
-  # Chain ID 0x7B (123 in decimal) - fits within byte range (-128 to 127)
+  # Chain ID 0x7B (123 in decimal) - any positive integer supported
   chain-id = "0x7B"
   # ... rest of configuration
 }
@@ -372,7 +372,7 @@ fukuii {
     
     mynetwork {
       network-id = 12345
-      # Chain ID 0x7B (123 in decimal) - fits within byte range
+      # Chain ID 0x7B (123 in decimal) - chain IDs can be any positive integer value
       chain-id = "0x7B"
       # ... rest of chain configuration
     }
@@ -465,7 +465,7 @@ Perfect for local testing with all modern features enabled:
 ```hocon
 {
   network-id = 9999
-  # Chain ID 0x64 (100 in decimal) - fits within byte range
+  # Chain ID 0x64 (100 in decimal) – chain IDs can be any positive integer value
   chain-id = "0x64"
   
   # All forks enabled from genesis
@@ -537,7 +537,7 @@ Configuration for a permissioned consortium network:
 ```hocon
 {
   network-id = 8888
-  # Chain ID 0x50 (80 in decimal) - fits within byte range
+  # Chain ID 0x50 (80 in decimal) - chain IDs can be any positive integer value (BigInt)
   chain-id = "0x50"
   
   frontier-block-number = "0"
@@ -622,7 +622,7 @@ Configuration for a test network with planned fork activations:
 ```hocon
 {
   network-id = 7777
-  # Chain ID 0x4D (77 in decimal) - fits within byte range
+  # Chain ID 0x4D (77 in decimal) - chain IDs are BigInt and can be any positive integer value
   chain-id = "0x4D"
   
   # Progressive fork activation
