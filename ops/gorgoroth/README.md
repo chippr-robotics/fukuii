@@ -138,6 +138,27 @@ curl -X POST -H "Content-Type: application/json" \
   http://localhost:8545
 ```
 
+### Connecting Peers
+
+The network is configured with discovery disabled. In Docker networks, nodes can communicate using service names as hostnames (e.g., `fukuii-node1`, `fukuii-node2`). However, you may need to manually connect peers using the admin API:
+
+```bash
+# Get node info (including enode URL)
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
+  http://localhost:8545
+
+# Add a peer manually (if needed)
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"admin_addPeer","params":["enode://NODE_ID@fukuii-node2:30303"],"id":1}' \
+  http://localhost:8545
+```
+
+**Note**: The static-nodes.json files in the 3-node configuration contain placeholder enode IDs and are for reference only. For production use, you should:
+1. Generate proper node keys for each node
+2. Update static-nodes.json with actual enode URLs
+3. Or manually connect peers using the admin API after startup
+
 ### Collecting Logs
 
 ```bash
@@ -283,9 +304,26 @@ docker ps -a
 
 ### Nodes Not Connecting
 
-For Fukuii nodes in the 3-node configuration, peer discovery is managed via `static-nodes.json`. Ensure the static node files are properly mounted.
+The network uses discovery disabled mode. Nodes should connect automatically via Docker networking (using service names as hostnames). If nodes are not connecting:
 
-For other configurations, nodes use Docker networking and should connect automatically via the bridge network.
+1. **Check if admin API is available**:
+   ```bash
+   curl -X POST -H "Content-Type: application/json" \
+     --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
+     http://localhost:8545
+   ```
+
+2. **Manually add peers** using the admin API with the enode URL from step 1
+
+3. **For 3-node configuration**: The static-nodes.json files contain placeholder enode IDs. You'll need to either:
+   - Generate proper node keys and update static-nodes.json
+   - Remove the static-nodes.json volume mounts and use manual peering
+   - Use the 6-node or mixed configurations which rely on Docker networking
+
+4. **Check Docker networking**:
+   ```bash
+   docker network inspect gorgoroth_gorgoroth
+   ```
 
 ### No Blocks Being Mined
 
