@@ -237,16 +237,19 @@ The inventory is categorized by priority and functional area to support sprint p
 
 ### Current Status
 
+✅ **Test coverage is fully enabled and operational.** See [TEST_COVERAGE_STATUS.md](TEST_COVERAGE_STATUS.md) for complete details.
+
 **Coverage Plugin**: ✅ Installed (scoverage 2.2.2)
 
 **CI Integration**: ✅ Active
 - Coverage runs on push to main/develop branches
-- Reports uploaded to Codecov
+- Reports uploaded to Codecov (https://codecov.io/gh/chippr-robotics/fukuii)
 - Coverage artifacts stored in CI
+- Codecov badge visible in README
 
 **Configuration** (from `build.sbt`):
 ```scala
-coverageEnabled := false           // Disabled by default
+coverageEnabled := false           // Disabled by default, enable with `sbt coverage`
 coverageMinimumStmtTotal := 70     // 70% minimum target
 coverageFailOnMinimum := true      // Fail build if below minimum
 coverageHighlighting := true       // Enable highlighting
@@ -276,15 +279,23 @@ coverageHighlighting := true       // Enable highlighting
 ### Coverage Commands
 
 ```bash
-# Run tests with coverage
+# Enable and run tests with coverage
 sbt testCoverage
 
 # Run tests without coverage (cleanup)
 sbt testCoverageOff
 
+# Manual coverage workflow
+sbt coverage              # Enable coverage
+sbt testEssential         # Run tests
+sbt coverageReport        # Generate report
+sbt coverageAggregate     # Aggregate all modules
+
 # View coverage report
-# Reports generated in: target/scala-*/scoverage-report/
+# Reports generated in: target/scala-*/scoverage-report/index.html
 ```
+
+See [TEST_COVERAGE_STATUS.md](TEST_COVERAGE_STATUS.md) for complete coverage documentation.
 
 ### Baseline Coverage Metrics
 
@@ -292,6 +303,8 @@ sbt testCoverageOff
 ```bash
 sbt "clean; coverage; testEssential; testStandard; coverageReport; coverageAggregate"
 ```
+
+**Codecov Dashboard**: https://codecov.io/gh/chippr-robotics/fukuii
 
 ---
 
