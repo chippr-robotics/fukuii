@@ -3,6 +3,7 @@ package com.chipprbots.scalanet.discovery.ethereum.v5.codecs
 import com.chipprbots.scalanet.discovery.ethereum.v5.Payload
 import com.chipprbots.scalanet.discovery.ethereum.v5.Payload._
 import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.enrCodec
 import scodec.Codec
 import scodec.bits.ByteVector
 import scodec.codecs._
@@ -75,15 +76,49 @@ trait PayloadCodecs {
     )
   }
   
+  /** Codec for NODES message (0x04) */
+  given nodesCodec: Codec[Nodes] = {
+    (requestIdCodec :: uint16 :: listOfN(uint16, enrCodec)).xmap(
+      { case (reqId, total, enrs) => Nodes(reqId, total, enrs) },
+      (nodes: Nodes) => (nodes.requestId, nodes.total, nodes.enrs)
+    )
+  }
+  
+  /** Codec for REGTOPIC message (0x07) */
+  given regTopicCodec: Codec[RegTopic] = {
+    (requestIdCodec :: bytes(32) :: enrCodec :: byteVectorCodec).xmap(
+      { case (reqId, topic, enr, ticket) => RegTopic(reqId, topic, enr, ticket) },
+      (rt: RegTopic) => (rt.requestId, rt.topic, rt.enr, rt.ticket)
+    )
+  }
+  
+  /** Codec for TICKET message (0x08) */
+  given ticketCodec: Codec[Ticket] = {
+    (requestIdCodec :: byteVectorCodec :: uint32).xmap(
+      { case (reqId, ticket, waitTime) => Ticket(reqId, ticket, waitTime.toInt) },
+      (t: Ticket) => (t.requestId, t.ticket, t.waitTime.toLong)
+    )
+  }
+  
+  /** Codec for REGCONFIRMATION message (0x09) */
+  given regConfirmationCodec: Codec[RegConfirmation] = {
+    (requestIdCodec :: bytes(32)).xmap(
+      { case (reqId, topic) => RegConfirmation(reqId, topic) },
+      (rc: RegConfirmation) => (rc.requestId, rc.topic)
+    )
+  }
+  
   /** Generic payload codec with message type discrimination */
   given payloadCodec: Codec[Payload] = discriminated[Payload]
     .by(uint8)
     .typecase(MessageType.Ping, pingCodec)
     .typecase(MessageType.Pong, pongCodec)
     .typecase(MessageType.FindNode, findNodeCodec)
+    .typecase(MessageType.Nodes, nodesCodec)
     .typecase(MessageType.TalkReq, talkRequestCodec)
     .typecase(MessageType.TalkResp, talkResponseCodec)
+    .typecase(MessageType.RegTopic, regTopicCodec)
+    .typecase(MessageType.Ticket, ticketCodec)
+    .typecase(MessageType.RegConfirmation, regConfirmationCodec)
     .typecase(MessageType.TopicQuery, topicQueryCodec)
-    // Note: NODES, REGTOPIC, TICKET, REGCONFIRMATION require ENR codec
-    // which depends on full RLP support in main module
 }

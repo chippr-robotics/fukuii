@@ -36,7 +36,8 @@ object Session {
   case class ActiveSession(
     keys: SessionKeys,
     localNodeId: ByteVector,
-    remoteNodeId: ByteVector
+    remoteNodeId: ByteVector,
+    isInitiator: Boolean  // True if this node initiated the handshake
   )
   
   /** Derive session keys using HKDF

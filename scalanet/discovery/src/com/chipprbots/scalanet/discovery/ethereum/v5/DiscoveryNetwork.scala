@@ -64,6 +64,7 @@ object DiscoveryNetwork {
     peerGroup: PeerGroup[A, Packet],
     privateKey: PrivateKey,
     localNode: Node,
+    localEnrSeq: Long,  // Add ENR sequence number parameter
     toNodeAddress: A => Node.Address,
     config: DiscoveryConfig,
     sessionCache: Session.SessionCache
@@ -85,6 +86,15 @@ object DiscoveryNetwork {
       
       // Pending handshakes: nonce -> Deferred[HandshakeComplete]
       private val pendingHandshakes = Ref.unsafe[IO, Map[ByteVector, Deferred[IO, Session.ActiveSession]]](Map.empty)
+      
+      // Track idNonce sent in WHOAREYOU for signature verification: remoteNodeId -> idNonce
+      private val sentIdNonces = Ref.unsafe[IO, Map[ByteVector, ByteVector]](Map.empty)
+      
+      // Node table for storing discovered nodes: nodeId -> Node
+      private val nodeTable = Ref.unsafe[IO, Map[Node.Id, Node]](Map.empty)
+      
+      // Topic table for storing topic registrations: topic -> Set[nodeId]
+      private val topicTable = Ref.unsafe[IO, Map[ByteVector, Set[Node.Id]]](Map.empty)
       
       /** Send a PING and wait for PONG */
       override def ping(peer: Peer[A], localEnrSeq: Long): IO[Option[PingResult]] = {
@@ -212,76 +222,656 @@ object DiscoveryNetwork {
         * 2. Encrypt with AES-GCM using session keys  
         * 3. Create OrdinaryMessagePacket with encrypted data
         * 4. Send via UDP peer group
-        * 
-        * Full implementation requires:
-        * - Payload codec integration (basic codec provided in codecs/RLPCodecs.scala)
-        * - Proper authData construction with node IDs
-        * - Integration with peer group send API
-        * - Retry logic and error handling
-        * 
-        * Note: This placeholder provides the framework. Full integration happens
-        * in the main fukuii module which has access to the complete peer group API
-        * and RLP encoding for ENRs.
         */
       private def sendEncryptedMessage(
         peer: Peer[A], 
         payload: Payload, 
         session: Session.ActiveSession
       ): IO[Unit] = {
+        import codecs.RLPCodecs.payloadCodec
+        
         logger.debug(s"Sending encrypted ${payload.getClass.getSimpleName} to $peer")
         
-        // TODO: Full implementation in main module integration:
-        // 1. Encode payload: payloadCodec.encode(payload)
-        // 2. Encrypt: Session.encrypt(sessionKey, nonce, plaintext, authData)
-        // 3. Build packet: OrdinaryMessagePacket(nonce, authData, ciphertext)
-        // 4. Send: peerGroup.send(peer.address, packetBytes)
-        
-        IO.unit
+        for {
+          // 1. Encode payload
+          encoded <- IO.fromEither(
+            payloadCodec.encode(payload).toEither
+              .left.map(err => new PacketException(s"Failed to encode payload: ${err.message}"))
+          )
+          
+          // 2. Generate random nonce
+          nonce = Packet.randomNonce
+          
+          // 3. Select encryption key based on session role
+          encryptionKey = if (session.isInitiator) session.keys.initiatorKey else session.keys.recipientKey
+          
+          // 4. Build auth-data (source node ID)
+          authData = session.localNodeId
+          
+          // 5. Encrypt payload
+          ciphertext <- IO.fromTry(
+            Session.encrypt(encryptionKey, nonce, encoded.bytes, authData)
+          )
+          
+          // 6. Build OrdinaryMessagePacket
+          packet = Packet.OrdinaryMessagePacket(
+            nonce = nonce,
+            authDataSize = authData.size.toInt,
+            authData = authData,
+            messageCipherText = ciphertext
+          )
+          
+          // 7. Send via peer group (create channel and send)
+          _ <- peerGroup.client(peer.address).use { channel =>
+            channel.sendMessage(packet)
+          }
+          _ = logger.debug(s"Sent encrypted message to $peer")
+        } yield ()
       }
       
       /** Initiate handshake with peer  
         *
         * Implements the handshake initiation flow:
-        * 1. Send initial unencrypted message
-        * 2. Receive WHOAREYOU challenge from peer
-        * 3. Perform ECDH key exchange with ephemeral keys
-        * 4. Derive session keys using HKDF
-        * 5. Send HandshakeMessage with encrypted response
-        * 6. Store session in cache
-        * 
-        * Full implementation requires:
-        * - ECDH implementation (now available via Session.performECDH)
-        * - Handshake state machine to track challenges
-        * - Integration with peer group for packet I/O
-        * - Proper nonce and challenge management
-        * 
-        * The ECDH foundation is now complete. Full handshake flow integration
-        * happens in the main fukuii module with access to complete network stack.
+        * 1. Send initial random packet to trigger WHOAREYOU
+        * 2. Wait for WHOAREYOU response
+        * 3. Perform ECDH key exchange
+        * 4. Derive session keys
+        * 5. Send HandshakeMessage
+        * 6. Store session and retry original message
         */
       private def initiateHandshake(peer: Peer[A], payload: Payload): IO[Unit] = {
         logger.debug(s"Initiating handshake with $peer for ${payload.getClass.getSimpleName}")
         
-        // TODO: Full handshake implementation in main module integration:
-        // 1. Generate ephemeral key pair
-        // 2. Send initial message (triggers WHOAREYOU from peer)
-        // 3. On WHOAREYOU: perform ECDH via Session.performECDH
-        // 4. Derive keys: Session.deriveKeys(ecdhSecret, localId, remoteId, idNonce)
-        // 5. Send HandshakeMessage with auth data
-        // 6. Cache session: sessionCache.put(remoteNodeId, activeSession)
+        for {
+          // 1. Create deferred for handshake completion
+          handshakeDeferred <- Deferred[IO, Session.ActiveSession]
+          
+          // 2. Generate initial nonce that will be echoed by WHOAREYOU
+          initialNonce = Packet.randomNonce
+          
+          // 3. Register pending handshake keyed by nonce for correlation
+          _ <- pendingHandshakes.update(_ + (initialNonce -> handshakeDeferred))
+          
+          // 4. Send random packet (initial contact) to trigger WHOAREYOU
+          randomAuthData = Packet.randomNonce // Random auth data
+          initialPacket = Packet.OrdinaryMessagePacket(
+            nonce = initialNonce,
+            authDataSize = randomAuthData.size.toInt,
+            authData = randomAuthData,
+            messageCipherText = ByteVector.empty
+          )
+          
+          _ <- peerGroup.client(peer.address).use { channel =>
+            channel.sendMessage(initialPacket)
+          }
+          _ = logger.debug(s"Sent initial handshake packet to $peer with nonce ${initialNonce.toHex.take(16)}")
+          
+          // 5. Wait for handshake completion (WHOAREYOU will be processed by handleWhoAreYou)
+          session <- temporal.timeout(handshakeDeferred.get, config.handshakeTimeout)
+            .handleErrorWith { _ =>
+              // Cleanup on timeout
+              pendingHandshakes.update(_ - initialNonce) >>
+              IO.raiseError(new PacketException(s"Handshake timeout with $peer"))
+            }
+          
+          // 6. Cleanup
+          _ <- pendingHandshakes.update(_ - initialNonce)
+          
+          // 7. Retry original message with encryption
+          _ <- sendEncryptedMessage(peer, payload, session)
+          _ = logger.debug(s"Handshake complete with $peer, retried original message")
+        } yield ()
+      }
+      
+      /** Handle WHOAREYOU challenge packet
+        * 
+        * Completes handshake by:
+        * 1. Generating ephemeral key pair
+        * 2. Performing ECDH
+        * 3. Deriving session keys
+        * 4. Sending HandshakeMessage
+        * 5. Storing session in cache
+        */
+      private def handleWhoAreYou(peer: Peer[A], packet: Packet.WhoAreYouPacket): IO[Unit] = {
+        import java.security.SecureRandom
+        import org.bouncycastle.asn1.sec.SECNamedCurves
         
+        logger.debug(s"Received WHOAREYOU from $peer with nonce ${packet.nonce.toHex.take(16)}")
+        
+        for {
+          // 1. Look up pending handshake by nonce
+          handshakeDeferredOpt <- pendingHandshakes.get.map(_.get(packet.nonce))
+          
+          _ <- handshakeDeferredOpt match {
+            case None =>
+              logger.warn(s"Received WHOAREYOU from $peer but no pending handshake found for nonce ${packet.nonce.toHex.take(16)}")
+              IO.unit
+              
+            case Some(handshakeDeferred) =>
+              for {
+                // 2. Generate ephemeral key pair using proper EC cryptography
+                ephemeralPrivateKey <- IO {
+                  val random = new SecureRandom()
+                  val privKeyBytes = Array.ofDim[Byte](32)
+                  random.nextBytes(privKeyBytes)
+                  ByteVector.view(privKeyBytes)
+                }
+                
+                // 3. Derive ephemeral public key from private key using secp256k1
+                ephemPubkey <- IO {
+                  val curveParams = SECNamedCurves.getByName("secp256k1")
+                  val privKeyBigInt = BigInt(1, ephemeralPrivateKey.toArray)
+                  val pubKeyPoint = curveParams.getG.multiply(privKeyBigInt.bigInteger).normalize()
+                  
+                  // Get X and Y coordinates as 32-byte arrays
+                  val x = pubKeyPoint.getAffineXCoord.toBigInteger.toByteArray
+                  val y = pubKeyPoint.getAffineYCoord.toBigInteger.toByteArray
+                  
+                  // Ensure exactly 32 bytes each (pad or trim)
+                  def normalize32(bytes: Array[Byte]): Array[Byte] = {
+                    if (bytes.length < 32) {
+                      Array.fill(32 - bytes.length)(0.toByte) ++ bytes
+                    } else if (bytes.length > 32) {
+                      bytes.takeRight(32)
+                    } else {
+                      bytes
+                    }
+                  }
+                  
+                  ByteVector.view(normalize32(x) ++ normalize32(y))
+                }
+                
+                // 4. Get peer's public key (from peer ID)
+                peerPublicKey = peer.id.value.bytes
+                
+                // 5. Perform ECDH
+                sharedSecret = Session.performECDH(ephemeralPrivateKey, peerPublicKey)
+                
+                // 6. Derive session keys
+                localNodeId = Session.nodeIdFromPublicKey(sigalg.toPublicKey(privateKey).value.bytes)
+                remoteNodeId = Session.nodeIdFromPublicKey(peerPublicKey)
+                idNonce = packet.whoAreYouData.idNonce
+                keys = Session.deriveKeys(sharedSecret, localNodeId, remoteNodeId, idNonce)
+                
+                // 7. Create active session (we are the initiator)
+                session = Session.ActiveSession(keys, localNodeId, remoteNodeId, isInitiator = true)
+                
+                // 8. Store in cache
+                _ <- sessionCache.put(remoteNodeId, session)
+                
+                // 9. Create signature over id-nonce using the node's private key
+                idSignature <- IO {
+                  ByteVector.view(sigalg.sign(privateKey, idNonce.bits).value.toByteArray)
+                }
+                
+                // 10. Build handshake auth data
+                handshakeAuthData = Packet.HandshakeAuthData(
+                  srcId = localNodeId,
+                  sigSize = idSignature.size.toInt,
+                  ephemPubkey = ephemPubkey,
+                  idSignature = idSignature
+                )
+                
+                // 11. Calculate auth data size
+                authDataSize = 32 + 1 + 64 + idSignature.size.toInt
+                
+                // 12. Build handshake packet with empty message (handshake completion)
+                handshakePacket = Packet.HandshakeMessagePacket(
+                  nonce = Packet.randomNonce,
+                  authDataSize = authDataSize,
+                  handshakeAuthData = handshakeAuthData,
+                  messageCipherText = ByteVector.empty
+                )
+                
+                _ <- peerGroup.client(peer.address).use { channel =>
+                  channel.sendMessage(handshakePacket)
+                }
+                _ = logger.debug(s"Sent handshake completion to $peer")
+                
+                // 13. Complete the specific pending handshake
+                _ <- handshakeDeferred.complete(session).void
+              } yield ()
+          }
+        } yield ()
+      }
+      
+      /** Handle ordinary encrypted message packet */
+      private def handleOrdinaryMessage(peer: Peer[A], packet: Packet.OrdinaryMessagePacket): IO[Unit] = {
+        import codecs.RLPCodecs.payloadCodec
+        
+        logger.debug(s"Received ordinary message from $peer")
+        
+        for {
+          // 1. Get session from cache
+          remoteNodeId <- IO.pure(Session.nodeIdFromPublicKey(peer.id.value.bytes))
+          sessionOpt <- sessionCache.get(remoteNodeId)
+          
+          // 2. If no session, send WHOAREYOU challenge
+          _ <- sessionOpt match {
+            case None =>
+              logger.debug(s"No session for $peer, sending WHOAREYOU")
+              sendWhoAreYou(peer, packet.nonce)
+              
+            case Some(session) =>
+              // 3. Decrypt message using session role
+              for {
+                // Select decryption key based on session role (inverse of encryption)
+                decryptionKey <- IO.pure(if (session.isInitiator) session.keys.initiatorKey else session.keys.recipientKey)
+                
+                plaintext <- IO.fromTry(
+                  Session.decrypt(decryptionKey, packet.nonce, packet.messageCipherText, packet.authData)
+                )
+                
+                // 4. Decode payload
+                payload <- IO.fromEither(
+                  payloadCodec.decode(plaintext.bits).toEither
+                    .left.map(err => new PacketException(s"Failed to decode payload: ${err.message}"))
+                    .map(_.value)
+                )
+                
+                // 5. Handle payload
+                _ <- handlePayload(peer, payload)
+              } yield ()
+          }
+        } yield ()
+      }
+      
+      /** Handle handshake message packet */
+      private def handleHandshakeMessage(peer: Peer[A], packet: Packet.HandshakeMessagePacket): IO[Unit] = {
+        logger.debug(s"Received handshake message from $peer")
+        
+        // Handshake messages are sent by the initiator in response to WHOAREYOU
+        // We need to verify the signature and establish the session as recipient
+        for {
+          // 1. Extract source node ID from handshake auth data
+          srcNodeId <- IO.pure(packet.handshakeAuthData.srcId)
+          
+          // 2. Retrieve the idNonce we sent in WHOAREYOU
+          idNonceOpt <- sentIdNonces.get.map(_.get(srcNodeId))
+          
+          _ <- idNonceOpt match {
+            case None =>
+              logger.warn(s"Received handshake from $peer but no idNonce found - cannot verify")
+              IO.unit
+              
+            case Some(idNonce) =>
+              for {
+                // 3. Verify signature over id-nonce
+                idSignature <- IO.pure(packet.handshakeAuthData.idSignature)
+                peerPublicKey <- IO.pure(peer.id)
+                
+                isValid <- IO {
+                  sigalg.verify(peerPublicKey, com.chipprbots.scalanet.discovery.crypto.Signature(idSignature.bits), idNonce.bits)
+                }
+                
+                _ <- if (!isValid) {
+                  logger.error(s"Handshake signature verification failed for $peer")
+                  IO.raiseError(new PacketException(s"Invalid handshake signature from $peer"))
+                } else {
+                  for {
+                    _ <- IO(logger.debug(s"Handshake signature verified for $peer"))
+                    
+                    // 4. Extract ephemeral public key from packet
+                    ephemPubkey <- IO.pure(packet.handshakeAuthData.ephemPubkey)
+                    
+                    // 5. Perform ECDH with our node's private key
+                    sharedSecret <- IO.pure(Session.performECDH(privateKey.value.bytes, ephemPubkey))
+                    
+                    // 6. Derive session keys
+                    localNodeId <- IO.pure(Session.nodeIdFromPublicKey(sigalg.toPublicKey(privateKey).value.bytes))
+                    remoteNodeId <- IO.pure(srcNodeId)
+                    keys <- IO.pure(Session.deriveKeys(sharedSecret, remoteNodeId, localNodeId, idNonce))
+                    
+                    // 7. Create active session (we are the recipient, not the initiator)
+                    session <- IO.pure(Session.ActiveSession(keys, localNodeId, remoteNodeId, isInitiator = false))
+                    
+                    // 8. Store session in cache
+                    _ <- sessionCache.put(remoteNodeId, session)
+                    
+                    // 9. Cleanup idNonce
+                    _ <- sentIdNonces.update(_ - srcNodeId)
+                    
+                    _ <- IO(logger.debug(s"Session established as recipient with $peer"))
+                  } yield ()
+                }
+              } yield ()
+          }
+        } yield ()
+      }
+      
+      /** Send WHOAREYOU challenge packet */
+      private def sendWhoAreYou(peer: Peer[A], triggeringNonce: ByteVector): IO[Unit] = {
+        logger.debug(s"Sending WHOAREYOU to $peer echoing nonce ${triggeringNonce.toHex.take(16)}")
+        
+        for {
+          // 1. Create WHOAREYOU data
+          idNonce <- IO.pure(Session.randomIdNonce)
+          enrSeq <- IO.pure(localEnrSeq)
+          whoAreYouData <- IO.pure(Packet.WhoAreYouData(idNonce, enrSeq))
+          
+          // 2. Store idNonce for later signature verification
+          remoteNodeId <- IO.pure(Session.nodeIdFromPublicKey(peer.id.value.bytes))
+          _ <- sentIdNonces.update(_ + (remoteNodeId -> idNonce))
+          
+          // 3. Create WHOAREYOU packet - echo the nonce from the triggering packet
+          whoAreYouPacket <- IO.pure(Packet.WhoAreYouPacket(
+            nonce = triggeringNonce,  // Echo the original packet's nonce
+            authDataSize = 24, // 16 bytes idNonce + 8 bytes enrSeq
+            whoAreYouData = whoAreYouData
+          ))
+          
+          // 4. Send
+          _ <- peerGroup.client(peer.address).use { channel =>
+            channel.sendMessage(whoAreYouPacket)
+          }
+        } yield ()
+      }
+      
+      /** Handle decoded payload and route to appropriate handler */
+      private def handlePayload(peer: Peer[A], payload: Payload): IO[Unit] = {
+        payload match {
+          case pong: Pong =>
+            // Complete pending request
+            pendingRequests.get.flatMap { requests =>
+              requests.get(pong.requestId) match {
+                case Some(deferred) => deferred.complete(pong).void
+                case None => IO.unit
+              }
+            }
+            
+          case nodes: Nodes =>
+            // Store received nodes in node table and complete pending request
+            for {
+              // Extract nodes from ENRs and store them
+              // Note: In production, properly extract node info from ENR
+              _ <- nodes.enrs.traverse_ { enr =>
+                // TODO: Extract actual node info from ENR
+                // For now, we skip storage since we don't have proper ENR parsing
+                IO.unit
+              }
+              
+              // Complete pending request
+              _ <- pendingRequests.get.flatMap { requests =>
+                requests.get(nodes.requestId) match {
+                  case Some(deferred) => deferred.complete(nodes).void
+                  case None => IO.unit
+                }
+              }
+            } yield ()
+            
+          case talkResp: TalkResponse =>
+            // Complete pending request
+            pendingRequests.get.flatMap { requests =>
+              requests.get(talkResp.requestId) match {
+                case Some(deferred) => deferred.complete(talkResp).void
+                case None => IO.unit
+              }
+            }
+            
+          case ticket: Ticket =>
+            // Complete pending request
+            pendingRequests.get.flatMap { requests =>
+              requests.get(ticket.requestId) match {
+                case Some(deferred) => deferred.complete(ticket).void
+                case None => IO.unit
+              }
+            }
+            
+          case regConf: RegConfirmation =>
+            // Complete pending request
+            pendingRequests.get.flatMap { requests =>
+              requests.get(regConf.requestId) match {
+                case Some(deferred) => deferred.complete(regConf).void
+                case None => IO.unit
+              }
+            }
+            
+          case ping: Ping =>
+            // Respond with PONG
+            logger.debug(s"Received PING from $peer, sending PONG")
+            val recipientAddr = Addressable[A].getAddress(peer.address)
+            val pong = Pong(
+              requestId = ping.requestId,
+              enrSeq = localEnrSeq,
+              recipientIP = ByteVector(recipientAddr.getAddress.getAddress),
+              recipientPort = recipientAddr.getPort
+            )
+            sendMessage(peer, pong)
+            
+          case findNode: FindNode =>
+            // Respond with NODES - lookup nodes at requested distances
+            logger.debug(s"Received FINDNODE from $peer for distances ${findNode.distances}")
+            
+            for {
+              // Get all known nodes from node table
+              allNodes <- nodeTable.get
+              
+              // For now, return all nodes (proper distance calculation would filter by kademlia distance)
+              // In production, calculate XOR distance and filter by requested distances
+              enrsToReturn = allNodes.values.toList.map { node =>
+                // Convert Node to EthereumNodeRecord
+                // For now, create a minimal ENR - in production, use proper ENR from node
+                EthereumNodeRecord(
+                  signature = com.chipprbots.scalanet.discovery.crypto.Signature(scodec.bits.BitVector.empty),
+                  content = EthereumNodeRecord.Content(
+                    seq = 0L,
+                    attrs = scala.collection.immutable.SortedMap.empty[ByteVector, ByteVector](using com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.byteVectorOrdering)
+                  )
+                )
+              }.take(config.maxNodesPerMessage)
+              
+              _ <- if (enrsToReturn.nonEmpty) {
+                val nodes = Nodes(
+                  requestId = findNode.requestId,
+                  total = 1,
+                  enrs = enrsToReturn
+                )
+                sendMessage(peer, nodes)
+              } else {
+                // No nodes to return - send empty NODES response
+                logger.debug(s"No ENRs found for FINDNODE from $peer; sending empty NODES response")
+                val nodes = Nodes(
+                  requestId = findNode.requestId,
+                  total = 1,
+                  enrs = List.empty
+                )
+                sendMessage(peer, nodes)
+              }
+            } yield ()
+            
+          case talkReq: TalkRequest =>
+            // Respond with empty TALKRESP
+            logger.debug(s"Received TALKREQ from $peer")
+            val talkResp = TalkResponse(
+              requestId = talkReq.requestId,
+              response = ByteVector.empty
+            )
+            sendMessage(peer, talkResp)
+            
+          case topicQuery: TopicQuery =>
+            // Respond with NODES containing nodes registered for the topic
+            logger.debug(s"Received TOPICQUERY from $peer for topic ${topicQuery.topic.toHex.take(16)}")
+            
+            for {
+              // Get nodes registered for this topic
+              topicNodes <- topicTable.get.map(_.getOrElse(topicQuery.topic, Set.empty))
+              allNodes <- nodeTable.get
+              
+              // Get full node info for registered nodes
+              enrsToReturn = topicNodes.toList.flatMap { nodeId =>
+                allNodes.get(nodeId).map { node =>
+                  // Convert Node to EthereumNodeRecord
+                  EthereumNodeRecord(
+                    signature = com.chipprbots.scalanet.discovery.crypto.Signature(scodec.bits.BitVector.empty),
+                    content = EthereumNodeRecord.Content(
+                      seq = 0L,
+                      attrs = scala.collection.immutable.SortedMap.empty[ByteVector, ByteVector](using com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.byteVectorOrdering)
+                    )
+                  )
+                }
+              }.take(config.maxNodesPerMessage)
+              
+              _ <- if (enrsToReturn.nonEmpty) {
+                val nodes = Nodes(
+                  requestId = topicQuery.requestId,
+                  total = 1,
+                  enrs = enrsToReturn
+                )
+                sendMessage(peer, nodes)
+              } else {
+                logger.debug(s"No nodes registered for topic ${topicQuery.topic.toHex.take(16)}")
+                // Send empty NODES response
+                val nodes = Nodes(
+                  requestId = topicQuery.requestId,
+                  total = 1,
+                  enrs = List.empty
+                )
+                sendMessage(peer, nodes)
+              }
+            } yield ()
+            
+          case regTopic: RegTopic =>
+            // Register topic and respond with TICKET
+            logger.debug(s"Received REGTOPIC from $peer for topic ${regTopic.topic.toHex.take(16)}")
+            
+            for {
+              // Register the peer for this topic
+              _ <- topicTable.update { table =>
+                val currentNodes = table.getOrElse(regTopic.topic, Set.empty)
+                table + (regTopic.topic -> (currentNodes + peer.id))
+              }
+              
+              // Store the node in our node table (extract from ENR)
+              node <- IO.pure(Node(peer.id, toNodeAddress(peer.address)))
+              _ <- nodeTable.update(_ + (peer.id -> node))
+              
+              // Generate a ticket (simplified - just use random bytes)
+              ticket <- IO.pure(Packet.randomNonce) // 12 bytes
+              waitTime <- IO.pure(10) // seconds
+              
+              // Send TICKET response
+              ticketResp <- IO.pure(Ticket(
+                requestId = regTopic.requestId,
+                ticket = ticket,
+                waitTime = waitTime
+              ))
+              
+              _ <- sendMessage(peer, ticketResp)
+              _ = logger.debug(s"Registered $peer for topic ${regTopic.topic.toHex.take(16)}")
+            } yield ()
+        }
+      }
+      
+      /** Process incoming packet and dispatch to appropriate handler */
+      private def processIncomingPacket(peer: Peer[A], packetBits: BitVector): IO[Unit] = {
+        for {
+          // 1. Decode packet
+          decodeResult <- IO.fromEither(
+            Packet.decodePacket(packetBits).toEither
+              .left.map(err => new PacketException(s"Failed to decode packet: ${err.message}"))
+          )
+          
+          packet = decodeResult.value
+          
+          // 2. Dispatch based on packet type
+          _ <- packet match {
+            case ord: Packet.OrdinaryMessagePacket =>
+              handleOrdinaryMessage(peer, ord)
+              
+            case way: Packet.WhoAreYouPacket =>
+              handleWhoAreYou(peer, way)
+              
+            case hs: Packet.HandshakeMessagePacket =>
+              handleHandshakeMessage(peer, hs)
+          }
+        } yield ()
+      }.handleErrorWith { error =>
+        logger.error(s"Error processing packet from $peer: ${error.getMessage}", error)
         IO.unit
       }
       
       /** Start handling incoming packets */
       override def startHandling(handler: DiscoveryRPC[Peer[A]]): IO[Deferred[IO, Unit]] = {
+        import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
+        import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
+        
         for {
           cancelToken <- Deferred[IO, Unit]
+          
+          // Track channel fibers for cleanup
+          channelFibers <- Ref[IO].of(List.empty[cats.effect.Fiber[IO, Throwable, Unit]])
+          
           _ <- Stream.repeatEval(peerGroup.nextServerEvent)
             .interruptWhen(cancelToken.get.attempt)
-            .evalMap { event =>
-              // Handle incoming packets
-              logger.debug(s"Received event: $event")
-              IO.unit
+            .collect {
+              case Some(ChannelCreated(channel, release)) => (channel, release)
+            }
+            .evalMap { case (channel, release) =>
+              // Handle this channel in the background
+              val channelStream = Stream.repeatEval(channel.nextChannelEvent)
+                .collect {
+                  case Some(MessageReceived(packet: Packet)) => packet
+                }
+                .evalMap { packet =>
+                  // Extract peer info from channel
+                  val peerAddress = channel.from
+                  
+                  // Extract node ID from packet based on type
+                  val peer = packet match {
+                    case hs: Packet.HandshakeMessagePacket =>
+                      // Extract node ID from handshake auth data
+                      val nodeId: Node.Id = PublicKey(BitVector(hs.handshakeAuthData.srcId.toArray))
+                      Peer(nodeId, peerAddress)
+                      
+                    case ord: Packet.OrdinaryMessagePacket =>
+                      // Try to extract from auth data (should be srcId) or session cache
+                      if (ord.authData.size == 32) {
+                        val nodeId: Node.Id = PublicKey(BitVector(ord.authData.toArray ++ ord.authData.toArray))
+                        Peer(nodeId, peerAddress)
+                      } else {
+                        // Fallback: use placeholder - session lookup will handle it
+                        val placeholderNodeId: Node.Id = PublicKey(BitVector(Array.fill(64)(0.toByte)))
+                        Peer(placeholderNodeId, peerAddress)
+                      }
+                      
+                    case _: Packet.WhoAreYouPacket =>
+                      // WHOAREYOU doesn't contain node ID, use placeholder
+                      // The peer should be known from the session we're establishing
+                      val placeholderNodeId: Node.Id = PublicKey(BitVector(Array.fill(64)(0.toByte)))
+                      Peer(placeholderNodeId, peerAddress)
+                  }
+                  
+                  // Process the packet
+                  packet match {
+                    case ord: Packet.OrdinaryMessagePacket =>
+                      handleOrdinaryMessage(peer, ord)
+                      
+                    case way: Packet.WhoAreYouPacket =>
+                      handleWhoAreYou(peer, way)
+                      
+                    case hs: Packet.HandshakeMessagePacket =>
+                      handleHandshakeMessage(peer, hs)
+                  }
+                }
+                .handleErrorWith { error =>
+                  Stream.eval(IO(logger.error(s"Error in channel handler: ${error.getMessage}", error)))
+                }
+                .onFinalize(release)
+                .compile
+                .drain
+              
+              // Start the channel handler and track the fiber
+              for {
+                fiber <- channelStream.start
+                _ <- channelFibers.update(fiber :: _)
+              } yield ()
+            }
+            .onFinalize {
+              // Cancel all channel fibers when the main stream is interrupted
+              for {
+                fibers <- channelFibers.get
+                _ <- fibers.traverse_(_.cancel)
+              } yield ()
             }
             .compile
             .drain
