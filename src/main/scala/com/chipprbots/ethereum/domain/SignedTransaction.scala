@@ -66,20 +66,20 @@ object SignedTransaction {
   def sign(
       tx: Transaction,
       keyPair: AsymmetricCipherKeyPair,
-      chainId: Option[Byte]
+      chainId: Option[BigInt]
   ): SignedTransaction = {
     val bytes = bytesToSign(tx, chainId)
     val sig = ECDSASignature.sign(bytes, keyPair)
     SignedTransaction(tx, getEthereumSignature(tx, sig, chainId))
   }
 
-  private[domain] def bytesToSign(tx: Transaction, chainId: Option[Byte]): Array[Byte] =
+  private[domain] def bytesToSign(tx: Transaction, chainId: Option[BigInt]): Array[Byte] =
     tx match {
       case legacyTransaction: LegacyTransaction => getLegacyBytesToSign(legacyTransaction, chainId)
       case twal: TransactionWithAccessList      => getTWALBytesToSign(twal)
     }
 
-  private def getLegacyBytesToSign(legacyTransaction: LegacyTransaction, chainIdOpt: Option[Byte]): Array[Byte] =
+  private def getLegacyBytesToSign(legacyTransaction: LegacyTransaction, chainIdOpt: Option[BigInt]): Array[Byte] =
     chainIdOpt match {
       case Some(id) =>
         chainSpecificTransactionBytes(legacyTransaction, id)
@@ -126,7 +126,7 @@ object SignedTransaction {
     */
   private def getLegacyTransactionRawSignature(
       ethereumSignature: ECDSASignature,
-      chainIdOpt: Option[Byte]
+      chainIdOpt: Option[BigInt]
   ): ECDSASignature =
     chainIdOpt match {
       // ignore chainId for unprotected negative y-parity in pre-eip155 signature
@@ -136,10 +136,10 @@ object SignedTransaction {
       case Some(_) if ethereumSignature.v == ECDSASignature.positivePointSign =>
         ethereumSignature.copy(v = ECDSASignature.positivePointSign)
       // identify negative y-parity for protected post eip-155 signature
-      case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155NegativePointSign).toByte =>
+      case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155NegativePointSign) =>
         ethereumSignature.copy(v = ECDSASignature.negativePointSign)
       // identify positive y-parity for protected post eip-155 signature
-      case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155PositivePointSign).toByte =>
+      case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155PositivePointSign) =>
         ethereumSignature.copy(v = ECDSASignature.positivePointSign)
       // legacy pre-eip
       case None => ethereumSignature
@@ -192,7 +192,7 @@ object SignedTransaction {
   private def getEthereumSignature(
       tx: Transaction,
       rawSignature: ECDSASignature,
-      chainIdOpt: Option[Byte]
+      chainIdOpt: Option[BigInt]
   ): ECDSASignature =
     tx match {
       case _: LegacyTransaction =>
@@ -212,12 +212,12 @@ object SignedTransaction {
     * @return
     *   a legacy transaction specific ECDSASignature, with v chainId-protected if possible
     */
-  private def getLegacyEthereumSignature(rawSignature: ECDSASignature, chainIdOpt: Option[Byte]): ECDSASignature =
+  private def getLegacyEthereumSignature(rawSignature: ECDSASignature, chainIdOpt: Option[BigInt]): ECDSASignature =
     chainIdOpt match {
       case Some(chainId) if rawSignature.v == ECDSASignature.negativePointSign =>
-        rawSignature.copy(v = (chainId * 2 + EIP155NegativePointSign).toByte)
+        rawSignature.copy(v = chainId * 2 + EIP155NegativePointSign)
       case Some(chainId) if rawSignature.v == ECDSASignature.positivePointSign =>
-        rawSignature.copy(v = (chainId * 2 + EIP155PositivePointSign).toByte)
+        rawSignature.copy(v = chainId * 2 + EIP155PositivePointSign)
       case None => rawSignature
       case _ =>
         throw new IllegalStateException(
@@ -342,15 +342,15 @@ object SignedTransaction {
     * @return
     *   Some(chainId) if available, None if not (unprotected signed transaction)
     */
-  private def extractChainId(stx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig): Option[Byte] = {
+  private def extractChainId(stx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig): Option[BigInt] = {
     val chainIdOpt: Option[BigInt] = stx.tx match {
       case _: LegacyTransaction
           if stx.signature.v == ECDSASignature.negativePointSign || stx.signature.v == ECDSASignature.positivePointSign =>
         None
-      case _: LegacyTransaction            => Some(BigInt(blockchainConfig.chainId.toInt))
+      case _: LegacyTransaction            => Some(blockchainConfig.chainId)
       case twal: TransactionWithAccessList => Some(twal.chainId)
     }
-    chainIdOpt.map(_.toByte)
+    chainIdOpt
   }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
