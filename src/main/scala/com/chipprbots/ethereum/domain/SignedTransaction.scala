@@ -127,19 +127,22 @@ object SignedTransaction {
   private def getLegacyTransactionRawSignature(
       ethereumSignature: ECDSASignature,
       chainIdOpt: Option[BigInt]
-  ): ECDSASignature =
+  ): ECDSASignature = {
+    // Normalize v to handle negative values (e.g., -98 byte -> 158 unsigned)
+    val normalizedV = if (ethereumSignature.v < 0) ethereumSignature.v + 256 else ethereumSignature.v
+    
     chainIdOpt match {
       // ignore chainId for unprotected negative y-parity in pre-eip155 signature
-      case Some(_) if ethereumSignature.v == ECDSASignature.negativePointSign =>
+      case Some(_) if normalizedV == ECDSASignature.negativePointSign =>
         ethereumSignature.copy(v = BigInt(ECDSASignature.negativePointSign))
       // ignore chainId for unprotected positive y-parity in pre-eip155 signature
-      case Some(_) if ethereumSignature.v == ECDSASignature.positivePointSign =>
+      case Some(_) if normalizedV == ECDSASignature.positivePointSign =>
         ethereumSignature.copy(v = BigInt(ECDSASignature.positivePointSign))
       // identify negative y-parity for protected post eip-155 signature
-      case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155NegativePointSign) =>
+      case Some(chainId) if normalizedV == (2 * chainId + EIP155NegativePointSign) =>
         ethereumSignature.copy(v = BigInt(ECDSASignature.negativePointSign))
       // identify positive y-parity for protected post eip-155 signature
-      case Some(chainId) if ethereumSignature.v == (2 * chainId + EIP155PositivePointSign) =>
+      case Some(chainId) if normalizedV == (2 * chainId + EIP155PositivePointSign) =>
         ethereumSignature.copy(v = BigInt(ECDSASignature.positivePointSign))
       // legacy pre-eip
       case None => ethereumSignature
@@ -147,9 +150,10 @@ object SignedTransaction {
       case _ =>
         throw new IllegalStateException(
           s"Unexpected pointSign for LegacyTransaction, chainId: ${chainIdOpt
-              .getOrElse("None")}, ethereum.signature.v: ${ethereumSignature.v}"
+              .getOrElse("None")}, ethereum.signature.v: ${ethereumSignature.v}, normalized.v: $normalizedV"
         )
     }
+  }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
     *
@@ -347,7 +351,13 @@ object SignedTransaction {
       case _: LegacyTransaction
           if stx.signature.v == ECDSASignature.negativePointSign || stx.signature.v == ECDSASignature.positivePointSign =>
         None
-      case _: LegacyTransaction            => Some(blockchainConfig.chainId)
+      case _: LegacyTransaction =>
+        // EIP-155: Extract chainId from v value
+        // v = chainId * 2 + 35 (for negative y-parity) or chainId * 2 + 36 (for positive y-parity)
+        // Handle negative v values by converting to unsigned (e.g., -98 byte -> 158 unsigned)
+        val normalizedV = if (stx.signature.v < 0) stx.signature.v + 256 else stx.signature.v
+        val chainId = (normalizedV - EIP155NegativePointSign) / 2
+        Some(chainId)
       case twal: TransactionWithAccessList => Some(twal.chainId)
     }
     chainIdOpt
