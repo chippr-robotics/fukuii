@@ -38,7 +38,10 @@ object ECDSASignature {
   val allowedPointSigns: Set[Byte] = Set(negativePointSign, positivePointSign)
 
   def apply(r: ByteString, s: ByteString, v: Byte): ECDSASignature =
-    ECDSASignature(BigInt(1, r.toArray), BigInt(1, s.toArray), BigInt(v))
+    // v must be treated as unsigned byte when converting to BigInt
+    // For EIP-155 chains, v can be >= 128 (e.g., 157 for ETC mainnet)
+    // Byte type is signed, so 157 becomes -99. We need to convert as unsigned.
+    ECDSASignature(BigInt(1, r.toArray), BigInt(1, s.toArray), BigInt(v & 0xFF))
 
   def fromBytes(bytes65: ByteString): Option[ECDSASignature] =
     if (bytes65.length == EncodedLength)

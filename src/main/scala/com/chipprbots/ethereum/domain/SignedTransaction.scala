@@ -58,7 +58,8 @@ object SignedTransaction {
     val txSignature = ECDSASignature(
       r = ByteUtils.bytesToBigInt(signatureRandom.toArray),
       s = ByteUtils.bytesToBigInt(signature.toArray),
-      v = BigInt(pointSign)
+      // pointSign must be treated as unsigned byte (EIP-155 values can be >= 128)
+      v = BigInt(pointSign & 0xFF)
     )
     SignedTransaction(tx, txSignature)
   }
