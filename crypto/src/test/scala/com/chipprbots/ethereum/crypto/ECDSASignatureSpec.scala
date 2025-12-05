@@ -24,7 +24,7 @@ class ECDSASignatureSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     val pointSign = 28
 
     val sig =
-      ECDSASignature(signatureRandom, signature, BigInt(pointSign))
+      ECDSASignature(signatureRandom, signature, pointSign.toByte)
 
     sig.publicKey(bytesToSign).isEmpty shouldBe false
   }
@@ -39,7 +39,7 @@ class ECDSASignatureSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     val pointSign = 0x1f
 
     val sig =
-      ECDSASignature(signatureRandom, signature, BigInt(pointSign))
+      ECDSASignature(signatureRandom, signature, pointSign.toByte)
 
     sig.publicKey(bytesToSign).isEmpty shouldBe true
   }
