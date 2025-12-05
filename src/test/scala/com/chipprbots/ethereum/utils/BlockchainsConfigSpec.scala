@@ -154,8 +154,9 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     blockchainsConfig.network shouldBe "customnet"
     blockchainsConfig.blockchains should contain key "customnet"
     blockchainsConfig.blockchainConfig.networkId shouldBe 9999
-    // Chain ID 0x270f (9999) will overflow when converted to byte, resulting in 15
-    // This is expected behavior as chain IDs are stored as signed bytes
+    // Chain ID 0x270f (9999) when converted to byte:
+    // 9999 % 256 = 15, which fits in the positive range of signed byte (0 to 127)
+    // So the result is 15
     blockchainsConfig.blockchainConfig.chainId shouldBe 15.toByte
   }
 
