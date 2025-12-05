@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 object EthInfoService {
   case class ChainIdRequest()
-  case class ChainIdResponse(value: Byte)
+  case class ChainIdResponse(value: BigInt)
 
   case class ProtocolVersionRequest()
   case class ProtocolVersionResponse(value: String)
@@ -175,7 +175,7 @@ class EthInfoService(
       val toAddress = req.tx.to.map(Address.apply)
 
       val tx = LegacyTransaction(0, req.tx.gasPrice, gasLimit, toAddress, req.tx.value, req.tx.data)
-      val fakeSignature = ECDSASignature(0, 0, 0.toByte)
+      val fakeSignature = ECDSASignature(0, 0, 0)
       SignedTransactionWithSender(tx, fakeSignature, fromAddress)
     }
 

@@ -590,7 +590,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
           value = 0,
           payload = ByteString()
         ),
-        signature = ECDSASignature(0, 0, 0.toByte),
+        signature = ECDSASignature(0, 0, 0),
         sender = Address("0x1234")
       )
       PendingTransaction(fakeTransaction, System.currentTimeMillis)

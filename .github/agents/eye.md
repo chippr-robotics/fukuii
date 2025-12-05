@@ -180,6 +180,12 @@ class ETCHardForkSpec extends AnyFlatSpec:
 **Scope:** Ethereum Classic specification compliance  
 **Test vectors:** Official Ethereum tests (filtered for ETC)
 
+**⚠️ For consensus-critical changes:**
+- Validate that **Morgoth's Consensus-Critical Change Protocol** was followed
+- Verify forge agent implemented the change (not manual coding)
+- Require byte-perfect validation for all consensus code
+- See protocol for proper agent delegation order
+
 **The Eye's test categories:**
 
 1. **State tests** - EVM execution correctness

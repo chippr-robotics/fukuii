@@ -24,7 +24,7 @@ case class BlockchainConfig(
     customGenesisJsonOpt: Option[String],
     daoForkConfig: Option[DaoForkConfig],
     accountStartNonce: UInt256,
-    chainId: Byte,
+    chainId: BigInt,
     networkId: Int,
     monetaryPolicyConfig: MonetaryPolicyConfig,
     gasTieBreaker: Boolean,
@@ -32,7 +32,6 @@ case class BlockchainConfig(
     bootstrapNodes: Set[String],
     checkpointPubKeys: Set[ByteString] = Set.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
-    capabilities: List[Capability] = List.empty,
     bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
     useBootstrapCheckpoints: Boolean = true,
     messConfig: MESSConfig = MESSConfig()
@@ -160,11 +159,9 @@ object BlockchainConfig {
     val daoForkConfig = Try(blockchainConfig.getConfig("dao")).toOption.map(DaoForkConfig(_))
     val accountStartNonce: UInt256 = UInt256(BigInt(blockchainConfig.getString("account-start-nonce")))
 
-    val chainId: Byte = {
+    val chainId: BigInt = {
       val s = blockchainConfig.getString("chain-id")
-      val n = parseHexOrDecNumber(s)
-      require(n >= 0 && n <= 127, "chain-id must be a number in range [0, 127]")
-      n.toByte
+      parseHexOrDecNumber(s)
     }
 
     val networkId: Int = blockchainConfig.getInt("network-id")
@@ -185,9 +182,6 @@ object BlockchainConfig {
     val berlinBlockNumber: BigInt = BigInt(blockchainConfig.getString("berlin-block-number"))
     val mystiqueBlockNumber: BigInt = BigInt(blockchainConfig.getString("mystique-block-number"))
     val spiralBlockNumber: BigInt = BigInt(blockchainConfig.getString("spiral-block-number"))
-
-    val capabilities: List[Capability] =
-      blockchainConfig.getStringList("capabilities").asScala.toList.map(Capability.parseUnsafe)
 
     val bootstrapCheckpoints: List[BootstrapCheckpoint] = ConfigUtils
       .getOptionalValue(blockchainConfig, _.getStringList, "bootstrap-checkpoints")
@@ -251,7 +245,6 @@ object BlockchainConfig {
       bootstrapNodes = bootstrapNodes,
       checkpointPubKeys = checkpointPubKeys,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
-      capabilities = capabilities,
       bootstrapCheckpoints = bootstrapCheckpoints,
       useBootstrapCheckpoints = useBootstrapCheckpoints,
       messConfig = messConfig

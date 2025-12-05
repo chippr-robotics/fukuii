@@ -82,6 +82,7 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 - **Interactive Console UI**: Optional TUI for monitoring sync progress (use `--tui` flag)
 - **Extensive CLI Tools**: Key generation, address derivation, and more
 - **JSON-RPC API**: Full eth/web3/net API support
+- **Custom Networks**: Deploy on private networks without modifying source code
 - **Well-Documented**: Comprehensive runbooks and ADRs
 
 Getting started

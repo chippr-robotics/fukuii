@@ -210,6 +210,32 @@ val NodeInsertResult(newBranchNode: BranchNode, ...) = (put(...): @unchecked)
 
 ## Special Vigilance for ETC Code
 
+### Consensus-Critical Changes
+
+**⚠️ STOP if you encounter consensus-critical code:**
+
+If compilation errors are in:
+- `consensus/` directory
+- `vm/` directory (EVM execution)
+- `crypto/` directory
+- Transaction validation
+- Block reward calculation
+- Hard fork logic
+- Chain ID handling
+
+**DO NOT FIX IMMEDIATELY. Instead:**
+1. **STOP and assess:** Is this a consensus-critical change?
+2. **Check:** Has forge agent validated this change?
+3. **If NO:** Surface to user - this needs Morgoth's Consensus-Critical Change Protocol
+4. **If YES:** Proceed with fixing ONLY compilation errors, maintaining exact logic
+
+**Why this matters:**
+- Consensus code must be byte-perfect
+- Compilation fixes must not change semantics
+- Wrong fix = chain split
+
+See **Morgoth's Consensus-Critical Change Protocol** for proper workflow.
+
 ### Pekko/Akka Darkness
 - Migrated from Akka to Pekko (Apache fork)
 - Require Pekko imports: `org.apache.pekko.pattern.pipe` for `.pipeTo`

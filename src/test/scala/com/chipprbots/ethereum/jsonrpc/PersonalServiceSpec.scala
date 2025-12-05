@@ -440,7 +440,7 @@ class PersonalServiceSpec
     val nonce = 7
     val txValue = 128000
 
-    val chainId: Byte = 0x03.toByte
+    val chainId: BigInt = 0x03
     val forkBlockNumbers: ForkBlockNumbers = ForkBlockNumbers.Empty.copy(
       eip155BlockNumber = 12345,
       eip161BlockNumber = 0,

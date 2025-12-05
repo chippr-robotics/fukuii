@@ -190,7 +190,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       .sign(
         transaction.copy(gasLimit = BigInt(2).pow(100000), nonce = signedTransaction.tx.nonce + 1),
         keyPair,
-        Some(0x3d.toByte)
+        Some(BigInt(0x3d))
       )
 
     val transactions: Seq[SignedTransaction] =
@@ -229,7 +229,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     ConsensusTest
   ) in new TestSetup {
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
@@ -264,7 +264,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     val generalTx: SignedTransaction = SignedTransaction.sign(transaction, keyPair, None)
     val specificTx: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -308,7 +308,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         difficultyBombRemovalBlockNumber = 5900000,
         eip161BlockNumber = 0
       ),
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
@@ -395,7 +395,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
   it should "include consecutive transactions from single sender" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val nextTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -436,7 +436,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     ConsensusTest
   ) in new TestSetup {
     val nextTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(BigInt(0x3d)))
 
     val privateKeyWithNoEthere: BigInt =
       BigInt(1, Hex.decode("584a31be275195585603ddd05a53d16fae9deafba67213b6060cec9f16e44cae"))
@@ -450,7 +450,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       payload = ByteString.empty
     )
     val signedFailingTransaction: SignedTransaction =
-      SignedTransaction.sign(failingTransaction, keyPairFromPrvKey(privateKeyWithNoEthere), Some(0x3d.toByte))
+      SignedTransaction.sign(failingTransaction, keyPairFromPrvKey(privateKeyWithNoEthere), Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -490,7 +490,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     ConsensusTest
   ) in new TestSetup {
     val txWitSameNonceButLowerGasPrice: SignedTransaction = SignedTransaction
-      .sign(transaction.copy(gasPrice = signedTransaction.tx.gasPrice - 1), keyPair, Some(0x3d.toByte))
+      .sign(transaction.copy(gasPrice = signedTransaction.tx.gasPrice - 1), keyPair, Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -687,12 +687,12 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     val maliciousAccount: Address = Address(0x123)
 
     lazy val signedTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction, keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction, keyPair, Some(BigInt(0x3d)))
     lazy val duplicatedSignedTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(gasLimit = 2), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(gasLimit = 2), keyPair, Some(BigInt(0x3d)))
 
     lazy val signedTypedTransaction: SignedTransaction =
-      SignedTransaction.sign(typedTransaction, keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(typedTransaction, keyPair, Some(BigInt(0x3d)))
 
     lazy val signedTransactionWithAddress: SignedTransactionWithSender =
       SignedTransactionWithSender(signedTransaction, Address(keyPair))
@@ -708,7 +708,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         difficultyBombContinueBlockNumber = 5000000,
         difficultyBombRemovalBlockNumber = 5900000
       ),
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,

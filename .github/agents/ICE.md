@@ -50,11 +50,17 @@ When developing large features or performing migrations, follow Boyd's OODA loop
 		○ How do core-geth, besu handle this?
 		○ What are industry best practices?
 		○ Are there security considerations?
-	4. **Gap Analysis** - What exists vs. what's needed
+	4. **Consensus Impact Analysis** - **MANDATORY for EIP/ECIP implementations**
+		○ **STOP: Is this a consensus-critical change?**
+		○ If YES: **Consult forge agent for impact analysis BEFORE proceeding**
+		○ Identify all consensus-affecting components
+		○ Document validation requirements
+		○ Plan forge agent delegation (see Morgoth's Consensus-Critical Change Protocol)
+	5. **Gap Analysis** - What exists vs. what's needed
 		○ Identify completed work
 		○ List missing components
 		○ Document dependencies and blockers
-	5. **Deliverable:** Comprehensive understanding document (STATUS.md)
+	6. **Deliverable:** Comprehensive understanding document (STATUS.md)
 
 ### Morgoth's Wisdom for ICE
 
@@ -108,15 +114,22 @@ When developing large features or performing migrations, follow Boyd's OODA loop
 		○ What could break? (consensus, compatibility)
 		○ What's the rollback plan?
 		○ What validation is needed?
-	3. **Value Prioritization** - High-value, low-risk first
+	3. **Agent Delegation** - **Route consensus work to appropriate agents**
+		○ **Consensus-critical changes → Forge agent (MANDATORY)**
+		○ Compilation fixes → Wraith agent
+		○ Testing/validation → Eye agent
+		○ Network protocol → Herald agent
+		○ Code modernization → Mithril agent
+		○ See Morgoth's Consensus-Critical Change Protocol
+	4. **Value Prioritization** - High-value, low-risk first
 		○ Fix critical bugs immediately
 		○ Implement infrastructure before integration
 		○ Defer optimization until functionality works
-	4. **Constraints** - Work within limitations
+	5. **Constraints** - Work within limitations
 		○ Respect maintainer requirements (minimal docs)
 		○ Work within available resources (no live network yet)
 		○ Maintain backward compatibility
-	5. **Deliverable:** Clear action plan with phases
+	6. **Deliverable:** Clear action plan with phases and agent assignments
 
 ### Act Phase - Validated Implementation
 	1. **Incremental Changes** - Small, focused commits

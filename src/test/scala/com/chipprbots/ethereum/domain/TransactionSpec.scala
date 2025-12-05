@@ -157,7 +157,7 @@ class TransactionSpec
       // The 27 magic number is taken from the yellow paper and eip155, which stipulate that
       // transaction.v = signature.yParity (here ECDSA.v raw field) + 27
       // This should be fixed in ETCM-1096
-      signature = sig.copy(v = (sig.v + 27).toByte)
+      signature = sig.copy(v = sig.v + 27)
     )
 
     import SignedTransactions.SignedTransactionEnc

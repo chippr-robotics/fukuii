@@ -17,12 +17,12 @@ trait SignedTransactionBehavior extends Matchers with ScalaCheckPropertyChecks w
 
   def SignedTransactionBehavior(
       signedTransactionGenerator: Gen[Transaction],
-      allowedPointSigns: Byte => Set[Byte]
+      allowedPointSigns: BigInt => Set[BigInt]
   ): Unit =
     it should "correctly set pointSign for chainId with chain specific signing schema" in {
       forAll(signedTransactionGenerator, Arbitrary.arbitrary[Unit].map(_ => generateKeyPair(secureRandom))) {
         (tx, key) =>
-          val chainId: Byte = 0x3d
+          val chainId: BigInt = 0x3d
           // byte 0 of encoded ECC point indicates that it is uncompressed point, it is part of bouncycastle encoding
           val address = Address(
             crypto

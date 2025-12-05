@@ -45,7 +45,7 @@ class BlockExecutionSpec
     "correctly run executeBlocks" when {
 
       "two blocks with txs (that first one has invalid tx)" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
-        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
+        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3))
         val block1BodyWithTxs: BlockBody = validBlockBodyWithNoTxs.copy(transactionList = Seq(invalidStx))
         val block1 = Block(validBlockHeader, block1BodyWithTxs)
         val block2BodyWithTxs: BlockBody =
@@ -88,7 +88,7 @@ class BlockExecutionSpec
       }
 
       "two blocks with txs (that last one has invalid tx)" taggedAs(UnitTest, StateTest) in new BlockchainSetup {
-        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
+        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3))
         val block1BodyWithTxs: BlockBody =
           validBlockBodyWithNoTxs.copy(transactionList = Seq(validStxSignedByOrigin))
         val block1 = Block(validBlockHeader, block1BodyWithTxs)
@@ -367,7 +367,7 @@ class BlockExecutionSpec
       }
 
       "last one wasn't executed correctly" taggedAs(UnitTest, StateTest) in new BlockExecutionTestSetup {
-        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
+        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3))
         val blockBodyWithTxs: BlockBody =
           validBlockBodyWithNoTxs.copy(transactionList = Seq(validStxSignedByOrigin, invalidStx))
         val block = Block(validBlockHeader, blockBodyWithTxs)
@@ -379,7 +379,7 @@ class BlockExecutionSpec
       }
 
       "first one wasn't executed correctly" taggedAs(UnitTest, StateTest) in new BlockExecutionTestSetup {
-        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3.toByte))
+        val invalidStx = SignedTransaction(validTx, ECDSASignature(1, 2, 3))
         val blockBodyWithTxs: BlockBody =
           validBlockBodyWithNoTxs.copy(transactionList = Seq(invalidStx, validStxSignedByOrigin))
         val block = Block(validBlockHeader, blockBodyWithTxs)

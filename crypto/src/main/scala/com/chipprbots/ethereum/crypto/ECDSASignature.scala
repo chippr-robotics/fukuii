@@ -38,7 +38,7 @@ object ECDSASignature {
   val allowedPointSigns: Set[Byte] = Set(negativePointSign, positivePointSign)
 
   def apply(r: ByteString, s: ByteString, v: Byte): ECDSASignature =
-    ECDSASignature(BigInt(1, r.toArray), BigInt(1, s.toArray), v)
+    ECDSASignature(BigInt(1, r.toArray), BigInt(1, s.toArray), BigInt(v))
 
   def fromBytes(bytes65: ByteString): Option[ECDSASignature] =
     if (bytes65.length == EncodedLength)
@@ -58,11 +58,11 @@ object ECDSASignature {
     val signer = new ECDSASigner(new HMacDSAKCalculator(new SHA256Digest))
     signer.init(true, keyPair.getPrivate)
     val components = signer.generateSignature(messageHash)
-    val r = components(0)
-    val s = ECDSASignature.canonicalise(components(1))
-    val v = ECDSASignature
+    val r = BigInt(components(0))
+    val s = ECDSASignature.canonicalise(BigInt(components(1)))
+    val v = BigInt(ECDSASignature
       .calculateV(r, s, keyPair, messageHash)
-      .getOrElse(throw new RuntimeException("Failed to calculate signature rec id"))
+      .getOrElse(throw new RuntimeException("Failed to calculate signature rec id")))
 
     ECDSASignature(r, s, v)
   }
@@ -136,9 +136,9 @@ object ECDSASignature {
   * @param s
   *   \- part of the signature calculated with signer private key
   * @param v
-  *   \- public key recovery id
+  *   \- signature recovery value (can be recovery ID 27/28 or EIP-155 protected value CHAIN_ID*2+35+{0,1})
   */
-case class ECDSASignature(r: BigInt, s: BigInt, v: Byte) {
+case class ECDSASignature(r: BigInt, s: BigInt, v: BigInt) {
 
   /** returns ECC point encoded with on compression and without leading byte indicating compression
     * @param messageHash
@@ -148,7 +148,7 @@ case class ECDSASignature(r: BigInt, s: BigInt, v: Byte) {
     * @return
     */
   def publicKey(messageHash: Array[Byte]): Option[Array[Byte]] =
-    ECDSASignature.recoverPubBytes(r, s, v, messageHash)
+    ECDSASignature.recoverPubBytes(r, s, v.toByte, messageHash)
 
   /** returns ECC point encoded with on compression and without leading byte indicating compression
     * @param messageHash
@@ -156,7 +156,7 @@ case class ECDSASignature(r: BigInt, s: BigInt, v: Byte) {
     * @return
     */
   def publicKey(messageHash: ByteString): Option[ByteString] =
-    ECDSASignature.recoverPubBytes(r, s, v, messageHash.toArray[Byte]).map(ByteString(_))
+    ECDSASignature.recoverPubBytes(r, s, v.toByte, messageHash.toArray[Byte]).map(ByteString(_))
 
   def toBytes: ByteString = {
     import ECDSASignature.RLength
@@ -164,6 +164,6 @@ case class ECDSASignature(r: BigInt, s: BigInt, v: Byte) {
     def bigInt2Bytes(b: BigInt) =
       ByteUtils.padLeft(ByteString(b.toByteArray).takeRight(RLength), RLength, 0)
 
-    bigInt2Bytes(r) ++ bigInt2Bytes(s) ++ ByteString(v)
+    bigInt2Bytes(r) ++ bigInt2Bytes(s) ++ ByteString(v.toByte)
   }
 }

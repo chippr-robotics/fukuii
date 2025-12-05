@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.utils
 
+import java.io.File
 import java.net.InetSocketAddress
 
 import org.apache.pekko.util.ByteString
@@ -22,6 +23,7 @@ import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguratio
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.utils.VmConfig.VmMode
+import com.chipprbots.ethereum.utils.Logger
 
 import ConfigUtils._
 
@@ -43,6 +45,13 @@ object Config {
   val secureRandomAlgo: Option[String] =
     if (config.hasPath("secure-random-algo")) Some(config.getString("secure-random-algo"))
     else None
+
+  // Node capabilities - determined by what this version of Fukuii supports
+  // Per DevP2P spec: advertise only the highest version of each protocol family
+  // ETH versions are backward compatible (eth/68 includes eth/63-67)
+  // SNAP is a separate protocol
+  import com.chipprbots.ethereum.network.p2p.messages.Capability
+  val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.SNAP1)
 
   val blockchains: BlockchainsConfig = BlockchainsConfig(config.getConfig("blockchains"))
 
@@ -356,16 +365,68 @@ object DaoForkConfig {
 case class BlockchainsConfig(network: String, blockchains: Map[String, BlockchainConfig]) {
   val blockchainConfig: BlockchainConfig = blockchains(network)
 }
-object BlockchainsConfig {
+object BlockchainsConfig extends Logger {
   private val networkKey = "network"
+  private val customChainsDirKey = "custom-chains-dir"
 
-  def apply(rawConfig: TypesafeConfig): BlockchainsConfig = BlockchainsConfig(
-    network = rawConfig.getString(networkKey),
-    blockchains = keys(rawConfig)
-      .filterNot(_ == networkKey)
+  def apply(rawConfig: TypesafeConfig): BlockchainsConfig = {
+    // Get the network name first
+    val network = rawConfig.getString(networkKey)
+    
+    // Load built-in blockchain configs
+    val builtInBlockchains = keys(rawConfig)
+      .filterNot(k => k == networkKey || k == customChainsDirKey)
       .map(name => name -> BlockchainConfig.fromRawConfig(rawConfig.getConfig(name)))
       .toMap
-  )
+    
+    // Check for custom chains directory
+    val customBlockchains = if (rawConfig.hasPath(customChainsDirKey)) {
+      val customChainsDir = rawConfig.getString(customChainsDirKey)
+      val chainsDir = new File(customChainsDir)
+      
+      if (chainsDir.exists() && chainsDir.isDirectory) {
+        log.info(s"Loading custom chain configurations from: $customChainsDir")
+        val chainFiles = chainsDir.listFiles().filter { f =>
+          f.isFile && f.getName.endsWith("-chain.conf")
+        }
+        
+        // TODO: Future optimization - cache parsed configurations and check file modification
+        // times to avoid re-parsing unchanged files on restart
+        chainFiles.flatMap { chainFile =>
+          val result = Try {
+            val chainName = chainFile.getName.stripSuffix("-chain.conf")
+            log.info(s"Loading custom chain config: $chainName from ${chainFile.getName}")
+            val chainConfig = ConfigFactory.parseFile(chainFile)
+            chainName -> BlockchainConfig.fromRawConfig(chainConfig)
+          }
+          
+          result.failed.foreach { e =>
+            log.error(s"Failed to load chain config from ${chainFile.getName}: ${e.getMessage}", e)
+          }
+          
+          result.toOption
+        }.toMap
+      } else {
+        if (chainsDir.exists()) {
+          log.warn(s"Custom chains directory is not a directory: $customChainsDir")
+        } else {
+          log.warn(s"Custom chains directory does not exist: $customChainsDir")
+        }
+        Map.empty[String, BlockchainConfig]
+      }
+    } else {
+      Map.empty[String, BlockchainConfig]
+    }
+    
+    // Merge blockchains, with custom configs taking precedence
+    val allBlockchains = builtInBlockchains ++ customBlockchains
+    
+    if (customBlockchains.nonEmpty) {
+      log.info(s"Loaded ${customBlockchains.size} custom chain configuration(s): ${customBlockchains.keys.mkString(", ")}")
+    }
+    
+    BlockchainsConfig(network, allBlockchains)
+  }
 }
 
 case class MonetaryPolicyConfig(

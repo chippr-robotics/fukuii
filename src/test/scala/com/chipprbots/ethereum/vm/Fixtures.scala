@@ -31,7 +31,7 @@ object Fixtures {
     berlinBlockNumber = BerlinBlockNumber,
     mystiqueBlockNumber = MystiqueBlockNumber,
     spiralBlockNumber = SpiralBlockNumber,
-    chainId = 0x3d.toByte
+    chainId = 0x3d
   )
 
 }

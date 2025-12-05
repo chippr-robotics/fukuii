@@ -13,6 +13,6 @@ import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 case class Wallet(address: Address, prvKey: ByteString) {
   lazy val keyPair: AsymmetricCipherKeyPair = keyPairFromPrvKey(prvKey.toArray)
 
-  def signTx(tx: LegacyTransaction, chainId: Option[Byte]): SignedTransactionWithSender =
+  def signTx(tx: LegacyTransaction, chainId: Option[BigInt]): SignedTransactionWithSender =
     SignedTransactionWithSender(SignedTransaction.sign(tx, keyPair, chainId), Address(keyPair))
 }

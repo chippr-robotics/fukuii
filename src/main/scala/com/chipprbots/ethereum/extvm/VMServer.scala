@@ -239,6 +239,6 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
       berlinBlockNumber = BigInt("1000000000000000000"), // TODO include berlin block number in protobuf
       mystiqueBlockNumber = BigInt("1000000000000000000"), // TODO include mystique block number in protobuf
       spiralBlockNumber = BigInt("1000000000000000000"), // TODO include spiral block number in protobuf
-      chainId = conf.chainId.byteAt(0)
+      chainId = bigintFromGByteString(conf.chainId)
     )
 }

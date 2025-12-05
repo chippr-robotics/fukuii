@@ -138,7 +138,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
       customGenesisJsonOpt = None,
       daoForkConfig = None,
       accountStartNonce = com.chipprbots.ethereum.domain.UInt256.Zero,
-      chainId = 61.toByte,
+      chainId = 61,
       networkId = 1,
       monetaryPolicyConfig = MonetaryPolicyConfig(
         firstEraBlockReward = BigInt(5000000000000000000L),
@@ -152,7 +152,6 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
       bootstrapNodes = Set.empty,
       checkpointPubKeys = Set.empty,
       allowedMinersPublicKeys = Set.empty,
-      capabilities = List.empty,
       bootstrapCheckpoints = bootstrapCheckpoints,
       useBootstrapCheckpoints = useBootstrapCheckpoints
     )

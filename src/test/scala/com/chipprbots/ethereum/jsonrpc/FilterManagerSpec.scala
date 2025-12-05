@@ -113,7 +113,7 @@ class FilterManagerSpec
             value = 0,
             payload = ByteString()
           ),
-          signature = ECDSASignature(0, 0, 27.toByte)
+          signature = ECDSASignature(0, 0, 27)
         )
       ),
       uncleNodesList = Nil
@@ -191,7 +191,7 @@ class FilterManagerSpec
             value = 0,
             payload = ByteString()
           ),
-          signature = ECDSASignature(0, 0, 27.toByte)
+          signature = ECDSASignature(0, 0, 27)
         ),
         SignedTransaction(
           tx = LegacyTransaction(
@@ -202,7 +202,7 @@ class FilterManagerSpec
             value = 0,
             payload = ByteString()
           ),
-          signature = ECDSASignature(0, 0, 27.toByte)
+          signature = ECDSASignature(0, 0, 27)
         )
       ),
       uncleNodesList = Nil
@@ -277,7 +277,7 @@ class FilterManagerSpec
             value = 0,
             payload = ByteString()
           ),
-          signature = ECDSASignature(0, 0, 27.toByte)
+          signature = ECDSASignature(0, 0, 27)
         )
       ),
       uncleNodesList = Nil
@@ -317,7 +317,7 @@ class FilterManagerSpec
           value = 0,
           payload = ByteString()
         ),
-        signature = ECDSASignature(0, 0, 27.toByte)
+        signature = ECDSASignature(0, 0, 27)
       )
     )
     val block2: Block = Block(bh2, BlockBody(blockTransactions2, Nil))

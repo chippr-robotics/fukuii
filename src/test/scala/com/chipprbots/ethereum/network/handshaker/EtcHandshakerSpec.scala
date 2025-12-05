@@ -526,7 +526,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     )
     lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
 
-    class MockEtcHandshakerConfiguration(pv: List[Capability] = blockchainConfig.capabilities)
+    class MockEtcHandshakerConfiguration(pv: List[Capability] = Config.supportedCapabilities)
         extends EtcHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = None
       override val nodeStatusHolder: AtomicReference[NodeStatus] = TestSetup.this.nodeStatusHolder
@@ -534,7 +534,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
       override val blockchain: Blockchain = TestSetup.this.blockchain
       override val appStateStorage: AppStateStorage = TestSetup.this.storagesInstance.storages.appStateStorage
       override val blockchainReader: BlockchainReader = TestSetup.this.blockchainReader
-      override val blockchainConfig: BlockchainConfig = TestSetup.this.blockchainConfig.copy(capabilities = pv)
+      override val blockchainConfig: BlockchainConfig = TestSetup.this.blockchainConfig
     }
 
     val etcHandshakerConfigurationWithResolver: MockEtcHandshakerConfiguration = new MockEtcHandshakerConfiguration {

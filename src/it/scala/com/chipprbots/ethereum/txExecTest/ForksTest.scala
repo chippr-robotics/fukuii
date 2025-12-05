@@ -32,7 +32,7 @@ class ForksTest extends AnyFlatSpec with Matchers {
         eip160BlockNumber = 7,
         eip155BlockNumber = 0
       ),
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       monetaryPolicyConfig = MonetaryPolicyConfig(5000000, 0.2, 5000000000000000000L, 3000000000000000000L),
       // unused
       bootstrapNodes = Set(),
