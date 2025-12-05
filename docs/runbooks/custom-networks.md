@@ -51,7 +51,10 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
   chain-id = "0x7B"
   
   # Protocol capabilities
-  capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
+  # Per DevP2P spec: Only advertise the highest version of each protocol family
+  # ETH versions are backward compatible - eth/68 includes all previous versions
+  # SNAP is a separate protocol and should be advertised if supported
+  capabilities = ["eth/68", "snap/1"]
   
   # Fork block numbers - set to 0 or appropriate values for your network
   frontier-block-number = "0"
@@ -186,6 +189,34 @@ Chain configurations define the fundamental parameters and rules for a blockchai
   - Common values: 1 (ETH), 61/0x3d (ETC), 63/0x3f (Mordor)
   - For custom networks, use values like 77/0x4D, 80/0x50, 100/0x64, 123/0x7B
 
+### Protocol Capabilities
+
+Protocol capabilities define which Ethereum subprotocols and versions your node supports. This is a critical configuration for proper peer communication.
+
+**Important**: According to the [DevP2P specification](https://github.com/ethereum/devp2p/blob/master/caps/eth.md):
+- ETH protocol versions are **backward compatible**
+- You should **only advertise the highest version** of each protocol family
+- When you advertise `eth/68`, peers understand you support all previous ETH versions (eth/63 through eth/67)
+- SNAP is a **separate protocol** from ETH and should be advertised independently
+
+**Correct configuration**:
+```hocon
+capabilities = ["eth/68", "snap/1"]
+```
+
+**Incorrect configuration** (listing all versions explicitly):
+```hocon
+# Don't do this - it's redundant and non-standard
+capabilities = ["eth/63", "eth/64", "eth/65", "eth/66", "eth/67", "eth/68"]
+```
+
+**Supported capabilities in Fukuii**:
+- `eth/68`: Latest ETH protocol (includes eth/63-67)
+- `snap/1`: SNAP sync protocol for faster state synchronization
+- `etc/64`: ETC-specific protocol variant
+
+This aligns with how core-geth and go-ethereum handle capability advertisement.
+
 ### Fork Activation Blocks
 
 Fork block numbers determine when specific protocol upgrades activate. Common forks include:
@@ -245,7 +276,9 @@ For a simple private network, this minimal configuration is sufficient:
 {
   network-id = YOUR_NETWORK_ID
   chain-id = "YOUR_CHAIN_ID_HEX"
-  capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
+  # Per DevP2P spec: Only advertise highest version of each protocol family
+  # ETH versions are backward compatible - eth/68 includes eth/63-67
+  capabilities = ["eth/68", "snap/1"]
   
   # Enable all forks from genesis
   frontier-block-number = "0"
@@ -425,7 +458,7 @@ volumes:
 |-----------|------|----------|-------------|
 | `network-id` | Integer | Yes | Network identifier for peer discovery |
 | `chain-id` | String (hex) | Yes | Chain ID for EIP-155 transaction signing |
-| `capabilities` | Array | Yes | Supported Ethereum protocol versions |
+| `capabilities` | Array | Yes | Protocol capabilities - advertise highest version only (e.g., ["eth/68", "snap/1"]) |
 
 ### Fork Block Numbers
 
@@ -472,7 +505,8 @@ Perfect for local testing with all modern features enabled:
   network-id = 9999
   # Chain ID 0x64 (100 in decimal) - fits within byte range
   chain-id = "0x64"
-  capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
+  # Per DevP2P spec: Only advertise highest version of each protocol family
+  capabilities = ["eth/68", "snap/1"]
   
   # All forks enabled from genesis
   frontier-block-number = "0"
@@ -545,7 +579,8 @@ Configuration for a permissioned consortium network:
   network-id = 8888
   # Chain ID 0x50 (80 in decimal) - fits within byte range
   chain-id = "0x50"
-  capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
+  # Per DevP2P spec: Only advertise highest version of each protocol family
+  capabilities = ["eth/68", "snap/1"]
   
   frontier-block-number = "0"
   homestead-block-number = "0"
@@ -631,7 +666,8 @@ Configuration for a test network with planned fork activations:
   network-id = 7777
   # Chain ID 0x4D (77 in decimal) - fits within byte range
   chain-id = "0x4D"
-  capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
+  # Per DevP2P spec: Only advertise highest version of each protocol family
+  capabilities = ["eth/68", "snap/1"]
   
   # Progressive fork activation
   frontier-block-number = "0"
