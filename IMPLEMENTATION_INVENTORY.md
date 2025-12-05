@@ -1,7 +1,7 @@
 # Implementation Inventory - TODOs, FIXMEs, and Incomplete Features
 
 **Generated:** 2025-12-05  
-**Last Updated:** 2025-12-05 (post PR #725 merge)  
+**Last Updated:** 2025-12-05 (reflects PR #725 Discovery v5 testing completion)  
 **Purpose:** Comprehensive inventory of incomplete implementations, TODOs, and areas marked for future work
 
 ---
@@ -200,8 +200,8 @@ The inventory is categorized by priority and functional area to support sprint p
 
 #### Discovery v5 (Scalanet)
 - **Status**: ✅ **Testing Complete** (PR #725 merged)
-- **Test Coverage**: 160+ test cases, 1,605 lines of test code
-- **Remaining TODOs**: 8 items in implementation (not testing)
+- **Test Coverage**: Comprehensive test suite (see Recent Updates section for details)
+- **Remaining TODOs**: 8 items in implementation (verified 2025-12-05)
   - 3 in `DiscoveryNetwork.scala`: Topic table and ENR parsing
   - 5 in `KRouter.scala`: Kademlia optimizations
 - **Priority**: Low - Core protocol and testing complete, remaining are enhancements
@@ -466,7 +466,7 @@ The Fukuii codebase is in **good health** with:
 - ✅ No critical P0 blockers for production
 - ✅ Core functionality complete and working
 - ✅ Test coverage infrastructure in place
-- ✅ **Discovery v5 testing complete** (PR #725: 160+ tests, 1,605 lines) 
+- ✅ **Discovery v5 testing complete** (see Recent Updates section)
 - ⏳ SNAP Sync 95% complete (testing phase)
 - ⏳ Some P1 items requiring attention (Fast Sync atomicity, VM optimizations)
 - ⏳ Significant P2/P3 tech debt to be addressed over time
