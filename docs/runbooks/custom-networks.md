@@ -45,7 +45,10 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
   network-id = 12345
   
   # Chain ID for transaction signing (EIP-155)
-  chain-id = "0x3039"
+  # IMPORTANT: Chain IDs are stored as signed bytes (-128 to 127)
+  # Choose a value in this range to avoid overflow issues
+  # Use hex format: "0x7B" = 123 in decimal
+  chain-id = "0x7B"
   
   # Protocol capabilities
   capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
@@ -178,6 +181,10 @@ Chain configurations define the fundamental parameters and rules for a blockchai
 
 - **network-id**: Used for peer discovery and handshaking. Each network should have a unique ID.
 - **chain-id**: Used for transaction signing (EIP-155). Prevents replay attacks across different chains.
+  - **Important**: Chain IDs are stored as signed bytes in Fukuii (range: -128 to 127)
+  - Choose values within this range to avoid overflow issues
+  - Common values: 1 (ETH), 61/0x3d (ETC), 63/0x3f (Mordor)
+  - For custom networks, use values like 77/0x4D, 80/0x50, 100/0x64, 123/0x7B
 
 ### Fork Activation Blocks
 
@@ -320,7 +327,8 @@ mkdir -p /opt/fukuii/chains
 cat > /opt/fukuii/chains/mynetwork-chain.conf << 'EOF'
 {
   network-id = 12345
-  chain-id = "0x3039"
+  # Chain ID 0x7B (123 in decimal) - fits within byte range (-128 to 127)
+  chain-id = "0x7B"
   # ... rest of configuration
 }
 EOF
@@ -368,7 +376,8 @@ fukuii {
     
     mynetwork {
       network-id = 12345
-      chain-id = "0x3039"
+      # Chain ID 0x7B (123 in decimal) - fits within byte range
+      chain-id = "0x7B"
       # ... rest of chain configuration
     }
   }
@@ -461,7 +470,8 @@ Perfect for local testing with all modern features enabled:
 ```hocon
 {
   network-id = 9999
-  chain-id = "0x270f"
+  # Chain ID 0x64 (100 in decimal) - fits within byte range
+  chain-id = "0x64"
   capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
   
   # All forks enabled from genesis
@@ -533,7 +543,8 @@ Configuration for a permissioned consortium network:
 ```hocon
 {
   network-id = 8888
-  chain-id = "0x22b8"
+  # Chain ID 0x50 (80 in decimal) - fits within byte range
+  chain-id = "0x50"
   capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
   
   frontier-block-number = "0"
@@ -618,7 +629,8 @@ Configuration for a test network with planned fork activations:
 ```hocon
 {
   network-id = 7777
-  chain-id = "0x1e61"
+  # Chain ID 0x4D (77 in decimal) - fits within byte range
+  chain-id = "0x4D"
   capabilities = ["eth/63", "eth/64", "eth/65", "eth/66"]
   
   # Progressive fork activation

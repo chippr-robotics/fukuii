@@ -86,6 +86,7 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     blockchainsConfig.network shouldBe "etc"
     blockchainsConfig.blockchains should contain key "etc"
     blockchainsConfig.blockchainConfig.networkId shouldBe 1
+    // Chain ID 0x3d (61 in decimal) fits within byte range and is the ETC mainnet chain ID
     blockchainsConfig.blockchainConfig.chainId shouldBe 0x3d.toByte
   }
 
@@ -138,6 +139,10 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
     val chainFile = new File(tempDir, "customnet-chain.conf")
     Files.write(chainFile.toPath, customChainConfig.getBytes)
+    
+    // Verify file was created successfully
+    chainFile.exists() shouldBe true
+    chainFile.length() should be > 0L
 
     val config = ConfigFactory.parseString(s"""
       network = "customnet"
@@ -149,7 +154,9 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     blockchainsConfig.network shouldBe "customnet"
     blockchainsConfig.blockchains should contain key "customnet"
     blockchainsConfig.blockchainConfig.networkId shouldBe 9999
-    blockchainsConfig.blockchainConfig.chainId shouldBe 0x270f.toByte
+    // Chain ID 0x270f (9999) will overflow when converted to byte, resulting in 15
+    // This is expected behavior as chain IDs are stored as signed bytes
+    blockchainsConfig.blockchainConfig.chainId shouldBe 15.toByte
   }
 
   it should "give priority to custom configurations over built-in ones" taggedAs (UnitTest) in {
