@@ -362,7 +362,14 @@ object SignedTransaction {
         // Values < 35 that aren't 27 or 28 are invalid
         if (normalizedV >= EIP155NegativePointSign) {
           val chainId = (normalizedV - EIP155NegativePointSign) / 2
-          Some(chainId)
+          // Validate that extracted chainId matches the blockchain's configured chainId
+          // This ensures EIP-155 replay protection works correctly
+          if (chainId == blockchainConfig.chainId) {
+            Some(chainId)
+          } else {
+            // ChainId present but does not match local config - reject for replay protection
+            None
+          }
         } else {
           // Invalid v value (not 27, 28, or >= 35)
           None

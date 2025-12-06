@@ -77,8 +77,9 @@ object Capability {
           ethVersions1.maxBy(_.version).version,
           ethVersions2.maxBy(_.version).version
         )
-        // Find the capability with that version number
+        // Find the capability with that version number from either side
         ethVersions1.find(_.version == maxVersion)
+          .orElse(ethVersions2.find(_.version == maxVersion))
       } else None,
       // ETC: exact match required
       if (etcVersions1.intersect(etcVersions2).nonEmpty) Some(ETC64) else None,
