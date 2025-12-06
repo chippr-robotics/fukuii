@@ -91,9 +91,13 @@ See [Docker Documentation](../deployment/docker.md) for comprehensive Docker doc
 
 #### `ops/`
 Operational configurations for production deployments:
+- `ops/barad-dur/` - Barad-dûr (Kong API Gateway) - Production API gateway stack
+- `ops/cirith-ungol/` - Cirith Ungol - ETC mainnet testing environment  
+- `ops/gorgoroth/` - Gorgoroth - Internal private test network
 - `ops/grafana/` - Pre-configured Grafana dashboards for monitoring Fukuii nodes
+- `ops/prometheus/` - Prometheus configuration templates
 
-See [Metrics and Monitoring](../operations/metrics-and-monitoring.md) for details.
+See [ops/README.md](../../ops/README.md) and [Metrics and Monitoring](../operations/metrics-and-monitoring.md) for details.
 
 #### `docs/`
 Comprehensive documentation:

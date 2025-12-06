@@ -320,7 +320,7 @@ docker compose logs fukuii | grep -i "progress\|downloaded"
 ### Quick Start
 
 ```bash
-cd ops/testbed
+cd ops/cirith-ungol
 
 # Start the node
 ./start.sh start
