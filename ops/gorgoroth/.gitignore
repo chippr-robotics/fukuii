@@ -11,3 +11,20 @@ data/
 test-*.sh
 notes.txt
 TODO.txt
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+
+# Backup files
+*.bak
+*.backup
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Local testing configurations
+*-local.yml
+*-local.conf
