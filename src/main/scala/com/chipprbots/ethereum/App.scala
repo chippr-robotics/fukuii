@@ -84,7 +84,7 @@ object App extends Logger {
       """
         |Fukuii Ethereum Client
         |
-        |Usage: fukuii [modifier] [network] [options]
+        |Usage: fukuii [public|enterprise] [network] [options]
         |   or: fukuii [command] [options]
         |
         |Modifiers:
