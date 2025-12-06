@@ -63,7 +63,7 @@ Barad-dûr is an "API Ops Starter" — a complete operational stack designed to 
 ### 1. Run the Setup Script
 
 ```bash
-cd docker/barad-dur
+cd ops/barad-dur
 ./setup.sh
 ```
 

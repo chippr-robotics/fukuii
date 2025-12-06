@@ -1,0 +1,50 @@
+# Cirith Ungol Docker Compose Configuration
+# Named after the pass of the spider in Mordor
+# Fukuii node configured for ETC mainnet testing
+# Focus: General testing and validation
+
+networks:
+  fukuii-cirith-ungol:
+    driver: bridge
+
+services:
+  fukuii:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: fukuii-cirith-ungol
+    restart: unless-stopped
+    networks:
+      - fukuii-cirith-ungol
+    ports:
+      # JSON-RPC HTTP
+      - "8545:8545"
+      # JSON-RPC WebSocket  
+      - "8546:8546"
+      # P2P networking
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+    volumes:
+      # Configuration files
+      - ./conf/etc.conf:/app/conf/etc.conf:ro
+      - ./conf/logback.xml:/app/conf/logback.xml:ro
+      # Data directory (persistent)
+      - fukuii-cirith-ungol-data:/app/data
+      # Logs directory
+      - fukuii-cirith-ungol-logs:/app/logs
+    environment:
+      # Set node identifier for logging
+      - FUKUII_NODE_ID=cirith-ungol
+      - FUKUII_ENV=cirith-ungol-mainnet
+    # Configuration files are loaded from /app/conf/
+    command: ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  fukuii-cirith-ungol-data:
+    driver: local
+  fukuii-cirith-ungol-logs:
+    driver: local

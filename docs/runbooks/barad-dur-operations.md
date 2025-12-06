@@ -46,7 +46,7 @@ Barad-dûr is a production-ready API ops stack that combines:
 ### Directory Structure
 
 ```
-docker/barad-dur/
+ops/barad-dur/
 ├── docker-compose.yml          # Full stack configuration
 ├── docker-compose-dbless.yml   # DB-less Kong variant
 ├── kong.yml                    # Kong declarative config
@@ -70,7 +70,7 @@ docker/barad-dur/
 
 1. **Check Service Health**
    ```bash
-   cd docker/barad-dur
+   cd ops/barad-dur
    docker-compose ps
    ```
    All services should show `Up (healthy)`.
@@ -124,7 +124,7 @@ curl http://localhost:8001/upstreams/fukuii-cluster/health | jq .
 ### Normal Startup
 
 ```bash
-cd docker/barad-dur
+cd ops/barad-dur
 
 # Pull latest images (optional)
 docker-compose pull
@@ -147,7 +147,7 @@ watch docker-compose ps
 ### Graceful Shutdown
 
 ```bash
-cd docker/barad-dur
+cd ops/barad-dur
 
 # Graceful shutdown (allows connections to drain)
 docker-compose stop
@@ -224,7 +224,7 @@ kong_upstream_target_health
 
 ### Setting Up Alerts
 
-Create `/docker/barad-dur/prometheus/alert_rules.yml`:
+Create `/ops/barad-dur/prometheus/alert_rules.yml`:
 
 ```yaml
 groups:
@@ -663,7 +663,7 @@ docker-compose exec kong nslookup fukuii-primary
 
 ## Related Documentation
 
-- [Barad-dûr README](https://github.com/chippr-robotics/fukuii/tree/develop/docker/barad-dur) - Stack overview and quick start
+- [Barad-dûr README](https://github.com/chippr-robotics/fukuii/tree/develop/ops/barad-dur) - Stack overview and quick start
 - [Kong Guide](../deployment/kong.md) - Comprehensive Kong documentation
 - [Kong Architecture](../deployment/kong-architecture.md) - Architecture details
 - [Kong Security](../deployment/kong-security.md) - Security best practices
