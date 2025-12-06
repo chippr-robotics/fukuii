@@ -2,12 +2,24 @@
 # Launcher Integration Validation Script
 # This script validates all supported launch configurations for Fukuii
 # as specified in the issue requirements.
+#
+# DEPRECATED: This standalone bash script has been replaced by LauncherIntegrationSpec
+# which is integrated into the automated CI/CD test suite.
+#
+# Please use: sbt "testOnly *LauncherIntegrationSpec"
+# Or run as part of the full test suite: sbt test
+#
+# This script is maintained for backward compatibility but will be removed in a future release.
 
 set -e
 
 echo "=========================================="
 echo "Fukuii Launcher Integration Validation"
 echo "=========================================="
+echo ""
+echo "⚠️  DEPRECATION NOTICE:"
+echo "This script has been replaced by LauncherIntegrationSpec"
+echo "Run: sbt 'testOnly *LauncherIntegrationSpec'"
 echo ""
 
 # Function to test argument parsing (without actually launching)
