@@ -117,8 +117,11 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    // This test simulates CoreGeth's protocol deviation where it advertises p2pVersion=5
-    // (compression enabled) but sends uncompressed messages
+    // This test simulates CoreGeth's unreliable compression behavior where it advertises p2pVersion=5
+    // (compression enabled) but sometimes sends messages that fail decompression
+    // See RUN008 fix and docs/reviews/COMPRESSION_FIX_WIRE_PROTOCOL.md
+    // CoreGeth DOES compress (confirmed from source code) but the compressed data sometimes
+    // fails to decompress correctly - likely due to Snappy library incompatibility
     
     // Both peers exchange v5 hellos, agreeing on compression
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
@@ -144,6 +147,114 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     // Should successfully decode the uncompressed status message
     assert(decodedMessages.size == 1)
     assert(decodedMessages.head == Right(status))
+  }
+
+  it should "NOT compress messages when sending to CoreGeth (Geth/) peer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    override lazy val remoteClientId: String = "Geth/v1.12.20-stable/linux-amd64/go1.21.10"
+    override lazy val negotiatedRemoteP2PVersion: Long = 5L
+    override lazy val negotiatedLocalP2PVersion: Long = 5L
+
+    // Exchange hellos
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5.copy(clientId = remoteClientId))
+    messageCodec.readMessages(remoteHello)
+
+    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
+    remoteMessageCodec.readMessages(localHello)
+
+    // Send status from local to remote (Geth peer)
+    val localStatus: ByteString = messageCodec.encodeMessage(status)
+    
+    // The remote codec (simulating Geth) should be able to read the message without decompression
+    // Create a temporary codec that doesn't expect compression
+    val gethCodec = new MessageCodec(remoteFrameCodec, decoder, 4L, "TestClient/v1.0.0")
+    val decodedMessages = gethCodec.readMessages(localStatus)
+    
+    // Should successfully decode - proves message was sent uncompressed
+    assert(decodedMessages.size == 1)
+    assert(decodedMessages.head == Right(status))
+  }
+
+  it should "NOT compress messages when sending to core-geth peer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    override lazy val remoteClientId: String = "core-geth/v1.12.20/linux-amd64/go1.21"
+    override lazy val negotiatedRemoteP2PVersion: Long = 5L
+    
+    // Create codec for core-geth peer
+    val coreGethCodec = new MessageCodec(frameCodec, decoder, negotiatedRemoteP2PVersion, remoteClientId)
+    
+    // Send a message from local to core-geth
+    val localStatus: ByteString = coreGethCodec.encodeMessage(status)
+    
+    // Verify message was sent uncompressed by trying to read it with a v4 codec
+    val v4Codec = new MessageCodec(remoteFrameCodec, decoder, 4L, "TestClient/v1.0.0")
+    val decodedMessages = v4Codec.readMessages(localStatus)
+    
+    assert(decodedMessages.size == 1)
+    assert(decodedMessages.head == Right(status))
+  }
+
+  it should "compress messages when sending to non-Geth peer with p2p v5" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    override lazy val remoteClientId: String = "fukuii/v1.0.0"
+    override lazy val negotiatedRemoteP2PVersion: Long = 5L
+    override lazy val negotiatedLocalP2PVersion: Long = 5L
+
+    // Exchange hellos
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5.copy(clientId = remoteClientId))
+    messageCodec.readMessages(remoteHello)
+
+    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
+    remoteMessageCodec.readMessages(localHello)
+
+    // Send status from local to remote (non-Geth peer)
+    val localStatus: ByteString = messageCodec.encodeMessage(status)
+    
+    // Try to read with v4 codec (no compression expected)
+    val v4Codec = new MessageCodec(remoteFrameCodec, decoder, 4L, "TestClient/v1.0.0")
+    val decodedMessagesV4 = v4Codec.readMessages(localStatus)
+    
+    // Should fail to decode because message was compressed
+    assert(decodedMessagesV4.size == 1)
+    assert(decodedMessagesV4.head.isLeft)
+    
+    // But should work with v5 codec that expects compression
+    val decodedMessagesV5 = remoteMessageCodec.readMessages(localStatus)
+    assert(decodedMessagesV5.size == 1)
+    assert(decodedMessagesV5.head == Right(status))
+  }
+
+  it should "handle case-insensitive client ID matching for Geth variants" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    // Test various capitalization variants
+    val clientVariants = Seq(
+      "GETH/v1.0.0",
+      "geth/v1.0.0", 
+      "Geth/v1.0.0",
+      "CORE-GETH/v1.0.0",
+      "Core-Geth/v1.0.0",
+      "CoreGeth/v1.0.0"
+    )
+    
+    clientVariants.foreach { clientId =>
+      val codec = new MessageCodec(frameCodec, decoder, 5L, clientId)
+      val encodedStatus = codec.encodeMessage(status)
+      
+      // Should be readable by v4 codec (no compression)
+      val v4Codec = new MessageCodec(remoteFrameCodec, decoder, 4L, "TestClient/v1.0.0")
+      val decoded = v4Codec.readMessages(encodedStatus)
+      
+      assert(decoded.size == 1, s"Failed for client: $clientId")
+      assert(decoded.head == Right(status), s"Failed for client: $clientId")
+    }
   }
 
   trait TestSetup extends SecureChannelSetup {
@@ -174,8 +285,11 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
       NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63))
 
     // Each codec should be instantiated with the peer's p2p version (i.e. the version of the remote peer)
-    val messageCodec = new MessageCodec(frameCodec, decoder, negotiatedRemoteP2PVersion)
-    val remoteMessageCodec = new MessageCodec(remoteFrameCodec, decoder, negotiatedLocalP2PVersion)
+    // and the remote client ID
+    lazy val remoteClientId: String = "TestClient/v1.0.0"
+    lazy val localClientId: String = Config.clientId
+    val messageCodec = new MessageCodec(frameCodec, decoder, negotiatedRemoteP2PVersion, remoteClientId)
+    val remoteMessageCodec = new MessageCodec(remoteFrameCodec, decoder, negotiatedLocalP2PVersion, localClientId)
 
   }
 

@@ -43,11 +43,42 @@ object MessageCodec {
 class MessageCodec(
     frameCodec: FrameCodec,
     messageDecoder: MessageDecoder,
-    val remotePeer2PeerVersion: Long
+    val remotePeer2PeerVersion: Long,
+    val remoteClientId: String
 ) extends Logger {
   import MessageCodec._
 
   val contextIdCounter = new AtomicInteger
+
+  /** Determines if compression should be used for this client.
+    * Uses blacklist approach: disable compression only for known-broken clients.
+    */
+  private def shouldCompressForClient: Boolean = {
+    val baselineSupport = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
+    
+    // CoreGeth compression asymmetry (confirmed via source code analysis):
+    // - SENDING: CoreGeth compresses all messages when p2pVersion >= 5 (we handle via fallback)
+    // - RECEIVING: CoreGeth cannot decompress our Snappy-compressed messages (THIS fix)
+    // Root cause: Likely Snappy library incompatibility between Java (xerial.snappy) and Go (golang/snappy)
+    // See: FUKUII-COMPRESSION-001, RUN008 fix, docs/reviews/COMPRESSION_FIX_WIRE_PROTOCOL.md
+    val lowerClientId = remoteClientId.toLowerCase
+    val isKnownBroken = lowerClientId.startsWith("geth/") || 
+                        lowerClientId.startsWith("core-geth/") ||
+                        lowerClientId.startsWith("coregeth/")
+    
+    val result = baselineSupport && !isKnownBroken
+    
+    log.info(
+      "COMPRESSION_POLICY: clientId={}, p2pVersion={}, baseline={}, knownBroken={}, willCompress={}",
+      remoteClientId,
+      remotePeer2PeerVersion,
+      baselineSupport,
+      isKnownBroken,
+      result
+    )
+    
+    result
+  }
 
   // TODO: ETCM-402 - messageDecoder should use negotiated protocol version
   def readMessages(data: ByteString): Seq[Either[DecodingError, Message]] = {
@@ -214,7 +245,7 @@ class MessageCodec(
       
       // Core-geth compresses ALL messages when p2pVersion >= 5, including wire protocol messages
       // Matches core-geth behavior: no exceptions for wire protocol (Ping, Pong, etc.)
-      val shouldCompressThis = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
+      val shouldCompressThis = shouldCompressForClient
       
       val payload =
         if (shouldCompressThis) {
@@ -222,19 +253,21 @@ class MessageCodec(
           // Safe compression ratio calculation (avoid division by zero)
           val ratio = if (framedPayload.length > 0) compressed.length.toDouble / framedPayload.length else 0.0
           log.debug(
-            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {}), code=0x{}, p2pVersion={}",
+            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {}), code=0x{}, p2pVersion={}, clientId={}",
             frameNo,
             framedPayload.length,
             compressed.length,
             "%.2f".format(ratio),
             serializable.code.toHexString,
-            remotePeer2PeerVersion
+            remotePeer2PeerVersion,
+            remoteClientId
           )
           compressed
         } else {
           log.debug(
-            "ENCODE_MSG: Skipping compression for frame {} (p2pVersion={} < {}), code=0x{}",
+            "ENCODE_MSG: Skipping compression for frame {} (clientId={}, p2pVersion={} < {} OR client blacklisted), code=0x{}",
             frameNo,
+            remoteClientId,
             remotePeer2PeerVersion,
             EtcHelloExchangeState.P2pVersion,
             serializable.code.toHexString
