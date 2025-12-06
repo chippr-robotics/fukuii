@@ -175,12 +175,6 @@ case "$ACTION" in
                 curl -s http://localhost:8546/health
             fi
             echo ""
-            
-            echo "Core-geth sync status:"
-            curl -s -X POST -H "Content-Type: application/json" \
-              --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-              http://localhost:8555 | jq 2>/dev/null || echo "Unable to get sync status"
-            echo ""
         else
             echo "Install curl to check health endpoints"
         fi
@@ -189,7 +183,8 @@ case "$ACTION" in
     clean)
         echo "WARNING: This will remove all data including the blockchain!"
         echo "This includes:"
-        echo "  - Fukuii docker volumes"
+        echo "  - fukuii-cirith-ungol-data (blockchain data)"
+        echo "  - fukuii-cirith-ungol-logs (log files)"
         read -p "Are you sure? (yes/no): " -r
         echo ""
         if [[ $REPLY =~ ^[Yy]([Ee][Ss])?$ ]]; then
