@@ -16,7 +16,7 @@ object Checkpoint {
   implicit val checkpointRLPDecoder: RLPDecoder[Checkpoint] = {
     case signatures: RLPList =>
       Checkpoint(
-        signatures.items.map(ecdsaSignatureDec.decode)
+        signatures.items.map(ecdsaSignatureDec.decode).toList
       )
     case _ => throw new RuntimeException("Cannot decode Checkpoint")
   }

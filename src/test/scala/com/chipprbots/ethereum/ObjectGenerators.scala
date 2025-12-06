@@ -210,9 +210,14 @@ trait ObjectGenerators {
     shouldCheckpoint <- Arbitrary.arbitrary[Option[Boolean]]
     checkpoint <- if (shouldCheckpoint.isDefined) Gen.option(fakeCheckpointOptGen(0, 5)) else Gen.const(None)
   } yield checkpoint match {
-    case Some(Some(definedCheckpoint)) => HefPostEcip1097(Some(definedCheckpoint))  // Has actual checkpoint
-    case Some(None) => HefEmpty  // checkpoint is None, so use HefEmpty (matches normalization in decoder)
-    case None => HefEmpty  // No checkpoint
+    case Some(Some(definedCheckpoint)) if definedCheckpoint.signatures.nonEmpty => 
+      HefPostEcip1097(Some(definedCheckpoint))  // Has actual checkpoint with signatures
+    case Some(Some(_)) => 
+      HefEmpty  // Checkpoint exists but has no signatures, normalize to HefEmpty
+    case Some(None) => 
+      HefEmpty  // Checkpoint is None, normalize to HefEmpty (matches decoder normalization)
+    case None => 
+      HefEmpty  // No checkpoint at all
   }
 
   def blockHeaderGen: Gen[BlockHeader] = for {
@@ -267,7 +272,7 @@ trait ObjectGenerators {
       r <- bigIntGen
       s <- bigIntGen
       v <- byteGen
-    } yield ECDSASignature(r, s, BigInt(v))
+    } yield ECDSASignature(r, s, BigInt(v & 0xFF))  // Convert signed byte to unsigned (0-255) for RLP compatibility
 
   def listOfNodes(min: Int, max: Int): Gen[Seq[MptNode]] = for {
     size <- intGen(min, max)
