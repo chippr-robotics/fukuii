@@ -19,7 +19,7 @@ The Configuration Wizard is a comprehensive tool designed for institutional-grad
 - ⛓️ **Chain Tuning** - Edit fork parameters with direct links to ECIP/EIP specifications
 - ⚙️ **Advanced Settings** - Full access to all configuration options organized by category
 - 📤 **Import/Export** - Upload existing configs for editing and download validated HOCON files
-- 🏷️ **Version Control** - All configs stamped with Fukuii version number (0.1.121)
+- 🏷️ **Configuration Management** - Generate validated HOCON configuration files
 
 **Quick Start:**
 1. Visit the [Configuration Wizard](configuration-wizard.md)
