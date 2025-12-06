@@ -14,7 +14,11 @@ def extract_version_from_sbt():
     try:
         with open(sbt_file, 'r') as f:
             content = f.read()
-            # Find the version assignment line
+            # Match the actual format: (ThisBuild / version) := "x.y.z"
+            match = re.search(r'\(ThisBuild\s*/\s*version\)\s*:=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content)
+            if match:
+                return match.group(1)
+            # Fallback to simpler pattern for compatibility
             match = re.search(r'version.*:=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content)
             if match:
                 return match.group(1)
@@ -39,11 +43,12 @@ def on_post_page(output, page, config):
     """
     version = extract_version_from_sbt()
     
-    # Inject version as data attribute on html element
-    output = output.replace(
-        '<html',
-        f'<html data-fukuii-version="{version}"',
-        1
+    # Inject version as data attribute on html element (robust replacement)
+    output = re.sub(
+        r'<html([^>]*)',
+        f'<html\\1 data-fukuii-version="{version}"',
+        output,
+        count=1
     )
     
     # Also inject as JavaScript variable for immediate use

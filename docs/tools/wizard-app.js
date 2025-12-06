@@ -3,9 +3,13 @@
  * Institutional-grade blockchain node configuration tool
  */
 
+// Default fallback version if build-time injection fails
+// Note: This should match the fallback in docs/hooks/inject_version.py
+const DEFAULT_VERSION = '0.1.121';
+
 // Version - dynamically set at build time via mkdocs hook or read from page metadata
 const FUKUII_VERSION = document.documentElement.getAttribute('data-fukuii-version') || 
-                       (typeof __FUKUII_VERSION__ !== 'undefined' ? __FUKUII_VERSION__ : '0.1.121');
+                       (typeof __FUKUII_VERSION__ !== 'undefined' ? __FUKUII_VERSION__ : DEFAULT_VERSION);
 
 // Configuration State
 const configState = {
