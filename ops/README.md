@@ -6,19 +6,22 @@ This directory contains operational configuration files and resources for runnin
 
 ```
 ops/
-├── grafana/                                      # Grafana dashboard configurations
-│   ├── fukuii-dashboard.json                    # Control Tower - Main monitoring dashboard
-│   ├── fukuii-miners-dashboard.json             # Miners - Mining-focused metrics
-│   ├── fukuii-node-troubleshooting-dashboard.json  # Node Troubleshooting - Debug dashboard
-│   └── fukuii-casual-dashboard.json             # Casual View - Minimalist dashboard
-├── prometheus/                                   # Prometheus configuration
-├── testbed/                                      # Testbed - ETC mainnet testing environment
+├── barad-dur/                                    # Barad-dûr - Kong API Gateway stack
+│   ├── docker-compose.yml                        # Full stack with PostgreSQL
+│   ├── docker-compose-dbless.yml                 # DB-less mode
+│   ├── kong.yml                                  # Kong declarative config
+│   ├── setup.sh                                  # Setup and initialization script
+│   ├── test-api.sh                               # API testing script
+│   ├── fukuii-conf/                              # Fukuii node configurations
+│   ├── grafana/                                  # Grafana dashboards and provisioning
+│   └── prometheus/                               # Prometheus configuration
+├── cirith-ungol/                                 # Cirith Ungol - ETC mainnet testing environment
 │   ├── conf/
 │   │   ├── etc.conf                              # ETC mainnet configuration
 │   │   └── logback.xml                           # DEBUG logging configuration
 │   ├── docker-compose.yml                        # Docker Compose deployment
 │   ├── start.sh                                  # Quick start/stop script
-│   ├── README.md                                 # Testbed documentation
+│   ├── README.md                                 # Cirith Ungol documentation
 │   └── ISSUE_RESOLUTION.md                       # Issue tracking and resolution notes
 ├── gorgoroth/                                    # Gorgoroth - Internal test network
 │   ├── conf/                                     # Configuration files for all nodes
@@ -30,6 +33,12 @@ ops/
 │   ├── deploy.sh                                 # Deployment management script
 │   ├── collect-logs.sh                           # Log collection script
 │   └── README.md                                 # Gorgoroth documentation
+├── grafana/                                      # Grafana dashboard configurations
+│   ├── fukuii-dashboard.json                    # Control Tower - Main monitoring dashboard
+│   ├── fukuii-miners-dashboard.json             # Miners - Mining-focused metrics
+│   ├── fukuii-node-troubleshooting-dashboard.json  # Node Troubleshooting - Debug dashboard
+│   └── fukuii-casual-dashboard.json             # Casual View - Minimalist dashboard
+├── prometheus/                                   # Prometheus configuration
 ├── run-007-research/                             # Research directory for investigations
 └── README.md                                     # This file
 ```
@@ -40,15 +49,36 @@ The `grafana/` directory contains pre-configured Grafana dashboards for monitori
 
 ## Run Configurations
 
-### Testbed - ETC Mainnet Testing Environment
+### Barad-dûr - Kong API Gateway Stack
 
-The `testbed/` directory contains the primary testing configuration for running a Fukuii node on **ETC mainnet** with comprehensive logging and dual-node setup.
+The `barad-dur/` directory contains a production-ready API ops stack with Kong API Gateway, named after Sauron's Dark Tower - the fortified gateway to Fukuii.
+
+**Purpose**: Production API gateway with high availability, monitoring, and security features.
+
+**Features**:
+- Kong API Gateway (3.9) with PostgreSQL backend
+- Multiple Fukuii instances with load balancing
+- Prometheus metrics collection
+- Grafana visualization dashboards
+- DB-less mode option for simpler deployments
+- Automated setup and testing scripts
+
+**Quick Start**:
+```bash
+cd ops/barad-dur
+./setup.sh
+```
+
+For detailed information, see [barad-dur/README.md](barad-dur/README.md).
+
+### Cirith Ungol - ETC Mainnet Testing Environment
+
+The `cirith-ungol/` directory contains the testing configuration for running a Fukuii node on **ETC mainnet** with comprehensive logging, named after the pass of the spider in Mordor.
 
 **Purpose**: General testing and validation environment for ETC mainnet operations.
 
 **Features**:
 - Network: ETC mainnet
-- Dual-node setup: Fukuii + Core-Geth for comparison
 - DEBUG logging configuration
 - Docker Compose deployment ready
 - Quick start script for easy management
@@ -56,13 +86,11 @@ The `testbed/` directory contains the primary testing configuration for running 
 
 **Quick Start**:
 ```bash
-cd ops/testbed
+cd ops/cirith-ungol
 ./start.sh start
 ```
 
-For detailed information, see [testbed/README.md](testbed/README.md) and [testbed/ISSUE_RESOLUTION.md](testbed/ISSUE_RESOLUTION.md).
-
-⚠️ **Note**: The testbed is the primary environment for all testing activities. Previous run-001 through run-005 folders have been retired.
+For detailed information, see [cirith-ungol/README.md](cirith-ungol/README.md) and [cirith-ungol/ISSUE_RESOLUTION.md](cirith-ungol/ISSUE_RESOLUTION.md).
 
 ### Gorgoroth - Internal Test Network
 

@@ -63,50 +63,39 @@ collect_logs() {
     
     # Check container status
     echo "Checking container status..."
-    docker ps --filter "name=fukuii-testbed" --filter "name=core-geth-testbed" --format "  {{.Names}}: {{.Status}}"
     echo ""
     
     # Capture logs from both containers
     echo "Collecting logs..."
-    capture_container_logs "fukuii-testbed" "$LOG_DIR/fukuii_${TIMESTAMP}.log"
-    capture_container_logs "core-geth-testbed" "$LOG_DIR/core-geth_${TIMESTAMP}.log"
+    capture_container_logs "fukuii-cirith-ungol" "$LOG_DIR/fukuii_${TIMESTAMP}.log"
     echo ""
     
     # Get SNAP-specific information from fukuii
     echo "Fukuii SNAP Sync Status:"
     echo "------------------------"
-    docker logs fukuii-testbed 2>&1 | grep "SNAP Sync Progress" | tail -5 || echo "  No SNAP progress logs found"
+    docker logs fukuii-cirith-ungol 2>&1 | grep "SNAP Sync Progress" | tail -5 || echo "  No SNAP progress logs found"
     echo ""
     
     # Get peer capability information from fukuii
     echo "Fukuii Peer Capabilities:"
     echo "-------------------------"
-    docker logs fukuii-testbed 2>&1 | grep "PEER_HANDSHAKE_SUCCESS" | tail -10 || echo "  No handshake logs found"
+    docker logs fukuii-cirith-ungol 2>&1 | grep "PEER_HANDSHAKE_SUCCESS" | tail -10 || echo "  No handshake logs found"
     echo ""
     
-    # Get sync status from core-geth
-    echo "Core-Geth Sync Status:"
-    echo "----------------------"
-    docker logs core-geth-testbed 2>&1 | grep -i "sync\|snap" | tail -10 || echo "  No sync logs found"
-    echo ""
-    
-    # Get peer count from both nodes
-    echo "Peer Count Comparison:"
-    echo "----------------------"
+    # Get peer count from fukuii node
+    echo "Peer Count:"
+    echo "-----------"
     echo -n "  Fukuii: "
-    docker exec fukuii-testbed curl -s -X POST \
+    docker exec fukuii-cirith-ungol curl -s -X POST \
       -H "Content-Type: application/json" \
       --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
       http://localhost:8546 2>/dev/null | grep -o '"result":"[^"]*"' || echo "Unable to get peer count"
-    
-    echo -n "  Core-geth: "
-    docker exec core-geth-testbed geth attach --exec "admin.peers.length" http://localhost:8545 2>/dev/null || echo "Unable to get peer count (geth uses container internal port)"
     echo ""
     
     # Display recent SNAP-related errors from fukuii
     echo "Recent Fukuii SNAP Errors:"
     echo "--------------------------"
-    docker logs fukuii-testbed 2>&1 | grep -i "snap.*error\|snap.*timeout\|snap.*fail" | tail -10 || echo "  No SNAP errors found"
+    docker logs fukuii-cirith-ungol 2>&1 | grep -i "snap.*error\|snap.*timeout\|snap.*fail" | tail -10 || echo "  No SNAP errors found"
     echo ""
     
     echo "=================================="
@@ -121,7 +110,6 @@ collect_logs() {
     echo "  - View fukuii SNAP logs:     grep -i snap $LOG_DIR/fukuii_${TIMESTAMP}.log"
     echo "  - View peer capabilities:    grep PEER_HANDSHAKE_SUCCESS $LOG_DIR/fukuii_${TIMESTAMP}.log"
     echo "  - View GetAccountRange:      grep GetAccountRange $LOG_DIR/fukuii_${TIMESTAMP}.log"
-    echo "  - Compare with core-geth:    less $LOG_DIR/core-geth_${TIMESTAMP}.log"
     echo ""
 }
 
@@ -130,7 +118,6 @@ ACTION="${1:-up}"
 
 case "$ACTION" in
     up|start)
-        echo "Starting Fukuii Testbed (both fukuii and core-geth nodes)..."
         echo ""
         $COMPOSE_CMD up -d
         echo ""
@@ -138,7 +125,6 @@ case "$ACTION" in
         echo ""
         echo "Monitoring commands:"
         echo "  - View fukuii logs:   $COMPOSE_CMD logs -f fukuii"
-        echo "  - View geth logs:     $COMPOSE_CMD logs -f core-geth"
         echo "  - View all logs:      $COMPOSE_CMD logs -f"
         echo "  - Collect logs:       $0 collect-logs"
         echo "  - Check health:       curl http://localhost:8546/health"
@@ -189,12 +175,6 @@ case "$ACTION" in
                 curl -s http://localhost:8546/health
             fi
             echo ""
-            
-            echo "Core-geth sync status:"
-            curl -s -X POST -H "Content-Type: application/json" \
-              --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-              http://localhost:8555 | jq 2>/dev/null || echo "Unable to get sync status"
-            echo ""
         else
             echo "Install curl to check health endpoints"
         fi
@@ -203,27 +183,13 @@ case "$ACTION" in
     clean)
         echo "WARNING: This will remove all data including the blockchain!"
         echo "This includes:"
-        echo "  - Fukuii docker volume"
-        echo "  - Core-geth data in ops/data/geth/"
+        echo "  - fukuii-cirith-ungol-data (blockchain data)"
+        echo "  - fukuii-cirith-ungol-logs (log files)"
         read -p "Are you sure? (yes/no): " -r
         echo ""
         if [[ $REPLY =~ ^[Yy]([Ee][Ss])?$ ]]; then
             echo "Stopping and removing all data..."
             $COMPOSE_CMD down -v
-            
-            # Also remove the host-mounted geth data
-            GETH_DATA_DIR="../data/geth"
-            if [ -d "$GETH_DATA_DIR" ]; then
-                echo "Removing core-geth data directory..."
-                # Safety check: ensure we're in the right directory
-                if [[ "$GETH_DATA_DIR" == *"ops/data/geth"* ]] || [[ "$GETH_DATA_DIR" == "../data/geth" ]]; then
-                    find "$GETH_DATA_DIR" -mindepth 1 -delete 2>/dev/null || rm -rf "${GETH_DATA_DIR:?}"/*
-                    echo "  ✓ Core-geth data removed"
-                else
-                    echo "  ✗ Unexpected data directory path, skipping removal for safety"
-                fi
-            fi
-            
             echo "✓ All data removed."
         else
             echo "Cancelled."
@@ -234,10 +200,8 @@ case "$ACTION" in
         echo "Usage: $0 [command] [options]"
         echo ""
         echo "Commands:"
-        echo "  up, start        Start both nodes (fukuii and core-geth)"
         echo "  down, stop       Stop both nodes"
         echo "  restart          Restart both nodes"
-        echo "  logs [service]   Show and follow logs (optional: fukuii or core-geth)"
         echo "  collect-logs     Capture logs from both nodes to files"
         echo "  status           Show node status and health"
         echo "  clean            Stop and remove all data (including blockchain)"
@@ -246,7 +210,6 @@ case "$ACTION" in
         echo "Examples:"
         echo "  $0 start                    # Start both nodes"
         echo "  $0 logs fukuii              # Follow fukuii logs only"
-        echo "  $0 logs core-geth           # Follow core-geth logs only"
         echo "  $0 collect-logs             # Capture logs to files"
         echo "  $0 status                   # Check status of both nodes"
         echo ""

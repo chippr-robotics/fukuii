@@ -1,52 +1,27 @@
-# Testbed Configuration - SNAP Sync Testing
+# Cirith Ungol Configuration - ETC Mainnet Testing
 
-This configuration continues SNAP sync testing from run-005 to validate the SNAP protocol implementation and analyze peer capability exchange behavior.
+> *Named after the pass of the spider in Mordor, a treacherous path that must be carefully navigated*
+
+This configuration provides a testing environment for Fukuii nodes on ETC mainnet with comprehensive logging and monitoring capabilities.
 
 ## Purpose
 
-**Run 006 is a SNAP protocol validation test**, not a production sync attempt. The goal is to:
+Cirith Ungol serves as a general-purpose testing environment for:
 
-1. **Test SNAP implementation** - Validate our SNAP protocol code
-2. **Capture detailed logs** - Analyze capability exchange and SNAP message flows
-3. **Investigate peer behavior** - Understand why ETC peers don't advertise snap/1
-4. **Debug protocol issues** - Identify any implementation problems
-5. **Compare with core-geth** - Run core-geth alongside for SNAP sync comparison
+1. **Test Fukuii implementation** - Validate node behavior on ETC mainnet
+2. **Capture detailed logs** - Analyze sync processes and network behavior
+3. **Investigate network issues** - Debug protocol implementation and peer interactions
+4. **Protocol validation** - Test various sync modes and network configurations
 
 ## Architecture
 
-Run 006 deploys **two nodes** for comparison:
+Cirith Ungol deploys a single Fukuii node:
 
 ### Fukuii Node
-- Our implementation under test
-- SNAP sync enabled with detailed logging
-- Focus: Validate SNAP protocol implementation
+- ETC mainnet node for testing
+- Configurable sync modes (SNAP, Fast, Full)
+- Focus: Testing and validation
 - Ports: 8545 (HTTP), 8546 (WS), 30303 (P2P)
-
-### Core-Geth Node
-- Reference implementation (official ETC client)
-- SNAP sync enabled (`--syncmode=snap`)
-- Purpose: Baseline comparison for SNAP behavior
-- Ports: 8555 (HTTP), 8556 (WS), 30313 (P2P)
-- Data: Stored in `ops/data/geth/` (gitignored)
-
-This allows us to compare:
-- Whether core-geth encounters the same issues with SNAP
-- How core-geth handles peers without snap/1 support
-- Message flows between the two implementations
-- Capability negotiation differences
-
-## Background from Run 005
-
-Run 005 attempted SNAP sync but made zero progress:
-- All GetAccountRange requests timed out with no responses
-- ETC mainnet peers only advertised "Capability: ETH68", not "snap/1"
-- SNAP sync remained at 0 accounts throughout the entire run
-
-While this suggests ETC peers don't support SNAP, we need detailed logs to:
-- Verify the capability negotiation flow
-- Confirm SNAP messages are being sent correctly
-- Understand peer disconnect reasons
-- Validate our SNAP protocol implementation
 
 ## Configuration Changes from Run 005
 
@@ -70,96 +45,83 @@ do-fast-sync = false   # Disabled to isolate SNAP behavior
 <!-- INFO/WARN: Non-SNAP components (reduce noise) -->
 <logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="INFO" />
 <logger name="com.chipprbots.scalanet" level="INFO" />
+
+### Logging: Configurable for Testing Needs
+```xml
+<!-- DEBUG: SNAP sync components -->
+<logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
+
+<!-- DEBUG: Handshake and capability exchange -->
+<logger name="com.chipprbots.ethereum.network.handshaker" level="DEBUG" />
+
+<!-- DEBUG: RLPx and message codec -->
+<logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
+
+<!-- INFO/WARN: Other components -->
+<logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="INFO" />
+<logger name="com.chipprbots.scalanet" level="INFO" />
 ```
 
-### Timeouts: Same as Run 005
+### Timeouts: Standard Configuration
 - `peer-response-timeout = 90.seconds`
 - `snap-sync.request-timeout = 60.seconds`
 - `blacklist-duration = 60.seconds`
-
-## Expected Behavior
-
-Since run 005 showed peers don't advertise snap/1:
-
-**Expected:** SNAP sync will likely make zero progress again
-**Goal:** Capture detailed logs showing:
-- Peer Hello messages (which capabilities they advertise)
-- SNAP sync initialization
-- GetAccountRange requests being sent
-- Request timeouts (since peers don't support SNAP)
-- Peer disconnect events and reasons
-
-This is **expected behavior for a test** - we're validating that our implementation correctly handles peers without SNAP support.
 
 ## Usage
 
 ### Quick Start
 
 ```bash
-cd ops/testbed
+cd ops/cirith-ungol
 
-# Start both nodes (fukuii and core-geth)
+# Start the node
 ./start.sh start
 
 # View logs (live)
 ./start.sh logs
 
-# View specific node logs
-docker compose logs -f fukuii      # Fukuii node only
-docker compose logs -f core-geth   # Core-geth node only
-
-# Stop both nodes
+# Stop the node
 ./start.sh stop
 ```
 
-### Monitoring Both Nodes
+### Monitoring
 
 #### Check Node Status
 ```bash
-# Fukuii status
+# Node status
 curl http://localhost:8545/eth_syncing
 
-# Core-geth status
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-  http://localhost:8555
-
-# Both node containers
+# Container status
 docker compose ps
 ```
 
-#### Compare Sync Behavior
+#### View Sync Progress
 ```bash
-# Fukuii SNAP progress
+# SNAP sync progress
 docker compose logs fukuii | grep "SNAP Sync Progress"
 
-# Core-geth sync status (check if it progresses with SNAP)
-docker compose logs core-geth | grep -i "snap\|sync"
+# General sync status
+docker compose logs fukuii | grep -i "sync"
 ```
 
 ### Key Monitoring Commands
 
-#### 1. Peer Capability Exchange (Fukuii)
+#### 1. Peer Capability Exchange
 ```bash
-# See what capabilities peers advertise to fukuii
+# See what capabilities peers advertise
 docker compose logs fukuii | grep "PEER_HANDSHAKE_SUCCESS"
-
-# Should show peers advertising only ETH68, not snap/1
 ```
 
-#### 2. SNAP Sync Behavior (Both Nodes)
+#### 2. Sync Behavior
 ```bash
-# Fukuii SNAP sync initialization
+# Sync initialization
 docker compose logs fukuii | grep -i "snap.*start\|snap.*init"
 
-# Fukuii SNAP progress (likely 0)
+# Sync progress
 docker compose logs fukuii | grep "SNAP Sync Progress"
-
-# Core-geth SNAP behavior (compare)
-docker compose logs core-geth | grep -i "snap"
 ```
 
-#### 3. SNAP Messages (Fukuii)
+#### 3. SNAP Messages
 ```bash
 # See GetAccountRange requests being sent
 docker compose logs fukuii | grep "GetAccountRange"
@@ -168,19 +130,7 @@ docker compose logs fukuii | grep "GetAccountRange"
 docker compose logs fukuii | grep "SNAP request.*timeout"
 ```
 
-#### 4. Core-Geth Comparison
-```bash
-# Check if core-geth makes SNAP progress
-docker compose logs core-geth | tail -100
-
-# Check core-geth peer count
-docker compose exec core-geth geth attach --exec "admin.peers.length"
-
-# Check core-geth sync status
-docker compose exec core-geth geth attach --exec "eth.syncing"
-```
-
-#### 5. Capability Negotiation Details
+#### 4. Capability Negotiation Details
 ```bash
 # Detailed handshake logging
 docker compose logs fukuii | grep -i "capability\|hello"
@@ -191,62 +141,49 @@ docker compose logs fukuii | grep -i "snap/1\|snap.*protocol"
 
 ## What to Look For in Logs
 
-### Success Criteria (for this test)
+### Key Observations
 
-✅ **Peer handshakes complete** - We can connect to peers  
-✅ **Capability exchange logged** - We see what peers advertise  
-✅ **SNAP sync starts** - Our SNAP implementation initializes  
-✅ **GetAccountRange sent** - Our SNAP messages are formatted correctly  
-✅ **Detailed logs captured** - We have data for analysis  
+✅ **Peer handshakes complete** - Node can connect to peers  
+✅ **Capability exchange logged** - See what peers advertise  
+✅ **Sync processes start** - Sync implementations initialize  
+✅ **Detailed logs captured** - Data available for analysis  
 
 ### Analysis Points
 
-1. **Do peers advertise snap/1?**
-   - Look for "snap/1" or "SNAP1" in capability lists
-   - If not found, confirms run-005 observation
+1. **Peer capabilities**
+   - Look for advertised capabilities in handshake logs
+   - Identify which sync protocols are supported
 
-2. **How does our code handle missing SNAP support?**
-   - Does it gracefully timeout?
+2. **Sync behavior**
+   - How does the code handle different peer capabilities?
+   - Are timeouts and retries working correctly?
    - Are error messages clear?
-   - Do we blacklist peers appropriately?
 
-3. **Are SNAP messages formatted correctly?**
+3. **Message formatting**
    - Check message encoding/decoding logs
    - Verify RLP serialization
-   - Confirm message codes match SNAP spec
+   - Confirm message codes match protocol specs
 
-4. **What happens at timeout?**
+4. **Timeout handling**
    - Peer disconnect reasons
    - Retry behavior
    - Blacklist reasons
-
-## Comparison with Run 005
-
-| Aspect | Run 005 | Run 006 |
-|--------|---------|---------|
-| **SNAP Sync** | Enabled | Enabled (same) |
-| **Purpose** | Try to sync | Test SNAP implementation |
-| **SNAP Logging** | DEBUG | DEBUG (same) |
-| **Non-SNAP Logging** | DEBUG | INFO/WARN (reduced) |
-| **FastSync** | Disabled | Disabled (same) |
-| **Expected Result** | Zero progress | Zero progress (expected) |
-| **Success Metric** | Sync completes | Detailed logs captured |
 
 ## Troubleshooting
 
 ### If Logs Are Too Noisy
 
-Check that non-SNAP components are at INFO or WARN:
+Check logging levels:
 ```bash
 docker compose logs fukuii | grep "level=" | sort | uniq -c
 ```
 
-### If Missing SNAP Logs
+### If Missing Sync Logs
 
-Verify SNAP sync is enabled:
+Verify sync configuration:
 ```bash
 docker compose exec fukuii cat /app/conf/etc.conf | grep do-snap-sync
-# Should show: do-snap-sync = true
+docker compose exec fukuii cat /app/conf/etc.conf | grep do-fast-sync
 ```
 
 ### If No Peers Connect
@@ -259,26 +196,26 @@ docker compose logs fukuii | grep "PEER_HANDSHAKE"
 
 ## Analysis After Run
 
-After collecting logs from run 006, analyze:
+After collecting logs, analyze:
 
 1. **Capability Advertisement**
    ```bash
-   grep "PEER_HANDSHAKE_SUCCESS" run006.log | grep -o "Capability: [A-Z0-9]*" | sort | uniq -c
+   grep "PEER_HANDSHAKE_SUCCESS" cirith-ungol.log | grep -o "Capability: [A-Z0-9]*" | sort | uniq -c
    ```
 
 2. **SNAP Message Flow**
    ```bash
-   grep -E "GetAccountRange|AccountRange.*response" run006.log
+   grep -E "GetAccountRange|AccountRange.*response" cirith-ungol.log
    ```
 
 3. **Timeout Patterns**
    ```bash
-   grep "timeout" run006.log | grep -i snap
+   grep "timeout" cirith-ungol.log | grep -i snap
    ```
 
 4. **Disconnect Reasons**
    ```bash
-   grep -i "disconnect\|blacklist" run006.log
+   grep -i "disconnect\|blacklist" cirith-ungol.log
    ```
 
 ## Next Steps
@@ -308,108 +245,13 @@ Based on run 006 results:
 
 ## Conclusion
 
-Run 006 is a **test configuration** to validate SNAP protocol implementation and understand peer behavior. Success is measured by capturing detailed logs for analysis, not by achieving sync progress.
+Cirith Ungol provides a flexible testing environment for validating Fukuii node behavior on ETC mainnet. The configuration supports comprehensive logging and monitoring to aid in debugging and analysis.
 
-The configuration enables SNAP sync with comprehensive logging focused on:
-- Peer capability exchange
-- SNAP protocol messages
-- Request/response flows
-- Timeout and error handling
-
-This allows thorough analysis of why SNAP sync doesn't progress on ETC mainnet and validates that our implementation handles this scenario correctly.
-
-
-## Problem Statement (from Run 005)
-
-Run 005 attempted to use SNAP sync on ETC mainnet but sync never progressed past the account retrieval phase:
-- GetAccountRange requests were sent to peers
-- All requests timed out after 60s
-- No responses were ever received
-- Peers were blacklisted with "Some other reason specific to a subprotocol"
-- SNAP sync progress remained at 0 accounts
-
-## Root Cause Analysis
-
-### Investigation Findings
-
-1. **ETC Mainnet Peers Do Not Advertise SNAP/1**
-   - All connected peers only advertised `ETH68` capability
-   - No peers advertised `snap/1` capability
-   - Examined 3 primary peers repeatedly throughout run-005:
-     - 164.90.144.106:30303 - only ETH68
-     - 157.245.77.211:30303 - only ETH68
-     - 64.225.0.245:30303 - only ETH68
-
-2. **Fukuii Correctly Configured for SNAP**
-   - Node properly advertises `snap/1` in capabilities list
-   - Configuration in `src/main/resources/conf/chains/etc-chain.conf`:
-     ```
-     capabilities = ["eth/63", "eth/64", "eth/65", "eth/66", "eth/67", "eth/68", "snap/1"]
-     ```
-   - SNAP sync components are properly initialized
-   - GetAccountRange requests are correctly formatted
-
-3. **Core-Geth Implementation Verified**
-   - Examined core-geth source code (official ETC client)
-   - SNAP/1 protocol IS implemented in core-geth
-   - Default sync mode is SnapSync
-   - SNAP protocol is enabled when `SnapshotCache > 0` (default: 102)
-   - However, actual ETC mainnet nodes appear to run with different configurations
-
-### Why SNAP Doesn't Work on ETC Mainnet
-
-**The ETC network ecosystem has not widely adopted SNAP sync**. Possible reasons:
-
-1. **Operational Decisions**: Many ETC node operators may:
-   - Disable snapshot cache to reduce disk/memory usage
-   - Use older node software versions without SNAP
-   - Explicitly configure nodes for FastSync or FullSync only
-
-2. **Network Maturity**: SNAP sync is a relatively newer protocol:
-   - Designed for Ethereum mainnet's large state size
-   - ETC has smaller state, making FastSync adequate
-   - Less urgency to upgrade to SNAP on ETC
-
-3. **Client Distribution**: While core-geth supports SNAP:
-   - Not all ETC nodes run latest core-geth versions
-   - Some may run alternative clients
-   - Default configurations may vary
-
-### Impact
-
-- **SNAP sync is not viable for ETC mainnet** at this time
-- Attempting SNAP sync results in:
-  - All requests timing out (no SNAP-capable peers)
-  - Peers being unnecessarily blacklisted
-  - No sync progress whatsoever
-  - Wasted network resources
-
-## Solution for Run 006
-
-### Configuration Changes
-
-Run 006 disables SNAP sync and enables FastSync instead:
-
-```hocon
-fukuii {
-  sync {
-    # DISABLED: SNAP not supported by ETC mainnet peers
-    do-snap-sync = false
-    
-    # ENABLED: FastSync is well-supported on ETC mainnet
-    do-fast-sync = true
-  }
-}
-```
-
-### Why FastSync is Appropriate
-
-1. **Wide Peer Support**: All ETC peers support ETH63-ETH68, which includes FastSync
-2. **Proven Reliability**: FastSync has been used on ETC for years
-3. **Adequate Performance**: ETC state size is manageable with FastSync
-4. **Peer Availability**: Many peers available for FastSync requests
-
-## Expected Behavior in Run 006
+Success is measured by:
+- Stable node operation
+- Proper peer connectivity
+- Expected sync behavior
+- Clear, actionable logs for troubleshooting
 
 ### Success Indicators
 
@@ -478,7 +320,7 @@ docker compose logs fukuii | grep -i "progress\|downloaded"
 ### Quick Start
 
 ```bash
-cd ops/testbed
+cd ops/cirith-ungol
 
 # Start the node
 ./start.sh start
