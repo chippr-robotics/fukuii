@@ -274,6 +274,39 @@ const advancedConfigSections = {
   }
 };
 
+// Utility Functions
+function parseValue(value) {
+  // Parse a value from string to appropriate type
+  if (value === 'true') {
+    return true;
+  } else if (value === 'false') {
+    return false;
+  } else if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value)) {
+    // Only parse numbers that are purely numeric
+    return Number(value);
+  }
+  return value;
+}
+
+function formatConfigValue(value) {
+  if (typeof value === 'boolean') {
+    return value.toString();
+  } else if (typeof value === 'number') {
+    return value.toString();
+  } else if (typeof value === 'string') {
+    // Check if it's a duration or special format
+    if (value.includes('.') && (value.endsWith('seconds') || value.endsWith('minutes'))) {
+      return value;
+    }
+    // Check if it's a variable substitution or simple identifier
+    if (value.startsWith('${') || /^[0-9a-zA-Z._-]+$/.test(value)) {
+      return value;
+    }
+    return `"${value}"`;
+  }
+  return String(value);
+}
+
 // Initialize wizard
 document.addEventListener('DOMContentLoaded', () => {
   initializeTabs();
@@ -515,17 +548,7 @@ function toggleSection(sectionId) {
 }
 
 function updateCustomConfig(key, value) {
-  // Parse boolean values
-  if (value === 'true') {
-    value = true;
-  } else if (value === 'false') {
-    value = false;
-  } else if (!isNaN(value) && value !== '' && typeof value === 'string') {
-    // Only parse numbers from strings, not already-number values
-    value = Number(value);
-  }
-  
-  configState.customConfig[key] = value;
+  configState.customConfig[key] = parseValue(value);
   updatePreview();
 }
 
@@ -602,17 +625,7 @@ function parseConfigFile(content, filename) {
         value = value.slice(1, -1);
       }
       
-      // Parse boolean
-      if (value === 'true') {
-        value = true;
-      } else if (value === 'false') {
-        value = false;
-      } else if (!isNaN(value) && value !== '' && !/[a-zA-Z]/.test(value)) {
-        // Parse number (if it doesn't contain letters)
-        value = Number(value);
-      }
-      
-      config[key] = value;
+      config[key] = parseValue(value);
     }
   });
   
@@ -799,25 +812,6 @@ function organizeConfigBySection(config) {
   });
   
   return sections;
-}
-
-function formatConfigValue(value) {
-  if (typeof value === 'boolean') {
-    return value.toString();
-  } else if (typeof value === 'number') {
-    return value.toString();
-  } else if (typeof value === 'string') {
-    // Check if it's a duration or special format
-    if (value.includes('.') && (value.endsWith('seconds') || value.endsWith('minutes'))) {
-      return value;
-    }
-    // Check if it needs quotes
-    if (value.startsWith('${') || /^[0-9a-zA-Z._-]+$/.test(value)) {
-      return value;
-    }
-    return `"${value}"`;
-  }
-  return String(value);
 }
 
 function escapeHtml(text) {
