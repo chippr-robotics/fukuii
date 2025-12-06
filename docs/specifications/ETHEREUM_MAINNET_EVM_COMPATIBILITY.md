@@ -26,8 +26,9 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 |----------|-------------|---------|---------|
 | Pre-Merge EIPs | 25+ | 2 | 8+ |
 | Post-Merge EIPs | 0 | 0 | 10+ |
+| Pectra/Fusaka EIPs | 0 | 0 | 8 |
 | Opcodes | 142/145 | 0 | 3 |
-| Precompiled Contracts | 9/11 | 0 | 2 |
+| Precompiled Contracts | 9/20 | 0 | 11 |
 
 ### Compatibility Level
 
@@ -36,8 +37,8 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 - **Ethereum London**: ⚠️ Partial (EIP-1559 not implemented)
 - **Ethereum Paris (The Merge)**: ❌ Not implemented
 - **Ethereum Shanghai**: ⚠️ Partial (beacon chain features missing)
-- **Ethereum Cancun**: ❌ Not implemented
-- **Ethereum Prague**: ❌ Not implemented
+- **Ethereum Cancun (Dencun)**: ❌ Not implemented
+- **Ethereum Prague (Pectra/Fusaka)**: ❌ Not implemented
 
 ---
 
@@ -141,16 +142,22 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 | EIP-6780 | SELFDESTRUCT changes | ❌ Missing | Same-transaction only |
 | EIP-7516 | BLOBBASEFEE opcode | ❌ Missing | Blob gas price |
 
-### Prague (Upcoming)
+### Prague/Pectra (Execution: Prague, Consensus: Fusaka - Activated May 7, 2025)
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
-| EIP-2537 | BLS12-381 precompiles | ❌ Missing | BLS curve operations |
-| EIP-6110 | Supply validator deposits on chain | ❌ Missing | Consensus layer |
-| EIP-7002 | Execution layer triggerable exits | ❌ Missing | Validator exits |
-| EIP-7251 | Increase MAX_EFFECTIVE_BALANCE | ❌ Missing | Consensus layer |
-| EIP-7549 | Move committee index outside Attestation | ❌ Missing | Consensus layer |
-| EIP-7685 | General purpose execution layer requests | ❌ Missing | Execution layer |
-| EIP-7702 | Set EOA account code | ❌ Missing | Account abstraction |
+| **Execution Layer EIPs** | | | |
+| EIP-2537 | BLS12-381 precompiles | ❌ Missing | BLS curve operations (9 precompiles) |
+| EIP-2935 | Serve historical block hashes from state | ❌ Missing | BLOCKHASH opcode improvement |
+| EIP-6110 | Supply validator deposits on chain | ❌ Missing | Deposit processing in EL |
+| EIP-7002 | Execution layer triggerable exits | ❌ Missing | Validator exits from EL |
+| EIP-7251 | Increase MAX_EFFECTIVE_BALANCE | ❌ Missing | Max 2048 ETH effective balance |
+| EIP-7549 | Move committee index outside Attestation | ❌ Missing | Consensus layer optimization |
+| EIP-7685 | General purpose execution layer requests | ❌ Missing | Request framework |
+| EIP-7702 | Set EOA account code for one transaction | ❌ Missing | Account abstraction precursor |
+| **Consensus Layer EIPs (Fusaka)** | | | |
+| EIP-7251 | Max effective balance (Consensus) | ❌ Missing | Validator consolidation support |
+| EIP-7549 | Committee index optimization | ❌ Missing | Attestation efficiency |
+| EIP-7594 | PeerDAS (Peer Data Availability Sampling) | ❌ Missing | Data availability layer |
 
 ---
 
@@ -173,8 +180,9 @@ Block 13,773,000 │ Arrow Glacier
 Block 15,050,000 │ Gray Glacier
 Block 15,537,394 │ Paris (The Merge) ← PoS transition
 Block 17,034,870 │ Shanghai        ← Withdrawals
-Block 19,426,587 │ Cancun          ← Proto-danksharding
-TBD              │ Prague          ← Verkle trees
+Block 19,426,587 │ Cancun (Dencun) ← Proto-danksharding
+Slot 10388992    │ Prague (Pectra/Fusaka) ← Account abstraction, MaxEB, EL requests
+(May 7, 2025)    │ (Execution: Prague, Consensus: Fusaka)
 ```
 
 ---
@@ -328,7 +336,7 @@ gas = G_verylow + G_copy * ceil(size / 32) + memory_expansion_cost
 ### Lower Priority (Future Enhancements)
 
 #### 12. EIP-2537: BLS12-381 Curve Operations
-**Priority**: 🟢 Lower  
+**Priority**: 🟢 Lower → 🟠 High (Included in Pectra)  
 **Complexity**: High  
 **Impact**: Precompiled contracts
 
@@ -344,6 +352,179 @@ gas = G_verylow + G_copy * ceil(size / 32) + memory_expansion_cost
 | 0x11 | BLS12_PAIRING | Pairing check |
 | 0x12 | BLS12_MAP_FP_TO_G1 | Hash to G1 |
 | 0x13 | BLS12_MAP_FP2_TO_G2 | Hash to G2 |
+
+**Notes**: 
+- Required for efficient BLS signature verification in EVM
+- Critical for Ethereum consensus layer integration
+- Now part of Pectra/Fusaka (activated May 7, 2025)
+
+---
+
+### Prague/Pectra (Fusaka) EIPs - Activated May 7, 2025
+
+#### 13. EIP-2935: Serve Historical Block Hashes from State
+**Priority**: 🟡 Medium  
+**Complexity**: Medium  
+**Impact**: State storage, BLOCKHASH opcode
+
+**Requirements**:
+- System contract at address `0x0aae40965e6800cd9b1f4b05ff21581047e3f91e`
+- Stores last 8192 block hashes in a ring buffer
+- BLOCKHASH opcode reads from this contract for blocks beyond 256
+- Improves historical block hash availability
+
+**Implementation Details**:
+```
+HISTORY_STORAGE_ADDRESS = 0x0aae40965e6800cd9b1f4b05ff21581047e3f91e
+HISTORY_SERVE_WINDOW = 8192
+```
+
+**Gas Impact**:
+- BLOCKHASH becomes more expensive for historical queries
+- But provides much longer lookback window
+
+#### 14. EIP-6110: Supply Validator Deposits on Chain
+**Priority**: 🔴 Critical (Execution-Consensus Integration)  
+**Complexity**: High  
+**Impact**: Deposit contract, block structure
+
+**Requirements**:
+- Process deposit events from deposit contract in execution layer
+- Add `deposits` field to execution payload
+- Remove reliance on consensus layer for deposit processing
+- Maximum 8192 deposits per block
+
+**Deposit Contract**: `0x00000000219ab540356cBB839Cbe05303d7705Fa`
+
+**Implementation Notes**:
+- Deposits are extracted from logs in execution layer
+- Improves execution-consensus layer separation
+- Part of Engine API v4
+
+#### 15. EIP-7002: Execution Layer Triggerable Exits
+**Priority**: 🟠 High  
+**Complexity**: Medium  
+**Impact**: Validator exits, block structure
+
+**Requirements**:
+- System contract at `0x00431D736Ab7fA9C4d1B0e70c1E2B8a0e79e3C4e`
+- Allows validators to trigger exits from execution layer
+- Add `exits` field to execution payload
+- Maximum 16 exits per block
+
+**Exit Request Structure**:
+```scala
+case class ExitRequest(
+  validatorPubkey: ByteString,  // 48 bytes
+  amount: BigInt                 // uint64
+)
+```
+
+#### 16. EIP-7251: Increase MAX_EFFECTIVE_BALANCE
+**Priority**: 🟡 Medium (Consensus Layer)  
+**Complexity**: Medium  
+**Impact**: Validator economics, consolidations
+
+**Changes**:
+- Increases MAX_EFFECTIVE_BALANCE from 32 ETH to 2048 ETH
+- Allows validator consolidation
+- Reduces beacon chain state size
+- Execution layer needs to support consolidation requests
+
+**Impact on Execution Layer**:
+- Must support validator consolidation requests
+- Part of general request framework (EIP-7685)
+
+#### 17. EIP-7549: Move Committee Index Outside Attestation
+**Priority**: 🟢 Lower (Consensus Layer)  
+**Complexity**: Low  
+**Impact**: Attestation structure
+
+**Notes**:
+- Primarily consensus layer change
+- Improves attestation efficiency
+- No direct execution layer impact
+- Minimal execution client changes required
+
+#### 18. EIP-7685: General Purpose Execution Layer Requests
+**Priority**: 🔴 Critical  
+**Complexity**: Medium  
+**Impact**: Block structure, Engine API
+
+**Requirements**:
+- Framework for execution layer to consensus layer requests
+- Add `requests` field to execution payload
+- Support multiple request types (deposits, exits, consolidations)
+
+**Request Types**:
+| Type ID | Name | EIP |
+|---------|------|-----|
+| 0x00 | Deposit | EIP-6110 |
+| 0x01 | Exit | EIP-7002 |
+| 0x02 | Consolidation | EIP-7251 |
+
+**Implementation**:
+```scala
+case class ExecutionPayload(
+  // ... existing fields ...
+  requests: Seq[Request]  // New field
+)
+
+sealed trait Request {
+  def requestType: Byte
+}
+```
+
+#### 19. EIP-7702: Set EOA Account Code for One Transaction
+**Priority**: 🔴 Critical  
+**Complexity**: High  
+**Impact**: Transaction types, account abstraction
+
+**Requirements**:
+- Implement Type 4 (EIP-7702) transactions
+- Add `authorization_list` to transactions
+- Temporarily set code for EOA accounts during transaction
+- Revert code after transaction completes
+
+**Authorization Structure**:
+```scala
+case class Authorization(
+  chainId: BigInt,
+  address: Address,
+  nonce: BigInt,
+  yParity: Byte,
+  r: BigInt,
+  s: BigInt
+)
+```
+
+**Transaction Format**:
+- Type: 0x04
+- Fields: chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, destination, value, data, access_list, authorization_list, signature_y_parity, signature_r, signature_s
+
+**Use Cases**:
+- Account abstraction without protocol changes
+- Batched transactions from EOAs
+- Sponsored transactions
+- Gas payment by contract
+
+**Implementation Challenges**:
+- Temporary code storage
+- Nonce management
+- Gas accounting
+- Security considerations (reentrancy, etc.)
+
+#### 20. EIP-7594: PeerDAS (Peer Data Availability Sampling)
+**Priority**: 🟢 Lower (Consensus Layer)  
+**Complexity**: Very High  
+**Impact**: Data availability, networking
+
+**Notes**:
+- Primarily consensus layer feature
+- Improves data availability sampling
+- Reduces bandwidth requirements for validators
+- Minimal direct execution client impact
+- Enables more efficient blob handling
 
 ---
 
@@ -502,7 +683,176 @@ All LOG0-LOG4 opcodes: ✅ Implemented
 | Address | Name | EIP | Priority |
 |---------|------|-----|----------|
 | 0x0A | KZG_POINT_EVALUATION | EIP-4844 | 🟡 Medium |
-| 0x0B-0x13 | BLS12-381 operations | EIP-2537 | 🟢 Lower |
+| 0x0B | BLS12_G1ADD | EIP-2537 | 🟠 High (Pectra) |
+| 0x0C | BLS12_G1MUL | EIP-2537 | 🟠 High (Pectra) |
+| 0x0D | BLS12_G1MSM | EIP-2537 | 🟠 High (Pectra) |
+| 0x0E | BLS12_G2ADD | EIP-2537 | 🟠 High (Pectra) |
+| 0x0F | BLS12_G2MUL | EIP-2537 | 🟠 High (Pectra) |
+| 0x10 | BLS12_G2MSM | EIP-2537 | 🟠 High (Pectra) |
+| 0x11 | BLS12_PAIRING | EIP-2537 | 🟠 High (Pectra) |
+| 0x12 | BLS12_MAP_FP_TO_G1 | EIP-2537 | 🟠 High (Pectra) |
+| 0x13 | BLS12_MAP_FP2_TO_G2 | EIP-2537 | 🟠 High (Pectra) |
+
+---
+
+## Transaction Types
+
+Ethereum has evolved from a single transaction format to multiple typed transactions using the envelope format (EIP-2718). Fukuii currently only supports Type 0 (legacy) transactions.
+
+### Type 0: Legacy Transactions (Pre-EIP-2718)
+**Status**: ✅ Implemented  
+**EIP**: N/A (Original format)
+
+**Structure**:
+```
+rlp([nonce, gasPrice, gasLimit, to, value, data, v, r, s])
+```
+
+**Fields**:
+- `nonce`: Transaction counter for sender
+- `gasPrice`: Gas price in wei
+- `gasLimit`: Maximum gas allowed
+- `to`: Recipient address (or empty for contract creation)
+- `value`: ETH amount to transfer
+- `data`: Contract data or initialization code
+- `v, r, s`: ECDSA signature components
+
+**Limitations**:
+- Fixed gas price (no priority fee)
+- No access lists
+- No chain ID protection in pre-EIP-155 transactions
+
+### Type 1: Access List Transactions (EIP-2930)
+**Status**: ⚠️ Partial (Berlin)  
+**EIP**: [EIP-2930](https://eips.ethereum.org/EIPS/eip-2930)
+
+**Structure**:
+```
+0x01 || rlp([chainId, nonce, gasPrice, gasLimit, to, value, data, accessList, signatureYParity, signatureR, signatureS])
+```
+
+**New Fields**:
+- `accessList`: List of addresses and storage keys that will be accessed
+- Transaction type prefix: `0x01`
+
+**Benefits**:
+- Reduced gas costs for pre-declared storage access
+- Mitigates effects of EIP-2929 (cold/warm access costs)
+
+### Type 2: EIP-1559 Transactions
+**Status**: ❌ Missing (London)  
+**EIP**: [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559)
+
+**Structure**:
+```
+0x02 || rlp([chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, signatureYParity, signatureR, signatureS])
+```
+
+**New Fields**:
+- `maxPriorityFeePerGas`: Maximum priority fee (tip) to miner
+- `maxFeePerGas`: Maximum total fee willing to pay
+- Replaces `gasPrice` with fee market mechanism
+
+**Gas Calculation**:
+```
+effectiveGasPrice = min(maxFeePerGas, baseFeePerGas + maxPriorityFeePerGas)
+priorityFee = effectiveGasPrice - baseFeePerGas
+```
+
+**Benefits**:
+- Predictable base fees
+- Better UX (no more gas price guessing)
+- ETH burn mechanism (base fee is burned)
+
+### Type 3: Blob Transactions (EIP-4844)
+**Status**: ❌ Missing (Cancun/Dencun)  
+**EIP**: [EIP-4844](https://eips.ethereum.org/EIPS/eip-4844)
+
+**Structure**:
+```
+0x03 || rlp([chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, maxFeePerBlobGas, blobVersionedHashes, signatureYParity, signatureR, signatureS])
+```
+
+**New Fields**:
+- `maxFeePerBlobGas`: Maximum fee per blob gas unit
+- `blobVersionedHashes`: Commitments to blob data (not included in block)
+
+**Blob Data**:
+- Blobs are ~125KB each (4096 field elements × 32 bytes)
+- Not stored in execution layer state
+- Designed for rollup data availability
+- Separate gas market from regular transactions
+
+**Benefits**:
+- Dramatically cheaper data availability for rollups
+- Separate blob gas pricing (independent of regular gas)
+- Temporary storage (blobs pruned after ~18 days)
+
+### Type 4: Account Abstraction Transactions (EIP-7702)
+**Status**: ❌ Missing (Pectra/Fusaka)  
+**EIP**: [EIP-7702](https://eips.ethereum.org/EIPS/eip-7702)
+
+**Structure**:
+```
+0x04 || rlp([chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, authorizationList, signatureYParity, signatureR, signatureS])
+```
+
+**New Field**:
+- `authorizationList`: List of authorizations to temporarily set code for EOAs
+
+**Authorization Structure**:
+```scala
+case class Authorization(
+  chainId: BigInt,
+  address: Address,      // Contract address to delegate to
+  nonce: BigInt,         // Account nonce for replay protection
+  yParity: Byte,
+  r: BigInt,
+  s: BigInt
+)
+```
+
+**Mechanism**:
+1. EOA signs authorization to delegate to a contract
+2. During transaction execution, EOA temporarily gets code from contract
+3. Code is removed after transaction completes
+4. Enables smart contract logic for EOAs
+
+**Benefits**:
+- Account abstraction for EOAs without protocol changes
+- Batched transactions from EOAs
+- Gas sponsorship (someone else pays gas)
+- Custom signature schemes
+- Social recovery
+- Transaction batching
+
+**Security Considerations**:
+- Authorization nonce prevents replay attacks
+- Chain ID prevents cross-chain replay
+- Temporary delegation limits attack surface
+- Must validate all authorizations before execution
+
+### Transaction Type Comparison
+
+| Feature | Type 0 | Type 1 | Type 2 | Type 3 | Type 4 |
+|---------|--------|--------|--------|--------|--------|
+| Gas Pricing | Fixed | Fixed | Dynamic (EIP-1559) | Dynamic + Blob | Dynamic + Blob |
+| Access Lists | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Base Fee | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Blob Data | ❌ | ❌ | ❌ | ✅ | ❌ |
+| EOA Code Delegation | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Chain ID | Optional | ✅ | ✅ | ✅ | ✅ |
+| Use Case | Legacy | Gas optimization | Modern txs | Rollup data | Account abstraction |
+
+### Implementation Status in Fukuii
+
+| Type | Status | Priority | Notes |
+|------|--------|----------|-------|
+| Type 0 | ✅ Implemented | N/A | Fully supported |
+| Type 1 | ⚠️ Partial | 🟠 High | Access list parsing incomplete |
+| Type 2 | ❌ Missing | 🔴 Critical | Required for London compatibility |
+| Type 3 | ❌ Missing | 🟡 Medium | Required for Cancun compatibility |
+| Type 4 | ❌ Missing | 🔴 Critical | Required for Pectra compatibility |
 
 ---
 
@@ -526,19 +876,27 @@ All LOG0-LOG4 opcodes: ✅ Implemented
 
 1. **Transaction Types**:
    - ETC: Type 0 (legacy) only
-   - ETH: Types 0, 1, 2, 3 (legacy, access list, EIP-1559, blob)
+   - ETH: Types 0, 1, 2, 3, 4 (legacy, access list, EIP-1559, blob, EIP-7702)
 
 2. **Block Headers**:
    - ETC: Classic header structure with PoW fields
    - ETH: Extended header with `baseFeePerGas`, `withdrawalsRoot`, `blobGasUsed`, `excessBlobGas`, `parentBeaconBlockRoot`
 
-3. **Chain ID**:
+3. **Execution Payload (Post-Pectra)**:
+   - Additional field: `requests` (EIP-7685)
+   - Includes deposits, exits, and consolidation requests
+   
+4. **Chain ID**:
    - ETC: 61 (mainnet), 63 (Mordor)
    - ETH: 1 (mainnet)
 
-4. **Network Protocol**:
+5. **Network Protocol**:
    - ETC: eth/63-68, snap/1
    - ETH: eth/66-68, snap/1 (with extended message types)
+
+6. **Validator Operations (Pectra)**:
+   - ETC: N/A (PoW)
+   - ETH: On-chain deposits (EIP-6110), execution-triggered exits (EIP-7002), validator consolidation (EIP-7251)
 
 ---
 
@@ -662,27 +1020,131 @@ sbt "IntegrationTest / test"
 
 3. **Weeks 7-8**: Testing and validation
 
+### Phase 5: Pectra/Fusaka Support (Estimated: 10-14 weeks)
+
+1. **Weeks 1-3**: BLS12-381 Precompiles (EIP-2537)
+   - Implement 9 BLS12-381 precompiled contracts (0x0B - 0x13)
+   - G1/G2 point operations
+   - Pairing and mapping functions
+   - Extensive testing with official test vectors
+
+2. **Weeks 4-5**: Historical Block Hashes (EIP-2935)
+   - Implement system contract for block hash storage
+   - Update BLOCKHASH opcode logic
+   - Ring buffer implementation (8192 blocks)
+
+3. **Weeks 6-8**: Execution Layer Requests Framework (EIP-7685)
+   - Add `requests` field to execution payload
+   - Implement request encoding/decoding
+   - Update Engine API to v4
+   - Request validation and processing
+
+4. **Weeks 9-10**: On-chain Deposits (EIP-6110)
+   - Extract deposits from execution layer logs
+   - Add `deposits` field to payload
+   - Deposit validation (max 8192 per block)
+   - Integration with deposit contract
+
+5. **Weeks 11-12**: Execution-Triggered Exits (EIP-7002)
+   - Implement exit request system contract
+   - Add `exits` field to payload
+   - Exit request validation (max 16 per block)
+   - Public key and amount processing
+
+6. **Weeks 13-14**: EIP-7702 Transactions (Type 4)
+   - Authorization list parsing and validation
+   - Temporary code delegation mechanism
+   - Nonce verification for authorizations
+   - Gas accounting for delegated code
+   - Comprehensive security testing
+
+**Note on EIP-7251 and EIP-7549**: These are primarily consensus layer changes with minimal execution layer impact beyond supporting consolidation requests in the general request framework.
+
+**Note on EIP-7594 (PeerDAS)**: This is a consensus layer networking change with no direct execution client implementation required.
+
 ---
 
 ## Conclusion
 
-Fukuii provides a solid foundation for EVM compatibility up to the Berlin/Istanbul level. To achieve full Ethereum mainnet compatibility, the following priorities should be addressed:
+Fukuii provides a solid foundation for EVM compatibility up to the Berlin/Istanbul level. To achieve full Ethereum mainnet compatibility including the recently activated Pectra/Fusaka fork (May 7, 2025), the following priorities should be addressed:
 
 1. **Critical**: EIP-1559 and related London fork changes
 2. **Critical**: Post-Merge infrastructure (Engine API, PoS)
-3. **High**: Missing Cancun opcodes (TLOAD, TSTORE, MCOPY)
-4. **Medium**: Proto-danksharding (EIP-4844)
-5. **Lower**: BLS12-381 precompiles (EIP-2537)
+3. **Critical**: Execution layer requests framework (EIP-7685)
+4. **Critical**: Type 4 transactions and account abstraction (EIP-7702)
+5. **High**: Missing Cancun opcodes (TLOAD, TSTORE, MCOPY)
+6. **High**: BLS12-381 precompiles (EIP-2537) - now part of Pectra
+7. **High**: On-chain deposits and execution-triggered exits (EIP-6110, EIP-7002)
+8. **Medium**: Proto-danksharding (EIP-4844)
+9. **Medium**: Historical block hashes (EIP-2935)
 
-The architecture of Fukuii (based on the well-tested Mantis codebase) provides a clean separation between EVM execution and consensus, which should facilitate these additions.
+The architecture of Fukuii (based on the well-tested Mantis codebase) provides a clean separation between EVM execution and consensus, which should facilitate these additions. The Pectra/Fusaka fork represents a significant evolution of the Ethereum protocol, introducing important features for account abstraction, validator management, and execution-consensus layer integration.
+
+### Key Takeaways for Pectra/Fusaka
+
+**Execution Layer Changes**:
+- **EIP-7702** brings delegated code execution to EOAs, a major step toward account abstraction
+- **EIP-2537** adds 9 new precompiles for BLS12-381 operations
+- **EIP-2935** improves historical block hash availability
+- **EIP-7685** establishes a general framework for execution-to-consensus requests
+
+**Execution-Consensus Integration**:
+- **EIP-6110** moves deposit processing to execution layer
+- **EIP-7002** enables execution layer to trigger validator exits
+- **EIP-7251** supports validator consolidation (minimal execution layer impact)
+
+**Development Impact**:
+The Pectra fork significantly increases the complexity of Ethereum execution clients, particularly around:
+1. Transaction type handling (Type 4)
+2. System contract interactions (multiple new system contracts)
+3. Engine API evolution (v4 with request support)
+4. Cryptographic operations (BLS12-381)
+
+**Estimated Total Implementation Time**: 30-44 weeks across 5 major phases, assuming sequential development. Parallel development could reduce this timeline significantly.
 
 ---
 
 ## References
 
+### Official Ethereum Resources
 - [Ethereum EIPs Repository](https://github.com/ethereum/EIPs)
 - [Ethereum Execution Specs](https://github.com/ethereum/execution-specs)
 - [EVM Opcodes Reference](https://www.evm.codes/)
 - [Ethereum Yellow Paper](https://ethereum.github.io/yellowpaper/paper.pdf)
-- [ECIP Repository](https://ecips.ethereumclassic.org/)
 - [Ethereum/tests Repository](https://github.com/ethereum/tests)
+
+### Ethereum Classic Resources
+- [ECIP Repository](https://ecips.ethereumclassic.org/)
+
+### Pectra/Fusaka Fork Resources
+- [Pectra Network Upgrade Meta](https://eips.ethereum.org/EIPS/eip-7600)
+- [EIP-2537: BLS12-381 Precompiles](https://eips.ethereum.org/EIPS/eip-2537)
+- [EIP-2935: Historical Block Hashes](https://eips.ethereum.org/EIPS/eip-2935)
+- [EIP-6110: On-chain Deposits](https://eips.ethereum.org/EIPS/eip-6110)
+- [EIP-7002: Execution Layer Exits](https://eips.ethereum.org/EIPS/eip-7002)
+- [EIP-7251: Max Effective Balance](https://eips.ethereum.org/EIPS/eip-7251)
+- [EIP-7549: Committee Index Optimization](https://eips.ethereum.org/EIPS/eip-7549)
+- [EIP-7685: General Purpose EL Requests](https://eips.ethereum.org/EIPS/eip-7685)
+- [EIP-7702: Set Code for EOAs](https://eips.ethereum.org/EIPS/eip-7702)
+
+### Engine API and Consensus
+- [Engine API Specification](https://github.com/ethereum/execution-apis/tree/main/src/engine)
+- [Consensus Layer Specs](https://github.com/ethereum/consensus-specs)
+
+### Testing and Validation
+- [Hive Testing Framework](https://github.com/ethereum/hive)
+- [Execution Spec Tests](https://github.com/ethereum/execution-spec-tests)
+
+---
+
+## Document History
+
+- **Initial Version**: Pre-Pectra analysis (focusing on London through Cancun)
+- **Current Version**: Updated for Pectra/Fusaka fork activation (May 7, 2025)
+  - Added 8 new Pectra/Fusaka EIPs with detailed analysis
+  - Updated fork history timeline with Pectra activation
+  - Revised priority classifications (EIP-2537 upgraded to High)
+  - Added 11 new BLS12-381 precompile addresses
+  - Expanded implementation roadmap with Phase 5 (Pectra support)
+  - Enhanced conclusion with Pectra-specific development impact analysis
+  - Added comprehensive references for Pectra-related EIPs
