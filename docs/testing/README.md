@@ -21,6 +21,11 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 - **KPIBaselines.scala** - Scala object with baseline values (`src/test/scala/com/chipprbots/ethereum/testing/KPIBaselines.scala`)
 - **KPIBaselinesSpec.scala** - Test suite validating baseline definitions (`src/test/scala/com/chipprbots/ethereum/testing/KPIBaselinesSpec.scala`)
 
+### Launcher Integration Tests
+- **[LAUNCHER_INTEGRATION_TESTS.md](LAUNCHER_INTEGRATION_TESTS.md)** - Comprehensive guide for launcher configuration validation tests
+- **LauncherIntegrationSpec.scala** - Test suite validating all supported launch configurations (`src/test/scala/com/chipprbots/ethereum/LauncherIntegrationSpec.scala`)
+- Replaces standalone `test-launcher-integration.sh` bash script with automated CI/CD integration
+
 ## Test Tier Classification
 
 Based on TEST-002, tests are organized into three tiers:
