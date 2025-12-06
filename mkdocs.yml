@@ -108,6 +108,10 @@ extra:
 
 extra_css:
   - stylesheets/extra.css
+  - stylesheets/wizard-theme.css
+
+extra_javascript:
+  - tools/wizard-app.js
 
 # Navigation structure
 nav:
@@ -239,3 +243,4 @@ nav:
       - Implementation Complete: reports/IMPLEMENTATION_COMPLETE.md
     - Tools:
       - tools/README.md
+      - Configuration Wizard: tools/configuration-wizard.md
