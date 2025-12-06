@@ -142,7 +142,7 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 | EIP-6780 | SELFDESTRUCT changes | ❌ Missing | Same-transaction only |
 | EIP-7516 | BLOBBASEFEE opcode | ❌ Missing | Blob gas price |
 
-### Prague/Pectra (Execution: Prague, Consensus: Fusaka - Scheduled May 7, 2025)
+### Prague/Pectra (Execution: Prague, Consensus: Fusaka - Activated May 7, 2025)
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
 | **Execution Layer EIPs** | | | |
@@ -356,11 +356,11 @@ gas = G_verylow + G_copy * ceil(size / 32) + memory_expansion_cost
 **Notes**: 
 - Required for efficient BLS signature verification in EVM
 - Critical for Ethereum consensus layer integration
-- Included in Pectra/Fusaka (scheduled May 7, 2025)
+- Activated as part of Pectra/Fusaka (May 7, 2025)
 
 ---
 
-### Prague/Pectra (Fusaka) EIPs - Scheduled May 7, 2025
+### Prague/Pectra (Fusaka) EIPs - Activated May 7, 2025
 
 #### 13. EIP-2935: Serve Historical Block Hashes from State
 **Priority**: 🟡 Medium  
@@ -416,7 +416,7 @@ HISTORY_SERVE_WINDOW = 8192
 ```scala
 case class ExitRequest(
   validatorPubkey: ByteString,  // 48 bytes
-  amount: BigInt                 // uint64
+  amount: BigInt                 // uint64 value (represented as BigInt in Scala)
 )
 ```
 
@@ -1066,7 +1066,7 @@ sbt "IntegrationTest / test"
 
 ## Conclusion
 
-Fukuii provides a solid foundation for EVM compatibility up to the Berlin/Istanbul level. To achieve full Ethereum mainnet compatibility including the upcoming Pectra/Fusaka fork (scheduled May 7, 2025), the following priorities should be addressed:
+Fukuii provides a solid foundation for EVM compatibility up to the Berlin/Istanbul level. To achieve full Ethereum mainnet compatibility including the recently activated Pectra/Fusaka fork (May 7, 2025), the following priorities should be addressed:
 
 1. **Critical**: EIP-1559 and related London fork changes
 2. **Critical**: Post-Merge infrastructure (Engine API, PoS)
@@ -1140,11 +1140,11 @@ The Pectra fork significantly increases the complexity of Ethereum execution cli
 ## Document History
 
 - **Initial Version**: Pre-Pectra analysis (focusing on London through Cancun)
-- **Current Version (December 2024)**: Updated for Pectra/Fusaka fork
-  - Note: Pectra/Fusaka fork is scheduled for activation on May 7, 2025
+- **Current Version (December 2025)**: Updated for Pectra/Fusaka fork activation
+  - Pectra/Fusaka fork was activated on May 7, 2025
   - Added 8 new Pectra/Fusaka EIPs with detailed analysis
   - Added comprehensive transaction types section (Types 0-4)
-  - Updated fork history timeline with planned Pectra activation
+  - Updated fork history timeline with Pectra activation
   - Revised priority classifications (EIP-2537 upgraded to High)
   - Added 10 new precompile addresses (1 from EIP-4844, 9 from EIP-2537)
   - Expanded implementation roadmap with Phase 5 (Pectra support)
