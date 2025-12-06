@@ -22,7 +22,7 @@ object App extends Logger {
   )
 
   // Known modifiers that affect launcher behavior
-  private val knownModifiers = Set("public")
+  private val knownModifiers = Set("public", "enterprise")
 
   /** Check if argument is an option flag (starts with -) */
   private def isOptionFlag(arg: String): Boolean = arg.startsWith("-")
@@ -52,6 +52,31 @@ object App extends Logger {
       System.setProperty("fukuii.network.discovery.discovery-enabled", "true")
       log.info("Public discovery explicitly enabled")
     }
+    
+    if (modifiers.contains("enterprise")) {
+      // Enterprise mode: Best practices for private/permissioned EVM networks
+      
+      // Disable public peer discovery - use bootstrap nodes only
+      System.setProperty("fukuii.network.discovery.discovery-enabled", "false")
+      
+      // Disable automatic port forwarding (not needed in enterprise environments)
+      System.setProperty("fukuii.network.automatic-port-forwarding", "false")
+      
+      // Use known nodes from configuration/bootstrap only
+      System.setProperty("fukuii.network.discovery.reuse-known-nodes", "true")
+      
+      // Disable sync blacklisting to allow retry in controlled environments
+      System.setProperty("fukuii.sync.blacklist-duration", "0.seconds")
+      
+      // Set RPC interface to localhost by default for security
+      // Can be overridden with explicit config if needed
+      System.setProperty("fukuii.network.rpc.http.interface", "localhost")
+      
+      log.info("Enterprise mode enabled: configured for private/permissioned network")
+      log.info("- Public discovery disabled (use bootstrap nodes)")
+      log.info("- Automatic port forwarding disabled")
+      log.info("- RPC bound to localhost (override with config if needed)")
+    }
   }
 
   private def showHelp(): Unit =
@@ -59,12 +84,19 @@ object App extends Logger {
       """
         |Fukuii Ethereum Client
         |
-        |Usage: fukuii [public] [network] [options]
+        |Usage: fukuii [public|enterprise] [network] [options]
         |   or: fukuii [command] [options]
         |
         |Modifiers:
         |  public                 Explicitly enable public peer discovery
         |                         (useful for ensuring discovery on testnets)
+        |
+        |  enterprise             Configure for private/permissioned EVM networks
+        |                         - Disables public peer discovery
+        |                         - Disables automatic port forwarding
+        |                         - Binds RPC to localhost by default
+        |                         - Optimized for controlled network environments
+        |                         Use with custom network configuration
         |
         |Networks:
         |  etc                    Ethereum Classic mainnet (default)
@@ -109,6 +141,8 @@ object App extends Logger {
         |  fukuii public etc               # Start ETC with public discovery enabled
         |  fukuii public mordor            # Start Mordor with public discovery enabled
         |  fukuii public --tui             # Start ETC with public discovery and TUI
+        |  fukuii enterprise               # Start in enterprise mode (private network)
+        |  fukuii enterprise pottery       # Start private pottery network
         |  fukuii cli --help               # Show CLI utilities help
         |  fukuii cli generate-private-key # Generate a new private key
         |
