@@ -29,7 +29,7 @@ The default configuration includes example credentials for demonstration purpose
 ## Step 1: Clone and Navigate
 
 ```bash
-cd docker/barad-dur
+cd ops/barad-dur
 ```
 
 ## Step 2: Run Setup Script
@@ -336,5 +336,5 @@ docker-compose down --rmi all
 
 # Remove Barad-dûr directory (optional)
 cd ../..
-rm -rf docker/barad-dur
+rm -rf ops/barad-dur
 ```

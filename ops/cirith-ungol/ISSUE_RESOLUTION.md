@@ -2,7 +2,7 @@
 
 ## Issue ID
 - **GitHub Issue**: #704
-- **Title**: testbed - SNAP sync testing and protocol validation
+- **Title**: cirith-ungol - SNAP sync testing and protocol validation
 
 ## Purpose
 
@@ -301,7 +301,7 @@ Success is measured by log quality and implementation validation, not by sync pr
 
 ## Issue ID
 - **GitHub Issue**: Related to run 005 follow-up
-- **Title**: testbed - SNAP sync investigation and FastSync configuration
+- **Title**: cirith-ungol - SNAP sync investigation and FastSync configuration
 
 ## Problem Statement
 

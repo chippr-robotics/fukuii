@@ -83,7 +83,7 @@ Docker and Docker Compose configurations:
 - `docker/fukuii/` - Fukuii-specific Docker Compose setup with Prometheus/Grafana
 - `docker/besu/` - Besu client setup (for comparison testing)
 - `docker/geth/` - Geth client setup (for comparison testing)
-- `docker/barad-dur/` - Barad-dûr (Kong) API gateway integration
+- `ops/barad-dur/` - Barad-dûr (Kong) API gateway integration
 - `docker/scripts/` - Helper scripts
 - `Dockerfile*` - Various Dockerfile variants (prod, dev, distroless, etc.)
 
@@ -91,9 +91,13 @@ See [Docker Documentation](../deployment/docker.md) for comprehensive Docker doc
 
 #### `ops/`
 Operational configurations for production deployments:
+- `ops/barad-dur/` - Barad-dûr (Kong API Gateway) - Production API gateway stack
+- `ops/cirith-ungol/` - Cirith Ungol - ETC mainnet testing environment  
+- `ops/gorgoroth/` - Gorgoroth - Internal private test network
 - `ops/grafana/` - Pre-configured Grafana dashboards for monitoring Fukuii nodes
+- `ops/prometheus/` - Prometheus configuration templates
 
-See [Metrics and Monitoring](../operations/metrics-and-monitoring.md) for details.
+See [ops/README.md](../../ops/README.md) and [Metrics and Monitoring](../operations/metrics-and-monitoring.md) for details.
 
 #### `docs/`
 Comprehensive documentation:
