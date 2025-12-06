@@ -31,7 +31,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-    command: ["enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node2:
     image: ghcr.io/chippr-robotics/fukuii:latest
@@ -54,7 +54,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
-    command: ["enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node3:
     image: ghcr.io/chippr-robotics/fukuii:latest
@@ -77,7 +77,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
-    command: ["enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
 
   # Besu Nodes
   besu-node1:
