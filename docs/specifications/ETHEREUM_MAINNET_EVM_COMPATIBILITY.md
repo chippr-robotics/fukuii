@@ -26,7 +26,7 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 |----------|-------------|---------|---------|
 | Pre-Merge EIPs | 25+ | 2 | 8+ |
 | Post-Merge EIPs | 0 | 0 | 10+ |
-| Pectra/Fusaka EIPs | 0 | 0 | 8 |
+| Pectra/Fusaka EIPs | 0 | 0 | 9 |
 | Opcodes | 142/145 | 0 | 3 |
 | Precompiled Contracts | 9/19 | 0 | 10 |
 
@@ -143,6 +143,9 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 | EIP-7516 | BLOBBASEFEE opcode | ❌ Missing | Blob gas price |
 
 ### Prague/Pectra (Execution: Prague, Consensus: Fusaka - Activated May 7, 2025)
+
+**Note**: EIP-7251 and EIP-7549 appear in both sections as they affect both execution and consensus layers.
+
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
 | **Execution Layer EIPs** | | | |
@@ -778,7 +781,7 @@ priorityFee = effectiveGasPrice - baseFeePerGas
 - `blobVersionedHashes`: Commitments to blob data (not included in block)
 
 **Blob Data**:
-- Blobs are ~125KB each (4096 field elements × 32 bytes)
+- Blobs are ~128KB each (4096 field elements × 32 bytes)
 - Not stored in execution layer state
 - Designed for rollup data availability
 - Separate gas market from regular transactions
@@ -1124,6 +1127,7 @@ The Pectra fork significantly increases the complexity of Ethereum execution cli
 - [EIP-7002: Execution Layer Exits](https://eips.ethereum.org/EIPS/eip-7002)
 - [EIP-7251: Max Effective Balance](https://eips.ethereum.org/EIPS/eip-7251)
 - [EIP-7549: Committee Index Optimization](https://eips.ethereum.org/EIPS/eip-7549)
+- [EIP-7594: PeerDAS](https://eips.ethereum.org/EIPS/eip-7594)
 - [EIP-7685: General Purpose EL Requests](https://eips.ethereum.org/EIPS/eip-7685)
 - [EIP-7702: Set Code for EOAs](https://eips.ethereum.org/EIPS/eip-7702)
 
@@ -1142,7 +1146,7 @@ The Pectra fork significantly increases the complexity of Ethereum execution cli
 - **Initial Version**: Pre-Pectra analysis (focusing on London through Cancun)
 - **Current Version (December 2025)**: Updated for Pectra/Fusaka fork activation
   - Pectra/Fusaka fork was activated on May 7, 2025
-  - Added 8 new Pectra/Fusaka EIPs with detailed analysis
+  - Added 9 new Pectra/Fusaka EIPs with detailed analysis
   - Added comprehensive transaction types section (Types 0-4)
   - Updated fork history timeline with Pectra activation
   - Revised priority classifications (EIP-2537 upgraded to High)
