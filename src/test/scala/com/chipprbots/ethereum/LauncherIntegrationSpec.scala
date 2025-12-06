@@ -513,14 +513,17 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
   it should "handle conflicting modifiers" taggedAs (UnitTest) in {
     clearModifierProperties()
     
-    // Both public and enterprise modifiers - enterprise should take precedence
+    // Both public and enterprise modifiers - when multiple modifiers are present,
+    // they are all applied in the order they appear in the Set iteration.
+    // Since enterprise mode is applied after public (in applyModifiers), it will
+    // override the public discovery setting.
     val args = Array("public", "enterprise", "etc")
     val modifiers = args.filter(isModifier).toSet
     
     modifiers should contain allOf("public", "enterprise")
     
     applyModifiers(modifiers)
-    // Enterprise sets discovery to false, which should override public's true
+    // Enterprise sets discovery to false, which overrides public's true
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
     
     clearModifierProperties()
