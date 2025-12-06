@@ -50,8 +50,9 @@ object Config {
   // Per DevP2P spec: advertise only the highest version of each protocol family
   // ETH versions are backward compatible (eth/68 includes eth/63-67)
   // SNAP is a separate protocol
+  // ETC64 is the Ethereum Classic specific extension
   import com.chipprbots.ethereum.network.p2p.messages.Capability
-  val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.SNAP1)
+  val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.ETC64, Capability.SNAP1)
 
   val blockchains: BlockchainsConfig = BlockchainsConfig(config.getConfig("blockchains"))
 

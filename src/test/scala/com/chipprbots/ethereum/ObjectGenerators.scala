@@ -206,12 +206,13 @@ trait ObjectGenerators {
     chainWeight <- chainWeightGen
   } yield ETC64.NewBlock(Block(blockHeader, BlockBody(stxs, uncles)), chainWeight)
 
-  def extraFieldsGen: Gen[HeaderExtraFields] = for {
+    def extraFieldsGen: Gen[HeaderExtraFields] = for {
     shouldCheckpoint <- Arbitrary.arbitrary[Option[Boolean]]
     checkpoint <- if (shouldCheckpoint.isDefined) Gen.option(fakeCheckpointOptGen(0, 5)) else Gen.const(None)
   } yield checkpoint match {
-    case Some(definedCheckpoint) => HefPostEcip1097(definedCheckpoint)
-    case None                    => HefEmpty
+    case Some(Some(definedCheckpoint)) => HefPostEcip1097(Some(definedCheckpoint))  // Has actual checkpoint
+    case Some(None) => HefEmpty  // checkpoint is None, so use HefEmpty (matches normalization in decoder)
+    case None => HefEmpty  // No checkpoint
   }
 
   def blockHeaderGen: Gen[BlockHeader] = for {
@@ -221,7 +222,7 @@ trait ObjectGenerators {
     stateRoot <- byteStringOfLengthNGen(32)
     transactionsRoot <- byteStringOfLengthNGen(32)
     receiptsRoot <- byteStringOfLengthNGen(32)
-    logsBloom <- byteStringOfLengthNGen(50)
+    logsBloom <- byteStringOfLengthNGen(256)  // BloomFilter.BloomFilterByteSize = 256
     difficulty <- bigIntGen
     number <- bigIntGen
     gasLimit <- bigIntGen
