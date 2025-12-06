@@ -18,51 +18,51 @@ import com.chipprbots.ethereum.testing.Tags._
   */
 class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
 
-  // Helper methods to access private methods in App via reflection
-  private def getIsModifierMethod = {
+  // Cached reflection methods for efficiency
+  private lazy val isModifierMethod = {
     val method = App.getClass.getDeclaredMethod("isModifier", classOf[String])
     method.setAccessible(true)
     method
   }
 
-  private def getIsNetworkMethod = {
+  private lazy val isNetworkMethod = {
     val method = App.getClass.getDeclaredMethod("isNetwork", classOf[String])
     method.setAccessible(true)
     method
   }
 
-  private def getIsOptionFlagMethod = {
+  private lazy val isOptionFlagMethod = {
     val method = App.getClass.getDeclaredMethod("isOptionFlag", classOf[String])
     method.setAccessible(true)
     method
   }
 
-  private def getApplyModifiersMethod = {
+  private lazy val applyModifiersMethod = {
     val method = App.getClass.getDeclaredMethod("applyModifiers", classOf[Set[String]])
     method.setAccessible(true)
     method
   }
 
-  private def getSetNetworkConfigMethod = {
+  private lazy val setNetworkConfigMethod = {
     val method = App.getClass.getDeclaredMethod("setNetworkConfig", classOf[String])
     method.setAccessible(true)
     method
   }
 
   private def isModifier(arg: String): Boolean =
-    getIsModifierMethod.invoke(App, arg).asInstanceOf[Boolean]
+    isModifierMethod.invoke(App, arg).asInstanceOf[Boolean]
 
   private def isNetwork(arg: String): Boolean =
-    getIsNetworkMethod.invoke(App, arg).asInstanceOf[Boolean]
+    isNetworkMethod.invoke(App, arg).asInstanceOf[Boolean]
 
   private def isOptionFlag(arg: String): Boolean =
-    getIsOptionFlagMethod.invoke(App, arg).asInstanceOf[Boolean]
+    isOptionFlagMethod.invoke(App, arg).asInstanceOf[Boolean]
 
   private def applyModifiers(modifiers: Set[String]): Unit =
-    getApplyModifiersMethod.invoke(App, modifiers)
+    applyModifiersMethod.invoke(App, modifiers)
 
   private def setNetworkConfig(network: String): Unit =
-    getSetNetworkConfigMethod.invoke(App, network)
+    setNetworkConfigMethod.invoke(App, network)
 
   // Helper to clear system properties used by modifiers
   private def clearModifierProperties(): Unit = {
