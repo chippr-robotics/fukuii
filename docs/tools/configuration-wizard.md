@@ -177,15 +177,15 @@ For chain-specific configurations:
 
 ### Reference Documentation
 
-- [Node Configuration Runbook](/runbooks/node-configuration/) - Comprehensive configuration reference
-- [Operating Modes](/runbooks/operating-modes/) - Different node operation modes
-- [Security Best Practices](/runbooks/security/) - Security configuration guide
-- [Performance Tuning](/runbooks/snap-sync-performance-tuning/) - Performance optimization
+- [Node Configuration Runbook](../runbooks/node-configuration.md) - Comprehensive configuration reference
+- [Operating Modes](../runbooks/operating-modes.md) - Different node operation modes
+- [Security Best Practices](../runbooks/security.md) - Security configuration guide
+- [Performance Tuning](../runbooks/snap-sync-performance-tuning.md) - Performance optimization
 
 ### Support
 
 For additional help:
 
-- Review the [Documentation](/)
-- Check [Troubleshooting](/troubleshooting/)
+- Review the [Documentation](../index.md)
+- Check [Troubleshooting](../troubleshooting/README.md)
 - Visit the [GitHub Repository](https://github.com/chippr-robotics/fukuii)
