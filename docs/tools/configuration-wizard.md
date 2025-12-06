@@ -1,8 +1,5 @@
 # Configuration Wizard
 
-<link rel="stylesheet" href="../stylesheets/wizard-theme.css">
-<script src="wizard-app.js"></script>
-
 <div class="wizard-container">
   <div class="wizard-header">
     <h1>⚙️ Fukuii Configuration Wizard</h1>

@@ -344,11 +344,14 @@ function selectProfile(profileId) {
   configState.selectedProfile = profileId;
   configState.customConfig = { ...profiles[profileId].config };
   
-  // Update UI
-  document.querySelectorAll('.profile-card').forEach(card => {
-    card.classList.remove('selected');
+  // Update UI - re-render all cards to update selection state
+  const container = document.getElementById('profiles-container');
+  container.innerHTML = '';
+  Object.keys(profiles).forEach(id => {
+    const profile = profiles[id];
+    const card = createProfileCard(id, profile);
+    container.appendChild(card);
   });
-  event.currentTarget.classList.add('selected');
   
   updatePreview();
 }
@@ -468,10 +471,12 @@ function createFieldInput(key, field) {
   
   let input;
   if (field.type === 'boolean') {
+    // Normalize to boolean
+    const boolValue = currentValue === true || currentValue === 'true';
     input = `
       <select class="form-select" onchange="updateCustomConfig('${key}', this.value)">
-        <option value="true" ${currentValue === true || currentValue === 'true' ? 'selected' : ''}>Enabled</option>
-        <option value="false" ${currentValue === false || currentValue === 'false' ? 'selected' : ''}>Disabled</option>
+        <option value="true" ${boolValue ? 'selected' : ''}>Enabled</option>
+        <option value="false" ${!boolValue ? 'selected' : ''}>Disabled</option>
       </select>
     `;
   } else if (field.type === 'select') {
@@ -510,10 +515,15 @@ function toggleSection(sectionId) {
 }
 
 function updateCustomConfig(key, value) {
-  // Parse boolean and number values
-  if (value === 'true') value = true;
-  else if (value === 'false') value = false;
-  else if (!isNaN(value) && value !== '') value = Number(value);
+  // Parse boolean values
+  if (value === 'true') {
+    value = true;
+  } else if (value === 'false') {
+    value = false;
+  } else if (!isNaN(value) && value !== '' && typeof value === 'string') {
+    // Only parse numbers from strings, not already-number values
+    value = Number(value);
+  }
   
   configState.customConfig[key] = value;
   updatePreview();
@@ -570,6 +580,7 @@ function handleFileUpload(file) {
 
 function parseConfigFile(content, filename) {
   // Basic HOCON parsing - extract key-value pairs
+  // Note: This is a simplified parser. For complex HOCON files, manual review may be needed.
   const lines = content.split('\n');
   const config = {};
   
@@ -579,7 +590,7 @@ function parseConfigFile(content, filename) {
     // Skip comments and empty lines
     if (line.startsWith('#') || line.startsWith('//') || line === '') return;
     
-    // Simple key = value parsing
+    // Simple key = value parsing (single line only)
     const match = line.match(/^\s*([a-zA-Z0-9._-]+)\s*=\s*(.+)$/);
     if (match) {
       let [, key, value] = match;
@@ -592,10 +603,14 @@ function parseConfigFile(content, filename) {
       }
       
       // Parse boolean
-      if (value === 'true') value = true;
-      else if (value === 'false') value = false;
-      // Parse number
-      else if (!isNaN(value) && value !== '') value = Number(value);
+      if (value === 'true') {
+        value = true;
+      } else if (value === 'false') {
+        value = false;
+      } else if (!isNaN(value) && value !== '' && !/[a-zA-Z]/.test(value)) {
+        // Parse number (if it doesn't contain letters)
+        value = Number(value);
+      }
       
       config[key] = value;
     }
@@ -608,6 +623,11 @@ function parseConfigFile(content, filename) {
   const detectedProfile = detectProfile(config);
   if (detectedProfile) {
     configState.selectedProfile = detectedProfile;
+  }
+  
+  // Show warning for complex files
+  if (content.includes('{') || content.includes('[')) {
+    showAlert('warning', 'Complex HOCON structures detected. Some nested configurations may not be fully parsed. Please review the imported settings.');
   }
   
   updatePreview();
