@@ -105,8 +105,19 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
         // EIP-2930+ transactions use y-parity (0 or 1) for v
         stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
       case _: LegacyTransaction =>
-        // Legacy transactions: before EIP-155, must use unprotected signatures (v = 27 or 28)
-        if (beforeEIP155) !stx.isChainSpecific else true
+        val v = stx.signature.v
+        // Legacy transactions can use:
+        // 1. Unprotected signatures (v = 27 or 28)
+        // 2. EIP-155 protected signatures (v = chainId * 2 + 35 or chainId * 2 + 36)
+        val isUnprotected = v == ECDSASignature.negativePointSign || v == ECDSASignature.positivePointSign
+        val isEIP155Protected = if (v >= 35) {
+          // Check if v corresponds to valid EIP-155 format: v = chainId * 2 + 35 + {0,1}
+          val chainIdFromV = (v - 35) / 2
+          v == chainIdFromV * 2 + 35 || v == chainIdFromV * 2 + 36
+        } else false
+        
+        if (beforeEIP155) isUnprotected
+        else isUnprotected || isEIP155Protected
     }
 
     if (validR && validS && validSigningSchema) Right(SignedTransactionValid)
