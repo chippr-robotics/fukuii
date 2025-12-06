@@ -125,8 +125,8 @@ The fix should:
 ## Related Documentation
 
 - [ADR CON-001](../adr/consensus/CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md) - Original documentation of CoreGeth protocol deviations
-- [MessageCodec.scala](../../src/main/scala/com/chipprbots/ethereum/network/rlpx/MessageCodec.scala) - Implementation of the fix
-- [MessageCodecSpec.scala](../../src/test/scala/com/chipprbots/ethereum/network/p2p/MessageCodecSpec.scala) - Test coverage
+- `MessageCodec.scala` - Implementation of the fix
+- `MessageCodecSpec.scala` - Test coverage
 
 ## Lessons Learned
 
