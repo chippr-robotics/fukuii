@@ -347,7 +347,7 @@ object SignedTransaction {
     * @return
     *   Some(chainId) if available, None if not (unprotected signed transaction)
     */
-  private def extractChainId(stx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig): Option[BigInt] = {
+    private def extractChainId(stx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig): Option[BigInt] = {
     val chainIdOpt: Option[BigInt] = stx.tx match {
       case _: LegacyTransaction
           if stx.signature.v == ECDSASignature.negativePointSign || stx.signature.v == ECDSASignature.positivePointSign =>
@@ -357,8 +357,16 @@ object SignedTransaction {
         // v = chainId * 2 + 35 (for negative y-parity) or chainId * 2 + 36 (for positive y-parity)
         // Handle negative v values by converting to unsigned (e.g., -98 byte -> 158 unsigned)
         val normalizedV = if (stx.signature.v < 0) stx.signature.v + 256 else stx.signature.v
-        val chainId = (normalizedV - EIP155NegativePointSign) / 2
-        Some(chainId)
+        
+        // Only extract chainId if v is >= 35 (valid EIP-155 range)
+        // Values < 35 that aren't 27 or 28 are invalid
+        if (normalizedV >= EIP155NegativePointSign) {
+          val chainId = (normalizedV - EIP155NegativePointSign) / 2
+          Some(chainId)
+        } else {
+          // Invalid v value (not 27, 28, or >= 35)
+          None
+        }
       case twal: TransactionWithAccessList => Some(twal.chainId)
     }
     chainIdOpt
