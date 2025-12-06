@@ -32,7 +32,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-    command: ["enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
@@ -62,7 +62,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
-    command: ["enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
@@ -92,7 +92,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
-    command: ["enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s

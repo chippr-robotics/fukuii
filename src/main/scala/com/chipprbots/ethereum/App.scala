@@ -18,7 +18,8 @@ object App extends Logger {
     "pottery",
     "sagano",
     "bootnode",
-    "testnet-internal-nomad"
+    "testnet-internal-nomad",
+    "gorgoroth"
   )
 
   // Known modifiers that affect launcher behavior
