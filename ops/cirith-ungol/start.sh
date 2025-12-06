@@ -67,41 +67,35 @@ collect_logs() {
     
     # Capture logs from both containers
     echo "Collecting logs..."
-    capture_container_logs "fukuii-testbed" "$LOG_DIR/fukuii_${TIMESTAMP}.log"
+    capture_container_logs "fukuii-cirith-ungol" "$LOG_DIR/fukuii_${TIMESTAMP}.log"
     echo ""
     
     # Get SNAP-specific information from fukuii
     echo "Fukuii SNAP Sync Status:"
     echo "------------------------"
-    docker logs fukuii-testbed 2>&1 | grep "SNAP Sync Progress" | tail -5 || echo "  No SNAP progress logs found"
+    docker logs fukuii-cirith-ungol 2>&1 | grep "SNAP Sync Progress" | tail -5 || echo "  No SNAP progress logs found"
     echo ""
     
     # Get peer capability information from fukuii
     echo "Fukuii Peer Capabilities:"
     echo "-------------------------"
-    docker logs fukuii-testbed 2>&1 | grep "PEER_HANDSHAKE_SUCCESS" | tail -10 || echo "  No handshake logs found"
+    docker logs fukuii-cirith-ungol 2>&1 | grep "PEER_HANDSHAKE_SUCCESS" | tail -10 || echo "  No handshake logs found"
     echo ""
     
-    echo "Core-Geth Sync Status:"
-    echo "----------------------"
-    echo ""
-    
-    # Get peer count from both nodes
-    echo "Peer Count Comparison:"
-    echo "----------------------"
+    # Get peer count from fukuii node
+    echo "Peer Count:"
+    echo "-----------"
     echo -n "  Fukuii: "
-    docker exec fukuii-testbed curl -s -X POST \
+    docker exec fukuii-cirith-ungol curl -s -X POST \
       -H "Content-Type: application/json" \
       --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
       http://localhost:8546 2>/dev/null | grep -o '"result":"[^"]*"' || echo "Unable to get peer count"
-    
-    echo -n "  Core-geth: "
     echo ""
     
     # Display recent SNAP-related errors from fukuii
     echo "Recent Fukuii SNAP Errors:"
     echo "--------------------------"
-    docker logs fukuii-testbed 2>&1 | grep -i "snap.*error\|snap.*timeout\|snap.*fail" | tail -10 || echo "  No SNAP errors found"
+    docker logs fukuii-cirith-ungol 2>&1 | grep -i "snap.*error\|snap.*timeout\|snap.*fail" | tail -10 || echo "  No SNAP errors found"
     echo ""
     
     echo "=================================="
@@ -195,26 +189,12 @@ case "$ACTION" in
     clean)
         echo "WARNING: This will remove all data including the blockchain!"
         echo "This includes:"
-        echo "  - Fukuii docker volume"
-        echo "  - Core-geth data in ops/data/geth/"
+        echo "  - Fukuii docker volumes"
         read -p "Are you sure? (yes/no): " -r
         echo ""
         if [[ $REPLY =~ ^[Yy]([Ee][Ss])?$ ]]; then
             echo "Stopping and removing all data..."
             $COMPOSE_CMD down -v
-            
-            # Also remove the host-mounted geth data
-            GETH_DATA_DIR="../data/geth"
-            if [ -d "$GETH_DATA_DIR" ]; then
-                # Safety check: ensure we're in the right directory
-                if [[ "$GETH_DATA_DIR" == *"ops/data/geth"* ]] || [[ "$GETH_DATA_DIR" == "../data/geth" ]]; then
-                    find "$GETH_DATA_DIR" -mindepth 1 -delete 2>/dev/null || rm -rf "${GETH_DATA_DIR:?}"/*
-                    echo "  ✓ Core-geth data removed"
-                else
-                    echo "  ✗ Unexpected data directory path, skipping removal for safety"
-                fi
-            fi
-            
             echo "✓ All data removed."
         else
             echo "Cancelled."
