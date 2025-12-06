@@ -3,7 +3,7 @@
 <div class="wizard-container">
   <div class="wizard-header">
     <h1>⚙️ Fukuii Configuration Wizard</h1>
-    <p>Professional-grade blockchain node configuration for Ethereum Classic</p>
+    <p>Enterprise-grade blockchain node & network system administration toolkit</p>
     <span class="version-badge">Version 0.1.121</span>
   </div>
 
@@ -146,6 +146,8 @@
 </div>
 
 ## Using the Configuration Wizard
+
+This enterprise-grade administration toolkit provides comprehensive configuration management for Fukuii blockchain nodes. Ethereum Classic is the default public network, with support for additional networks and custom configurations.
 
 ### Quick Start
 
