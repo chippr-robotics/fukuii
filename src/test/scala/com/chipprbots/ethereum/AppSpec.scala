@@ -43,6 +43,12 @@ class AppSpec extends AnyFlatSpec with Matchers {
     getIsModifierMethod.invoke(App, "--tui").asInstanceOf[Boolean] shouldBe false
   }
 
+  it should "recognize 'enterprise' as a modifier" taggedAs (UnitTest) in {
+    getIsModifierMethod.invoke(App, "enterprise").asInstanceOf[Boolean] shouldBe true
+    getIsModifierMethod.invoke(App, "etc").asInstanceOf[Boolean] shouldBe false
+    getIsModifierMethod.invoke(App, "--tui").asInstanceOf[Boolean] shouldBe false
+  }
+
   it should "recognize network names" taggedAs (UnitTest) in {
     getIsNetworkMethod.invoke(App, "etc").asInstanceOf[Boolean] shouldBe true
     getIsNetworkMethod.invoke(App, "mordor").asInstanceOf[Boolean] shouldBe true
@@ -86,6 +92,32 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe null
   }
 
+  it should "disable discovery when 'enterprise' modifier is present" taggedAs (UnitTest) in {
+    // Clear any existing properties
+    System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.automatic-port-forwarding")
+    System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.sync.blacklist-duration")
+    System.clearProperty("fukuii.network.rpc.http.interface")
+    
+    // Apply enterprise modifier
+    getApplyModifiersMethod.invoke(App, Set("enterprise"))
+    
+    // Verify enterprise properties are set
+    System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
+    System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
+    System.getProperty("fukuii.network.discovery.reuse-known-nodes") shouldBe "true"
+    System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
+    System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
+    
+    // Cleanup
+    System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.automatic-port-forwarding")
+    System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.sync.blacklist-duration")
+    System.clearProperty("fukuii.network.rpc.http.interface")
+  }
+
   behavior.of("App argument filtering")
 
   it should "filter out modifiers from arguments" taggedAs (UnitTest) in {
@@ -114,5 +146,15 @@ class AppSpec extends AnyFlatSpec with Matchers {
     args1.filter(isModifier).toSet shouldBe Set("public")
     args2.filter(isModifier).toSet shouldBe Set("public")
     args3.filter(isModifier).toSet shouldBe Set("public")
+  }
+
+  it should "handle 'enterprise' in any position" taggedAs (UnitTest) in {
+    val args1 = Array("enterprise", "pottery")
+    val args2 = Array("pottery", "enterprise")
+    val args3 = Array("enterprise", "--tui", "pottery")
+    
+    args1.filter(isModifier).toSet shouldBe Set("enterprise")
+    args2.filter(isModifier).toSet shouldBe Set("enterprise")
+    args3.filter(isModifier).toSet shouldBe Set("enterprise")
   }
 }

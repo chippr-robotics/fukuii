@@ -43,12 +43,20 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
   override def beforeEach(): Unit = {
     // Clear system properties before each test
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.automatic-port-forwarding")
+    System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.sync.blacklist-duration")
+    System.clearProperty("fukuii.network.rpc.http.interface")
     System.clearProperty("config.file")
   }
 
   override def afterEach(): Unit = {
     // Clean up system properties after each test
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.automatic-port-forwarding")
+    System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.sync.blacklist-duration")
+    System.clearProperty("fukuii.network.rpc.http.interface")
     System.clearProperty("config.file")
   }
 
@@ -124,6 +132,67 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
       argsWithoutModifiers should contain("etc")
       argsWithoutModifiers should contain("--tui")
     }
+  }
+
+  behavior.of("App launcher with 'enterprise' modifier")
+
+  it should "configure enterprise settings when 'fukuii enterprise' is used" taggedAs (IntegrationTest) in {
+    // Clear properties
+    System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.automatic-port-forwarding")
+    System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.sync.blacklist-duration")
+    System.clearProperty("fukuii.network.rpc.http.interface")
+    
+    val modifiers = extractModifiers(Array("enterprise"))
+    applyModifiers(modifiers)
+
+    // Verify enterprise settings
+    System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
+    System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
+    System.getProperty("fukuii.network.discovery.reuse-known-nodes") shouldBe "true"
+    System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
+    System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
+  }
+
+  it should "configure enterprise settings when 'fukuii enterprise pottery' is used" taggedAs (IntegrationTest) in {
+    val args = Array("enterprise", "pottery")
+    
+    // Clear properties
+    System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.automatic-port-forwarding")
+    System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.sync.blacklist-duration")
+    System.clearProperty("fukuii.network.rpc.http.interface")
+    
+    val modifiers = extractModifiers(args)
+    applyModifiers(modifiers)
+
+    // Verify enterprise settings
+    System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
+    System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
+    
+    // Verify network argument is still present after filtering
+    val argsWithoutModifiers = filterOutModifiers(args)
+    argsWithoutModifiers should contain("pottery")
+  }
+
+  it should "preserve options when 'fukuii enterprise --tui' is used" taggedAs (IntegrationTest) in {
+    val args = Array("enterprise", "--tui")
+    
+    // Clear properties
+    System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.automatic-port-forwarding")
+    
+    val modifiers = extractModifiers(args)
+    applyModifiers(modifiers)
+
+    // Verify enterprise settings
+    System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
+    
+    // Verify option flag is still present after filtering
+    val argsWithoutModifiers = filterOutModifiers(args)
+    argsWithoutModifiers should contain("--tui")
   }
 
   behavior.of("App launcher without 'public' modifier")
