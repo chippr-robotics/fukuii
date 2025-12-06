@@ -99,21 +99,21 @@ class MessageCodec(
     *   val isKnownBroken = lowerClientId.startsWith("geth/") || 
     *                       lowerClientId.startsWith("core-geth/") ||
     *                       lowerClientId.startsWith("coregeth/")
-    
-    val result = baselineSupport && !isKnownBroken
-    
-    log.info(
-      "COMPRESSION_POLICY: clientId={}, p2pVersion={}, baseline={}, knownBroken={}, willCompress={}",
-      remoteClientId,
-      remotePeer2PeerVersion,
-      baselineSupport,
-      isKnownBroken,
-      result
-    )
-    
-    result
-  }
-  */
+    *     
+    *   val result = baselineSupport && !isKnownBroken
+    *   
+    *   log.info(
+    *     "COMPRESSION_POLICY: clientId={}, p2pVersion={}, baseline={}, knownBroken={}, willCompress={}",
+    *     remoteClientId,
+    *     remotePeer2PeerVersion,
+    *     baselineSupport,
+    *     isKnownBroken,
+    *     result
+    *   )
+    *   
+    *   result
+    * }
+    */
 
   // TODO: ETCM-402 - messageDecoder should use negotiated protocol version
   def readMessages(data: ByteString): Seq[Either[DecodingError, Message]] = {
