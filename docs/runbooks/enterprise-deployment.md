@@ -257,12 +257,20 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
 
 ### Pattern 3: Hybrid Public-Private
 
-**Use Case**: Private network with occasional public network interaction
+**Use Case**: Private network with selective interaction with public networks
 
 **Architecture**:
 - Private enterprise network for internal operations
-- Bridge nodes connecting to public networks
+- Bridge/relay nodes that connect to BOTH private and public networks
+- Bridge nodes facilitate cross-chain transfers or data verification
 - Separate key management for private and public operations
+- Example: Using public Ethereum for final settlement while keeping internal transactions private
+
+**Important Notes**:
+- This pattern does NOT mean running a private node connected to the public network
+- Bridge nodes act as intermediaries, maintaining separate connections to each network
+- Requires careful security design to prevent exposure of private data
+- Use case: Enterprise wanting to anchor private chain state to public blockchain for immutability
 
 ## Best Practices
 
