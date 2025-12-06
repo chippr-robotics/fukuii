@@ -51,15 +51,65 @@ object Capability {
   def parseUnsafe(s: String): Capability =
     parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Fukuii"))
 
-  def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] =
-    c1.intersect(c2) match {
+  def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] = {
+    // ETH protocol versions are backward compatible
+    // If we advertise ETH68 and peer advertises ETH64, we should negotiate ETH64
+    // This means we need to find the highest common version for each protocol family
+    
+    val ethVersions1 = c1.collect {
+      case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) => cap
+    }
+    val ethVersions2 = c2.collect {
+      case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) => cap
+    }
+    
+    val etcVersions1 = c1.collect { case cap @ ETC64 => cap }
+    val etcVersions2 = c2.collect { case cap @ ETC64 => cap }
+    
+    val snapVersions1 = c1.collect { case cap @ SNAP1 => cap }
+    val snapVersions2 = c2.collect { case cap @ SNAP1 => cap }
+    
+    // For each protocol family, find the highest common version
+    val negotiatedCapabilities = List(
+      // ETH: if both support ETH, use the minimum of their maximum versions
+      if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) {
+        val maxVersion = math.min(
+          ethVersions1.maxBy(_.version).version,
+          ethVersions2.maxBy(_.version).version
+        )
+        // Find the capability with that version number from either side
+        ethVersions1.find(_.version == maxVersion)
+          .orElse(ethVersions2.find(_.version == maxVersion))
+      } else None,
+      // ETC: exact match required
+      if (etcVersions1.intersect(etcVersions2).nonEmpty) Some(ETC64) else None,
+      // SNAP: exact match required
+      if (snapVersions1.intersect(snapVersions2).nonEmpty) Some(SNAP1) else None
+    ).flatten
+    
+    negotiatedCapabilities match {
       case Nil => None
       case l   => Some(best(l))
     }
+  }
 
-  // TODO consider how this scoring should be handled with 'snap' and other extended protocols
-  def best(capabilities: List[Capability]): Capability =
-    capabilities.maxBy(_.version)
+  /** Select the best capability from a list, with protocol-family-aware scoring.
+    * Priority: ETC > ETH > SNAP (within each family, higher versions preferred)
+    */
+  def best(capabilities: List[Capability]): Capability = {
+    capabilities.groupBy {
+      case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 => "ETH"
+      case ETC64 => "ETC"
+      case SNAP1 => "SNAP"
+    }.toList.sortBy {
+      case ("ETC", _) => 0  // Highest priority
+      case ("ETH", _) => 1  // Medium priority
+      case ("SNAP", _) => 2 // Lowest priority
+      case _ => 3
+    }.headOption.map {
+      case (_, caps) => caps.maxBy(_.version)
+    }.getOrElse(capabilities.head)
+  }
 
   /** Determines if this capability uses RequestId wrapper in messages (ETH66+, SNAP1+)
     * ETH66, ETH67, ETH68, SNAP1 use RequestId wrapper
