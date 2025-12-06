@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/main/docs/images/fukuii-logo-cute.png" alt="Fukuii Logo" width="400"/>
+  <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-logo-cute.png" alt="Fukuii Logo" width="400"/>
 </div>
 
 # 🧠🐛 Fukuii Ethereum Client
