@@ -97,7 +97,7 @@ Operational configurations for production deployments:
 - `ops/grafana/` - Pre-configured Grafana dashboards for monitoring Fukuii nodes
 - `ops/prometheus/` - Prometheus configuration templates
 
-See [ops/README.md](../../ops/README.md) and [Metrics and Monitoring](../operations/metrics-and-monitoring.md) for details.
+See [ops/README.md](https://github.com/chippr-robotics/fukuii/blob/develop/ops/README.md) and [Metrics and Monitoring](../operations/metrics-and-monitoring.md) for details.
 
 #### `docs/`
 Comprehensive documentation:
