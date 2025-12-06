@@ -23,6 +23,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
+    // This test validates that messages are sent uncompressed regardless of p2p version
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV4)
     messageCodec.readMessages(remoteHello)
 
@@ -30,15 +32,16 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
       remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
-    // remote peer did not receive local status so it treats all remote messages as uncompressed
+    // Messages should not be compressed
     assert(remoteReadNotCompressedStatus.size == 1)
     assert(remoteReadNotCompressedStatus.head == Right(status))
   }
 
-  it should "compress messages when remote side advertises p2p version larger or equal 5" taggedAs (
+  it should "not compress messages even when remote side advertises p2p version larger or equal 5 (emergency fix)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new TestSetup {
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
     override lazy val negotiatedRemoteP2PVersion: Long = 5L
     override lazy val negotiatedLocalP2PVersion: Long = 3L
 
@@ -49,13 +52,29 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val remoteReadNotCompressedStatus: Seq[Either[Throwable, Message]] =
       remoteMessageCodec.readMessages(localNextMessageAfterHello)
 
-    // remote peer did not receive local hello so it treats all remote messages as uncompressed,
-    // but local peer compresses messages when remote advertises p2p version >= 5
+    // With compression disabled, remote peer should be able to read the uncompressed message
     assert(remoteReadNotCompressedStatus.size == 1)
-    assert(remoteReadNotCompressedStatus.head.isLeft)
+    assert(remoteReadNotCompressedStatus.head == Right(status))
   }
 
-  it should "compress messages when both sides advertises p2p version larger or equal 5" in new TestSetup {
+  it should "not compress messages even when both sides advertise p2p version larger or equal 5 (emergency fix)" in new TestSetup {
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
+    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
+    messageCodec.readMessages(remoteHello)
+
+    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
+    remoteMessageCodec.readMessages(localHello)
+
+    val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
+    val remoteReadNextMessageAfterHello: Seq[Either[Throwable, Message]] =
+      remoteMessageCodec.readMessages(localNextMessageAfterHello)
+
+    // With compression disabled, both peers should communicate successfully
+    assert(remoteReadNextMessageAfterHello.size == 1)
+    assert(remoteReadNextMessageAfterHello.head == Right(status))
+  }
+
+  it should "send and receive uncompressed messages correctly when compression is disabled" in new TestSetup {
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
 
@@ -71,7 +90,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     assert(remoteReadNextMessageAfterHello.head == Right(status))
   }
 
-  it should "compress and decompress messages correctly when both sides use p2p v5" in new TestSetup {
+  it should "send and receive uncompressed messages correctly when compression is disabled" in new TestSetup {
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
 
@@ -79,13 +99,12 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val localHello: ByteString = messageCodec.encodeMessage(helloV5)
     remoteMessageCodec.readMessages(localHello)
 
-    // After hello exchange, subsequent messages should be compressed/decompressed correctly
-    // Hello is never compressed per spec, but Status and other messages will be compressed when both peers are v5+
+    // After hello exchange, messages should be uncompressed
     val localStatus: ByteString = messageCodec.encodeMessage(status)
     val remoteReadStatus: Seq[Either[Throwable, Message]] =
       remoteMessageCodec.readMessages(localStatus)
 
-    // Verify status message was correctly compressed and decompressed
+    // Verify status message was sent uncompressed and decoded correctly
     assert(remoteReadStatus.size == 1)
     assert(remoteReadStatus.head == Right(status))
   }
@@ -94,8 +113,9 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    // This test verifies the fix for the issue where compressed data starting with bytes
-    // in the range 0x80-0xff (like 0x94) was incorrectly treated as uncompressed RLP
+    // NOTE: This test is currently not applicable since compression is DISABLED globally
+    // When compression is re-enabled, this test should verify the fix for the issue where
+    // compressed data starting with bytes in the range 0x80-0xff was incorrectly treated as uncompressed RLP
     
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
@@ -103,12 +123,12 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val localHello: ByteString = messageCodec.encodeMessage(helloV5)
     remoteMessageCodec.readMessages(localHello)
 
-    // Send a status message which may compress to data starting with 0x80-0xff range bytes
+    // Send a status message (will be uncompressed due to global disable)
     val localStatus: ByteString = messageCodec.encodeMessage(status)
     val remoteReadStatus: Seq[Either[Throwable, Message]] =
       remoteMessageCodec.readMessages(localStatus)
 
-    // The message should be correctly decompressed regardless of what byte the compressed data starts with
+    // The message should be correctly decoded as uncompressed
     assert(remoteReadStatus.size == 1)
     assert(remoteReadStatus.head == Right(status))
   }
@@ -153,6 +173,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
+    // This test validates that messages are sent uncompressed to CoreGeth
     override lazy val remoteClientId: String = "Geth/v1.12.20-stable/linux-amd64/go1.21.10"
     override lazy val negotiatedRemoteP2PVersion: Long = 5L
     override lazy val negotiatedLocalP2PVersion: Long = 5L
@@ -181,6 +203,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
     override lazy val remoteClientId: String = "core-geth/v1.12.20/linux-amd64/go1.21"
     override lazy val negotiatedRemoteP2PVersion: Long = 5L
     
@@ -198,10 +221,12 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     assert(decodedMessages.head == Right(status))
   }
 
-  it should "compress messages when sending to non-Geth peer with p2p v5" taggedAs (
+  it should "NOT compress messages when sending to non-Geth peer with p2p v5 (global disable)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new TestSetup {
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
+    // Even non-Geth peers should receive uncompressed messages
     override lazy val remoteClientId: String = "fukuii/v1.0.0"
     override lazy val negotiatedRemoteP2PVersion: Long = 5L
     override lazy val negotiatedLocalP2PVersion: Long = 5L
@@ -220,11 +245,11 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     val v4Codec = new MessageCodec(remoteFrameCodec, decoder, 4L, "TestClient/v1.0.0")
     val decodedMessagesV4 = v4Codec.readMessages(localStatus)
     
-    // Should fail to decode because message was compressed
+    // Should successfully decode because compression is globally disabled
     assert(decodedMessagesV4.size == 1)
-    assert(decodedMessagesV4.head.isLeft)
+    assert(decodedMessagesV4.head == Right(status))
     
-    // But should work with v5 codec that expects compression
+    // Should also work with v5 codec
     val decodedMessagesV5 = remoteMessageCodec.readMessages(localStatus)
     assert(decodedMessagesV5.size == 1)
     assert(decodedMessagesV5.head == Right(status))

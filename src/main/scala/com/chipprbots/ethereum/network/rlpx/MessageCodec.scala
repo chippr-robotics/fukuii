@@ -51,20 +51,54 @@ class MessageCodec(
   val contextIdCounter = new AtomicInteger
 
   /** Determines if compression should be used for this client.
-    * Uses blacklist approach: disable compression only for known-broken clients.
+    * 
+    * EMERGENCY FIX (FUKUII-COMPRESSION-001): Compression disabled globally.
+    * 
+    * Root Cause: fukuii's Snappy compression is broken for ALL peers (including fukuii-to-fukuii).
+    * Evidence shows the issue affects:
+    * - fukuii → CoreGeth (CoreGeth cannot decompress our messages)
+    * - fukuii → fukuii (fukuii peers cannot decompress messages from each other)
+    * 
+    * Hypothesis: xerial.snappy may be using framed Snappy format instead of raw block format
+    * required by Ethereum devp2p/RLPx specification. This would explain:
+    * - Why our messages fail to decompress on other clients
+    * - Why the RUN008 fallback works (treats failed decompression as uncompressed RLP)
+    * - Why fukuii-to-fukuii also fails (both sides expect different format)
+    * 
+    * TODO: Investigate and fix Snappy implementation:
+    * 1. Verify xerial.snappy uses raw block format (not framed)
+    * 2. Test compress/decompress round-trip between fukuii instances
+    * 3. Compare byte output with CoreGeth's golang/snappy compression
+    * 4. Consider switching to snappy library that explicitly supports raw block format
+    * 
+    * See: FUKUII-COMPRESSION-001, RUN008 fix, docs/reviews/COMPRESSION_FIX_WIRE_PROTOCOL.md
     */
   private def shouldCompressForClient: Boolean = {
-    val baselineSupport = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
+    // EMERGENCY: Disable compression globally until root cause is fixed
+    val result = false
     
-    // CoreGeth compression asymmetry (confirmed via source code analysis):
-    // - SENDING: CoreGeth compresses all messages when p2pVersion >= 5 (we handle via fallback)
-    // - RECEIVING: CoreGeth cannot decompress our Snappy-compressed messages (THIS fix)
-    // Root cause: Likely Snappy library incompatibility between Java (xerial.snappy) and Go (golang/snappy)
-    // See: FUKUII-COMPRESSION-001, RUN008 fix, docs/reviews/COMPRESSION_FIX_WIRE_PROTOCOL.md
-    val lowerClientId = remoteClientId.toLowerCase
-    val isKnownBroken = lowerClientId.startsWith("geth/") || 
-                        lowerClientId.startsWith("core-geth/") ||
-                        lowerClientId.startsWith("coregeth/")
+    log.info(
+      "COMPRESSION_POLICY: DISABLED globally (emergency fix) - clientId={}, p2pVersion={}",
+      remoteClientId,
+      remotePeer2PeerVersion
+    )
+    
+    result
+  }
+  
+  /** Legacy implementation (commented out for reference):
+    * 
+    * private def shouldCompressForClient: Boolean = {
+    *   val baselineSupport = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
+    *   
+    *   // CoreGeth compression asymmetry (confirmed via source code analysis):
+    *   // - SENDING: CoreGeth compresses all messages when p2pVersion >= 5 (we handle via fallback)
+    *   // - RECEIVING: CoreGeth cannot decompress our Snappy-compressed messages (THIS fix)
+    *   // Root cause: Likely Snappy library incompatibility between Java (xerial.snappy) and Go (golang/snappy)
+    *   val lowerClientId = remoteClientId.toLowerCase
+    *   val isKnownBroken = lowerClientId.startsWith("geth/") || 
+    *                       lowerClientId.startsWith("core-geth/") ||
+    *                       lowerClientId.startsWith("coregeth/")
     
     val result = baselineSupport && !isKnownBroken
     
@@ -79,6 +113,7 @@ class MessageCodec(
     
     result
   }
+  */
 
   // TODO: ETCM-402 - messageDecoder should use negotiated protocol version
   def readMessages(data: ByteString): Seq[Either[DecodingError, Message]] = {
