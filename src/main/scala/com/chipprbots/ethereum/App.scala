@@ -21,11 +21,17 @@ object App extends Logger {
     "testnet-internal-nomad"
   )
 
+  // Known modifiers that affect launcher behavior
+  private val knownModifiers = Set("public")
+
   /** Check if argument is an option flag (starts with -) */
   private def isOptionFlag(arg: String): Boolean = arg.startsWith("-")
 
   /** Check if argument is a known network name */
   private def isNetwork(arg: String): Boolean = knownNetworks.contains(arg)
+
+  /** Check if argument is a known modifier */
+  private def isModifier(arg: String): Boolean = knownModifiers.contains(arg)
 
   /** Set config file for the specified network (must be called before Config is accessed) */
   private def setNetworkConfig(network: String): Unit = {
@@ -40,13 +46,25 @@ object App extends Logger {
     }
   }
 
+  /** Apply modifiers to system configuration */
+  private def applyModifiers(modifiers: Set[String]): Unit = {
+    if (modifiers.contains("public")) {
+      System.setProperty("fukuii.network.discovery.discovery-enabled", "true")
+      log.info("Public discovery explicitly enabled")
+    }
+  }
+
   private def showHelp(): Unit =
     println(
       """
         |Fukuii Ethereum Client
         |
-        |Usage: fukuii [network] [options]
+        |Usage: fukuii [public] [network] [options]
         |   or: fukuii [command] [options]
+        |
+        |Modifiers:
+        |  public                 Explicitly enable public peer discovery
+        |                         (useful for ensuring discovery on testnets)
         |
         |Networks:
         |  etc                    Ethereum Classic mainnet (default)
@@ -87,6 +105,10 @@ object App extends Logger {
         |  fukuii etc                      # Start Ethereum Classic node
         |  fukuii etc --tui                # Start with Terminal UI enabled
         |  fukuii mordor                   # Start Mordor testnet node
+        |  fukuii public                   # Start ETC with public discovery enabled
+        |  fukuii public etc               # Start ETC with public discovery enabled
+        |  fukuii public mordor            # Start Mordor with public discovery enabled
+        |  fukuii public --tui             # Start ETC with public discovery and TUI
         |  fukuii cli --help               # Show CLI utilities help
         |  fukuii cli generate-private-key # Generate a new private key
         |
@@ -106,40 +128,47 @@ object App extends Logger {
     val cli = "cli"
     val sigValidator = "signature-validator"
 
-    args.headOption match {
-      case None                  => Fukuii.main(args)
+    // Parse and extract modifiers from arguments
+    val modifiers = args.filter(isModifier).toSet
+    val argsWithoutModifiers = args.filterNot(isModifier)
+
+    // Apply modifiers (e.g., "public" enables discovery)
+    applyModifiers(modifiers)
+
+    argsWithoutModifiers.headOption match {
+      case None                  => Fukuii.main(argsWithoutModifiers)
       case Some("--help" | "-h") => showHelp()
       case Some(`launchFukuii`) =>
         // Handle 'fukuii <network>' case - set config before launching
-        args.tail.headOption.filter(isNetwork).foreach(setNetworkConfig)
+        argsWithoutModifiers.tail.headOption.filter(isNetwork).foreach(setNetworkConfig)
         // Filter out network name from remaining args to avoid passing it to Fukuii.main
-        val remainingArgs = args.tail.headOption.filter(isNetwork) match {
-          case Some(_) => args.tail.tail
-          case None    => args.tail
+        val remainingArgs = argsWithoutModifiers.tail.headOption.filter(isNetwork) match {
+          case Some(_) => argsWithoutModifiers.tail.tail
+          case None    => argsWithoutModifiers.tail
         }
         Fukuii.main(remainingArgs)
-      case Some(`launchKeytool`) => KeyTool.main(args.tail)
+      case Some(`launchKeytool`) => KeyTool.main(argsWithoutModifiers.tail)
       case Some(`downloadBootstrap`) =>
         // Import Config locally to ensure it's loaded after any network config is set.
         // This delayed import is intentional - Config is a lazy-initialized object that
         // reads config.file system property at initialization time.
         import com.chipprbots.ethereum.utils.Config
         Config.Db.dataSource match {
-          case "rocksdb" => BootstrapDownload.main(args.tail :+ Config.Db.RocksDb.path)
+          case "rocksdb" => BootstrapDownload.main(argsWithoutModifiers.tail :+ Config.Db.RocksDb.path)
         }
       // HIBERNATED: vm-server case commented out
-      // case Some(`vmServer`)     => VmServerApp.main(args.tail)
-      case Some(`faucet`)       => Faucet.main(args.tail)
-      case Some(`ecKeyGen`)     => EcKeyGen.main(args.tail)
-      case Some(`sigValidator`) => SignatureValidator.main(args.tail)
-      case Some(`cli`)          => CliLauncher.main(args.tail)
+      // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
+      case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
+      case Some(`ecKeyGen`)     => EcKeyGen.main(argsWithoutModifiers.tail)
+      case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
+      case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
       case Some(network) if isNetwork(network) =>
         // Network name specified - set config and launch Fukuii
         setNetworkConfig(network)
-        Fukuii.main(args.tail)
+        Fukuii.main(argsWithoutModifiers.tail)
       case Some(arg) if isOptionFlag(arg) =>
         // Option flags (starting with -) are passed directly to Fukuii
-        Fukuii.main(args)
+        Fukuii.main(argsWithoutModifiers)
       case Some(unknown) =>
         log.error(
           s"Unrecognised launcher option: $unknown\n" +
