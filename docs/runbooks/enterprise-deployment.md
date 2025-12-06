@@ -32,6 +32,7 @@ When you launch Fukuii with the `enterprise` modifier, it automatically configur
 4. **Localhost RPC Binding**: API endpoints bound to localhost by default for security
 5. **Disabled Peer Blacklisting**: Allows faster recovery in controlled environments
 6. **Optimized Sync Settings**: Configuration tuned for private network characteristics
+7. **TLS Support**: For production deployments, configure TLS/HTTPS for RPC endpoints (see [TLS Operations Guide](tls-operations.md))
 
 ## Quick Start
 
@@ -49,26 +50,38 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
   network-id = 88888
   chain-id = "0x15B38"  # 88888 in hex
   
-  # Enable modern EVM features from genesis
+  # Enable all modern EVM features from genesis for latest capabilities
+  # All forks enabled at block 0 to ensure enterprise network starts with latest EVM
   frontier-block-number = "0"
   homestead-block-number = "0"
   eip150-block-number = "0"
   eip155-block-number = "0"
   eip160-block-number = "0"
+  eip161-block-number = "0"
   byzantium-block-number = "0"
   constantinople-block-number = "0"
   petersburg-block-number = "0"
   istanbul-block-number = "0"
   
-  # Disable ETC-specific forks
-  eip161-block-number = "1000000000000000000"
-  atlantis-block-number = "1000000000000000000"
-  agharta-block-number = "1000000000000000000"
-  phoenix-block-number = "1000000000000000000"
-  magneto-block-number = "1000000000000000000"
-  mystique-block-number = "1000000000000000000"
-  spiral-block-number = "1000000000000000000"
+  # Enable ETC-specific forks at genesis for full compatibility
+  atlantis-block-number = "0"
+  agharta-block-number = "0"
+  phoenix-block-number = "0"
+  magneto-block-number = "0"
+  mystique-block-number = "0"
+  spiral-block-number = "0"
   
+  # Enable ETH-specific forks for maximum compatibility
+  muir-glacier-block-number = "0"
+  berlin-block-number = "0"
+  
+  # ECIP checkpointing/treasury forks - may not be relevant for private enterprise chains
+  ecip1098-block-number = "1000000000000000000"
+  ecip1097-block-number = "1000000000000000000"
+  ecip1099-block-number = "1000000000000000000"
+  ecip1049-block-number = "1000000000000000000"
+  
+  # Disable difficulty bomb (not needed in private networks)
   difficulty-bomb-pause-block-number = "0"
   difficulty-bomb-continue-block-number = "0"
   difficulty-bomb-removal-block-number = "0"
@@ -79,6 +92,9 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
   custom-genesis-file = null
   treasury-address = "0011223344556677889900112233445566778899"
   
+  # Monetary policy configuration
+  # NOTE: In private enterprise chains, monetary policy may not be relevant
+  # as block rewards can be set to zero or configured based on business requirements
   monetary-policy {
     first-era-block-reward = "2000000000000000000"
     first-era-reduced-block-reward = "2000000000000000000"
