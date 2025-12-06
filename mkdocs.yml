@@ -14,18 +14,18 @@ edit_uri: edit/develop/docs/
 theme:
   name: material
   palette:
-    # Light mode
+    # Light mode - Institutional banking theme
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: deep purple
+      primary: green
       accent: amber
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
-    # Dark mode
+    # Dark mode - Institutional banking theme
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: deep purple
+      primary: green
       accent: amber
       toggle:
         icon: material/brightness-4
@@ -96,6 +96,10 @@ plugins:
   - search:
       separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
 
+# Hooks for version injection
+hooks:
+  - docs/hooks/inject_version.py
+
 # Extra configuration
 extra:
   social:
@@ -108,6 +112,10 @@ extra:
 
 extra_css:
   - stylesheets/extra.css
+  - stylesheets/wizard-theme.css
+
+extra_javascript:
+  - tools/wizard-app.js
 
 # Navigation structure
 nav:
@@ -239,3 +247,4 @@ nav:
       - Implementation Complete: reports/IMPLEMENTATION_COMPLETE.md
     - Tools:
       - tools/README.md
+      - Configuration Wizard: tools/configuration-wizard.md
