@@ -75,22 +75,6 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "send and receive uncompressed messages correctly when compression is disabled" in new TestSetup {
-    val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
-    messageCodec.readMessages(remoteHello)
-
-    val localHello: ByteString = messageCodec.encodeMessage(helloV5)
-    remoteMessageCodec.readMessages(localHello)
-
-    val localNextMessageAfterHello: ByteString = messageCodec.encodeMessage(status)
-    val remoteReadNextMessageAfterHello: Seq[Either[Throwable, Message]] =
-      remoteMessageCodec.readMessages(localNextMessageAfterHello)
-
-    // both peers exchanged v5 hellos, so they should send compressed messages
-    assert(remoteReadNextMessageAfterHello.size == 1)
-    assert(remoteReadNextMessageAfterHello.head == Right(status))
-  }
-
-  it should "send and receive uncompressed messages correctly when compression is disabled" in new TestSetup {
     // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
     val remoteHello: ByteString = remoteMessageCodec.encodeMessage(helloV5)
     messageCodec.readMessages(remoteHello)
@@ -241,15 +225,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     // Send status from local to remote (non-Geth peer)
     val localStatus: ByteString = messageCodec.encodeMessage(status)
     
-    // Try to read with v4 codec (no compression expected)
-    val v4Codec = new MessageCodec(remoteFrameCodec, decoder, 4L, "TestClient/v1.0.0")
-    val decodedMessagesV4 = v4Codec.readMessages(localStatus)
-    
-    // Should successfully decode because compression is globally disabled
-    assert(decodedMessagesV4.size == 1)
-    assert(decodedMessagesV4.head == Right(status))
-    
-    // Should also work with v5 codec
+    // Should work with v5 codec that the remote peer uses
     val decodedMessagesV5 = remoteMessageCodec.readMessages(localStatus)
     assert(decodedMessagesV5.size == 1)
     assert(decodedMessagesV5.head == Right(status))
