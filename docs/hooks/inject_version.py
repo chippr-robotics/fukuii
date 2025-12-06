@@ -5,6 +5,7 @@ This ensures the configuration wizard always displays the correct version.
 
 import re
 import os
+import json
 
 
 def extract_version_from_sbt():
@@ -15,11 +16,12 @@ def extract_version_from_sbt():
         with open(sbt_file, 'r') as f:
             content = f.read()
             # Match the actual format: (ThisBuild / version) := "x.y.z"
-            match = re.search(r'\(ThisBuild\s*/\s*version\)\s*:=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content)
+            # Allow any valid version string including pre-release identifiers
+            match = re.search(r'\(ThisBuild\s*/\s*version\)\s*:=\s*"([^"]+)"', content)
             if match:
                 return match.group(1)
             # Fallback to simpler pattern for compatibility
-            match = re.search(r'version.*:=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', content)
+            match = re.search(r'version.*:=\s*"([^"]+)"', content)
             if match:
                 return match.group(1)
     except FileNotFoundError:
@@ -44,17 +46,19 @@ def on_post_page(output, page, config):
     version = extract_version_from_sbt()
     
     # Inject version as data attribute on html element (robust replacement)
+    # Matches <html ...> with or without attributes
     output = re.sub(
-        r'<html([^>]*)',
-        f'<html\\1 data-fukuii-version="{version}"',
+        r'<html([^>]*)>',
+        f'<html\\1 data-fukuii-version="{version}">',
         output,
         count=1
     )
     
-    # Also inject as JavaScript variable for immediate use
+    # Also inject as JavaScript variable with proper JSON encoding for safety
+    version_json = json.dumps(version)
     output = output.replace(
         '</head>',
-        f'<script>window.__FUKUII_VERSION__ = "{version}";</script>\n</head>',
+        f'<script>window.__FUKUII_VERSION__ = {version_json};</script>\n</head>',
         1
     )
     
