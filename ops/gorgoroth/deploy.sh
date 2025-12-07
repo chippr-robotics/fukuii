@@ -23,15 +23,17 @@ CONFIGS=(
 )
 
 print_usage() {
-    echo "Usage: $0 {start|stop|restart|status|logs|clean} [config]"
+    echo "Usage: $0 {start|stop|restart|status|logs|clean|sync-static-nodes} [config]"
     echo ""
     echo "Commands:"
-    echo "  start [config]   - Start the network with specified config (default: 3nodes)"
-    echo "  stop [config]    - Stop the network"
-    echo "  restart [config] - Restart the network"
-    echo "  status [config]  - Show status of all containers"
-    echo "  logs [config]    - Follow logs from all containers"
-    echo "  clean [config]   - Stop and remove all containers and volumes"
+    echo "  start [config]        - Start the network with specified config (default: 3nodes)"
+    echo "  stop [config]         - Stop the network"
+    echo "  restart [config]      - Restart the network"
+    echo "  status [config]       - Show status of all containers"
+    echo "  logs [config]         - Follow logs from all containers"
+    echo "  clean [config]        - Stop and remove all containers and volumes"
+    echo "  sync-static-nodes     - Collect enodes from running containers, create static-nodes.json,"
+    echo "                          distribute to all containers, and restart them"
     echo ""
     echo "Available configurations:"
     for config in "${CONFIGS[@]}"; do
@@ -42,6 +44,7 @@ print_usage() {
     echo "Examples:"
     echo "  $0 start 3nodes"
     echo "  $0 logs fukuii-geth"
+    echo "  $0 sync-static-nodes"
     echo "  $0 stop mixed"
 }
 
@@ -154,6 +157,9 @@ case $COMMAND in
         ;;
     clean)
         clean_network "$CONFIG"
+        ;;
+    sync-static-nodes)
+        "$SCRIPT_DIR/../tools/fukuii-cli.sh"
         ;;
     *)
         echo -e "${RED}Error: Unknown command '$COMMAND'${NC}"

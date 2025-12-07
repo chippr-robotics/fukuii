@@ -18,6 +18,7 @@ This runbook provides comprehensive documentation of Fukuii's configuration syst
 6. [Environment Variables](#environment-variables)
 7. [Common Configuration Examples](#common-configuration-examples)
 8. [Configuration Reference](#configuration-reference)
+9. [Developer Tools](#developer-tools)
 
 ## Configuration System Overview
 
@@ -698,11 +699,16 @@ Downloads and extracts blockchain bootstrap data to speed up initial sync.
 ```
 Runs a faucet service for testnet token distribution.
 
-**EC Key Generator**:
+**CLI Utilities**:
 ```bash
-./bin/fukuii eckeygen
+./bin/fukuii cli --help
+./bin/fukuii cli generate-key-pairs
+./bin/fukuii cli generate-key-pairs 5
 ```
-Generates elliptic curve key pairs for testing and development.
+Command-line utilities for key generation, address derivation, and more.
+Use `--help` to see all available subcommands.
+
+For RPC-based key generation, see `personal_newAccount` endpoint.
 
 **Signature Validator**:
 ```bash
@@ -1040,3 +1046,61 @@ bootstrap-nodes = [
 **Document Version**: 1.0  
 **Last Updated**: 2025-11-04  
 **Maintainer**: Chippr Robotics LLC
+
+## Developer Tools
+
+### Fukuii CLI Tool
+
+For developers and operators managing multi-node deployments, Fukuii provides a CLI tool for common operations.
+
+#### Installation (Linux)
+
+```bash
+# Copy the tool to a system-wide location
+sudo cp ops/tools/fukuii-cli.sh /usr/local/bin/fukuii-cli
+sudo chmod +x /usr/local/bin/fukuii-cli
+
+# Verify installation
+fukuii-cli --help
+```
+
+#### Installation (User-specific)
+
+```bash
+# Create a local bin directory if it doesn't exist
+mkdir -p ~/.local/bin
+
+# Copy the tool
+cp ops/tools/fukuii-cli.sh ~/.local/bin/fukuii-cli
+chmod +x ~/.local/bin/fukuii-cli
+
+# Add to PATH (add this to ~/.bashrc or ~/.zshrc)
+export PATH="$HOME/.local/bin:$PATH"
+
+# Reload your shell or run:
+source ~/.bashrc  # or source ~/.zshrc
+
+# Verify installation
+fukuii-cli
+```
+
+#### Current Features
+
+The fukuii-cli tool currently provides:
+
+- **Enode Collection**: Automatically collect enode URLs from running Fukuii containers
+- **Static Nodes Management**: Generate and distribute static-nodes.json files across nodes
+- **Container Orchestration**: Restart containers with updated peer configurations
+
+#### Usage
+
+```bash
+# Run from the ops/gorgoroth directory via deploy.sh
+cd ops/gorgoroth
+./deploy.sh sync-static-nodes
+
+# Or run directly if installed system-wide
+fukuii-cli
+```
+
+**Note**: Additional features will be added in future releases to make this a comprehensive toolkit for Fukuii node operations.
