@@ -452,7 +452,7 @@ object FukuiiMcpServer extends IOApp:
     s"""{
       |  "number": 12345678,
       |  "hash": "0x1234567890abcdef",
-      |  "timestamp": ${System.currentTimeMillis() / 1000},
+      |  "timestamp": 1700000000,
       |  "difficulty": 123456789,
       |  "gasLimit": 8000000,
       |  "gasUsed": 7500000,
@@ -487,9 +487,10 @@ object FukuiiMcpServer extends IOApp:
    * Process JSON-RPC messages from stdin
    */
   val processMessages: Pipe[IO, String, String] = _.evalMap { line =>
-    IO(System.err.println(s"Received: $line")) >>
+    // Note: Logging to stderr for debugging during development
+    // In production, this should use a proper logging framework
     decode[JsonRpcRequest](line).fold(
-      error => IO.pure(s"""{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error: ${error.getMessage}"}}"""),
+      error => IO.pure(s"""{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"""),
       request => handleRequest(request).map(_.asJson.noSpaces)
     )
   }
