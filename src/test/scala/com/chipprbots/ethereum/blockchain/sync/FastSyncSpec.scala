@@ -108,14 +108,18 @@ class FastSyncSpec
 
     val saveTestBlocksWithWeights: IO[Unit] = IO {
       // Save test blocks with chain weights to prevent "Parent chain weight not found" errors
-      testBlocks.foreach { block =>
+      // Use cumulative difficulty (each block adds to the total)
+      testBlocks.foldLeft(ChainWeight.totalDifficultyOnly(1)) { (cumulativeWeight, block) =>
+        val newWeight = cumulativeWeight.increase(block.header)
         blockchainWriter.save(
           block,
           receipts = Nil,
-          ChainWeight.totalDifficultyOnly(block.header.difficulty),
+          newWeight,
           saveAsBestBlock = false
         )
+        newWeight
       }
+      ()
     }
 
     val startSync: IO[Unit] = IO(fastSync ! SyncProtocol.Start)
