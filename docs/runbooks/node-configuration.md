@@ -257,6 +257,46 @@ fukuii {
 }
 ```
 
+**Static Nodes Configuration**:
+
+In addition to bootstrap nodes configured in chain configuration files, Fukuii supports loading static nodes from a `static-nodes.json` file in the data directory. This allows for dynamic peer configuration without modifying configuration files.
+
+The `static-nodes.json` file should be placed in the data directory (e.g., `~/.fukuii/etc/static-nodes.json`) and contain a JSON array of enode URLs:
+
+```json
+[
+  "enode://6eecbdcc74c0b672ce505b9c639c3ef2e8ee8cddd8447ca7ab82c65041932db64a9cd4d7e723ba180b0c3d88d1f0b2913fda48972cdd6742fea59f900af084af@192.168.1.1:9076",
+  "enode://a335a7e86eab05929266de232bec201a49fdcfc1115e8f8b861656e8afb3a6e5d3ffd172d153ae6c080401a56e3d620db2ac0695038a19e9b0c5220212651493@192.168.1.2:9076"
+]
+```
+
+**How it works**:
+- **Default/Public mode**: Static nodes are merged with bootstrap nodes from config - both are used
+- **Enterprise mode** (`fukuii enterprise <network>`): Only static nodes are used, bootstrap nodes are ignored
+- This allows complete control over peer connections in private networks while preventing accidental connections to public infrastructure
+
+**Modifier behavior**:
+```bash
+# Public mode - uses both bootstrap nodes and static-nodes.json
+fukuii public etc
+
+# Enterprise mode - uses ONLY static-nodes.json (ignores bootstrap nodes)
+fukuii enterprise gorgoroth
+```
+
+**Use cases**:
+- Private/permissioned networks where peer lists change frequently
+- Test networks where nodes are dynamically created
+- Automated deployments where peer configuration is managed externally
+- Enterprise environments with scripted node management requiring strict peer control
+
+**Notes**:
+- The file is optional - if it doesn't exist, only bootstrap nodes from config are used (unless in enterprise mode)
+- Invalid enode URLs are logged and skipped
+- Changes to the file require a node restart to take effect
+- For the Gorgoroth test network, this is the recommended way to configure peers
+
+
 **Peer Management**:
 ```hocon
 fukuii {

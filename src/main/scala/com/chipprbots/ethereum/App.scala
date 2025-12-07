@@ -50,13 +50,16 @@ object App extends Logger {
   private def applyModifiers(modifiers: Set[String]): Unit = {
     if (modifiers.contains("public")) {
       System.setProperty("fukuii.network.discovery.discovery-enabled", "true")
+      // Public mode: use both bootstrap nodes and static nodes for better sync experience
+      System.setProperty("fukuii.network.discovery.use-bootstrap-nodes", "true")
       log.info("Public discovery explicitly enabled")
+      log.info("- Using both bootstrap nodes and static-nodes.json for peer discovery")
     }
     
     if (modifiers.contains("enterprise")) {
       // Enterprise mode: Best practices for private/permissioned EVM networks
       
-      // Disable public peer discovery - use bootstrap nodes only
+      // Disable public peer discovery - use static nodes only
       System.setProperty("fukuii.network.discovery.discovery-enabled", "false")
       
       // Disable automatic port forwarding (not needed in enterprise environments)
@@ -64,6 +67,9 @@ object App extends Logger {
       
       // Use known nodes from configuration/bootstrap only
       System.setProperty("fukuii.network.discovery.reuse-known-nodes", "true")
+      
+      // Enterprise mode: ignore bootstrap nodes, use only static-nodes.json
+      System.setProperty("fukuii.network.discovery.use-bootstrap-nodes", "false")
       
       // Disable sync blacklisting to allow retry in controlled environments
       System.setProperty("fukuii.sync.blacklist-duration", "0.seconds")
@@ -73,7 +79,8 @@ object App extends Logger {
       System.setProperty("fukuii.network.rpc.http.interface", "localhost")
       
       log.info("Enterprise mode enabled: configured for private/permissioned network")
-      log.info("- Public discovery disabled (use bootstrap nodes)")
+      log.info("- Public discovery disabled")
+      log.info("- Using ONLY static-nodes.json (bootstrap nodes ignored)")
       log.info("- Automatic port forwarding disabled")
       log.info("- RPC bound to localhost (override with config if needed)")
     }
