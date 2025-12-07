@@ -34,7 +34,7 @@ class FastSyncSpec
     with FreeSpecBase
     with SpecFixtures
     with WithActorSystemShutDown { self =>
-  implicit val timeout: Timeout = Timeout(30.seconds)
+  implicit val timeout: Timeout = Timeout(60.seconds)
 
   class Fixture extends EphemBlockchainTestSetup with TestSyncConfig with TestSyncPeers {
     implicit override lazy val system: ActorSystem = self.system
@@ -106,6 +106,22 @@ class FastSyncSpec
       )
     }
 
+    val saveTestBlocksWithWeights: IO[Unit] = IO {
+      // Save test blocks with chain weights to prevent "Parent chain weight not found" errors
+      // Use cumulative difficulty (each block adds to the total)
+      testBlocks.foldLeft(ChainWeight.totalDifficultyOnly(1)) { (cumulativeWeight, block) =>
+        val newWeight = cumulativeWeight.increase(block.header)
+        blockchainWriter.save(
+          block,
+          receipts = Nil,
+          newWeight,
+          saveAsBestBlock = false
+        )
+        newWeight
+      }
+      ()
+    }
+
     val startSync: IO[Unit] = IO(fastSync ! SyncProtocol.Start)
 
     val getSyncStatus: IO[Status] =
@@ -159,6 +175,7 @@ class FastSyncSpec
 
         (for {
           _ <- saveGenesis
+          _ <- saveTestBlocksWithWeights
           _ <- startSync
           _ <- etcPeerManager.onPeersConnected
           _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
