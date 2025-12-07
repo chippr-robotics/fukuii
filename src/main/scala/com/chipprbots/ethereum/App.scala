@@ -36,13 +36,21 @@ object App extends Logger {
   /** Set config file for the specified network (must be called before Config is accessed) */
   private def setNetworkConfig(network: String): Unit = {
     val configFile = s"conf/$network.conf"
-    // Only set if the config file exists
+    // Check if config file exists in filesystem first
     val file = new File(configFile)
     if (file.exists()) {
       System.setProperty("config.file", configFile)
+      log.info(s"Loading network configuration from filesystem: $configFile")
     } else {
-      // Log warning when config file doesn't exist for a known network
-      log.warn(s"Config file '$configFile' not found for network '$network', using default config")
+      // Check if resource exists in classpath
+      val resourceExists = Option(getClass.getClassLoader.getResource(configFile)).isDefined
+      if (resourceExists) {
+        System.setProperty("config.file", configFile)
+        log.info(s"Loading network configuration from classpath: $configFile")
+      } else {
+        // Log warning when config file doesn't exist for a known network
+        log.warn(s"Config file '$configFile' not found in filesystem or classpath, using default config")
+      }
     }
   }
 

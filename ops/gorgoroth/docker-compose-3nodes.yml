@@ -32,6 +32,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -62,6 +63,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -92,6 +94,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
