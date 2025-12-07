@@ -33,11 +33,10 @@ get_enode_from_container() {
     
     while [ $retry -lt $max_retries ]; do
         # Try to get enode via RPC
-        local enode=$(docker exec "$container_name" curl -s -X POST \
-            --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
-            http://localhost:8546 2>/dev/null | \
-            grep -o '"enode":"[^"]*"' | \
-            cut -d'"' -f4 || echo "")
+        # Note: Using grep/cut instead of jq for portability (jq may not be in all containers)
+        local enode=$(docker exec "$container_name" sh -c \
+            'curl -s -X POST --data "{\"jsonrpc\":\"2.0\",\"method\":\"admin_nodeInfo\",\"params\":[],\"id\":1}" http://localhost:8546 | grep -o "\"enode\":\"[^\"]*\"" | cut -d"\"" -f4' \
+            2>/dev/null || echo "")
         
         if [ -n "$enode" ]; then
             echo "$enode"
@@ -90,16 +89,18 @@ fi
 echo ""
 echo -e "${GREEN}Collected ${#ENODES[@]} enode(s)${NC}"
 
-# Create static-nodes.json
-echo "[" > "$TEMP_STATIC_NODES"
-for i in "${!ENODES[@]}"; do
-    if [ $i -eq $((${#ENODES[@]} - 1)) ]; then
-        echo "  \"${ENODES[$i]}\"" >> "$TEMP_STATIC_NODES"
-    else
-        echo "  \"${ENODES[$i]}\"," >> "$TEMP_STATIC_NODES"
-    fi
-done
-echo "]" >> "$TEMP_STATIC_NODES"
+# Create static-nodes.json with proper formatting
+{
+    echo "["
+    for i in "${!ENODES[@]}"; do
+        if [ $i -eq $((${#ENODES[@]} - 1)) ]; then
+            printf '  "%s"\n' "${ENODES[$i]}"
+        else
+            printf '  "%s",\n' "${ENODES[$i]}"
+        fi
+    done
+    echo "]"
+} > "$TEMP_STATIC_NODES"
 
 echo ""
 echo -e "${BLUE}Generated static-nodes.json:${NC}"
