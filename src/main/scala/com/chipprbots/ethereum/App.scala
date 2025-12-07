@@ -112,6 +112,10 @@ object App extends Logger {
         |  cli [subcommand]       Command-line utilities
         |                         Run 'fukuii cli --help' for more information
         |
+        |  mcp                    Start MCP (Model Context Protocol) server
+        |                         Provides agentic control over the Fukuii node
+        |                         Communicates via stdio for integration with AI assistants
+        |
         |  keytool [options]      Key management tool
         |
         |  bootstrap [path]       Download blockchain bootstrap data
@@ -161,6 +165,7 @@ object App extends Logger {
     val faucet = "faucet"
     val ecKeyGen = "eckeygen"
     val cli = "cli"
+    val mcp = "mcp"
     val sigValidator = "signature-validator"
 
     // Parse and extract modifiers from arguments
@@ -195,6 +200,7 @@ object App extends Logger {
       // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
       case Some(`ecKeyGen`)     => EcKeyGen.main(argsWithoutModifiers.tail)
+      case Some(`mcp`)          => com.chipprbots.ethereum.mcp.FukuiiMcpServer.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
       case Some(network) if isNetwork(network) =>
