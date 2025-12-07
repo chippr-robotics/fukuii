@@ -1,1 +1,25 @@
-* text eol=lf
+* text=auto eol=lf
+
+# Binary files - Images
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.svg binary
+*.bmp binary
+*.tiff binary
+
+# Binary files - Documents and Archives
+*.pdf binary
+*.jar binary
+*.zip binary
+*.tar.gz binary
+
+# Binary files - Compiled code
+*.class binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
