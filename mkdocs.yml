@@ -13,6 +13,7 @@ edit_uri: edit/develop/docs/
 # Theme configuration
 theme:
   name: material
+  logo: images/fukuii-logo-cute.png
   palette:
     # Light mode - Institutional banking theme
     - media: "(prefers-color-scheme: light)"
