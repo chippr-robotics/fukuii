@@ -1051,7 +1051,7 @@ bootstrap-nodes = [
 
 ### Fukuii CLI Tool
 
-For developers and operators managing multi-node deployments, Fukuii provides a CLI tool for common operations.
+The Fukuii CLI is a unified command-line toolkit for managing Fukuii node deployments and configurations. It consolidates all deployment and configuration operations into a single, consistent interface.
 
 #### Installation (Linux)
 
@@ -1061,7 +1061,7 @@ sudo cp ops/tools/fukuii-cli.sh /usr/local/bin/fukuii-cli
 sudo chmod +x /usr/local/bin/fukuii-cli
 
 # Verify installation
-fukuii-cli --help
+fukuii-cli help
 ```
 
 #### Installation (User-specific)
@@ -1081,26 +1081,58 @@ export PATH="$HOME/.local/bin:$PATH"
 source ~/.bashrc  # or source ~/.zshrc
 
 # Verify installation
-fukuii-cli
+fukuii-cli help
 ```
 
-#### Current Features
+#### Features
 
-The fukuii-cli tool currently provides:
+The fukuii-cli tool provides a comprehensive set of commands:
 
-- **Enode Collection**: Automatically collect enode URLs from running Fukuii containers
-- **Static Nodes Management**: Generate and distribute static-nodes.json files across nodes
-- **Container Orchestration**: Restart containers with updated peer configurations
+**Network Deployment:**
+- `start [config]` - Start the Gorgoroth test network with specified configuration
+- `stop [config]` - Stop the network
+- `restart [config]` - Restart the network
+- `status [config]` - Show status of all containers
+- `logs [config]` - Follow logs from all containers
+- `clean [config]` - Stop and remove all containers and volumes
 
-#### Usage
+**Node Configuration:**
+- `sync-static-nodes` - Collect enode URLs and synchronize static-nodes.json across all nodes
+- `collect-logs [config]` - Collect logs from all containers for debugging
+
+**Utility:**
+- `help` - Show detailed usage information
+- `version` - Show version information
+
+#### Usage Examples
 
 ```bash
-# Run from the ops/gorgoroth directory via deploy.sh
-cd ops/gorgoroth
-./deploy.sh sync-static-nodes
+# Start a 3-node network
+fukuii-cli start 3nodes
 
-# Or run directly if installed system-wide
-fukuii-cli
+# Wait for nodes to initialize
+sleep 45
+
+# Synchronize peer connections
+fukuii-cli sync-static-nodes
+
+# Check network status
+fukuii-cli status
+
+# View logs
+fukuii-cli logs 3nodes
+
+# Collect logs for debugging
+fukuii-cli collect-logs 3nodes
+
+# Stop the network
+fukuii-cli stop 3nodes
 ```
 
-**Note**: Additional features will be added in future releases to make this a comprehensive toolkit for Fukuii node operations.
+#### Backward Compatibility
+
+For backward compatibility, the following scripts in `ops/gorgoroth/` are wrappers that call `fukuii-cli`:
+- `deploy.sh` - Forwards all commands to fukuii-cli
+- `sync-static-nodes.sh` - Calls fukuii-cli sync-static-nodes
+
+You can continue using these scripts with the same syntax, or migrate to using `fukuii-cli` directly for a unified command experience.

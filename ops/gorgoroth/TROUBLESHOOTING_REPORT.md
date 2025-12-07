@@ -182,10 +182,15 @@ environment:
 
 ### Option 3: Update static-nodes.json with Actual Enode IDs (Recommended Workaround)
 
-**✅ IMPLEMENTED** - A `fukuii-cli` tool is now available to automate this process.
+**✅ IMPLEMENTED** - A unified `fukuii-cli` toolkit is now available to automate deployment and configuration.
 
-The `fukuii-cli` tool (formerly `sync-static-nodes.sh`) automatically:
-1. Collects enode URLs from all running containers
+The `fukuii-cli` tool is a comprehensive command-line toolkit that includes:
+- Network deployment commands (start, stop, restart, status, logs, clean)
+- Node configuration commands (sync-static-nodes, collect-logs)
+- All functionality previously in separate scripts now unified in one tool
+
+**Sync-Static-Nodes Functionality:**
+1. Collects enode URLs from all running containers via RPC
 2. Generates a consolidated static-nodes.json file
 3. Distributes the file to all containers
 4. Restarts containers to apply the configuration
@@ -193,23 +198,37 @@ The `fukuii-cli` tool (formerly `sync-static-nodes.sh`) automatically:
 **Usage:**
 
 ```bash
-# From ops/gorgoroth directory
-cd ops/gorgoroth
+# Using fukuii-cli directly (recommended)
+fukuii-cli sync-static-nodes
+
+# Or using backward-compatible wrappers
 ./sync-static-nodes.sh
-
-# Or via deploy.sh wrapper
 ./deploy.sh sync-static-nodes
+```
 
-# Or if installed system-wide
-fukuii-cli
+**All Available Commands:**
+
+```bash
+fukuii-cli start [config]          # Start network
+fukuii-cli stop [config]           # Stop network
+fukuii-cli restart [config]        # Restart network
+fukuii-cli status [config]         # Show container status
+fukuii-cli logs [config]           # Follow logs
+fukuii-cli clean [config]          # Remove containers and volumes
+fukuii-cli sync-static-nodes       # Synchronize peer connections
+fukuii-cli collect-logs [config]   # Collect logs for debugging
+fukuii-cli help                    # Show help
+fukuii-cli version                 # Show version
 ```
 
 **Benefits:**
+- Unified command structure across all operations
 - Automatically extracts actual enode IDs from running nodes
 - Handles all nodes in the network
 - Properly formats JSON output
 - Includes retry logic for reliability
 - Restarts containers to apply changes
+- Backward compatible with existing scripts
 
 **Limitations:**
 - Still doesn't fix the underlying port configuration issue (9076 vs 30303)
@@ -220,7 +239,7 @@ fukuii-cli
 
 1. Start the network (nodes will start but won't connect):
    ```bash
-   ./deploy.sh start 3nodes
+   fukuii-cli start 3nodes
    ```
 
 2. Wait for nodes to fully initialize (~30-45 seconds):
@@ -230,7 +249,7 @@ fukuii-cli
 
 3. Synchronize static nodes (collects enodes and establishes connections):
    ```bash
-   ./sync-static-nodes.sh
+   fukuii-cli sync-static-nodes
    ```
 
 4. Verify peer connections:

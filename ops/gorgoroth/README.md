@@ -113,12 +113,16 @@ cd ops/gorgoroth
 
 # 1. Start the 3-node network
 ./deploy.sh start 3nodes
+# Or using fukuii-cli directly:
+# fukuii-cli start 3nodes
 
 # 2. Wait for nodes to fully initialize (30-45 seconds)
 sleep 45
 
 # 3. Synchronize static nodes to establish peer connections
 ./sync-static-nodes.sh
+# Or using fukuii-cli directly:
+# fukuii-cli sync-static-nodes
 
 # 4. Verify peer connections
 curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
@@ -131,7 +135,7 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":
 - Distributes the file to each container
 - Restarts containers to apply peer configuration
 
-**Note**: The `sync-static-nodes.sh` script is also available as `fukuii-cli` tool. See `docs/runbooks/node-configuration.md` for installation instructions.
+**Note**: All deployment commands are now part of the unified `fukuii-cli` toolkit. The `deploy.sh` and `sync-static-nodes.sh` scripts are wrappers that call `fukuii-cli` for backward compatibility. See `docs/runbooks/node-configuration.md` for installation and usage instructions.
 
 ### Starting a Network (Subsequent Runs)
 
@@ -218,10 +222,14 @@ curl -X POST -H "Content-Type: application/json" \
 
 ## Deployment Script Usage
 
-The `deploy.sh` script provides easy network management:
+The `deploy.sh` script is a wrapper for the unified `fukuii-cli` tool. All deployment commands are now available through `fukuii-cli`:
 
 ```bash
+# Using deploy.sh (backward compatible)
 ./deploy.sh {start|stop|restart|status|logs|clean|sync-static-nodes} [config]
+
+# Using fukuii-cli directly
+fukuii-cli {start|stop|restart|status|logs|clean|sync-static-nodes|collect-logs} [config]
 ```
 
 **Commands:**
@@ -233,24 +241,29 @@ The `deploy.sh` script provides easy network management:
 - `logs [config]` - Follow container logs
 - `clean [config]` - Remove containers and volumes (with confirmation)
 - `sync-static-nodes` - Synchronize static-nodes.json across all running containers
+- `collect-logs [config]` - Collect logs from all containers
 
 **Examples:**
 
 ```bash
 # Start 6-node network
 ./deploy.sh start 6nodes
+# Or: fukuii-cli start 6nodes
 
 # Synchronize static nodes for peer connections
 ./deploy.sh sync-static-nodes
+# Or: fukuii-cli sync-static-nodes
 
 # View mixed network logs
 ./deploy.sh logs mixed
+# Or: fukuii-cli logs mixed
 
-# Restart fukuii-geth network
-./deploy.sh restart fukuii-geth
+# Check status
+fukuii-cli status
 
 # Clean up 3-node network (removes all data)
 ./deploy.sh clean 3nodes
+# Or: fukuii-cli clean 3nodes
 ```
 
 ## Log Collection Script Usage
