@@ -2774,6 +2774,82 @@
       "settingRebuildPath": true,
       "settingFollowRedirects": "global",
       "_type": "request"
+    },
+    {
+      "_id": "fld_faucet001",
+      "parentId": "fld_0149b7b6",
+      "modified": 1765090102436,
+      "created": 1765090102436,
+      "name": "Faucet",
+      "description": "Faucet JSON-RPC endpoints for testnet token distribution",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -1765090102436,
+      "_type": "request_group"
+    },
+    {
+      "_id": "req_faucet_sendFunds",
+      "parentId": "fld_faucet001",
+      "modified": 1765090102436,
+      "created": 1765090102436,
+      "url": "{{ faucet_url }}",
+      "name": "faucet_sendFunds",
+      "description": "Send testnet tokens to an address",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"faucet_sendFunds\",\n  \"params\": [\n    \"0x...address...\"\n  ]\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_faucet_sendFunds"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1765090102436,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_faucet_status",
+      "parentId": "fld_faucet001",
+      "modified": 1765090102436,
+      "created": 1765090102436,
+      "url": "{{ faucet_url }}",
+      "name": "faucet_status",
+      "description": "Get faucet status",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"faucet_status\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_faucet_status"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1765090102437,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
     }
   ]
 }
