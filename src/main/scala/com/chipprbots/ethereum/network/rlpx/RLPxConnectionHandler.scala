@@ -44,7 +44,7 @@ import com.chipprbots.ethereum.utils.ByteUtils
 class RLPxConnectionHandler(
     capabilities: List[Capability],
     authHandshaker: AuthHandshaker,
-    messageCodecFactory: (FrameCodec, Capability, Long) => MessageCodec,
+    messageCodecFactory: (FrameCodec, Capability, Long, String) => MessageCodec,
     rlpxConfiguration: RLPxConfiguration,
     extractor: Secrets => HelloCodec
 ) extends Actor
@@ -308,7 +308,7 @@ class RLPxConnectionHandler(
 
     private def negotiateCodec(hello: Hello, extractor: HelloCodec): Option[(MessageCodec, Capability)] =
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
-        (messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion), negotiated)
+        (messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion, hello.clientId), negotiated)
       }
 
     private def processFrames(frames: Seq[Frame], messageCodec: MessageCodec): Unit =
@@ -538,10 +538,11 @@ object RLPxConnectionHandler {
   def ethMessageCodecFactory(
       frameCodec: FrameCodec,
       negotiated: Capability,
-      p2pVersion: Long
+      p2pVersion: Long,
+      clientId: String
   ): MessageCodec = {
     val md = NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))
-    new MessageCodec(frameCodec, md, p2pVersion)
+    new MessageCodec(frameCodec, md, p2pVersion, clientId)
   }
 
   case class ConnectTo(uri: URI)
