@@ -230,14 +230,17 @@ Start with the custom config:
 
 ### Generate Node Key (Optional)
 
-Each node has a unique identifier. To generate a custom node key:
+Each node has a unique identifier derived from its node key. To generate a custom node key:
 
 ```bash
-./bin/fukuii cli generate-private-key > ~/.fukuii/etc/node.key
+# Generate a node key pair (private key on first line, public key on second line)
+./bin/fukuii cli generate-key-pairs > ~/.fukuii/etc/node.key
 chmod 600 ~/.fukuii/etc/node.key
 ```
 
-If not provided, Fukuii generates one automatically on first start.
+The `generate-key-pairs` command outputs the private key on the first line and the public key (node ID) on the second line. Only the private key is used by Fukuii when starting; the public key line can be used to identify your node to others.
+
+If not provided, Fukuii generates a node key automatically on first start.
 
 ## First Startup
 

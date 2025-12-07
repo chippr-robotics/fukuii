@@ -18,6 +18,7 @@ This runbook provides comprehensive documentation of Fukuii's configuration syst
 6. [Environment Variables](#environment-variables)
 7. [Common Configuration Examples](#common-configuration-examples)
 8. [Configuration Reference](#configuration-reference)
+9. [Developer Tools](#developer-tools)
 
 ## Configuration System Overview
 
@@ -698,11 +699,16 @@ Downloads and extracts blockchain bootstrap data to speed up initial sync.
 ```
 Runs a faucet service for testnet token distribution.
 
-**EC Key Generator**:
+**CLI Utilities**:
 ```bash
-./bin/fukuii eckeygen
+./bin/fukuii cli --help
+./bin/fukuii cli generate-key-pairs
+./bin/fukuii cli generate-key-pairs 5
 ```
-Generates elliptic curve key pairs for testing and development.
+Command-line utilities for key generation, address derivation, and more.
+Use `--help` to see all available subcommands.
+
+For RPC-based key generation, see `personal_newAccount` endpoint.
 
 **Signature Validator**:
 ```bash
@@ -1040,3 +1046,87 @@ bootstrap-nodes = [
 **Document Version**: 1.0  
 **Last Updated**: 2025-11-04  
 **Maintainer**: Chippr Robotics LLC
+
+## Developer Tools
+
+### Fukuii CLI Tool
+
+The Fukuii CLI is a unified command-line toolkit for managing Fukuii node deployments and configurations. It consolidates all deployment and configuration operations into a single, consistent interface.
+
+#### Installation (Linux)
+
+```bash
+# Copy the tool to a system-wide location
+sudo cp ops/tools/fukuii-cli.sh /usr/local/bin/fukuii-cli
+sudo chmod +x /usr/local/bin/fukuii-cli
+
+# Verify installation
+fukuii-cli help
+```
+
+#### Installation (User-specific)
+
+```bash
+# Create a local bin directory if it doesn't exist
+mkdir -p ~/.local/bin
+
+# Copy the tool
+cp ops/tools/fukuii-cli.sh ~/.local/bin/fukuii-cli
+chmod +x ~/.local/bin/fukuii-cli
+
+# Add to PATH (add this to ~/.bashrc or ~/.zshrc)
+export PATH="$HOME/.local/bin:$PATH"
+
+# Reload your shell or run:
+source ~/.bashrc  # or source ~/.zshrc
+
+# Verify installation
+fukuii-cli help
+```
+
+#### Features
+
+The fukuii-cli tool provides a comprehensive set of commands:
+
+**Network Deployment:**
+- `start [config]` - Start the Gorgoroth test network with specified configuration
+- `stop [config]` - Stop the network
+- `restart [config]` - Restart the network
+- `status [config]` - Show status of all containers
+- `logs [config]` - Follow logs from all containers
+- `clean [config]` - Stop and remove all containers and volumes
+
+**Node Configuration:**
+- `sync-static-nodes` - Collect enode URLs and synchronize static-nodes.json across all nodes
+- `collect-logs [config]` - Collect logs from all containers for debugging
+
+**Utility:**
+- `help` - Show detailed usage information
+- `version` - Show version information
+
+#### Usage Examples
+
+```bash
+# Start a 3-node network
+fukuii-cli start 3nodes
+
+# Wait for nodes to initialize
+sleep 45
+
+# Synchronize peer connections
+fukuii-cli sync-static-nodes
+
+# Check network status
+fukuii-cli status
+
+# View logs
+fukuii-cli logs 3nodes
+
+# Collect logs for debugging
+fukuii-cli collect-logs 3nodes
+
+# Stop the network
+fukuii-cli stop 3nodes
+```
+
+**Note**: The fukuii-cli tool is the primary interface for all deployment and configuration operations. Install it system-wide for easy access from anywhere.

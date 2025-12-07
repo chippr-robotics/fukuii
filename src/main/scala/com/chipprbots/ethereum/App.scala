@@ -3,7 +3,6 @@ package com.chipprbots.ethereum
 import java.io.File
 
 import com.chipprbots.ethereum.cli.CliLauncher
-import com.chipprbots.ethereum.crypto.EcKeyGen
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
 import com.chipprbots.ethereum.utils.Logger
@@ -111,16 +110,17 @@ object App extends Logger {
         |Commands:
         |  cli [subcommand]       Command-line utilities
         |                         Run 'fukuii cli --help' for more information
+        |                         Key generation: fukuii cli generate-key-pairs [n]
         |
         |  keytool [options]      Key management tool
         |
         |  bootstrap [path]       Download blockchain bootstrap data
         |
-        |  faucet [options]       Run faucet service
+        |  faucet                 Start faucet JSON-RPC server for testnet token distribution
+        |                         Endpoints: faucet_sendFunds, faucet_status
         |
-        |  eckeygen [options]     Generate EC key pairs
-        |
-        |  signature-validator    Validate signatures
+        |  signature-validator <pubkey> <sig> <hash>
+        |                         Validate ECDSA signature against public key and message hash
         |
         |Options:
         |  --help, -h             Show this help message
@@ -134,18 +134,22 @@ object App extends Logger {
         |  java -Dconfig.file=/path/to/custom.conf -jar fukuii.jar
         |
         |Examples:
-        |  fukuii                          # Start Ethereum Classic node (default)
-        |  fukuii etc                      # Start Ethereum Classic node
-        |  fukuii etc --tui                # Start with Terminal UI enabled
-        |  fukuii mordor                   # Start Mordor testnet node
-        |  fukuii public                   # Start ETC with public discovery enabled
-        |  fukuii public etc               # Start ETC with public discovery enabled
-        |  fukuii public mordor            # Start Mordor with public discovery enabled
-        |  fukuii public --tui             # Start ETC with public discovery and TUI
-        |  fukuii enterprise               # Start in enterprise mode (private network)
-        |  fukuii enterprise pottery       # Start private pottery network
-        |  fukuii cli --help               # Show CLI utilities help
-        |  fukuii cli generate-private-key # Generate a new private key
+        |  fukuii                                # Start Ethereum Classic node (default)
+        |  fukuii etc                            # Start Ethereum Classic node
+        |  fukuii etc --tui                      # Start with Terminal UI enabled
+        |  fukuii mordor                         # Start Mordor testnet node
+        |  fukuii public                         # Start ETC with public discovery enabled
+        |  fukuii public etc                     # Start ETC with public discovery enabled
+        |  fukuii public mordor                  # Start Mordor with public discovery enabled
+        |  fukuii public --tui                   # Start ETC with public discovery and TUI
+        |  fukuii enterprise                     # Start in enterprise mode (private network)
+        |  fukuii enterprise pottery             # Start private pottery network
+        |  fukuii cli --help                     # Show CLI utilities help
+        |  fukuii cli generate-private-key       # Generate a new private key
+        |  fukuii cli generate-key-pairs         # Generate node key pair (for node.key)
+        |  fukuii cli generate-key-pairs 5       # Generate 5 key pairs
+        |  fukuii faucet                         # Start faucet server (testnet)
+        |  fukuii signature-validator <pk> <sig> <hash>  # Validate a signature
         |
         |For more information, visit: https://github.com/chippr-robotics/fukuii
         |""".stripMargin
@@ -159,7 +163,6 @@ object App extends Logger {
     // HIBERNATED: vm-server option commented out
     // val vmServer = "vm-server"
     val faucet = "faucet"
-    val ecKeyGen = "eckeygen"
     val cli = "cli"
     val sigValidator = "signature-validator"
 
@@ -194,7 +197,6 @@ object App extends Logger {
       // HIBERNATED: vm-server case commented out
       // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
-      case Some(`ecKeyGen`)     => EcKeyGen.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
       case Some(network) if isNetwork(network) =>
