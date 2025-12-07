@@ -52,6 +52,8 @@ if (file.exists()) {
 
 **Expected Impact**: Nodes will attempt to connect to peers on the correct P2P port.
 
+**⚠️ Important Note**: The enode IDs in static-nodes.json are placeholders. On first startup, each node generates its own unique node key, and the actual enode IDs will differ from the placeholders. See Step 5.1 below for verification that this is expected and how to handle it.
+
 ### 3. Persistent Node Keys
 **File**: `ops/gorgoroth/docker-compose-3nodes.yml`
 
@@ -134,13 +136,52 @@ Listening on /[0:0:0:0:0:0:0:0]:9076  # OLD BROKEN BEHAVIOR
 
 ### Step 5: Verify Peer Connections
 
+**On first run, peer connections may not be established yet** due to placeholder enode IDs in static-nodes.json. This is expected.
+
+#### Step 5.1: Check Initial Peer Count
+
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-  http://localhost:8546
+  http://localhost:8545
 ```
 
-**Expected result**:
+**If result is `0x0` (no peers)**: This is expected on first run. Proceed to Step 5.2.
+
+**If result is `0x2` (two peers)**: Peer connections are working! Skip to Step 6.
+
+#### Step 5.2: Update Static Nodes with Actual Enode IDs (First Run Only)
+
+1. Collect actual enode IDs from all nodes:
+   ```bash
+   echo "Node 1:"
+   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
+   echo "Node 2:"
+   docker logs gorgoroth-fukuii-node2 2>&1 | grep "Node address" | tail -1
+   echo "Node 3:"
+   docker logs gorgoroth-fukuii-node3 2>&1 | grep "Node address" | tail -1
+   ```
+
+2. Update the static-nodes.json files with the actual enode IDs (change `<public-key>` to the actual values):
+   - `ops/gorgoroth/conf/node1/static-nodes.json` - add node2 and node3 enodes
+   - `ops/gorgoroth/conf/node2/static-nodes.json` - add node1 and node3 enodes
+   - `ops/gorgoroth/conf/node3/static-nodes.json` - add node1 and node2 enodes
+
+3. Restart the network:
+   ```bash
+   cd ops/gorgoroth
+   fukuii-cli restart 3nodes
+   sleep 45
+   ```
+
+4. Check peer count again - should now return `0x2`:
+   ```bash
+   curl -X POST -H "Content-Type: application/json" \
+     --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+     http://localhost:8545
+   ```
+
+**Expected result after update**:
 ```json
 {"jsonrpc":"2.0","result":"0x2","id":1}
 ```
@@ -169,10 +210,10 @@ docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
 # Wait for some blocks to be mined
 sleep 120
 
-# Check block number
+# Check block number (using HTTP JSON-RPC port)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://localhost:8546
+  http://localhost:8545
 ```
 
 **Expected**: Block number should be > 0 (e.g., "0x5" or higher)
@@ -189,7 +230,8 @@ curl -X POST -H "Content-Type: application/json" \
 Check that all nodes are at the same block height:
 
 ```bash
-for port in 8546 8548 8550; do
+# Test HTTP JSON-RPC ports for all three nodes
+for port in 8545 8547 8549; do
   echo "Node on port $port:"
   curl -s -X POST -H "Content-Type: application/json" \
     --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \

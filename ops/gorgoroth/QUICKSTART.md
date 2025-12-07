@@ -35,11 +35,42 @@ fukuii-cli start 3nodes
 
 ### 3. Wait for Nodes to Initialize
 
-The nodes need about 30-45 seconds to fully initialize and establish peer connections.
+The nodes need about 30-45 seconds to fully initialize and generate node keys.
 
 ```bash
 sleep 45
 ```
+
+⚠️ **Important Note on First Run**: The static-nodes.json files contain placeholder enode IDs. On first startup, each node will generate its own unique node key and enode ID. These won't match the placeholders, so nodes won't connect automatically. 
+
+**To establish peer connections on first run:**
+
+1. After waiting 45 seconds, collect the actual enode IDs from the logs:
+   ```bash
+   echo "Node 1:"
+   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
+   echo "Node 2:"
+   docker logs gorgoroth-fukuii-node2 2>&1 | grep "Node address" | tail -1
+   echo "Node 3:"
+   docker logs gorgoroth-fukuii-node3 2>&1 | grep "Node address" | tail -1
+   ```
+
+2. Update the static-nodes.json files with the actual enode IDs:
+   - `ops/gorgoroth/conf/node1/static-nodes.json` - add node2 and node3 enodes
+   - `ops/gorgoroth/conf/node2/static-nodes.json` - add node1 and node3 enodes
+   - `ops/gorgoroth/conf/node3/static-nodes.json` - add node1 and node2 enodes
+   
+   Format: `enode://<public-key>@<hostname>:30303`
+
+3. Restart the network to apply the changes:
+   ```bash
+   fukuii-cli restart 3nodes
+   sleep 45
+   ```
+
+After restart, nodes should successfully connect to each other.
+
+**Note**: Once node keys are persisted in Docker volumes, subsequent restarts will use the same keys and the static-nodes.json files will remain valid.
 
 ### 4. Verify Nodes are Running
 
@@ -56,10 +87,10 @@ You should see all 3 containers running and healthy.
 Check that nodes are connected to each other:
 
 ```bash
-# Check peer count on node 1
+# Check peer count on node 1 (using HTTP JSON-RPC port)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-  http://localhost:8546
+  http://localhost:8545
 
 # Expected result: {"jsonrpc":"2.0","result":"0x2","id":1}
 # This means node1 is connected to 2 peers (node2 and node3)
@@ -70,7 +101,7 @@ curl -X POST -H "Content-Type: application/json" \
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-  http://localhost:8546
+  http://localhost:8545
 ```
 
 ### 7. Test Block Production
@@ -80,7 +111,7 @@ Wait a few minutes for blocks to be mined, then check the block number:
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://localhost:8546
+  http://localhost:8545
 ```
 
 ## Accessing the Nodes
@@ -156,6 +187,8 @@ fukuii-cli clean 3nodes
 
 ### Nodes Not Connecting
 
+**First-time setup issue**: If this is the first time running the network, the placeholder enode IDs in static-nodes.json won't match the actual generated keys. See Step 3 in [Quick Start](#quick-start-5-minutes) for the solution.
+
 1. Check that all containers are running:
    ```bash
    fukuii-cli status 3nodes
@@ -166,10 +199,16 @@ fukuii-cli clean 3nodes
    fukuii-cli logs 3nodes | grep -i "peer\|connection"
    ```
 
-3. Verify static nodes configuration:
+3. Verify static nodes configuration matches actual enode IDs:
    ```bash
+   # Check what's in the static-nodes.json
    docker exec gorgoroth-fukuii-node1 cat /app/data/static-nodes.json
+   
+   # Check the actual enode ID for this node
+   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
    ```
+   
+4. If enode IDs don't match, update static-nodes.json files and restart (see Step 3 above).
 
 ### No Blocks Being Mined
 
@@ -177,7 +216,7 @@ fukuii-cli clean 3nodes
    ```bash
    curl -X POST -H "Content-Type: application/json" \
      --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' \
-     http://localhost:8546
+     http://localhost:8545
    ```
 
 2. Check for mining-related errors in logs:
