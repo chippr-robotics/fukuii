@@ -116,9 +116,11 @@ object App extends Logger {
         |
         |  bootstrap [path]       Download blockchain bootstrap data
         |
-        |  faucet [options]       Run faucet service
+        |  faucet                 Start faucet JSON-RPC server for testnet token distribution
+        |                         Endpoints: faucet_sendFunds, faucet_status
         |
-        |  signature-validator    Validate signatures
+        |  signature-validator <pubkey> <sig> <hash>
+        |                         Validate ECDSA signature against public key and message hash
         |
         |Options:
         |  --help, -h             Show this help message
@@ -146,6 +148,8 @@ object App extends Logger {
         |  fukuii cli generate-private-key       # Generate a new private key
         |  fukuii cli generate-key-pairs         # Generate node key pair (for node.key)
         |  fukuii cli generate-key-pairs 5       # Generate 5 key pairs
+        |  fukuii faucet                         # Start faucet server (testnet)
+        |  fukuii signature-validator <pk> <sig> <hash>  # Validate a signature
         |
         |For more information, visit: https://github.com/chippr-robotics/fukuii
         |""".stripMargin
