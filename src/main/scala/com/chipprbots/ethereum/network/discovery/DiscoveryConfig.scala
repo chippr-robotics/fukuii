@@ -30,11 +30,34 @@ object DiscoveryConfig extends Logger {
     val datadir = etcClientConfig.getString("datadir")
     val staticNodes = StaticNodesLoader.loadFromDatadir(datadir)
 
-    // Combine bootstrap nodes from config and static-nodes.json
-    val allBootstrapNodes = bootstrapNodes ++ staticNodes
-    
-    if (staticNodes.nonEmpty) {
-      log.info(s"Merged ${staticNodes.size} static node(s) from static-nodes.json with ${bootstrapNodes.size} bootstrap node(s) from config")
+    // Check if bootstrap nodes should be used (controlled by modifiers like 'enterprise')
+    // Default to true if not specified to maintain backward compatibility
+    val useBootstrapNodes = try {
+      System.getProperty("fukuii.network.discovery.use-bootstrap-nodes", "true").toBoolean
+    } catch {
+      case _: Exception => true
+    }
+
+    // Combine nodes based on configuration
+    val allBootstrapNodes = if (useBootstrapNodes) {
+      // Public/default mode: merge bootstrap nodes and static nodes
+      val combined = bootstrapNodes ++ staticNodes
+      if (staticNodes.nonEmpty && bootstrapNodes.nonEmpty) {
+        log.info(s"Merged ${staticNodes.size} static node(s) from static-nodes.json with ${bootstrapNodes.size} bootstrap node(s) from config")
+      } else if (staticNodes.nonEmpty) {
+        log.info(s"Using ${staticNodes.size} static node(s) from static-nodes.json")
+      } else if (bootstrapNodes.nonEmpty) {
+        log.info(s"Using ${bootstrapNodes.size} bootstrap node(s) from config")
+      }
+      combined
+    } else {
+      // Enterprise mode: use only static nodes, ignore bootstrap nodes
+      if (staticNodes.nonEmpty) {
+        log.info(s"Using ${staticNodes.size} static node(s) from static-nodes.json (bootstrap nodes ignored)")
+      } else {
+        log.warn("Bootstrap nodes disabled but no static-nodes.json found - node may not connect to any peers")
+      }
+      staticNodes
     }
 
     DiscoveryConfig(

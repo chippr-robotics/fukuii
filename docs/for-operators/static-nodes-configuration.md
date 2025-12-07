@@ -4,12 +4,34 @@
 
 This feature enables Fukuii nodes to load peer configuration from a `static-nodes.json` file in the data directory. This provides a flexible way to manage peer connections, especially useful for private networks, test environments, and enterprise deployments.
 
-## How It Works
+## Node Selection Modes
 
+Fukuii supports different modes for controlling which peers to connect to, controlled by the `public` and `enterprise` modifiers:
+
+### Default/Public Mode
 1. On startup, Fukuii loads bootstrap nodes from the chain configuration file (e.g., `etc-chain.conf`)
 2. If a `static-nodes.json` file exists in the data directory, those nodes are also loaded
-3. Static nodes are merged with bootstrap nodes from the configuration
+3. Static nodes are **merged** with bootstrap nodes from the configuration
 4. All nodes (bootstrap + static) are used for peer discovery and connection
+5. **Best for**: Public networks, testnets, and scenarios where you want both your custom peers AND standard bootstrap nodes
+
+### Enterprise Mode
+1. On startup with `enterprise` modifier, Fukuii **ignores** bootstrap nodes from chain configuration
+2. If a `static-nodes.json` file exists, **only** those nodes are used
+3. Bootstrap nodes are skipped to avoid unintentional connections to public infrastructure
+4. **Best for**: Private/permissioned networks where you want complete control over peer connections
+
+**Usage:**
+```bash
+# Public mode - uses both bootstrap nodes and static-nodes.json
+fukuii public etc
+
+# Enterprise mode - uses ONLY static-nodes.json (ignores bootstrap nodes)
+fukuii enterprise gorgoroth
+
+# Default (no modifier) - uses both bootstrap nodes and static-nodes.json
+fukuii etc
+```
 
 ## File Location
 

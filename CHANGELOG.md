@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Static nodes configuration support via `static-nodes.json` file in datadir
   - Nodes can now load peer configuration from `<datadir>/static-nodes.json`
-  - Static nodes are automatically merged with bootstrap nodes from chain config
+  - **Public mode**: Static nodes are merged with bootstrap nodes from chain config for better sync experience
+  - **Enterprise mode**: Uses ONLY static nodes, ignores bootstrap nodes to prevent unintentional public network connections
   - Enables dynamic peer management for private/test networks without config file changes
   - Fully integrated with existing peer discovery system
+  - Controlled via `public` and `enterprise` command-line modifiers
 - Release automation with one-click releases
 - Automated CHANGELOG generation from commit history
 - SBOM (Software Bill of Materials) generation in CycloneDX format
