@@ -93,9 +93,9 @@ curl -X POST -H "Content-Type: application/json" \
 
 ### WebSocket Endpoints
 
-- Node 1: http://localhost:8546
-- Node 2: http://localhost:8548
-- Node 3: http://localhost:8550
+- Node 1: ws://localhost:8546
+- Node 2: ws://localhost:8548
+- Node 3: ws://localhost:8550
 
 ### P2P Ports (for external peers)
 
