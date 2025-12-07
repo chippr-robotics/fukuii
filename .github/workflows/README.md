@@ -233,7 +233,7 @@ sudo apt-get install fukuii
 
 **Categories:**
 - 🚀 Features
-- 🐛 Bug Fixes
+- 🐞 Bug Fixes
 - 🔒 Security
 - 📚 Documentation
 - 🏗️ Build & CI/CD
