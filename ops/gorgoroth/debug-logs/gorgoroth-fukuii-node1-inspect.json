@@ -1,0 +1,435 @@
+[
+    {
+        "Id": "2c729726c7c69c90b08c91021a9904a27267864e45ce82486c3ba456d30525e1",
+        "Created": "2025-12-07T05:02:04.052306953Z",
+        "Path": "/app/fukuii/bin/fukuii",
+        "Args": [
+            "fukuii",
+            "enterprise",
+            "gorgoroth"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 230413,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2025-12-07T05:02:04.196014639Z",
+            "FinishedAt": "0001-01-01T00:00:00Z",
+            "Health": {
+                "Status": "healthy",
+                "FailingStreak": 0,
+                "Log": [
+                    {
+                        "Start": "2025-12-06T23:07:20.349891144-06:00",
+                        "End": "2025-12-06T23:07:20.406266563-06:00",
+                        "ExitCode": 0,
+                        "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100    99  100    99    0     0  24645      0 --:--:-- --:--:-- --:--:-- 33000\n{\n  \"checks\":[\n    {\n      \"name\":\"server\",\n      \"status\":\"OK\",\n      \"info\":\"running\"\n    }\n  ]\n}"
+                    },
+                    {
+                        "Start": "2025-12-06T23:07:50.407654751-06:00",
+                        "End": "2025-12-06T23:07:50.464921892-06:00",
+                        "ExitCode": 0,
+                        "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100    99  100    99    0     0  24663      0 --:--:-- --:--:-- --:--:-- 33000\n{\n  \"checks\":[\n    {\n      \"name\":\"server\",\n      \"status\":\"OK\",\n      \"info\":\"running\"\n    }\n  ]\n}"
+                    },
+                    {
+                        "Start": "2025-12-06T23:08:20.465912475-06:00",
+                        "End": "2025-12-06T23:08:20.524785692-06:00",
+                        "ExitCode": 0,
+                        "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100    99  100    99    0     0  24324      0 --:--:-- --:--:-- --:--:-- 33000\n{\n  \"checks\":[\n    {\n      \"name\":\"server\",\n      \"status\":\"OK\",\n      \"info\":\"running\"\n    }\n  ]\n}"
+                    },
+                    {
+                        "Start": "2025-12-06T23:08:50.52614933-06:00",
+                        "End": "2025-12-06T23:08:50.582872595-06:00",
+                        "ExitCode": 0,
+                        "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100    99  100    99    0     0  17847      0 --:--:-- --:--:-- --:--:-- 19800\n{\n  \"checks\":[\n    {\n      \"name\":\"server\",\n      \"status\":\"OK\",\n      \"info\":\"running\"\n    }\n  ]\n}"
+                    },
+                    {
+                        "Start": "2025-12-06T23:09:20.583602798-06:00",
+                        "End": "2025-12-06T23:09:20.641207165-06:00",
+                        "ExitCode": 0,
+                        "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100    99  100    99    0     0  24541      0 --:--:-- --:--:-- --:--:-- 33000\n{\n  \"checks\":[\n    {\n      \"name\":\"server\",\n      \"status\":\"OK\",\n      \"info\":\"running\"\n    }\n  ]\n}"
+                    }
+                ]
+            }
+        },
+        "Image": "sha256:7643e825007e280a5868bf9a6caeaac93f444ac5b3a37b575b7620214a45c252",
+        "ResolvConfPath": "/var/lib/docker/containers/2c729726c7c69c90b08c91021a9904a27267864e45ce82486c3ba456d30525e1/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/2c729726c7c69c90b08c91021a9904a27267864e45ce82486c3ba456d30525e1/hostname",
+        "HostsPath": "/var/lib/docker/containers/2c729726c7c69c90b08c91021a9904a27267864e45ce82486c3ba456d30525e1/hosts",
+        "LogPath": "/var/lib/docker/containers/2c729726c7c69c90b08c91021a9904a27267864e45ce82486c3ba456d30525e1/2c729726c7c69c90b08c91021a9904a27267864e45ce82486c3ba456d30525e1-json.log",
+        "Name": "/gorgoroth-fukuii-node1",
+        "RestartCount": 0,
+        "Driver": "overlay2",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "docker-default",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "/chipprbots/blockchain/fukuii/ops/gorgoroth/conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro",
+                "/chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node1/gorgoroth.conf:/app/conf/gorgoroth.conf:ro",
+                "/chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node1/static-nodes.json:/app/data/static-nodes.json:ro",
+                "gorgoroth_fukuii-node1-data:/app/data:rw",
+                "gorgoroth_fukuii-node1-logs:/app/logs:rw"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {}
+            },
+            "NetworkMode": "gorgoroth_gorgoroth",
+            "PortBindings": {
+                "30303/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "30303"
+                    }
+                ],
+                "30303/udp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "30303"
+                    }
+                ],
+                "8545/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "8545"
+                    }
+                ],
+                "8546/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "8546"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "unless-stopped",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": null,
+            "DnsOptions": null,
+            "DnsSearch": null,
+            "ExtraHosts": [],
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/asound",
+                "/proc/acpi",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/sys/firmware",
+                "/sys/devices/virtual/powercap",
+                "/sys/devices/system/cpu/cpu0/thermal_throttle",
+                "/sys/devices/system/cpu/cpu1/thermal_throttle",
+                "/sys/devices/system/cpu/cpu2/thermal_throttle",
+                "/sys/devices/system/cpu/cpu3/thermal_throttle"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "GraphDriver": {
+            "Data": {
+                "ID": "2c729726c7c69c90b08c91021a9904a27267864e45ce82486c3ba456d30525e1",
+                "LowerDir": "/var/lib/docker/overlay2/4095f3ee3919c2489d32b4e0db8c9c84ee339560f39bd0754195b6029740b11c-init/diff:/var/lib/docker/overlay2/4def4879f89354a09ed40a4d3a8aa68268618e4ca96bbaab3c078e76c98ec81f/diff:/var/lib/docker/overlay2/b6953c25ccd08b193e787a9e48c5100aad5aab79ec3bd9251d1ca989e6a35a6b/diff:/var/lib/docker/overlay2/9d350b45e83b47487fa5ab9fbbccbb3c36bdc3fc12687335e7f6a9f4c456dca6/diff:/var/lib/docker/overlay2/ed1dada229a2c530ae337ac405c7dc6f916865b731c98a021e47e02811a0e357/diff:/var/lib/docker/overlay2/823d7dbdfdf0fadd99c1d5d4305b59f7f698365f01925811f008d129de6767ca/diff:/var/lib/docker/overlay2/b0dbb3f8b0154529e899a172030965a3de63445177acf5ee9f41c0a8141add4a/diff:/var/lib/docker/overlay2/fb0c09338d907535dc17a500baff79ac8dcacfe610f16970d7575086797fe573/diff:/var/lib/docker/overlay2/61e22360878e6013981a89438e5830be750aa4e10c7316ed7cf5591b9030399b/diff:/var/lib/docker/overlay2/2d8e2a3db72a765e12e73a896d5de3091fb4aad030e8f103dfc850434b937201/diff:/var/lib/docker/overlay2/4e4ff458fc7b398a8d82d0c1931c471230cc0ac26d2222de71cdad82379e7d2d/diff:/var/lib/docker/overlay2/09ab522927c09e28db543d4aa49d840a10ccaa1e784bee28d644d8a63a377611/diff",
+                "MergedDir": "/var/lib/docker/overlay2/4095f3ee3919c2489d32b4e0db8c9c84ee339560f39bd0754195b6029740b11c/merged",
+                "UpperDir": "/var/lib/docker/overlay2/4095f3ee3919c2489d32b4e0db8c9c84ee339560f39bd0754195b6029740b11c/diff",
+                "WorkDir": "/var/lib/docker/overlay2/4095f3ee3919c2489d32b4e0db8c9c84ee339560f39bd0754195b6029740b11c/work"
+            },
+            "Name": "overlay2"
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/chipprbots/blockchain/fukuii/ops/gorgoroth/conf/base-gorgoroth.conf",
+                "Destination": "/app/conf/base-gorgoroth.conf",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node1/gorgoroth.conf",
+                "Destination": "/app/conf/gorgoroth.conf",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node1/static-nodes.json",
+                "Destination": "/app/data/static-nodes.json",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "volume",
+                "Name": "gorgoroth_fukuii-node1-data",
+                "Source": "/var/lib/docker/volumes/gorgoroth_fukuii-node1-data/_data",
+                "Destination": "/app/data",
+                "Driver": "local",
+                "Mode": "rw",
+                "RW": true,
+                "Propagation": ""
+            },
+            {
+                "Type": "volume",
+                "Name": "gorgoroth_fukuii-node1-logs",
+                "Source": "/var/lib/docker/volumes/gorgoroth_fukuii-node1-logs/_data",
+                "Destination": "/app/logs",
+                "Driver": "local",
+                "Mode": "rw",
+                "RW": true,
+                "Propagation": ""
+            },
+            {
+                "Type": "volume",
+                "Name": "17a0ca21f63fa6046e6f3f9a268059ceb1445a467ae1133e7e9012f5453d660f",
+                "Source": "/var/lib/docker/volumes/17a0ca21f63fa6046e6f3f9a268059ceb1445a467ae1133e7e9012f5453d660f/_data",
+                "Destination": "/app/conf",
+                "Driver": "local",
+                "Mode": "",
+                "RW": true,
+                "Propagation": ""
+            }
+        ],
+        "Config": {
+            "Hostname": "fukuii-node1",
+            "Domainname": "",
+            "User": "fukuii",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "ExposedPorts": {
+                "30303/tcp": {},
+                "30303/udp": {},
+                "8545/tcp": {},
+                "8546/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "FUKUII_ENV=gorgoroth",
+                "FUKUII_NODE_ID=node1",
+                "PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "JAVA_HOME=/opt/java/openjdk",
+                "LANG=en_US.UTF-8",
+                "LANGUAGE=en_US:en",
+                "LC_ALL=en_US.UTF-8",
+                "JAVA_VERSION=jdk-21.0.9+10",
+                "FUKUII_DATA_DIR=/app/data",
+                "FUKUII_CONF_DIR=/app/conf"
+            ],
+            "Cmd": [
+                "fukuii",
+                "enterprise",
+                "gorgoroth"
+            ],
+            "Healthcheck": {
+                "Test": [
+                    "CMD",
+                    "curl",
+                    "-f",
+                    "http://localhost:8546/health"
+                ],
+                "Interval": 30000000000,
+                "Timeout": 10000000000,
+                "StartPeriod": 60000000000,
+                "Retries": 3
+            },
+            "Image": "ghcr.io/chippr-robotics/fukuii:latest",
+            "Volumes": {
+                "/app/conf": {},
+                "/app/data": {}
+            },
+            "WorkingDir": "/app",
+            "Entrypoint": [
+                "/app/fukuii/bin/fukuii"
+            ],
+            "OnBuild": null,
+            "Labels": {
+                "com.docker.compose.config-hash": "88981e66eb7910c58462962582b17f61d90624589a711eecee1ab089cdc71923",
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.depends_on": "",
+                "com.docker.compose.image": "sha256:7643e825007e280a5868bf9a6caeaac93f444ac5b3a37b575b7620214a45c252",
+                "com.docker.compose.oneoff": "False",
+                "com.docker.compose.project": "gorgoroth",
+                "com.docker.compose.project.config_files": "/chipprbots/blockchain/fukuii/ops/gorgoroth/docker-compose-3nodes.yml",
+                "com.docker.compose.project.working_dir": "/chipprbots/blockchain/fukuii/ops/gorgoroth",
+                "com.docker.compose.service": "fukuii-node1",
+                "com.docker.compose.version": "2.40.3",
+                "org.opencontainers.image.created": "2025-12-07T03:33:54.992Z",
+                "org.opencontainers.image.description": "A Scala based client for Ethereum-like Blockchains.",
+                "org.opencontainers.image.documentation": "https://github.com/chippr-robotics/fukuii/blob/main/docs/deployment/docker.md",
+                "org.opencontainers.image.licenses": "Apache-2.0",
+                "org.opencontainers.image.ref.name": "ubuntu",
+                "org.opencontainers.image.revision": "ab43586aded8e1c716acbb9561a68f994b72c9fb",
+                "org.opencontainers.image.source": "https://github.com/chippr-robotics/fukuii",
+                "org.opencontainers.image.title": "fukuii",
+                "org.opencontainers.image.url": "https://github.com/chippr-robotics/fukuii",
+                "org.opencontainers.image.vendor": "Chippr Robotics LLC",
+                "org.opencontainers.image.version": "main"
+            }
+        },
+        "NetworkSettings": {
+            "Bridge": "",
+            "SandboxID": "f5a7d802d961bd8da8fab344918e403671b21a6bcac566f715223bf2a8113db6",
+            "SandboxKey": "/var/run/docker/netns/f5a7d802d961",
+            "Ports": {
+                "30303/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "30303"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "30303"
+                    }
+                ],
+                "30303/udp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "30303"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "30303"
+                    }
+                ],
+                "8545/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "8545"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "8545"
+                    }
+                ],
+                "8546/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "8546"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "8546"
+                    }
+                ]
+            },
+            "HairpinMode": false,
+            "LinkLocalIPv6Address": "",
+            "LinkLocalIPv6PrefixLen": 0,
+            "SecondaryIPAddresses": null,
+            "SecondaryIPv6Addresses": null,
+            "EndpointID": "",
+            "Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "IPAddress": "",
+            "IPPrefixLen": 0,
+            "IPv6Gateway": "",
+            "MacAddress": "",
+            "Networks": {
+                "gorgoroth_gorgoroth": {
+                    "IPAMConfig": {
+                        "IPv4Address": "172.25.0.11"
+                    },
+                    "Links": null,
+                    "Aliases": [
+                        "gorgoroth-fukuii-node1",
+                        "fukuii-node1"
+                    ],
+                    "MacAddress": "7e:34:cd:c1:a8:6f",
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "73bf0d0f9b0c94e5b9036820f3b0571ede67c967e7a71c9a7cbd342304df821c",
+                    "EndpointID": "b53b404a7f97f4348419d74598ff7288607254ecdf08023715f1a2c3579e2245",
+                    "Gateway": "172.25.0.1",
+                    "IPAddress": "172.25.0.11",
+                    "IPPrefixLen": 16,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "gorgoroth-fukuii-node1",
+                        "fukuii-node1",
+                        "2c729726c7c6"
+                    ]
+                }
+            }
+        }
+    }
+]
