@@ -1,1 +1,13 @@
-* text eol=lf
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.jar binary
+*.zip binary
+*.tar.gz binary
+*.class binary
