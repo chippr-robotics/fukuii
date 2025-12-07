@@ -2850,6 +2850,47 @@
       "settingRebuildPath": true,
       "settingFollowRedirects": "global",
       "_type": "request"
+    },
+    {
+      "_id": "env_gorgoroth_3nodes_test_network",
+      "parentId": "env_ee4c8118750744559d3b1020845fe5d4",
+      "modified": 1733612601296,
+      "created": 1733612601296,
+      "name": "Gorgoroth 3-Node Test Network",
+      "data": {
+        "node1_http": "http://localhost:8545",
+        "node1_ws": "http://localhost:8546",
+        "node2_http": "http://localhost:8547",
+        "node2_ws": "http://localhost:8548",
+        "node3_http": "http://localhost:8549",
+        "node3_ws": "http://localhost:8550",
+        "node_url": "http://localhost:8546",
+        "address": "0x1000000000000000000000000000000000000001",
+        "recipient": "0x2000000000000000000000000000000000000002",
+        "contract": "0x3000000000000000000000000000000000000003",
+        "tx_hash": "0x...",
+        "filter_id": "0x1"
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "node1_http",
+          "node1_ws",
+          "node2_http",
+          "node2_ws",
+          "node3_http",
+          "node3_ws",
+          "node_url",
+          "address",
+          "recipient",
+          "contract",
+          "tx_hash",
+          "filter_id"
+        ]
+      },
+      "color": "#FF6B35",
+      "isPrivate": false,
+      "metaSortKey": 1733612601296,
+      "_type": "environment"
     }
   ]
 }
