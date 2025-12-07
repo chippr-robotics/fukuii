@@ -231,11 +231,13 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     assert(decodedMessagesV5.head == Right(status))
   }
 
-  it should "handle case-insensitive client ID matching for Geth variants" taggedAs (
+  it should "NOT compress messages for any client variant when compression is globally disabled" taggedAs (
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    // Test various capitalization variants
+    // NOTE: Compression is currently DISABLED globally (emergency fix for FUKUII-COMPRESSION-001)
+    // This test validates that messages are sent uncompressed regardless of client ID
+    // When compression is re-enabled, this test will validate case-insensitive client ID matching
     val clientVariants = Seq(
       "GETH/v1.0.0",
       "geth/v1.0.0", 
@@ -249,7 +251,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
       val codec = new MessageCodec(frameCodec, decoder, 5L, clientId)
       val encodedStatus = codec.encodeMessage(status)
       
-      // Should be readable by v4 codec (no compression)
+      // Should be readable by v4 codec since compression is globally disabled
       val v4Codec = new MessageCodec(remoteFrameCodec, decoder, 4L, "TestClient/v1.0.0")
       val decoded = v4Codec.readMessages(encodedStatus)
       

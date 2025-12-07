@@ -77,7 +77,7 @@ class MessageCodec(
     // EMERGENCY: Disable compression globally until root cause is fixed
     val result = false
     
-    log.info(
+    log.debug(
       "COMPRESSION_POLICY: DISABLED globally (emergency fix) - clientId={}, p2pVersion={}",
       remoteClientId,
       remotePeer2PeerVersion
