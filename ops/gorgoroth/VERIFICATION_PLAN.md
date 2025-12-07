@@ -284,4 +284,7 @@ If issues are found:
 1. Enable admin RPC namespace for `fukuii-cli sync-static-nodes` automation
 2. Generate and document proper node keys for deterministic setup
 3. Add automated integration test for 3-node network
-4. Update main README.md to reference QUICKSTART.md
+4. Add unit tests for App.scala classpath resource loading behavior
+   - Test that config loads from classpath when filesystem file doesn't exist
+   - Validate logging output for both filesystem and classpath scenarios
+   - Test fallback when config file exists in neither location
