@@ -16,7 +16,7 @@ The Gorgoroth 3-node battlenet successfully starts all containers and passes hea
 ### Commands Executed
 ```bash
 cd /home/runner/work/fukuii/fukuii/ops/gorgoroth
-./deploy.sh start 3nodes
+fukuii-cli start 3nodes
 # Waited 45 seconds for initialization
 ./collect-logs.sh 3nodes /tmp/3nodes-logs
 ```
@@ -202,8 +202,8 @@ The `fukuii-cli` tool is a comprehensive command-line toolkit that includes:
 fukuii-cli sync-static-nodes
 
 # Or using backward-compatible wrappers
-./sync-static-nodes.sh
-./deploy.sh sync-static-nodes
+fukuii-cli sync-static-nodes
+fukuii-cli sync-static-nodes
 ```
 
 **All Available Commands:**
@@ -343,8 +343,7 @@ $ docker exec gorgoroth-fukuii-node1 curl -s -X POST -H "Content-Type: applicati
 
 ### Deployment Files
 - `/home/runner/work/fukuii/fukuii/ops/gorgoroth/docker-compose-3nodes.yml`
-- `/home/runner/work/fukuii/fukuii/ops/gorgoroth/deploy.sh`
-- `/home/runner/work/fukuii/fukuii/ops/gorgoroth/collect-logs.sh`
+- `/home/runner/work/fukuii/fukuii/ops/tools/fukuii-cli.sh`
 
 ### Log Files
 - `/tmp/3nodes-logs/gorgoroth-fukuii-node1.log`

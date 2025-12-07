@@ -31,7 +31,7 @@ The Gorgoroth test network provides:
 Basic configuration with 3 Fukuii nodes for initial testing.
 
 ```bash
-./deploy.sh start 3nodes
+fukuii-cli start 3nodes
 ```
 
 **Nodes:**
@@ -43,7 +43,7 @@ Basic configuration with 3 Fukuii nodes for initial testing.
 Larger Fukuii-only network for scalability testing.
 
 ```bash
-./deploy.sh start 6nodes
+fukuii-cli start 6nodes
 ```
 
 **Nodes:**
@@ -55,7 +55,7 @@ Larger Fukuii-only network for scalability testing.
 Mixed network with 3 Fukuii and 3 Core-Geth nodes.
 
 ```bash
-./deploy.sh start fukuii-geth
+fukuii-cli start fukuii-geth
 ```
 
 **Fukuii Nodes:**
@@ -69,7 +69,7 @@ Mixed network with 3 Fukuii and 3 Core-Geth nodes.
 Mixed network with 3 Fukuii and 3 Hyperledger Besu nodes.
 
 ```bash
-./deploy.sh start fukuii-besu
+fukuii-cli start fukuii-besu
 ```
 
 **Fukuii Nodes:**
@@ -83,7 +83,7 @@ Mixed network with 3 Fukuii and 3 Hyperledger Besu nodes.
 Comprehensive test with all three client implementations (9 nodes total).
 
 ```bash
-./deploy.sh start mixed
+fukuii-cli start mixed
 ```
 
 **Fukuii Nodes:**
@@ -112,17 +112,13 @@ For first-time deployment, follow this process to establish peer connections:
 cd ops/gorgoroth
 
 # 1. Start the 3-node network
-./deploy.sh start 3nodes
-# Or using fukuii-cli directly:
-# fukuii-cli start 3nodes
+fukuii-cli start 3nodes
 
 # 2. Wait for nodes to fully initialize (30-45 seconds)
 sleep 45
 
 # 3. Synchronize static nodes to establish peer connections
-./sync-static-nodes.sh
-# Or using fukuii-cli directly:
-# fukuii-cli sync-static-nodes
+fukuii-cli sync-static-nodes
 
 # 4. Verify peer connections
 curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
@@ -135,7 +131,7 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":
 - Distributes the file to each container
 - Restarts containers to apply peer configuration
 
-**Note**: All deployment commands are now part of the unified `fukuii-cli` toolkit. The `deploy.sh` and `sync-static-nodes.sh` scripts are wrappers that call `fukuii-cli` for backward compatibility. See `docs/runbooks/node-configuration.md` for installation and usage instructions.
+**Note**: All deployment and configuration commands are accessed through the unified `fukuii-cli` toolkit. See `docs/runbooks/node-configuration.md` for installation and usage instructions.
 
 ### Starting a Network (Subsequent Runs)
 
@@ -145,13 +141,13 @@ Once static-nodes.json has been synchronized, you can start/stop normally:
 cd ops/gorgoroth
 
 # Start the network
-./deploy.sh start 3nodes
+fukuii-cli start 3nodes
 
 # View logs
-./deploy.sh logs 3nodes
+fukuii-cli logs 3nodes
 
 # Check status
-./deploy.sh status 3nodes
+fukuii-cli status 3nodes
 ```
 
 ### Testing the Network
@@ -179,14 +175,14 @@ The network is configured with discovery disabled and uses static peer connectio
 
 **For First-Time Setup:**
 
-Use the `sync-static-nodes.sh` script to automatically configure peer connections:
+Use the `fukuii-cli sync-static-nodes` command to automatically configure peer connections:
 
 ```bash
 # After starting the network for the first time
-./sync-static-nodes.sh
+fukuii-cli sync-static-nodes
 ```
 
-This script will:
+This command will:
 1. Collect enode URLs from all running containers via RPC
 2. Generate a consolidated static-nodes.json file
 3. Distribute the file to each container
@@ -208,27 +204,23 @@ curl -X POST -H "Content-Type: application/json" \
   http://localhost:8546
 ```
 
-**Note**: The static-nodes.json files in the configuration directories contain placeholder enode IDs for reference only. The `sync-static-nodes.sh` script handles generating the actual enode URLs from running containers.
+**Note**: The static-nodes.json files in the configuration directories contain placeholder enode IDs for reference only. The `fukuii-cli sync-static-nodes` command handles generating the actual enode URLs from running containers.
 
 ### Collecting Logs
 
 ```bash
 # Collect logs from running network
-./collect-logs.sh 3nodes
+fukuii-cli collect-logs 3nodes
 
-# Specify custom output directory
-./collect-logs.sh fukuii-geth ./my-logs
+# Collect logs to custom output directory
+fukuii-cli collect-logs 3nodes ./my-logs
 ```
 
-## Deployment Script Usage
+## Fukuii CLI Usage
 
-The `deploy.sh` script is a wrapper for the unified `fukuii-cli` tool. All deployment commands are now available through `fukuii-cli`:
+All deployment and configuration commands are accessed through the unified `fukuii-cli` tool:
 
 ```bash
-# Using deploy.sh (backward compatible)
-./deploy.sh {start|stop|restart|status|logs|clean|sync-static-nodes} [config]
-
-# Using fukuii-cli directly
 fukuii-cli {start|stop|restart|status|logs|clean|sync-static-nodes|collect-logs} [config]
 ```
 
@@ -247,22 +239,20 @@ fukuii-cli {start|stop|restart|status|logs|clean|sync-static-nodes|collect-logs}
 
 ```bash
 # Start 6-node network
-./deploy.sh start 6nodes
-# Or: fukuii-cli start 6nodes
+fukuii-cli start 6nodes
 
 # Synchronize static nodes for peer connections
-./deploy.sh sync-static-nodes
-# Or: fukuii-cli sync-static-nodes
+fukuii-cli sync-static-nodes
 
 # View mixed network logs
-./deploy.sh logs mixed
-# Or: fukuii-cli logs mixed
+fukuii-cli logs mixed
 
 # Check status
 fukuii-cli status
 
 # Clean up 3-node network (removes all data)
-./deploy.sh clean 3nodes
+fukuii-cli clean 3nodes
+fukuii-cli clean 3nodes
 # Or: fukuii-cli clean 3nodes
 ```
 
@@ -271,7 +261,7 @@ fukuii-cli status
 The `collect-logs.sh` script collects logs from all running containers:
 
 ```bash
-./collect-logs.sh [config] [output-dir]
+fukuii-cli collect-logs [config] [output-dir]
 ```
 
 **What it collects:**
@@ -286,10 +276,10 @@ The `collect-logs.sh` script collects logs from all running containers:
 
 ```bash
 # Collect logs with automatic timestamped directory
-./collect-logs.sh 3nodes
+fukuii-cli collect-logs 3nodes
 
 # Collect logs to specific directory
-./collect-logs.sh fukuii-geth ./debug-logs
+fukuii-cli collect-logs fukuii-geth ./debug-logs
 ```
 
 ## Network Configuration
@@ -345,10 +335,10 @@ ops/gorgoroth/
 ├── docker-compose-fukuii-geth.yml
 ├── docker-compose-fukuii-besu.yml
 ├── docker-compose-mixed.yml
-├── deploy.sh
-├── collect-logs.sh
 └── README.md
 ```
+
+**Note**: `fukuii-cli` is located at `ops/tools/fukuii-cli.sh` and can be used directly or installed system-wide.
 
 ## Troubleshooting
 
@@ -359,11 +349,11 @@ ops/gorgoroth/
 docker ps -a
 
 # View container logs
-./deploy.sh logs 3nodes
+fukuii-cli logs 3nodes
 
 # Clean and restart
-./deploy.sh clean 3nodes
-./deploy.sh start 3nodes
+fukuii-cli clean 3nodes
+fukuii-cli start 3nodes
 ```
 
 ### Nodes Not Connecting
@@ -404,7 +394,7 @@ curl -X POST -H "Content-Type: application/json" \
 
 ```bash
 # Collect all logs for analysis
-./collect-logs.sh 3nodes ./debug-logs
+fukuii-cli collect-logs 3nodes ./debug-logs
 
 # Check the collected logs
 ls -lh ./debug-logs/
@@ -449,9 +439,9 @@ ls -lh ./debug-logs/
 Use the 3-node configuration for quick iteration:
 
 ```bash
-./deploy.sh start 3nodes
+fukuii-cli start 3nodes
 # Make code changes
-./deploy.sh restart 3nodes
+fukuii-cli restart 3nodes
 ```
 
 ### Multi-Client Compatibility
@@ -460,13 +450,13 @@ Test Fukuii compatibility with other clients:
 
 ```bash
 # Test with Core-Geth
-./deploy.sh start fukuii-geth
+fukuii-cli start fukuii-geth
 
 # Test with Besu
-./deploy.sh start fukuii-besu
+fukuii-cli start fukuii-besu
 
 # Test with both
-./deploy.sh start mixed
+fukuii-cli start mixed
 ```
 
 ### Performance Testing
@@ -474,7 +464,7 @@ Test Fukuii compatibility with other clients:
 Use the 6-node configuration for load testing:
 
 ```bash
-./deploy.sh start 6nodes
+fukuii-cli start 6nodes
 # Run performance tests against multiple nodes
 ```
 
@@ -484,13 +474,13 @@ Create isolated environment for debugging:
 
 ```bash
 # Start network
-./deploy.sh start 3nodes
+fukuii-cli start 3nodes
 
 # Reproduce issue
 # ...
 
 # Collect logs
-./collect-logs.sh 3nodes ./bug-reproduction-logs
+fukuii-cli collect-logs 3nodes ./bug-reproduction-logs
 ```
 
 ## Related Resources
@@ -504,7 +494,7 @@ Create isolated environment for debugging:
 For issues or questions:
 
 - Check the [Troubleshooting](#troubleshooting) section
-- Review container logs with `./deploy.sh logs [config]`
+- Review container logs with `fukuii-cli logs [config]`
 - Open an issue on [GitHub](https://github.com/chippr-robotics/fukuii/issues)
 
 ## License

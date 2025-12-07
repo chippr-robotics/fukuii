@@ -1129,10 +1129,4 @@ fukuii-cli collect-logs 3nodes
 fukuii-cli stop 3nodes
 ```
 
-#### Backward Compatibility
-
-For backward compatibility, the following scripts in `ops/gorgoroth/` are wrappers that call `fukuii-cli`:
-- `deploy.sh` - Forwards all commands to fukuii-cli
-- `sync-static-nodes.sh` - Calls fukuii-cli sync-static-nodes
-
-You can continue using these scripts with the same syntax, or migrate to using `fukuii-cli` directly for a unified command experience.
+**Note**: The fukuii-cli tool is the primary interface for all deployment and configuration operations. Install it system-wide for easy access from anywhere.
