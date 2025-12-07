@@ -159,7 +159,7 @@ case $COMMAND in
         clean_network "$CONFIG"
         ;;
     sync-static-nodes)
-        "$SCRIPT_DIR/sync-static-nodes.sh"
+        "$SCRIPT_DIR/../tools/fukuii-cli.sh"
         ;;
     *)
         echo -e "${RED}Error: Unknown command '$COMMAND'${NC}"
