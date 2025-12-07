@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Static nodes configuration support via `static-nodes.json` file in datadir
+  - Nodes can now load peer configuration from `<datadir>/static-nodes.json`
+  - Static nodes are automatically merged with bootstrap nodes from chain config
+  - Enables dynamic peer management for private/test networks without config file changes
+  - Fully integrated with existing peer discovery system
 - Release automation with one-click releases
 - Automated CHANGELOG generation from commit history
 - SBOM (Software Bill of Materials) generation in CycloneDX format

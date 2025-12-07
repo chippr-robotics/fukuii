@@ -81,14 +81,17 @@ object StaticNodesLoader extends Logger {
   private def parseStaticNodes(jsonContent: String): Set[String] = {
     parse(jsonContent) match {
       case JArray(values) =>
-        values.collect {
-          case JString(enode) if enode.startsWith("enode://") => enode
+        values.flatMap {
+          case JString(enode) if enode.startsWith("enode://") => Some(enode)
           case JString(enode) =>
             log.warn(s"Invalid enode URL (must start with 'enode://'): $enode")
-            null
-        }.filter(_ != null).toSet
-      case _ =>
-        log.warn(s"Invalid static-nodes.json format: expected JSON array")
+            None
+          case other =>
+            log.warn(s"Unexpected value in static-nodes.json: $other")
+            None
+        }.toSet
+      case other =>
+        log.warn(s"Invalid static-nodes.json format: expected JSON array, found ${other.getClass.getSimpleName}")
         Set.empty
     }
   }

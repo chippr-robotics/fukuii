@@ -257,6 +257,38 @@ fukuii {
 }
 ```
 
+**Static Nodes Configuration**:
+
+In addition to bootstrap nodes configured in chain configuration files, Fukuii supports loading static nodes from a `static-nodes.json` file in the data directory. This allows for dynamic peer configuration without modifying configuration files.
+
+The `static-nodes.json` file should be placed in the data directory (e.g., `~/.fukuii/etc/static-nodes.json`) and contain a JSON array of enode URLs:
+
+```json
+[
+  "enode://6eecbdcc74c0b672ce505b9c639c3ef2e8ee8cddd8447ca7ab82c65041932db64a9cd4d7e723ba180b0c3d88d1f0b2913fda48972cdd6742fea59f900af084af@192.168.1.1:9076",
+  "enode://a335a7e86eab05929266de232bec201a49fdcfc1115e8f8b861656e8afb3a6e5d3ffd172d153ae6c080401a56e3d620db2ac0695038a19e9b0c5220212651493@192.168.1.2:9076"
+]
+```
+
+**How it works**:
+- On startup, Fukuii loads bootstrap nodes from the chain configuration
+- If a `static-nodes.json` file exists in the data directory, those nodes are also loaded
+- The static nodes are merged with the bootstrap nodes from config
+- All nodes (bootstrap + static) are used for peer discovery
+
+**Use cases**:
+- Private/permissioned networks where peer lists change frequently
+- Test networks where nodes are dynamically created
+- Automated deployments where peer configuration is managed externally
+- Enterprise environments with scripted node management
+
+**Notes**:
+- The file is optional - if it doesn't exist, only bootstrap nodes from config are used
+- Invalid enode URLs are logged and skipped
+- Changes to the file require a node restart to take effect
+- For the Gorgoroth test network, this is the recommended way to configure peers
+
+
 **Peer Management**:
 ```hocon
 fukuii {
