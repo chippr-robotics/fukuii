@@ -180,34 +180,66 @@ environment:
 - JAVA_OPTS may not be properly passed through startup script
 - Tested and failed - startup script doesn't use JAVA_OPTS
 
-### Option 3: Update static-nodes.json with Actual Enode IDs (Partial Solution)
+### Option 3: Update static-nodes.json with Actual Enode IDs (Recommended Workaround)
 
-Even with port fixed, static-nodes.json needs actual enode IDs. Create script to generate:
+**✅ IMPLEMENTED** - A `fukuii-cli` tool is now available to automate this process.
+
+The `fukuii-cli` tool (formerly `sync-static-nodes.sh`) automatically:
+1. Collects enode URLs from all running containers
+2. Generates a consolidated static-nodes.json file
+3. Distributes the file to all containers
+4. Restarts containers to apply the configuration
+
+**Usage:**
 
 ```bash
-#!/usr/bin/env bash
-# generate-static-nodes.sh
+# From ops/gorgoroth directory
+cd ops/gorgoroth
+./sync-static-nodes.sh
 
-# Get actual enode IDs from running containers
-NODE1_ENODE=$(docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address:" | tail -1 | sed 's/.*enode:\/\/\([^@]*\)@.*/\1/')
-NODE2_ENODE=$(docker logs gorgoroth-fukuii-node2 2>&1 | grep "Node address:" | tail -1 | sed 's/.*enode:\/\/\([^@]*\)@.*/\1/')
-NODE3_ENODE=$(docker logs gorgoroth-fukuii-node3 2>&1 | grep "Node address:" | tail -1 | sed 's/.*enode:\/\/\([^@]*\)@.*/\1/')
+# Or via deploy.sh wrapper
+./deploy.sh sync-static-nodes
 
-# Fix port to 30303 instead of detected 9076
-# Generate static-nodes.json for node1
-cat > ops/gorgoroth/conf/node1/static-nodes.json << EOF
-[
-  "enode://${NODE2_ENODE}@fukuii-node2:30303",
-  "enode://${NODE3_ENODE}@fukuii-node3:30303"
-]
-EOF
-
-# Similar for node2 and node3...
+# Or if installed system-wide
+fukuii-cli
 ```
 
-**Problem:**
-- Still doesn't fix port issue
-- Nodes will advertise wrong port even with correct enode IDs
+**Benefits:**
+- Automatically extracts actual enode IDs from running nodes
+- Handles all nodes in the network
+- Properly formats JSON output
+- Includes retry logic for reliability
+- Restarts containers to apply changes
+
+**Limitations:**
+- Still doesn't fix the underlying port configuration issue (9076 vs 30303)
+- Nodes will advertise wrong port in enode URLs until configuration bug is fixed
+- Works around the problem rather than solving root cause
+
+**First-Time 3-Node Setup Process:**
+
+1. Start the network (nodes will start but won't connect):
+   ```bash
+   ./deploy.sh start 3nodes
+   ```
+
+2. Wait for nodes to fully initialize (~30-45 seconds):
+   ```bash
+   sleep 45
+   ```
+
+3. Synchronize static nodes (collects enodes and establishes connections):
+   ```bash
+   ./sync-static-nodes.sh
+   ```
+
+4. Verify peer connections:
+   ```bash
+   curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+     http://localhost:8546
+   ```
+
+For detailed CLI usage and installation instructions, see `docs/runbooks/node-configuration.md`.
 
 ### Option 4: Manual Peering via RPC (Testing Workaround)
 
@@ -238,8 +270,8 @@ Since this is a troubleshooting task to identify issues, not necessarily fix the
 ### Future (Proper Fix)
 1. Fix `setNetworkConfig()` in App.scala to check classpath resources
 2. Add integration test to verify network configs load correctly
-3. Create script to generate valid static-nodes.json files
-4. Update documentation with working examples
+3. ✅ **COMPLETED**: Created `fukuii-cli` tool to generate and synchronize static-nodes.json files
+4. ✅ **COMPLETED**: Updated documentation with working examples and first-time setup process
 
 ## Test Results Summary
 

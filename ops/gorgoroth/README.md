@@ -104,12 +104,43 @@ Comprehensive test with all three client implementations (9 nodes total).
 - 8GB RAM (for larger configurations)
 - 10GB free disk space
 
-### Starting a Network
+### First-Time 3-Node Setup
+
+For first-time deployment, follow this process to establish peer connections:
 
 ```bash
 cd ops/gorgoroth
 
-# Start 3-node Fukuii network
+# 1. Start the 3-node network
+./deploy.sh start 3nodes
+
+# 2. Wait for nodes to fully initialize (30-45 seconds)
+sleep 45
+
+# 3. Synchronize static nodes to establish peer connections
+./sync-static-nodes.sh
+
+# 4. Verify peer connections
+curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+  http://localhost:8546
+```
+
+**What happens during sync:**
+- Collects actual enode URLs from all running containers
+- Generates a consolidated static-nodes.json file
+- Distributes the file to each container
+- Restarts containers to apply peer configuration
+
+**Note**: The `sync-static-nodes.sh` script is also available as `fukuii-cli` tool. See `docs/runbooks/node-configuration.md` for installation instructions.
+
+### Starting a Network (Subsequent Runs)
+
+Once static-nodes.json has been synchronized, you can start/stop normally:
+
+```bash
+cd ops/gorgoroth
+
+# Start the network
 ./deploy.sh start 3nodes
 
 # View logs
@@ -140,24 +171,40 @@ curl -X POST -H "Content-Type: application/json" \
 
 ### Connecting Peers
 
-The network is configured with discovery disabled. In Docker networks, nodes can communicate using service names as hostnames (e.g., `fukuii-node1`, `fukuii-node2`). However, you may need to manually connect peers using the admin API:
+The network is configured with discovery disabled and uses static peer connections.
+
+**For First-Time Setup:**
+
+Use the `sync-static-nodes.sh` script to automatically configure peer connections:
+
+```bash
+# After starting the network for the first time
+./sync-static-nodes.sh
+```
+
+This script will:
+1. Collect enode URLs from all running containers via RPC
+2. Generate a consolidated static-nodes.json file
+3. Distribute the file to each container
+4. Restart containers to apply the configuration
+
+**For Manual Peer Management:**
+
+You can also manually inspect or add peers using the admin API:
 
 ```bash
 # Get node info (including enode URL)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 
-# Add a peer manually (if needed)
+# Add a peer manually
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"admin_addPeer","params":["enode://NODE_ID@fukuii-node2:30303"],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 ```
 
-**Note**: The static-nodes.json files in the 3-node configuration contain placeholder enode IDs and are for reference only. For production use, you should:
-1. Generate proper node keys for each node
-2. Update static-nodes.json with actual enode URLs
-3. Or manually connect peers using the admin API after startup
+**Note**: The static-nodes.json files in the configuration directories contain placeholder enode IDs for reference only. The `sync-static-nodes.sh` script handles generating the actual enode URLs from running containers.
 
 ### Collecting Logs
 
@@ -174,7 +221,7 @@ curl -X POST -H "Content-Type: application/json" \
 The `deploy.sh` script provides easy network management:
 
 ```bash
-./deploy.sh {start|stop|restart|status|logs|clean} [config]
+./deploy.sh {start|stop|restart|status|logs|clean|sync-static-nodes} [config]
 ```
 
 **Commands:**
@@ -185,12 +232,16 @@ The `deploy.sh` script provides easy network management:
 - `status [config]` - Show container status
 - `logs [config]` - Follow container logs
 - `clean [config]` - Remove containers and volumes (with confirmation)
+- `sync-static-nodes` - Synchronize static-nodes.json across all running containers
 
 **Examples:**
 
 ```bash
 # Start 6-node network
 ./deploy.sh start 6nodes
+
+# Synchronize static nodes for peer connections
+./deploy.sh sync-static-nodes
 
 # View mixed network logs
 ./deploy.sh logs mixed
