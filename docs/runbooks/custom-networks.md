@@ -227,10 +227,41 @@ bootstrap-nodes = [
 ]
 ```
 
-To get the enode URL of a node, query its admin API:
+#### Generating Node Keys
+
+Before setting up your network, you'll need to generate node keys for each node:
+
+```bash
+# Generate a node key pair for a node
+./bin/fukuii cli generate-key-pairs > node.key
+
+# The output contains:
+# Line 1: Private key (64 hex characters) - this is what Fukuii reads from node.key
+# Line 2: Public key (128 hex characters) - this is the node ID used in enode URLs
+```
+
+**Where to store node keys:**
+- For source/binary installations: `~/.fukuii/<network>/node.key` (e.g., `~/.fukuii/mynetwork/node.key`)
+- For Docker deployments: Mount the key file to `/app/data/node.key` in the container
+- Ensure proper permissions: `chmod 600 node.key` to protect the private key
+
+#### Getting Enode URLs
+
+To get the enode URL of a running node, query its admin API:
 ```bash
 curl -X POST --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' http://localhost:8546
 ```
+
+The response will include the full enode URL in the format:
+```
+enode://PUBLIC_KEY@IP:PORT
+```
+
+You can also construct the enode URL manually using:
+- The public key (second line from `generate-key-pairs` output)
+- The node's IP address
+- The P2P port (default: 30303)
+
 
 ## Creating a Custom Chain Configuration
 
