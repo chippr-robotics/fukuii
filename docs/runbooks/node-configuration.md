@@ -698,11 +698,14 @@ Downloads and extracts blockchain bootstrap data to speed up initial sync.
 ```
 Runs a faucet service for testnet token distribution.
 
-**EC Key Generator**:
+**CLI Utilities**:
 ```bash
-./bin/fukuii eckeygen
+./bin/fukuii cli --help
+./bin/fukuii cli generate-key-pairs
+./bin/fukuii cli generate-key-pairs 5
 ```
-Generates elliptic curve key pairs for testing and development.
+Command-line utilities for key generation, address derivation, and more.
+Use `--help` to see all available subcommands.
 
 **Signature Validator**:
 ```bash
