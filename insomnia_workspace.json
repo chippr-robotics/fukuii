@@ -2798,7 +2798,7 @@
       "method": "POST",
       "body": {
         "mimeType": "application/json",
-        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"faucet_sendFunds\",\n  \"params\": [\n    \"0x1234567890123456789012345678901234567890\"\n  ]\n}"
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"faucet_sendFunds\",\n  \"params\": [\n    \"0x...address...\"\n  ]\n}"
       },
       "parameters": [],
       "headers": [
