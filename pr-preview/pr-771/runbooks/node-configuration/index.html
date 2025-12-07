@@ -6703,14 +6703,14 @@ Tool for validating cryptographic signatures.</p>
 <strong>Maintainer</strong>: Chippr Robotics LLC</p>
 <h2 id="developer-tools">Developer Tools<a class="headerlink" href="#developer-tools" title="Permanent link">&para;</a></h2>
 <h3 id="fukuii-cli-tool">Fukuii CLI Tool<a class="headerlink" href="#fukuii-cli-tool" title="Permanent link">&para;</a></h3>
-<p>For developers and operators managing multi-node deployments, Fukuii provides a CLI tool for common operations.</p>
+<p>The Fukuii CLI is a unified command-line toolkit for managing Fukuii node deployments and configurations. It consolidates all deployment and configuration operations into a single, consistent interface.</p>
 <h4 id="installation-linux">Installation (Linux)<a class="headerlink" href="#installation-linux" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a><span class="c1"># Copy the tool to a system-wide location</span>
 </span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a>sudo<span class="w"> </span>cp<span class="w"> </span>ops/tools/fukuii-cli.sh<span class="w"> </span>/usr/local/bin/fukuii-cli
 </span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a>sudo<span class="w"> </span>chmod<span class="w"> </span>+x<span class="w"> </span>/usr/local/bin/fukuii-cli
 </span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4" href="#__codelineno-69-4"></a>
 </span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5" href="#__codelineno-69-5"></a><span class="c1"># Verify installation</span>
-</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6" href="#__codelineno-69-6"></a>fukuii-cli<span class="w"> </span>--help
+</span><span id="__span-69-6"><a id="__codelineno-69-6" name="__codelineno-69-6" href="#__codelineno-69-6"></a>fukuii-cli<span class="w"> </span><span class="nb">help</span>
 </span></code></pre></div>
 <h4 id="installation-user-specific">Installation (User-specific)<a class="headerlink" href="#installation-user-specific" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a><span class="c1"># Create a local bin directory if it doesn&#39;t exist</span>
@@ -6727,24 +6727,46 @@ Tool for validating cryptographic signatures.</p>
 </span><span id="__span-70-12"><a id="__codelineno-70-12" name="__codelineno-70-12" href="#__codelineno-70-12"></a><span class="nb">source</span><span class="w"> </span>~/.bashrc<span class="w">  </span><span class="c1"># or source ~/.zshrc</span>
 </span><span id="__span-70-13"><a id="__codelineno-70-13" name="__codelineno-70-13" href="#__codelineno-70-13"></a>
 </span><span id="__span-70-14"><a id="__codelineno-70-14" name="__codelineno-70-14" href="#__codelineno-70-14"></a><span class="c1"># Verify installation</span>
-</span><span id="__span-70-15"><a id="__codelineno-70-15" name="__codelineno-70-15" href="#__codelineno-70-15"></a>fukuii-cli
+</span><span id="__span-70-15"><a id="__codelineno-70-15" name="__codelineno-70-15" href="#__codelineno-70-15"></a>fukuii-cli<span class="w"> </span><span class="nb">help</span>
 </span></code></pre></div>
-<h4 id="current-features">Current Features<a class="headerlink" href="#current-features" title="Permanent link">&para;</a></h4>
-<p>The fukuii-cli tool currently provides:</p>
-<ul>
-<li><strong>Enode Collection</strong>: Automatically collect enode URLs from running Fukuii containers</li>
-<li><strong>Static Nodes Management</strong>: Generate and distribute static-nodes.json files across nodes</li>
-<li><strong>Container Orchestration</strong>: Restart containers with updated peer configurations</li>
-</ul>
-<h4 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h4>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a><span class="c1"># Run from the ops/gorgoroth directory via deploy.sh</span>
-</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a><span class="nb">cd</span><span class="w"> </span>ops/gorgoroth
-</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3" href="#__codelineno-71-3"></a>./deploy.sh<span class="w"> </span>sync-static-nodes
-</span><span id="__span-71-4"><a id="__codelineno-71-4" name="__codelineno-71-4" href="#__codelineno-71-4"></a>
-</span><span id="__span-71-5"><a id="__codelineno-71-5" name="__codelineno-71-5" href="#__codelineno-71-5"></a><span class="c1"># Or run directly if installed system-wide</span>
-</span><span id="__span-71-6"><a id="__codelineno-71-6" name="__codelineno-71-6" href="#__codelineno-71-6"></a>fukuii-cli
+<h4 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h4>
+<p>The fukuii-cli tool provides a comprehensive set of commands:</p>
+<p><strong>Network Deployment:</strong>
+- <code>start [config]</code> - Start the Gorgoroth test network with specified configuration
+- <code>stop [config]</code> - Stop the network
+- <code>restart [config]</code> - Restart the network
+- <code>status [config]</code> - Show status of all containers
+- <code>logs [config]</code> - Follow logs from all containers
+- <code>clean [config]</code> - Stop and remove all containers and volumes</p>
+<p><strong>Node Configuration:</strong>
+- <code>sync-static-nodes</code> - Collect enode URLs and synchronize static-nodes.json across all nodes
+- <code>collect-logs [config]</code> - Collect logs from all containers for debugging</p>
+<p><strong>Utility:</strong>
+- <code>help</code> - Show detailed usage information
+- <code>version</code> - Show version information</p>
+<h4 id="usage-examples">Usage Examples<a class="headerlink" href="#usage-examples" title="Permanent link">&para;</a></h4>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a><span class="c1"># Start a 3-node network</span>
+</span><span id="__span-71-2"><a id="__codelineno-71-2" name="__codelineno-71-2" href="#__codelineno-71-2"></a>fukuii-cli<span class="w"> </span>start<span class="w"> </span>3nodes
+</span><span id="__span-71-3"><a id="__codelineno-71-3" name="__codelineno-71-3" href="#__codelineno-71-3"></a>
+</span><span id="__span-71-4"><a id="__codelineno-71-4" name="__codelineno-71-4" href="#__codelineno-71-4"></a><span class="c1"># Wait for nodes to initialize</span>
+</span><span id="__span-71-5"><a id="__codelineno-71-5" name="__codelineno-71-5" href="#__codelineno-71-5"></a>sleep<span class="w"> </span><span class="m">45</span>
+</span><span id="__span-71-6"><a id="__codelineno-71-6" name="__codelineno-71-6" href="#__codelineno-71-6"></a>
+</span><span id="__span-71-7"><a id="__codelineno-71-7" name="__codelineno-71-7" href="#__codelineno-71-7"></a><span class="c1"># Synchronize peer connections</span>
+</span><span id="__span-71-8"><a id="__codelineno-71-8" name="__codelineno-71-8" href="#__codelineno-71-8"></a>fukuii-cli<span class="w"> </span>sync-static-nodes
+</span><span id="__span-71-9"><a id="__codelineno-71-9" name="__codelineno-71-9" href="#__codelineno-71-9"></a>
+</span><span id="__span-71-10"><a id="__codelineno-71-10" name="__codelineno-71-10" href="#__codelineno-71-10"></a><span class="c1"># Check network status</span>
+</span><span id="__span-71-11"><a id="__codelineno-71-11" name="__codelineno-71-11" href="#__codelineno-71-11"></a>fukuii-cli<span class="w"> </span>status
+</span><span id="__span-71-12"><a id="__codelineno-71-12" name="__codelineno-71-12" href="#__codelineno-71-12"></a>
+</span><span id="__span-71-13"><a id="__codelineno-71-13" name="__codelineno-71-13" href="#__codelineno-71-13"></a><span class="c1"># View logs</span>
+</span><span id="__span-71-14"><a id="__codelineno-71-14" name="__codelineno-71-14" href="#__codelineno-71-14"></a>fukuii-cli<span class="w"> </span>logs<span class="w"> </span>3nodes
+</span><span id="__span-71-15"><a id="__codelineno-71-15" name="__codelineno-71-15" href="#__codelineno-71-15"></a>
+</span><span id="__span-71-16"><a id="__codelineno-71-16" name="__codelineno-71-16" href="#__codelineno-71-16"></a><span class="c1"># Collect logs for debugging</span>
+</span><span id="__span-71-17"><a id="__codelineno-71-17" name="__codelineno-71-17" href="#__codelineno-71-17"></a>fukuii-cli<span class="w"> </span>collect-logs<span class="w"> </span>3nodes
+</span><span id="__span-71-18"><a id="__codelineno-71-18" name="__codelineno-71-18" href="#__codelineno-71-18"></a>
+</span><span id="__span-71-19"><a id="__codelineno-71-19" name="__codelineno-71-19" href="#__codelineno-71-19"></a><span class="c1"># Stop the network</span>
+</span><span id="__span-71-20"><a id="__codelineno-71-20" name="__codelineno-71-20" href="#__codelineno-71-20"></a>fukuii-cli<span class="w"> </span>stop<span class="w"> </span>3nodes
 </span></code></pre></div>
-<p><strong>Note</strong>: Additional features will be added in future releases to make this a comprehensive toolkit for Fukuii node operations.</p>
+<p><strong>Note</strong>: The fukuii-cli tool is the primary interface for all deployment and configuration operations. Install it system-wide for easy access from anywhere.</p>
 
 
 
