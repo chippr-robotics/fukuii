@@ -89,13 +89,13 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 
 **New**: Fukuii is built with agentic AI integration as a first principle:
 
-- **Model Context Protocol (MCP) Server**: Provides standardized agentic control over the node
-- **AI Assistant Integration**: Works with Claude, GPT, and other AI assistants
+- **Model Context Protocol (MCP)**: Integrated into the JSON-RPC API on port 8545
+- **AI Assistant Integration**: Works with Claude, GPT, and other AI assistants via HTTP/WebSocket
 - **Rich Tool Set**: Tools for node status, peer management, blockchain queries, and diagnostics
 - **Resource Access**: Read node state, configuration, and blockchain data via standard URIs
 - **Guided Prompts**: Pre-built templates for health checks, troubleshooting, and management tasks
 
-Launch the MCP server with: `fukuii mcp`
+Enable MCP by adding `"mcp"` to `fukuii.network.rpc.apis` in your configuration.
 
 See [MCP Documentation](docs/MCP.md) for detailed integration instructions with AI assistants.
 

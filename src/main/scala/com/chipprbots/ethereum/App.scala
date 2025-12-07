@@ -112,10 +112,6 @@ object App extends Logger {
         |                         Run 'fukuii cli --help' for more information
         |                         Key generation: fukuii cli generate-key-pairs [n]
         |
-        |  mcp                    Start MCP (Model Context Protocol) server
-        |                         Provides agentic control over the Fukuii node
-        |                         Communicates via stdio for integration with AI assistants
-        |
         |  keytool [options]      Key management tool
         |
         |  bootstrap [path]       Download blockchain bootstrap data
@@ -125,6 +121,12 @@ object App extends Logger {
         |
         |  signature-validator <pubkey> <sig> <hash>
         |                         Validate ECDSA signature against public key and message hash
+        |
+        |MCP (Model Context Protocol) Support:
+        |  MCP methods are available via the JSON-RPC API on port 8545
+        |  Enable with: fukuii.network.rpc.apis = [..., "mcp"]
+        |  Methods: mcp_initialize, tools/list, tools/call, resources/list,
+        |           resources/read, prompts/list, prompts/get
         |
         |Options:
         |  --help, -h             Show this help message
@@ -168,7 +170,6 @@ object App extends Logger {
     // val vmServer = "vm-server"
     val faucet = "faucet"
     val cli = "cli"
-    val mcp = "mcp"
     val sigValidator = "signature-validator"
 
     // Parse and extract modifiers from arguments
@@ -203,7 +204,6 @@ object App extends Logger {
       // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
       case Some(`ecKeyGen`)     => EcKeyGen.main(argsWithoutModifiers.tail)
-      case Some(`mcp`)          => com.chipprbots.ethereum.mcp.FukuiiMcpServer.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
       case Some(network) if isNetwork(network) =>
