@@ -63,9 +63,9 @@ In private networks, the peer list may change frequently. Instead of modifying c
 # Update static nodes
 cat > ~/.fukuii/gorgoroth/static-nodes.json << EOF
 [
-  "enode://node1@192.168.1.10:9076",
-  "enode://node2@192.168.1.11:9076",
-  "enode://node3@192.168.1.12:9076"
+  "enode://<node-id-1>@192.168.1.10:9076",
+  "enode://<node-id-2>@192.168.1.11:9076",
+  "enode://<node-id-3>@192.168.1.12:9076"
 ]
 EOF
 

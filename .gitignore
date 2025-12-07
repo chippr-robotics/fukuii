@@ -24,6 +24,9 @@ project/project/
 fukuii-log.txt
 .evm-runner_history
 
+# Temporary test/debug files
+tmp-*.json
+
 # Nix
 result
 .nix/
