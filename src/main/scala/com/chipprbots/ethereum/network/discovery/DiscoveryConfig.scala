@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.network.discovery
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.utils.ConfigUtils
+import com.chipprbots.ethereum.utils.Logger
 
 case class DiscoveryConfig(
     discoveryEnabled: Boolean,
@@ -21,16 +22,27 @@ case class DiscoveryConfig(
     channelCapacity: Int
 )
 
-object DiscoveryConfig {
+object DiscoveryConfig extends Logger {
   def apply(etcClientConfig: com.typesafe.config.Config, bootstrapNodes: Set[String]): DiscoveryConfig = {
     val discoveryConfig = etcClientConfig.getConfig("network.discovery")
+
+    // Load static nodes from datadir/static-nodes.json if it exists
+    val datadir = etcClientConfig.getString("datadir")
+    val staticNodes = StaticNodesLoader.loadFromDatadir(datadir)
+
+    // Combine bootstrap nodes from config and static-nodes.json
+    val allBootstrapNodes = bootstrapNodes ++ staticNodes
+    
+    if (staticNodes.nonEmpty) {
+      log.info(s"Merged ${staticNodes.size} static node(s) from static-nodes.json with ${bootstrapNodes.size} bootstrap node(s) from config")
+    }
 
     DiscoveryConfig(
       discoveryEnabled = discoveryConfig.getBoolean("discovery-enabled"),
       host = ConfigUtils.getOptionalValue(discoveryConfig, _.getString, "host"),
       interface = discoveryConfig.getString("interface"),
       port = discoveryConfig.getInt("port"),
-      bootstrapNodes = NodeParser.parseNodes(bootstrapNodes),
+      bootstrapNodes = NodeParser.parseNodes(allBootstrapNodes),
       reuseKnownNodes = discoveryConfig.getBoolean("reuse-known-nodes"),
       scanInterval = discoveryConfig.getDuration("scan-interval").toMillis.millis,
       messageExpiration = discoveryConfig.getDuration("message-expiration").toMillis.millis,
