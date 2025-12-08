@@ -106,17 +106,44 @@ But actual node enodes were:
 - Node keys ARE persistent (stored in `/app/data/node.key`)
 - Static-nodes.json files are pre-generated with sample enodes
 - These don't match the actual generated node keys on first startup
+- **Sequencing Issue**: All nodes start simultaneously and generate unique enodes, but static-nodes.json still has old sample IDs
 
-**Workaround:**
+**Solution Implemented:**
+Enhanced `fukuii-cli sync-static-nodes` command to automate the entire process:
+
+1. **Extract enodes from logs** - No admin RPC required
+   ```bash
+   # Logs show: "Node address: enode://61015255a7105d5c...@[0:0:0:0:0:0:0:0]:30303"
+   # Script extracts and converts to: enode://61015255a7105d5c...@fukuii-node1:30303
+   ```
+
+2. **Generate per-node static-nodes.json** - Each node gets only OTHER nodes (excludes self)
+   ```json
+   // node1/static-nodes.json contains only node2 and node3
+   [
+     "enode://bbf9941816f2e25e...@fukuii-node2:30303",
+     "enode://a2e21adbb299e3e8...@fukuii-node3:30303"
+   ]
+   ```
+
+3. **Update and restart** - Host config files updated, containers restarted
+
+**Automated Workflow:**
+```bash
+cd ops/tools
+./fukuii-cli.sh start 3nodes
+sleep 45  # Wait for nodes to generate enodes
+./fukuii-cli.sh sync-static-nodes  # Auto-sync all nodes
+sleep 30  # Wait for peer connections to establish
+```
+
+**Manual Workaround (if needed):**
 As documented in QUICKSTART.md:
 1. Start network for first time
 2. Wait 45 seconds for node key generation
 3. Extract enode IDs from logs: `docker logs gorgoroth-fukuii-nodeX | grep "Node address"`
-4. Update static-nodes.json files with actual enodes
+4. Update static-nodes.json files with actual enodes (excluding each node's own enode)
 5. Restart network
-
-**Long-term Solution:**
-The `fukuii-cli sync-static-nodes` command is designed to automate this, but currently fails because the admin RPC namespace is not enabled in enterprise builds.
 
 ### 3. RLPx Handshake Timeouts (EXPLAINED)
 
@@ -220,12 +247,24 @@ gorgoroth-besu-node3     Up (healthy)
    - This file is mounted as `/app/fukuii/conf/app.conf` in ALL docker-compose configurations
    - Was overriding the fixes in other config files
 
+### Tooling Improvements
+4. `ops/tools/fukuii-cli.sh` **[ROOT CAUSE FIX]**
+   - Added `get_enode_from_logs()` function to extract enodes from container logs
+   - Enhanced `get_enode_from_container()` to try logs first, RPC as fallback
+   - Improved `sync_static_nodes()` to create per-node static-nodes.json excluding own enode
+   - Fixes sequencing/timing issue where nodes start with mismatched enode identities
+
+### Static Node Configuration
+5. `ops/gorgoroth/conf/node1/static-nodes.json` - Updated with actual enodes (excludes node1)
+6. `ops/gorgoroth/conf/node2/static-nodes.json` - Updated with actual enodes (excludes node2)
+7. `ops/gorgoroth/conf/node3/static-nodes.json` - Updated with actual enodes (excludes node3)
+
 ## Recommendations
 
 ### Immediate Actions
 1. ✅ **Deploy blacklist duration fix** - Already implemented
-2. 📋 **Document static-nodes.json setup** - Already documented in QUICKSTART.md
-3. 🔧 **Enable admin RPC in enterprise builds** - Required for automated static-nodes sync
+2. ✅ **Implement automated static-nodes sync** - Already implemented in fukuii-cli.sh
+3. 📋 **Document static-nodes.json setup** - Already documented in QUICKSTART.md
 
 ### Future Improvements
 
