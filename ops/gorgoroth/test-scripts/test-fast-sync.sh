@@ -68,7 +68,8 @@ for port in 8545 8547 8549; do
     --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
     http://localhost:$port 2>/dev/null | jq -r '.result // "0x0"')
   
-  if [ -z "$PEERS" ]; then
+  # Check if PEERS is empty or null
+  if [ -z "$PEERS" ] || [ "$PEERS" = "null" ]; then
     log_error "Port $port: No response from RPC endpoint"
     CONNECTIVITY_OK=false
     continue
@@ -205,7 +206,12 @@ if [ "$SYNCED" = true ]; then
   log_success "Fast sync completed in ${ELAPSED}s"
   echo "  Final block: $NODE_BLOCK"
   echo "  Blocks synced: $NODE_BLOCK"
-  echo "  Sync rate: $((NODE_BLOCK / (ELAPSED / 60))) blocks/min"
+  # Avoid division by zero - calculate blocks per minute only if elapsed >= 60s
+  if [ $ELAPSED -ge 60 ]; then
+    echo "  Sync rate: $((NODE_BLOCK / (ELAPSED / 60))) blocks/min"
+  else
+    echo "  Sync rate: N/A (sync completed too quickly: ${ELAPSED}s)"
+  fi
 else
   log_error "Fast sync timeout after ${SYNC_TIMEOUT}s"
   log_error "Final block: $NODE_BLOCK/$BLOCK_NUM"
@@ -274,7 +280,12 @@ echo "  ✓ Seed nodes: 3 nodes running"
 echo "  ✓ Blockchain height: $BLOCK_NUM blocks"
 echo "  ✓ Sync time: ${ELAPSED}s ($(($ELAPSED / 60))m $(($ELAPSED % 60))s)"
 echo "  ✓ Final block: $NODE_BLOCK"
-echo "  ✓ Sync rate: $((NODE_BLOCK / (ELAPSED / 60))) blocks/min"
+# Avoid division by zero - calculate blocks per minute only if elapsed >= 60s
+if [ $ELAPSED -ge 60 ]; then
+  echo "  ✓ Sync rate: $((NODE_BLOCK / (ELAPSED / 60))) blocks/min"
+else
+  echo "  ✓ Sync rate: N/A (completed in ${ELAPSED}s)"
+fi
 echo "  ✓ State verified: Block hashes match"
 if [ $DECOMPRESS_ERRORS -eq 0 ]; then
   echo "  ✓ Decompression: No errors"

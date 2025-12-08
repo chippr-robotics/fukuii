@@ -13,9 +13,33 @@ MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Statistics
+DECOMPRESS_COUNT=0
+SNAPPY_COUNT=0
+RLPX_COUNT=0
+HANDSHAKE_COUNT=0
+ERROR_COUNT=0
+
+# Cleanup and display statistics on exit
+cleanup() {
+  echo
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Monitoring Statistics:"
+  echo "  Decompression messages: $DECOMPRESS_COUNT"
+  echo "  Snappy messages: $SNAPPY_COUNT"
+  echo "  RLPx messages: $RLPX_COUNT"
+  echo "  Handshake messages: $HANDSHAKE_COUNT"
+  echo "  Error messages: $ERROR_COUNT"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  exit 0
+}
+
+# Set up trap to call cleanup on Ctrl+C or script termination
+trap cleanup SIGINT SIGTERM
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Monitoring $CONTAINER_NAME for decompression issues"
-echo "Press Ctrl+C to stop"
+echo "Press Ctrl+C to stop and view statistics"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 
@@ -26,13 +50,6 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   docker ps --format '{{.Names}}' | grep fukuii
   exit 1
 fi
-
-# Statistics
-DECOMPRESS_COUNT=0
-SNAPPY_COUNT=0
-RLPX_COUNT=0
-HANDSHAKE_COUNT=0
-ERROR_COUNT=0
 
 # Start monitoring
 docker logs -f "$CONTAINER_NAME" 2>&1 | while IFS= read -r line; do
@@ -89,15 +106,3 @@ docker logs -f "$CONTAINER_NAME" 2>&1 | while IFS= read -r line; do
     ERROR_COUNT=$((ERROR_COUNT + 1))
   fi
 done
-
-# This code won't be reached during normal operation (Ctrl+C stops the script)
-# but is here for completeness
-echo
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Monitoring Statistics:"
-echo "  Decompression messages: $DECOMPRESS_COUNT"
-echo "  Snappy messages: $SNAPPY_COUNT"
-echo "  RLPx messages: $RLPX_COUNT"
-echo "  Handshake messages: $HANDSHAKE_COUNT"
-echo "  Error messages: $ERROR_COUNT"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -530,9 +530,14 @@ curl -X POST -H "Content-Type: application/json" \
 
 ### Script 1: Fast Sync Test Runner
 
+**Location**: `ops/gorgoroth/test-scripts/test-fast-sync.sh`  
+**Permissions**: Executable (`chmod +x` applied)  
+**Usage**: `./test-fast-sync.sh`
+
 ```bash
 #!/bin/bash
-# File: ops/gorgoroth/test-scripts/test-fast-sync.sh
+# Fast Sync Test Script for Fukuii Gorgoroth Network
+# Tests fast sync functionality on the 6-node network
 
 set -e
 
@@ -667,13 +672,15 @@ echo "Finished at: $(date)"
 
 ### Script 2: Decompression Monitor
 
+**Location**: `ops/gorgoroth/test-scripts/monitor-decompression.sh`  
+**Permissions**: Executable (`chmod +x` applied)  
+**Usage**: `./monitor-decompression.sh [container_name]`
+
 ```bash
 #!/bin/bash
-# File: ops/gorgoroth/test-scripts/monitor-decompression.sh
-
 # Monitor for message decompression issues in real-time
 
-CONTAINER_NAME="fukuii-node6"
+CONTAINER_NAME="${1:-fukuii-node6}"
 
 echo "=== Monitoring $CONTAINER_NAME for decompression issues ==="
 echo "Press Ctrl+C to stop"
