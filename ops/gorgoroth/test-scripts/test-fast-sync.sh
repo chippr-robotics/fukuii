@@ -208,7 +208,8 @@ if [ "$SYNCED" = true ]; then
   echo "  Blocks synced: $NODE_BLOCK"
   # Avoid division by zero - calculate blocks per minute only if elapsed >= 60s
   if [ $ELAPSED -ge 60 ]; then
-    echo "  Sync rate: $((NODE_BLOCK / (ELAPSED / 60))) blocks/min"
+    MINUTES=$((ELAPSED / 60))
+    echo "  Sync rate: $((NODE_BLOCK / MINUTES)) blocks/min"
   else
     echo "  Sync rate: N/A (sync completed too quickly: ${ELAPSED}s)"
   fi
@@ -282,7 +283,8 @@ echo "  ✓ Sync time: ${ELAPSED}s ($(($ELAPSED / 60))m $(($ELAPSED % 60))s)"
 echo "  ✓ Final block: $NODE_BLOCK"
 # Avoid division by zero - calculate blocks per minute only if elapsed >= 60s
 if [ $ELAPSED -ge 60 ]; then
-  echo "  ✓ Sync rate: $((NODE_BLOCK / (ELAPSED / 60))) blocks/min"
+  MINUTES=$((ELAPSED / 60))
+  echo "  ✓ Sync rate: $((NODE_BLOCK / MINUTES)) blocks/min"
 else
   echo "  ✓ Sync rate: N/A (completed in ${ELAPSED}s)"
 fi
