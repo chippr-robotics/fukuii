@@ -2,6 +2,19 @@
 
 This directory contains comprehensive testing documentation for the Fukuii Ethereum Classic client.
 
+## Network Compatibility Testing (Gorgoroth & Cirith Ungol)
+
+### Gorgoroth Multi-Client Testing
+- **[GORGOROTH_COMPATIBILITY_TESTING.md](GORGOROTH_COMPATIBILITY_TESTING.md)** - Complete testing procedures for multi-client validation
+- **[GORGOROTH_FAUCET_TESTING.md](GORGOROTH_FAUCET_TESTING.md)** - Faucet service validation procedures
+
+### Cirith Ungol Real-World Sync Testing
+- **[CIRITH_UNGOL_TESTING_GUIDE.md](CIRITH_UNGOL_TESTING_GUIDE.md)** - Real-world sync testing with ETC mainnet and Mordor testnet
+
+### Validation Status
+- See **[GORGOROTH_VALIDATION_STATUS.md](../validation/GORGOROTH_VALIDATION_STATUS.md)** for current progress and roadmap
+- See **[GORGOROTH_COMPATIBILITY.md](../validation/GORGOROTH_COMPATIBILITY.md)** for validation overview
+
 ## Test Strategy and KPIs
 
 ### Architecture Decision Records (ADRs)

@@ -483,11 +483,79 @@ fukuii-cli start 3nodes
 fukuii-cli collect-logs 3nodes ./bug-reproduction-logs
 ```
 
+## Compatibility Testing
+
+The Gorgoroth network includes comprehensive testing infrastructure for validating Fukuii compatibility with Core-Geth and Hyperledger Besu:
+
+### Automated Test Suite
+
+Run the complete compatibility test suite:
+
+```bash
+cd ops/gorgoroth/test-scripts
+./run-test-suite.sh fukuii-geth
+```
+
+The test suite includes:
+- Network connectivity validation
+- Block propagation testing
+- Mining compatibility checks
+- Consensus maintenance monitoring
+
+### Individual Tests
+
+Run specific tests:
+
+```bash
+# Test network connectivity
+./test-connectivity.sh
+
+# Test block propagation
+./test-block-propagation.sh
+
+# Test mining compatibility
+./test-mining.sh
+
+# Test consensus (30 minute run)
+./test-consensus.sh 30
+```
+
+### Documentation
+
+- [**Compatibility Testing Guide**](../../docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Comprehensive testing procedures
+- [**Faucet Testing Guide**](../../docs/testing/GORGOROTH_FAUCET_TESTING.md) - Faucet validation procedures
+- [**Validation Status**](../../docs/validation/GORGOROTH_VALIDATION_STATUS.md) - Current validation status and roadmap
+- [**Implementation Summary**](../../docs/validation/GORGOROTH_IMPLEMENTATION_SUMMARY.md) - Complete implementation overview
+- [**Verification Complete**](VERIFICATION_COMPLETE.md) - Initial validation results
+- [**Quick Start**](QUICKSTART.md) - Getting started guide
+
 ## Related Resources
 
 - [Fukuii Documentation](../../README.md)
 - [Docker Deployment Guide](../../docs/deployment/docker.md)
 - [Operations Runbooks](../../docs/runbooks/README.md)
+- [**Cirith Ungol Real-World Sync Testing**](../../docs/testing/CIRITH_UNGOL_TESTING_GUIDE.md) - Bonus trial for advanced testers
+
+## Bonus Trial: Cirith Ungol
+
+For community members ready to test **real-world sync capabilities**:
+
+**Cirith Ungol** provides a single-node environment for testing Fukuii sync with **ETC mainnet** (20M+ blocks) and **Mordor testnet**.
+
+**Why use Cirith Ungol after Gorgoroth?**
+- Test SNAP/Fast sync with real network history
+- Validate long-term stability (24+ hours)
+- Measure production performance
+- Connect to diverse public peers
+
+**Quick Start:**
+```bash
+cd ops/cirith-ungol
+./start.sh start    # Sync with ETC mainnet
+./start.sh logs     # Monitor progress
+```
+
+**Full guide:** [Cirith Ungol Testing Guide](../../docs/testing/CIRITH_UNGOL_TESTING_GUIDE.md)
 
 ## Support
 
