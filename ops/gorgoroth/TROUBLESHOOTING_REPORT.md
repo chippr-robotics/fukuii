@@ -4,13 +4,19 @@
 **Status:** Issues Identified - Workaround Available  
 **Network:** Gorgoroth 3-Node Test Network  
 
+> **UPDATE 2025-12-08:** Additional investigation and remediation completed. See [BATTLENET_CONNECTION_CLEANUP_REPORT.md](BATTLENET_CONNECTION_CLEANUP_REPORT.md) for:
+> - ✅ **Fixed:** Zero-duration blacklisting causing connection spam
+> - ✅ **Verified:** Configuration loading bug already fixed in App.scala
+> - ✅ **Confirmed:** Node keys DO persist correctly in Docker volumes
+> - 📋 **Documented:** Static-nodes.json configuration requirements
+
 ## Executive Summary
 
 The Gorgoroth 3-node battlenet successfully starts all containers and passes health checks, but nodes fail to establish peer connections. Root cause analysis reveals three critical issues:
 
-1. **Configuration Loading Bug**: Nodes advertise port 9076 instead of the configured 30303
-2. **Placeholder Enode IDs**: Static-nodes.json files contain invalid placeholder enode identifiers
-3. **Ephemeral Node Keys**: No persisted `nodekey` files exist inside the containers, so every restart generates new enode IDs and instantly invalidates any static-nodes settings or collected peer metadata
+1. **Configuration Loading Bug**: ~~Nodes advertise port 9076 instead of the configured 30303~~ **FIXED** ✅ - Already resolved in App.scala
+2. **Placeholder Enode IDs**: Static-nodes.json files contain invalid placeholder enode identifiers - **Requires operator action on first startup**
+3. **Ephemeral Node Keys**: ~~No persisted `nodekey` files exist inside the containers~~ **FALSE** - Node keys DO persist in `/app/data/node.key`
 
 ## Latest Troubleshooting Session – 2025-12-07 19:17 UTC
 
