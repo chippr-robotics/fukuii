@@ -8,7 +8,9 @@ data/
 *.idb
 
 # Ignore any local test scripts or notes
+# Note: Official test scripts in test-scripts/ directory are NOT ignored
 test-*.sh
+!test-scripts/test-*.sh
 notes.txt
 TODO.txt
 
