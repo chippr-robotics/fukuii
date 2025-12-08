@@ -211,6 +211,22 @@ sync_static_nodes() {
         
         echo -n "  node${node_num}: "
         if [ -f "$config_file" ]; then
+            # Count how many peer nodes this node has (excluding itself)
+            peer_count=0
+            for other_container in "${!ENODES_MAP[@]}"; do
+                if [ "$other_container" != "$container" ]; then
+                    peer_count=$((peer_count + 1))
+                fi
+            done
+            
+            # Validate that we have at least one peer
+            if [ $peer_count -eq 0 ]; then
+                echo -e "${YELLOW}⚠ no peers (only 1 node in network?)${NC}"
+                # Create empty array for single-node case
+                echo "[]" > "$config_file"
+                continue
+            fi
+            
             # Create static-nodes.json with all enodes EXCEPT this node's own
             {
                 echo "["
@@ -228,7 +244,7 @@ sync_static_nodes() {
                 echo ""
                 echo "]"
             } > "$config_file"
-            echo -e "${GREEN}✓ updated (excluding own enode)${NC}"
+            echo -e "${GREEN}✓ updated ($peer_count peer(s))${NC}"
         else
             echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
         fi
@@ -258,16 +274,29 @@ sync_static_nodes() {
 get_enode_from_logs() {
     local container_name=$1
     # Extract enode from container logs
-    # Format: "Node address: enode://...@[0:0:0:0:0:0:0:0]:30303"
+    # Expected log format: "Node address: enode://<64-hex-chars>@[0:0:0:0:0:0:0:0]:<port>"
+    # Example: "INFO [ServerActor] - Node address: enode://abc123...@[0:0:0:0:0:0:0:0]:30303"
     local enode=$(docker logs "$container_name" 2>&1 | \
         grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
         tail -1 | \
         sed 's/Node address: //' || echo "")
     
     if [ -n "$enode" ]; then
+        # Validate enode format (should start with "enode://" and contain @)
+        if [[ ! "$enode" =~ ^enode://[0-9a-f]+@\[0:0:0:0:0:0:0:0\]:[0-9]+$ ]]; then
+            echo "" >&2
+            echo -e "${YELLOW}Warning: Extracted enode has unexpected format: $enode${NC}" >&2
+            return 1
+        fi
+        
         # Convert [0:0:0:0:0:0:0:0] to container hostname
         # Extract node number from container name (e.g., gorgoroth-fukuii-node1 -> 1)
         local node_num=$(echo "$container_name" | grep -o "node[0-9]*" | grep -o "[0-9]*")
+        if [ -z "$node_num" ]; then
+            echo -e "${YELLOW}Warning: Could not extract node number from container name: $container_name${NC}" >&2
+            return 1
+        fi
+        
         local hostname="fukuii-node${node_num}"
         
         # Replace [0:0:0:0:0:0:0:0] with hostname
