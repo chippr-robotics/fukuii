@@ -148,8 +148,6 @@ For less formal feedback or questions, use [GitHub Discussions](https://github.c
 
 #### Option 3: GitHub Issues (For Specific Bugs)
 
-#### Option 3: GitHub Issues (For Specific Bugs)
-
 If you discover a specific bug unrelated to your field report, create a GitHub issue:
 
 1. Go to https://github.com/chippr-robotics/fukuii/issues/new/choose

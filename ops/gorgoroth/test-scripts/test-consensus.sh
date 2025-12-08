@@ -104,7 +104,8 @@ while [ $(date +%s) -lt $END_TIME ]; do
   # Check if nodes at same height have same hash
   # Group nodes by block number and check hashes match
   # Clear the array for this iteration
-  BLOCKS_AT_HEIGHT=()
+  unset BLOCKS_AT_HEIGHT
+  declare -A BLOCKS_AT_HEIGHT
   for i in "${!BLOCK_NUMBERS[@]}"; do
     height=${BLOCK_NUMBERS[$i]}
     hash=${BLOCK_HASHES[$i]}

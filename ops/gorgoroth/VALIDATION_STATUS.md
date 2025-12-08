@@ -210,10 +210,6 @@ The following areas need to be validated for Fukuii compatibility with core-geth
    - ✅ `test-scripts/test-faucet.sh` - Faucet service validation
    - ✅ `test-scripts/run-test-suite.sh` - Complete test suite runner
    - ✅ `test-scripts/generate-report.sh` - Summary report generator
-   - ✅ `test-scripts/test-mining.sh` - Mining compatibility validation
-   - ✅ `test-scripts/test-consensus.sh` - Long-running consensus monitoring
-   - ✅ `test-scripts/run-test-suite.sh` - Complete test suite runner
-   - ✅ `test-scripts/generate-report.sh` - Summary report generator
 
 3. **Documentation**:
    - ✅ `README.md` - Complete network documentation

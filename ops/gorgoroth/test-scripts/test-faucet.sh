@@ -104,7 +104,8 @@ if [ "$SEND_RESPONSE" != "error" ]; then
   # Check for transaction hash in response
   TX_HASH=$(echo "$SEND_RESPONSE" | jq -r '.result.txId' 2>/dev/null || echo "null")
   
-  if [ "$TX_HASH" != "null" ] && [ -n "$TX_HASH" ]; then
+  # Validate TX_HASH is in the expected format (0x followed by hex characters)
+  if [ "$TX_HASH" != "null" ] && [ -n "$TX_HASH" ] && [[ "$TX_HASH" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
     echo "✅ Faucet sent funds"
     echo "Transaction hash: $TX_HASH"
     
@@ -112,9 +113,9 @@ if [ "$SEND_RESPONSE" != "error" ]; then
     echo "Waiting 30 seconds for transaction to be mined..."
     sleep 30
     
-    # Check transaction receipt
+    # Check transaction receipt using jq to safely construct JSON
     TX_RECEIPT=$(curl -s -X POST -H "Content-Type: application/json" \
-      --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionReceipt\",\"params\":[\"$TX_HASH\"],\"id\":1}" \
+      --data "$(jq -n --arg tx "$TX_HASH" '{jsonrpc:"2.0",method:"eth_getTransactionReceipt",params:[$tx],id:1}')" \
       "$NODE_URL" | jq -r '.result' 2>/dev/null || echo "null")
     
     if [ "$TX_RECEIPT" != "null" ]; then

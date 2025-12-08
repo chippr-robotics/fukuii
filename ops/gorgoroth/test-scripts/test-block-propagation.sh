@@ -39,20 +39,21 @@ for port in "${ALL_PORTS[@]}"; do
     --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
     http://localhost:$port 2>/dev/null | jq -r '.result' 2>/dev/null || echo "error")
   
-  if [ "$BLOCK_NUM" != "error" ]; then
+  # Validate BLOCK_NUM is a hex string (e.g., 0x1234abcd)
+  if [ "$BLOCK_NUM" != "error" ] && [[ "$BLOCK_NUM" =~ ^0x[0-9a-fA-F]+$ ]]; then
     BLOCK_NUM_DEC=$((16#${BLOCK_NUM#0x}))
     BLOCK_NUMBERS+=($BLOCK_NUM_DEC)
     
-    # Get block hash at this height
+    # Get block hash at this height using jq to safely encode JSON
     BLOCK_HASH=$(curl -s -X POST -H "Content-Type: application/json" \
-      --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$BLOCK_NUM\",false],\"id\":1}" \
+      --data "$(jq -n --arg block "$BLOCK_NUM" '{jsonrpc:"2.0",method:"eth_getBlockByNumber",params:[$block,false],id:1}')" \
       http://localhost:$port 2>/dev/null | jq -r '.result.hash' 2>/dev/null || echo "error")
     
     BLOCK_HASHES+=("$BLOCK_HASH")
     
     echo "  Port $port: Block #$BLOCK_NUM_DEC ($BLOCK_HASH)"
   else
-    echo "  Port $port: ERROR - could not get block number"
+    echo "  Port $port: ERROR - invalid block number or could not get block number"
     BLOCK_NUMBERS+=(-1)
     BLOCK_HASHES+=("error")
   fi
