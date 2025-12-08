@@ -189,7 +189,7 @@ The implementation supports 5 different test configurations:
 
 - See [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) for detailed procedures
 - See [GORGOROTH_VALIDATION_STATUS.md](GORGOROTH_VALIDATION_STATUS.md) for current progress
-- See [test-scripts/](../ops/gorgoroth/test-scripts/) for test implementation
+- See `ops/gorgoroth/test-scripts/` (internal) for test implementation
 
 ## Technical Details
 
@@ -271,8 +271,8 @@ All infrastructure is in place for community testers to validate the configurati
 ## Support and Resources
 
 - **GitHub Issues**: https://github.com/chippr-robotics/fukuii/issues
-- **Documentation**: [ops/gorgoroth/](../ops/gorgoroth/)
-- **Quick Start**: [QUICKSTART.md](../ops/gorgoroth/QUICKSTART.md)
+- **Documentation**: `ops/gorgoroth/` (internal)
+- **Quick Start**: `QUICKSTART.md` (internal - see ops/gorgoroth/)
 - **Testing Guide**: [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 
 ---
