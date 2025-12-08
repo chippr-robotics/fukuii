@@ -23,6 +23,7 @@ The Gorgoroth test network validates Fukuii's compatibility with other Ethereum 
 - **Mining**: Block production and consensus across different clients
 - **Fast Sync**: Initial blockchain synchronization using fast sync protocol
 - **Snap Sync**: Snapshot-based synchronization (if supported)
+- **Faucet Service**: Testnet token distribution functionality
 
 ### Test Configurations Available
 
@@ -475,6 +476,127 @@ watch -n 10 'curl -s -X POST -H "Content-Type: application/json" \
 - Sync completes regardless of peer client type
 - Final state is valid
 
+## Faucet Service Testing
+
+### Test 5.1: Faucet Service Availability
+
+**Objective**: Verify the faucet service can be started and accessed.
+
+**Setup**: Configure and start the faucet service.
+
+```bash
+# Configure faucet for Gorgoroth
+cat > /tmp/faucet-gorgoroth.conf << 'EOF'
+include "faucet.conf"
+
+faucet {
+  wallet-address = "0x1000000000000000000000000000000000000001"
+  wallet-password = ""
+  rpc-client.rpc-address = "http://localhost:8545/"
+  tx-value = 500000000000000000  # 0.5 ETC
+}
+
+fukuii.network.rpc.http {
+  port = 8099
+}
+EOF
+
+# Start faucet
+./bin/fukuii faucet -Dconfig.file=/tmp/faucet-gorgoroth.conf
+```
+
+**Test Procedure**:
+
+```bash
+# Check if faucet is accessible
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"faucet_status","params":[],"id":1}' \
+  http://localhost:8099
+```
+
+**Success Criteria**:
+- Faucet service starts without errors
+- HTTP endpoint is accessible on port 8099
+- Status endpoint returns valid response
+
+### Test 5.2: Faucet Wallet Initialization
+
+**Objective**: Verify faucet wallet is properly initialized and has funds.
+
+```bash
+# Check faucet status
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"faucet_status","params":[],"id":1}' \
+  http://localhost:8099 | jq
+```
+
+**Success Criteria**:
+- Status returns `"WalletAvailable"`
+- No errors in faucet logs
+- Wallet address has sufficient balance
+
+### Test 5.3: Fund Distribution
+
+**Objective**: Verify faucet can send funds to test addresses.
+
+```bash
+# Request funds
+curl -X POST -H "Content-Type: application/json" \
+  --data '{
+    "jsonrpc":"2.0",
+    "method":"faucet_sendFunds",
+    "params":[{
+      "address":"0x2000000000000000000000000000000000000002"
+    }],
+    "id":1
+  }' \
+  http://localhost:8099 | jq
+
+# Wait for transaction to be mined
+sleep 30
+
+# Verify recipient balance increased
+curl -X POST -H "Content-Type: application/json" \
+  --data '{
+    "jsonrpc":"2.0",
+    "method":"eth_getBalance",
+    "params":["0x2000000000000000000000000000000000000002","latest"],
+    "id":1
+  }' \
+  http://localhost:8545 | jq
+```
+
+**Success Criteria**:
+- Faucet returns transaction hash
+- Transaction is mined successfully
+- Recipient balance increases by expected amount
+- Faucet wallet balance decreases appropriately
+
+### Test 5.4: Automated Faucet Testing
+
+**Objective**: Run comprehensive faucet validation.
+
+```bash
+# Run automated faucet test
+cd ops/gorgoroth/test-scripts
+./test-faucet.sh
+```
+
+The automated test covers:
+- Service availability
+- Status endpoint
+- Fund distribution
+- Transaction confirmation
+- Balance verification
+- Rate limiting (optional)
+
+**Success Criteria**:
+- All automated tests pass
+- No errors in logs
+- Faucet operates as expected
+
+See [FAUCET_TESTING.md](FAUCET_TESTING.md) for detailed faucet testing documentation.
+
 ## Automated Testing Scripts
 
 ### Automated Compatibility Test Suite
@@ -517,6 +639,12 @@ echo "=== Test 4: Mining Compatibility ===" | tee "$RESULTS_DIR/04-mining.log"
 # Test 5: Consensus Maintenance
 echo "=== Test 5: Consensus Maintenance ===" | tee "$RESULTS_DIR/05-consensus.log"
 ./test-scripts/test-consensus.sh >> "$RESULTS_DIR/05-consensus.log" 2>&1
+
+# Test 6: Faucet Service (if available)
+if [ -f "./test-scripts/test-faucet.sh" ]; then
+  echo "=== Test 6: Faucet Service ===" | tee "$RESULTS_DIR/06-faucet.log"
+  ./test-scripts/test-faucet.sh >> "$RESULTS_DIR/06-faucet.log" 2>&1
+fi
 
 # Generate summary report
 echo "=== Generating Summary Report ==="
