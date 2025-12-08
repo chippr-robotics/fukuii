@@ -24,6 +24,7 @@ services:
       - "30303:30303/tcp"
       - "30303:30303/udp"
     volumes:
+      - ./conf/gorgoroth-genesis-fixed.json:/app/fukuii/conf/chains/gorgoroth-genesis.json:ro
       - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
       - ./conf/node1/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
@@ -55,6 +56,7 @@ services:
       - "30304:30303/tcp"
       - "30304:30303/udp"
     volumes:
+      - ./conf/gorgoroth-genesis-fixed.json:/app/fukuii/conf/chains/gorgoroth-genesis.json:ro
       - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
@@ -86,6 +88,7 @@ services:
       - "30305:30303/tcp"
       - "30305:30303/udp"
     volumes:
+      - ./conf/gorgoroth-genesis-fixed.json:/app/fukuii/conf/chains/gorgoroth-genesis.json:ro
       - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
