@@ -166,10 +166,6 @@ sync_static_nodes() {
     echo -e "${BLUE}=== Fukuii Static Nodes Synchronization ===${NC}"
     echo ""
     
-    # Temporary file for consolidated static nodes
-    TEMP_STATIC_NODES=$(mktemp)
-    trap "rm -f $TEMP_STATIC_NODES" EXIT
-    
     # Find all running Fukuii containers
     CONTAINERS=$(docker ps --filter "name=gorgoroth-fukuii-" --format "{{.Names}}" | sort)
     
@@ -185,52 +181,56 @@ sync_static_nodes() {
     
     # Collect enodes from all containers
     echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
-    ENODES=()
+    declare -A ENODES_MAP  # Associate container name with its enode
     for container in $CONTAINERS; do
         echo -n "  $container: "
         enode=$(get_enode_from_container "$container")
         if [ $? -eq 0 ] && [ -n "$enode" ]; then
-            ENODES+=("$enode")
+            ENODES_MAP["$container"]="$enode"
             echo -e "${GREEN}✓${NC}"
         else
             echo -e "${RED}✗ (skipped)${NC}"
         fi
     done
     
-    if [ ${#ENODES[@]} -eq 0 ]; then
+    if [ ${#ENODES_MAP[@]} -eq 0 ]; then
         echo -e "${RED}Error: No enodes could be collected${NC}"
         exit 1
     fi
     
     echo ""
-    echo -e "${GREEN}Collected ${#ENODES[@]} enode(s)${NC}"
+    echo -e "${GREEN}Collected ${#ENODES_MAP[@]} enode(s)${NC}"
     
-    # Create static-nodes.json with proper formatting
-    {
-        echo "["
-        for i in "${!ENODES[@]}"; do
-            if [ $i -eq $((${#ENODES[@]} - 1)) ]; then
-                printf '  "%s"\n' "${ENODES[$i]}"
-            else
-                printf '  "%s",\n' "${ENODES[$i]}"
-            fi
-        done
-        echo "]"
-    } > "$TEMP_STATIC_NODES"
-    
+    # Update static-nodes.json for each container
+    # Each container's static-nodes.json should contain all OTHER nodes (excluding itself)
     echo ""
-    echo -e "${BLUE}Generated static-nodes.json:${NC}"
-    cat "$TEMP_STATIC_NODES" | sed 's/^/  /'
-    echo ""
-    
-    # Copy static-nodes.json to each container
-    echo -e "${BLUE}Copying static-nodes.json to containers...${NC}"
+    echo -e "${BLUE}Updating static-nodes.json in config directories...${NC}"
     for container in $CONTAINERS; do
-        echo -n "  $container: "
-        if docker cp "$TEMP_STATIC_NODES" "$container:/app/data/static-nodes.json" 2>/dev/null; then
-            echo -e "${GREEN}✓${NC}"
+        node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
+        config_file="$GORGOROTH_DIR/conf/node${node_num}/static-nodes.json"
+        
+        echo -n "  node${node_num}: "
+        if [ -f "$config_file" ]; then
+            # Create static-nodes.json with all enodes EXCEPT this node's own
+            {
+                echo "["
+                first=true
+                for other_container in "${!ENODES_MAP[@]}"; do
+                    if [ "$other_container" != "$container" ]; then
+                        if [ "$first" = true ]; then
+                            printf '  "%s"' "${ENODES_MAP[$other_container]}"
+                            first=false
+                        else
+                            printf ',\n  "%s"' "${ENODES_MAP[$other_container]}"
+                        fi
+                    fi
+                done
+                echo ""
+                echo "]"
+            } > "$config_file"
+            echo -e "${GREEN}✓ updated (excluding own enode)${NC}"
         else
-            echo -e "${RED}✗ (failed to copy)${NC}"
+            echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
         fi
     done
     
@@ -255,15 +255,47 @@ sync_static_nodes() {
     echo -e "     ${BLUE}curl -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}' http://localhost:8546${NC}"
 }
 
+get_enode_from_logs() {
+    local container_name=$1
+    # Extract enode from container logs
+    # Format: "Node address: enode://...@[0:0:0:0:0:0:0:0]:30303"
+    local enode=$(docker logs "$container_name" 2>&1 | \
+        grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
+        tail -1 | \
+        sed 's/Node address: //' || echo "")
+    
+    if [ -n "$enode" ]; then
+        # Convert [0:0:0:0:0:0:0:0] to container hostname
+        # Extract node number from container name (e.g., gorgoroth-fukuii-node1 -> 1)
+        local node_num=$(echo "$container_name" | grep -o "node[0-9]*" | grep -o "[0-9]*")
+        local hostname="fukuii-node${node_num}"
+        
+        # Replace [0:0:0:0:0:0:0:0] with hostname
+        enode=$(echo "$enode" | sed "s/\[0:0:0:0:0:0:0:0\]/$hostname/")
+        echo "$enode"
+        return 0
+    fi
+    
+    return 1
+}
+
 get_enode_from_container() {
     local container_name=$1
     local max_retries=5
     local retry=0
     
+    # First, try to get enode from logs (works even without admin RPC enabled)
+    local enode=$(get_enode_from_logs "$container_name")
+    if [ -n "$enode" ]; then
+        echo "$enode"
+        return 0
+    fi
+    
+    # Fallback to RPC method (requires admin namespace to be enabled)
     while [ $retry -lt $max_retries ]; do
         # Try to get enode via RPC
         # Note: Using grep/cut instead of jq for portability (jq may not be in all containers)
-        local enode=$(docker exec "$container_name" sh -c \
+        enode=$(docker exec "$container_name" sh -c \
             'curl -s -X POST --data "{\"jsonrpc\":\"2.0\",\"method\":\"admin_nodeInfo\",\"params\":[],\"id\":1}" http://localhost:8546 | grep -o "\"enode\":\"[^\"]*\"" | cut -d"\"" -f4' \
             2>/dev/null || echo "")
         
@@ -274,12 +306,10 @@ get_enode_from_container() {
         
         retry=$((retry + 1))
         if [ $retry -lt $max_retries ]; then
-            echo -e "${YELLOW}Retry $retry/$max_retries for $container_name...${NC}" >&2
             sleep 2
         fi
     done
     
-    echo -e "${RED}Failed to get enode from $container_name after $max_retries retries${NC}" >&2
     return 1
 }
 
