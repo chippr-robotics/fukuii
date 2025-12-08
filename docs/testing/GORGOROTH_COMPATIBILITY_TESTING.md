@@ -595,7 +595,7 @@ The automated test covers:
 - No errors in logs
 - Faucet operates as expected
 
-See [FAUCET_TESTING.md](FAUCET_TESTING.md) for detailed faucet testing documentation.
+See [GORGOROTH_FAUCET_TESTING.md](GORGOROTH_FAUCET_TESTING.md) for detailed faucet testing documentation.
 
 ## Automated Testing Scripts
 
@@ -892,7 +892,7 @@ When testing with Cirith Ungol:
 
 For full Cirith Ungol testing instructions, see:
 
-**[Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md)**
+**[Cirith Ungol Testing Guide](CIRITH_UNGOL_TESTING_GUIDE.md)**
 
 This comprehensive guide includes:
 - Detailed setup instructions
@@ -937,7 +937,7 @@ More adventurous community members are encouraged to:
 
 2. **Read the Quick Start guide**:
    ```bash
-   cat QUICKSTART.md
+   cat ops/gorgoroth/QUICKSTART.md
    ```
 
 3. **Start with the simplest test**:
@@ -981,9 +981,9 @@ After completing compatibility testing:
 ## References
 
 - [Gorgoroth README](README.md)
-- [Gorgoroth Quick Start](QUICKSTART.md)
-- [Verification Complete Report](VERIFICATION_COMPLETE.md)
-- [Fukuii Documentation](../../docs/README.md)
+- Gorgoroth Quick Start - see `ops/gorgoroth/QUICKSTART.md` (internal)
+- Verification Complete Report - see `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal)
+- [Fukuii Documentation](../README.md)
 - [Core-Geth Documentation](https://core-geth.org/)
 - [Hyperledger Besu Documentation](https://besu.hyperledger.org/)
 

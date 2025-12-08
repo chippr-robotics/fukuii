@@ -23,21 +23,21 @@ The Gorgoroth network now includes:
 - Comprehensive documentation for community testers
 - Validation tracking and status reporting
 
-See [Validation Status](../../ops/gorgoroth/VALIDATION_STATUS.md) for current progress.
+See [GORGOROTH_VALIDATION_STATUS.md](GORGOROTH_VALIDATION_STATUS.md) for current progress.
 
 ## Quick Links
 
 ### For Community Testers
 
-- **[Quick Start Guide](../../ops/gorgoroth/QUICKSTART.md)** - Get the network running in 5 minutes
+- **Quick Start Guide** - see `ops/gorgoroth/QUICKSTART.md` (internal) - Get the network running in 5 minutes
 - **[Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)** - Detailed testing procedures
-- **[Validation Status](../../ops/gorgoroth/VALIDATION_STATUS.md)** - Current progress and roadmap
+- **[Validation Status](GORGOROTH_VALIDATION_STATUS.md)** - Current progress and roadmap
 
 ### For Developers
 
-- **[Gorgoroth README](../../ops/gorgoroth/README.md)** - Complete network documentation
-- **[Verification Complete Report](../../ops/gorgoroth/VERIFICATION_COMPLETE.md)** - Initial validation findings
-- **[Test Scripts](../../ops/gorgoroth/test-scripts/)** - Automated testing tools
+- **Gorgoroth README** - see `ops/gorgoroth/README.md` (internal) - Complete network documentation
+- **Verification Complete Report** - see `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal) - Initial validation findings
+- **Test Scripts** - see `ops/gorgoroth/test-scripts/` (internal) - Automated testing tools
 
 ## How to Help
 
@@ -139,14 +139,14 @@ The validation will be considered complete when:
 ## Support
 
 - GitHub Issues: https://github.com/chippr-robotics/fukuii/issues
-- Documentation: [ops/gorgoroth/](../../ops/gorgoroth/)
+- Documentation: see `ops/gorgoroth/` (internal)
 - Troubleshooting: [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#troubleshooting)
 
 ## Related Documentation
 
-- [Docker Deployment Guide](deployment/docker.md)
-- [Operations Runbooks](runbooks/README.md)
-- [Testing Documentation](testing/README.md)
+- [Docker Deployment Guide](../deployment/docker.md)
+- [Operations Runbooks](../runbooks/README.md)
+- [Testing Documentation](../testing/README.md)
 
 ---
 

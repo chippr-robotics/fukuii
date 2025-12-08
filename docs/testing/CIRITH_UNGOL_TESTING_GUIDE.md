@@ -6,7 +6,7 @@
 
 **Cirith Ungol** (named after the treacherous pass in Mordor) is a single-node Docker container configuration designed for testing Fukuii's sync capabilities with **real networks** - ETC mainnet and Mordor testnet.
 
-While [Gorgoroth](../gorgoroth/README.md) provides a controlled private test network, Cirith Ungol allows you to test:
+While Gorgoroth (see `ops/gorgoroth/README.md` in repository) provides a controlled private test network, Cirith Ungol allows you to test:
 - **Fast Sync** with real network history (ETC mainnet: 20M+ blocks)
 - **Snap Sync** with production network state
 - **Long-term stability** with continuous sync operations
@@ -516,10 +516,9 @@ cd ops/cirith-ungol
 
 ## Related Documentation
 
-- [Gorgoroth Network Testing](../gorgoroth/README.md)
-- [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
-- [Cirith Ungol Issue Resolution](ISSUE_RESOLUTION.md)
-- [Fukuii Sync Documentation](../../docs/architecture/sync-modes.md)
+- Gorgoroth Network Testing - see `ops/gorgoroth/README.md` (internal)
+- [Gorgoroth Compatibility Testing](GORGOROTH_COMPATIBILITY_TESTING.md)
+- [Fukuii Sync Documentation](../architecture/sync-modes.md)
 
 ## Support
 

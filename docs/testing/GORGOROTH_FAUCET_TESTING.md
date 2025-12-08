@@ -484,9 +484,9 @@ cd ops/gorgoroth/test-scripts
 
 ## References
 
-- [Faucet Implementation](../../src/main/scala/com/chipprbots/ethereum/faucet/)
-- [Faucet Configuration](../../src/main/resources/conf/faucet.conf)
-- [Node Configuration Guide](../../docs/runbooks/node-configuration.md)
+- Faucet Implementation - see `src/main/scala/com/chipprbots/ethereum/faucet/` (source code)
+- Faucet Configuration - see `src/main/resources/conf/faucet.conf` (source code)
+- [Node Configuration Guide](../runbooks/node-configuration.md)
 - [Gorgoroth Network Documentation](README.md)
 
 ## Support
