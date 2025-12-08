@@ -1,7 +1,7 @@
 # Battlenet Connection Cleanup Report
 
 **Date:** 2025-12-08  
-**Update:** 2025-12-08 - Additional configuration file fixed  
+**Update:** 2025-12-08 - Fixed app-gorgoroth-override.conf blacklist configuration  
 **Network:** Gorgoroth Battlenet (Mixed Network Configuration)  
 **Status:** Issues Identified and Remediated  
 
@@ -19,7 +19,7 @@ A comprehensive review of the Gorgoroth battlenet configuration and connection h
 
 ### 1. Zero-Duration Blacklisting (FIXED)
 
-**Severity:** High (upgraded from Medium after discovering override issue)  
+**Severity:** High (upgraded from Medium due to configuration override preventing previous fixes from taking effect)  
 **Impact:** Confusing log messages and potential connection spam  
 
 **Problem:**
