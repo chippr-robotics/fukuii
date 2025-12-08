@@ -204,7 +204,9 @@ curl -X POST -H "Content-Type: application/json" \
   http://localhost:8546
 ```
 
-**Note**: The static-nodes.json files in the configuration directories contain placeholder enode IDs for reference only. The `fukuii-cli sync-static-nodes` command handles generating the actual enode URLs from running containers.
+**Note**: The static-nodes.json files now contain pre-generated persistent enode IDs. Each node has a `node.key` file that ensures stable node identities across restarts. See [NODE_KEY_PERSISTENCE_FIX.md](NODE_KEY_PERSISTENCE_FIX.md) for details on the node key setup.
+
+**Legacy sync-static-nodes command**: The `fukuii-cli sync-static-nodes` command is currently non-functional because the admin RPC namespace is disabled in enterprise mode. Instead, we use pre-generated node keys for persistent identities.
 
 ### Collecting Logs
 
@@ -302,6 +304,33 @@ Each Fukuii node is configured with:
 - **Fast sync disabled** (full sync for test network)
 - **SNAP sync disabled** (not needed for small network)
 - **JSON-RPC enabled** on all nodes
+- **Persistent node keys** for stable identities across restarts
+
+### Node Identity and Peer Discovery
+
+**Important:** The Gorgoroth network uses pre-generated persistent node keys to ensure stable peer connections.
+
+Each node has a `node.key` file in its configuration directory (`conf/node1/node.key`, etc.) containing:
+- Line 1: Private key (64 hex characters)
+- Line 2: Public key (128 hex characters) - this becomes the enode ID
+
+The `static-nodes.json` files are pre-configured with the correct enode URLs based on these persistent keys. This ensures:
+- ✅ Nodes maintain the same identity across restarts
+- ✅ Peer connections are re-established automatically after restart
+- ✅ No manual intervention required for peer discovery
+
+For details on the node key system, see [NODE_KEY_PERSISTENCE_FIX.md](NODE_KEY_PERSISTENCE_FIX.md).
+
+**Regenerating Node Keys:**
+
+⚠️ Only regenerate keys if you need to create new node identities:
+
+```bash
+cd ops/gorgoroth
+./generate-node-keys.py
+cd ../tools
+./fukuii-cli.sh restart 3nodes
+```
 
 ### Genesis Accounts
 

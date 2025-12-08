@@ -33,46 +33,22 @@ Or if you have fukuii-cli installed globally:
 fukuii-cli start 3nodes
 ```
 
-### 3. Wait for Nodes to Initialize
+### 3. Wait for Nodes to Initialize and Connect
 
-The nodes need about 30-45 seconds to fully initialize and generate node keys.
+The nodes need about 30-45 seconds to fully initialize and establish peer connections.
 
 ```bash
 sleep 45
 ```
 
-⚠️ **Important Note on First Run**: The static-nodes.json files contain placeholder enode IDs. On first startup, each node will generate its own unique node key and enode ID. These won't match the placeholders, so nodes won't connect automatically. 
+**✅ Node Key Persistence (NEW)**: The network now uses pre-generated persistent node keys! Each node has a `node.key` file in its configuration directory that ensures:
+- Stable node identities across restarts
+- Automatic peer reconnection
+- No manual intervention required
 
-**To establish peer connections on first run:**
+The static-nodes.json files are pre-configured with the correct enode IDs based on these persistent keys.
 
-1. After waiting 45 seconds, collect the actual enode IDs from the logs:
-   ```bash
-   echo "Node 1:"
-   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
-   echo "Node 2:"
-   docker logs gorgoroth-fukuii-node2 2>&1 | grep "Node address" | tail -1
-   echo "Node 3:"
-   docker logs gorgoroth-fukuii-node3 2>&1 | grep "Node address" | tail -1
-   ```
-
-2. Update the static-nodes.json files with the actual enode IDs:
-   - `ops/gorgoroth/conf/node1/static-nodes.json` - add node2 and node3 enodes
-   - `ops/gorgoroth/conf/node2/static-nodes.json` - add node1 and node3 enodes
-   - `ops/gorgoroth/conf/node3/static-nodes.json` - add node1 and node2 enodes
-   
-   Format: `enode://<public-key>@<hostname>:30303`
-
-3. Restart the network to apply the changes:
-   ```bash
-   fukuii-cli restart 3nodes
-   sleep 45
-   ```
-
-After restart, nodes should successfully connect to each other.
-
-**Note**: Once node keys are persisted in Docker volumes, subsequent restarts will use the same keys and the static-nodes.json files will remain valid.
-
-### 4. Verify Nodes are Running
+### 5. Verify Nodes are Running
 
 Check the status of all containers:
 
@@ -82,7 +58,20 @@ fukuii-cli status 3nodes
 
 You should see all 3 containers running and healthy.
 
-### 5. Test Peer Connections
+### 4. Verify Peer Connections
+
+Run the automated verification script to confirm everything is working:
+
+```bash
+./verify-node-keys.sh 3nodes
+```
+
+This will check:
+- ✓ All nodes are using persistent keys from node.key files
+- ✓ All nodes have established peer connections
+- ✓ Network is ready for testing
+
+Or manually check peer connections:
 
 Check that nodes are connected to each other:
 
@@ -187,28 +176,29 @@ fukuii-cli clean 3nodes
 
 ### Nodes Not Connecting
 
-**First-time setup issue**: If this is the first time running the network, the placeholder enode IDs in static-nodes.json won't match the actual generated keys. See Step 3 in [Quick Start](#quick-start-5-minutes) for the solution.
+The network now uses persistent node keys, so connection issues should be rare.
 
-1. Check that all containers are running:
+1. Run the verification script to diagnose:
+   ```bash
+   ./verify-node-keys.sh 3nodes
+   ```
+
+2. Check that all containers are running:
    ```bash
    fukuii-cli status 3nodes
    ```
 
-2. Check logs for connection errors:
+3. Check logs for connection errors:
    ```bash
    fukuii-cli logs 3nodes | grep -i "peer\|connection"
    ```
 
-3. Verify static nodes configuration matches actual enode IDs:
+4. Verify node keys are being loaded:
    ```bash
-   # Check what's in the static-nodes.json
-   docker exec gorgoroth-fukuii-node1 cat /app/data/static-nodes.json
-   
-   # Check the actual enode ID for this node
    docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
    ```
    
-4. If enode IDs don't match, update static-nodes.json files and restart (see Step 3 above).
+   Compare with the expected enode from `conf/node1/node.key` (line 2 is the public key)
 
 ### No Blocks Being Mined
 
@@ -253,11 +243,23 @@ Three accounts are pre-funded in the genesis block:
 
 ## Recent Fixes (December 2025)
 
-This setup includes recent fixes for:
+This setup includes recent fixes for node disconnection issues:
 
 1. ✅ **Configuration Loading Bug**: Fixed App.scala to properly load gorgoroth.conf from classpath
-2. ✅ **Port Mismatch**: Updated static-nodes.json to use correct port (30303)
-3. ✅ **Persistent Node Keys**: Configured datadir to persist node keys in Docker volumes
+2. ✅ **Port Configuration**: Nodes now correctly use port 30303 for P2P connections
+3. ✅ **Persistent Node Keys**: Pre-generated node.key files ensure stable identities across restarts
+4. ✅ **Static Peer Configuration**: Pre-configured static-nodes.json with correct enode IDs
+
+See [NODE_KEY_PERSISTENCE_FIX.md](NODE_KEY_PERSISTENCE_FIX.md) for technical details.
+
+### Regenerating Node Keys
+
+⚠️ Only needed if you want to create new node identities:
+
+```bash
+./generate-node-keys.py
+fukuii-cli restart 3nodes
+```
 
 ## Next Steps
 
