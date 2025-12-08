@@ -32,6 +32,17 @@ class AppSpec extends AnyFlatSpec with Matchers {
     method
   }
 
+  private def getDetermineNetworkArgMethod = {
+    val method = App.getClass.getDeclaredMethod("determineNetworkArg", classOf[Array[String]])
+    method.setAccessible(true)
+    method
+  }
+
+  private def determineNetworkArg(args: Array[String]): Option[String] =
+    getDetermineNetworkArgMethod
+      .invoke(App, args.asInstanceOf[AnyRef])
+      .asInstanceOf[Option[String]]
+
   private def isModifier(arg: String): Boolean =
     getIsModifierMethod.invoke(App, arg).asInstanceOf[Boolean]
 
@@ -156,5 +167,22 @@ class AppSpec extends AnyFlatSpec with Matchers {
     args1.filter(isModifier).toSet shouldBe Set("enterprise")
     args2.filter(isModifier).toSet shouldBe Set("enterprise")
     args3.filter(isModifier).toSet shouldBe Set("enterprise")
+  }
+
+  behavior.of("App network detection")
+
+  it should "detect network argument after 'fukuii' command" taggedAs (UnitTest) in {
+    val args = Array("fukuii", "gorgoroth")
+    determineNetworkArg(args) should contain("gorgoroth")
+  }
+
+  it should "detect direct network argument" taggedAs (UnitTest) in {
+    val args = Array("mordor")
+    determineNetworkArg(args) should contain("mordor")
+  }
+
+  it should "ignore network when command is non-node" taggedAs (UnitTest) in {
+    val args = Array("cli", "gorgoroth")
+    determineNetworkArg(args) shouldBe empty
   }
 }

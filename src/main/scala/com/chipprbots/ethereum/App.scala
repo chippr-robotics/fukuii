@@ -2,6 +2,8 @@ package com.chipprbots.ethereum
 
 import java.io.File
 
+import scala.sys
+
 import com.chipprbots.ethereum.cli.CliLauncher
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
@@ -24,6 +26,14 @@ object App extends Logger {
   // Known modifiers that affect launcher behavior
   private val knownModifiers = Set("public", "enterprise")
 
+  // Launcher commands
+  private val launchFukuii = "fukuii"
+  private val launchKeytool = "keytool"
+  private val downloadBootstrap = "bootstrap"
+  private val faucet = "faucet"
+  private val cli = "cli"
+  private val sigValidator = "signature-validator"
+
   /** Check if argument is an option flag (starts with -) */
   private def isOptionFlag(arg: String): Boolean = arg.startsWith("-")
 
@@ -33,26 +43,58 @@ object App extends Logger {
   /** Check if argument is a known modifier */
   private def isModifier(arg: String): Boolean = knownModifiers.contains(arg)
 
+  private def findFilesystemConfig(network: String, currentConfigFile: Option[String]): Option[File] = {
+    val envConfiguredDir = sys.env.get("FUKUII_CONF_DIR").map(new File(_))
+    val systemConfiguredDir = Option(System.getProperty("fukuii.conf.dir")).map(new File(_))
+    val launcherConfigDir = currentConfigFile
+      .flatMap(path => Option(new File(path).getParentFile))
+
+    val candidateDirs = Seq(envConfiguredDir, systemConfiguredDir, launcherConfigDir)
+      .flatten
+      .map(_.getAbsoluteFile)
+      .distinctBy(_.getAbsolutePath)
+
+    val directCandidates = Seq(
+      new File(s"conf/$network.conf"),
+      new File(s"$network.conf")
+    ).map(_.getAbsoluteFile)
+
+    val filesFromDirs = candidateDirs.map(dir => new File(dir, s"$network.conf"))
+
+    (filesFromDirs ++ directCandidates)
+      .find(file => file.exists() && file.isFile)
+  }
+
   /** Set config file for the specified network (must be called before Config is accessed) */
   private def setNetworkConfig(network: String): Unit = {
-    val configFile = s"conf/$network.conf"
-    // Check if config file exists in filesystem first
-    val file = new File(configFile)
-    if (file.exists()) {
-      System.setProperty("config.file", configFile)
-      log.info(s"Loading network configuration from filesystem: $configFile")
-    } else {
-      // Check if resource exists in classpath
-      val resourceExists = Option(getClass.getClassLoader.getResource(configFile)).isDefined
-      if (resourceExists) {
-        System.setProperty("config.file", configFile)
-        log.info(s"Loading network configuration from classpath: $configFile")
-      } else {
-        // Log warning when config file doesn't exist for a known network
-        log.warn(s"Config file '$configFile' not found in filesystem or classpath, using default config")
-      }
+    val currentConfigFile = Option(System.getProperty("config.file"))
+    findFilesystemConfig(network, currentConfigFile) match {
+      case Some(file) =>
+        val absolutePath = file.getAbsolutePath
+        System.setProperty("config.file", absolutePath)
+        System.clearProperty("config.resource")
+        log.info(s"Loading network configuration from filesystem: $absolutePath")
+      case None =>
+        val resourcePath = s"conf/$network.conf"
+        val resourceExists = Option(getClass.getClassLoader.getResource(resourcePath)).isDefined
+        if (resourceExists) {
+          System.clearProperty("config.file")
+          System.setProperty("config.resource", resourcePath)
+          log.info(s"Loading network configuration from classpath resource: $resourcePath")
+        } else {
+          log.warn(s"Config file '$resourcePath' not found in filesystem or classpath, using default config")
+        }
     }
   }
+
+  private def determineNetworkArg(args: Array[String]): Option[String] =
+    args.headOption match {
+      case Some(`launchFukuii`) => args.tail.find(isNetwork)
+      case Some(`launchKeytool`) | Some(`downloadBootstrap`) | Some(`faucet`) | Some(`sigValidator`) |
+          Some(`cli`) => None
+      case Some(network) if isNetwork(network) => Some(network)
+      case _                                   => None
+    }
 
   /** Apply modifiers to system configuration */
   private def applyModifiers(modifiers: Set[String]): Unit = {
@@ -172,18 +214,12 @@ object App extends Logger {
 
   def main(args: Array[String]): Unit = {
 
-    val launchFukuii = "fukuii"
-    val launchKeytool = "keytool"
-    val downloadBootstrap = "bootstrap"
-    // HIBERNATED: vm-server option commented out
-    // val vmServer = "vm-server"
-    val faucet = "faucet"
-    val cli = "cli"
-    val sigValidator = "signature-validator"
-
     // Parse and extract modifiers from arguments
     val modifiers = args.filter(isModifier).toSet
     val argsWithoutModifiers = args.filterNot(isModifier)
+
+    // Configure network before any logging (required for logback property definers)
+    determineNetworkArg(argsWithoutModifiers).foreach(setNetworkConfig)
 
     // Apply modifiers (e.g., "public" enables discovery)
     applyModifiers(modifiers)
@@ -192,8 +228,6 @@ object App extends Logger {
       case None                  => Fukuii.main(argsWithoutModifiers)
       case Some("--help" | "-h") => showHelp()
       case Some(`launchFukuii`) =>
-        // Handle 'fukuii <network>' case - set config before launching
-        argsWithoutModifiers.tail.headOption.filter(isNetwork).foreach(setNetworkConfig)
         // Filter out network name from remaining args to avoid passing it to Fukuii.main
         val remainingArgs = argsWithoutModifiers.tail.headOption.filter(isNetwork) match {
           case Some(_) => argsWithoutModifiers.tail.tail
@@ -215,8 +249,6 @@ object App extends Logger {
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
       case Some(network) if isNetwork(network) =>
-        // Network name specified - set config and launch Fukuii
-        setNetworkConfig(network)
         Fukuii.main(argsWithoutModifiers.tail)
       case Some(arg) if isOptionFlag(arg) =>
         // Option flags (starting with -) are passed directly to Fukuii
