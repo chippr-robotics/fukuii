@@ -81,15 +81,18 @@ class AppSpec extends AnyFlatSpec with Matchers {
   it should "set discovery system property when 'public' modifier is present" taggedAs (UnitTest) in {
     // Clear any existing property
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     
     // Apply public modifier
     getApplyModifiersMethod.invoke(App, Set("public"))
     
     // Verify system property is set
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
+    System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "true"
     
     // Cleanup
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
   }
 
   it should "not set discovery system property when no modifiers are present" taggedAs (UnitTest) in {
@@ -108,6 +111,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
     
@@ -118,6 +122,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
     System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
     System.getProperty("fukuii.network.discovery.reuse-known-nodes") shouldBe "true"
+    System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "false"
     System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
     System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
     
@@ -125,6 +130,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
   }

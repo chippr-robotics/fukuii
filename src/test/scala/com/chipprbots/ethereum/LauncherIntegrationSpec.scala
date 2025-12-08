@@ -98,6 +98,7 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
     clearConfigOverrides()
