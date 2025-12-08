@@ -49,12 +49,12 @@ check_container() {
 # Function to get peer count
 get_peer_count() {
   local port=$1
-  local response=$(curl -s -X POST -H "Content-Type: application/json" \
+  local response=$(curl -s --max-time 5 -X POST -H "Content-Type: application/json" \
     --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
     http://localhost:$port 2>/dev/null || echo '{"result":"0x0"}')
   
-  # Extract hex value and convert to decimal
-  local hex_count=$(echo "$response" | grep -o '"result":"0x[0-9a-f]*"' | cut -d'"' -f4)
+  # Extract hex value and convert to decimal (case-insensitive)
+  local hex_count=$(echo "$response" | grep -o '"result":"0x[0-9A-Fa-f]*"' | cut -d'"' -f4)
   if [ -n "$hex_count" ]; then
     printf "%d" "$hex_count"
   else

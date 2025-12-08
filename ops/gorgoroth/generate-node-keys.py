@@ -35,9 +35,12 @@ def generate_key_pair():
     # Get the uncompressed public key (64 bytes without 0x04 prefix)
     public_key_bytes = public_key.to_bytes()
     
+    private_hex = encode_hex(private_key.to_bytes())
+    public_hex = encode_hex(public_key_bytes)
+    
     return {
-        'private': encode_hex(private_key.to_bytes())[2:],  # Remove 0x prefix
-        'public': encode_hex(public_key_bytes)[2:]  # Remove 0x prefix
+        'private': private_hex.removeprefix('0x'),
+        'public': public_hex.removeprefix('0x')
     }
 
 
@@ -72,18 +75,31 @@ def update_static_nodes(node_dir, enode_urls, exclude_node):
 
 def main():
     """Main function to generate keys and update configurations."""
+    import sys
+    
     script_dir = Path(__file__).parent
     conf_dir = script_dir / 'conf'
     
-    # Configuration for 3-node network
+    # Parse command line arguments
+    num_nodes = 3
+    if len(sys.argv) > 1:
+        try:
+            num_nodes = int(sys.argv[1])
+            if num_nodes not in [3, 6]:
+                print("Error: Number of nodes must be 3 or 6")
+                sys.exit(1)
+        except ValueError:
+            print("Error: Invalid number of nodes. Usage: generate-node-keys.py [3|6]")
+            sys.exit(1)
+    
+    # Configuration for nodes
     nodes = [
-        {'name': 'node1', 'hostname': 'fukuii-node1'},
-        {'name': 'node2', 'hostname': 'fukuii-node2'},
-        {'name': 'node3', 'hostname': 'fukuii-node3'},
+        {'name': f'node{i}', 'hostname': f'fukuii-node{i}'}
+        for i in range(1, num_nodes + 1)
     ]
     
     print("=" * 60)
-    print("Generating persistent node keys for Gorgoroth network")
+    print(f"Generating persistent node keys for Gorgoroth {num_nodes}-node network")
     print("=" * 60)
     print()
     
@@ -134,12 +150,12 @@ def main():
     
     print()
     print("=" * 60)
-    print("SUCCESS: Node keys generated and static-nodes.json updated")
+    print(f"SUCCESS: Node keys generated for {num_nodes} nodes")
     print("=" * 60)
     print()
     print("Next steps:")
     print("1. The node.key files will be mounted into containers via docker-compose")
-    print("2. Start the network: cd ../tools && ./fukuii-cli.sh start 3nodes")
+    print(f"2. Start the network: cd ../tools && ./fukuii-cli.sh start {num_nodes}nodes")
     print("3. Verify peer connections after ~30 seconds")
     print()
 
