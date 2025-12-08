@@ -11,7 +11,7 @@ networks:
 
 services:
   fukuii-node1:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: fukuii:gorgoroth-test
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -24,9 +24,9 @@ services:
       - "30303:30303/tcp"
       - "30303:30303/udp"
     volumes:
-      - ./conf/gorgoroth-genesis-fixed.json:/app/fukuii/conf/chains/gorgoroth-genesis.json:ro
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node1/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node1-data:/app/data
       - fukuii-node1-logs:/app/logs
@@ -34,7 +34,7 @@ services:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
       - JAVA_OPTS=-Dfukuii.datadir=/app/data
-    command: ["fukuii", "enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
@@ -43,7 +43,7 @@ services:
       start_period: 60s
 
   fukuii-node2:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: fukuii:gorgoroth-test
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -56,9 +56,9 @@ services:
       - "30304:30303/tcp"
       - "30304:30303/udp"
     volumes:
-      - ./conf/gorgoroth-genesis-fixed.json:/app/fukuii/conf/chains/gorgoroth-genesis.json:ro
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node2/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
@@ -66,7 +66,7 @@ services:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
       - JAVA_OPTS=-Dfukuii.datadir=/app/data
-    command: ["fukuii", "enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
@@ -75,7 +75,7 @@ services:
       start_period: 60s
 
   fukuii-node3:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: fukuii:gorgoroth-test
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped
@@ -88,9 +88,9 @@ services:
       - "30305:30303/tcp"
       - "30305:30303/udp"
     volumes:
-      - ./conf/gorgoroth-genesis-fixed.json:/app/fukuii/conf/chains/gorgoroth-genesis.json:ro
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node3/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
@@ -98,7 +98,7 @@ services:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
       - JAVA_OPTS=-Dfukuii.datadir=/app/data
-    command: ["fukuii", "enterprise", "gorgoroth"]
+    command: ["fukuii", "enterprise"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
