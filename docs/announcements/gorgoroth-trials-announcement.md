@@ -16,7 +16,7 @@ Named after the volcanic plateau in Mordor where Sauron trained his armies, the 
 
 The **Battlenets** are specialized testing environments designed to validate different aspects of Fukuii's implementation:
 
-### 1. Gorgoroth - The Multi-Client Proving Ground
+### Gorgoroth - The Multi-Client Proving Ground
 
 **Gorgoroth** is a private test network where Fukuii faces off against Core-Geth and Hyperledger Besu in controlled combat scenarios. Here we validate:
 
@@ -32,22 +32,6 @@ The **Battlenets** are specialized testing environments designed to validate dif
 - `mixed` - 3 Fukuii + 3 Core-Geth + 3 Besu nodes (ultimate test)
 
 **Time Investment:** 1-2 hours for basic validation
-
-### 2. Cirith Ungol - The Real-World Challenge (Bonus Trial)
-
-For the more adventurous among you, **Cirith Ungol** awaits. This single-node testing environment connects to the real Ethereum Classic network, validating Fukuii's ability to sync with mainnet's 20M+ blocks and Mordor testnet's history.
-
-**What Cirith Ungol Tests:**
-- **SNAP Sync** - Can Fukuii rapidly sync 20M+ blocks?
-- **Fast Sync** - Does state synchronization work correctly?
-- **Long-term Stability** - Will Fukuii stand through a 24-hour siege?
-- **Peer Diversity** - Can Fukuii connect to the wild public network?
-
-**Time Investment:** 4-8 hours (mostly automated sync time)
-
-**Networks Supported:**
-- ETC Mainnet (20M+ blocks, 2-6 hour sync)
-- Mordor Testnet (10M+ blocks, 1-3 hour sync)
 
 ## Why Community Validation Matters
 
@@ -97,21 +81,6 @@ sleep 60
 # Run the automated test suite
 cd test-scripts
 ./run-test-suite.sh 3nodes
-```
-
-**For Advanced Testers - Try Cirith Ungol (Bonus):**
-```bash
-# After completing Gorgoroth trials
-cd fukuii/ops/cirith-ungol
-
-# Start syncing with ETC mainnet
-./start.sh start
-
-# Monitor progress (SNAP sync: 2-6 hours)
-./start.sh logs
-
-# Collect results
-./start.sh collect-logs
 ```
 
 ### 2. Document Your Experience
@@ -185,47 +154,6 @@ The Gorgoroth Trials are a community effort. If you figure something out:
 
 Your feedback during the alpha testing period directly impacts the timeline and quality of the beta release.
 
-## Quick Start Guide
-
-### Prerequisites
-
-- Docker 20.10+ with Docker Compose 2.0+
-- 8GB+ RAM (16GB recommended for Cirith Ungol)
-- 20GB+ free disk space (100GB for Cirith Ungol mainnet)
-- Stable internet connection
-- `curl`, `jq` for testing scripts
-
-### 5-Minute Gorgoroth Quick Start
-
-```bash
-# 1. Clone repository
-git clone https://github.com/chippr-robotics/fukuii.git
-cd fukuii/ops/gorgoroth
-
-# 2. Install fukuii-cli (optional but recommended)
-sudo cp ../tools/fukuii-cli.sh /usr/local/bin/fukuii-cli
-sudo chmod +x /usr/local/bin/fukuii-cli
-
-# 3. Start a test network
-fukuii-cli start 3nodes
-
-# 4. Wait for initialization
-echo "Waiting 60 seconds for nodes to initialize..."
-sleep 60
-
-# 5. Run automated tests
-cd test-scripts
-./run-test-suite.sh 3nodes
-
-# 6. Check results in test-results-TIMESTAMP directory
-```
-
-### Results Location
-
-All test results are saved in timestamped directories:
-- Gorgoroth: `ops/gorgoroth/test-scripts/test-results-YYYYMMDD-HHMMSS/`
-- Cirith Ungol: `ops/cirith-ungol/captured-logs/`
-
 ## Available Documentation
 
 Comprehensive guides are available to help you:
@@ -243,27 +171,6 @@ Comprehensive guides are available to help you:
 - **[Fukuii Documentation](https://github.com/chippr-robotics/fukuii/tree/main/docs)** - Full documentation index
 - **[Architecture Overview](https://github.com/chippr-robotics/fukuii/blob/main/docs/architecture/architecture-overview.md)** - How Fukuii works
 
-## Troubleshooting
-
-### Common Issues
-
-**Nodes won't connect:**
-- Wait 60-90 seconds after first start for node key generation
-- Check static-nodes.json files have correct enode IDs
-- Verify Docker networking is functioning
-
-**Port conflicts:**
-- Another service may be using ports 8545, 8546, or 30303
-- Stop conflicting services or modify docker-compose.yml
-
-**Out of disk space:**
-- Gorgoroth: Needs ~5GB for test network
-- Cirith Ungol: Needs 80-100GB for ETC mainnet
-
-**Tests failing:**
-- Check all containers are running: `docker ps`
-- View logs: `fukuii-cli logs 3nodes`
-- Collect diagnostic logs: `fukuii-cli collect-logs 3nodes ./my-logs`
 
 ### Getting Help
 
@@ -282,14 +189,6 @@ Testers who submit comprehensive field reports will be:
 - Listed in the project's CONTRIBUTORS.md file
 - Mentioned in release notes
 - Given special recognition in community channels
-
-### What Makes a Great Field Report?
-
-- **Completeness** - All sections filled out
-- **Clarity** - Clear description of issues and successes
-- **Evidence** - Log snippets, screenshots, metrics
-- **Reproducibility** - Steps others can follow
-- **Constructiveness** - Suggestions for improvement
 
 ## A Note on Cirith Ungol (The Bonus Trial)
 
@@ -327,30 +226,7 @@ The Gorgoroth Trials are more than just testing - they're a demonstration of the
 
 Your participation, whether testing for 15 minutes or running week-long stability tests, contributes to a stronger, more resilient Ethereum Classic network.
 
-### The Challenge Awaits
-
 The gates of Gorgoroth are open. The trials have begun.
-
-Will Fukuii prove worthy to join the ranks of production Ethereum Classic clients? Your testing will help answer that question.
-
-**Ready to begin?**
-
-1. Visit the [Fukuii Repository](https://github.com/chippr-robotics/fukuii)
-2. Follow the [Gorgoroth Quick Start](https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/QUICKSTART.md)
-3. Submit your field report to [GitHub Discussions](https://github.com/chippr-robotics/fukuii/discussions)
-
----
-
-## Important Links
-
-- **Repository**: https://github.com/chippr-robotics/fukuii
-- **Discussions**: https://github.com/chippr-robotics/fukuii/discussions
-- **Issues**: https://github.com/chippr-robotics/fukuii/issues
-- **Documentation**: https://github.com/chippr-robotics/fukuii/tree/main/docs
-- **Gorgoroth Quick Start**: https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/QUICKSTART.md
-- **Cirith Ungol Guide**: https://github.com/chippr-robotics/fukuii/blob/main/ops/cirith-ungol/TESTING_GUIDE.md
-
----
 
 **For the glory of Ethereum Classic!**
 
