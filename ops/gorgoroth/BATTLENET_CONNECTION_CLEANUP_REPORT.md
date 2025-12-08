@@ -1,6 +1,7 @@
 # Battlenet Connection Cleanup Report
 
 **Date:** 2025-12-08  
+**Update:** 2025-12-08 - Additional configuration file fixed  
 **Network:** Gorgoroth Battlenet (Mixed Network Configuration)  
 **Status:** Issues Identified and Remediated  
 
@@ -12,17 +13,25 @@ A comprehensive review of the Gorgoroth battlenet configuration and connection h
 2. **Mismatched static-nodes.json files** with placeholder enode IDs
 3. **Configuration loading improvements** already implemented in App.scala
 
+**UPDATE 2025-12-08:** Discovered and fixed additional zero-duration blacklist configuration in `app-gorgoroth-override.conf` which was overriding the fixes in `base-gorgoroth.conf` and `gorgoroth.conf`. All configuration files now properly set blacklist durations.
+
 ## Issues Identified
 
 ### 1. Zero-Duration Blacklisting (FIXED)
 
-**Severity:** Medium  
+**Severity:** High (upgraded from Medium after discovering override issue)  
 **Impact:** Confusing log messages and potential connection spam  
 
 **Problem:**
-The `base-testnet.conf` configuration file sets blacklist durations to zero:
+Multiple configuration files had zero-duration blacklist settings that needed to be fixed:
+
+1. **base-testnet.conf** - Sets blacklist durations to zero (inherited by gorgoroth)
+2. **app-gorgoroth-override.conf** - CRITICAL: This file is mounted as `/app/fukuii/conf/app.conf` in ALL docker-compose configurations and was overriding the fixes
+
+The `app-gorgoroth-override.conf` configuration file had:
 ```hocon
 peer {
+  # All testnet members are assumed to be honest so blacklisting is turned off
   short-blacklist-duration = 0
   long-blacklist-duration = 0
 }
@@ -37,9 +46,15 @@ Blacklisting peer [PeerAddress(172.25.0.13)] for 0 milliseconds. Reason: Some ot
 - Zero-duration blacklisting is intentional for testnets to allow rapid reconnection
 - However, it causes confusion in logs and may lead to connection spam
 - During RLPx handshake failures, peers are immediately re-attempted
+- The `app-gorgoroth-override.conf` override was the real culprit preventing the fix from working
 
 **Remediation:**
-Updated `gorgoroth.conf` to override with sensible test network values:
+Updated ALL relevant configuration files:
+
+1. **src/main/resources/conf/gorgoroth.conf** - Added peer blacklist overrides
+2. **ops/gorgoroth/conf/base-gorgoroth.conf** - Added peer blacklist overrides
+3. **ops/gorgoroth/conf/app-gorgoroth-override.conf** - CRITICAL FIX: Updated to use proper durations
+
 ```hocon
 peer {
   # Override zero blacklist durations from base-testnet with sensible values for gorgoroth
@@ -48,6 +63,15 @@ peer {
   long-blacklist-duration = 300.seconds
 }
 ```
+
+**Validation:**
+Tested with mixed network deployment (3 Fukuii + 3 Besu + 3 Core-Geth nodes):
+```
+2025-12-08 20:54:34,425 INFO  [CacheBasedBlacklist] - Blacklisting peer [PeerAddress(172.25.0.12)] for 30000 milliseconds. Reason: Some other reason specific to a subprotocol
+2025-12-08 20:54:34,455 INFO  [CacheBasedBlacklist] - Blacklisting peer [PeerAddress(172.25.0.13)] for 30000 milliseconds. Reason: Some other reason specific to a subprotocol
+```
+
+✅ **CONFIRMED:** Blacklist now shows 30000 milliseconds (30 seconds) instead of 0 milliseconds
 
 **Benefits:**
 - Prevents connection spam during handshake failures
@@ -185,11 +209,16 @@ gorgoroth-besu-node3     Up (healthy)
 ## Files Modified
 
 ### Configuration Files
-1. `/home/runner/work/fukuii/fukuii/src/main/resources/conf/gorgoroth.conf`
+1. `src/main/resources/conf/gorgoroth.conf`
    - Added peer blacklist duration overrides
 
-2. `/home/runner/work/fukuii/fukuii/ops/gorgoroth/conf/base-gorgoroth.conf`
+2. `ops/gorgoroth/conf/base-gorgoroth.conf`
    - Added peer blacklist duration overrides
+
+3. `ops/gorgoroth/conf/app-gorgoroth-override.conf` **[CRITICAL FIX]**
+   - Updated zero-duration blacklist settings to use proper values
+   - This file is mounted as `/app/fukuii/conf/app.conf` in ALL docker-compose configurations
+   - Was overriding the fixes in other config files
 
 ## Recommendations
 
