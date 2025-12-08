@@ -483,6 +483,50 @@ fukuii-cli start 3nodes
 fukuii-cli collect-logs 3nodes ./bug-reproduction-logs
 ```
 
+## Compatibility Testing
+
+The Gorgoroth network includes comprehensive testing infrastructure for validating Fukuii compatibility with Core-Geth and Hyperledger Besu:
+
+### Automated Test Suite
+
+Run the complete compatibility test suite:
+
+```bash
+cd ops/gorgoroth/test-scripts
+./run-test-suite.sh fukuii-geth
+```
+
+The test suite includes:
+- Network connectivity validation
+- Block propagation testing
+- Mining compatibility checks
+- Consensus maintenance monitoring
+
+### Individual Tests
+
+Run specific tests:
+
+```bash
+# Test network connectivity
+./test-connectivity.sh
+
+# Test block propagation
+./test-block-propagation.sh
+
+# Test mining compatibility
+./test-mining.sh
+
+# Test consensus (30 minute run)
+./test-consensus.sh 30
+```
+
+### Documentation
+
+- [**Compatibility Testing Guide**](COMPATIBILITY_TESTING.md) - Comprehensive testing procedures
+- [**Validation Status**](VALIDATION_STATUS.md) - Current validation status and roadmap
+- [**Verification Complete**](VERIFICATION_COMPLETE.md) - Initial validation results
+- [**Quick Start**](QUICKSTART.md) - Getting started guide
+
 ## Related Resources
 
 - [Fukuii Documentation](../../README.md)
