@@ -7,7 +7,7 @@
 
 The Gorgoroth test network has been successfully established and core functionality has been validated. This document tracks the validation status for all compatibility areas requested in the original issue.
 
-**Bonus**: For advanced real-world sync testing, see [Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md).
+**Bonus**: For advanced real-world sync testing, see [Cirith Ungol Testing Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md).
 
 ## Validation Requirements
 
@@ -368,7 +368,7 @@ cd ops/cirith-ungol
 - [ ] Node remains stable for 24+ hours
 
 **Full Documentation:**
-See [Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md) for:
+See [Cirith Ungol Testing Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md) for:
 - Complete setup instructions
 - Sync mode configuration
 - Monitoring and troubleshooting
