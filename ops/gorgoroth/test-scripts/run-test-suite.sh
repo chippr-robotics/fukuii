@@ -28,11 +28,21 @@ done
 echo "✅ Prerequisites OK"
 echo ""
 
+# Detect docker compose command (supports both 'docker compose' and 'docker-compose')
+if docker compose version &> /dev/null; then
+  DOCKER_COMPOSE="docker compose"
+elif docker-compose --version &> /dev/null; then
+  DOCKER_COMPOSE="docker-compose"
+else
+  echo "❌ Error: Neither 'docker compose' nor 'docker-compose' is available"
+  exit 1
+fi
+
 # Start the network if not already running
 echo "Checking network status..."
-if ! docker compose -f "docker-compose-${CONFIG}.yml" ps | grep -q "Up"; then
+if ! $DOCKER_COMPOSE -f "docker-compose-${CONFIG}.yml" ps | grep -q "Up"; then
   echo "Starting network..."
-  docker compose -f "docker-compose-${CONFIG}.yml" up -d
+  $DOCKER_COMPOSE -f "docker-compose-${CONFIG}.yml" up -d
   echo "Waiting 60 seconds for nodes to initialize..."
   sleep 60
 else

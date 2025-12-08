@@ -45,6 +45,9 @@ echo "Started at: $(date)"
 echo "Will end at: $(date -d @$END_TIME)"
 echo ""
 
+# Declare associative array outside loop
+declare -A BLOCKS_AT_HEIGHT
+
 # Main monitoring loop
 while [ $(date +%s) -lt $END_TIME ]; do
   TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
@@ -100,7 +103,8 @@ while [ $(date +%s) -lt $END_TIME ]; do
   
   # Check if nodes at same height have same hash
   # Group nodes by block number and check hashes match
-  declare -A BLOCKS_AT_HEIGHT
+  # Clear the array for this iteration
+  BLOCKS_AT_HEIGHT=()
   for i in "${!BLOCK_NUMBERS[@]}"; do
     height=${BLOCK_NUMBERS[$i]}
     hash=${BLOCK_HASHES[$i]}
