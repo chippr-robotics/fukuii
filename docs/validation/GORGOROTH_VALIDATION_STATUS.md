@@ -25,7 +25,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 
 **Status**: Fully validated and documented
 
-**Evidence**: See [VERIFICATION_COMPLETE.md](../../ops/gorgoroth/VERIFICATION_COMPLETE.md)
+**Evidence**: See `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal validation report)
 
 **What was tested**:
 - ✅ Peer discovery and handshakes
@@ -55,7 +55,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 
 **Status**: Validated on Fukuii-only network
 
-**Evidence**: See [VERIFICATION_COMPLETE.md](../../ops/gorgoroth/VERIFICATION_COMPLETE.md)
+**Evidence**: See `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal validation report)
 
 **What was tested**:
 - ✅ Mining enabled on all nodes
@@ -452,10 +452,10 @@ The validation will be considered complete when:
 ## References
 
 - [Main README](README.md)
-- [Quick Start Guide](../../ops/gorgoroth/QUICKSTART.md)
 - [Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
-- [Verification Complete Report](../../ops/gorgoroth/VERIFICATION_COMPLETE.md)
-- [Troubleshooting Report](../../ops/gorgoroth/TROUBLESHOOTING_REPORT.md)
+- Quick Start Guide: `ops/gorgoroth/QUICKSTART.md` (internal)
+- Verification Complete Report: `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal)
+- Troubleshooting Report: `ops/gorgoroth/TROUBLESHOOTING_REPORT.md` (internal)
 
 ## Support
 
