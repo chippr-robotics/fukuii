@@ -232,12 +232,12 @@ Comprehensive guides are available to help you:
 
 ### Gorgoroth Testing
 - **[Gorgoroth Quick Start](https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/QUICKSTART.md)** - Get running in 5 minutes
-- **[Compatibility Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/COMPATIBILITY_TESTING.md)** - Detailed test procedures
-- **[Faucet Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/FAUCET_TESTING.md)** - Test token distribution
-- **[Validation Status](https://github.com/chippr-robotics/fukuii/blob/main/ops/gorgoroth/VALIDATION_STATUS.md)** - Current progress
+- **[Compatibility Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md)** - Detailed test procedures
+- **[Faucet Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/docs/testing/GORGOROTH_FAUCET_TESTING.md)** - Test token distribution
+- **[Validation Status](https://github.com/chippr-robotics/fukuii/blob/main/docs/validation/GORGOROTH_VALIDATION_STATUS.md)** - Current progress
 
 ### Cirith Ungol Testing (Bonus)
-- **[Cirith Ungol Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/ops/cirith-ungol/TESTING_GUIDE.md)** - Real-world sync validation
+- **[Cirith Ungol Testing Guide](https://github.com/chippr-robotics/fukuii/blob/main/docs/testing/CIRITH_UNGOL_TESTING_GUIDE.md)** - Real-world sync validation
 
 ### General Documentation
 - **[Fukuii Documentation](https://github.com/chippr-robotics/fukuii/tree/main/docs)** - Full documentation index

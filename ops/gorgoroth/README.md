@@ -522,8 +522,10 @@ Run specific tests:
 
 ### Documentation
 
-- [**Compatibility Testing Guide**](COMPATIBILITY_TESTING.md) - Comprehensive testing procedures
-- [**Validation Status**](VALIDATION_STATUS.md) - Current validation status and roadmap
+- [**Compatibility Testing Guide**](../../docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Comprehensive testing procedures
+- [**Faucet Testing Guide**](../../docs/testing/GORGOROTH_FAUCET_TESTING.md) - Faucet validation procedures
+- [**Validation Status**](../../docs/validation/GORGOROTH_VALIDATION_STATUS.md) - Current validation status and roadmap
+- [**Implementation Summary**](../../docs/validation/GORGOROTH_IMPLEMENTATION_SUMMARY.md) - Complete implementation overview
 - [**Verification Complete**](VERIFICATION_COMPLETE.md) - Initial validation results
 - [**Quick Start**](QUICKSTART.md) - Getting started guide
 
@@ -532,7 +534,7 @@ Run specific tests:
 - [Fukuii Documentation](../../README.md)
 - [Docker Deployment Guide](../../docs/deployment/docker.md)
 - [Operations Runbooks](../../docs/runbooks/README.md)
-- [**Cirith Ungol Real-World Sync Testing**](../cirith-ungol/TESTING_GUIDE.md) - Bonus trial for advanced testers
+- [**Cirith Ungol Real-World Sync Testing**](../../docs/testing/CIRITH_UNGOL_TESTING_GUIDE.md) - Bonus trial for advanced testers
 
 ## Bonus Trial: Cirith Ungol
 
@@ -553,7 +555,7 @@ cd ops/cirith-ungol
 ./start.sh logs     # Monitor progress
 ```
 
-**Full guide:** [Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md)
+**Full guide:** [Cirith Ungol Testing Guide](../../docs/testing/CIRITH_UNGOL_TESTING_GUIDE.md)
 
 ## Support
 

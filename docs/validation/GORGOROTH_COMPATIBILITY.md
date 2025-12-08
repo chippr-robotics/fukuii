@@ -30,7 +30,7 @@ See [Validation Status](../../ops/gorgoroth/VALIDATION_STATUS.md) for current pr
 ### For Community Testers
 
 - **[Quick Start Guide](../../ops/gorgoroth/QUICKSTART.md)** - Get the network running in 5 minutes
-- **[Compatibility Testing Guide](../../ops/gorgoroth/COMPATIBILITY_TESTING.md)** - Detailed testing procedures
+- **[Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)** - Detailed testing procedures
 - **[Validation Status](../../ops/gorgoroth/VALIDATION_STATUS.md)** - Current progress and roadmap
 
 ### For Developers
@@ -105,7 +105,7 @@ When you complete testing, please:
 2. Include configuration tested, duration, and test results
 3. Attach logs if relevant
 
-See the [Compatibility Testing Guide](../../ops/gorgoroth/COMPATIBILITY_TESTING.md#reporting-results) for a results template.
+See the [Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#reporting-results) for a results template.
 
 ## Technical Details
 
@@ -140,7 +140,7 @@ The validation will be considered complete when:
 
 - GitHub Issues: https://github.com/chippr-robotics/fukuii/issues
 - Documentation: [ops/gorgoroth/](../../ops/gorgoroth/)
-- Troubleshooting: [COMPATIBILITY_TESTING.md](../../ops/gorgoroth/COMPATIBILITY_TESTING.md#troubleshooting)
+- Troubleshooting: [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#troubleshooting)
 
 ## Related Documentation
 

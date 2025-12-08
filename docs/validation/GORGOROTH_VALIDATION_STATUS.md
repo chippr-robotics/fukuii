@@ -91,7 +91,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 - Infrastructure exists to enable and test fast sync
 
 **Testing infrastructure**:
-- ✅ Test procedures documented in [COMPATIBILITY_TESTING.md](COMPATIBILITY_TESTING.md)
+- ✅ Test procedures documented in [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 - ✅ Configuration examples provided
 - ✅ Test scenarios defined
 
@@ -126,7 +126,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 - Protocol support confirmed (SNAP1)
 
 **Testing infrastructure**:
-- ✅ Test procedures documented in [COMPATIBILITY_TESTING.md](COMPATIBILITY_TESTING.md)
+- ✅ Test procedures documented in [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 - ✅ Configuration examples provided
 - ✅ Capability check tests defined
 
@@ -214,7 +214,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 3. **Documentation**:
    - ✅ `README.md` - Complete network documentation
    - ✅ `QUICKSTART.md` - Quick start guide
-   - ✅ `COMPATIBILITY_TESTING.md` - Detailed testing procedures
+   - ✅ `GORGOROTH_COMPATIBILITY_TESTING.md` - Detailed testing procedures
    - ✅ `FAUCET_TESTING.md` - Faucet service testing guide
    - ✅ `VERIFICATION_COMPLETE.md` - Initial validation report
    - ✅ `VALIDATION_STATUS.md` - This document
@@ -311,12 +311,12 @@ Community testers can help complete the validation by:
 
 2. **Testing fast sync**:
    - Start a network and let it mine 500+ blocks
-   - Follow fast sync procedures in COMPATIBILITY_TESTING.md
+   - Follow fast sync procedures in ../testing/GORGOROTH_COMPATIBILITY_TESTING.md
    - Report results
 
 3. **Testing snap sync**:
    - Start a network and let it mine 1000+ blocks
-   - Follow snap sync procedures in COMPATIBILITY_TESTING.md
+   - Follow snap sync procedures in ../testing/GORGOROTH_COMPATIBILITY_TESTING.md
    - Report results
 
 4. **Long-running stability**:
@@ -453,7 +453,7 @@ The validation will be considered complete when:
 
 - [Main README](README.md)
 - [Quick Start Guide](QUICKSTART.md)
-- [Compatibility Testing Guide](COMPATIBILITY_TESTING.md)
+- [Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 - [Verification Complete Report](VERIFICATION_COMPLETE.md)
 - [Troubleshooting Report](TROUBLESHOOTING_REPORT.md)
 

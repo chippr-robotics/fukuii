@@ -517,7 +517,7 @@ cd ops/cirith-ungol
 ## Related Documentation
 
 - [Gorgoroth Network Testing](../gorgoroth/README.md)
-- [Gorgoroth Compatibility Testing](../gorgoroth/COMPATIBILITY_TESTING.md)
+- [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 - [Cirith Ungol Issue Resolution](ISSUE_RESOLUTION.md)
 - [Fukuii Sync Documentation](../../docs/architecture/sync-modes.md)
 

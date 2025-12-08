@@ -25,7 +25,7 @@ The [Gorgoroth Network](../../ops/gorgoroth/) is a private test network for vali
 
 ### For Community Testers
 
-See the [Compatibility Testing Guide](../../ops/gorgoroth/COMPATIBILITY_TESTING.md) for detailed instructions on running validation tests.
+See the [Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) for detailed instructions on running validation tests.
 
 ### Current Status
 

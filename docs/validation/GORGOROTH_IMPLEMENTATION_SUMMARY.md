@@ -17,7 +17,7 @@ This implementation provides comprehensive infrastructure for validating Fukuii 
 ### 1. Comprehensive Documentation (7 Files)
 
 #### Main Testing Documentation
-- **`ops/gorgoroth/COMPATIBILITY_TESTING.md`** (22,257 chars)
+- **`docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md`** (22,257 chars)
   - Complete testing procedures for all validation areas
   - Step-by-step instructions for each test scenario
   - Troubleshooting guide
@@ -25,7 +25,7 @@ This implementation provides comprehensive infrastructure for validating Fukuii 
   - Results reporting templates
 
 #### Validation Tracking
-- **`ops/gorgoroth/VALIDATION_STATUS.md`** (11,635 chars)
+- **`docs/validation/GORGOROTH_VALIDATION_STATUS.md`** (11,635 chars)
   - Current validation progress (30% complete)
   - Compatibility matrix
   - Success criteria
@@ -187,8 +187,8 @@ The implementation supports 5 different test configurations:
 
 ### For Developers
 
-- See [COMPATIBILITY_TESTING.md](../ops/gorgoroth/COMPATIBILITY_TESTING.md) for detailed procedures
-- See [VALIDATION_STATUS.md](../ops/gorgoroth/VALIDATION_STATUS.md) for current progress
+- See [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) for detailed procedures
+- See [GORGOROTH_VALIDATION_STATUS.md](GORGOROTH_VALIDATION_STATUS.md) for current progress
 - See [test-scripts/](../ops/gorgoroth/test-scripts/) for test implementation
 
 ## Technical Details
@@ -233,8 +233,8 @@ To complete the validation, community testers should:
 ## Files Changed/Created
 
 ### New Files (13)
-1. `ops/gorgoroth/COMPATIBILITY_TESTING.md`
-2. `ops/gorgoroth/VALIDATION_STATUS.md`
+1. `docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md`
+2. `docs/validation/GORGOROTH_VALIDATION_STATUS.md`
 3. `ops/gorgoroth/test-scripts/test-connectivity.sh`
 4. `ops/gorgoroth/test-scripts/test-block-propagation.sh`
 5. `ops/gorgoroth/test-scripts/test-mining.sh`
@@ -273,7 +273,7 @@ All infrastructure is in place for community testers to validate the configurati
 - **GitHub Issues**: https://github.com/chippr-robotics/fukuii/issues
 - **Documentation**: [ops/gorgoroth/](../ops/gorgoroth/)
 - **Quick Start**: [QUICKSTART.md](../ops/gorgoroth/QUICKSTART.md)
-- **Testing Guide**: [COMPATIBILITY_TESTING.md](../ops/gorgoroth/COMPATIBILITY_TESTING.md)
+- **Testing Guide**: [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 
 ---
 
