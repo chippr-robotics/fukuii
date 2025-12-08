@@ -11,7 +11,7 @@ networks:
 
 services:
   fukuii-node1:
-    image: fukuii:gorgoroth-test
+    image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -34,7 +34,7 @@ services:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
       - JAVA_OPTS=-Dfukuii.datadir=/app/data
-    command: ["fukuii", "enterprise"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
@@ -43,7 +43,7 @@ services:
       start_period: 60s
 
   fukuii-node2:
-    image: fukuii:gorgoroth-test
+    image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -66,7 +66,7 @@ services:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
       - JAVA_OPTS=-Dfukuii.datadir=/app/data
-    command: ["fukuii", "enterprise"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
@@ -75,7 +75,7 @@ services:
       start_period: 60s
 
   fukuii-node3:
-    image: fukuii:gorgoroth-test
+    image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped
@@ -98,7 +98,7 @@ services:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
       - JAVA_OPTS=-Dfukuii.datadir=/app/data
-    command: ["fukuii", "enterprise"]
+    command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
