@@ -49,7 +49,7 @@ object App extends Logger {
     val launcherConfigDir = currentConfigFile
       .flatMap(path => Option(new File(path).getParentFile))
 
-    val candidateDirs = Seq(envConfiguredDir, systemConfiguredDir, launcherConfigDir, Some(new File("conf")))
+    val candidateDirs = Seq(envConfiguredDir, systemConfiguredDir, launcherConfigDir)
       .flatten
       .map(_.getAbsoluteFile)
       .distinctBy(_.getAbsolutePath)
@@ -62,7 +62,6 @@ object App extends Logger {
     val filesFromDirs = candidateDirs.map(dir => new File(dir, s"$network.conf"))
 
     (filesFromDirs ++ directCandidates)
-      .map(_.getAbsoluteFile)
       .find(file => file.exists() && file.isFile)
   }
 
