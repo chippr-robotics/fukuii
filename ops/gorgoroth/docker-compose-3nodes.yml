@@ -28,6 +28,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/node1/node.key:/app/data/node.key:ro
       - fukuii-node1-data:/app/data
       - fukuii-node1-logs:/app/logs
     environment:
@@ -60,6 +61,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/node2/node.key:/app/data/node.key:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
@@ -92,6 +94,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/node3/node.key:/app/data/node.key:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:
