@@ -127,57 +127,34 @@ We need to know:
 
 Your feedback is invaluable. Here's how to share it:
 
-#### Option 1: GitHub Discussions (Preferred)
+#### Option 1: GitHub Issues with Field Report Template (Preferred)
 
-Visit the [Fukuii GitHub Discussions](https://github.com/chippr-robotics/fukuii/discussions) and create a new post in the "Gorgoroth Trials" category.
+Visit the [Fukuii GitHub Issues](https://github.com/chippr-robotics/fukuii/issues/new/choose) and select the **"Gorgoroth Trials Field Report"** template.
 
-**Use this template:**
+This template will guide you through submitting:
+- System information
+- Test duration and configuration
+- Test results (pass/fail for each area)
+- What worked well
+- Issues encountered
+- Performance metrics
+- Suggestions for improvement
 
-```markdown
-## Gorgoroth Trial Field Report
+**Quick Link**: [Submit Field Report](https://github.com/chippr-robotics/fukuii/issues/new?template=gorgoroth_field_report.md&labels=gorgoroth-trials,validation-results)
 
-**Date**: YYYY-MM-DD
-**Tester**: Your GitHub Username
-**Trial**: Gorgoroth 3nodes / fukuii-geth / Cirith Ungol Mainnet / etc.
+#### Option 2: GitHub Discussions (For General Feedback)
 
-### System Information
-- OS: Ubuntu 22.04 / macOS 14 / Windows 11 / etc.
-- Docker: Version X.Y.Z
-- Available RAM: XGB
-- Available Disk: XGB
+For less formal feedback or questions, use [GitHub Discussions](https://github.com/chippr-robotics/fukuii/discussions) in the "Gorgoroth Trials" category.
 
-### Test Duration
-- Start: HH:MM UTC
-- End: HH:MM UTC
-- Total: X hours
+#### Option 3: GitHub Issues (For Specific Bugs)
 
-### Test Results
-- Network Connectivity: ✅ Pass / ❌ Fail
-- Block Propagation: ✅ Pass / ❌ Fail
-- Mining: ✅ Pass / ❌ Fail
-- Consensus: ✅ Pass / ❌ Fail
-- Faucet (if tested): ✅ Pass / ❌ Fail
+#### Option 3: GitHub Issues (For Specific Bugs)
 
-### What Worked Well
-[Describe successful aspects]
+If you discover a specific bug unrelated to your field report, create a GitHub issue:
 
-### Issues Encountered
-[List problems, errors, or unexpected behavior]
-
-### Suggestions
-[Ideas for improvement]
-
-### Additional Notes
-[Any other observations]
-```
-
-#### Option 2: GitHub Issues (For Bugs)
-
-If you discover a specific bug, create a GitHub issue:
-
-1. Go to https://github.com/chippr-robotics/fukuii/issues
-2. Click "New Issue"
-3. Use label: `gorgoroth-trials`
+1. Go to https://github.com/chippr-robotics/fukuii/issues/new/choose
+2. Select "Bug report" template
+3. Add label: `gorgoroth-trials`
 4. Include:
    - Steps to reproduce
    - Expected behavior
