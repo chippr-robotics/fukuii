@@ -818,6 +818,113 @@ done
 tar -czf gorgoroth-diagnostic-$(date +%Y%m%d-%H%M%S).tar.gz ./diagnostic-logs/
 ```
 
+## Bonus Trial: Cirith Ungol Real-World Sync Testing
+
+### Overview
+
+For advanced testers ready to validate **real-world sync capabilities**, we provide **Cirith Ungol** - a single-node testing environment for syncing with **ETC mainnet** and **Mordor testnet**.
+
+**Why test with Cirith Ungol?**
+
+| Aspect | Gorgoroth (This Guide) | Cirith Ungol (Bonus Trial) |
+|--------|----------------------|----------------------------|
+| **Network** | Private test network | Public ETC mainnet/Mordor |
+| **Blocks** | Starts from 0 | 20M+ blocks (mainnet) |
+| **Peers** | Controlled (3-9 nodes) | Public network peers |
+| **Purpose** | Multi-client compatibility | Real-world sync validation |
+| **Sync Testing** | Limited history | Full SNAP/Fast sync |
+| **Duration** | Minutes to hours | Hours to days |
+
+### What You'll Test
+
+With Cirith Ungol, you can validate:
+
+1. **SNAP Sync** - Against real network with 20M+ blocks
+2. **Fast Sync** - Full state sync from production network
+3. **Long-term Stability** - 24+ hour continuous operation
+4. **Peer Diversity** - Connection to various client implementations
+5. **Production Performance** - Real-world resource usage
+
+### Quick Start
+
+```bash
+# Navigate to Cirith Ungol
+cd ops/cirith-ungol
+
+# Start sync with ETC mainnet
+./start.sh start
+
+# Monitor sync progress
+./start.sh logs
+
+# Collect logs and metrics
+./start.sh collect-logs
+```
+
+### Expected Results
+
+**ETC Mainnet SNAP Sync:**
+- Duration: 2-6 hours (depending on peers and network)
+- Final block: 20M+ blocks
+- Disk usage: ~50-80GB
+- Peer count: 10-30 peers
+
+**Mordor Testnet:**
+- Duration: 1-3 hours
+- Final block: 10M+ blocks
+- Disk usage: ~20-40GB
+- Ideal for faster testing
+
+### Validation Checklist
+
+When testing with Cirith Ungol:
+
+- [ ] Node discovers public peers (10+ peers)
+- [ ] SNAP sync initiates successfully
+- [ ] Account ranges download completes
+- [ ] Storage ranges download completes
+- [ ] Trie healing completes
+- [ ] Transitions to full sync
+- [ ] State is queryable after sync
+- [ ] Node remains stable for 24+ hours
+
+### Complete Documentation
+
+For full Cirith Ungol testing instructions, see:
+
+**[Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md)**
+
+This comprehensive guide includes:
+- Detailed setup instructions
+- Sync mode configuration (SNAP/Fast/Full)
+- Monitoring and troubleshooting
+- Performance benchmarks
+- Integration with fukuii-cli
+- Results reporting templates
+
+### When to Use Cirith Ungol
+
+**Use Gorgoroth (this guide) for:**
+- Quick validation of multi-client compatibility
+- Network communication testing
+- Mining functionality
+- Protocol compatibility
+
+**Use Cirith Ungol (bonus trial) for:**
+- Real-world sync performance
+- Long-term stability testing
+- Production network compatibility
+- Before deploying to mainnet
+
+### Community Testing
+
+More adventurous community members are encouraged to:
+
+1. Complete Gorgoroth compatibility tests first
+2. Move to Cirith Ungol for real-world validation
+3. Report findings for both test environments
+4. Share performance metrics and sync times
+
 ## Community Testing
 
 ### Getting Started for Community Testers

@@ -7,6 +7,8 @@
 
 The Gorgoroth test network has been successfully established and core functionality has been validated. This document tracks the validation status for all compatibility areas requested in the original issue.
 
+**Bonus**: For advanced real-world sync testing, see [Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md).
+
 ## Validation Requirements
 
 The following areas need to be validated for Fukuii compatibility with core-geth and besu:
@@ -301,6 +303,8 @@ cd test-scripts
 
 Community testers can help complete the validation by:
 
+### Phase 1: Gorgoroth Multi-Client Testing
+
 1. **Running multi-client tests**:
    ```bash
    cd ops/gorgoroth
@@ -328,6 +332,71 @@ Community testers can help complete the validation by:
    - Measure block propagation times
    - Measure sync times
    - Compare different configurations
+
+### Phase 2: Cirith Ungol Real-World Testing (Bonus Trial)
+
+For advanced testers ready for real-world validation:
+
+**What is Cirith Ungol?**
+- Single-node testing environment
+- Syncs with **ETC mainnet** (20M+ blocks) or **Mordor testnet**
+- Tests SNAP/Fast sync with real networks
+- Validates long-term stability and production performance
+
+**Why test with Cirith Ungol?**
+- Validates sync capabilities with real network history
+- Tests peer diversity (public network peers)
+- Measures production performance
+- Required before mainnet deployment
+
+**Quick Start:**
+```bash
+cd ops/cirith-ungol
+
+# Start sync with ETC mainnet
+./start.sh start
+
+# Monitor progress (SNAP sync: 2-6 hours)
+./start.sh logs
+
+# Collect results
+./start.sh collect-logs
+```
+
+**What to validate:**
+- [ ] SNAP sync completes with mainnet (2-6 hours)
+- [ ] Connects to 10+ public peers
+- [ ] Account/storage ranges download successfully
+- [ ] Transitions to full sync automatically
+- [ ] State is queryable after sync
+- [ ] Node remains stable for 24+ hours
+
+**Full Documentation:**
+See [Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md) for:
+- Complete setup instructions
+- Sync mode configuration
+- Monitoring and troubleshooting
+- Performance benchmarks
+- Results reporting templates
+
+### Testing Progression
+
+**Recommended order for community testers:**
+
+1. ✅ **Start with Gorgoroth** (1-2 hours)
+   - Quick validation of multi-client compatibility
+   - Automated test suite
+   - Controlled environment
+
+2. ⚡ **Move to Cirith Ungol** (4-8 hours)
+   - Real-world sync validation
+   - Production network testing
+   - Long-term stability
+
+3. 📊 **Report Combined Results**
+   - Gorgoroth: Multi-client compatibility status
+   - Cirith Ungol: Sync performance and stability
+   - Share with community via GitHub issues
 
 ## Reporting Results
 

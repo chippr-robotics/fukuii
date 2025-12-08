@@ -532,6 +532,28 @@ Run specific tests:
 - [Fukuii Documentation](../../README.md)
 - [Docker Deployment Guide](../../docs/deployment/docker.md)
 - [Operations Runbooks](../../docs/runbooks/README.md)
+- [**Cirith Ungol Real-World Sync Testing**](../cirith-ungol/TESTING_GUIDE.md) - Bonus trial for advanced testers
+
+## Bonus Trial: Cirith Ungol
+
+For community members ready to test **real-world sync capabilities**:
+
+**Cirith Ungol** provides a single-node environment for testing Fukuii sync with **ETC mainnet** (20M+ blocks) and **Mordor testnet**.
+
+**Why use Cirith Ungol after Gorgoroth?**
+- Test SNAP/Fast sync with real network history
+- Validate long-term stability (24+ hours)
+- Measure production performance
+- Connect to diverse public peers
+
+**Quick Start:**
+```bash
+cd ops/cirith-ungol
+./start.sh start    # Sync with ETC mainnet
+./start.sh logs     # Monitor progress
+```
+
+**Full guide:** [Cirith Ungol Testing Guide](../cirith-ungol/TESTING_GUIDE.md)
 
 ## Support
 
