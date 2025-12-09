@@ -71,6 +71,8 @@ jobs:
           echo "=========================================="
           sbt testComprehensive
         env:
+          # FUKUII_DEV: true enables development configurations for tests
+          # This is intentional and consistent with CI workflow
           FUKUII_DEV: true
       
       - name: Compile production code (fast path for manual builds)
@@ -87,11 +89,14 @@ jobs:
       - name: Build assembly JAR
         run: sbt assembly
         env:
+          # FUKUII_DEV: false for production-quality builds
+          # This ensures production optimizations are enabled
           FUKUII_DEV: false
       
       - name: Build distribution package
         run: sbt dist
         env:
+          # FUKUII_DEV: false for production-quality builds
           FUKUII_DEV: false
       
       - name: Extract version and prepare artifacts
@@ -105,12 +110,24 @@ jobs:
           # Create nightly version identifier
           NIGHTLY_VERSION="${VERSION}-nightly-${TIMESTAMP}"
           
+          # Determine if tests were run
+          if [[ "${{ github.event_name }}" == "schedule" ]] || [[ "${{ github.event.inputs.skip_tests }}" != "true" ]]; then
+            TESTED="true"
+            QUALITY_MSG="✅ **Quality:** This build was created after running the comprehensive test suite, including deep edge case testing."
+          else
+            TESTED="false"
+            QUALITY_MSG="⚠️ **Note:** This build was created without running the full test suite. Use for testing and development purposes only."
+          fi
+          
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "nightly_version=${NIGHTLY_VERSION}" >> $GITHUB_OUTPUT
           echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "tested=${TESTED}" >> $GITHUB_OUTPUT
+          echo "quality_message=${QUALITY_MSG}" >> $GITHUB_OUTPUT
           
           echo "Version: ${VERSION}"
           echo "Nightly Version: ${NIGHTLY_VERSION}"
+          echo "Tests Run: ${TESTED}"
           
           # Prepare artifacts directory
           mkdir -p fast-distro-artifacts
@@ -158,7 +175,7 @@ jobs:
             **Base Version:** ${{ steps.prepare.outputs.version }}
             **Build Time:** ${{ steps.prepare.outputs.timestamp }}
             
-            ✅ **Quality:** This build was created after running the comprehensive test suite, including deep edge case testing.
+            ${{ steps.prepare.outputs.quality_message }}
             
             ### What's Included
             - Distribution package (`fukuii-${{ steps.prepare.outputs.nightly_version }}.zip`)
