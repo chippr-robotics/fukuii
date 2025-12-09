@@ -158,6 +158,9 @@ class NetService(
   def connectToPeer(req: ConnectToPeerRequest): ServiceResponse[ConnectToPeerResponse] = {
     try {
       val uri = new URI(req.uri)
+      // Note: This sends the connect message and returns immediately.
+      // Success=true means the URI is valid and connection attempt was initiated,
+      // not that the connection succeeded. Check net_listPeers to verify connection.
       peerManager ! PeerManagerActor.ConnectToPeer(uri)
       IO.pure(Right(ConnectToPeerResponse(success = true)))
     } catch {
@@ -168,6 +171,8 @@ class NetService(
 
   def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse] = {
     IO.pure {
+      // Note: Current Blacklist implementation doesn't store reason or timestamp with entries.
+      // These fields are populated with placeholder values. See GitHub issue for enhancement.
       val blacklistedPeers = blacklist.keys.map { id =>
         BlacklistEntry(
           id = id.value,

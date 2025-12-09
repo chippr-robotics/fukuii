@@ -297,7 +297,7 @@ class PeerManagerActor(
     case req: AddToBlacklistRequest =>
       val requester = sender()
       try {
-        val duration = req.duration.getOrElse(365.days) // Default to 1 year for "permanent"
+        val duration = req.duration.getOrElse(PeerManagerActor.DefaultPermanentBlacklistDuration)
         val reason = Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(req.reason)
         blacklist.add(PeerAddress(req.address), duration, reason)
         requester ! AddToBlacklistResponse(added = true)
@@ -600,6 +600,11 @@ object PeerManagerActor {
 
   case class RemoveFromBlacklistRequest(address: String)
   case class RemoveFromBlacklistResponse(removed: Boolean)
+
+  /** Default blacklist duration when none specified (permanent blacklist).
+    * Set to 365 days as a practical "permanent" duration.
+    */
+  val DefaultPermanentBlacklistDuration: FiniteDuration = 365.days
 
   sealed abstract class ConnectionError
 

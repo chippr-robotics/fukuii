@@ -1562,7 +1562,9 @@ Attempts to connect to a new peer using an enode URI.
 **Parameters**:
 1. `String` - Enode URI (format: `enode://nodeId@host:port`)
 
-**Returns**: `Boolean` - `true` if connection attempt was initiated
+**Returns**: `Boolean` - `true` if the URI is valid and connection attempt was initiated, `false` or error if URI is invalid
+
+**Note**: This method returns immediately after initiating the connection attempt. A return value of `true` means the URI was valid and the connection attempt was queued, NOT that the connection succeeded. Use `net_listPeers` after a few seconds to verify the connection was established successfully.
 
 **Example**:
 ```bash

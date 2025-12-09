@@ -131,6 +131,8 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
 
   // Blacklist management tests
   it should "list blacklisted peers" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Note: Directly adding to blacklist here since we're testing the listing functionality
+    // which queries the blacklist directly. The add/remove operations are tested separately.
     import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
     blacklist.add(PeerManagerActor.PeerAddress("192.168.1.100"), 60.seconds, BlacklistReason.UselessPeer)
     blacklist.add(PeerManagerActor.PeerAddress("192.168.1.101"), 120.seconds, BlacklistReason.UselessPeer)
