@@ -124,7 +124,8 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
   }
 
   it should "reject invalid peer URI" taggedAs (UnitTest, RPCTest) in new TestSetup {
-    val result = netService.connectToPeer(ConnectToPeerRequest("invalid-uri")).unsafeRunSync()
+    // Using a URI with invalid characters that will throw URISyntaxException
+    val result = netService.connectToPeer(ConnectToPeerRequest("enode://not valid uri")).unsafeRunSync()
 
     result.isLeft shouldBe true
   }
