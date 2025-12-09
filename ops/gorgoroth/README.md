@@ -523,9 +523,39 @@ Run specific tests:
 # Test fast sync (NEW)
 ./test-fast-sync.sh
 
+# 3-Node log review with RLPx and propagation analysis (NEW)
+./test-3node-log-review.sh
+
 # Monitor message decompression (NEW)
 ./monitor-decompression.sh [container_name]
 ```
+
+### 3-Node Log Review Test
+
+The 3-node log review test provides comprehensive testing and analysis for a network where only one node is mining:
+
+```bash
+cd ops/gorgoroth/test-scripts
+./test-3node-log-review.sh
+```
+
+**What it does:**
+- Configures node1 with mining enabled, node2/3 with mining disabled
+- Starts the network and synchronizes static peers
+- Monitors block generation for 120 seconds
+- Captures logs from all nodes
+- Analyzes logs for RLPx protocol errors (handshake, encoding, compression)
+- Analyzes block header propagation patterns
+- Generates comprehensive reports
+
+**Output:**
+Creates a timestamped directory with:
+- Full logs from all nodes
+- Automated error analysis
+- Block propagation statistics
+- Test metadata and summary report
+
+See [3-Node Log Review Documentation](test-scripts/README-3node-log-review.md) for complete details.
 
 ### Documentation
 
