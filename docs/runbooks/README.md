@@ -16,6 +16,8 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[Checkpoint Service](checkpoint-service.md)** - Running and using the checkpoint update service for production
 
 ### Operations
+- **[Mining Operations](mining-operations.md)** - Mining configuration, start/stop control, monitoring, and external miner integration
+- **[Network Management](network-management.md)** - Peer management, blacklist operations, and network hygiene best practices
 - **[Peering](peering.md)** - Peer discovery, network connectivity, and peering troubleshooting
 - **[Disk Management](disk-management.md)** - Data directory management, pruning strategies, and disk space monitoring
 - **[Backup & Restore](backup-restore.md)** - Backup strategies, data recovery, and disaster recovery procedures

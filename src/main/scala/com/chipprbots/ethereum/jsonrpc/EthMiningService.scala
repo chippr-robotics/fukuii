@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.RichMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
+import com.chipprbots.ethereum.consensus.pow.miners.MinerProtocol
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -50,6 +51,20 @@ object EthMiningService {
 
   case class GetHashRateRequest()
   case class GetHashRateResponse(hashRate: BigInt)
+
+  case class StartMinerRequest()
+  case class StartMinerResponse(success: Boolean)
+
+  case class StopMinerRequest()
+  case class StopMinerResponse(success: Boolean)
+
+  case class GetMinerStatusRequest()
+  case class GetMinerStatusResponse(
+      isMining: Boolean,
+      coinbase: Address,
+      hashRate: BigInt,
+      blocksMinedCount: Option[Long]
+  )
 }
 
 class EthMiningService(
@@ -148,6 +163,55 @@ class EthMiningService(
       removeObsoleteHashrates(new Date)
       // sum all reported hashRates
       GetHashRateResponse(hashRate.map { case (_, (hr, _)) => hr }.sum)
+    }
+
+  def startMiner(req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
+    mining.ifEthash[ServiceResponse[StartMinerResponse]] { ethash =>
+      IO {
+        ethash.sendMiner(MinerProtocol.StartMining)
+        log.info("Mining started via RPC")
+        Right(StartMinerResponse(true))
+      }
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
+
+  def stopMiner(req: StopMinerRequest): ServiceResponse[StopMinerResponse] =
+    mining.ifEthash[ServiceResponse[StopMinerResponse]] { ethash =>
+      IO {
+        ethash.sendMiner(MinerProtocol.StopMining)
+        log.info("Mining stopped via RPC")
+        Right(StopMinerResponse(true))
+      }
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
+
+  /** Returns comprehensive mining status information.
+    *
+    * Provides a consolidated view of the mining state including:
+    * - Whether the node is actively mining (based on recent activity)
+    * - The coinbase address receiving mining rewards
+    * - Current aggregate hashrate from all connected miners
+    * - Blocks mined count (currently reserved for future implementation)
+    *
+    * Note: blocksMinedCount is always None in the current implementation.
+    * Future versions may track and report this metric.
+    */
+  def getMinerStatus(req: GetMinerStatusRequest): ServiceResponse[GetMinerStatusResponse] =
+    ifEthash(req) { _ =>
+      val now = new Date
+      val isMining = lastActive.updateAndGet { (e: Option[Date]) =>
+        e.filter { time =>
+          Duration.between(time.toInstant, now.toInstant).toMillis < jsonRpcConfig.minerActiveTimeout.toMillis
+        }
+      }.isDefined
+      
+      removeObsoleteHashrates(now)
+      val currentHashRate = hashRate.map { case (_, (hr, _)) => hr }.sum
+      
+      GetMinerStatusResponse(
+        isMining = isMining,
+        coinbase = miningConfig.coinbase,
+        hashRate = currentHashRate,
+        blocksMinedCount = None // Reserved for future implementation - would require tracking mined blocks
+      )
     }
 
   // NOTE This is called from places that guarantee we are running Ethash consensus.
