@@ -96,6 +96,20 @@ case class JsonRpcController(
       handle[ListeningRequest, ListeningResponse](netService.listening, req)
     case req @ JsonRpcRequest(_, "net_peerCount", _, _) =>
       handle[PeerCountRequest, PeerCountResponse](netService.peerCount, req)
+    // Enhanced peer management endpoints
+    case req @ JsonRpcRequest(_, "net_listPeers", _, _) =>
+      handle[ListPeersRequest, ListPeersResponse](netService.listPeers, req)
+    case req @ JsonRpcRequest(_, "net_disconnectPeer", _, _) =>
+      handle[DisconnectPeerRequest, DisconnectPeerResponse](netService.disconnectPeer, req)
+    case req @ JsonRpcRequest(_, "net_connectToPeer", _, _) =>
+      handle[ConnectToPeerRequest, ConnectToPeerResponse](netService.connectToPeer, req)
+    // Blacklist management endpoints
+    case req @ JsonRpcRequest(_, "net_listBlacklistedPeers", _, _) =>
+      handle[ListBlacklistedPeersRequest, ListBlacklistedPeersResponse](netService.listBlacklistedPeers, req)
+    case req @ JsonRpcRequest(_, "net_addToBlacklist", _, _) =>
+      handle[AddToBlacklistRequest, AddToBlacklistResponse](netService.addToBlacklist, req)
+    case req @ JsonRpcRequest(_, "net_removeFromBlacklist", _, _) =>
+      handle[RemoveFromBlacklistRequest, RemoveFromBlacklistResponse](netService.removeFromBlacklist, req)
   }
 
   // scalastyle:off cyclomatic.complexity

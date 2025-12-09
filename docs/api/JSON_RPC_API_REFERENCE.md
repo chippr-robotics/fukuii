@@ -1484,6 +1484,195 @@ curl -X POST http://localhost:8546 \
 
 ---
 
+### net_listPeers
+
+Returns detailed information about all connected peers.
+
+**Parameters**: None
+
+**Returns**: `Array` - Array of peer objects with the following fields:
+- `id`: `String` - Unique peer identifier
+- `remoteAddress`: `String` - Remote address of the peer
+- `nodeId`: `String` or `null` - Ethereum node ID (public key) if available
+- `incomingConnection`: `Boolean` - Whether this is an incoming connection
+- `status`: `String` - Current peer status (e.g., "Handshaked", "Connecting", "Idle")
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "net_listPeers",
+    "params": []
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "id": "peer1",
+      "remoteAddress": "192.168.1.100:30303",
+      "nodeId": "abcd1234...",
+      "incomingConnection": false,
+      "status": "Handshaked"
+    }
+  ]
+}
+```
+
+**MCP Context**: Detailed peer information for network monitoring and diagnostics.
+
+---
+
+### net_disconnectPeer
+
+Disconnects a specific peer by ID.
+
+**Parameters**:
+1. `String` - Peer ID to disconnect
+
+**Returns**: `Boolean` - `true` if peer was disconnected, `false` if peer not found
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "net_disconnectPeer",
+    "params": ["peer1"]
+  }'
+```
+
+**MCP Context**: Network hygiene - remove problematic peers.
+
+---
+
+### net_connectToPeer
+
+Attempts to connect to a new peer using an enode URI.
+
+**Parameters**:
+1. `String` - Enode URI (format: `enode://nodeId@host:port`)
+
+**Returns**: `Boolean` - `true` if the URI is valid and connection attempt was initiated, `false` or error if URI is invalid
+
+**Note**: This method returns immediately after initiating the connection attempt. A return value of `true` means the URI was valid and the connection attempt was queued, NOT that the connection succeeded. Use `net_listPeers` after a few seconds to verify the connection was established successfully.
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "net_connectToPeer",
+    "params": ["enode://abcd1234...@192.168.1.100:30303"]
+  }'
+```
+
+**MCP Context**: Manual peer management for network configuration.
+
+---
+
+### net_listBlacklistedPeers
+
+Returns list of currently blacklisted peers.
+
+**Parameters**: None
+
+**Returns**: `Array` - Array of blacklist entry objects with the following fields:
+- `id`: `String` - Blacklisted address or peer ID
+- `reason`: `String` - Reason for blacklisting
+- `addedAt`: `Number` - Timestamp when added to blacklist (milliseconds since epoch)
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "net_listBlacklistedPeers",
+    "params": []
+  }'
+```
+
+**MCP Context**: Security monitoring - track banned peers.
+
+---
+
+### net_addToBlacklist
+
+Adds a peer address to the blacklist with optional duration.
+
+**Parameters**:
+1. `String` - Peer address to blacklist
+2. `Number` or `null` - Duration in seconds (optional, null for permanent)
+3. `String` - Reason for blacklisting
+
+**Returns**: `Boolean` - `true` if successfully added to blacklist
+
+**Example (temporary blacklist for 1 hour)**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "net_addToBlacklist",
+    "params": ["192.168.1.100", 3600, "Malicious behavior"]
+  }'
+```
+
+**Example (permanent blacklist)**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "net_addToBlacklist",
+    "params": ["192.168.1.100", null, "Permanent ban"]
+  }'
+```
+
+**MCP Context**: Security control - prevent connections from malicious peers.
+
+---
+
+### net_removeFromBlacklist
+
+Removes a peer address from the blacklist.
+
+**Parameters**:
+1. `String` - Peer address to remove from blacklist
+
+**Returns**: `Boolean` - `true` if successfully removed
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "net_removeFromBlacklist",
+    "params": ["192.168.1.100"]
+  }'
+```
+
+**MCP Context**: Network management - unban previously blacklisted peers.
+
+---
+
 ## PERSONAL Namespace
 
 **⚠️ Security Warning**: The personal namespace should be **disabled in production**. These methods expose private key operations and should only be used in development/testing environments.

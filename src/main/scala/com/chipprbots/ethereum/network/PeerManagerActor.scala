@@ -284,6 +284,40 @@ class PeerManagerActor(
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
       connectedPeers.getPeer(peerId).foreach(peer => peer.ref ! PeerActor.SendMessage(message))
 
+    case DisconnectPeerById(peerId) =>
+      val requester = sender()
+      connectedPeers.getPeer(peerId) match {
+        case Some(peer) =>
+          peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.DisconnectRequested)
+          requester ! DisconnectPeerResponse(disconnected = true)
+        case None =>
+          requester ! DisconnectPeerResponse(disconnected = false)
+      }
+
+    case req: AddToBlacklistRequest =>
+      val requester = sender()
+      try {
+        val duration = req.duration.getOrElse(PeerManagerActor.DefaultPermanentBlacklistDuration)
+        val reason = Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(req.reason)
+        blacklist.add(PeerAddress(req.address), duration, reason)
+        requester ! AddToBlacklistResponse(added = true)
+      } catch {
+        case e: Exception =>
+          log.error(s"Failed to add address ${req.address} to blacklist", e)
+          requester ! AddToBlacklistResponse(added = false)
+      }
+
+    case req: RemoveFromBlacklistRequest =>
+      val requester = sender()
+      try {
+        blacklist.remove(PeerAddress(req.address))
+        requester ! RemoveFromBlacklistResponse(removed = true)
+      } catch {
+        case e: Exception =>
+          log.error(s"Failed to remove address ${req.address} from blacklist", e)
+          requester ! RemoveFromBlacklistResponse(removed = false)
+      }
+
     case Terminated(ref) =>
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
@@ -558,6 +592,21 @@ object PeerManagerActor {
   }
 
   case class SendMessage(message: MessageSerializable, peerId: PeerId)
+
+  // New messages for enhanced peer management
+  case class DisconnectPeerById(peerId: PeerId)
+  case class DisconnectPeerResponse(disconnected: Boolean)
+
+  case class AddToBlacklistRequest(address: String, duration: Option[FiniteDuration], reason: String)
+  case class AddToBlacklistResponse(added: Boolean)
+
+  case class RemoveFromBlacklistRequest(address: String)
+  case class RemoveFromBlacklistResponse(removed: Boolean)
+
+  /** Default blacklist duration when none specified (permanent blacklist).
+    * Set to 365 days as a practical "permanent" duration.
+    */
+  val DefaultPermanentBlacklistDuration: FiniteDuration = 365.days
 
   sealed abstract class ConnectionError
 
