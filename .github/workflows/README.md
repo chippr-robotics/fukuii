@@ -59,37 +59,49 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 ---
 
-### ⚡ Fast Distro Workflow (`fast-distro.yml`)
+### ⚡ Nightly Distro Workflow (`fast-distro.yml`)
 
 **Triggers:** Nightly schedule (2 AM UTC), Manual dispatch
 
-**Purpose:** Creates distribution packages quickly without running the full test suite, suitable for nightly releases
+**Purpose:** Creates comprehensive nightly distribution packages with full test suite validation
 
 **Steps:**
-1. Compiles production code only (bytes, crypto, rlp, node) - skips test compilation
-2. Builds assembly JAR (standalone executable)
-3. Builds distribution package (ZIP)
-4. Creates timestamped artifacts
-5. Uploads artifacts with 30-day retention
-6. Creates nightly pre-release on GitHub (for scheduled runs)
+1. Runs comprehensive test suite (up to 4 hours) - ensures deep edge case coverage
+2. Compiles all modules (bytes, crypto, rlp, node)
+3. Builds assembly JAR (standalone executable)
+4. Builds distribution package (ZIP)
+5. Creates timestamped artifacts
+6. Uploads artifacts and test results with 30-day retention
+7. Creates nightly pre-release on GitHub (for scheduled runs)
 
 **Artifacts Published:**
 - Distribution ZIP with nightly version timestamp
 - Assembly JAR with nightly version timestamp
+- Test results and logs
 
 **Use Cases:**
-- Nightly builds for testing and development
-- Quick distribution builds without waiting for full test suite
-- Intermediate builds for stakeholders
+- Most stable nightly builds with full test validation
+- Deep edge case testing before production releases
+- Distribution packages for stakeholders
+- Quality assurance and regression testing
 
-**Note:** This workflow intentionally skips the full test suite and test compilation for faster builds. Uses `FUKUII_DEV: true` to speed up compilation by disabling production optimizations and fatal warnings. The full test suite has some tests that are excluded in `build.sbt`. This workflow is suitable for development and testing purposes only. For production releases, use the standard release workflow (`release.yml`).
+**Quality Assurance:**
+- ✅ Runs comprehensive test suite by default on scheduled builds
+- ✅ Tests all edge cases and production scenarios
+- ✅ Suitable for pre-production validation
+- ⚠️ Can optionally skip tests for manual quick builds (not recommended)
 
 **Manual Trigger:**
 ```bash
 # Via GitHub UI: Actions → Fast Distro → Run workflow
-# Or use GitHub CLI:
+# With full tests (recommended):
 gh workflow run fast-distro.yml
+
+# Quick build without tests (not recommended for nightly):
+gh workflow run fast-distro.yml -f skip_tests=true
 ```
+
+**Note:** This workflow runs the comprehensive test suite on all scheduled nightly builds to ensure maximum stability. The nightly has the most time to run and should be the most stable build. For production releases, use the standard release workflow (`release.yml`).
 
 ---
 
