@@ -985,7 +985,7 @@ Before reporting issues, verify:
 
 ### Appendix E: Related Documentation
 
-- [Gorgoroth README](../../ops/gorgoroth/README.md) - Network setup and management
+- Gorgoroth README (`ops/gorgoroth/README.md`) - Network setup and management
 - [SNAP Sync User Guide](../runbooks/snap-sync-user-guide.md) - SNAP sync configuration
 - [SNAP Sync FAQ](../runbooks/snap-sync-faq.md) - Common SNAP sync questions
 - [Cirith Ungol Testing Guide](CIRITH_UNGOL_TESTING_GUIDE.md) - Real-world sync testing
