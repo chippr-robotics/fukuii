@@ -124,6 +124,12 @@ case class JsonRpcController(
       handle[GetWorkRequest, GetWorkResponse](ethMiningService.getWork, req)
     case req @ JsonRpcRequest(_, "eth_submitWork", _, _) =>
       handle[SubmitWorkRequest, SubmitWorkResponse](ethMiningService.submitWork, req)
+    case req @ JsonRpcRequest(_, "miner_start", _, _) =>
+      handle[StartMinerRequest, StartMinerResponse](ethMiningService.startMiner, req)
+    case req @ JsonRpcRequest(_, "miner_stop", _, _) =>
+      handle[StopMinerRequest, StopMinerResponse](ethMiningService.stopMiner, req)
+    case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
+      handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
     case req @ JsonRpcRequest(_, "eth_blockNumber", _, _) =>
       handle[BestBlockNumberRequest, BestBlockNumberResponse](ethBlocksService.bestBlockNumber, req)
     case req @ JsonRpcRequest(_, "eth_coinbase", _, _) =>
@@ -252,7 +258,7 @@ case class JsonRpcController(
     case req @ JsonRpcRequest(_, "test_getLogHash", _, _) =>
       handle[GetLogHashRequest, GetLogHashResponse](testService.getLogHash, req)
     case req @ JsonRpcRequest(_, "miner_setEtherbase", _, _) =>
-      handle[SetEtherbaseRequest, SetEtherbaseResponse](testService.setEtherbase, req)
+      handle[TestService.SetEtherbaseRequest, TestService.SetEtherbaseResponse](testService.setEtherbase, req)
     // FIXME: 'debug_' has it's own 'handle' method, should be aligned (ETCM-806)
     case req @ JsonRpcRequest(_, "debug_accountRange", _, _) =>
       handle[AccountsInRangeRequest, AccountsInRangeResponse](testService.getAccountsInRange, req)
