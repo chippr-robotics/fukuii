@@ -27,13 +27,15 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node1/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/node1/logback-headers.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node1-data:/app/data
       - fukuii-node1-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]

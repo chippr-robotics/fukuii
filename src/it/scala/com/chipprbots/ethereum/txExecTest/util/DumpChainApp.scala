@@ -76,6 +76,7 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
     override val pruneIncomingPeers: Int = Config.Network.peer.pruneIncomingPeers
     override val minPruneAge: FiniteDuration = Config.Network.peer.minPruneAge
     override val networkId: Int = privateNetworkId
+  override val p2pVersion: Int = Config.Network.peer.p2pVersion
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds
     override val updateNodesInterval: FiniteDuration = 20.seconds
     override val shortBlacklistDuration: FiniteDuration = 1.minute

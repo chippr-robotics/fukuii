@@ -56,6 +56,25 @@ else
   sleep 45
 fi
 
+# Step 1b: Sync static nodes using Fukuii CLI if available
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+log_info "Step 1b: Synchronizing static peer lists..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+FUKUII_CLI="$GORGOROTH_DIR/../tools/fukuii-cli.sh"
+if [ -x "$FUKUII_CLI" ]; then
+  if "$FUKUII_CLI" sync-static-nodes; then
+    log_success "Static nodes synchronized successfully"
+    log_info "Waiting 30s for nodes to restart with updated peers..."
+    sleep 30
+  else
+    log_warn "fukuii-cli sync-static-nodes failed; continuing without refreshed peers"
+  fi
+else
+  log_warn "fukuii-cli.sh not found or not executable at $FUKUII_CLI"
+fi
+
 # Step 2: Verify seed connectivity
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
