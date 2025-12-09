@@ -307,6 +307,52 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
     requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> genesisInfo)))
   }
+
+  it should "skip GetBlockHeaders request when peer is at genesis to avoid disconnect" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+
+    // Create a peer at genesis (bestHash == genesisHash)
+    val genesisStatus: RemoteStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
+    val genesisInfo: PeerInfo = initialPeerInfo.copy(
+      remoteStatus = genesisStatus,
+      maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
+      bestBlockHash = Fixtures.Blocks.Genesis.header.hash
+    )
+
+    // Send handshake successful for peer at genesis
+    peersInfoHolder ! PeerHandshakeSuccessful(peer1, genesisInfo)
+
+    // Expect subscriptions as usual
+    peerEventBus.expectMsg(Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))))
+    peerEventBus.expectMsg(
+      Subscribe(
+        MessageClassifier(
+          Set(
+            Codes.BlockHeadersCode,
+            Codes.NewBlockCode,
+            Codes.NewBlockHashesCode,
+            // SNAP protocol response codes
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+          ),
+          PeerSelector.WithId(peer1.id)
+        )
+      )
+    )
+
+    // Verify NO GetBlockHeaders request is sent to avoid disconnect with reason 0x10 (Other)
+    // Many peers disconnect genesis-only nodes as a peer selection policy
+    peer1Probe.expectNoMessage()
+
+    // Verify peer is still added to handshaked peers
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    requestSender.expectMsg(PeerInfoResponse(Some(genesisInfo)))
+  }
   
   it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
     UnitTest,
@@ -482,8 +528,13 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
         )
       )
 
-      // Peer should receive request for highest block
-      peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
+      // Peer should receive request for highest block UNLESS peer is at genesis
+      // When peer is at genesis (bestHash == genesisHash), no GetBlockHeaders is sent
+      // to avoid triggering disconnect with reason 0x10 (Other) from peers that reject genesis-only nodes
+      val peerIsAtGenesis = peerInfo.remoteStatus.bestHash == peerInfo.remoteStatus.genesisHash
+      if (!peerIsAtGenesis) {
+        peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
+      }
     }
   }
   
