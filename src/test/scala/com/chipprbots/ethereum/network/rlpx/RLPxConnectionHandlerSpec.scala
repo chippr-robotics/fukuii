@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Ping
+import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.InitialHelloReceived
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
@@ -234,11 +235,30 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
+    
+    // Create a stub FrameCodec for MessageCodec
+    private lazy val stubFrameCodec: FrameCodec = stub[FrameCodec]
+    
+    // Create a default CompressionPolicy for tests (no compression)
+    private val defaultCompressionPolicy = CompressionPolicy(
+      compressOutbound = false,
+      expectInboundCompressed = false
+    )
+    
     // SCALA 3 MIGRATION: Using configurable test double instead of mock because
     // AuthHandshaker with Selectable cannot be properly mocked in Scala 3
     lazy val mockHandshaker: ConfigurableAuthHandshaker = new ConfigurableAuthHandshaker()
     lazy val connection: TestProbe = TestProbe()
-    lazy val mockMessageCodec: MessageCodec = mock[MessageCodec]
+    
+    // Create a stub MessageCodec with real dependencies to avoid NPE
+    lazy val mockMessageCodec: MessageCodec = stub[MessageCodec](
+      stubFrameCodec,
+      mockMessageDecoder,
+      5L, // remotePeer2PeerVersion
+      "test-client",
+      defaultCompressionPolicy
+    )
+    
     lazy val mockHelloExtractor: HelloCodec = mock[HelloCodec]
 
     // Configurable test double for AuthHandshaker that can be set up for different test scenarios
@@ -302,7 +322,7 @@ class RLPxConnectionHandlerSpec
         new RLPxConnectionHandler(
           protocolVersion :: Nil,
           mockHandshaker,
-          (_, _, _, _, _) => mockMessageCodec,
+          (frameCodec: FrameCodec, capability: Capability, p2pVersion: Long, clientId: String, compressionPolicy: MessageCodec.CompressionPolicy) => mockMessageCodec,
           rlpxConfiguration,
           _ => mockHelloExtractor
         ) {
