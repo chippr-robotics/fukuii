@@ -54,6 +54,7 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     val qaService: QAService = mock[QAService]
     val checkpointingService: CheckpointingService = mock[CheckpointingService]
     val fukuiiService: FukuiiService = mock[FukuiiService]
+    val mcpService: McpService = mock[McpService]
 
     val jsonRpcController =
       new JsonRpcController(
@@ -71,6 +72,7 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
         qaService,
         checkpointingService,
         fukuiiService,
+        mcpService,
         ProofServiceDummy,
         config
       )

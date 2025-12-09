@@ -5,6 +5,7 @@ import java.io.File
 import scala.sys
 
 import com.chipprbots.ethereum.cli.CliLauncher
+import com.chipprbots.ethereum.crypto.EcKeyGen
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
 import com.chipprbots.ethereum.utils.Logger
@@ -31,6 +32,7 @@ object App extends Logger {
   private val launchKeytool = "keytool"
   private val downloadBootstrap = "bootstrap"
   private val faucet = "faucet"
+  private val ecKeyGen = "eckeygen"
   private val cli = "cli"
   private val sigValidator = "signature-validator"
 
