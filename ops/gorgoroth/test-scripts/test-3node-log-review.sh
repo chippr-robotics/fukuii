@@ -64,9 +64,17 @@ check_mining_status() {
     local port=$1
     local node_name=$2
     
-    local is_mining=$(curl -s -X POST -H "Content-Type: application/json" \
-        --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' \
-        http://localhost:$port 2>/dev/null | grep -o '"result":[^,}]*' | cut -d':' -f2 || echo "error")
+    # Try to use jq if available, otherwise fall back to grep/cut
+    local is_mining
+    if command -v jq &> /dev/null; then
+        is_mining=$(curl -s -X POST -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' \
+            http://localhost:$port 2>/dev/null | jq -r '.result // "error"' || echo "error")
+    else
+        is_mining=$(curl -s -X POST -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' \
+            http://localhost:$port 2>/dev/null | grep -o '"result":[^,}]*' | cut -d':' -f2 || echo "error")
+    fi
     
     echo "  ${node_name} (port ${port}): mining=${is_mining}"
 }
@@ -75,9 +83,17 @@ check_mining_status() {
 get_block_number() {
     local port=$1
     
-    local block_num=$(curl -s -X POST -H "Content-Type: application/json" \
-        --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-        http://localhost:$port 2>/dev/null | grep -o '"result":"[^"]*"' | cut -d'"' -f4 || echo "0x0")
+    # Try to use jq if available, otherwise fall back to grep/cut
+    local block_num
+    if command -v jq &> /dev/null; then
+        block_num=$(curl -s -X POST -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            http://localhost:$port 2>/dev/null | jq -r '.result // "0x0"' || echo "0x0")
+    else
+        block_num=$(curl -s -X POST -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            http://localhost:$port 2>/dev/null | grep -o '"result":"[^"]*"' | cut -d'"' -f4 || echo "0x0")
+    fi
     
     if [[ "$block_num" =~ ^0x[0-9a-fA-F]+$ ]]; then
         echo $((16#${block_num#0x}))
@@ -248,9 +264,17 @@ check_peer_connections() {
         local node_id=$((($port - 8546) / 2 + 1))
         echo -e "${GREEN}Node${node_id} (port ${port}):${NC}"
         
-        local peer_count=$(curl -s -X POST -H "Content-Type: application/json" \
-            --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-            http://localhost:$port 2>/dev/null | grep -o '"result":"[^"]*"' | cut -d'"' -f4 || echo "0x0")
+        # Try to use jq if available, otherwise fall back to grep/cut
+        local peer_count
+        if command -v jq &> /dev/null; then
+            peer_count=$(curl -s -X POST -H "Content-Type: application/json" \
+                --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+                http://localhost:$port 2>/dev/null | jq -r '.result // "0x0"' || echo "0x0")
+        else
+            peer_count=$(curl -s -X POST -H "Content-Type: application/json" \
+                --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+                http://localhost:$port 2>/dev/null | grep -o '"result":"[^"]*"' | cut -d'"' -f4 || echo "0x0")
+        fi
         
         if [[ "$peer_count" =~ ^0x[0-9a-fA-F]+$ ]]; then
             local peer_count_dec=$((16#${peer_count#0x}))
@@ -314,7 +338,6 @@ echo -e "${BLUE}Step 2: Synchronizing static-nodes.json${NC}"
 echo ""
 
 # Use fukuii-cli to sync static nodes
-cd "$SCRIPT_DIR/.."
 "${GORGOROTH_DIR}/../tools/fukuii-cli.sh" sync-static-nodes
 
 echo "Waiting for nodes to reconnect after restart (30 seconds)..."
