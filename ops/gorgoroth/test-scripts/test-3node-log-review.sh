@@ -331,7 +331,14 @@ echo -e "${BLUE}Step 2: Synchronizing static-nodes.json${NC}"
 echo ""
 
 # Use fukuii-cli to sync static nodes
-"${GORGOROTH_DIR}/../tools/fukuii-cli.sh" sync-static-nodes
+FUKUII_CLI="${GORGOROTH_DIR}/../tools/fukuii-cli.sh"
+if [ ! -x "$FUKUII_CLI" ]; then
+    echo -e "${RED}Error: fukuii-cli.sh not found at ${FUKUII_CLI}${NC}"
+    echo "Please ensure fukuii-cli.sh is available in ops/tools/"
+    exit 1
+fi
+
+"$FUKUII_CLI" sync-static-nodes
 
 echo "Waiting for nodes to reconnect after restart (30 seconds)..."
 sleep 30
