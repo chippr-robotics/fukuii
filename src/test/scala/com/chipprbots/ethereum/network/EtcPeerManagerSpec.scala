@@ -286,12 +286,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
 
-    val genesisStatus: RemoteStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
-    val genesisInfo: PeerInfo = initialPeerInfo.copy(
-      remoteStatus = genesisStatus,
-      maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
-      bestBlockHash = Fixtures.Blocks.Genesis.header.hash
-    )
+    val genesisInfo: PeerInfo = createGenesisPeerInfo()
 
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, genesisInfo)
@@ -315,12 +310,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
 
     // Create a peer at genesis (bestHash == genesisHash)
-    val genesisStatus: RemoteStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
-    val genesisInfo: PeerInfo = initialPeerInfo.copy(
-      remoteStatus = genesisStatus,
-      maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
-      bestBlockHash = Fixtures.Blocks.Genesis.header.hash
-    )
+    val genesisInfo: PeerInfo = createGenesisPeerInfo()
 
     // Send handshake successful for peer at genesis
     peersInfoHolder ! PeerHandshakeSuccessful(peer1, genesisInfo)
@@ -463,6 +453,16 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
       maxBlockNumber = Fixtures.Blocks.Block3125369.header.number,
       bestBlockHash = peerStatus.bestHash
     )
+
+    // Helper to create a PeerInfo for a peer at genesis
+    def createGenesisPeerInfo(basePeerInfo: PeerInfo = initialPeerInfo): PeerInfo = {
+      val genesisStatus: RemoteStatus = basePeerInfo.remoteStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
+      basePeerInfo.copy(
+        remoteStatus = genesisStatus,
+        maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
+        bestBlockHash = Fixtures.Blocks.Genesis.header.hash
+      )
+    }
 
     val fakeNodeId: ByteString = ByteString()
 
