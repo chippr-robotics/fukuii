@@ -95,25 +95,95 @@ gh workflow run fast-distro.yml
 
 ### 🐳 Docker Build Workflow (`docker.yml`)
 
-**Triggers:** Push to main branches, version tags, Pull Requests
+**Triggers:** Push to main/master/develop branches, Pull Requests
 
-**Purpose:** Builds and publishes development Docker images to GitHub Container Registry
+**Purpose:** Builds and publishes Docker images for different use cases
 
 **Images Built:**
-- `fukuii-base`: Base OS and dependencies
-- `fukuii-dev`: Development environment
-- `fukuii`: Production application image
+- **`fukuii`**: Production application image (built from main/master)
+- **`fukuii-dev`**: Development environment (built from develop branch)
+- **`fukuii-base`**: Base OS and dependencies (built from main/master)
+- **`fukuii-mainnet`**: Mainnet-specific configuration
+- **`fukuii-mordor`**: Mordor testnet configuration
+- **`fukuii-bootnode`**: Bootnode variant
 
-**Registry:** `ghcr.io/chippr-robotics/fukuii` (Development builds)
+**Registries:**
+- GitHub Container Registry: `ghcr.io/chippr-robotics/fukuii`
+- Docker Hub: `chipprbots/fukuii`
 
-**Tags:**
+**Container Strategy:**
+
+1. **`fukuii:latest`** - Production release image
+   - Built from `main` branch when PR is merged
+   - Tagged as `latest` only when on main branch
+   - Use for production deployments
+
+2. **`fukuii-dev:latest`** - Development environment image
+   - Built from `develop` branch when PR is merged
+   - Includes full JDK and build tools (SBT)
+   - Tagged as `latest` only when on develop branch
+   - Use for development and building from source
+
+3. **Other images** - Built from main branch
+   - Network-specific variants (mainnet, mordor, bootnode)
+   - Base image for other builds
+
+**Tags Applied:**
 - Branch name (e.g., `main`, `develop`)
 - Pull request number (e.g., `pr-123`)
 - Semantic version (e.g., `1.0.0`, `1.0`) - from tags
 - Git SHA (e.g., `sha-abc123`)
-- `latest` (default branch only)
+- `latest` - Applied to main image when on main branch, dev image when on develop branch
+
+**Pull Request Behavior:**
+- Images are built but **not pushed** (test build only)
+- Validates Dockerfiles and build process
+- No tags are pushed to registries
 
 **Note:** Development images built by this workflow are **not signed** and do **not include provenance attestations**. For production deployments, use release images from `ghcr.io/chippr-robotics/chordodes_fukuii` which are built by `release.yml` with full security features.
+
+**See Also:** [Container Build Strategy](../../docs/deployment/CONTAINER_STRATEGY.md) for detailed documentation.
+
+---
+
+### 🌙 Nightly Build Workflow (`nightly.yml`)
+
+**Triggers:** Daily at 00:00 UTC (midnight), Manual dispatch
+
+**Purpose:** Automated nightly builds from main branch for testing and early access to features
+
+**Images Built:**
+- **`fukuii:nightly`** - Main production image with nightly tag
+- **`fukuii-dev:nightly`** - Development image with nightly tag
+- **`fukuii-base:nightly`** - Base image with nightly tag
+- **`fukuii-mainnet:nightly`** - Mainnet configuration with nightly tag
+- **`fukuii-mordor:nightly`** - Mordor testnet with nightly tag
+- **`fukuii-bootnode:nightly`** - Bootnode variant with nightly tag
+
+**Tags Applied:**
+- `nightly` - Rolling tag, always points to latest nightly build
+- `nightly-YYYYMMDD` - Date-stamped tag for specific nightly (e.g., `nightly-20231215`)
+
+**Additional Jobs:**
+- **Nightly Comprehensive Tests** - Runs comprehensive test suite (up to 3 hours)
+  - Tests are more thorough than regular CI
+  - Helps catch issues early before release
+  - Test results uploaded as artifacts (30-day retention)
+
+**Use Cases:**
+- Testing latest main branch changes before release
+- CI/CD integration testing
+- Early access to new features for testers
+- Regression testing
+
+**Manual Trigger:**
+```bash
+# Via GitHub UI: Actions → Nightly Build → Run workflow
+# Or use GitHub CLI:
+gh workflow run nightly.yml
+```
+
+**See Also:** [Container Build Strategy](../../docs/deployment/CONTAINER_STRATEGY.md) for detailed documentation.
 
 ---
 

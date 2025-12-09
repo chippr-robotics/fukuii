@@ -89,6 +89,8 @@ jobs:
   docker-build-dev:
     name: Build Dev Docker Image
     runs-on: ubuntu-latest
+    # Only run on develop branch to build fukuii-dev image
+    if: github.ref == 'refs/heads/develop' || github.base_ref == 'develop'
     permissions:
       contents: read
       packages: write
@@ -130,7 +132,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/develop' }}
 
       - name: Build and push dev image
         uses: docker/build-push-action@v5
