@@ -114,8 +114,10 @@ echo "Checking system resources..."
 # Check available RAM (Linux only)
 if [ -f /proc/meminfo ]; then
     TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    TOTAL_RAM_GB=$(echo "scale=1; $TOTAL_RAM_KB / 1024 / 1024" | bc)
-    if (( $(echo "$TOTAL_RAM_GB < 4" | bc -l) )); then
+    # Convert to GB using awk (more portable than bc)
+    TOTAL_RAM_GB=$(awk "BEGIN {printf \"%.1f\", $TOTAL_RAM_KB / 1024 / 1024}")
+    # Use integer comparison (4GB = 4194304 KB)
+    if [ "$TOTAL_RAM_KB" -lt 4194304 ]; then
         print_warning "Available RAM: ${TOTAL_RAM_GB}GB (4GB recommended for Gorgoroth tests)"
     else
         print_success "Available RAM: ${TOTAL_RAM_GB}GB"

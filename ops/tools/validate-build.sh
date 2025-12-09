@@ -71,7 +71,7 @@ echo
 print_step "Step 1/6: Checking Java Installation"
 if ! command -v java &> /dev/null; then
     print_error "Java is not installed"
-    echo "Please install Java 21 LTS or later"
+    echo "Please install Java 11 or later (Java 21 LTS recommended)"
     exit 1
 fi
 
