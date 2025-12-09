@@ -157,33 +157,46 @@ class EtcPeerManagerActor(
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
-      // Ask for the highest block from the peer
-      // Send GetBlockHeaders in format based on negotiated capability
-      val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
-      val getBlockHeadersMsg: MessageSerializable =
-        if (usesRequestId)
-          ETH66GetBlockHeaders(ETH66.nextRequestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
-        else
-          ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
-      
-      // Debug: Log the raw RLP-encoded message bytes for protocol analysis
-      if (log.isDebugEnabled) {
-        val encodedBytes = getBlockHeadersMsg.toBytes
-        val hexBytes = Hex.toHexString(encodedBytes)
-        log.debug(
-          "PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}",
-          encodedBytes.length,
-          if (hexBytes.length > MaxHexLogLength) hexBytes.take(MaxHexLogLength) + "..." else hexBytes
+      // Many peers disconnect with reason 0x10 (Other) when asked for headers at genesis
+      // as they implement peer selection policies that reject genesis-only nodes.
+      // When peer is at genesis, we skip this initial GetBlockHeaders to avoid disconnect.
+      // Block synchronization will be initiated by the sync controller (SyncController/SNAPSyncController)
+      // once it determines which peers to use for sync, avoiding unnecessary blacklisting.
+      if (peerInfo.isAtGenesis) {
+        log.info(
+          "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block - skipping GetBlockHeaders to avoid disconnect. " +
+          "Peer will be available for sync controller.",
+          peer.id
         )
+      } else {
+        // Ask for the highest block from the peer
+        // Send GetBlockHeaders in format based on negotiated capability
+        val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
+        val getBlockHeadersMsg: MessageSerializable =
+          if (usesRequestId)
+            ETH66GetBlockHeaders(ETH66.nextRequestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+          else
+            ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+        
+        // Debug: Log the raw RLP-encoded message bytes for protocol analysis
+        if (log.isDebugEnabled) {
+          val encodedBytes = getBlockHeadersMsg.toBytes
+          val hexBytes = Hex.toHexString(encodedBytes)
+          log.debug(
+            "PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}",
+            encodedBytes.length,
+            if (hexBytes.length > MaxHexLogLength) hexBytes.take(MaxHexLogLength) + "..." else hexBytes
+          )
+        }
+        
+        log.info(
+          "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
+          peer.id,
+          usesRequestId,
+          ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+        )
+        peer.ref ! SendMessage(getBlockHeadersMsg)
       }
-      
-      log.info(
-        "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
-        peer.id,
-        usesRequestId,
-        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
-      )
-      peer.ref ! SendMessage(getBlockHeadersMsg)
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
 
@@ -621,6 +634,12 @@ object EtcPeerManagerActor {
 
     def withChainWeight(weight: ChainWeight): PeerInfo =
       copy(chainWeight = weight)
+
+    /** Checks if this peer is at genesis block (bestHash == genesisHash).
+      * Peers at genesis often disconnect when asked for headers as they implement
+      * peer selection policies that reject genesis-only nodes.
+      */
+    def isAtGenesis: Boolean = remoteStatus.bestHash == remoteStatus.genesisHash
 
     override def toString: String =
       s"PeerInfo {" +
