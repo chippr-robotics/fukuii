@@ -11,7 +11,6 @@ import scala.util.Try
 import org.xerial.snappy.Snappy
 import org.bouncycastle.util.encoders.Hex
 
-import com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder.DecodingError
@@ -26,6 +25,28 @@ object MessageCodec {
   val MaxDecompressedLength = 16777215
   // Maximum bytes to show fully in hex strings (larger data will be truncated)
   val MaxFullHexLength = 64
+
+  final case class CompressionPolicy(
+      compressOutbound: Boolean,
+      expectInboundCompressed: Boolean
+  )
+
+  object CompressionPolicy {
+    private val SnappySupportedFromP2pVersion = 5
+
+    def fromHandshake(localAdvertisedP2pVersion: Int, remotePeerP2pVersion: Long): CompressionPolicy = {
+      val localSupportsSnappy = localAdvertisedP2pVersion >= SnappySupportedFromP2pVersion
+      val remoteSupportsSnappy = remotePeerP2pVersion >= SnappySupportedFromP2pVersion
+      val compressionNegotiated = localSupportsSnappy && remoteSupportsSnappy
+
+      CompressionPolicy(
+        compressOutbound = compressionNegotiated,
+        expectInboundCompressed = compressionNegotiated
+      )
+    }
+
+    def supportsSnappy(p2pVersion: Long): Boolean = p2pVersion >= SnappySupportedFromP2pVersion
+  }
 
   /** Utility method to truncate hex strings for logging.
     * For data up to MaxFullHexLength bytes: shows complete hex string
@@ -44,76 +65,21 @@ class MessageCodec(
     frameCodec: FrameCodec,
     messageDecoder: MessageDecoder,
     val remotePeer2PeerVersion: Long,
-    val remoteClientId: String
+    val remoteClientId: String,
+    compressionPolicy: MessageCodec.CompressionPolicy
 ) extends Logger {
   import MessageCodec._
 
   val contextIdCounter = new AtomicInteger
 
-  /** Determines if compression should be used for this client.
-    * 
-    * EMERGENCY FIX (FUKUII-COMPRESSION-001): Compression disabled globally.
-    * 
-    * Root Cause: fukuii's Snappy compression is broken for ALL peers (including fukuii-to-fukuii).
-    * Evidence shows the issue affects:
-    * - fukuii → CoreGeth (CoreGeth cannot decompress our messages)
-    * - fukuii → fukuii (fukuii peers cannot decompress messages from each other)
-    * 
-    * Hypothesis: xerial.snappy may be using framed Snappy format instead of raw block format
-    * required by Ethereum devp2p/RLPx specification. This would explain:
-    * - Why our messages fail to decompress on other clients
-    * - Why the RUN008 fallback works (treats failed decompression as uncompressed RLP)
-    * - Why fukuii-to-fukuii also fails (both sides expect different format)
-    * 
-    * TODO: Investigate and fix Snappy implementation:
-    * 1. Verify xerial.snappy uses raw block format (not framed)
-    * 2. Test compress/decompress round-trip between fukuii instances
-    * 3. Compare byte output with CoreGeth's golang/snappy compression
-    * 4. Consider switching to snappy library that explicitly supports raw block format
-    * 
-    * See: FUKUII-COMPRESSION-001, RUN008 fix, docs/reviews/COMPRESSION_FIX_WIRE_PROTOCOL.md
-    */
-  private def shouldCompressForClient: Boolean = {
-    // EMERGENCY: Disable compression globally until root cause is fixed
-    val result = false
-    
-    log.debug(
-      "COMPRESSION_POLICY: DISABLED globally (emergency fix) - clientId={}, p2pVersion={}",
-      remoteClientId,
-      remotePeer2PeerVersion
-    )
-    
-    result
-  }
-  
-  /** Legacy implementation (commented out for reference):
-    * 
-    * private def shouldCompressForClient: Boolean = {
-    *   val baselineSupport = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
-    *   
-    *   // CoreGeth compression asymmetry (confirmed via source code analysis):
-    *   // - SENDING: CoreGeth compresses all messages when p2pVersion >= 5 (we handle via fallback)
-    *   // - RECEIVING: CoreGeth cannot decompress our Snappy-compressed messages (THIS fix)
-    *   // Root cause: Likely Snappy library incompatibility between Java (xerial.snappy) and Go (golang/snappy)
-    *   val lowerClientId = remoteClientId.toLowerCase
-    *   val isKnownBroken = lowerClientId.startsWith("geth/") || 
-    *                       lowerClientId.startsWith("core-geth/") ||
-    *                       lowerClientId.startsWith("coregeth/")
-    *     
-    *   val result = baselineSupport && !isKnownBroken
-    *   
-    *   log.info(
-    *     "COMPRESSION_POLICY: clientId={}, p2pVersion={}, baseline={}, knownBroken={}, willCompress={}",
-    *     remoteClientId,
-    *     remotePeer2PeerVersion,
-    *     baselineSupport,
-    *     isKnownBroken,
-    *     result
-    *   )
-    *   
-    *   result
-    * }
-    */
+  log.info(
+    "COMPRESSION_POLICY: peerClientId={}, peerP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
+    remoteClientId,
+    remotePeer2PeerVersion,
+    compressionPolicy.compressOutbound,
+    compressionPolicy.expectInboundCompressed
+  )
+
 
   // TODO: ETCM-402 - messageDecoder should use negotiated protocol version
   def readMessages(data: ByteString): Seq[Either[DecodingError, Message]] = {
@@ -141,20 +107,20 @@ class MessageCodec(
       // Core-geth compresses ALL messages when p2pVersion >= 5, including wire protocol messages
       // Wire protocol messages (Hello 0x00, Disconnect 0x01, Ping 0x02, Pong 0x03) are also compressed
       // Previous logic excluded wire protocol messages, causing incompatibility with core-geth
-      val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion
+      val shouldAttemptDecompression = compressionPolicy.expectInboundCompressed
 
       // Enhanced logging for compression decision
       log.debug(
-        "COMPRESSION_DECISION: frame=0x{}, p2pVersion={}, shouldCompress={}, payloadSize={}, firstByte=0x{}",
+        "COMPRESSION_DECISION: frame=0x{}, p2pVersion={}, expectInboundCompressed={}, payloadSize={}, firstByte=0x{}",
         frame.`type`.toHexString,
         remotePeer2PeerVersion,
-        shouldCompress,
+        shouldAttemptDecompression,
         frameData.length,
         if (frameData.length > 0) Integer.toHexString(frameData(0) & 0xff) else "N/A"
       )
 
       val payloadTry =
-        if (shouldCompress) {
+        if (shouldAttemptDecompression) {
           // Always attempt decompression when compression is expected (p2pVersion >= 5)
           // If decompression fails, fall back to treating the data as uncompressed
           // This handles CoreGeth's protocol deviation where it advertises compression support
@@ -183,10 +149,8 @@ class MessageCodec(
           }
         } else {
           log.debug(
-            "COMPRESSION_SKIP: Frame type 0x{} - skipping decompression (p2pVersion={} < {})",
-            frame.`type`.toHexString,
-            remotePeer2PeerVersion,
-            EtcHelloExchangeState.P2pVersion
+            "COMPRESSION_SKIP: Frame type 0x{} - skipping decompression per negotiated policy",
+            frame.`type`.toHexString
           )
           Success(frameData)
         }
@@ -280,7 +244,7 @@ class MessageCodec(
       
       // Core-geth compresses ALL messages when p2pVersion >= 5, including wire protocol messages
       // Matches core-geth behavior: no exceptions for wire protocol (Ping, Pong, etc.)
-      val shouldCompressThis = shouldCompressForClient
+      val shouldCompressThis = compressionPolicy.compressOutbound
       
       val payload =
         if (shouldCompressThis) {
@@ -300,11 +264,8 @@ class MessageCodec(
           compressed
         } else {
           log.debug(
-            "ENCODE_MSG: Skipping compression for frame {} (clientId={}, p2pVersion={} < {} OR client blacklisted), code=0x{}",
+            "ENCODE_MSG: Skipping compression for frame {} (compression disabled for this peer), code=0x{}",
             frameNo,
-            remoteClientId,
-            remotePeer2PeerVersion,
-            EtcHelloExchangeState.P2pVersion,
             serializable.code.toHexString
           )
           framedPayload

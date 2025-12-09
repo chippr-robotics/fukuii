@@ -302,7 +302,7 @@ class RLPxConnectionHandlerSpec
         new RLPxConnectionHandler(
           protocolVersion :: Nil,
           mockHandshaker,
-          (_, _, _, _) => mockMessageCodec,  // Added 4th parameter for clientId
+          (_, _, _, _, _) => mockMessageCodec,
           rlpxConfiguration,
           _ => mockHelloExtractor
         ) {
