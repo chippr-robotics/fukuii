@@ -4,11 +4,44 @@ This guide provides step-by-step instructions for setting up and running a 3-nod
 
 ## Prerequisites
 
-- Docker 20.10+
-- Docker Compose 2.0+
-- 4GB RAM minimum
-- 5GB free disk space
-- fukuii-cli installed (from `ops/tools/fukuii-cli.sh`)
+Before starting the Gorgoroth trials, you must have:
+
+- **Docker 20.10+** - Container runtime
+- **Docker Compose 2.0+** - Container orchestration
+- **4GB RAM minimum** - System memory
+- **5GB free disk space** - Storage for blockchain data
+- **fukuii-cli** - Management tool (from `ops/tools/fukuii-cli.sh`)
+
+### Verify Prerequisites
+
+Run the automated prerequisite check to ensure your system is ready:
+
+```bash
+./ops/tools/check-docker.sh
+```
+
+This script will verify that Docker and Docker Compose are installed and meet the minimum version requirements.
+
+**Expected output:**
+```
+✓ Docker 24.0.6 installed (>= 20.10 required)
+✓ Docker daemon is running
+✓ Docker Compose 2.21.0 installed (>= 2.0 required)
+✓ Available RAM: 16.0GB
+✓ Available disk space: 100GB
+
+All Docker prerequisites are met!
+```
+
+### Alternative: Build-Only Validation (No Docker Required)
+
+If you're in an environment without Docker (e.g., GitHub Codespaces, CI/CD), you can validate the build process only:
+
+```bash
+./ops/tools/validate-build.sh
+```
+
+This will compile the code and create the distribution package but skip network tests.
 
 ## Quick Start (5 Minutes)
 

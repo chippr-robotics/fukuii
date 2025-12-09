@@ -360,11 +360,11 @@ trait Web3ServiceBuilder {
 }
 
 trait NetServiceBuilder {
-  this: PeerManagerActorBuilder with NodeStatusBuilder =>
+  this: PeerManagerActorBuilder with NodeStatusBuilder with BlacklistBuilder =>
 
   lazy val netServiceConfig: NetServiceConfig = NetServiceConfig(Config.config)
 
-  lazy val netService = new NetService(nodeStatusHolder, peerManager, netServiceConfig)
+  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)
 }
 
 trait PendingTransactionsManagerBuilder {

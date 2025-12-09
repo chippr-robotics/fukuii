@@ -1624,6 +1624,102 @@
       "_type": "request"
     },
     {
+      "_id": "req_miner_start_001",
+      "parentId": "fld_05c1147d",
+      "modified": 1733756575000,
+      "created": 1733756575000,
+      "url": "{{ node_url }}",
+      "name": "miner_start",
+      "description": "Start mining",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"miner_start\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_miner_start"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611338,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_miner_stop_001",
+      "parentId": "fld_05c1147d",
+      "modified": 1733756575001,
+      "created": 1733756575001,
+      "url": "{{ node_url }}",
+      "name": "miner_stop",
+      "description": "Stop mining",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"miner_stop\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_miner_stop"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611339,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_miner_getStatus_001",
+      "parentId": "fld_05c1147d",
+      "modified": 1733756575002,
+      "created": 1733756575002,
+      "url": "{{ node_url }}",
+      "name": "miner_getStatus",
+      "description": "Get comprehensive mining status",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"miner_getStatus\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_miner_getStatus"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611340,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
       "_id": "req_03e4d126",
       "parentId": "fld_05619cc3",
       "modified": 1763690611338,

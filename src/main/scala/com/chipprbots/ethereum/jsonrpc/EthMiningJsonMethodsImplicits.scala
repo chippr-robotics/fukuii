@@ -72,4 +72,25 @@ object EthMiningJsonMethodsImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: SubmitWorkResponse): JValue = JBool(t.success)
     }
 
+  implicit val miner_start: NoParamsMethodDecoder[StartMinerRequest] with JsonEncoder[StartMinerResponse] =
+    new NoParamsMethodDecoder(StartMinerRequest()) with JsonEncoder[StartMinerResponse] {
+      override def encodeJson(t: StartMinerResponse): JValue = JBool(t.success)
+    }
+
+  implicit val miner_stop: NoParamsMethodDecoder[StopMinerRequest] with JsonEncoder[StopMinerResponse] =
+    new NoParamsMethodDecoder(StopMinerRequest()) with JsonEncoder[StopMinerResponse] {
+      override def encodeJson(t: StopMinerResponse): JValue = JBool(t.success)
+    }
+
+  implicit val miner_getStatus: NoParamsMethodDecoder[GetMinerStatusRequest] with JsonEncoder[GetMinerStatusResponse] =
+    new NoParamsMethodDecoder(GetMinerStatusRequest()) with JsonEncoder[GetMinerStatusResponse] {
+      override def encodeJson(t: GetMinerStatusResponse): JValue = {
+        import org.json4s.JsonDSL._
+        ("isMining" -> t.isMining) ~
+        ("coinbase" -> encodeAsHex(t.coinbase.bytes)) ~
+        ("hashRate" -> encodeAsHex(t.hashRate)) ~
+        ("blocksMinedCount" -> t.blocksMinedCount.map(_.toString))
+      }
+    }
+
 }

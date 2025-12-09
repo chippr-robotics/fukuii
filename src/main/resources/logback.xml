@@ -76,15 +76,44 @@
 
     <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
 
+    <!-- Conditional console appender selection -->
+    <if condition='p("ASJSON").contains("true")'>
+        <then>
+            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                    <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
+                    <fieldNames>
+                        <timestamp>timestamp</timestamp>
+                        <version>[ignore]</version>
+                        <logger>logger</logger>
+                        <thread>thread</thread>
+                        <level>level</level>
+                        <levelValue>level_value</levelValue>
+                        <message>message</message>
+                        <stackTrace>stack_trace</stackTrace>
+                    </fieldNames>
+                    <includeMdcKeyNames>
+                        <includeMdcKeyName>peer</includeMdcKeyName>
+                        <includeMdcKeyName>block</includeMdcKeyName>
+                        <includeMdcKeyName>transaction</includeMdcKeyName>
+                        <includeMdcKeyName>actor</includeMdcKeyName>
+                    </includeMdcKeyNames>
+                    <includeCallerData>false</includeCallerData>
+                    <includeContext>true</includeContext>
+                </encoder>
+            </appender>
+        </then>
+        <else>
+            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder>
+                    <pattern>${stdoutEncoderPattern}</pattern>
+                </encoder>
+            </appender>
+        </else>
+    </if>
+
     <root level="${LOGSLEVEL}">
-        <if condition='p("ASJSON").contains("true")'>
-            <then>
-                <appender-ref ref="STASH" />
-            </then>
-            <else>
-                <appender-ref ref="STDOUT" />
-            </else>
-        </if>
+        <appender-ref ref="CONSOLE" />
         <appender-ref ref="FILE" />
         <appender-ref ref="METRICS" />
     </root>
