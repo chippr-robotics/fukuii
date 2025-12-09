@@ -455,12 +455,17 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
 
     // Helper to create a PeerInfo for a peer at genesis
+    // Ensures both bestHash and genesisHash point to genesis for consistency
     def createGenesisPeerInfo(basePeerInfo: PeerInfo = initialPeerInfo): PeerInfo = {
-      val genesisStatus: RemoteStatus = basePeerInfo.remoteStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
+      val genesisHash = Fixtures.Blocks.Genesis.header.hash
+      val genesisStatus: RemoteStatus = basePeerInfo.remoteStatus.copy(
+        bestHash = genesisHash,
+        genesisHash = genesisHash
+      )
       basePeerInfo.copy(
         remoteStatus = genesisStatus,
         maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
-        bestBlockHash = Fixtures.Blocks.Genesis.header.hash
+        bestBlockHash = genesisHash
       )
     }
 
@@ -529,10 +534,9 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
       )
 
       // Peer should receive request for highest block UNLESS peer is at genesis
-      // When peer is at genesis (bestHash == genesisHash), no GetBlockHeaders is sent
-      // to avoid triggering disconnect with reason 0x10 (Other) from peers that reject genesis-only nodes
-      val peerIsAtGenesis = peerInfo.remoteStatus.bestHash == peerInfo.remoteStatus.genesisHash
-      if (!peerIsAtGenesis) {
+      // When peer is at genesis, no GetBlockHeaders is sent to avoid triggering
+      // disconnect with reason 0x10 (Other) from peers that reject genesis-only nodes
+      if (!peerInfo.isAtGenesis) {
         peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
       }
     }

@@ -157,14 +157,11 @@ class EtcPeerManagerActor(
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
-      // Check if peer is at genesis (bestHash == genesisHash)
       // Many peers disconnect with reason 0x10 (Other) when asked for headers at genesis
       // as they implement peer selection policies that reject genesis-only nodes.
       // The sync controller will request headers when appropriate, so we skip this initial request
       // to avoid unnecessary disconnections that trigger blacklisting.
-      val peerIsAtGenesis = peerInfo.remoteStatus.bestHash == peerInfo.remoteStatus.genesisHash
-      
-      if (peerIsAtGenesis) {
+      if (peerInfo.isAtGenesis) {
         log.info(
           "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block - skipping immediate GetBlockHeaders to avoid disconnect. " +
           "Sync controller will request headers when needed.",
@@ -636,6 +633,12 @@ object EtcPeerManagerActor {
 
     def withChainWeight(weight: ChainWeight): PeerInfo =
       copy(chainWeight = weight)
+
+    /** Checks if this peer is at genesis block (bestHash == genesisHash).
+      * Peers at genesis often disconnect when asked for headers as they implement
+      * peer selection policies that reject genesis-only nodes.
+      */
+    def isAtGenesis: Boolean = remoteStatus.bestHash == remoteStatus.genesisHash
 
     override def toString: String =
       s"PeerInfo {" +
