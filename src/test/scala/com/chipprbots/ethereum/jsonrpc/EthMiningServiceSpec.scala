@@ -308,6 +308,34 @@ class EthMiningServiceSpec
     }
   }
 
+  it should "start mining via RPC" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val response: ServiceResponse[StartMinerResponse] = ethMiningService.startMiner(StartMinerRequest())
+    response.unsafeRunSync() shouldEqual Right(StartMinerResponse(true))
+  }
+
+  it should "stop mining via RPC" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val response: ServiceResponse[StopMinerResponse] = ethMiningService.stopMiner(StopMinerRequest())
+    response.unsafeRunSync() shouldEqual Right(StopMinerResponse(true))
+  }
+
+  it should "return detailed miner status" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Initially not mining
+    val response1: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val status1 = response1.unsafeRunSync()
+    status1 shouldBe Symbol("right")
+    status1.toOption.get.isMining shouldBe false
+    status1.toOption.get.coinbase shouldEqual miningConfig.coinbase
+    status1.toOption.get.hashRate shouldEqual BigInt(0)
+
+    // Submit a hashrate and check status
+    ethMiningService.submitHashRate(SubmitHashRateRequest(100, ByteString("miner1"))).unsafeRunSync()
+    val response2: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val status2 = response2.unsafeRunSync()
+    status2 shouldBe Symbol("right")
+    status2.toOption.get.isMining shouldBe true
+    status2.toOption.get.hashRate shouldEqual BigInt(100)
+  }
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
