@@ -3,7 +3,7 @@
 This document provides a comprehensive reference for all JSON-RPC endpoints supported by Fukuii.
 
 **Version**: 1.1.0  
-**Last Updated**: 2025-11-24  
+**Last Updated**: 2025-12-09  
 **MCP Ready**: This documentation is structured for Model Context Protocol (MCP) server integration
 
 ## Table of Contents
@@ -1095,6 +1095,118 @@ curl -X POST http://localhost:8546 \
     ]
   }'
 ```
+
+---
+
+### Enhanced Mining Control (Fukuii Extension)
+
+Since Ethereum mainnet no longer supports mining, Fukuii has enhanced the mining RPC API to provide better control for Ethereum Classic mining operations.
+
+#### miner_start
+
+Starts the mining process on the node.
+
+**Parameters**: None
+
+**Returns**: `Boolean` - `true` if mining started successfully, otherwise `false`
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "miner_start",
+    "params": []
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+```
+
+**Note**: Only applicable when running Ethash (PoW) consensus. Returns an error for other consensus types.
+
+---
+
+#### miner_stop
+
+Stops the mining process on the node.
+
+**Parameters**: None
+
+**Returns**: `Boolean` - `true` if mining stopped successfully, otherwise `false`
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "miner_stop",
+    "params": []
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+```
+
+**Note**: Only applicable when running Ethash (PoW) consensus.
+
+---
+
+#### miner_getStatus
+
+Returns comprehensive mining status information.
+
+**Parameters**: None
+
+**Returns**: `Object` - Mining status with the following fields:
+- `isMining`: `Boolean` - `true` if the client is actively mining
+- `coinbase`: `DATA`, 20 Bytes - The address receiving mining rewards
+- `hashRate`: `QUANTITY` - Current aggregate hash rate from all connected miners
+- `blocksMinedCount`: `QUANTITY` or `null` - Number of blocks mined (reserved for future use)
+
+**Example**:
+```bash
+curl -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "miner_getStatus",
+    "params": []
+  }'
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "isMining": true,
+    "coinbase": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+    "hashRate": "0x64",
+    "blocksMinedCount": null
+  }
+}
+```
+
+**Note**: Only applicable when running Ethash (PoW) consensus. Provides a consolidated view of mining status instead of querying multiple endpoints.
 
 ---
 
