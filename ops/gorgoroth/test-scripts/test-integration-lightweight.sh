@@ -39,10 +39,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 cd "$GORGOROTH_DIR"
 
 # Check if any nodes are running
-RUNNING_NODES=$(docker compose -f docker-compose-6nodes.yml ps -q 2>/dev/null | wc -l)
-if [ "$RUNNING_NODES" -gt 0 ]; then
+if docker compose -f docker-compose-6nodes.yml ps -q 2>/dev/null | grep -q .; then
+  RUNNING_NODES=$(docker compose -f docker-compose-6nodes.yml ps -q 2>/dev/null | wc -l)
   log_info "Found $RUNNING_NODES running nodes - stopping for clean test"
   docker compose -f docker-compose-6nodes.yml down 2>/dev/null || true
+else
+  log_info "No running nodes found"
 fi
 
 # The test script should fail gracefully when no nodes are running
@@ -50,23 +52,27 @@ fi
 log_info "Running test-fast-sync.sh (expecting early exit due to no blockchain)..."
 
 cd "$SCRIPT_DIR"
-if timeout 60 bash test-fast-sync.sh 2>&1 | tee /tmp/test-fast-sync-output.log; then
+TEST_OUTPUT=$(mktemp)
+if timeout 60 bash test-fast-sync.sh 2>&1 | tee "$TEST_OUTPUT"; then
   log_error "Test unexpectedly succeeded (should fail without blockchain)"
   TESTS_FAILED=true
 else
   # Expected to fail - check that it failed for the right reason
-  if grep -q "Too few blocks for meaningful fast sync test" /tmp/test-fast-sync-output.log; then
+  if grep -q "Too few blocks for meaningful fast sync test" "$TEST_OUTPUT"; then
     log_success "Test failed as expected: insufficient blocks"
-  elif grep -q "Failed to get block number" /tmp/test-fast-sync-output.log; then
+  elif grep -q "Failed to get block number" "$TEST_OUTPUT"; then
     log_success "Test failed as expected: no seed nodes running"
-  elif grep -q "No response from RPC endpoint" /tmp/test-fast-sync-output.log; then
+  elif grep -q "No response from RPC endpoint" "$TEST_OUTPUT"; then
     log_success "Test failed as expected: RPC endpoints not available"
   else
     log_info "Test exited with error (expected behavior)"
     log_info "Last 10 lines of output:"
-    tail -10 /tmp/test-fast-sync-output.log | sed 's/^/  /'
+    tail -10 "$TEST_OUTPUT" | sed 's/^/  /'
   fi
 fi
+
+# Clean up
+rm -f "$TEST_OUTPUT"
 
 echo
 
@@ -91,7 +97,8 @@ log_info "Test 3: Verify helper functions work correctly"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Source the helper functions from test-fast-sync.sh
-cat > /tmp/test-helpers.sh << 'EOF'
+HELPER_SCRIPT=$(mktemp)
+cat > "$HELPER_SCRIPT" << 'EOF'
 #!/bin/bash
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -121,12 +128,15 @@ log_error "Test error message"
 log_success "Test success message"
 EOF
 
-if bash /tmp/test-helpers.sh > /dev/null 2>&1; then
+if bash "$HELPER_SCRIPT" > /dev/null 2>&1; then
   log_success "Helper functions work correctly"
 else
   log_error "Helper functions failed"
   TESTS_FAILED=true
 fi
+
+# Clean up
+rm -f "$HELPER_SCRIPT"
 
 echo
 
@@ -167,7 +177,9 @@ log_info "Test 5: Verify division by zero protection logic"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Test the division logic with various ELAPSED values
-cat > /tmp/test-division.sh << 'EOF'
+DIVISION_SCRIPT=$(mktemp)
+DIVISION_OUTPUT=$(mktemp)
+cat > "$DIVISION_SCRIPT" << 'EOF'
 #!/bin/bash
 test_division() {
   ELAPSED=$1
@@ -192,11 +204,11 @@ test_division 120
 test_division 300
 EOF
 
-if bash /tmp/test-division.sh > /tmp/division-output.log 2>&1; then
-  if grep -q "N/A (too quick)" /tmp/division-output.log && \
-     grep -q "blocks/min" /tmp/division-output.log; then
+if bash "$DIVISION_SCRIPT" > "$DIVISION_OUTPUT" 2>&1; then
+  if grep -q "N/A (too quick)" "$DIVISION_OUTPUT" && \
+     grep -q "blocks/min" "$DIVISION_OUTPUT"; then
     log_success "Division by zero protection works correctly"
-    cat /tmp/division-output.log | sed 's/^/  /'
+    cat "$DIVISION_OUTPUT" | sed 's/^/  /'
   else
     log_error "Division logic output unexpected"
     TESTS_FAILED=true
@@ -206,6 +218,9 @@ else
   TESTS_FAILED=true
 fi
 
+# Clean up
+rm -f "$DIVISION_SCRIPT" "$DIVISION_OUTPUT"
+
 echo
 
 # Test 6: Verify null handling in RPC responses
@@ -213,7 +228,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 log_info "Test 6: Verify null/empty handling in RPC responses"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-cat > /tmp/test-null-handling.sh << 'EOF'
+NULL_SCRIPT=$(mktemp)
+NULL_OUTPUT=$(mktemp)
+cat > "$NULL_SCRIPT" << 'EOF'
 #!/bin/bash
 
 test_null_handling() {
@@ -239,11 +256,11 @@ echo "Testing valid value:"
 test_null_handling "0x5"
 EOF
 
-if bash /tmp/test-null-handling.sh > /tmp/null-handling-output.log 2>&1; then
-  if grep -q "FAIL.*Empty or null" /tmp/null-handling-output.log && \
-     grep -q "PASS.*Valid value" /tmp/null-handling-output.log; then
+if bash "$NULL_SCRIPT" > "$NULL_OUTPUT" 2>&1; then
+  if grep -q "FAIL.*Empty or null" "$NULL_OUTPUT" && \
+     grep -q "PASS.*Valid value" "$NULL_OUTPUT"; then
     log_success "Null handling works correctly"
-    cat /tmp/null-handling-output.log | sed 's/^/  /'
+    cat "$NULL_OUTPUT" | sed 's/^/  /'
   else
     log_error "Null handling output unexpected"
     TESTS_FAILED=true
@@ -252,6 +269,9 @@ else
   log_error "Null handling test failed"
   TESTS_FAILED=true
 fi
+
+# Clean up
+rm -f "$NULL_SCRIPT" "$NULL_OUTPUT"
 
 echo
 

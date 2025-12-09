@@ -93,10 +93,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 for script in "${TEST_SCRIPTS[@]}"; do
   SCRIPT_PATH="$SCRIPT_DIR/$script"
   if [ -f "$SCRIPT_PATH" ]; then
-    if bash -n "$SCRIPT_PATH" 2>&1; then
+    ERROR_OUTPUT=$(bash -n "$SCRIPT_PATH" 2>&1)
+    if [ $? -eq 0 ]; then
       echo "  ✓ $script: syntax OK"
     else
       log_error "$script: syntax error"
+      echo "$ERROR_OUTPUT" | sed 's/^/    /'
       VALIDATION_FAILED=true
     fi
   fi
