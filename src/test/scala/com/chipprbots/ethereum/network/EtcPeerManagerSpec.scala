@@ -455,12 +455,14 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
 
     // Helper to create a PeerInfo for a peer at genesis
-    // Ensures both bestHash and genesisHash point to genesis for consistency
+    // Sets both bestHash and genesisHash to ensure isAtGenesis() returns true.
+    // In production, genesisHash should already be set correctly from handshake,
+    // but we explicitly set both here for test clarity and to avoid test brittleness.
     def createGenesisPeerInfo(basePeerInfo: PeerInfo = initialPeerInfo): PeerInfo = {
       val genesisHash = Fixtures.Blocks.Genesis.header.hash
       val genesisStatus: RemoteStatus = basePeerInfo.remoteStatus.copy(
         bestHash = genesisHash,
-        genesisHash = genesisHash
+        genesisHash = genesisHash  // Explicitly set to match bestHash for isAtGenesis() == true
       )
       basePeerInfo.copy(
         remoteStatus = genesisStatus,

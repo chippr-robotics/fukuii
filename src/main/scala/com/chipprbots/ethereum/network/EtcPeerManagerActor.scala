@@ -159,12 +159,13 @@ class EtcPeerManagerActor(
 
       // Many peers disconnect with reason 0x10 (Other) when asked for headers at genesis
       // as they implement peer selection policies that reject genesis-only nodes.
-      // The sync controller will request headers when appropriate, so we skip this initial request
-      // to avoid unnecessary disconnections that trigger blacklisting.
+      // When peer is at genesis, we skip this initial GetBlockHeaders to avoid disconnect.
+      // Block synchronization will be initiated by the sync controller (SyncController/SNAPSyncController)
+      // once it determines which peers to use for sync, avoiding unnecessary blacklisting.
       if (peerInfo.isAtGenesis) {
         log.info(
-          "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block - skipping immediate GetBlockHeaders to avoid disconnect. " +
-          "Sync controller will request headers when needed.",
+          "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block - skipping GetBlockHeaders to avoid disconnect. " +
+          "Peer will be available for sync controller.",
           peer.id
         )
       } else {
