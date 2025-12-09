@@ -113,8 +113,10 @@ The `gorgoroth/` directory contains configurations for an internal private test 
 **Quick Start**:
 ```bash
 cd ops/gorgoroth
-./deploy.sh start 3nodes
+fukuii-cli start 3nodes
 ```
+
+**New to Gorgoroth?** See the [Quick Start Guide](gorgoroth/QUICKSTART.md) for a complete step-by-step setup walkthrough.
 
 For detailed information, see [gorgoroth/README.md](gorgoroth/README.md).
 

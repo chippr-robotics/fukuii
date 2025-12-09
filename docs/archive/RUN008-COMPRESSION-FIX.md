@@ -99,7 +99,7 @@ it should "accept uncompressed messages from peers that advertise compression su
 ```
 
 This test simulates CoreGeth's behavior:
-1. Both peers exchange p2pVersion=5 hellos (compression agreed)
+1. Both peers exchange p2pVersion=5 hellos, agreeing on compression
 2. CoreGeth sends UNCOMPRESSED Status message
 3. Fukuii should accept it despite compression being enabled
 

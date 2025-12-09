@@ -190,7 +190,7 @@ git push origin v1.0.0
 
 **Categories:**
 - 🚀 Features
-- 🐛 Bug Fixes
+- 🐞 Bug Fixes
 - 🔒 Security
 - 📚 Documentation
 - 🏗️ Build & CI/CD

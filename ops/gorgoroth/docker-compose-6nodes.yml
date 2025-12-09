@@ -24,13 +24,18 @@ services:
       - "30303:30303/tcp"
       - "30303:30303/udp"
     volumes:
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node1/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/node1/logback-headers.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node1-data:/app/data
       - fukuii-node1-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dfukuii.network.peer.p2p-version=4"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -53,13 +58,16 @@ services:
       - "30304:30303/tcp"
       - "30304:30303/udp"
     volumes:
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node2/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.peer.p2p-version=4"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -82,13 +90,16 @@ services:
       - "30305:30303/tcp"
       - "30305:30303/udp"
     volumes:
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node3/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -111,13 +122,16 @@ services:
       - "30306:30303/tcp"
       - "30306:30303/udp"
     volumes:
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node4/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node4/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node4/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node4-data:/app/data
       - fukuii-node4-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node4
       - FUKUII_ENV=gorgoroth
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -140,13 +154,16 @@ services:
       - "30307:30303/tcp"
       - "30307:30303/udp"
     volumes:
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node5/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node5/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node5/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node5-data:/app/data
       - fukuii-node5-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node5
       - FUKUII_ENV=gorgoroth
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -169,13 +186,16 @@ services:
       - "30308:30303/tcp"
       - "30308:30303/udp"
     volumes:
-      - ./conf/base-gorgoroth.conf:/app/conf/base-gorgoroth.conf:ro
-      - ./conf/node6/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node6/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node6/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node6-data:/app/data
       - fukuii-node6-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node6
       - FUKUII_ENV=gorgoroth
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]

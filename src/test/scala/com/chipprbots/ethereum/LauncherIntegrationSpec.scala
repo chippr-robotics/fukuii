@@ -1,5 +1,9 @@
 package com.chipprbots.ethereum
 
+import java.io.File
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -64,13 +68,40 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
   private def setNetworkConfig(network: String): Unit =
     setNetworkConfigMethod.invoke(App, network)
 
+  private def clearConfigOverrides(): Unit = {
+    System.clearProperty("config.file")
+    System.clearProperty("config.resource")
+    System.clearProperty("fukuii.conf.dir")
+  }
+
+  private def withTempDirectory(testCode: File => Any): Unit = {
+    val dir = Files.createTempDirectory("launcher-config-test").toFile
+    try testCode(dir)
+    finally deleteRecursively(dir)
+  }
+
+  private def deleteRecursively(file: File): Unit = {
+    if (file.isDirectory) {
+      val children = Option(file.listFiles()).getOrElse(Array.empty[File])
+      children.foreach(deleteRecursively)
+    }
+    file.delete()
+  }
+
+  private def writeConfig(file: File, contents: String = "include \"base-testnet.conf\"\n"): Unit = {
+    file.getParentFile.mkdirs()
+    Files.writeString(file.toPath, contents, StandardCharsets.UTF_8)
+  }
+
   // Helper to clear system properties used by modifiers
   private def clearModifierProperties(): Unit = {
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
+    clearConfigOverrides()
   }
 
   behavior.of("Basic launch configurations")
@@ -373,6 +404,51 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
       setNetworkConfig("mordor")
       setNetworkConfig("pottery")
     }
+  }
+
+  it should "load network config relative to current config.file" taggedAs (UnitTest) in {
+    clearConfigOverrides()
+    withTempDirectory { dir =>
+      val launcherConfig = new File(dir, "app.conf")
+      writeConfig(launcherConfig, "include \"base.conf\"\n")
+      val potteryConfig = new File(dir, "pottery.conf")
+      writeConfig(potteryConfig)
+
+      System.setProperty("config.file", launcherConfig.getAbsolutePath)
+
+      setNetworkConfig("pottery")
+
+      System.getProperty("config.file") shouldBe potteryConfig.getAbsolutePath
+      Option(System.getProperty("config.resource")) shouldBe None
+    }
+    clearConfigOverrides()
+  }
+
+  it should "respect custom config directory system property" taggedAs (UnitTest) in {
+    clearConfigOverrides()
+    withTempDirectory { dir =>
+      val gorgorothConfig = new File(dir, "gorgoroth.conf")
+      writeConfig(gorgorothConfig)
+
+      System.setProperty("fukuii.conf.dir", dir.getAbsolutePath)
+
+      setNetworkConfig("gorgoroth")
+
+      System.getProperty("config.file") shouldBe gorgorothConfig.getAbsolutePath
+      Option(System.getProperty("config.resource")) shouldBe None
+    }
+    clearConfigOverrides()
+  }
+
+  it should "fallback to bundled resource when filesystem config is missing" taggedAs (UnitTest) in {
+    clearConfigOverrides()
+
+    setNetworkConfig("gorgoroth")
+
+    Option(System.getProperty("config.file")) shouldBe None
+    System.getProperty("config.resource") shouldBe "conf/gorgoroth.conf"
+
+    clearConfigOverrides()
   }
 
   behavior.of("Enterprise mode features validation")

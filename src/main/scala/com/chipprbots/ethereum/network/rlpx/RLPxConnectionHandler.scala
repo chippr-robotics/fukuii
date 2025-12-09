@@ -17,6 +17,7 @@ import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
@@ -26,6 +27,7 @@ import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
+import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 
@@ -44,7 +46,7 @@ import com.chipprbots.ethereum.utils.ByteUtils
 class RLPxConnectionHandler(
     capabilities: List[Capability],
     authHandshaker: AuthHandshaker,
-    messageCodecFactory: (FrameCodec, Capability, Long, String) => MessageCodec,
+  messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy) => MessageCodec,
     rlpxConfiguration: RLPxConfiguration,
     extractor: Secrets => HelloCodec
 ) extends Actor
@@ -308,7 +310,10 @@ class RLPxConnectionHandler(
 
     private def negotiateCodec(hello: Hello, extractor: HelloCodec): Option[(MessageCodec, Capability)] =
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
-        (messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion, hello.clientId), negotiated)
+        val compressionPolicy =
+          CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+        (messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion, hello.clientId, compressionPolicy),
+          negotiated)
       }
 
     private def processFrames(frames: Seq[Frame], messageCodec: MessageCodec): Unit =
@@ -539,10 +544,11 @@ object RLPxConnectionHandler {
       frameCodec: FrameCodec,
       negotiated: Capability,
       p2pVersion: Long,
-      clientId: String
+      clientId: String,
+      compressionPolicy: CompressionPolicy
   ): MessageCodec = {
     val md = NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))
-    new MessageCodec(frameCodec, md, p2pVersion, clientId)
+    new MessageCodec(frameCodec, md, p2pVersion, clientId, compressionPolicy)
   }
 
   case class ConnectTo(uri: URI)

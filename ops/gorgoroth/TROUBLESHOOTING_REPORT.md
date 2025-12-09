@@ -4,21 +4,85 @@
 **Status:** Issues Identified - Workaround Available  
 **Network:** Gorgoroth 3-Node Test Network  
 
+> **UPDATE 2025-12-08:** Additional investigation and remediation completed. See [BATTLENET_CONNECTION_CLEANUP_REPORT.md](BATTLENET_CONNECTION_CLEANUP_REPORT.md) for:
+> - ✅ **Fixed:** Zero-duration blacklisting causing connection spam
+> - ✅ **Verified:** Configuration loading bug already fixed in App.scala
+> - ✅ **Confirmed:** Node keys DO persist correctly in Docker volumes
+> - 📋 **Documented:** Static-nodes.json configuration requirements
+
 ## Executive Summary
 
-The Gorgoroth 3-node battlenet successfully starts all containers and passes health checks, but nodes fail to establish peer connections. Root cause analysis reveals two critical issues:
+The Gorgoroth 3-node battlenet successfully starts all containers and passes health checks, but nodes fail to establish peer connections. Root cause analysis reveals three critical issues:
 
-1. **Configuration Loading Bug**: Nodes advertise port 9076 instead of the configured 30303
-2. **Placeholder Enode IDs**: Static-nodes.json files contain invalid placeholder enode identifiers
+1. **Configuration Loading Bug**: ~~Nodes advertise port 9076 instead of the configured 30303~~ **FIXED** ✅ - Already resolved in App.scala
+2. **Placeholder Enode IDs**: Static-nodes.json files contain invalid placeholder enode identifiers - **Requires operator action on first startup**
+3. **Ephemeral Node Keys**: ~~No persisted `nodekey` files exist inside the containers~~ **FALSE** - Node keys DO persist in `/app/data/node.key`
+
+## Latest Troubleshooting Session – 2025-12-07 19:17 UTC
+
+### Steps Performed
+
+- Started the stack with `fukuii-cli start 3nodes`, waited ~45 seconds, and immediately observed zero peers.
+- Ran `fukuii-cli restart 3nodes` to apply freshly edited host-side `static-nodes.json` files (node1 ↔ node2 ↔ node3) and allow containers to remount them.
+- Extracted the new enode IDs from container logs via `docker logs gorgoroth-fukuii-node{1,2,3}` and updated `ops/gorgoroth/conf/node*/static-nodes.json` twice.
+- Verified container state with `docker exec gorgoroth-fukuii-node1 cat /app/data/static-nodes.json` and directory listings under `/app/data`.
+- Collected artifacts with `fukuii-cli collect-logs gorgoroth logs-3nodes-20251207-132004` (now archived under `ops/gorgoroth/logs-3nodes-20251207-132004`).
+- Queried RPC health via `net_peerCount` on node1 and confirmed the value is still `0x0` after several minutes.
+- Attempted to automate enode collection with `./fukuii-cli.sh sync-static-nodes gorgoroth`, which consistently fails because the admin RPC namespace (specifically `admin_nodeInfo`) is disabled in this build.
+- Searched for persisted node keys using `docker exec gorgoroth-fukuii-node1 sh -c 'find /home/fukuii -maxdepth 3 -name nodekey -print'` and found none, explaining why every restart produces brand new enode IDs.
+
+### Key Observations
+
+- **Still advertising TCP 9076**: All three nodes log `Listening on ...:9076` despite Docker exposing 30303; the config-loading bug persists.
+- **Enode IDs rotate each restart**: Latest run produced:
+  - node1 – `enode://b83b6fb5bd82f3f65c4b0e29fcedbf34457121a03d0cb1f2307adb97b25ac04a4fc6951735c2616e9da21c9740200714c63d0d40ade7eba3b80c20da8497da89@[0:0:0:0:0:0:0:0]:9076`
+  - node2 – `enode://5131bfd7f9d7a35f20cafa60460525d84d351ca1e7b33c750c277392900e3d0c2dd7a3829226dcf5cdfc20b836edfbff89f81260692aa20fc235130497b85c3f@[0:0:0:0:0:0:0:0]:9076`
+  - node3 – `enode://2c5cc07365e069b3477bd8eedf7d1edd296175c9ff7ede3b6029c9a2587af8f72e87ad5dbbc6cc419aba428f55dc1d6aa37e7eabbaa25ab79801eca354da0fa4@[0:0:0:0:0:0:0:0]:9076`
+- **Static nodes stay stale**: Host and container `static-nodes.json` files match, but they inevitably contain yesterday's enodes because the underlying keys rotate—preventing any persistent peering even after manual edits.
+- **Automation blocked**: `fukuii-cli sync-static-nodes gorgoroth` cannot call `admin_nodeInfo`, so it retries five times per node and exits with code 1. Manual log scraping is the only option right now.
+- **No persisted nodekey**: Neither `/app/data` nor `/home/fukuii/.fukuii/etc` contain a `nodekey` file, confirming keys live in ephemeral locations (likely `/tmp`) and vanish on restart.
+- **External peers still blacklisted**: Logs show repeated `CacheBasedBlacklist` events for 64.225.0.245, 164.90.144.106, and 157.245.77.211 exactly as in prior runs.
+
+### Evidence Excerpts
+
+```bash
+$ docker exec gorgoroth-fukuii-node1 curl -s -X POST -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' http://localhost:8546
+{"jsonrpc":"2.0","result":"0x0","id":1}
+```
+
+```text
+$ ./fukuii-cli.sh sync-static-nodes gorgoroth
+Collecting enode URLs from containers...
+  gorgoroth-fukuii-node1: Retry 1/5 ...
+  ...
+Failed to get enode from gorgoroth-fukuii-node1 after 5 retries
+```
+
+```text
+$ docker exec gorgoroth-fukuii-node1 ls -al /app/data
+total 13
+drwxr-xr-x 2 fukuii fukuii 4096 Dec  5 04:34 .
+drwxr-xr-x 1 fukuii fukuii 4096 Dec  7 19:17 ..
+-rw-rw-r-- 1 fukuii fukuii  323 Dec  7 19:22 static-nodes.json
+```
+
+All supporting logs are stored in `ops/gorgoroth/logs-3nodes-20251207-132004/`.
 
 ## Test Execution
 
 ### Commands Executed
 ```bash
-cd /home/runner/work/fukuii/fukuii/ops/gorgoroth
-fukuii-cli start 3nodes
-# Waited 45 seconds for initialization
-./collect-logs.sh 3nodes /tmp/3nodes-logs
+cd /chipprbots/blockchain/fukuii/ops/tools
+./fukuii-cli.sh start 3nodes
+sleep 45
+./fukuii-cli.sh restart 3nodes
+./fukuii-cli.sh collect-logs gorgoroth logs-3nodes-20251207-132004
+./fukuii-cli.sh sync-static-nodes gorgoroth   # fails (admin RPC disabled)
+cd ../gorgoroth
+docker logs gorgoroth-fukuii-node{1,2,3} | grep -n "Node address"
+docker exec gorgoroth-fukuii-node1 curl -s -X POST -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' http://localhost:8546
 ```
 
 ### Results
@@ -26,6 +90,9 @@ fukuii-cli start 3nodes
 - ✅ All containers healthy (health checks passing)  
 - ❌ 0 peer connections established
 - ❌ Nodes advertising wrong P2P port (9076 vs 30303)
+- ❌ `fukuii-cli sync-static-nodes` fails (admin RPC namespace not exposed, cannot call `admin_nodeInfo`)
+- ⚠️ Host/container `static-nodes.json` files now contain the most recent enodes *at the time of editing*, but the IDs change every restart because node keys are ephemeral
+- 📁 Logs archived under `ops/gorgoroth/logs-3nodes-20251207-132004/`
 
 ## Network Status
 
@@ -36,6 +103,10 @@ fukuii-cli start 3nodes
 | node3 | HEALTHY | 0 | 9076 | 30303 |
 
 ### Actual Enode Addresses (from logs)
+
+> ⚠️ **These values are volatile.** With no persisted `nodekey` the IDs below change every restart; see the “Latest Troubleshooting Session” section for the most recent set captured on 2025-12-07 19:17 UTC.
+
+Historical snapshot (2025-12-07 05:50 UTC):
 
 ```
 node1: enode://a02031c44d9f129132ff6d0c4f88c0f59882abdb9be9c8f744b2f2d371dfc7c6cc694d76bf2fb8af5716fa11cd2e85ef4c11d526adc4aec70665ab98195e06b0@[0:0:0:0:0:0:0:0]:9076
@@ -107,6 +178,29 @@ From `ops/gorgoroth/README.md` (lines 159-161):
 > The static-nodes.json files in the 3-node configuration contain placeholder enode IDs and are for reference only. For production use, you should:
 > 1. Generate proper node keys for each node
 > 2. Update static-nodes.json with actual enode URLs
+
+### Issue #3: Ephemeral Node Keys (No Persisted `nodekey` Files)
+
+**Problem:**
+- Neither `/app/data` nor `/home/fukuii/.fukuii/etc` inside the containers contains a `nodekey` file. Running `docker exec gorgoroth-fukuii-node1 sh -c 'find /home/fukuii -maxdepth 3 -name nodekey -print'` returns no results.
+- As a result, every container restart generates a brand new Secp256k1 identity and therefore a brand new enode string.
+
+**Impact:**
+- Any static-nodes.json edits (manual or automated) are invalidated immediately after the next restart because the peer IDs no longer match.
+- The new enodes still advertise port 9076, compounding the mismatch.
+- Tooling that caches or distributes enodes cannot succeed until node keys are persisted on disk or injected deterministically.
+
+**Evidence:**
+```
+$ docker exec gorgoroth-fukuii-node1 ls -al /app/data
+total 13
+drwxr-xr-x 2 fukuii fukuii 4096 Dec  5 04:34 .
+drwxr-xr-x 1 fukuii fukuii 4096 Dec  7 19:17 ..
+-rw-rw-r-- 1 fukuii fukuii  323 Dec  7 19:22 static-nodes.json
+
+$ docker exec gorgoroth-fukuii-node1 sh -c 'find /home/fukuii -maxdepth 3 -name nodekey -print'
+# (no output)
+```
 
 ## Network Configuration
 
@@ -180,85 +274,26 @@ environment:
 - JAVA_OPTS may not be properly passed through startup script
 - Tested and failed - startup script doesn't use JAVA_OPTS
 
-### Option 3: Update static-nodes.json with Actual Enode IDs (Recommended Workaround)
+### Option 3: Update static-nodes.json with Actual Enode IDs (Manual Only — CLI Blocked)
 
-**✅ IMPLEMENTED** - A unified `fukuii-cli` toolkit is now available to automate deployment and configuration.
+The `fukuii-cli sync-static-nodes` path documented previously now fails because the enterprise build used for Gorgoroth disables the `admin` RPC namespace. The tool retries `admin_nodeInfo` five times against each container and exits with code 1, so operators must fall back to manual log scraping.
 
-The `fukuii-cli` tool is a comprehensive command-line toolkit that includes:
-- Network deployment commands (start, stop, restart, status, logs, clean)
-- Node configuration commands (sync-static-nodes, collect-logs)
-- All functionality previously in separate scripts now unified in one tool
+**Manual steps currently required:**
 
-**Sync-Static-Nodes Functionality:**
-1. Collects enode URLs from all running containers via RPC
-2. Generates a consolidated static-nodes.json file
-3. Distributes the file to all containers
-4. Restarts containers to apply the configuration
+1. `./fukuii-cli.sh start 3nodes` (or `restart`) from `ops/tools`.
+2. Wait for each node to emit `ServerActor - Node address: enode://...` in `docker logs`.
+3. Copy the fresh enodes into every `ops/gorgoroth/conf/node*/static-nodes.json` file so each node references the other two.
+4. Confirm the mounted file was refreshed via `docker exec gorgoroth-fukuii-nodeX cat /app/data/static-nodes.json`.
+5. Restart the network again to force Besu to reload static peers.
 
-**Usage:**
+**Limitations that remain:**
 
-```bash
-# Using fukuii-cli directly (recommended)
-fukuii-cli sync-static-nodes
+- The TCP port is still wrong (9076), so even correct static peers cannot handshake.
+- There is no persisted `nodekey`, so the enodes change on every restart and the above procedure must be repeated constantly.
+- `net_peerCount` continues to return `0x0`; no internal peering occurs.
+- Admin RPC (needed for automation) is disabled, so tooling cannot be fixed without enabling that namespace or adding another data source for enodes.
 
-# Or using backward-compatible wrappers
-fukuii-cli sync-static-nodes
-fukuii-cli sync-static-nodes
-```
-
-**All Available Commands:**
-
-```bash
-fukuii-cli start [config]          # Start network
-fukuii-cli stop [config]           # Stop network
-fukuii-cli restart [config]        # Restart network
-fukuii-cli status [config]         # Show container status
-fukuii-cli logs [config]           # Follow logs
-fukuii-cli clean [config]          # Remove containers and volumes
-fukuii-cli sync-static-nodes       # Synchronize peer connections
-fukuii-cli collect-logs [config]   # Collect logs for debugging
-fukuii-cli help                    # Show help
-fukuii-cli version                 # Show version
-```
-
-**Benefits:**
-- Unified command structure across all operations
-- Automatically extracts actual enode IDs from running nodes
-- Handles all nodes in the network
-- Properly formats JSON output
-- Includes retry logic for reliability
-- Restarts containers to apply changes
-- Backward compatible with existing scripts
-
-**Limitations:**
-- Still doesn't fix the underlying port configuration issue (9076 vs 30303)
-- Nodes will advertise wrong port in enode URLs until configuration bug is fixed
-- Works around the problem rather than solving root cause
-
-**First-Time 3-Node Setup Process:**
-
-1. Start the network (nodes will start but won't connect):
-   ```bash
-   fukuii-cli start 3nodes
-   ```
-
-2. Wait for nodes to fully initialize (~30-45 seconds):
-   ```bash
-   sleep 45
-   ```
-
-3. Synchronize static nodes (collects enodes and establishes connections):
-   ```bash
-   fukuii-cli sync-static-nodes
-   ```
-
-4. Verify peer connections:
-   ```bash
-   curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-     http://localhost:8546
-   ```
-
-For detailed CLI usage and installation instructions, see `docs/runbooks/node-configuration.md`.
+Until the admin RPC is exposed or node keys are persisted, automation is not possible and manual edits only provide momentary alignment before the next restart.
 
 ### Option 4: Manual Peering via RPC (Testing Workaround)
 
@@ -289,8 +324,8 @@ Since this is a troubleshooting task to identify issues, not necessarily fix the
 ### Future (Proper Fix)
 1. Fix `setNetworkConfig()` in App.scala to check classpath resources
 2. Add integration test to verify network configs load correctly
-3. ✅ **COMPLETED**: Created `fukuii-cli` tool to generate and synchronize static-nodes.json files
-4. ✅ **COMPLETED**: Updated documentation with working examples and first-time setup process
+3. ⚠️ Expose the admin RPC namespace or persist node keys so `fukuii-cli sync-static-nodes` can function (currently fails retrieving enodes)
+4. ✅ Documented the manual workaround and troubleshooting procedures in this report
 
 ## Test Results Summary
 
@@ -346,16 +381,18 @@ $ docker exec gorgoroth-fukuii-node1 curl -s -X POST -H "Content-Type: applicati
 - `/home/runner/work/fukuii/fukuii/ops/tools/fukuii-cli.sh`
 
 ### Log Files
-- `/tmp/3nodes-logs/gorgoroth-fukuii-node1.log`
-- `/tmp/3nodes-logs/gorgoroth-fukuii-node2.log`
-- `/tmp/3nodes-logs/gorgoroth-fukuii-node3.log`
+- `ops/gorgoroth/logs-3nodes-20251207-132004/gorgoroth-fukuii-node1.log`
+- `ops/gorgoroth/logs-3nodes-20251207-132004/gorgoroth-fukuii-node2.log`
+- `ops/gorgoroth/logs-3nodes-20251207-132004/gorgoroth-fukuii-node3.log`
+- Previous run artifacts under `/tmp/3nodes-logs/` (kept for historical comparison)
 
 ## Conclusion
 
-The Gorgoroth 3-node battlenet nodes cannot connect to each other due to two compounding issues:
+The Gorgoroth 3-node battlenet nodes cannot connect to each other due to three compounding issues:
 
-1. **Primary Issue**: Configuration file loading bug causes nodes to use default port 9076 instead of the configured 30303
-2. **Secondary Issue**: Static-nodes.json files contain placeholder enode IDs that don't match actual node identities
+1. **Primary Issue**: Configuration file loading bug causes nodes to use default port 9076 instead of the configured 30303.
+2. **Secondary Issue**: Static-nodes.json files contain placeholder (or quickly outdated) enode IDs that don't match actual node identities.
+3. **Tertiary Issue**: Node identities are regenerated every restart because no persistent `nodekey` file exists inside the containers, invalidating any manual or automated static-node updates.
 
 The configuration loading bug is the critical blocker. Even with correct enode IDs in static-nodes.json, nodes would still fail to connect because they're advertising the wrong port. The bug is in `App.scala`'s `setNetworkConfig()` method which checks for filesystem files instead of classpath resources.
 

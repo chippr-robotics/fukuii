@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Ping
+import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.InitialHelloReceived
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
@@ -43,10 +44,10 @@ class RLPxConnectionHandlerSpec
     with MockFactory {
 
   it should "write messages send to TCP connection" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
 
     setupIncomingRLPxConnection()
 
-    (mockMessageCodec.encodeMessage _).expects(Ping(): MessageSerializable).returning(ByteString("ping encoded"))
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
 
@@ -56,11 +57,7 @@ class RLPxConnectionHandlerSpec
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-
-    (mockMessageCodec.encodeMessage _)
-      .expects(Ping(): MessageSerializable)
-      .returning(ByteString("ping encoded"))
-      .anyNumberOfTimes()
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
 
     setupIncomingRLPxConnection()
 
@@ -81,11 +78,7 @@ class RLPxConnectionHandlerSpec
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-
-    (mockMessageCodec.encodeMessage _)
-      .expects(Ping(): MessageSerializable)
-      .returning(ByteString("ping encoded"))
-      .anyNumberOfTimes()
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
 
     setupIncomingRLPxConnection()
 
@@ -110,10 +103,7 @@ class RLPxConnectionHandlerSpec
   }
 
   it should "close the connection when Ack timeout happens" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    (mockMessageCodec.encodeMessage _)
-      .expects(Ping(): MessageSerializable)
-      .returning(ByteString("ping encoded"))
-      .anyNumberOfTimes()
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
 
     setupIncomingRLPxConnection()
 
@@ -131,10 +121,7 @@ class RLPxConnectionHandlerSpec
   }
 
   it should "ignore timeout of old messages" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    (mockMessageCodec.encodeMessage _)
-      .expects(Ping(): MessageSerializable)
-      .returning(ByteString("ping encoded"))
-      .anyNumberOfTimes()
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
 
     setupIncomingRLPxConnection()
 
@@ -234,11 +221,40 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
+    
     // SCALA 3 MIGRATION: Using configurable test double instead of mock because
     // AuthHandshaker with Selectable cannot be properly mocked in Scala 3
     lazy val mockHandshaker: ConfigurableAuthHandshaker = new ConfigurableAuthHandshaker()
     lazy val connection: TestProbe = TestProbe()
-    lazy val mockMessageCodec: MessageCodec = mock[MessageCodec]
+    
+    // SCALA 3 MIGRATION: Cannot mock MessageCodec with constructor parameters in Scala 3
+    // Using configurable test double pattern similar to ConfigurableAuthHandshaker
+    private lazy val stubFrameCodec: FrameCodec = stub[FrameCodec]
+    private val defaultCompressionPolicy = CompressionPolicy(
+      compressOutbound = false,
+      expectInboundCompressed = false
+    )
+    
+    class ConfigurableMessageCodec
+        extends MessageCodec(
+          stubFrameCodec,
+          mockMessageDecoder,
+          5L, // remotePeer2PeerVersion
+          "test-client",
+          defaultCompressionPolicy
+        ) {
+      var encodeMessageHandler: Option[MessageSerializable => ByteString] = None
+      var readMessagesHandler: Option[ByteString => Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]]] = None
+      
+      override def encodeMessage(message: MessageSerializable): ByteString =
+        encodeMessageHandler.getOrElse(super.encodeMessage)(message)
+      
+      override def readMessages(data: ByteString): Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]] =
+        readMessagesHandler.getOrElse(super.readMessages)(data)
+    }
+    
+    lazy val mockMessageCodec: ConfigurableMessageCodec = new ConfigurableMessageCodec()
+    
     lazy val mockHelloExtractor: HelloCodec = mock[HelloCodec]
 
     // Configurable test double for AuthHandshaker that can be set up for different test scenarios
@@ -302,7 +318,7 @@ class RLPxConnectionHandlerSpec
         new RLPxConnectionHandler(
           protocolVersion :: Nil,
           mockHandshaker,
-          (_, _, _, _) => mockMessageCodec,  // Added 4th parameter for clientId
+          (frameCodec: FrameCodec, capability: Capability, p2pVersion: Long, clientId: String, compressionPolicy: MessageCodec.CompressionPolicy) => mockMessageCodec,
           rlpxConfiguration,
           _ => mockHelloExtractor
         ) {
@@ -344,9 +360,7 @@ class RLPxConnectionHandlerSpec
       (mockHelloExtractor.readHello _)
         .expects(ByteString.empty)
         .returning(Some((Hello(5, "", Capability.ETH63 :: Nil, 30303, ByteString("abc")), Seq.empty)))
-      (mockMessageCodec.readMessages _)
-        .expects(hello)
-        .returning(Nil) // For processing of messages after handshaking finishes
+      mockMessageCodec.readMessagesHandler = Some(_ => Nil) // For processing of messages after handshaking finishes
 
       rlpxConnection ! Tcp.Received(data)
       connection.expectMsg(Tcp.Write(response, RLPxConnectionHandler.Ack))

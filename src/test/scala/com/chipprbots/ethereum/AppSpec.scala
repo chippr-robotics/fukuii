@@ -32,6 +32,17 @@ class AppSpec extends AnyFlatSpec with Matchers {
     method
   }
 
+  private def getDetermineNetworkArgMethod = {
+    val method = App.getClass.getDeclaredMethod("determineNetworkArg", classOf[Array[String]])
+    method.setAccessible(true)
+    method
+  }
+
+  private def determineNetworkArg(args: Array[String]): Option[String] =
+    getDetermineNetworkArgMethod
+      .invoke(App, args.asInstanceOf[AnyRef])
+      .asInstanceOf[Option[String]]
+
   private def isModifier(arg: String): Boolean =
     getIsModifierMethod.invoke(App, arg).asInstanceOf[Boolean]
 
@@ -70,15 +81,18 @@ class AppSpec extends AnyFlatSpec with Matchers {
   it should "set discovery system property when 'public' modifier is present" taggedAs (UnitTest) in {
     // Clear any existing property
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     
     // Apply public modifier
     getApplyModifiersMethod.invoke(App, Set("public"))
     
     // Verify system property is set
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
+    System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "true"
     
     // Cleanup
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
   }
 
   it should "not set discovery system property when no modifiers are present" taggedAs (UnitTest) in {
@@ -97,6 +111,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
     
@@ -107,6 +122,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
     System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
     System.getProperty("fukuii.network.discovery.reuse-known-nodes") shouldBe "true"
+    System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "false"
     System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
     System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
     
@@ -114,6 +130,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
   }
@@ -156,5 +173,22 @@ class AppSpec extends AnyFlatSpec with Matchers {
     args1.filter(isModifier).toSet shouldBe Set("enterprise")
     args2.filter(isModifier).toSet shouldBe Set("enterprise")
     args3.filter(isModifier).toSet shouldBe Set("enterprise")
+  }
+
+  behavior.of("App network detection")
+
+  it should "detect network argument after 'fukuii' command" taggedAs (UnitTest) in {
+    val args = Array("fukuii", "gorgoroth")
+    determineNetworkArg(args) should contain("gorgoroth")
+  }
+
+  it should "detect direct network argument" taggedAs (UnitTest) in {
+    val args = Array("mordor")
+    determineNetworkArg(args) should contain("mordor")
+  }
+
+  it should "ignore network when command is non-node" taggedAs (UnitTest) in {
+    val args = Array("cli", "gorgoroth")
+    determineNetworkArg(args) shouldBe empty
   }
 }
