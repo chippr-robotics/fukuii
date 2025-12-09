@@ -66,10 +66,10 @@ object NetService {
       duration: Option[Long], // Duration in seconds, None for permanent
       reason: String
   )
-  case class AddToBlacklistResponse(success: Boolean)
+  case class AddToBlacklistResponse(added: Boolean)
 
   case class RemoveFromBlacklistRequest(address: String)
-  case class RemoveFromBlacklistResponse(success: Boolean)
+  case class RemoveFromBlacklistResponse(removed: Boolean)
 
   case class NetServiceConfig(peerManagerTimeout: FiniteDuration)
 
