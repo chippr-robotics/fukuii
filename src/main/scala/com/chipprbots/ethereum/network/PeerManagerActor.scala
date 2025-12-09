@@ -302,7 +302,8 @@ class PeerManagerActor(
         blacklist.add(PeerAddress(req.address), duration, reason)
         requester ! AddToBlacklistResponse(added = true)
       } catch {
-        case _: Exception =>
+        case e: Exception =>
+          log.error(s"Failed to add address ${req.address} to blacklist", e)
           requester ! AddToBlacklistResponse(added = false)
       }
 
@@ -312,7 +313,8 @@ class PeerManagerActor(
         blacklist.remove(PeerAddress(req.address))
         requester ! RemoveFromBlacklistResponse(removed = true)
       } catch {
-        case _: Exception =>
+        case e: Exception =>
+          log.error(s"Failed to remove address ${req.address} from blacklist", e)
           requester ! RemoveFromBlacklistResponse(removed = false)
       }
 

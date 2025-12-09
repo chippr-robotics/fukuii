@@ -250,8 +250,6 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
         params match {
           case Some(JArray(JString(address) :: JInt(duration) :: JString(reason) :: _)) =>
             Right(AddToBlacklistRequest(address, Some(duration.toLong), reason))
-          case Some(JArray(JString(address) :: JString(reason) :: _)) =>
-            Right(AddToBlacklistRequest(address, None, reason))
           case Some(JArray(JString(address) :: JNull :: JString(reason) :: _)) =>
             Right(AddToBlacklistRequest(address, None, reason))
           case _ =>

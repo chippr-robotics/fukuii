@@ -5,17 +5,13 @@ import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.util.Timeout
-import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
-import cats.syntax.traverse._
 
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig
-import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.Config
@@ -185,6 +181,7 @@ class NetService(
   }
 
   def addToBlacklist(req: AddToBlacklistRequest): ServiceResponse[AddToBlacklistResponse] = {
+    implicit val timeout: Timeout = Timeout(config.peerManagerTimeout)
     peerManager
       .askFor[PeerManagerActor.AddToBlacklistResponse](
         PeerManagerActor.AddToBlacklistRequest(
@@ -192,15 +189,16 @@ class NetService(
           duration = req.duration.map(_.seconds),
           reason = req.reason
         )
-      )(Timeout(config.peerManagerTimeout))
+      )
       .map(response => Right(AddToBlacklistResponse(response.added)))
   }
 
   def removeFromBlacklist(req: RemoveFromBlacklistRequest): ServiceResponse[RemoveFromBlacklistResponse] = {
+    implicit val timeout: Timeout = Timeout(config.peerManagerTimeout)
     peerManager
       .askFor[PeerManagerActor.RemoveFromBlacklistResponse](
         PeerManagerActor.RemoveFromBlacklistRequest(req.address)
-      )(Timeout(config.peerManagerTimeout))
+      )
       .map(response => Right(RemoveFromBlacklistResponse(response.removed)))
   }
 }
