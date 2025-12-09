@@ -501,6 +501,7 @@ The test suite includes:
 - Block propagation testing
 - Mining compatibility checks
 - Consensus maintenance monitoring
+- Fast sync functionality validation
 
 ### Individual Tests
 
@@ -518,12 +519,19 @@ Run specific tests:
 
 # Test consensus (30 minute run)
 ./test-consensus.sh 30
+
+# Test fast sync (NEW)
+./test-fast-sync.sh
+
+# Monitor message decompression (NEW)
+./monitor-decompression.sh [container_name]
 ```
 
 ### Documentation
 
 - [**Compatibility Testing Guide**](../../docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Comprehensive testing procedures
 - [**Faucet Testing Guide**](../../docs/testing/GORGOROTH_FAUCET_TESTING.md) - Faucet validation procedures
+- [**Fast Sync Testing Plan**](../../docs/testing/FAST_SYNC_TESTING_PLAN.md) - Fast sync testing for 6-node network
 - [**Validation Status**](../../docs/validation/GORGOROTH_VALIDATION_STATUS.md) - Current validation status and roadmap
 - [**Implementation Summary**](../../docs/validation/GORGOROTH_IMPLEMENTATION_SUMMARY.md) - Complete implementation overview
 - [**Verification Complete**](VERIFICATION_COMPLETE.md) - Initial validation results

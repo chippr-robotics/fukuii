@@ -7,6 +7,7 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 ### Gorgoroth Multi-Client Testing
 - **[GORGOROTH_COMPATIBILITY_TESTING.md](GORGOROTH_COMPATIBILITY_TESTING.md)** - Complete testing procedures for multi-client validation
 - **[GORGOROTH_FAUCET_TESTING.md](GORGOROTH_FAUCET_TESTING.md)** - Faucet service validation procedures
+- **[FAST_SYNC_TESTING_PLAN.md](FAST_SYNC_TESTING_PLAN.md)** - Fast sync testing plan for 6-node Gorgoroth network
 
 ### Cirith Ungol Real-World Sync Testing
 - **[CIRITH_UNGOL_TESTING_GUIDE.md](CIRITH_UNGOL_TESTING_GUIDE.md)** - Real-world sync testing with ETC mainnet and Mordor testnet
