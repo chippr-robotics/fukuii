@@ -42,13 +42,6 @@ echo ""
 echo "Logs will be saved to: ${LOGS_DIR}"
 echo ""
 
-# Function to wait for user confirmation
-wait_for_confirmation() {
-    local message=$1
-    echo -e "${YELLOW}${message}${NC}"
-    read -p "Press Enter to continue..."
-}
-
 # Function to check if containers are running
 check_containers_running() {
     local running_count=$(docker ps --filter "name=gorgoroth-fukuii-" --format "{{.Names}}" | wc -l)
