@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
+import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.ServerStatus
@@ -40,9 +41,15 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
     log.info("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
     
     // Log compression decision based on p2p version
-    val compressionEnabled = hello.p2pVersion >= EtcHelloExchangeState.P2pVersion
-    log.info("COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressionEnabled={}", 
-      hello.p2pVersion, EtcHelloExchangeState.P2pVersion, compressionEnabled)
+    val compressionPolicy =
+      CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+    log.info(
+      "COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
+      hello.p2pVersion,
+      EtcHelloExchangeState.P2pVersion,
+      compressionPolicy.compressOutbound,
+      compressionPolicy.expectInboundCompressed
+    )
     
     // FIXME in principle this should be already negotiated
     Capability.negotiate(peerCapabilities, Config.supportedCapabilities) match {

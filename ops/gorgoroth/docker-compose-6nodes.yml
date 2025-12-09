@@ -35,7 +35,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dfukuii.network.peer.p2p-version=4"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
@@ -67,7 +67,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.peer.p2p-version=4"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
