@@ -104,9 +104,7 @@ class MessageCodec(
     frames.map { frame =>
       val frameData = frame.payload.toArray
       
-      // Core-geth compresses ALL messages when p2pVersion >= 5, including wire protocol messages
-      // Wire protocol messages (Hello 0x00, Disconnect 0x01, Ping 0x02, Pong 0x03) are also compressed
-      // Previous logic excluded wire protocol messages, causing incompatibility with core-geth
+      // Attempt decompression based on negotiated compression policy
       val shouldAttemptDecompression = compressionPolicy.expectInboundCompressed
 
       // Enhanced logging for compression decision
@@ -121,10 +119,8 @@ class MessageCodec(
 
       val payloadTry =
         if (shouldAttemptDecompression) {
-          // Always attempt decompression when compression is expected (p2pVersion >= 5)
+          // Attempt decompression when compression is expected (p2pVersion >= 5)
           // If decompression fails, fall back to treating the data as uncompressed
-          // This handles CoreGeth's protocol deviation where it advertises compression support
-          // but sends uncompressed messages
           decompressData(frameData, frame).recoverWith { case ex =>
             log.warn(
               "COMPRESSION_FALLBACK: Frame type 0x{}: Decompression failed - treating as uncompressed data. " +
