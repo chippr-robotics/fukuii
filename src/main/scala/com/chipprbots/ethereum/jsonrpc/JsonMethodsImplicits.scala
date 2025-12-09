@@ -182,6 +182,101 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: PeerCountResponse): JValue = encodeAsHex(t.value)
     }
 
+  // Enhanced peer management codecs
+  implicit val net_listPeers: NoParamsMethodDecoder[ListPeersRequest] with JsonEncoder[ListPeersResponse] =
+    new NoParamsMethodDecoder(ListPeersRequest()) with JsonEncoder[ListPeersResponse] {
+      override def encodeJson(t: ListPeersResponse): JValue = {
+        JArray(t.peers.map { peerInfo =>
+          JObject(
+            "id" -> JString(peerInfo.id),
+            "remoteAddress" -> JString(peerInfo.remoteAddress),
+            "nodeId" -> (peerInfo.nodeId match {
+              case Some(nodeId) => JString(nodeId)
+              case None         => JNull
+            }),
+            "incomingConnection" -> JBool(peerInfo.incomingConnection),
+            "status" -> JString(peerInfo.status)
+          )
+        })
+      }
+    }
+
+  implicit val net_disconnectPeer: JsonMethodDecoder[DisconnectPeerRequest] with JsonEncoder[DisconnectPeerResponse] =
+    new JsonMethodDecoder[DisconnectPeerRequest] with JsonEncoder[DisconnectPeerResponse] {
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, DisconnectPeerRequest] =
+        params match {
+          case Some(JArray(JString(peerId) :: _)) =>
+            Right(DisconnectPeerRequest(peerId))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      def encodeJson(t: DisconnectPeerResponse): JValue =
+        JBool(t.success)
+    }
+
+  implicit val net_connectToPeer: JsonMethodDecoder[ConnectToPeerRequest] with JsonEncoder[ConnectToPeerResponse] =
+    new JsonMethodDecoder[ConnectToPeerRequest] with JsonEncoder[ConnectToPeerResponse] {
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, ConnectToPeerRequest] =
+        params match {
+          case Some(JArray(JString(uri) :: _)) =>
+            Right(ConnectToPeerRequest(uri))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      def encodeJson(t: ConnectToPeerResponse): JValue =
+        JBool(t.success)
+    }
+
+  // Blacklist management codecs
+  implicit val net_listBlacklistedPeers
+      : NoParamsMethodDecoder[ListBlacklistedPeersRequest] with JsonEncoder[ListBlacklistedPeersResponse] =
+    new NoParamsMethodDecoder(ListBlacklistedPeersRequest()) with JsonEncoder[ListBlacklistedPeersResponse] {
+      override def encodeJson(t: ListBlacklistedPeersResponse): JValue = {
+        JArray(t.blacklistedPeers.map { entry =>
+          JObject(
+            "id" -> JString(entry.id),
+            "reason" -> JString(entry.reason),
+            "addedAt" -> JInt(entry.addedAt)
+          )
+        })
+      }
+    }
+
+  implicit val net_addToBlacklist: JsonMethodDecoder[AddToBlacklistRequest] with JsonEncoder[AddToBlacklistResponse] =
+    new JsonMethodDecoder[AddToBlacklistRequest] with JsonEncoder[AddToBlacklistResponse] {
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, AddToBlacklistRequest] =
+        params match {
+          case Some(JArray(JString(address) :: JInt(duration) :: JString(reason) :: _)) =>
+            Right(AddToBlacklistRequest(address, Some(duration.toLong), reason))
+          case Some(JArray(JString(address) :: JString(reason) :: _)) =>
+            Right(AddToBlacklistRequest(address, None, reason))
+          case Some(JArray(JString(address) :: JNull :: JString(reason) :: _)) =>
+            Right(AddToBlacklistRequest(address, None, reason))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      def encodeJson(t: AddToBlacklistResponse): JValue =
+        JBool(t.added)
+    }
+
+  implicit val net_removeFromBlacklist
+      : JsonMethodDecoder[RemoveFromBlacklistRequest] with JsonEncoder[RemoveFromBlacklistResponse] =
+    new JsonMethodDecoder[RemoveFromBlacklistRequest] with JsonEncoder[RemoveFromBlacklistResponse] {
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, RemoveFromBlacklistRequest] =
+        params match {
+          case Some(JArray(JString(address) :: _)) =>
+            Right(RemoveFromBlacklistRequest(address))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      def encodeJson(t: RemoveFromBlacklistResponse): JValue =
+        JBool(t.removed)
+    }
+
   implicit val personal_importRawKey: JsonMethodDecoder[ImportRawKeyRequest] with JsonEncoder[ImportRawKeyResponse] =
     new JsonMethodDecoder[ImportRawKeyRequest] with JsonEncoder[ImportRawKeyResponse] {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, ImportRawKeyRequest] =
