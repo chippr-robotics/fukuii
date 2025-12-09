@@ -183,6 +183,17 @@ class EthMiningService(
       }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
+  /** Returns comprehensive mining status information.
+    *
+    * Provides a consolidated view of the mining state including:
+    * - Whether the node is actively mining (based on recent activity)
+    * - The coinbase address receiving mining rewards
+    * - Current aggregate hashrate from all connected miners
+    * - Blocks mined count (currently reserved for future implementation)
+    *
+    * Note: blocksMinedCount is always None in the current implementation.
+    * Future versions may track and report this metric.
+    */
   def getMinerStatus(req: GetMinerStatusRequest): ServiceResponse[GetMinerStatusResponse] =
     ifEthash(req) { _ =>
       val isMining = lastActive.updateAndGet { (e: Option[Date]) =>
@@ -198,7 +209,7 @@ class EthMiningService(
         isMining = isMining,
         coinbase = miningConfig.coinbase,
         hashRate = currentHashRate,
-        blocksMinedCount = None // This would require tracking mined blocks count
+        blocksMinedCount = None // Reserved for future implementation - would require tracking mined blocks
       )
     }
 

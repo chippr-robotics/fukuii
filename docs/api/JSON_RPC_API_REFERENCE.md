@@ -1178,7 +1178,7 @@ Returns comprehensive mining status information.
 - `isMining`: `Boolean` - `true` if the client is actively mining
 - `coinbase`: `DATA`, 20 Bytes - The address receiving mining rewards
 - `hashRate`: `QUANTITY` - Current aggregate hash rate from all connected miners
-- `blocksMinedCount`: `QUANTITY` or `null` - Number of blocks mined (reserved for future use)
+- `blocksMinedCount`: `QUANTITY` or `null` - Number of blocks mined (always `null` in current version, reserved for future implementation)
 
 **Example**:
 ```bash
