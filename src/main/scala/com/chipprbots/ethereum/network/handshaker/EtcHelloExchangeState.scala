@@ -87,8 +87,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
 }
 
 object EtcHelloExchangeState {
-  // Use p2pVersion 5 to align with CoreGeth and enable Snappy compression
-  // CoreGeth (and go-ethereum) only enable Snappy when p2pVersion >= 5
-  // See: https://github.com/etclabscore/core-geth/blob/master/p2p/peer.go#L54
-  val P2pVersion = 5
+  // Allow p2pVersion to be configured via fukuii.network.peer.p2p-version.
+  // Default remains 5 (Snappy-capable), but can be overridden per environment for investigations.
+  lazy val P2pVersion: Int = Config.Network.peer.p2pVersion
 }

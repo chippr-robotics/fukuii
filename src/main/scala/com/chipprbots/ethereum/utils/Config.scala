@@ -88,6 +88,7 @@ object Config {
       val pruneIncomingPeers: Int = peerConfig.getInt("prune-incoming-peers")
       val minPruneAge: FiniteDuration = peerConfig.getDuration("min-prune-age").toMillis.millis
       val networkId: Int = blockchainConfig.networkId
+      val p2pVersion: Int = peerConfig.getInt("p2p-version")
 
       val rlpxConfiguration: RLPxConfiguration = new RLPxConfiguration {
         val waitForHandshakeTimeout: FiniteDuration =
