@@ -106,7 +106,10 @@ for node in "${NODES[@]}"; do
     fi
     
     # Verify the file was copied
-    file_size=$(docker run --rm -v "$volume_name:/data" busybox stat -c %s /data/static-nodes.json)
+    if ! file_size=$(docker run --rm -v "$volume_name:/data" busybox stat -c %s /data/static-nodes.json 2>/dev/null || docker run --rm -v "$volume_name:/data" busybox stat -f %z /data/static-nodes.json 2>/dev/null); then
+        echo -e "${YELLOW}⚠ Warning: Could not verify file size${NC}"
+        continue
+    fi
     
     if [ "$file_size" -gt 10 ]; then
         echo -e "${GREEN}✓ Initialized ($file_size bytes)${NC}"

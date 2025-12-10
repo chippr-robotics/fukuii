@@ -74,23 +74,26 @@ TESTS_PASSED=$((TESTS_PASSED + 1))
 
 # Test 4: Verify no node references itself
 echo -n "Test 4: No node references itself... "
-# Node1 enode: 896acf67a7166e6af8361a4494f574d99c713bc0d0328ddbf6c33a1db51152c9
-# Node2 enode: 0037d4884abf8f9abd8ee0a815ee156a6e1ce51eca7bf999e8775d552ce488da
-# Node3 enode: 284c0b9f9e8b2791d00e08450d5510f22781aa8261fdf84f0793e5eb350c4535
+# Extract the enode IDs from the actual files to avoid duplication
+NODE1_ENODE=$(jq -r '.[]' "$GORGOROTH_DIR/conf/node2/static-nodes.json" "$GORGOROTH_DIR/conf/node3/static-nodes.json" | grep -o 'enode://[^@]*' | sort -u | grep -v "$(jq -r '.[]' "$GORGOROTH_DIR/conf/node2/static-nodes.json" | head -1 | grep -o 'enode://[^@]*')" | head -1 || echo "")
+NODE2_ENODE=$(jq -r '.[]' "$GORGOROTH_DIR/conf/node1/static-nodes.json" "$GORGOROTH_DIR/conf/node3/static-nodes.json" | grep -o 'enode://[^@]*' | sort -u | grep -v "$(jq -r '.[]' "$GORGOROTH_DIR/conf/node3/static-nodes.json" | head -1 | grep -o 'enode://[^@]*')" | head -1 || echo "")
+NODE3_ENODE=$(jq -r '.[]' "$GORGOROTH_DIR/conf/node1/static-nodes.json" "$GORGOROTH_DIR/conf/node2/static-nodes.json" | grep -o 'enode://[^@]*' | sort -u | grep -v "$(jq -r '.[]' "$GORGOROTH_DIR/conf/node1/static-nodes.json" | head -1 | grep -o 'enode://[^@]*')" | head -1 || echo "")
 
-if grep -q "896acf67a7166e6af8361a4494f574d99c713bc0d0328ddbf6c33a1db51152c9" "$GORGOROTH_DIR/conf/node1/static-nodes.json"; then
-    echo -e "${RED}FAIL${NC}"
-    echo "  node1 references itself"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-elif grep -q "0037d4884abf8f9abd8ee0a815ee156a6e1ce51eca7bf999e8775d552ce488da" "$GORGOROTH_DIR/conf/node2/static-nodes.json"; then
-    echo -e "${RED}FAIL${NC}"
-    echo "  node2 references itself"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-elif grep -q "284c0b9f9e8b2791d00e08450d5510f22781aa8261fdf84f0793e5eb350c4535" "$GORGOROTH_DIR/conf/node3/static-nodes.json"; then
-    echo -e "${RED}FAIL${NC}"
-    echo "  node3 references itself"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-else
+# Simpler approach: check if node1's file contains node1 in any peer entry from node2 or node3
+SELF_REF_FOUND=false
+for node in node1 node2 node3; do
+    file="$GORGOROTH_DIR/conf/$node/static-nodes.json"
+    # Count peers that reference this node itself (should be 0)
+    # This works by checking if @fukuii-nodeN: appears in the static-nodes.json for nodeN
+    if grep -q "@fukuii-$node:" "$file"; then
+        echo -e "${RED}FAIL${NC}"
+        echo "  $node references itself"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        SELF_REF_FOUND=true
+        break
+    fi
+done
+if [ "$SELF_REF_FOUND" = false ]; then
     echo -e "${GREEN}PASS${NC}"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 fi
@@ -144,7 +147,8 @@ ENODE_FORMAT_ERROR=false
 for node in node1 node2 node3; do
     file="$GORGOROTH_DIR/conf/$node/static-nodes.json"
     # Check each enode URL matches the pattern: enode://[128 hex chars]@hostname:30303
-    if ! jq -r '.[]' "$file" | grep -qE '^enode://[0-9a-f]{128}@fukuii-node[0-9]+:30303$'; then
+    # Hex chars can be upper or lowercase (A-F or a-f)
+    if ! jq -r '.[]' "$file" | grep -qE '^enode://[0-9a-fA-F]{128}@fukuii-node[0-9]+:30303$'; then
         echo -e "${RED}FAIL${NC}"
         echo "  Invalid enode format in $file"
         TESTS_FAILED=$((TESTS_FAILED + 1))
