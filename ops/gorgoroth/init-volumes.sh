@@ -94,11 +94,16 @@ for node in "${NODES[@]}"; do
     fi
     
     # Copy static-nodes.json to volume using a temporary container
-    docker run --rm \
+    if ! docker run --rm \
         -v "$volume_name:/data" \
         -v "$config_file:/host/static-nodes.json:ro" \
         busybox \
-        cp /host/static-nodes.json /data/static-nodes.json
+        cp /host/static-nodes.json /data/static-nodes.json 2>/dev/null; then
+        echo -e "${RED}✗ Failed to copy file to volume${NC}"
+        echo "   Volume: $volume_name"
+        echo "   Source: $config_file"
+        continue
+    fi
     
     # Verify the file was copied
     file_size=$(docker run --rm -v "$volume_name:/data" busybox stat -c %s /data/static-nodes.json)

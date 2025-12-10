@@ -140,11 +140,9 @@ start_network() {
     echo "Next steps:"
     echo "  View logs:    fukuii-cli logs $config"
     echo "  Check status: fukuii-cli status $config"
-    if [ "$first_run" = true ]; then
-        echo "  Test peers:   curl -X POST -H 'Content-Type: application/json' \\"
-        echo "                  --data '{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}' \\"
-        echo "                  http://localhost:8546"
-    fi
+    echo "  Test peers:   curl -X POST -H 'Content-Type: application/json' \\"
+    echo "                  --data '{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}' \\"
+    echo "                  http://localhost:8546"
 }
 
 stop_network() {
