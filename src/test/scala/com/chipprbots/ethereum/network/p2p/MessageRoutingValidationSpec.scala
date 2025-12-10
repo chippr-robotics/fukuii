@@ -5,6 +5,7 @@ import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -150,29 +151,9 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     NetworkTest
   ) in {
     // NewBlock is shared across ETH63 and ETH64+ via BaseETH6XMessages
-    val blockHeaders = Seq.empty
-    val blockBody = BaseETH6XMessages.BlockBody(Seq.empty, Seq.empty)
+    // Use a test block from Fixtures
     val newBlock = BaseETH6XMessages.NewBlock(
-      block = BaseETH6XMessages.Block(
-        header = BaseETH6XMessages.BlockHeader(
-          parentHash = exampleHash,
-          ommersHash = exampleHash,
-          beneficiary = exampleHash,
-          stateRoot = exampleHash,
-          transactionsRoot = exampleHash,
-          receiptsRoot = exampleHash,
-          logsBloom = ByteString.empty,
-          difficulty = BigInt(1000),
-          number = BigInt(1),
-          gasLimit = BigInt(8000000),
-          gasUsed = BigInt(0),
-          unixTimestamp = 1000L,
-          extraData = ByteString.empty,
-          mixHash = exampleHash,
-          nonce = ByteString.empty
-        ),
-        body = blockBody
-      ),
+      Fixtures.Blocks.Block3125369.block,
       totalDifficulty = BigInt("1000000000000000000")
     )
 
