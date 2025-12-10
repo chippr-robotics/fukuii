@@ -213,17 +213,17 @@ class RLPxConnectionHandlerSpec
 
   it should "handle late Hello message after handshake without compression" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     // Setup a mock that will capture what gets encoded
-    var encodedMessages = scala.collection.mutable.ListBuffer[ByteString]()
+    var encodedMessages: List[ByteString] = Nil
     mockMessageCodec.encodeMessageHandler = Some { msg =>
       val encoded = ByteString(s"encoded:${msg.underlyingMsg.getClass.getSimpleName}")
-      encodedMessages += encoded
+      encodedMessages = encodedMessages :+ encoded
       encoded
     }
 
     setupIncomingRLPxConnection()
 
     // Clear any messages from setup
-    encodedMessages.clear()
+    encodedMessages = Nil
 
     // Send a late Hello message - this should NOT go through MessageCodec.encodeMessage
     // Instead, it should be written directly using frameCodec to avoid compression

@@ -147,6 +147,22 @@ class RLPxConnectionHandler(
       }
     }
 
+    /** Write a Hello message directly without compression.
+      * This is used to handle late Hello messages that arrive after handshake completion,
+      * preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello behavior.
+      */
+    private def writeUncompressedHello(hello: HelloEnc, messageCodec: MessageCodec): ByteString = {
+      val encoded: Array[Byte] = hello.toBytes
+      val frames = Seq(
+        Frame(
+          Header(encoded.length, 0, None, None),
+          hello.code,
+          ByteString(encoded)
+        )
+      )
+      messageCodec.frameCodec.writeFrames(frames)
+    }
+
     val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
       log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
@@ -418,21 +434,12 @@ class RLPxConnectionHandler(
           // This prevents the race condition where Hello gets compressed via MessageCodec
           // instead of being sent uncompressed via HelloCodec.
           // Per Core-Geth reference (p2p/transport.go), Hello MUST NOT be compressed.
-          log.warning(
+          log.debug(
             "[RLPx] Received late Hello message for peer {} after handshake complete - " +
               "sending uncompressed to prevent 'Cannot decode Hello' error on peer",
             peerId
           )
-          // Use the frameCodec directly to avoid compression, mimicking HelloCodec behavior
-          val encoded: Array[Byte] = h.toBytes
-          val frames = Seq(
-            Frame(
-              Header(encoded.length, 0, None, None),
-              h.code,
-              ByteString(encoded)
-            )
-          )
-          val out = messageCodec.frameCodec.writeFrames(frames)
+          val out = writeUncompressedHello(h, messageCodec)
           connection ! Write(out, Ack)
           val timeout = system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
           context.become(
