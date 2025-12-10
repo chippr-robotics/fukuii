@@ -22,6 +22,12 @@ The template files contain placeholder values:
 - `fukuii-nodeX` - Docker container hostnames (these remain constant)
 - `30303` - P2P port (remains constant)
 
+**Note on Template Structure**: 
+- Nodes 1-3 templates include only the peers for a 3-node network
+- Nodes 4-6 templates include all other nodes for a 6-node network
+- This asymmetry is intentional - use the configuration that matches your deployment
+- The `fukuii-cli sync-static-nodes` command automatically detects running nodes and updates files accordingly
+
 ## First Run Setup
 
 On first startup, each node generates a unique private key and enode ID. The placeholder values in static-nodes.json won't match, so nodes won't connect initially.
@@ -87,7 +93,8 @@ After updating static-nodes.json and restarting, verify connections:
 # Check peer count (should be N-1 where N is total nodes)
 curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' http://localhost:8546
 
-# Expected for 3-node network: {"jsonrpc":"2.0","result":"0x2","id":1}
+# Expected for 3-node network with all nodes connected: {"jsonrpc":"2.0","result":"0x2","id":1}
+# Note: On first run BEFORE sync-static-nodes, this will return 0x0 (no peers)
 ```
 
 ## Important Notes

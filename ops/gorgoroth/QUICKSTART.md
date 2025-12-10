@@ -96,6 +96,9 @@ If you prefer to manually configure peers:
 
 1. Collect the actual enode IDs from the logs:
    ```bash
+   # Wait for nodes to fully initialize (important!)
+   sleep 45
+   
    echo "Node 1:"
    docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
    echo "Node 2:"
