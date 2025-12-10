@@ -114,6 +114,32 @@ class RLPxConnectionHandler(
 
   class ConnectedHandler(connection: ActorRef) {
 
+    private var helloAckPending: Boolean = false
+    private var helloWriteAcknowledged: Boolean = false
+    private var activeMessageCodec: Option[MessageCodec] = None
+
+    private def markHelloAsSent(): Unit = {
+      helloAckPending = true
+      log.debug("[RLPx] Hello write queued for peer {}", peerId)
+    }
+
+    private def markHelloAckReceived(messageCodecOpt: Option[MessageCodec]): Unit = {
+      if (helloAckPending) {
+        helloAckPending = false
+        helloWriteAcknowledged = true
+        val codecToUpdate = messageCodecOpt.orElse(activeMessageCodec)
+        codecToUpdate.foreach(_.enableInboundCompression("hello-write-ack"))
+        log.debug("[RLPx] Hello write acknowledged for peer {}", peerId)
+      }
+    }
+
+    private def registerMessageCodec(messageCodec: MessageCodec): Unit = {
+      activeMessageCodec = Some(messageCodec)
+      if (helloWriteAcknowledged) {
+        messageCodec.enableInboundCompression("hello-ack-before-handshake-complete")
+      }
+    }
+
     val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
       log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
@@ -241,6 +267,7 @@ class RLPxConnectionHandler(
         case SendMessage(h: HelloEnc) =>
           val out = extractor.writeHello(h)
           connection ! Write(out, Ack)
+          markHelloAsSent()
           val timeout =
             system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
           context.become(
@@ -252,6 +279,7 @@ class RLPxConnectionHandler(
           )
         case Ack if cancellableAckTimeout.nonEmpty =>
           // Cancel pending message timeout
+          markHelloAckReceived(None)
           cancellableAckTimeout.foreach(_.cancellable.cancel())
           context.become(awaitInitialHello(extractor, None, seqNumber))
 
@@ -290,6 +318,7 @@ class RLPxConnectionHandler(
           } yield messageCodec
           messageCodecOpt match {
             case Some(messageCodec) =>
+              registerMessageCodec(messageCodec)
               log.info("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
               context.become(
                 handshaked(
@@ -422,6 +451,7 @@ class RLPxConnectionHandler(
 
         case Ack if cancellableAckTimeout.nonEmpty =>
           // Cancel pending message timeout
+          markHelloAckReceived(Some(messageCodec))
           log.debug("SEND_MSG_ACK: peer={}, seqNum={}", peerId, cancellableAckTimeout.map(_.seqNumber).getOrElse(-1))
           cancellableAckTimeout.foreach(_.cancellable.cancel())
 
