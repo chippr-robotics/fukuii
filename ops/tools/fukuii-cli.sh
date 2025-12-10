@@ -91,15 +91,60 @@ start_network() {
     echo -e "${GREEN}Starting Gorgoroth test network with configuration: $config${NC}"
     echo "Using compose file: $compose_file"
     
+    # Check if this is a first run (volumes don't exist)
+    local first_run=false
+    case "$config" in
+        3nodes)
+            if ! docker volume inspect gorgoroth_fukuii-node1-data >/dev/null 2>&1; then
+                first_run=true
+            fi
+            ;;
+        6nodes)
+            if ! docker volume inspect gorgoroth_fukuii-node1-data >/dev/null 2>&1; then
+                first_run=true
+            fi
+            ;;
+    esac
+    
+    if [ "$first_run" = true ]; then
+        echo ""
+        echo -e "${YELLOW}First run detected - volumes not initialized${NC}"
+        echo "To enable automatic peer connectivity, initialize volumes with static-nodes.json:"
+        echo ""
+        echo "  ./init-volumes.sh $config"
+        echo ""
+        echo -e "Or continue without initialization and use ${BLUE}fukuii-cli sync-static-nodes${NC} later"
+        echo ""
+        read -p "Initialize volumes now? [Y/n] " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            cd "$GORGOROTH_DIR"
+            if [ -f "./init-volumes.sh" ]; then
+                ./init-volumes.sh "$config" || {
+                    echo -e "${RED}Volume initialization failed${NC}"
+                    exit 1
+                }
+                echo ""
+            else
+                echo -e "${RED}init-volumes.sh not found${NC}"
+                exit 1
+            fi
+        fi
+    fi
+    
     cd "$GORGOROTH_DIR"
     docker compose -f "$compose_file" up -d
     
     echo -e "${GREEN}Network started successfully!${NC}"
     echo ""
     echo "Next steps:"
-    echo "  View logs:   fukuii-cli logs $config"
+    echo "  View logs:    fukuii-cli logs $config"
     echo "  Check status: fukuii-cli status $config"
-    echo "  Sync peers:   fukuii-cli sync-static-nodes"
+    if [ "$first_run" = true ]; then
+        echo "  Test peers:   curl -X POST -H 'Content-Type: application/json' \\"
+        echo "                  --data '{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}' \\"
+        echo "                  http://localhost:8546"
+    fi
 }
 
 stop_network() {

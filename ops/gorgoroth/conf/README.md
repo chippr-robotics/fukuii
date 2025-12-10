@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory contains template `static-nodes.json` files for each Gorgoroth test network node. These files define which peers each node should connect to when peer discovery is disabled.
+This directory contains pre-populated `static-nodes.json` files for each Gorgoroth test network node. These files define which peers each node should connect to when peer discovery is disabled.
 
 ## File Format
 
@@ -15,26 +15,52 @@ Each `static-nodes.json` file is a JSON array of enode URLs:
 ]
 ```
 
-## Template Files
+## Pre-populated Files (December 2025)
 
-The template files contain placeholder values:
-- `PLACEHOLDER_NODEX_PUBLIC_KEY` - Will be replaced with actual node public keys after first startup
-- `fukuii-nodeX` - Docker container hostnames (these remain constant)
-- `30303` - P2P port (remains constant)
+**Important Change**: As of version 0.1.147, the static-nodes.json files are pre-populated with actual enode IDs that correspond to persistent node keys stored in Docker volumes.
 
-**Note on Template Structure**: 
-- Nodes 1-3 templates include only the peers for a 3-node network
-- Nodes 4-6 templates include all other nodes for a 6-node network
-- This asymmetry is intentional - use the configuration that matches your deployment
-- The `fukuii-cli sync-static-nodes` command automatically detects running nodes and updates files accordingly
+**How it works:**
+- Each node has a persistent private key stored in its Docker volume
+- The enode ID is deterministically generated from this private key
+- Static-nodes.json files contain the correct enode IDs from the start
+- Nodes connect automatically on first run without manual intervention
+
+### Node Enode IDs (Persistent)
+
+These enode IDs correspond to the persistent node keys in Docker volumes:
+
+- **Node 1**: `enode://896acf67a7166e6af8361a4494f574d99c713bc0d0328ddbf6c33a1db51152c9fac3601b08c7c204d0d867b3f7e689bf1e8d976a65dda189a74f8afc4bab33c9@fukuii-node1:30303`
+- **Node 2**: `enode://0037d4884abf8f9abd8ee0a815ee156a6e1ce51eca7bf999e8775d552ce488da1e24fdfdcf933b9a944138629a1dd67663c3ef1fe76730cfc57bbb13e960d995@fukuii-node2:30303`
+- **Node 3**: `enode://284c0b9f9e8b2791d00e08450d5510f22781aa8261fdf84f0793e5eb350c4535ce8d927dd2d48fa4d2685c47eb3b7e49796d4f5a598ce214e28fc632f8df57a6@fukuii-node3:30303`
 
 ## First Run Setup
 
-On first startup, each node generates a unique private key and enode ID. The placeholder values in static-nodes.json won't match, so nodes won't connect initially.
-
 ### Automated Setup (Recommended)
 
-Use the `fukuii-cli` tool to automatically collect and sync enode IDs:
+Use the initialization script to pre-populate Docker volumes with the static-nodes.json files:
+
+```bash
+# Initialize volumes (first run only)
+cd ops/gorgoroth
+./init-volumes.sh 3nodes
+
+# Start the network
+fukuii-cli start 3nodes
+
+# Wait for nodes to initialize and connect
+sleep 45
+
+# Verify peer connections
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+  http://localhost:8546
+```
+
+**Expected result**: `{"jsonrpc":"2.0","result":"0x2","id":1}` (2 peers for 3-node network)
+
+### Alternative: Sync After Startup
+
+If you started the network without initializing volumes, use the sync command:
 
 ```bash
 # Start the network
@@ -43,38 +69,41 @@ fukuii-cli start 3nodes
 # Wait for nodes to initialize
 sleep 45
 
-# Automatically collect enodes and update static-nodes.json
+# Sync static nodes configuration
 fukuii-cli sync-static-nodes
 ```
 
 This will:
 1. Extract enode URLs from each running container
-2. Update static-nodes.json files with actual enode IDs
+2. Update static-nodes.json files in volumes
 3. Restart containers to apply the configuration
 
-### Manual Setup
+## Docker Volume Management
 
-If you prefer manual configuration:
+### Volume Shadowing Fix (v0.1.147)
 
-1. Start the network and collect enode IDs from logs:
-   ```bash
-   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
-   ```
+Previous versions had a Docker Compose configuration issue where bind mounts for static-nodes.json were shadowed by named volume mounts. This prevented nodes from loading peer configuration.
 
-2. Edit the static-nodes.json files, replacing placeholders with actual enode IDs
+**What was fixed:**
+- Removed conflicting bind mounts from all docker-compose files
+- Static-nodes.json files are now copied into volumes using the init-volumes.sh script
+- Nodes can now read peer configuration from /app/data/static-nodes.json inside the container
 
-3. Restart the network:
-   ```bash
-   fukuii-cli restart 3nodes
-   ```
+### File Locations
 
-## File Locations
-
-In Docker deployments, static-nodes.json files are mounted from:
+**In Repository:**
 ```
-ops/gorgoroth/conf/node1/static-nodes.json -> /app/data/static-nodes.json
-ops/gorgoroth/conf/node2/static-nodes.json -> /app/data/static-nodes.json
-ops/gorgoroth/conf/node3/static-nodes.json -> /app/data/static-nodes.json
+ops/gorgoroth/conf/node1/static-nodes.json  (pre-populated)
+ops/gorgoroth/conf/node2/static-nodes.json  (pre-populated)
+ops/gorgoroth/conf/node3/static-nodes.json  (pre-populated)
+...
+```
+
+**In Docker Volumes (after initialization):**
+```
+gorgoroth_fukuii-node1-data volume -> /app/data/static-nodes.json
+gorgoroth_fukuii-node2-data volume -> /app/data/static-nodes.json
+gorgoroth_fukuii-node3-data volume -> /app/data/static-nodes.json
 ...
 ```
 
@@ -107,15 +136,35 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":
 ## Troubleshooting
 
 **Nodes not connecting:**
-- Verify enode IDs in static-nodes.json match actual node IDs in logs
-- Check that hostnames match docker-compose service names
-- Ensure port is 30303 (P2P), not 8545/8546 (RPC)
-- Verify nodes are on the same Docker network
+
+1. **Volumes not initialized**: Run `./init-volumes.sh 3nodes` before starting the network
+2. **Old volumes from previous versions**: Clean and reinitialize:
+   ```bash
+   fukuii-cli clean 3nodes
+   ./init-volumes.sh 3nodes
+   fukuii-cli start 3nodes
+   ```
+3. **Verify enode IDs** match between static-nodes.json and actual node IDs:
+   ```bash
+   # Check file in volume
+   docker run --rm -v gorgoroth_fukuii-node1-data:/data busybox cat /data/static-nodes.json
+   
+   # Check actual node enode
+   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
+   ```
+4. **Check hostnames** match docker-compose service names (fukuii-node1, fukuii-node2, etc.)
+5. **Verify port** is 30303 (P2P), not 8545/8546 (RPC)
+6. **Confirm nodes** are on the same Docker network
 
 **Enode format errors:**
 - Format: `enode://<128-hex-chars>@<hostname>:30303`
 - Public key must be exactly 128 hexadecimal characters
 - No extra whitespace or line breaks in JSON
+
+**File size is only 3 bytes (empty array):**
+- This indicates the volume wasn't properly initialized
+- Run `./init-volumes.sh 3nodes` to populate the volumes
+- Expected file size: ~320-350 bytes for 2-peer configuration
 
 ## References
 

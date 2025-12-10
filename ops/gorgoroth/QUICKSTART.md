@@ -51,7 +51,20 @@ This will compile the code and create the distribution package but skip network 
 docker pull ghcr.io/chippr-robotics/fukuii:latest
 ```
 
-### 2. Start the 3-Node Network
+### 2. Initialize Volumes (First Run Only)
+
+On first run, initialize the Docker volumes with peer configuration:
+
+```bash
+cd ops/gorgoroth
+./init-volumes.sh 3nodes
+```
+
+This pre-populates the volumes with static-nodes.json files containing the correct peer enode IDs, so nodes can connect automatically on startup.
+
+**Note**: This step is only required once. Skip it on subsequent runs unless you've cleaned the volumes.
+
+### 3. Start the 3-Node Network
 
 From the repository root:
 
@@ -66,62 +79,21 @@ Or if you have fukuii-cli installed globally:
 fukuii-cli start 3nodes
 ```
 
-### 3. Wait for Nodes to Initialize and Sync Static Peers
+### 4. Wait for Nodes to Initialize
 
-The nodes need about 30-45 seconds to fully initialize and generate node keys.
+The nodes need about 30-45 seconds to fully initialize and connect to peers:
 
 ```bash
 sleep 45
 ```
 
-⚠️ **Important Note on First Run**: The static-nodes.json files contain placeholder enode IDs. On first startup, each node will generate its own unique node key and enode ID. These won't match the placeholders, so nodes won't connect automatically. 
+**What's Happening:**
+- Nodes generate or load persisted node keys
+- Static peer configuration is loaded from volumes
+- Nodes connect to each other automatically
+- DAG generation begins for mining
 
-**Automated Peer Synchronization (Recommended)**:
-
-Use the `sync-static-nodes` command to automatically collect enode IDs and update static-nodes.json files:
-
-```bash
-fukuii-cli sync-static-nodes
-```
-
-This command will:
-1. Collect enode URLs from all running nodes
-2. Update static-nodes.json files for each node (excluding self-references)
-3. Restart containers to apply the configuration
-4. Nodes will connect to each other within 30 seconds
-
-**Manual Peer Synchronization (Alternative)**:
-
-If you prefer to manually configure peers:
-
-1. Collect the actual enode IDs from the logs:
-   ```bash
-   # Wait for nodes to fully initialize (important!)
-   sleep 45
-   
-   echo "Node 1:"
-   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
-   echo "Node 2:"
-   docker logs gorgoroth-fukuii-node2 2>&1 | grep "Node address" | tail -1
-   echo "Node 3:"
-   docker logs gorgoroth-fukuii-node3 2>&1 | grep "Node address" | tail -1
-   ```
-
-2. Update the static-nodes.json files with the actual enode IDs:
-   - `ops/gorgoroth/conf/node1/static-nodes.json` - add node2 and node3 enodes
-   - `ops/gorgoroth/conf/node2/static-nodes.json` - add node1 and node3 enodes
-   - `ops/gorgoroth/conf/node3/static-nodes.json` - add node1 and node2 enodes
-   
-   Format: `enode://<public-key>@<hostname>:30303`
-
-3. Restart the network to apply the changes:
-   ```bash
-   fukuii-cli restart 3nodes
-   ```
-
-**Note**: Once node keys are persisted in Docker volumes, subsequent restarts will use the same keys and the static-nodes.json files will remain valid.
-
-### 4. Verify Nodes are Running
+### 5. Verify Nodes are Running
 
 Check the status of all containers:
 
@@ -238,28 +210,54 @@ fukuii-cli clean 3nodes
 
 ### Nodes Not Connecting
 
-**First-time setup issue**: If this is the first time running the network, the placeholder enode IDs in static-nodes.json won't match the actual generated keys. See Step 3 in [Quick Start](#quick-start-5-minutes) for the solution.
+If nodes are not connecting to each other:
 
-1. Check that all containers are running:
+1. **First Run - Volumes Not Initialized**: If you skipped the volume initialization step, run:
+   ```bash
+   fukuii-cli stop 3nodes
+   ./init-volumes.sh 3nodes
+   fukuii-cli start 3nodes
+   ```
+
+2. **Check Container Status**:
    ```bash
    fukuii-cli status 3nodes
    ```
 
-2. Check logs for connection errors:
+3. **Check Logs for Connection Errors**:
    ```bash
    fukuii-cli logs 3nodes | grep -i "peer\|connection"
    ```
 
-3. Verify static nodes configuration matches actual enode IDs:
+4. **Verify Static Nodes Configuration**:
    ```bash
-   # Check what's in the static-nodes.json
+   # Check what's in the static-nodes.json inside the container
    docker exec gorgoroth-fukuii-node1 cat /app/data/static-nodes.json
    
    # Check the actual enode ID for this node
    docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
    ```
-   
-4. If enode IDs don't match, update static-nodes.json files and restart (see Step 3 above).
+
+5. **Re-sync Peer Configuration** (if enode IDs changed):
+   ```bash
+   fukuii-cli sync-static-nodes
+   ```
+
+### Volumes From Previous Runs
+
+If you're experiencing issues after cleaning volumes, the static-nodes.json files may be out of sync:
+
+**Option 1 - Full Reset (Recommended)**:
+```bash
+fukuii-cli clean 3nodes
+./init-volumes.sh 3nodes
+fukuii-cli start 3nodes
+```
+
+**Option 2 - Re-sync Existing Network**:
+```bash
+fukuii-cli sync-static-nodes
+```
 
 ### No Blocks Being Mined
 
@@ -309,6 +307,25 @@ This setup includes recent fixes for:
 1. ✅ **Configuration Loading Bug**: Fixed App.scala to properly load gorgoroth.conf from classpath
 2. ✅ **Port Mismatch**: Updated static-nodes.json to use correct port (30303)
 3. ✅ **Persistent Node Keys**: Configured datadir to persist node keys in Docker volumes
+4. ✅ **Docker Volume Shadowing Fix (v0.1.147)**: Removed conflicting bind mounts that prevented static-nodes.json from loading
+5. ✅ **Pre-populated Peer Configuration**: Static-nodes.json files now contain actual enode IDs for automatic peer connectivity
+
+### Volume Shadowing Fix (December 2025)
+
+Previous versions had a Docker Compose configuration issue where bind mounts for static-nodes.json were shadowed by named volume mounts. This prevented nodes from loading peer configuration.
+
+**What was fixed:**
+- Removed conflicting bind mounts for static-nodes.json from docker-compose files
+- Pre-populated repository static-nodes.json files with correct enode IDs
+- Created init-volumes.sh script to initialize volumes on first run
+- Nodes now connect automatically without manual intervention
+
+**Migration for existing deployments:**
+```bash
+fukuii-cli clean 3nodes
+./init-volumes.sh 3nodes
+fukuii-cli start 3nodes
+```
 
 ## Next Steps
 
@@ -319,14 +336,8 @@ This setup includes recent fixes for:
 
 ## Known Limitations
 
-### Version 0.1.146
+### RPC Port Configuration
 
-**Peer Discovery on First Run**:
-- On first run, nodes generate unique keys that don't match placeholder enode IDs in static-nodes.json
-- **Solution**: Use `fukuii-cli sync-static-nodes` after first startup to automatically configure peers
-- **Note**: This only affects first run. Subsequent restarts use persisted keys and maintain connectivity
-
-**RPC Port Configuration**:
 - Fukuii uses non-standard port assignment: HTTP RPC on 8546, WebSocket on 8545
 - Standard Ethereum clients use: HTTP on 8545, WebSocket on 8546
 - **Note**: Be sure to use port 8546 when testing HTTP JSON-RPC endpoints
