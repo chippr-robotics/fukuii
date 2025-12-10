@@ -22,6 +22,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
 
   it should "compress messages when both peers advertise compression support" taggedAs (UnitTest, NetworkTest) in
     new TestSetup {
+      enableInboundCompressionOnAllCodecs()
       val encodedStatus: ByteString = messageCodec.encodeMessage(status)
 
       val decoded = remoteMessageCodec.readMessages(encodedStatus)
@@ -52,6 +53,7 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
 
   it should "fall back to uncompressed frames when peers misbehave under compression" taggedAs
     (UnitTest, NetworkTest) in new TestSetup {
+      enableInboundCompressionOnAllCodecs()
       val statusBytes = status.toBytes
       val uncompressedFrame = Frame(Header(statusBytes.length, 0, None, None), Codes.StatusCode, ByteString(statusBytes))
       val bytes = remoteFrameCodec.writeFrames(Seq(uncompressedFrame))
@@ -95,10 +97,15 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
       new MessageCodec(codec, decoder, peerP2pVersion, peerClientId, policy)
     }
 
-    val messageCodec: MessageCodec =
+    lazy val messageCodec: MessageCodec =
       mkCodec(frameCodec, decoder, negotiatedRemoteP2PVersion, remoteClientId, localAdvertisedVersion)
-    val remoteMessageCodec: MessageCodec =
+    lazy val remoteMessageCodec: MessageCodec =
       mkCodec(remoteFrameCodec, decoder, negotiatedLocalP2PVersion, localClientId, remoteAdvertisedVersion)
+
+    def enableInboundCompressionOnAllCodecs(): Unit = {
+      messageCodec.enableInboundCompression("test-setup")
+      remoteMessageCodec.enableInboundCompression("test-setup")
+    }
   }
 
 }

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.rlpx
 
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 
 import org.apache.pekko.util.ByteString
 
@@ -26,22 +26,45 @@ object MessageCodec {
   // Maximum bytes to show fully in hex strings (larger data will be truncated)
   val MaxFullHexLength = 64
 
-  final case class CompressionPolicy(
-      compressOutbound: Boolean,
-      expectInboundCompressed: Boolean
-  )
+  final class CompressionPolicy private (
+      val compressOutbound: Boolean,
+      private val inboundCompressionNegotiated: Boolean,
+      initialExpectInboundCompressed: Boolean
+  ) {
+    private val expectInboundFlag =
+      new AtomicBoolean(initialExpectInboundCompressed && inboundCompressionNegotiated)
+
+    def expectInboundCompressed: Boolean = expectInboundFlag.get()
+
+    /**
+      * Enable inbound compression if it was negotiated during the handshake. Returns true only when
+      * the flag transitioned from false -> true so callers can emit idempotent logs.
+      */
+    def enableInboundCompression(): Boolean =
+      inboundCompressionNegotiated && expectInboundFlag.compareAndSet(false, true)
+
+    def isInboundCompressionNegotiated: Boolean = inboundCompressionNegotiated
+  }
 
   object CompressionPolicy {
     private val SnappySupportedFromP2pVersion = 5
+
+    def apply(compressOutbound: Boolean, expectInboundCompressed: Boolean): CompressionPolicy =
+      new CompressionPolicy(
+        compressOutbound = compressOutbound,
+        inboundCompressionNegotiated = expectInboundCompressed,
+        initialExpectInboundCompressed = expectInboundCompressed
+      )
 
     def fromHandshake(localAdvertisedP2pVersion: Int, remotePeerP2pVersion: Long): CompressionPolicy = {
       val localSupportsSnappy = localAdvertisedP2pVersion >= SnappySupportedFromP2pVersion
       val remoteSupportsSnappy = remotePeerP2pVersion >= SnappySupportedFromP2pVersion
       val compressionNegotiated = localSupportsSnappy && remoteSupportsSnappy
 
-      CompressionPolicy(
+      new CompressionPolicy(
         compressOutbound = compressionNegotiated,
-        expectInboundCompressed = compressionNegotiated
+        inboundCompressionNegotiated = compressionNegotiated,
+        initialExpectInboundCompressed = false
       )
     }
 
@@ -79,6 +102,29 @@ class MessageCodec(
     compressionPolicy.compressOutbound,
     compressionPolicy.expectInboundCompressed
   )
+
+  def enableInboundCompression(reason: String): Unit = {
+    if (compressionPolicy.enableInboundCompression()) {
+      log.info(
+        "COMPRESSION_POLICY_UPDATE: peerClientId={}, peerP2pVersion={}, reason={}, expectInboundCompressed=true",
+        remoteClientId,
+        remotePeer2PeerVersion,
+        reason
+      )
+    } else if (!compressionPolicy.isInboundCompressionNegotiated) {
+      log.debug(
+        "COMPRESSION_POLICY_UPDATE: Skipping inbound compression enable for peer {} - not negotiated (reason={})",
+        remoteClientId,
+        reason
+      )
+    } else {
+      log.debug(
+        "COMPRESSION_POLICY_UPDATE: Inbound compression already enabled for peer {}, reason={}",
+        remoteClientId,
+        reason
+      )
+    }
+  }
 
 
   // TODO: ETCM-402 - messageDecoder should use negotiated protocol version
