@@ -669,6 +669,10 @@
          <lastmod>2025-12-10</lastmod>
     </url>
     <url>
+         <loc>https://chippr-robotics.github.io/fukuii/validation/EXECUTIVE_SUMMARY/</loc>
+         <lastmod>2025-12-10</lastmod>
+    </url>
+    <url>
          <loc>https://chippr-robotics.github.io/fukuii/validation/GORGOROTH_COMPATIBILITY/</loc>
          <lastmod>2025-12-10</lastmod>
     </url>
@@ -678,6 +682,10 @@
     </url>
     <url>
          <loc>https://chippr-robotics.github.io/fukuii/validation/GORGOROTH_VALIDATION_STATUS/</loc>
+         <lastmod>2025-12-10</lastmod>
+    </url>
+    <url>
+         <loc>https://chippr-robotics.github.io/fukuii/validation/P2P_COMMUNICATION_VALIDATION_GUIDE/</loc>
          <lastmod>2025-12-10</lastmod>
     </url>
 </urlset>
