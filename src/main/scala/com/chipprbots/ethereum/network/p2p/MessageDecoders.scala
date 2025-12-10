@@ -27,36 +27,25 @@ object NetworkMessageDecoder extends MessageDecoder {
 
   override def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case Disconnect.code => Try(payload.toDisconnect).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Ping.code       => Try(payload.toPing).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Pong.code       => Try(payload.toPong).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Hello.code      => Try(payload.toHello).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _               => Left(UnknownMessageTypeError(msgCode, s"Unknown network message type: $msgCode"))
+      case Disconnect.code =>
+        Try(payload.toDisconnect).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Ping.code =>
+        Try(payload.toPing).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Pong.code =>
+        Try(payload.toPong).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Hello.code =>
+        Try(payload.toHello).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown network message type: $msgCode"))
     }
 
-}
-
-object ETC64MessageDecoder extends MessageDecoder {
-  import com.chipprbots.ethereum.network.p2p.messages.ETC64.Status._
-  import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock._
-
-  def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
-    msgCode match {
-      case Codes.StatusCode                => Try(payload.toStatus).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockCode              => Try(payload.toNewBlock).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetNodeDataCode           => Try(payload.toGetNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NodeDataCode              => Try(payload.toNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetReceiptsCode           => Try(payload.toGetReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.ReceiptsCode              => Try(payload.toReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockHashesCode        => Try(payload.toNewBlockHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockHeadersCode       => Try(payload.toGetBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHeadersCode          => Try(payload.toBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockBodiesCode        => Try(payload.toGetBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockBodiesCode           => Try(payload.toBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHashesFromNumberCode => Try(payload.toBlockHashesFromNumber).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.SignedTransactionsCode    => Try(payload.toSignedTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                               => Left(UnknownMessageTypeError(msgCode, s"Unknown etc/64 message type: $msgCode"))
-    }
 }
 
 object ETH64MessageDecoder extends MessageDecoder {
@@ -65,20 +54,59 @@ object ETH64MessageDecoder extends MessageDecoder {
 
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case Codes.GetNodeDataCode           => Try(payload.toGetNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NodeDataCode              => Try(payload.toNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetReceiptsCode           => Try(payload.toGetReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.ReceiptsCode              => Try(payload.toReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockHashesCode        => Try(payload.toNewBlockHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockHeadersCode       => Try(payload.toGetBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHeadersCode          => Try(payload.toBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockBodiesCode        => Try(payload.toGetBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockBodiesCode           => Try(payload.toBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHashesFromNumberCode => Try(payload.toBlockHashesFromNumber).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.StatusCode                => Try(payload.toStatus).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockCode              => Try(payload.toNewBlock).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.SignedTransactionsCode    => Try(payload.toSignedTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                               => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/64 message type: $msgCode"))
+      case Codes.GetNodeDataCode =>
+        Try(payload.toGetNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NodeDataCode =>
+        Try(payload.toNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHashesFromNumberCode =>
+        Try(payload.toBlockHashesFromNumber).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.StatusCode =>
+        Try(payload.toStatus).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/64 message type: $msgCode"))
     }
 }
 
@@ -88,20 +116,59 @@ object ETH63MessageDecoder extends MessageDecoder {
 
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case Codes.GetNodeDataCode           => Try(payload.toGetNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NodeDataCode              => Try(payload.toNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetReceiptsCode           => Try(payload.toGetReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.ReceiptsCode              => Try(payload.toReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockHashesCode        => Try(payload.toNewBlockHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockHeadersCode       => Try(payload.toGetBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHeadersCode          => Try(payload.toBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockBodiesCode        => Try(payload.toGetBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockBodiesCode           => Try(payload.toBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHashesFromNumberCode => Try(payload.toBlockHashesFromNumber).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.StatusCode                => Try(payload.toStatus).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockCode              => Try(payload.toNewBlock).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.SignedTransactionsCode    => Try(payload.toSignedTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                               => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/63 message type: $msgCode"))
+      case Codes.GetNodeDataCode =>
+        Try(payload.toGetNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NodeDataCode =>
+        Try(payload.toNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHashesFromNumberCode =>
+        Try(payload.toBlockHashesFromNumber).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.StatusCode =>
+        Try(payload.toStatus).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/63 message type: $msgCode"))
     }
 }
 
@@ -114,22 +181,67 @@ object ETH65MessageDecoder extends MessageDecoder {
 
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case Codes.StatusCode                     => Try(payload.toStatus).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockHashesCode             => Try(payload.toNewBlockHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.SignedTransactionsCode         => Try(payload.toSignedTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockHeadersCode            => Try(payload.toGetBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHeadersCode               => Try(payload.toBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockBodiesCode             => Try(payload.toGetBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockBodiesCode                => Try(payload.toBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockCode                   => Try(payload.toNewBlock).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewPooledTransactionHashesCode => Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetPooledTransactionsCode      => Try(payload.toGetPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.PooledTransactionsCode         => Try(payload.toPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetNodeDataCode                => Try(payload.toGetNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NodeDataCode                   => Try(payload.toNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetReceiptsCode                => Try(payload.toGetReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.ReceiptsCode                   => Try(payload.toReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                                    => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/65 message type: $msgCode"))
+      case Codes.StatusCode =>
+        Try(payload.toStatus).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewPooledTransactionHashesCode =>
+        Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetPooledTransactionsCode =>
+        Try(payload.toGetPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.PooledTransactionsCode =>
+        Try(payload.toPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetNodeDataCode =>
+        Try(payload.toGetNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NodeDataCode =>
+        Try(payload.toNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/65 message type: $msgCode"))
     }
 }
 
@@ -152,25 +264,67 @@ object ETH66MessageDecoder extends MessageDecoder {
 
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case Codes.StatusCode             => Try(payload.toStatus).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockHashesCode     => Try(payload.toNewBlockHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.SignedTransactionsCode => Try(payload.toSignedTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockHeadersCode    => Try(payload.toGetBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHeadersCode       => Try(payload.toBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockBodiesCode     => Try(payload.toGetBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockBodiesCode        => Try(payload.toBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockCode           => Try(payload.toNewBlock).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
+      case Codes.StatusCode =>
+        Try(payload.toStatus).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
       case Codes.NewPooledTransactionHashesCode =>
         Try(
           ETH65NewPooledTransactionHashes.NewPooledTransactionHashesDec(payload).toNewPooledTransactionHashes
         ).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetPooledTransactionsCode => Try(payload.toGetPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.PooledTransactionsCode    => Try(payload.toPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetNodeDataCode           => Try(payload.toGetNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NodeDataCode              => Try(payload.toNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetReceiptsCode           => Try(payload.toGetReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.ReceiptsCode              => Try(payload.toReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                               => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/66 message type: $msgCode"))
+      case Codes.GetPooledTransactionsCode =>
+        Try(payload.toGetPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.PooledTransactionsCode =>
+        Try(payload.toPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetNodeDataCode =>
+        Try(payload.toGetNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NodeDataCode =>
+        Try(payload.toNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/66 message type: $msgCode"))
     }
 }
 
@@ -191,22 +345,67 @@ object ETH67MessageDecoder extends MessageDecoder {
 
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case Codes.StatusCode                     => Try(payload.toStatus).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockHashesCode             => Try(payload.toNewBlockHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.SignedTransactionsCode         => Try(payload.toSignedTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockHeadersCode            => Try(payload.toGetBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHeadersCode               => Try(payload.toBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockBodiesCode             => Try(payload.toGetBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockBodiesCode                => Try(payload.toBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockCode                   => Try(payload.toNewBlock).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewPooledTransactionHashesCode => Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetPooledTransactionsCode      => Try(payload.toGetPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.PooledTransactionsCode         => Try(payload.toPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetNodeDataCode                => Try(payload.toGetNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NodeDataCode                   => Try(payload.toNodeData).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetReceiptsCode                => Try(payload.toGetReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.ReceiptsCode                   => Try(payload.toReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                                    => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/67 message type: $msgCode"))
+      case Codes.StatusCode =>
+        Try(payload.toStatus).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewPooledTransactionHashesCode =>
+        Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetPooledTransactionsCode =>
+        Try(payload.toGetPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.PooledTransactionsCode =>
+        Try(payload.toPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetNodeDataCode =>
+        Try(payload.toGetNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NodeDataCode =>
+        Try(payload.toNodeData).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/67 message type: $msgCode"))
     }
 }
 
@@ -225,23 +424,62 @@ object ETH68MessageDecoder extends MessageDecoder {
 
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case Codes.StatusCode                     => Try(payload.toStatus).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockHashesCode             => Try(payload.toNewBlockHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.SignedTransactionsCode         => Try(payload.toSignedTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockHeadersCode            => Try(payload.toGetBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockHeadersCode               => Try(payload.toBlockHeaders).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetBlockBodiesCode             => Try(payload.toGetBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.BlockBodiesCode                => Try(payload.toBlockBodies).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewBlockCode                   => Try(payload.toNewBlock).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.NewPooledTransactionHashesCode => Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.GetPooledTransactionsCode      => Try(payload.toGetPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.PooledTransactionsCode         => Try(payload.toPooledTransactions).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
+      case Codes.StatusCode =>
+        Try(payload.toStatus).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewPooledTransactionHashesCode =>
+        Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetPooledTransactionsCode =>
+        Try(payload.toGetPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.PooledTransactionsCode =>
+        Try(payload.toPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
       // GetNodeData and NodeData are explicitly removed in ETH68
       case Codes.GetNodeDataCode => Left(MalformedMessageError("GetNodeData (0x0d) is not supported in eth/68"))
       case Codes.NodeDataCode    => Left(MalformedMessageError("NodeData (0x0e) is not supported in eth/68"))
-      case Codes.GetReceiptsCode => Try(payload.toGetReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case Codes.ReceiptsCode    => Try(payload.toReceipts).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                     => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/68 message type: $msgCode"))
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/68 message type: $msgCode"))
     }
 }
 
@@ -249,7 +487,6 @@ object ETH68MessageDecoder extends MessageDecoder {
 object EthereumMessageDecoder {
   def ethMessageDecoder(protocolVersion: Capability): MessageDecoder =
     protocolVersion match {
-      case Capability.ETC64 => ETC64MessageDecoder
       case Capability.ETH63 => ETH63MessageDecoder
       case Capability.ETH64 => ETH64MessageDecoder
       case Capability.ETH65 => ETH65MessageDecoder
@@ -262,8 +499,8 @@ object EthereumMessageDecoder {
 
 /** SNAP/1 protocol message decoder
   *
-  * Decodes SNAP/1 protocol messages (satellite protocol for state sync).
-  * SNAP is used alongside ETH protocol, not as a replacement.
+  * Decodes SNAP/1 protocol messages (satellite protocol for state sync). SNAP is used alongside ETH protocol, not as a
+  * replacement.
   */
 object SNAPMessageDecoder extends MessageDecoder {
   import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -276,17 +513,41 @@ object SNAPMessageDecoder extends MessageDecoder {
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes.ByteCodesDec
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesDec
   import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes.TrieNodesDec
-  
+
   def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
     msgCode match {
-      case GetAccountRangeCode  => Try(payload.toGetAccountRange).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case AccountRangeCode     => Try(payload.toAccountRange).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case GetStorageRangesCode => Try(payload.toGetStorageRanges).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case StorageRangesCode    => Try(payload.toStorageRanges).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case GetByteCodesCode     => Try(payload.toGetByteCodes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case ByteCodesCode        => Try(payload.toByteCodes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case GetTrieNodesCode     => Try(payload.toGetTrieNodes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case TrieNodesCode        => Try(payload.toTrieNodes).toEither.left.map(ex => MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex)))
-      case _                    => Left(UnknownMessageTypeError(msgCode, s"Unknown snap/1 message type: $msgCode"))
+      case GetAccountRangeCode =>
+        Try(payload.toGetAccountRange).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case AccountRangeCode =>
+        Try(payload.toAccountRange).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case GetStorageRangesCode =>
+        Try(payload.toGetStorageRanges).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case StorageRangesCode =>
+        Try(payload.toStorageRanges).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case GetByteCodesCode =>
+        Try(payload.toGetByteCodes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case ByteCodesCode =>
+        Try(payload.toByteCodes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case GetTrieNodesCode =>
+        Try(payload.toGetTrieNodes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case TrieNodesCode =>
+        Try(payload.toTrieNodes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown snap/1 message type: $msgCode"))
     }
 }

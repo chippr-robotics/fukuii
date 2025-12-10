@@ -32,18 +32,21 @@ object DiscoveryConfig extends Logger {
 
     // Check if bootstrap nodes should be used (controlled by modifiers like 'enterprise')
     // Default to true if not specified to maintain backward compatibility
-    val useBootstrapNodes = try {
-      System.getProperty("fukuii.network.discovery.use-bootstrap-nodes", "true").toBoolean
-    } catch {
-      case _: Exception => true
-    }
+    val useBootstrapNodes =
+      try
+        System.getProperty("fukuii.network.discovery.use-bootstrap-nodes", "true").toBoolean
+      catch {
+        case _: Exception => true
+      }
 
     // Combine nodes based on configuration
     val allBootstrapNodes = if (useBootstrapNodes) {
       // Public/default mode: merge bootstrap nodes and static nodes
       val combined = bootstrapNodes ++ staticNodes
       if (staticNodes.nonEmpty && bootstrapNodes.nonEmpty) {
-        log.info(s"Merged ${staticNodes.size} static node(s) from static-nodes.json with ${bootstrapNodes.size} bootstrap node(s) from config")
+        log.info(
+          s"Merged ${staticNodes.size} static node(s) from static-nodes.json with ${bootstrapNodes.size} bootstrap node(s) from config"
+        )
       } else if (staticNodes.nonEmpty) {
         log.info(s"Using ${staticNodes.size} static node(s) from static-nodes.json")
       } else if (bootstrapNodes.nonEmpty) {

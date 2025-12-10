@@ -5,7 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt.LeafNode
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.utils.Logger
@@ -13,24 +13,26 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** Coordinator for state trie healing operations.
   *
-  * State healing is the final phase of SNAP sync that detects and downloads missing
-  * trie nodes that were not included in account/storage range downloads. This healer
-  * manages the healing process by:
+  * State healing is the final phase of SNAP sync that detects and downloads missing trie nodes that were not included
+  * in account/storage range downloads. This healer manages the healing process by:
   *
-  * 1. Detecting missing nodes during account/storage verification
-  * 2. Batching GetTrieNodes requests for efficiency
-  * 3. Validating and storing received trie nodes
-  * 4. Iteratively healing until the trie is complete
+  *   1. Detecting missing nodes during account/storage verification 2. Batching GetTrieNodes requests for efficiency 3.
+  *      Validating and storing received trie nodes 4. Iteratively healing until the trie is complete
   *
-  * @param stateRoot Root hash of the state trie to heal
-  * @param etcPeerManager Actor for sending requests to peers
-  * @param requestTracker Tracker for request/response lifecycle management
-  * @param mptStorage Storage layer for persisting healed trie nodes
-  * @param batchSize Maximum number of node paths to request in a single message (default 16)
+  * @param stateRoot
+  *   Root hash of the state trie to heal
+  * @param networkPeerManager
+  *   Actor for sending requests to peers
+  * @param requestTracker
+  *   Tracker for request/response lifecycle management
+  * @param mptStorage
+  *   Storage layer for persisting healed trie nodes
+  * @param batchSize
+  *   Maximum number of node paths to request in a single message (default 16)
   */
 class TrieNodeHealer(
     stateRoot: ByteString,
-    etcPeerManager: ActorRef,
+    networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     batchSize: Int = HealingTask.DEFAULT_BATCH_SIZE
@@ -59,22 +61,23 @@ class TrieNodeHealer(
 
   /** Adds missing nodes to be healed.
     *
-    * @param missingNodes List of (path, hash) pairs for missing trie nodes
+    * @param missingNodes
+    *   List of (path, hash) pairs for missing trie nodes
     */
   def addMissingNodes(missingNodes: Seq[(Seq[ByteString], ByteString)]): Unit = synchronized {
     val newTasks = HealingTask.createTasksFromMissingNodes(missingNodes, stateRoot)
     pendingTasks = pendingTasks ++ newTasks
     log.info(s"Added ${newTasks.size} missing nodes to healing queue. Total pending: ${pendingTasks.size}")
   }
-  
+
   /** Queues a single node by hash for healing.
-    * 
-    * When validation discovers missing nodes, we only have their hashes, not the full
-    * trie paths. Using an empty path signals to GetTrieNodes to do a direct hash lookup
-    * rather than path-based traversal. This is less efficient than path-based healing but
-    * necessary when we only have the hash reference (e.g., from a HashNode in the trie).
     *
-    * @param nodeHash The hash of the missing node
+    * When validation discovers missing nodes, we only have their hashes, not the full trie paths. Using an empty path
+    * signals to GetTrieNodes to do a direct hash lookup rather than path-based traversal. This is less efficient than
+    * path-based healing but necessary when we only have the hash reference (e.g., from a HashNode in the trie).
+    *
+    * @param nodeHash
+    *   The hash of the missing node
     */
   def queueNode(nodeHash: ByteString): Unit = synchronized {
     // Create a healing task with empty path (direct hash lookup)
@@ -89,10 +92,11 @@ class TrieNodeHealer(
     pendingTasks = pendingTasks :+ task
     log.debug(s"Queued node for healing: hash=${nodeHash.take(4).toHex}")
   }
-  
+
   /** Queues multiple nodes by hash for healing.
     *
-    * @param nodeHashes The hashes of missing nodes
+    * @param nodeHashes
+    *   The hashes of missing nodes
     */
   def queueNodes(nodeHashes: Seq[ByteString]): Unit = synchronized {
     val tasks = nodeHashes.map { nodeHash =>
@@ -111,8 +115,10 @@ class TrieNodeHealer(
 
   /** Requests the next batch of trie nodes from a peer.
     *
-    * @param peer The peer to request from
-    * @return Some(requestId) if a request was sent, None if no pending tasks
+    * @param peer
+    *   The peer to request from
+    * @return
+    *   Some(requestId) if a request was sent, None if no pending tasks
     */
   def requestNextBatch(peer: Peer): Option[BigInt] = synchronized {
     if (pendingTasks.isEmpty) {
@@ -147,7 +153,7 @@ class TrieNodeHealer(
     // Send request to peer
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
     val messageSerializable: com.chipprbots.ethereum.network.p2p.MessageSerializable = new GetTrieNodesEnc(request)
-    etcPeerManager ! EtcPeerManagerActor.SendMessage(messageSerializable, peer.id)
+    networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
 
     log.debug(
       s"Requested ${batch.size} trie nodes from peer $peer " +
@@ -159,8 +165,10 @@ class TrieNodeHealer(
 
   /** Handles a TrieNodes response from a peer.
     *
-    * @param response The TrieNodes message received
-    * @return Right(count) with number of nodes healed, or Left(error) if validation failed
+    * @param response
+    *   The TrieNodes message received
+    * @return
+    *   Right(count) with number of nodes healed, or Left(error) if validation failed
     */
   def handleResponse(response: TrieNodes): Either[String, Int] = synchronized {
     val requestId = response.requestId
@@ -180,7 +188,7 @@ class TrieNodeHealer(
 
     // Validate and store received nodes
     var healedCount = 0
-    for ((nodeData, task) <- nodes.zip(tasksForRequest)) {
+    for ((nodeData, task) <- nodes.zip(tasksForRequest))
       validateAndStoreNode(nodeData, task) match {
         case Right(_) =>
           task.nodeData = Some(nodeData)
@@ -196,7 +204,6 @@ class TrieNodeHealer(
           task.pending = true
           pendingTasks = pendingTasks :+ task
       }
-    }
 
     // Move completed tasks
     val (completed, stillActive) = tasksForRequest.partition(_.done)
@@ -216,11 +223,14 @@ class TrieNodeHealer(
 
   /** Validates and stores a healed trie node.
     *
-    * @param nodeData RLP-encoded trie node data
-    * @param task The healing task for this node
-    * @return Right(()) if successful, Left(error) otherwise
+    * @param nodeData
+    *   RLP-encoded trie node data
+    * @param task
+    *   The healing task for this node
+    * @return
+    *   Right(()) if successful, Left(error) otherwise
     */
-  private def validateAndStoreNode(nodeData: ByteString, task: HealingTask): Either[String, Unit] = {
+  private def validateAndStoreNode(nodeData: ByteString, task: HealingTask): Either[String, Unit] =
     try {
       // Validate node hash matches expected
       val nodeHash = ByteString(org.bouncycastle.jcajce.provider.digest.Keccak.Digest256().digest(nodeData.toArray))
@@ -240,12 +250,13 @@ class TrieNodeHealer(
       case e: Exception =>
         Left(s"Failed to store healed node: ${e.getMessage}")
     }
-  }
 
   /** Stores a healed trie node in MptStorage.
     *
-    * @param nodeData RLP-encoded trie node data
-    * @param nodeHash Hash of the trie node
+    * @param nodeData
+    *   RLP-encoded trie node data
+    * @param nodeHash
+    *   Hash of the trie node
     */
   private def storeTrieNode(nodeData: ByteString, nodeHash: ByteString): Unit = synchronized {
     // TODO: Parse node type and create appropriate MptNode
@@ -277,8 +288,10 @@ class TrieNodeHealer(
 
   /** Handles timeout for a healing request.
     *
-    * @param requestId The request ID that timed out
-    * @param tasks The tasks that were part of the request
+    * @param requestId
+    *   The request ID that timed out
+    * @param tasks
+    *   The tasks that were part of the request
     */
   private def handleTimeout(requestId: BigInt, tasks: Seq[HealingTask]): Unit = synchronized {
     log.warn(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}")
@@ -296,7 +309,8 @@ class TrieNodeHealer(
 
   /** Returns current healing statistics.
     *
-    * @return A statistics object with healing progress and performance metrics
+    * @return
+    *   A statistics object with healing progress and performance metrics
     */
   def statistics: HealingStatistics = synchronized {
     val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
@@ -317,7 +331,8 @@ class TrieNodeHealer(
 
   /** Calculates overall healing progress (0.0 to 1.0).
     *
-    * @return Progress value between 0.0 and 1.0
+    * @return
+    *   Progress value between 0.0 and 1.0
     */
   private def calculateProgress(): Double = {
     val total = pendingTasks.size + activeTasks.size + completedTasks.size
@@ -327,7 +342,8 @@ class TrieNodeHealer(
 
   /** Returns the number of pending healing tasks.
     *
-    * @return Number of tasks waiting to be requested
+    * @return
+    *   Number of tasks waiting to be requested
     */
   def pendingCount: Int = synchronized {
     pendingTasks.size
@@ -335,7 +351,8 @@ class TrieNodeHealer(
 
   /** Returns whether healing is complete (no pending or active tasks).
     *
-    * @return True if all healing tasks are done
+    * @return
+    *   True if all healing tasks are done
     */
   def isComplete: Boolean = synchronized {
     pendingTasks.isEmpty && activeTasks.isEmpty
@@ -363,10 +380,9 @@ case class HealingStatistics(
     kilobytesPerSecond: Double,
     progress: Double
 ) {
-  override def toString: String = {
+  override def toString: String =
     f"HealingStats(Progress: ${progress * 100}%.1f%%, " +
       f"Nodes: $totalNodes (${nodesPerSecond}%.1f nodes/sec), " +
       f"Tasks: $completedTasks done, $activeTasks active, $pendingTasks pending, " +
       f"Throughput: ${kilobytesPerSecond}%.1f KB/sec)"
-  }
 }

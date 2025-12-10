@@ -106,7 +106,7 @@ This review evaluates the SNAP sync implementation against the documented plan a
    - ✅ 11 unit tests passing
 
 2. **SNAPMessageDecoder**
-   - ✅ Integrated into EtcPeerManagerActor
+   - ✅ Integrated into NetworkPeerManagerActor
    - ✅ Routes all 8 SNAP message types
    - ✅ Late binding via RegisterSnapSyncController
 

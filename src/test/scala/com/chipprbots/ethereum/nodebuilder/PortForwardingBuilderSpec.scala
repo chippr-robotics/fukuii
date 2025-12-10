@@ -47,9 +47,9 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
     // This is defensive cleanup - if stopPortForwarding fails, the test already
     // made assertions about the state, so we don't need to fail here
     testBuilders.foreach { builder =>
-      try {
+      try
         builder.stopPortForwarding().futureValue
-      } catch {
+      catch {
         case NonFatal(_) => // Ignore non-fatal cleanup errors (already stopped, timeout, etc.)
       }
     }

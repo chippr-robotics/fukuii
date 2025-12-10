@@ -11,7 +11,7 @@ Successfully built a new Docker image and validated the gorgoroth 3-node Ethereu
 
 ### 1. Network Configuration ✅
 - **Network**: gorgoroth (Chain ID: 0x539 / 1337)
-- **Protocol**: ETC64 with SNAP1 support
+- **Protocol**: ETH68 with SNAP1 support
 - **Loaded correctly** from custom configuration
 
 ### 2. Port Configuration ✅

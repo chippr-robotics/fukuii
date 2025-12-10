@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-
-
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.ByteString
@@ -9,7 +7,6 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
-
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.{Peer, PeerId}
@@ -23,12 +20,10 @@ class TrieNodeHealerSpec
     with Matchers
     with BeforeAndAfterAll {
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     TestKit.shutdownActorSystem(system)
-  }
 
   implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
-
 
   "TrieNodeHealer" should "initialize with proper state" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
@@ -38,7 +33,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -55,7 +50,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -75,7 +70,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -101,7 +96,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -131,7 +126,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -153,7 +148,7 @@ class TrieNodeHealerSpec
     val batchSize = 10
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = batchSize
@@ -197,7 +192,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -224,13 +219,13 @@ class TrieNodeHealerSpec
 
     // Handle response
     val result = healer.handleResponse(response)
-    
+
     result match {
-      case Right(count) => 
+      case Right(count) =>
         count should be >= 0
       case Left(error) =>
         // Accept validation failures or other expected errors
-        error should (include("task") or include("No active"))
+        error should (include("task").or(include("No active")))
     }
   }
 
@@ -242,7 +237,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -266,7 +261,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -290,7 +285,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 16
@@ -319,7 +314,7 @@ class TrieNodeHealerSpec
 
     val healer = new TrieNodeHealer(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       batchSize = 5
@@ -338,7 +333,7 @@ class TrieNodeHealerSpec
 
     requestId1 shouldBe defined
     requestId2 shouldBe defined
-    requestId1.get should not equal requestId2.get
+    (requestId1.get should not).equal(requestId2.get)
 
     // Both requests should be sent
     etcPeerManager.expectMsgType[Any]

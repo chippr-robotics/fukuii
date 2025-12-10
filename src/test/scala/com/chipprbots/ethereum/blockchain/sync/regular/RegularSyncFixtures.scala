@@ -37,15 +37,16 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger._
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
+import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
+import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -73,7 +74,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       (0 to 5).toList.map((peerId _).andThen(getPeer)).fproduct(getPeerInfo(_)).toMap
     val defaultPeer: Peer = peerByNumber(0)
 
-    val etcPeerManager: TestProbe = TestProbe()
+    val networkPeerManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
     val ommersPool: TestProbe = TestProbe()
     val pendingTransactionsManager: TestProbe = TestProbe()
@@ -88,7 +89,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       RegularSync
         .props(
           peersClient.ref,
-          etcPeerManager.ref,
+          networkPeerManager.ref,
           peerEventBus.ref,
           consensusAdapter,
           blockchainReader,
@@ -142,7 +143,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def getPeerInfo(
         peer: Peer,
-        capability: Capability = Capability.ETC64
+        capability: Capability = Capability.ETH68
     ): PeerInfo = {
       val status =
         RemoteStatus(
@@ -451,7 +452,10 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     def sendLastTestBlockAsTop(): Unit = sendNewBlock(testBlocks.last)
 
     def sendNewBlock(block: Block = newBlock, peer: Peer = defaultPeer): Unit =
-      blockFetcher ! MessageFromPeer(NewBlock(block, ChainWeight.totalDifficultyOnly(block.number)), peer.id)
+      blockFetcher ! MessageFromPeer(
+        BaseETH6XMessages.NewBlock(block, ChainWeight.totalDifficultyOnly(block.number).totalDifficulty),
+        peer.id
+      )
 
     def goToTop(): Unit = {
       regularSync ! SyncProtocol.Start

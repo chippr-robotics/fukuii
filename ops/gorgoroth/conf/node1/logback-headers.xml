@@ -136,7 +136,7 @@
     <logger name="com.chipprbots.ethereum.network" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.EtcPeerManagerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.ServerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="INFO" />
     

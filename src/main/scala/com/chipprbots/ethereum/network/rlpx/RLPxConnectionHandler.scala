@@ -46,7 +46,7 @@ import com.chipprbots.ethereum.utils.ByteUtils
 class RLPxConnectionHandler(
     capabilities: List[Capability],
     authHandshaker: AuthHandshaker,
-  messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy) => MessageCodec,
+    messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy) => MessageCodec,
     rlpxConfiguration: RLPxConfiguration,
     extractor: Secrets => HelloCodec
 ) extends Actor
@@ -123,7 +123,7 @@ class RLPxConnectionHandler(
       log.debug("[RLPx] Hello write queued for peer {}", peerId)
     }
 
-    private def markHelloAckReceived(): Unit = {
+    private def markHelloAckReceived(): Unit =
       if (helloAckPending) {
         helloAckPending = false
         helloWriteAcknowledged = true
@@ -134,7 +134,6 @@ class RLPxConnectionHandler(
         // leading to "Cannot decode Hello" errors.
         log.debug("[RLPx] Hello write acknowledged for peer {} - deferring compression enable", peerId)
       }
-    }
 
     private def registerMessageCodec(messageCodec: MessageCodec): Unit = {
       activeMessageCodec = Some(messageCodec)
@@ -147,13 +146,13 @@ class RLPxConnectionHandler(
       }
     }
 
-    /** Write a Hello message directly without compression.
-      * This is used to handle late Hello messages that arrive after handshake completion,
-      * preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello behavior.
+    /** Write a Hello message directly without compression. This is used to handle late Hello messages that arrive after
+      * handshake completion, preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello
+      * behavior.
       */
     private def writeUncompressedHello(hello: HelloEnc, messageCodec: MessageCodec): ByteString = {
       import MessageCodec.MaxFramePayloadSize
-      
+
       val encoded: Array[Byte] = hello.toBytes
       val numFrames = Math.ceil(encoded.length / MaxFramePayloadSize.toDouble).toInt
       val frames = (0 until numFrames).map { frameNo =>
@@ -365,8 +364,10 @@ class RLPxConnectionHandler(
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
           CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
-        (messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion, hello.clientId, compressionPolicy),
-          negotiated)
+        (
+          messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion, hello.clientId, compressionPolicy),
+          negotiated
+        )
       }
 
     private def processFrames(frames: Seq[Frame], messageCodec: MessageCodec): Unit =
@@ -382,7 +383,7 @@ class RLPxConnectionHandler(
       case Left(ex) =>
         // Use type-safe error checking instead of string matching
         val isDecompressionFailure = MessageDecoder.isDecompressionFailure(ex)
-        
+
         if (isDecompressionFailure) {
           // Log detailed debugging information for decompression failures
           log.warning(
@@ -442,7 +443,8 @@ class RLPxConnectionHandler(
           )
           val out = writeUncompressedHello(h, messageCodec)
           connection ! Write(out, Ack)
-          val timeout = system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
+          val timeout =
+            system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
           context.become(
             handshaked(
               messageCodec = messageCodec,
@@ -451,7 +453,7 @@ class RLPxConnectionHandler(
               seqNumber = increaseSeqNumber(seqNumber)
             )
           )
-        
+
         case sm: SendMessage =>
           if (cancellableAckTimeout.isEmpty)
             sendMessage(messageCodec, sm.serializable, seqNumber, messagesNotSent)
@@ -532,7 +534,7 @@ class RLPxConnectionHandler(
         remainingMsgsToSend: Queue[MessageSerializable]
     ): Unit = {
       val out = messageCodec.encodeMessage(messageToSend)
-      
+
       // Enhanced logging for GetBlockHeaders debugging
       val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
       log.info(
@@ -551,7 +553,7 @@ class RLPxConnectionHandler(
         remainingMsgsToSend.size,
         outHex
       )
-      
+
       connection ! Write(out, Ack)
       log.debug("Sent message: {} to {}", messageToSend.underlyingMsg.toShortString, peerId)
 

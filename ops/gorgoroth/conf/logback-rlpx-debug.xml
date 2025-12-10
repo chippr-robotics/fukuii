@@ -1,0 +1,115 @@
+<configuration>
+
+    <property name="stdoutEncoderPattern" value="%d %-5level [%logger{36}] - %msg%n" />
+    <property name="fileEncoderPattern" value="%d [%thread] %-5level %logger{36} %X{akkaSource} - %msg%n" />
+
+    <!-- Read properties from application.conf via ConfigPropertyDefiner -->
+    <define name="LOGSLEVEL" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-level</key>
+        <defaultValue>DEBUG</defaultValue>
+    </define>
+    <define name="ASJSON" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.json-output</key>
+        <defaultValue>false</defaultValue>
+    </define>
+    <define name="LOGSDIR" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-dir</key>
+        <defaultValue>./logs</defaultValue>
+    </define>
+    <define name="LOGSFILENAME" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-file</key>
+        <defaultValue>fukuii-rlpx-debug</defaultValue>
+    </define>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${stdoutEncoderPattern}</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
+            <fieldNames>
+                <timestamp>timestamp</timestamp>
+                <version>[ignore]</version>
+                <logger>logger</logger>
+                <thread>thread</thread>
+                <level>level</level>
+                <levelValue>level_value</levelValue>
+                <message>message</message>
+                <stackTrace>stack_trace</stackTrace>
+            </fieldNames>
+            <includeMdcKeyNames>
+                <includeMdcKeyName>peer</includeMdcKeyName>
+                <includeMdcKeyName>block</includeMdcKeyName>
+                <includeMdcKeyName>transaction</includeMdcKeyName>
+                <includeMdcKeyName>actor</includeMdcKeyName>
+            </includeMdcKeyNames>
+            <includeCallerData>true</includeCallerData>
+            <includeContext>true</includeContext>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOGSDIR}/${LOGSFILENAME}.log</file>
+        <append>true</append>
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <fileNamePattern>${LOGSDIR}/${LOGSFILENAME}.%i.log.zip</fileNamePattern>
+            <minIndex>1</minIndex>
+            <maxIndex>50</maxIndex>
+        </rollingPolicy>
+        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <maxFileSize>10MB</maxFileSize>
+        </triggeringPolicy>
+        <encoder>
+            <pattern>${fileEncoderPattern}</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
+
+    <if condition='p("ASJSON").contains("true")'>
+        <then>
+            <appender-ref ref="STASH" />
+        </then>
+        <else>
+            <appender-ref ref="STDOUT" />
+        </else>
+    </if>
+
+    <root level="${LOGSLEVEL}">
+        <appender-ref ref="FILE" />
+        <appender-ref ref="METRICS" />
+        <if condition='p("ASJSON").contains("true")'>
+            <then>
+                <appender-ref ref="STASH" />
+            </then>
+            <else>
+                <appender-ref ref="STDOUT" />
+            </else>
+        </if>
+    </root>
+
+    <!-- Reduce noise from third-party libraries -->
+    <logger name="io.netty" level="WARN" />
+    <logger name="org.jupnp" level="WARN" />
+
+    <!-- RLPx deep tracing -->
+    <logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="TRACE" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="TRACE" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.Decryptor" level="TRACE" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.Compressor" level="TRACE" />
+
+    <!-- Sync path signal -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="DEBUG" />
+
+    <!-- Handshake visibility -->
+    <logger name="com.chipprbots.ethereum.network.handshaker" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="DEBUG" />
+
+</configuration>

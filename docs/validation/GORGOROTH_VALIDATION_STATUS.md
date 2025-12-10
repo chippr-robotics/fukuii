@@ -29,7 +29,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 
 **What was tested**:
 - ✅ Peer discovery and handshakes
-- ✅ Protocol compatibility (ETC64, SNAP1)
+- ✅ Protocol compatibility (ETH68, SNAP1)
 - ✅ Block propagation across Fukuii nodes
 - ✅ Network connectivity in Docker environment
 - ✅ Static node configuration

@@ -24,7 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.GenOps.GenOps
@@ -62,14 +62,14 @@ class FastSyncSpec
     lazy val bestBlockAtStart: Block = testBlocks(10)
     lazy val expectedPivotBlockNumber: BigInt = bestBlockAtStart.number - syncConfig.pivotBlockOffset
     lazy val expectedTargetBlockNumber: BigInt = expectedPivotBlockNumber + syncConfig.fastSyncBlockValidationX
-    lazy val testPeers: Map[Peer, EtcPeerManagerActor.PeerInfo] = twoAcceptedPeers.map { case (k, peerInfo) =>
+    lazy val testPeers: Map[Peer, NetworkPeerManagerActor.PeerInfo] = twoAcceptedPeers.map { case (k, peerInfo) =>
       val lastBlock = bestBlockAtStart
       k -> peerInfo
         .withBestBlockData(lastBlock.number, lastBlock.hash)
         .copy(remoteStatus = peerInfo.remoteStatus.copy(bestHash = lastBlock.hash))
     }
-    lazy val etcPeerManager =
-      new EtcPeerManagerFake(
+    lazy val networkPeerManager =
+      new NetworkPeerManagerFake(
         syncConfig,
         testPeers,
         testBlocks,
@@ -89,7 +89,7 @@ class FastSyncSpec
         stateStorage = storagesInstance.storages.stateStorage,
         validators = validators,
         peerEventBus = peerEventBus.ref,
-        etcPeerManager = etcPeerManager.ref,
+        networkPeerManager = networkPeerManager.ref,
         blacklist = blacklist,
         syncConfig = syncConfig,
         scheduler = system.scheduler,
@@ -153,9 +153,9 @@ class FastSyncSpec
         (for {
           _ <- startSync
           _ <- saveGenesis
-          _ <- etcPeerManager.onPeersConnected
-          _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
-          _ <- etcPeerManager.fetchedHeaders.head.compile.lastOrError
+          _ <- networkPeerManager.onPeersConnected
+          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
+          _ <- networkPeerManager.fetchedHeaders.head.compile.lastOrError
           status <- getSyncStatus
         } yield status match {
           case Status.Syncing(startingBlockNumber, blocksProgress, stateNodesProgress) =>
@@ -177,9 +177,9 @@ class FastSyncSpec
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
           _ <- startSync
-          _ <- etcPeerManager.onPeersConnected
-          _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
-          blocksBatch <- etcPeerManager.fetchedBlocks.head.compile.lastOrError
+          _ <- networkPeerManager.onPeersConnected
+          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
+          blocksBatch <- networkPeerManager.fetchedBlocks.head.compile.lastOrError
           status <- getSyncStatus
           lastBlockFromBatch = blocksBatch.lastOption.map(_.number).getOrElse(BigInt(0))
         } yield status match {
@@ -207,8 +207,8 @@ class FastSyncSpec
         (for {
           _ <- saveGenesis
           _ <- startSync
-          _ <- etcPeerManager.onPeersConnected
-          _ <- etcPeerManager.pivotBlockSelected.head.compile.lastOrError
+          _ <- networkPeerManager.onPeersConnected
+          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
           _ <- Stream
             .awakeEvery[IO](10.millis)
             .evalMap(_ => getSyncStatus)

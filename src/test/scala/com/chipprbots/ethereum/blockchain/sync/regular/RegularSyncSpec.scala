@@ -44,10 +44,10 @@ import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.GetHandshakedPeers
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.HandshakedPeers
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
@@ -55,9 +55,9 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
+import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -117,7 +117,7 @@ class RegularSyncSpec
 
       "subscribe to handshaked peers list" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync // unlazy
-        etcPeerManager.expectMsg(EtcPeerManagerActor.GetHandshakedPeers)
+        networkPeerManager.expectMsg(NetworkPeerManagerActor.GetHandshakedPeers)
       })
     }
 
@@ -128,7 +128,10 @@ class RegularSyncSpec
         peerEventBus.expectMsgClass(classOf[Subscribe])
         // It's weird that we're using block number for total difficulty but I'm too scared to fight this dragon
         peerEventBus.reply(
-          MessageFromPeer(NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number)), defaultPeer.id)
+          MessageFromPeer(
+            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number).totalDifficulty),
+            defaultPeer.id
+          )
         )
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
@@ -173,7 +176,7 @@ class RegularSyncSpec
           peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
           blockFetcher ! MessageFromPeer(
-            NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number)),
+            NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
           peersClient.expectMsgEq(blockHeadersChunkRequest(1))
@@ -283,7 +286,10 @@ class RegularSyncSpec
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
         peerEventBus.reply(
-          MessageFromPeer(NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.header.difficulty)), defaultPeer.id)
+          MessageFromPeer(
+            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.header.difficulty).totalDifficulty),
+            defaultPeer.id
+          )
         )
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
@@ -365,7 +371,7 @@ class RegularSyncSpec
           peerEventBus.expectMsgClass(classOf[Subscribe])
           peerEventBus.reply(
             MessageFromPeer(
-              NewBlock(alternativeBlocks.last, ChainWeight(0, alternativeBlocks.last.number)),
+              NewBlock(alternativeBlocks.last, ChainWeight(0, alternativeBlocks.last.number).totalDifficulty),
               defaultPeer.id
             )
           )
@@ -421,14 +427,17 @@ class RegularSyncSpec
         peerEventBus.expectMsgClass(classOf[Subscribe])
         val blockFetcher: ActorRef = peerEventBus.sender()
         peerEventBus.reply(
-          MessageFromPeer(NewBlock(originalBranch.last, ChainWeight(0, originalBranch.last.number)), defaultPeer.id)
+          MessageFromPeer(
+            NewBlock(originalBranch.last, ChainWeight(0, originalBranch.last.number).totalDifficulty),
+            defaultPeer.id
+          )
         )
 
         awaitCond(bestBlock == originalBranch.last, 5.seconds)
 
         // As node will be on top, we have to re-trigger the fetching process by simulating a block from the fork being broadcasted
         blockFetcher ! MessageFromPeer(
-          NewBlock(betterBranch.last, ChainWeight(0, betterBranch.last.number)),
+          NewBlock(betterBranch.last, ChainWeight(0, betterBranch.last.number).totalDifficulty),
           defaultPeer.id
         )
         awaitCond(bestBlock == betterBranch.last, 5.seconds)
@@ -549,7 +558,9 @@ class RegularSyncSpec
         regularSync ! SyncProtocol.Start
         peerEventBus.expectMsgClass(classOf[Subscribe])
 
-        peerEventBus.reply(MessageFromPeer(NewBlock(newBlock, ChainWeight(0, 1)), defaultPeer.id))
+        peerEventBus.reply(
+          MessageFromPeer(NewBlock(newBlock, ChainWeight(0, 1).totalDifficulty), defaultPeer.id)
+        )
 
         // Wait for actor to finish processing and verify it never calls evaluateBranchBlock
         // Use assertForDuration to continuously verify the mock is never called
@@ -571,7 +582,10 @@ class RegularSyncSpec
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
         peerEventBus.reply(
-          MessageFromPeer(NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number)), defaultPeer.id)
+          MessageFromPeer(
+            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number).totalDifficulty),
+            defaultPeer.id
+          )
         )
 
         awaitCond(didTryToImportBlock(failingBlock))
@@ -592,13 +606,13 @@ class RegularSyncSpec
       "broadcast imported block" in sync(new OnTopFixture(testSystem) {
         goToTop()
 
-        etcPeerManager.expectMsg(GetHandshakedPeers)
-        etcPeerManager.reply(HandshakedPeers(handshakedPeers))
+        networkPeerManager.expectMsg(GetHandshakedPeers)
+        networkPeerManager.reply(HandshakedPeers(handshakedPeers))
 
         sendNewBlock()
 
-        etcPeerManager.fishForSpecificMessageMatching() {
-          case EtcPeerManagerActor.SendMessage(message, _) =>
+        networkPeerManager.fishForSpecificMessageMatching() {
+          case NetworkPeerManagerActor.SendMessage(message, _) =>
             message.underlyingMsg match {
               case NewBlock(block, _) if block == newBlock => true
               case _                                       => false
@@ -630,7 +644,10 @@ class RegularSyncSpec
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
         peerEventBus.reply(
-          MessageFromPeer(NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number)), defaultPeer.id)
+          MessageFromPeer(
+            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number).totalDifficulty),
+            defaultPeer.id
+          )
         )
 
         awaitCond(didTryToImportBlock(testBlocks.head))
@@ -667,13 +684,13 @@ class RegularSyncSpec
       "broadcast after successful import" in sync(new OnTopFixture(testSystem) {
         goToTop()
 
-        etcPeerManager.expectMsg(GetHandshakedPeers)
-        etcPeerManager.reply(HandshakedPeers(handshakedPeers))
+        networkPeerManager.expectMsg(GetHandshakedPeers)
+        networkPeerManager.reply(HandshakedPeers(handshakedPeers))
 
         regularSync ! SyncProtocol.MinedBlock(newBlock)
 
-        etcPeerManager.fishForSpecificMessageMatching() {
-          case EtcPeerManagerActor.SendMessage(message, _) =>
+        networkPeerManager.fishForSpecificMessageMatching() {
+          case NetworkPeerManagerActor.SendMessage(message, _) =>
             message.underlyingMsg match {
               case NewBlock(block, _) if block == newBlock => true
               case _                                       => false
@@ -729,14 +746,14 @@ class RegularSyncSpec
           )
         )
 
-        etcPeerManager.expectMsg(GetHandshakedPeers)
-        etcPeerManager.reply(HandshakedPeers(handshakedPeers))
+        networkPeerManager.expectMsg(GetHandshakedPeers)
+        networkPeerManager.reply(HandshakedPeers(handshakedPeers))
 
         regularSync ! newCheckpointMsg
 
         awaitCond(didTryToImportBlock(checkpointBlock))
-        etcPeerManager.fishForSpecificMessageMatching() {
-          case EtcPeerManagerActor.SendMessage(message, _) =>
+        networkPeerManager.fishForSpecificMessageMatching() {
+          case NetworkPeerManagerActor.SendMessage(message, _) =>
             message.underlyingMsg match {
               case NewBlock(block, _) if block == checkpointBlock => true
               case _                                              => false
@@ -747,7 +764,7 @@ class RegularSyncSpec
     }
 
     "broadcasting blocks" should {
-      "send a NewBlock message without latest checkpoint number when client not support ETC64" in sync(
+      "send an ETH NewBlock message to broadcast newly imported blocks" in sync(
         new OnTopFixture(testSystem) {
           goToTop()
 
@@ -758,13 +775,13 @@ class RegularSyncSpec
             (peer, peerInfo)
           }
 
-          etcPeerManager.expectMsg(GetHandshakedPeers)
-          etcPeerManager.reply(HandshakedPeers(Map(peerWithETH63._1 -> peerWithETH63._2)))
+          networkPeerManager.expectMsg(GetHandshakedPeers)
+          networkPeerManager.reply(HandshakedPeers(Map(peerWithETH63._1 -> peerWithETH63._2)))
 
           blockFetcher ! MessageFromPeer(BaseETH6XMessages.NewBlock(newBlock, newBlock.number), defaultPeer.id)
 
-          etcPeerManager.fishForSpecificMessageMatching() {
-            case EtcPeerManagerActor.SendMessage(message, _) =>
+          networkPeerManager.fishForSpecificMessageMatching() {
+            case NetworkPeerManagerActor.SendMessage(message, _) =>
               message.underlyingMsg match {
                 case BaseETH6XMessages.NewBlock(`newBlock`, _) => true
                 case _                                         => false
@@ -774,28 +791,6 @@ class RegularSyncSpec
         }
       )
 
-      "send a NewBlock message with latest checkpoint number when client supports ETC64" in sync(
-        new OnTopFixture(testSystem) {
-          goToTop()
-
-          val num: BigInt = 42
-          blockchainWriter.saveBestKnownBlocks(testBlocks.head.hash, num, Some(num))
-
-          etcPeerManager.expectMsg(GetHandshakedPeers)
-          etcPeerManager.reply(HandshakedPeers(handshakedPeers))
-
-          blockFetcher ! MessageFromPeer(NewBlock(newBlock, ChainWeight(num, newBlock.number)), defaultPeer.id)
-
-          etcPeerManager.fishForSpecificMessageMatching() {
-            case EtcPeerManagerActor.SendMessage(message, _) =>
-              message.underlyingMsg match {
-                case NewBlock(`newBlock`, _) => true
-                case _                       => false
-              }
-            case _ => false
-          }
-        }
-      )
     }
 
     "reporting progress" should {
@@ -809,7 +804,10 @@ class RegularSyncSpec
             peerEventBus.expectMsgClass(classOf[Subscribe])
             peerEventBus.reply(
               MessageFromPeer(
-                NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number)),
+                NewBlock(
+                  testBlocks.last,
+                  ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty
+                ),
                 defaultPeer.id
               )
             )
@@ -836,7 +834,10 @@ class RegularSyncSpec
             peerEventBus.expectMsgClass(classOf[Subscribe])
             peerEventBus.reply(
               MessageFromPeer(
-                NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number)),
+                NewBlock(
+                  testBlocks.last,
+                  ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty
+                ),
                 defaultPeer.id
               )
             )
@@ -861,7 +862,10 @@ class RegularSyncSpec
             peerEventBus.expectMsgClass(classOf[Subscribe])
             peerEventBus.reply(
               MessageFromPeer(
-                NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number)),
+                NewBlock(
+                  testBlocks.last,
+                  ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty
+                ),
                 defaultPeer.id
               )
             )
@@ -888,7 +892,10 @@ class RegularSyncSpec
             peerEventBus.expectMsgClass(classOf[Subscribe])
             peerEventBus.reply(
               MessageFromPeer(
-                NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number)),
+                NewBlock(
+                  testBlocks.last,
+                  ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty
+                ),
                 defaultPeer.id
               )
             )

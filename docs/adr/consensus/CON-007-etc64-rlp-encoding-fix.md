@@ -1,5 +1,7 @@
 # CON-007: ETC64 RLP Encoding Fix for Peer Compatibility
 
+> **Archival note (2024):** ETC64 protocol support has been removed from Fukuii in favor of ETH66+ and SNAP1. This ADR is retained for historical context and does not describe currently supported behavior.
+
 ## Status
 Accepted
 

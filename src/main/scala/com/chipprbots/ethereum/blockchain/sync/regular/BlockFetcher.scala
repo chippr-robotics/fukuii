@@ -38,7 +38,6 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -314,9 +313,6 @@ class BlockFetcher(
         fetchBlocks(newState)
 
       case AdaptedMessageFromEventBus(BaseETH6XMessages.NewBlock(block, _), peerId) =>
-        handleNewBlock(block, peerId, state)
-
-      case AdaptedMessageFromEventBus(ETC64.NewBlock(block, _), peerId) =>
         handleNewBlock(block, peerId, state)
 
       case BlockImportFailed(blockNr, reason) =>

@@ -37,10 +37,9 @@ class TuiLogSuppressor extends FukuiiLogger:
 
       // Find and detach console appenders
       val appenders = rootLogger.iteratorForAppenders().asScala.toList
-      val consoleAppenders = appenders.collect {
-        case appender: ConsoleAppender[ILoggingEvent] =>
-          log.debug(s"Suppressing console appender: ${appender.getName}")
-          (appender.getName, appender)
+      val consoleAppenders = appenders.collect { case appender: ConsoleAppender[ILoggingEvent] =>
+        log.debug(s"Suppressing console appender: ${appender.getName}")
+        (appender.getName, appender)
       }
 
       consoleAppenders.foreach { case (name, appender) =>

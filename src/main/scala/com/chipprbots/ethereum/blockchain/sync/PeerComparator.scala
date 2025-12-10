@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain
 
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 
 object PeerComparator {
 

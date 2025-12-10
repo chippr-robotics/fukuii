@@ -31,7 +31,10 @@ class CheckpointUpdateServiceSpec
   }
 
   /** Helper method to invoke private parseCheckpointsFromJson method */
-  private def parseCheckpoints(service: CheckpointUpdateService, json: String): Either[String, Seq[BootstrapCheckpoint]] = {
+  private def parseCheckpoints(
+      service: CheckpointUpdateService,
+      json: String
+  ): Either[String, Seq[BootstrapCheckpoint]] = {
     val parseMethod = service.getClass.getDeclaredMethod("parseCheckpointsFromJson", classOf[String])
     parseMethod.setAccessible(true)
     parseMethod.invoke(service, json).asInstanceOf[Either[String, Seq[BootstrapCheckpoint]]]

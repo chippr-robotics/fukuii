@@ -211,7 +211,10 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
   }
 
-  it should "handle late Hello message after handshake without compression" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "handle late Hello message after handshake without compression" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     // Setup a mock that will capture what gets encoded
     var encodedMessages: List[ByteString] = Nil
     mockMessageCodec.encodeMessageHandler = Some { msg =>
@@ -234,14 +237,14 @@ class RLPxConnectionHandlerSpec
       listenPort = 30303,
       nodeId = ByteString(Array.fill[Byte](64)(0))
     )
-    
+
     rlpxConnection ! RLPxConnectionHandler.SendMessage(lateHello)
 
     // The connection should write the Hello without going through MessageCodec.encodeMessage
     // (which would compress it). Instead, it should use frameCodec directly.
     // We can verify this by checking that encodeMessage was NOT called
     connection.expectMsgClass(classOf[Tcp.Write])
-    
+
     // The encodeMessage handler should NOT have been called for Hello
     encodedMessages should be(empty)
 
@@ -249,7 +252,7 @@ class RLPxConnectionHandlerSpec
     rlpxConnection ! RLPxConnectionHandler.Ack
     rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
     connection.expectMsgClass(classOf[Tcp.Write])
-    
+
     // This time encodeMessage should have been called
     encodedMessages should not be empty
     encodedMessages.head.utf8String should include("Ping")
@@ -265,12 +268,12 @@ class RLPxConnectionHandlerSpec
         throw new Exception("Mock message decoder fails to decode all messages")
     }
     val protocolVersion = Capability.ETH63
-    
+
     // SCALA 3 MIGRATION: Using configurable test double instead of mock because
     // AuthHandshaker with Selectable cannot be properly mocked in Scala 3
     lazy val mockHandshaker: ConfigurableAuthHandshaker = new ConfigurableAuthHandshaker()
     lazy val connection: TestProbe = TestProbe()
-    
+
     // SCALA 3 MIGRATION: Cannot mock MessageCodec with constructor parameters in Scala 3
     // Using configurable test double pattern similar to ConfigurableAuthHandshaker
     private lazy val stubFrameCodec: FrameCodec = stub[FrameCodec]
@@ -278,7 +281,7 @@ class RLPxConnectionHandlerSpec
       compressOutbound = false,
       expectInboundCompressed = false
     )
-    
+
     class ConfigurableMessageCodec
         extends MessageCodec(
           stubFrameCodec,
@@ -288,17 +291,21 @@ class RLPxConnectionHandlerSpec
           defaultCompressionPolicy
         ) {
       var encodeMessageHandler: Option[MessageSerializable => ByteString] = None
-      var readMessagesHandler: Option[ByteString => Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]]] = None
-      
+      var readMessagesHandler: Option[
+        ByteString => Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]]
+      ] = None
+
       override def encodeMessage(message: MessageSerializable): ByteString =
         encodeMessageHandler.getOrElse(super.encodeMessage)(message)
-      
-      override def readMessages(data: ByteString): Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]] =
+
+      override def readMessages(
+          data: ByteString
+      ): Seq[Either[MessageDecoder.DecodingError, com.chipprbots.ethereum.network.p2p.Message]] =
         readMessagesHandler.getOrElse(super.readMessages)(data)
     }
-    
+
     lazy val mockMessageCodec: ConfigurableMessageCodec = new ConfigurableMessageCodec()
-    
+
     lazy val mockHelloExtractor: HelloCodec = mock[HelloCodec]
 
     // Configurable test double for AuthHandshaker that can be set up for different test scenarios
@@ -362,7 +369,13 @@ class RLPxConnectionHandlerSpec
         new RLPxConnectionHandler(
           protocolVersion :: Nil,
           mockHandshaker,
-          (frameCodec: FrameCodec, capability: Capability, p2pVersion: Long, clientId: String, compressionPolicy: MessageCodec.CompressionPolicy) => mockMessageCodec,
+          (
+              frameCodec: FrameCodec,
+              capability: Capability,
+              p2pVersion: Long,
+              clientId: String,
+              compressionPolicy: MessageCodec.CompressionPolicy
+          ) => mockMessageCodec,
           rlpxConfiguration,
           _ => mockHelloExtractor
         ) {

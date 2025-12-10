@@ -185,7 +185,7 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
   // Enhanced peer management codecs
   implicit val net_listPeers: NoParamsMethodDecoder[ListPeersRequest] with JsonEncoder[ListPeersResponse] =
     new NoParamsMethodDecoder(ListPeersRequest()) with JsonEncoder[ListPeersResponse] {
-      override def encodeJson(t: ListPeersResponse): JValue = {
+      override def encodeJson(t: ListPeersResponse): JValue =
         JArray(t.peers.map { peerInfo =>
           JObject(
             "id" -> JString(peerInfo.id),
@@ -198,7 +198,6 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
             "status" -> JString(peerInfo.status)
           )
         })
-      }
     }
 
   implicit val net_disconnectPeer: JsonMethodDecoder[DisconnectPeerRequest] with JsonEncoder[DisconnectPeerResponse] =
@@ -233,7 +232,7 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
   implicit val net_listBlacklistedPeers
       : NoParamsMethodDecoder[ListBlacklistedPeersRequest] with JsonEncoder[ListBlacklistedPeersResponse] =
     new NoParamsMethodDecoder(ListBlacklistedPeersRequest()) with JsonEncoder[ListBlacklistedPeersResponse] {
-      override def encodeJson(t: ListBlacklistedPeersResponse): JValue = {
+      override def encodeJson(t: ListBlacklistedPeersResponse): JValue =
         JArray(t.blacklistedPeers.map { entry =>
           JObject(
             "id" -> JString(entry.id),
@@ -241,7 +240,6 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
             "addedAt" -> JInt(entry.addedAt)
           )
         })
-      }
     }
 
   implicit val net_addToBlacklist: JsonMethodDecoder[AddToBlacklistRequest] with JsonEncoder[AddToBlacklistResponse] =

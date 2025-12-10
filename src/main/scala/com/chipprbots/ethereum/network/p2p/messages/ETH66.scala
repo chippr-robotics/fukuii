@@ -24,14 +24,14 @@ import com.chipprbots.ethereum.utils.ByteUtils
   */
 object ETH66 {
 
-  /** Thread-safe counter for generating unique request IDs.
-    * Starting from 1 to avoid the special case of encoding 0.
+  /** Thread-safe counter for generating unique request IDs. Starting from 1 to avoid the special case of encoding 0.
     */
   private val requestIdCounter = new AtomicLong(1L)
 
-  /** Generates a new unique request ID for ETH66+ protocol messages.
-    * Request IDs are used to match responses to their corresponding requests.
-    * @return a unique, incrementing request ID
+  /** Generates a new unique request ID for ETH66+ protocol messages. Request IDs are used to match responses to their
+    * corresponding requests.
+    * @return
+    *   a unique, incrementing request ID
     */
   def nextRequestId: BigInt = BigInt(requestIdCounter.getAndIncrement())
 
@@ -136,7 +136,10 @@ object ETH66 {
 
       override def toRLPEncodable: RLPEncodeable =
         // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
-        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.headers.map(_.toRLPEncodable): _*))
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(msg.headers.map(_.toRLPEncodable): _*)
+        )
     }
 
     implicit class BlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
@@ -216,7 +219,10 @@ object ETH66 {
 
       override def toRLPEncodable: RLPEncodeable =
         // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
-        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.bodies.map(_.toRLPEncodable): _*))
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(msg.bodies.map(_.toRLPEncodable): _*)
+        )
     }
 
     implicit class BlockBodiesDec(val bytes: Array[Byte]) extends AnyVal {
@@ -287,7 +293,10 @@ object ETH66 {
 
       override def toRLPEncodable: RLPEncodeable =
         // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
-        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.txs.map(_.toRLPEncodable): _*))
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(msg.txs.map(_.toRLPEncodable): _*)
+        )
     }
 
     implicit class PooledTransactionsDec(val bytes: Array[Byte]) extends AnyVal {

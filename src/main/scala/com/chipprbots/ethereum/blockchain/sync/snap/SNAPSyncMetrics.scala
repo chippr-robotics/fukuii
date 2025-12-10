@@ -9,23 +9,25 @@ import com.google.common.util.concurrent.AtomicDouble
 import com.chipprbots.ethereum.metrics.MetricsContainer
 
 /** Prometheus metrics for SNAP sync.
-  * 
+  *
   * Provides comprehensive observability for SNAP synchronization including:
-  * - Sync phase tracking
-  * - Account range download progress
-  * - Bytecode download progress
-  * - Storage range download progress
-  * - State healing progress
-  * - Peer performance metrics
-  * - Throughput and timing metrics
-  * 
+  *   - Sync phase tracking
+  *   - Account range download progress
+  *   - Bytecode download progress
+  *   - Storage range download progress
+  *   - State healing progress
+  *   - Peer performance metrics
+  *   - Throughput and timing metrics
+  *
   * Metrics are exposed via Prometheus endpoint and can be visualized in Grafana.
   */
 object SNAPSyncMetrics extends MetricsContainer {
 
   // ===== Sync Phase Metrics =====
-  
-  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=Bytecode, 3=StorageRange, 4=StateHealing, 5=StateValidation, 6=Completed) */
+
+  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=Bytecode, 3=StorageRange, 4=StateHealing, 5=StateValidation,
+    * 6=Completed)
+    */
   final private val CurrentPhaseGauge =
     metrics.registry.gauge("snapsync.phase.current.gauge", new AtomicDouble(0d))
 
@@ -38,13 +40,13 @@ object SNAPSyncMetrics extends MetricsContainer {
     metrics.registry.gauge("snapsync.phase.time.seconds.gauge", new AtomicDouble(0d))
 
   // ===== Pivot Block Metrics =====
-  
+
   /** Pivot block number selected for SNAP sync */
   final private val PivotBlockNumberGauge =
     metrics.registry.gauge("snapsync.pivot.block.number.gauge", new AtomicDouble(0d))
 
   // ===== Account Range Sync Metrics =====
-  
+
   /** Total accounts synced */
   final private val AccountsSyncedGauge =
     metrics.registry.gauge("snapsync.accounts.synced.gauge", new AtomicLong(0L))
@@ -74,7 +76,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     metrics.counter("snapsync.accounts.requests.failed")
 
   // ===== Bytecode Download Metrics =====
-  
+
   /** Total bytecodes downloaded */
   final private val BytecodesDownloadedGauge =
     metrics.registry.gauge("snapsync.bytecodes.downloaded.gauge", new AtomicLong(0L))
@@ -104,7 +106,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     metrics.counter("snapsync.bytecodes.requests.failed")
 
   // ===== Storage Range Sync Metrics =====
-  
+
   /** Total storage slots synced */
   final private val StorageSlotsSyncedGauge =
     metrics.registry.gauge("snapsync.storage.slots.synced.gauge", new AtomicLong(0L))
@@ -134,7 +136,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     metrics.counter("snapsync.storage.requests.failed")
 
   // ===== State Healing Metrics =====
-  
+
   /** Total trie nodes healed */
   final private val NodesHealedGauge =
     metrics.registry.gauge("snapsync.healing.nodes.healed.gauge", new AtomicLong(0L))
@@ -164,7 +166,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     metrics.registry.gauge("snapsync.validation.missing.nodes.gauge", new AtomicLong(0L))
 
   // ===== Peer Performance Metrics =====
-  
+
   /** Number of SNAP-capable peers currently connected */
   final private val SnapCapablePeersGauge =
     metrics.registry.gauge("snapsync.peers.capable.gauge", new AtomicLong(0L))
@@ -182,7 +184,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     metrics.counter("snapsync.requests.retries.total")
 
   // ===== Error and Failure Metrics =====
-  
+
   /** Counter for total sync errors */
   final private val SyncErrorsCounter =
     metrics.counter("snapsync.errors.total")
@@ -217,13 +219,13 @@ object SNAPSyncMetrics extends MetricsContainer {
   def measure(progress: SyncProgress): Unit = {
     // Phase
     val phaseValue = progress.phase match {
-      case SNAPSyncController.Idle => 0
+      case SNAPSyncController.Idle             => 0
       case SNAPSyncController.AccountRangeSync => 1
-      case SNAPSyncController.ByteCodeSync => 2
+      case SNAPSyncController.ByteCodeSync     => 2
       case SNAPSyncController.StorageRangeSync => 3
-      case SNAPSyncController.StateHealing => 4
-      case SNAPSyncController.StateValidation => 5
-      case SNAPSyncController.Completed => 6
+      case SNAPSyncController.StateHealing     => 4
+      case SNAPSyncController.StateValidation  => 5
+      case SNAPSyncController.Completed        => 6
     }
     setCurrentPhase(phaseValue)
 
@@ -253,7 +255,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     // Time
     val totalMinutes = (System.currentTimeMillis() - progress.startTime) / 60000.0
     setTotalSyncTime(totalMinutes)
-    
+
     val phaseSeconds = (System.currentTimeMillis() - progress.phaseStartTime) / 1000.0
     setPhaseTime(phaseSeconds)
   }

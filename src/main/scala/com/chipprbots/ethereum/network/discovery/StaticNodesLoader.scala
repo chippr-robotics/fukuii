@@ -15,22 +15,20 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Utility to load static nodes from a static-nodes.json file
   *
-  * The static-nodes.json file should be a JSON array of enode URLs:
-  * [
-  *   "enode://...",
-  *   "enode://..."
-  * ]
+  * The static-nodes.json file should be a JSON array of enode URLs: [ "enode://...", "enode://..." ]
   */
 object StaticNodesLoader extends Logger {
 
   /** Load static nodes from a file path
     *
-    * @param filePath path to the static-nodes.json file
-    * @return Set of enode URL strings, or empty set if file doesn't exist or is invalid
+    * @param filePath
+    *   path to the static-nodes.json file
+    * @return
+    *   Set of enode URL strings, or empty set if file doesn't exist or is invalid
     */
   def loadFromFile(filePath: String): Set[String] = {
     val file = new File(filePath)
-    
+
     if (!file.exists()) {
       log.debug(s"Static nodes file not found: $filePath")
       return Set.empty
@@ -46,9 +44,7 @@ object StaticNodesLoader extends Logger {
       try {
         val content = source.mkString
         parseStaticNodes(content)
-      } finally {
-        source.close()
-      }
+      } finally source.close()
     } match {
       case Success(nodes) =>
         if (nodes.nonEmpty) {
@@ -65,8 +61,10 @@ object StaticNodesLoader extends Logger {
     *
     * Looks for static-nodes.json in the specified datadir
     *
-    * @param datadir the data directory path
-    * @return Set of enode URL strings, or empty set if file doesn't exist or is invalid
+    * @param datadir
+    *   the data directory path
+    * @return
+    *   Set of enode URL strings, or empty set if file doesn't exist or is invalid
     */
   def loadFromDatadir(datadir: String): Set[String] = {
     val staticNodesPath = Paths.get(datadir, "static-nodes.json").toString
@@ -75,10 +73,12 @@ object StaticNodesLoader extends Logger {
 
   /** Parse static nodes JSON content
     *
-    * @param jsonContent JSON string content
-    * @return Set of enode URL strings
+    * @param jsonContent
+    *   JSON string content
+    * @return
+    *   Set of enode URL strings
     */
-  private def parseStaticNodes(jsonContent: String): Set[String] = {
+  private def parseStaticNodes(jsonContent: String): Set[String] =
     parse(jsonContent) match {
       case JArray(values) =>
         values.flatMap {
@@ -94,5 +94,4 @@ object StaticNodesLoader extends Logger {
         log.warn(s"Invalid static-nodes.json format: expected JSON array, found ${other.getClass.getSimpleName}")
         Set.empty
     }
-  }
 }

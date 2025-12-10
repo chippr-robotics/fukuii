@@ -31,7 +31,8 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.PeerActor.GetStatus
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerActor.StatusResponse
@@ -39,12 +40,13 @@ import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguratio
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network._
 import com.chipprbots.ethereum.testing.Tags._
-import com.chipprbots.ethereum.network.handshaker.EtcHandshaker
-import com.chipprbots.ethereum.network.handshaker.EtcHandshakerConfiguration
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status.StatusEnc
+import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.ETH64.Status.{StatusEnc => ETH64StatusEnc}
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.GetBlockHeadersEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.DisconnectEnc
@@ -167,7 +169,7 @@ class PeerActorSpec
     )
 
     // Node status exchange
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     // Fork block exchange
@@ -205,16 +207,26 @@ class PeerActorSpec
     )
 
     // Node status exchange
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: DisconnectEnc) => () }
   }
 
-  it should "successfully connect to ETC peer with protocol 64" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    override def protocol: Capability = Capability.ETC64
+  it should "successfully connect to ETH peer with protocol 64" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+    override def protocol: Capability = Capability.ETH64
     val uri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@localhost:9000")
     val completeUri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@127.0.0.1:9000?discport=9000")
+
+    // Ensure local chain is past the fork so ForkId validation succeeds by persisting the DAO fork block as best
+    val daoForkChainWeight = ChainWeight.totalDifficultyOnly(daoForkBlockChainTotalDifficulty)
+    blockchainWriter.save(
+      Fixtures.Blocks.DaoForkBlock.block,
+      Seq.empty,
+      daoForkChainWeight,
+      saveAsBestBlock = true
+    )
+
     peer ! PeerActor.ConnectTo(uri)
     peer ! PeerActor.ConnectTo(uri)
 
@@ -223,26 +235,23 @@ class PeerActorSpec
 
     // Hello exchange
     val remoteHello: Hello =
-      Hello(4, "test-client", Seq(Capability.ETC64, Capability.ETH63), 9000, ByteString("unused"))
+      Hello(4, "test-client", Seq(Capability.ETH64, Capability.ETH63), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: com.chipprbots.ethereum.network.p2p.messages.ETC64.Status = ETC64.Status(
-      protocolVersion = Capability.ETC64.version,
+    val remoteStatus: ETH64.Status = ETH64.Status(
+      protocolVersion = Capability.ETH64.version,
       networkId = peerConf.networkId,
-      chainWeight =
-        ChainWeight.totalDifficultyOnly(daoForkBlockChainTotalDifficulty + 100000), // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+  forkId = ForkId.create(genesisHash, PeerActorSpec.this.blockchainConfig)(daoForkBlockNumber)
     )
-
     // Node status exchange
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: ETC64.Status.StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
-
-    // Fork block exchange
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
+    // Fork block exchange is skipped for ETH64+ peers per EIP-2124 (ForkId validation replaces it)
+    rlpxConnection.expectNoMessage(200.milliseconds)
 
     // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
@@ -273,9 +282,8 @@ class PeerActorSpec
       bestHash = ByteString("blockhash"),
       genesisHash = genesisHash
     )
-
     // Node status exchange
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     // Fork block exchange
@@ -316,8 +324,7 @@ class PeerActorSpec
       bestHash = ByteString("blockhash"),
       genesisHash = genesisHash
     )
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
@@ -345,8 +352,7 @@ class PeerActorSpec
       bestHash = ByteString("blockhash"),
       genesisHash = genesisHash
     )
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
@@ -392,8 +398,7 @@ class PeerActorSpec
       bestHash = ByteString("blockhash"),
       genesisHash = genesisHash
     )
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
@@ -424,8 +429,7 @@ class PeerActorSpec
       bestHash = ByteString("blockhash"),
       genesisHash = genesisHash
     )
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
@@ -487,7 +491,7 @@ class PeerActorSpec
       genesisHash = genesisHash
     )
 
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: StatusEnc) => () }
+    expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
@@ -585,7 +589,7 @@ class PeerActorSpec
   trait HandshakerSetup extends NodeStatusSetup { self =>
     def protocol: Capability
 
-    val handshakerConfiguration: EtcHandshakerConfiguration = new EtcHandshakerConfiguration {
+    val handshakerConfiguration: NetworkHandshakerConfiguration = new NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = Some(
         new ForkResolver.EtcForkResolver(self.blockchainConfig.daoForkConfig.get)
       )
@@ -597,7 +601,7 @@ class PeerActorSpec
       override val blockchainConfig: BlockchainConfig = self.blockchainConfig
     }
 
-    val handshaker: EtcHandshaker = EtcHandshaker(handshakerConfiguration)
+    val handshaker: NetworkHandshaker = NetworkHandshaker(handshakerConfiguration)
   }
 
   trait TestSetup extends NodeStatusSetup with BlockUtils with HandshakerSetup {
@@ -632,6 +636,12 @@ class PeerActorSpec
         )
       )
     )
+
+    def expectStatusMessage(): Unit =
+      rlpxConnection.expectMsgPF() {
+        case RLPxConnectionHandler.SendMessage(_: StatusEnc)      => ()
+        case RLPxConnectionHandler.SendMessage(_: ETH64StatusEnc) => ()
+      }
   }
 
 }

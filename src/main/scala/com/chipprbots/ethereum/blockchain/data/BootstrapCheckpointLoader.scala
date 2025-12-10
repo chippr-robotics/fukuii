@@ -73,7 +73,7 @@ class BootstrapCheckpointLoader(
       sortedCheckpoints.size,
       highestCheckpoint.blockNumber
     )
-    
+
     log.info(
       "Status messages will report block {} (bootstrap pivot) instead of genesis to avoid peer disconnections.",
       highestCheckpoint.blockNumber

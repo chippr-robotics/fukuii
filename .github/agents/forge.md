@@ -204,7 +204,7 @@ Migrate Ethereum Classic's VM execution, mining, and blockchain core from Scala 
 // Helper: Capability detection
 def usesRequestId(capability: Capability): Boolean = capability match {
   case Capability.ETH66 | Capability.ETH67 | Capability.ETH68 => true
-  case _ => false // ETH63, ETH64, ETH65, ETC64
+  case _ => false // ETH63, ETH64, ETH65
 }
 
 // Sending: Check peer capability, create appropriate format
@@ -385,7 +385,7 @@ For every piece forged:
 **Your care:**
 - Check peer's `remoteStatus.capability` before creating messages
 - Use ETH66 format (with requestId) for ETH66/67/68 peers
-- Use ETH62 format (no requestId) for ETH63/64/65/ETC64 peers
+- Use ETH62 format (no requestId) for ETH63/64/65 peers
 - Never mix formats on same connection
 - Pattern match both formats defensively (different peers = different protocols)
 - Reference core-geth for protocol behavior alignment
@@ -561,7 +561,7 @@ Analyzed core-geth (https://github.com/etclabscore/core-geth) and found:
 
 **Files Modified:**
 - Added: `Capability.usesRequestId` helper method
-- Updated message sending: EtcPeerManagerActor, PivotBlockSelector, FastSync, FastSyncBranchResolverActor, EtcForkBlockExchangeState, PeersClient
+- Updated message sending: NetworkPeerManagerActor, PivotBlockSelector, FastSync, FastSyncBranchResolverActor, EtcForkBlockExchangeState, PeersClient
 - Updated pattern matching: All sync actors to handle both ETH62 and ETH66 BlockHeaders
 - Kept: Backward-compatible decoders in ETH66.scala
 
