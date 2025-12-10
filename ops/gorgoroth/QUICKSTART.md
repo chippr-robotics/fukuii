@@ -66,7 +66,7 @@ Or if you have fukuii-cli installed globally:
 fukuii-cli start 3nodes
 ```
 
-### 3. Wait for Nodes to Initialize
+### 3. Wait for Nodes to Initialize and Sync Static Peers
 
 The nodes need about 30-45 seconds to fully initialize and generate node keys.
 
@@ -76,10 +76,29 @@ sleep 45
 
 ⚠️ **Important Note on First Run**: The static-nodes.json files contain placeholder enode IDs. On first startup, each node will generate its own unique node key and enode ID. These won't match the placeholders, so nodes won't connect automatically. 
 
-**To establish peer connections on first run:**
+**Automated Peer Synchronization (Recommended)**:
 
-1. After waiting 45 seconds, collect the actual enode IDs from the logs:
+Use the `sync-static-nodes` command to automatically collect enode IDs and update static-nodes.json files:
+
+```bash
+fukuii-cli sync-static-nodes
+```
+
+This command will:
+1. Collect enode URLs from all running nodes
+2. Update static-nodes.json files for each node (excluding self-references)
+3. Restart containers to apply the configuration
+4. Nodes will connect to each other within 30 seconds
+
+**Manual Peer Synchronization (Alternative)**:
+
+If you prefer to manually configure peers:
+
+1. Collect the actual enode IDs from the logs:
    ```bash
+   # Wait for nodes to fully initialize (important!)
+   sleep 45
+   
    echo "Node 1:"
    docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
    echo "Node 2:"
@@ -98,10 +117,7 @@ sleep 45
 3. Restart the network to apply the changes:
    ```bash
    fukuii-cli restart 3nodes
-   sleep 45
    ```
-
-After restart, nodes should successfully connect to each other.
 
 **Note**: Once node keys are persisted in Docker volumes, subsequent restarts will use the same keys and the static-nodes.json files will remain valid.
 
@@ -120,21 +136,23 @@ You should see all 3 containers running and healthy.
 Check that nodes are connected to each other:
 
 ```bash
-# Check peer count on node 1 (using HTTP JSON-RPC port)
+# Check peer count on node 1 (using HTTP JSON-RPC port 8546)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 
 # Expected result: {"jsonrpc":"2.0","result":"0x2","id":1}
 # This means node1 is connected to 2 peers (node2 and node3)
 ```
+
+**Note**: Fukuii uses port 8546 for HTTP JSON-RPC and port 8545 for WebSocket connections.
 
 ### 6. Check Sync Status
 
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 ```
 
 ### 7. Test Block Production
@@ -144,7 +162,7 @@ Wait a few minutes for blocks to be mined, then check the block number:
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 ```
 
 ## Accessing the Nodes
@@ -249,7 +267,7 @@ fukuii-cli clean 3nodes
    ```bash
    curl -X POST -H "Content-Type: application/json" \
      --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' \
-     http://localhost:8545
+     http://localhost:8546
    ```
 
 2. Check for mining-related errors in logs:
@@ -299,10 +317,37 @@ This setup includes recent fixes for:
 - Explore multi-client setups with Core-Geth and Besu
 - Set up monitoring with Prometheus and Grafana
 
+## Known Limitations
+
+### Version 0.1.146
+
+**Peer Discovery on First Run**:
+- On first run, nodes generate unique keys that don't match placeholder enode IDs in static-nodes.json
+- **Solution**: Use `fukuii-cli sync-static-nodes` after first startup to automatically configure peers
+- **Note**: This only affects first run. Subsequent restarts use persisted keys and maintain connectivity
+
+**RPC Port Configuration**:
+- Fukuii uses non-standard port assignment: HTTP RPC on 8546, WebSocket on 8545
+- Standard Ethereum clients use: HTTP on 8545, WebSocket on 8546
+- **Note**: Be sure to use port 8546 when testing HTTP JSON-RPC endpoints
+
+### Prerequisites
+
+**Docker Version Requirements**:
+- Docker 20.10+ required
+- Docker Compose 2.0+ required
+- Run `./ops/tools/check-docker.sh` to verify your environment
+
+**System Resources**:
+- Minimum 4GB RAM
+- Minimum 5GB free disk space
+- For 6-node or mixed networks, 8GB+ RAM recommended
+
 ## Support
 
 For issues or questions:
 
 - Check the [Troubleshooting](#troubleshooting) section
-- Review the [TROUBLESHOOTING_REPORT.md](TROUBLESHOOTING_REPORT.md)
+- Review the [TROUBLESHOOTING_REPORT.md](TROUBLESHOOTING_REPORT.md) (if available)
+- Review the [Gorgoroth Trials Field Reports](../../docs/testing/gorgoroth-trials/)
 - Open an issue on [GitHub](https://github.com/chippr-robotics/fukuii/issues)
