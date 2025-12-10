@@ -127,16 +127,23 @@ class RLPxConnectionHandler(
       if (helloAckPending) {
         helloAckPending = false
         helloWriteAcknowledged = true
-        val codecToUpdate = messageCodecOpt.orElse(activeMessageCodec)
-        codecToUpdate.foreach(_.enableInboundCompression("hello-write-ack"))
-        log.debug("[RLPx] Hello write acknowledged for peer {}", peerId)
+        // CRITICAL FIX: Do NOT enable inbound compression here
+        // Per Core-Geth reference (p2p/transport.go#doProtoHandshake),
+        // SetSnappy should only be called AFTER both Hello messages are exchanged.
+        // Enabling it too early causes the peer to expect compressed Hello frames,
+        // leading to "Cannot decode Hello" errors.
+        log.debug("[RLPx] Hello write acknowledged for peer {} - deferring compression enable", peerId)
       }
     }
 
     private def registerMessageCodec(messageCodec: MessageCodec): Unit = {
       activeMessageCodec = Some(messageCodec)
+      // CRITICAL FIX: Enable inbound compression when MessageCodec is registered
+      // This happens after Hello exchange is complete, matching Core-Geth behavior
+      // where SetSnappy is called after doProtoHandshake completes.
       if (helloWriteAcknowledged) {
-        messageCodec.enableInboundCompression("hello-ack-before-handshake-complete")
+        messageCodec.enableInboundCompression("handshake-complete")
+        log.debug("[RLPx] Enabled inbound compression for peer {} after handshake complete", peerId)
       }
     }
 
@@ -406,6 +413,37 @@ class RLPxConnectionHandler(
         seqNumber: Int = 0
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
+        case SendMessage(h: HelloEnc) =>
+          // CRITICAL FIX: Handle late Hello messages that arrive after handshake completion
+          // This prevents the race condition where Hello gets compressed via MessageCodec
+          // instead of being sent uncompressed via HelloCodec.
+          // Per Core-Geth reference (p2p/transport.go), Hello MUST NOT be compressed.
+          log.warning(
+            "[RLPx] Received late Hello message for peer {} after handshake complete - " +
+              "sending uncompressed to prevent 'Cannot decode Hello' error on peer",
+            peerId
+          )
+          // Use the frameCodec directly to avoid compression, mimicking HelloCodec behavior
+          val encoded: Array[Byte] = h.toBytes
+          val frames = Seq(
+            Frame(
+              Header(encoded.length, 0, None, None),
+              h.code,
+              ByteString(encoded)
+            )
+          )
+          val out = messageCodec.frameCodec.writeFrames(frames)
+          connection ! Write(out, Ack)
+          val timeout = system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
+          context.become(
+            handshaked(
+              messageCodec = messageCodec,
+              messagesNotSent = messagesNotSent,
+              cancellableAckTimeout = Some(CancellableAckTimeout(seqNumber, timeout)),
+              seqNumber = increaseSeqNumber(seqNumber)
+            )
+          )
+        
         case sm: SendMessage =>
           if (cancellableAckTimeout.isEmpty)
             sendMessage(messageCodec, sm.serializable, seqNumber, messagesNotSent)

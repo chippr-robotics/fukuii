@@ -87,7 +87,7 @@ object MessageCodec {
 }
 
 class MessageCodec(
-    frameCodec: FrameCodec,
+    val frameCodec: FrameCodec,
     messageDecoder: MessageDecoder,
     val remotePeer2PeerVersion: Long,
     val remoteClientId: String,
