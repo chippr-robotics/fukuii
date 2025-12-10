@@ -152,14 +152,15 @@ class RLPxConnectionHandler(
       * preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello behavior.
       */
     private def writeUncompressedHello(hello: HelloEnc, messageCodec: MessageCodec): ByteString = {
+      import MessageCodec.MaxFramePayloadSize
+      
       val encoded: Array[Byte] = hello.toBytes
-      val frames = Seq(
-        Frame(
-          Header(encoded.length, 0, None, None),
-          hello.code,
-          ByteString(encoded)
-        )
-      )
+      val numFrames = Math.ceil(encoded.length / MaxFramePayloadSize.toDouble).toInt
+      val frames = (0 until numFrames).map { frameNo =>
+        val payload = encoded.drop(frameNo * MaxFramePayloadSize).take(MaxFramePayloadSize)
+        val header = Header(payload.length, 0, None, None)
+        Frame(header, hello.code, ByteString(payload))
+      }
       messageCodec.frameCodec.writeFrames(frames)
     }
 
