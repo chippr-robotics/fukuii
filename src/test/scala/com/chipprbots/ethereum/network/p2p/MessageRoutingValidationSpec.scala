@@ -45,10 +45,10 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH64)
     val decoded = decoder.fromBytes(Codes.StatusCode, statusBytes)
 
-    decoded shouldBe a[Right[_, _]]
-    decoded.right.get shouldBe a[ETH64.Status]
-    
-    val decodedStatus = decoded.right.get.asInstanceOf[ETH64.Status]
+    decoded shouldBe a[Right[?, ?]]
+    decoded.toOption.get shouldBe a[ETH64.Status]
+
+    val decodedStatus = decoded.toOption.get.asInstanceOf[ETH64.Status]
     decodedStatus.protocolVersion shouldBe 64
     decodedStatus.networkId shouldBe 1
     decodedStatus.forkId shouldBe exampleForkId
