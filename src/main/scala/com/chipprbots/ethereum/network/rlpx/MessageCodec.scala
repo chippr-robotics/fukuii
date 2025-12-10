@@ -64,7 +64,9 @@ object MessageCodec {
       new CompressionPolicy(
         compressOutbound = compressionNegotiated,
         inboundCompressionNegotiated = compressionNegotiated,
-        initialExpectInboundCompressed = false
+        // When compression is negotiated, expect compressed messages immediately
+        // (Hello is handled separately before MessageCodec is created)
+        initialExpectInboundCompressed = compressionNegotiated
       )
     }
 
