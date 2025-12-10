@@ -50,6 +50,10 @@ object Config {
   // Per DevP2P spec: advertise only the highest version of each protocol family
   // ETH versions are backward compatible (eth/68 includes eth/63-67)
   // SNAP is a separate protocol
+  // 
+  // Historical note: ETC64 protocol support was removed in favor of standard ETH protocols.
+  // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
+  // See docs/validation/ETC64_REMOVAL_VALIDATION.md for details.
   import com.chipprbots.ethereum.network.p2p.messages.Capability
   val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.SNAP1)
 

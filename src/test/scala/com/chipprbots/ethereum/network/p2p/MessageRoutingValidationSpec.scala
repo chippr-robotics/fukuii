@@ -46,6 +46,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     val decoded = decoder.fromBytes(Codes.StatusCode, statusBytes)
 
     decoded shouldBe a[Right[?, ?]]
+    // Using .get here is safe because the assertion above ensures we have a Right
     decoded.toOption.get shouldBe a[ETH64.Status]
 
     val decodedStatus = decoded.toOption.get.asInstanceOf[ETH64.Status]
