@@ -211,6 +211,50 @@ class RLPxConnectionHandlerSpec
     rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
   }
 
+  it should "handle late Hello message after handshake without compression" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+    // Setup a mock that will capture what gets encoded
+    var encodedMessages = scala.collection.mutable.ListBuffer[ByteString]()
+    mockMessageCodec.encodeMessageHandler = Some { msg =>
+      val encoded = ByteString(s"encoded:${msg.underlyingMsg.getClass.getSimpleName}")
+      encodedMessages += encoded
+      encoded
+    }
+
+    setupIncomingRLPxConnection()
+
+    // Clear any messages from setup
+    encodedMessages.clear()
+
+    // Send a late Hello message - this should NOT go through MessageCodec.encodeMessage
+    // Instead, it should be written directly using frameCodec to avoid compression
+    val lateHello = Hello(
+      p2pVersion = 5,
+      clientId = "test-client",
+      capabilities = Seq(Capability.ETH63),
+      listenPort = 30303,
+      nodeId = ByteString(Array.fill[Byte](64)(0))
+    )
+    
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(lateHello)
+
+    // The connection should write the Hello without going through MessageCodec.encodeMessage
+    // (which would compress it). Instead, it should use frameCodec directly.
+    // We can verify this by checking that encodeMessage was NOT called
+    connection.expectMsgClass(classOf[Tcp.Write])
+    
+    // The encodeMessage handler should NOT have been called for Hello
+    encodedMessages should be(empty)
+
+    // Now send a regular message (non-Hello) and verify it goes through MessageCodec
+    rlpxConnection ! RLPxConnectionHandler.Ack
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    connection.expectMsgClass(classOf[Tcp.Write])
+    
+    // This time encodeMessage should have been called
+    encodedMessages should not be empty
+    encodedMessages.head.utf8String should include("Ping")
+  }
+
   // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
   // Using lazy val for mocks ensures they're created when accessed within MockFactory context.
   trait TestSetup extends SecureRandomBuilder {

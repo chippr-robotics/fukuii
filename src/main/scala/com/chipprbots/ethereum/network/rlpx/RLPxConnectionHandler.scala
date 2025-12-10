@@ -123,7 +123,7 @@ class RLPxConnectionHandler(
       log.debug("[RLPx] Hello write queued for peer {}", peerId)
     }
 
-    private def markHelloAckReceived(messageCodecOpt: Option[MessageCodec]): Unit = {
+    private def markHelloAckReceived(): Unit = {
       if (helloAckPending) {
         helloAckPending = false
         helloWriteAcknowledged = true
@@ -286,7 +286,7 @@ class RLPxConnectionHandler(
           )
         case Ack if cancellableAckTimeout.nonEmpty =>
           // Cancel pending message timeout
-          markHelloAckReceived(None)
+          markHelloAckReceived()
           cancellableAckTimeout.foreach(_.cancellable.cancel())
           context.become(awaitInitialHello(extractor, None, seqNumber))
 
@@ -489,7 +489,7 @@ class RLPxConnectionHandler(
 
         case Ack if cancellableAckTimeout.nonEmpty =>
           // Cancel pending message timeout
-          markHelloAckReceived(Some(messageCodec))
+          markHelloAckReceived()
           log.debug("SEND_MSG_ACK: peer={}, seqNum={}", peerId, cancellableAckTimeout.map(_.seqNumber).getOrElse(-1))
           cancellableAckTimeout.foreach(_.cancellable.cancel())
 
