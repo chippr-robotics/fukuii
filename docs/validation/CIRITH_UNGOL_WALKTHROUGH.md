@@ -4,7 +4,7 @@
 
 **Time Required**: 6-24 hours (depending on sync mode)  
 **Difficulty**: Advanced  
-**Prerequisites**: Completed 3-node and 6-node walkthroughs, understanding of blockchain sync modes
+**Prerequisites**: Completed 3-node and 6-node walkthroughs, understanding of blockchain sync modes, fukuii-cli.sh installed or aliased
 
 ---
 
@@ -97,44 +97,56 @@ docker --version          # Docker 20.10+
 curl --version
 jq --version
 tmux --version           # For long-running sessions (optional)
+
+# Verify fukuii-cli is installed (used for some management tasks)
+fukuii-cli version
 ```
+
+**Note**: Cirith Ungol currently uses a dedicated `start.sh` script for deployment, which provides Cirith Ungol-specific functionality. The script wraps Docker Compose commands and can be managed similarly to fukuii-cli.sh.
 
 ---
 
 ## Setup
 
-### Step 1: Navigate to Cirith Ungol Directory
+### Step 1: Set Up Cirith Ungol Environment
 
 ```bash
+# Navigate to Cirith Ungol directory
 cd /path/to/fukuii/ops/cirith-ungol
-ls -la
+
+# Verify the deployment script is available
+ls -la start.sh
+
+# Make sure it's executable
+chmod +x start.sh
 ```
 
 **Expected files**:
-- `start.sh` - Management script
-- `docker-compose-mainnet.yml` - ETC mainnet config
-- `docker-compose-mordor.yml` - Mordor testnet config
+- `start.sh` - Cirith Ungol management script (similar to fukuii-cli.sh for this environment)
+- `docker-compose.yml` - Node configuration
 - `conf/` - Configuration files
 
 ### Step 2: Review Configuration
 
 ```bash
-# Check mainnet configuration
-cat docker-compose-mainnet.yml
+# Check the docker compose configuration
+cat docker-compose.yml
 
-# Check Mordor configuration
-cat docker-compose-mordor.yml
+# View available commands
+./start.sh help
 ```
 
 ### Step 3: Clean Previous State
 
 ```bash
-# Stop any running instances
+# Stop any running Cirith Ungol instances
 ./start.sh stop
 
-# Clean volumes
-docker volume prune -f
+# Clean volumes (removes all data including blockchain)
+./start.sh clean
 ```
+
+**Note**: The `start.sh` script provides commands similar to fukuii-cli.sh: `start`, `stop`, `status`, `logs`, `collect-logs`, and `clean`.
 
 ---
 
@@ -142,44 +154,24 @@ docker volume prune -f
 
 ### Step 1.1: Choose Network
 
+Configure which network to sync with by editing the configuration or using environment variables.
+
 **For first-time testing, start with Mordor testnet** (smaller, faster):
 
 ```bash
-export CIRITH_NETWORK=mordor
+# The docker-compose.yml is pre-configured for ETC mainnet
+# For Mordor testnet, you may need to update the configuration in conf/
+# Check the current configuration
+cat docker-compose.yml | grep -A 5 "network"
 ```
 
-**For production validation, use mainnet**:
+### Step 1.2: Verify Configuration
+
+The Cirith Ungol setup uses the configuration in the `conf/` directory.
 
 ```bash
-export CIRITH_NETWORK=mainnet
-```
-
-### Step 1.2: Configure Sync Mode
-
-Edit the appropriate config file to enable SNAP sync (recommended):
-
-```bash
-# For Mordor
-cat > conf/mordor-snap.conf <<EOF
-include "base.conf"
-
-fukuii {
-  network = "mordor"
-  
-  sync {
-    do-snap-sync = true
-    do-fast-sync = false
-  }
-  
-  network.rpc {
-    http {
-      enabled = true
-      interface = "0.0.0.0"
-      port = 8545
-    }
-  }
-}
-EOF
+# Check if SNAP sync is configured
+cat conf/application.conf | grep -i "snap\|sync" || echo "Check sync configuration in conf/"
 ```
 
 ### Step 1.3: Set Up Monitoring
@@ -195,7 +187,7 @@ echo ""
 
 # Sync status
 echo "Sync Status:"
-curl -s -X POST http://localhost:8545 \
+curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' | jq '.'
 
@@ -203,7 +195,7 @@ echo ""
 
 # Block number
 echo "Current Block:"
-curl -s -X POST http://localhost:8545 \
+curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result'
 
@@ -211,7 +203,7 @@ echo ""
 
 # Peer count
 echo "Peer Count:"
-curl -s -X POST http://localhost:8545 \
+curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result'
 
@@ -219,7 +211,7 @@ echo ""
 
 # Container status
 echo "Container Status:"
-docker ps --filter name=cirith --format "table {{.Names}}\t{{.Status}}"
+cd /path/to/fukuii/ops/cirith-ungol && ./start.sh status 2>/dev/null | grep -A 5 "NAME\|fukuii" || echo "  Check with: ./start.sh status"
 EOF
 
 chmod +x /tmp/cirith-monitor.sh
@@ -237,24 +229,33 @@ chmod +x /tmp/cirith-monitor.sh
 ### Step 2.1: Start SNAP Sync
 
 ```bash
-# Start with SNAP sync enabled
-./start.sh start --snap
+# Navigate to Cirith Ungol directory
+cd /path/to/fukuii/ops/cirith-ungol
 
-# Or manually:
-docker compose -f docker-compose-${CIRITH_NETWORK}.yml up -d
+# Start the node (configured for SNAP sync by default)
+./start.sh start
+
+# Verify it started
+./start.sh status
 ```
 
 **Expected output**:
 ```
-[+] Running 1/1
- ✔ Container cirith-ungol-node  Started
+✓ Fukuii Testbed started successfully!
+
+Monitoring commands:
+  - View fukuii logs:   docker compose logs -f fukuii
+  - View all logs:      docker compose logs -f
+  - Collect logs:       ./start.sh collect-logs
+  - Check health:       curl http://localhost:8546/health
+  - Stop nodes:         ./start.sh stop
 ```
 
 ### Step 2.2: Monitor Initial Sync
 
 ```bash
-# Watch logs
-./start.sh logs -f
+# Watch logs for SNAP sync progress
+./start.sh logs
 
 # Or use the monitoring dashboard
 watch -n 10 /tmp/cirith-monitor.sh
@@ -275,7 +276,7 @@ cat > /tmp/snap-progress.sh <<'EOF'
 #!/bin/bash
 echo "=== SNAP Sync Progress ==="
 
-SYNC=$(curl -s -X POST http://localhost:8545 \
+SYNC=$(curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}')
 
@@ -317,14 +318,14 @@ watch -n 60 /tmp/snap-progress.sh
 
 ```bash
 # Check if sync is complete
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' | jq '.'
 
 # Should return: {"jsonrpc":"2.0","id":1,"result":false}
 
 # Verify state is queryable
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0x0000000000000000000000000000000000000000","latest"],"id":1}' | jq '.'
 ```
@@ -339,21 +340,21 @@ echo "=== Testing State Queries ==="
 
 # Get latest block
 echo "Latest block:"
-curl -s -X POST http://localhost:8545 \
+curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' \
   | jq '.result.number'
 
 # Get account balance
 echo "Test account balance:"
-curl -s -X POST http://localhost:8545 \
+curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0x0000000000000000000000000000000000000001","latest"],"id":1}' \
   | jq '.result'
 
 # Get transaction count
 echo "Account transaction count:"
-curl -s -X POST http://localhost:8545 \
+curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_getTransactionCount","params":["0x0000000000000000000000000000000000000001","latest"],"id":1}' \
   | jq '.result'
@@ -377,43 +378,34 @@ chmod +x /tmp/test-state.sh
 ### Step 3.1: Stop Node and Reset
 
 ```bash
-# Stop SNAP sync node
+# Navigate to Cirith Ungol directory
+cd /path/to/fukuii/ops/cirith-ungol
+
+# Stop the node
 ./start.sh stop
 
-# Remove data volume
-docker volume rm cirith-ungol-data || true
+# Remove data volume (this clears blockchain data)
+./start.sh clean
+# Answer 'yes' when prompted
 ```
 
 ### Step 3.2: Configure Fast Sync
 
 ```bash
-# Update config for Fast sync
-cat > conf/${CIRITH_NETWORK}-fast.conf <<EOF
-include "base.conf"
+# Update configuration for Fast sync instead of SNAP
+# Edit conf/application.conf or use appropriate config file
+# Set: do-snap-sync = false, do-fast-sync = true
 
-fukuii {
-  network = "$CIRITH_NETWORK"
-  
-  sync {
-    do-snap-sync = false
-    do-fast-sync = true
-  }
-  
-  network.rpc {
-    http {
-      enabled = true
-      interface = "0.0.0.0"
-      port = 8545
-    }
-  }
-}
-EOF
+# For now, note that configuration changes may be needed
+echo "Note: Check conf/ directory for sync mode configuration"
 ```
 
 ### Step 3.3: Start Fast Sync
 
 ```bash
-./start.sh start --fast
+# Start node with Fast sync configuration
+cd /path/to/fukuii/ops/cirith-ungol
+./start.sh start
 ```
 
 ### Step 3.4: Monitor Fast Sync Progress
@@ -422,8 +414,9 @@ EOF
 # Use same monitoring tools
 watch -n 60 /tmp/snap-progress.sh
 
-# Check logs
-./start.sh logs -f
+# View logs
+cd /path/to/fukuii/ops/cirith-ungol
+./start.sh logs
 ```
 
 **Expected Fast sync times**:
@@ -449,10 +442,16 @@ watch -n 60 /tmp/snap-progress.sh
 ### Step 4.1: Identify Connected Peers
 
 ```bash
-# Get peer information (if admin API enabled)
-curl -X POST http://localhost:8545 \
+# Get peer information (requires container to be running)
+cd /path/to/fukuii/ops/cirith-ungol
+
+# Check peer count
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"admin_peers","params":[],"id":1}' | jq '.'
+  -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq '.'
+
+# View peer-related logs
+./start.sh logs | grep -i "peer\|handshake" | tail -20
 ```
 
 ### Step 4.2: Analyze Peer Distribution
@@ -463,14 +462,18 @@ cat > /tmp/analyze-peers.sh <<'EOF'
 #!/bin/bash
 echo "=== Peer Analysis ==="
 
-PEERS=$(curl -s -X POST http://localhost:8545 \
+cd /path/to/fukuii/ops/cirith-ungol
+
+PEERS=$(curl -s -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 
-echo "Total peers: $(printf "%d" $PEERS)"
+echo "Total peers: $(printf "%d" $PEERS 2>/dev/null || echo "N/A")"
 
-# Check peer details from logs
-docker logs cirith-ungol-node 2>&1 | grep -i "peer" | tail -20
+# Check peer details from logs using the collect-logs function
+echo ""
+echo "Recent peer handshakes:"
+./start.sh logs 2>/dev/null | grep -i "PEER_HANDSHAKE_SUCCESS" | tail -10 || echo "  No handshake logs available"
 EOF
 
 chmod +x /tmp/analyze-peers.sh
@@ -503,10 +506,12 @@ watch -n 300 '/tmp/analyze-peers.sh'
 
 ```bash
 # Record start state
+cd /path/to/fukuii/ops/cirith-ungol
+
 cat > /tmp/stability-start.txt <<EOF
 Start Time: $(date)
-Start Block: $(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-Start Peers: $(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
+Start Block: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+Start Peers: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 EOF
 
 cat /tmp/stability-start.txt
@@ -521,8 +526,8 @@ cat > /tmp/monitor-resources.sh <<'EOF'
 echo "=== Resource Usage ==="
 echo "Time: $(date)"
 
-# Docker stats
-docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}" cirith-ungol-node
+# Docker stats for Cirith Ungol container
+docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}" fukuii-cirith-ungol 2>/dev/null || echo "Container not running or name different"
 
 # Disk usage
 echo ""
@@ -548,16 +553,18 @@ echo "Resource monitoring started (PID: $MONITOR_PID)"
 # After 24 hours, check for problems
 echo "=== Stability Check (24 hours) ==="
 
+cd /path/to/fukuii/ops/cirith-ungol
+
 # Check error count
-docker logs cirith-ungol-node 2>&1 | grep -i "error\|fatal\|panic" | wc -l
+./start.sh logs 2>&1 | grep -i "error\|fatal\|panic" | wc -l
 
 # Check if still syncing
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' | jq '.'
 
 # Verify peer count stable
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq '.'
 ```
@@ -588,24 +595,26 @@ For production readiness, run for 7 days:
 ### Step 6.1: Measure Sync Performance
 
 ```bash
-# Calculate sync time
+# Calculate sync time from collected data
 cat > /tmp/sync-benchmark.txt <<EOF
 === Sync Performance Benchmark ===
 
-Network: $CIRITH_NETWORK
+Network: ETC Mainnet / Mordor
 Sync Mode: SNAP/Fast
 Hardware: $(uname -m), $(nproc) cores
 
-Start Time: [from logs]
-End Time: [from logs]
-Total Duration: [calculate]
+Start Time: [from /tmp/stability-start.txt]
+End Time: $(date)
+Total Duration: [calculate from logs]
 
-Blocks Synced: [final block number]
+Blocks Synced: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 Average Speed: [blocks per minute]
-Disk Space Used: [check volume size]
+Disk Space Used: [check docker volume size]
 Peak Memory: [from monitoring]
 Average CPU: [from monitoring]
 EOF
+
+cat /tmp/sync-benchmark.txt
 ```
 
 ### Step 6.2: Benchmark RPC Performance
@@ -619,7 +628,7 @@ echo "=== RPC Performance Benchmark ==="
 # Test eth_blockNumber
 echo "eth_blockNumber (100 calls):"
 time for i in {1..100}; do
-  curl -s -X POST http://localhost:8545 \
+  curl -s -X POST http://localhost:8546 \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /dev/null
 done
@@ -627,7 +636,7 @@ done
 # Test eth_getBlockByNumber
 echo "eth_getBlockByNumber (100 calls):"
 time for i in {1..100}; do
-  curl -s -X POST http://localhost:8545 \
+  curl -s -X POST http://localhost:8546 \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' > /dev/null
 done
@@ -635,7 +644,7 @@ done
 # Test eth_getBalance
 echo "eth_getBalance (100 calls):"
 time for i in {1..100}; do
-  curl -s -X POST http://localhost:8545 \
+  curl -s -X POST http://localhost:8546 \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0x0000000000000000000000000000000000000001","latest"],"id":1}' > /dev/null
 done
@@ -657,31 +666,29 @@ chmod +x /tmp/benchmark-rpc.sh
 ### Step 7.1: Collect All Logs
 
 ```bash
-# Create results directory
-mkdir -p /tmp/cirith-ungol-results
+# Navigate to Cirith Ungol directory
+cd /path/to/fukuii/ops/cirith-ungol
 
-# Collect logs
+# Use the built-in log collection
 ./start.sh collect-logs
 
-# Copy to results
-cp -r logs/* /tmp/cirith-ungol-results/
-
-# Save monitoring data
-cp /tmp/resource-log.txt /tmp/cirith-ungol-results/
-cp /tmp/stability-start.txt /tmp/cirith-ungol-results/
+# Logs will be saved in ./captured-logs/ directory
+ls -lh ./captured-logs/
 ```
 
 ### Step 7.2: Generate Final Report
 
 ```bash
 # Get current state (with error handling)
-CURRENT_BLOCK=$(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
-CURRENT_PEERS=$(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+cd /path/to/fukuii/ops/cirith-ungol
+
+CURRENT_BLOCK=$(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+CURRENT_PEERS=$(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
 
 cat > /tmp/cirith-ungol-results/FINAL-REPORT.md <<EOF
 # Cirith Ungol Validation Results
 
-**Network**: $CIRITH_NETWORK
+**Network**: ETC Mainnet / Mordor
 **Date**: $(date)
 **Duration**: 24+ hours
 
@@ -716,7 +723,7 @@ cat > /tmp/cirith-ungol-results/FINAL-REPORT.md <<EOF
 - CPU usage: [avg %]
 
 ## Overall Assessment
-✅ Fukuii successfully validated on $CIRITH_NETWORK
+✅ Fukuii successfully validated on ETC network
 ✅ Ready for production use
 EOF
 
@@ -733,16 +740,17 @@ cat /tmp/cirith-ungol-results/FINAL-REPORT.md
 ## Cleanup
 
 ```bash
+# Navigate to Cirith Ungol directory
+cd /path/to/fukuii/ops/cirith-ungol
+
 # Stop node
 ./start.sh stop
 
-# Remove volumes (optional)
+# Remove volumes (optional, removes blockchain data)
 ./start.sh clean
+# Answer 'yes' when prompted
 
-# Archive results
-tar -czf cirith-ungol-results-$(date +%Y%m%d).tar.gz /tmp/cirith-ungol-results/
-
-# Results preserved in archive
+# Results preserved in ./captured-logs/ and /tmp/cirith-ungol-results/
 ```
 
 ---
@@ -753,24 +761,26 @@ tar -czf cirith-ungol-results-$(date +%Y%m%d).tar.gz /tmp/cirith-ungol-results/
 
 ```bash
 # Check peer count
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq '.'
 
 # Restart if < 3 peers
+cd /path/to/fukuii/ops/cirith-ungol
 ./start.sh restart
 ```
 
 ### High Memory Usage
 
 ```bash
-# Check memory
-docker stats cirith-ungol-node
+# Check memory using the deployment script
+cd /path/to/fukuii/ops/cirith-ungol
+docker stats fukuii-cirith-ungol
 
 # If > 80% of available RAM, consider:
 # 1. Adding more RAM
 # 2. Using swap space
-# 3. Tuning JVM settings in config
+# 3. Tuning JVM settings in configuration
 ```
 
 ### Disk Space Issues
@@ -796,6 +806,7 @@ sudo ufw allow 30303/tcp
 sudo ufw allow 30303/udp
 
 # Restart
+cd /path/to/fukuii/ops/cirith-ungol
 ./start.sh restart
 ```
 
