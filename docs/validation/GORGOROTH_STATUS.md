@@ -336,9 +336,11 @@ cd ops/cirith-ungol
 - [E2E Testing Guide](../testing/E2E_TESTING_GUIDE.md) - End-to-end testing framework
 
 ### Operations
-- [Gorgoroth README](../../ops/gorgoroth/README.md) - Network setup and operations
-- [Gorgoroth Quick Start](../../ops/gorgoroth/QUICKSTART.md) - Quick start guide
-- [Cirith Ungol Operations](../../ops/cirith-ungol/README.md) - Single-node operations
+
+For operational setup and configuration, see the following files in the repository:
+- `ops/gorgoroth/README.md` - Network setup and operations
+- `ops/gorgoroth/QUICKSTART.md` - Quick start guide
+- `ops/cirith-ungol/README.md` - Single-node operations
 
 ### Reference
 - [P2P Communication Validation](P2P_COMMUNICATION_VALIDATION_GUIDE.md) - Protocol details
@@ -364,7 +366,7 @@ The nightly CI/CD workflow includes:
 - [ ] Performance benchmarking
 - [ ] Test result aggregation
 
-See: [Nightly Workflow](.github/workflows/nightly.yml)
+See `.github/workflows/nightly.yml` in the repository for the nightly workflow configuration.
 
 ---
 
