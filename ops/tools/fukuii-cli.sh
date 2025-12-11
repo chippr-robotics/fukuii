@@ -381,7 +381,7 @@ normalize_cirith_mode() {
             echo "$mode"
             ;;
         *)
-            echo -e "${RED}Error: Unknown sync mode '$1'. Use 'fast' or 'snap'.${NC}" >&2
+            echo -e "${RED}Error: Unknown sync mode '${1:-<unspecified>}'. Use 'fast' or 'snap'.${NC}" >&2
             exit 1
             ;;
     esac
@@ -416,6 +416,15 @@ cirith_compose() {
 cirith_start() {
     local mode
     mode=$(render_cirith_config "${1:-fast}")
+    
+    # Validate that rendered config exists
+    local target_file="$CIRITH_DIR/conf/generated/runtime.conf"
+    if [[ ! -f "$target_file" ]]; then
+        echo -e "${RED}Error: Rendered config not found at $target_file${NC}" >&2
+        echo -e "${YELLOW}This should have been created by render_cirith_config, but wasn't.${NC}" >&2
+        exit 1
+    fi
+    
     echo -e "${GREEN}Starting Cirith Ungol testbed (${mode} sync)...${NC}"
     (cd "$CIRITH_DIR" && CIRITH_SYNC_MODE="$mode" docker compose up -d)
     echo -e "${GREEN}Cirith Ungol testbed is up.${NC}"

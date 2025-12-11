@@ -38,7 +38,7 @@ services:
     # Configuration files are loaded from /app/conf/
     command: ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-sf", "-X", "POST", "-H", "Content-Type: application/json", "--data", "{\"jsonrpc\":\"2.0\",\"method\":\"web3_clientVersion\",\"params\":[],\"id\":1}", "http://localhost:8545"]
       interval: 30s
       timeout: 10s
       retries: 3
