@@ -6,6 +6,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GORGOROTH_DIR="$SCRIPT_DIR/../gorgoroth"
+CIRITH_DIR="$SCRIPT_DIR/../cirith-ungol"
+CIRITH_COMPOSE_FILE="$CIRITH_DIR/docker-compose.yml"
+CIRITH_TOOLS_DIR="$CIRITH_DIR/tools"
 
 # Color output
 RED='\033[0;31m'
@@ -45,6 +48,15 @@ Commands:
   Help:
     help                  - Show this help message
     version               - Show version information
+
+    Cirith Ungol ETC Testbed:
+        cirith-ungol start [mode]      - Start ETC testbed in fast or snap mode (default: fast)
+        cirith-ungol stop              - Stop the testbed
+        cirith-ungol logs [service]    - Tail logs (optionally specific service)
+        cirith-ungol status            - Show container status
+        cirith-ungol collect-logs [dir]- Archive logs and RPC snapshots
+        cirith-ungol smoketest [mode]  - Run automated smoke validation
+        cirith-ungol clean             - Stop and remove volumes
 
 Available configurations:
 EOF
@@ -354,6 +366,132 @@ collect_logs_cmd() {
     ./collect-logs.sh "$config" "$output_dir"
 }
 
+# ============================================================================
+# Cirith Ungol ETC Testbed Commands
+# ============================================================================
+
+ensure_cirith_dirs() {
+    mkdir -p "$CIRITH_DIR/conf/generated"
+}
+
+normalize_cirith_mode() {
+    local mode=$(echo "${1:-fast}" | tr '[:upper:]' '[:lower:]')
+    case "$mode" in
+        fast|snap)
+            echo "$mode"
+            ;;
+        *)
+            echo -e "${RED}Error: Unknown sync mode '$1'. Use 'fast' or 'snap'.${NC}" >&2
+            exit 1
+            ;;
+    esac
+}
+
+render_cirith_config() {
+    ensure_cirith_dirs
+    local mode=$(normalize_cirith_mode "$1")
+    local profile
+    case "$mode" in
+        fast) profile="etc-fast.conf" ;;
+        snap) profile="etc-snap.conf" ;;
+    esac
+
+    local source_file="$CIRITH_DIR/conf/modes/$profile"
+    local target_file="$CIRITH_DIR/conf/generated/runtime.conf"
+
+    if [[ ! -f "$source_file" ]]; then
+        echo -e "${RED}Error: Missing Cirith Ungol profile $source_file${NC}" >&2
+        exit 1
+    fi
+
+    cp "$source_file" "$target_file"
+    echo -e "${GREEN}Rendered Cirith Ungol config: $profile -> conf/generated/runtime.conf${NC}"
+    echo "$mode"
+}
+
+cirith_compose() {
+    (cd "$CIRITH_DIR" && "$@")
+}
+
+cirith_start() {
+    local mode
+    mode=$(render_cirith_config "${1:-fast}")
+    echo -e "${GREEN}Starting Cirith Ungol testbed (${mode} sync)...${NC}"
+    (cd "$CIRITH_DIR" && CIRITH_SYNC_MODE="$mode" docker compose up -d)
+    echo -e "${GREEN}Cirith Ungol testbed is up.${NC}"
+    echo "Next steps:"
+    echo "  - View logs:    fukuii-cli cirith-ungol logs"
+    echo "  - Status:       fukuii-cli cirith-ungol status"
+    echo "  - Smoke test:   fukuii-cli cirith-ungol smoketest $mode"
+}
+
+cirith_stop() {
+    echo -e "${YELLOW}Stopping Cirith Ungol testbed...${NC}"
+    (cd "$CIRITH_DIR" && docker compose down)
+    echo -e "${GREEN}Cirith Ungol stopped.${NC}"
+}
+
+cirith_restart() {
+    local mode=${1:-fast}
+    cirith_stop
+    sleep 2
+    cirith_start "$mode"
+}
+
+cirith_status() {
+    echo -e "${GREEN}Cirith Ungol container status${NC}"
+    (cd "$CIRITH_DIR" && docker compose ps)
+}
+
+cirith_logs() {
+    local service="${1:-}"
+    (cd "$CIRITH_DIR"
+        if [[ -n "$service" ]]; then
+            echo -e "${GREEN}Following logs for $service${NC}"
+            docker compose logs -f "$service"
+        else
+            echo -e "${GREEN}Following logs for all services${NC}"
+            docker compose logs -f
+        fi)
+}
+
+cirith_clean() {
+    echo -e "${RED}WARNING: This will remove Cirith Ungol containers and volumes!${NC}"
+    read -p "Are you sure? (yes/no): " -r
+    if [[ $REPLY =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        (cd "$CIRITH_DIR" && docker compose down -v)
+        echo -e "${GREEN}Cirith Ungol environment cleaned.${NC}"
+    else
+        echo "Cancelled."
+    fi
+}
+
+cirith_collect_logs() {
+    local output_dir="${1:-}" 
+    ensure_cirith_dirs
+    (cd "$CIRITH_DIR" && ./tools/collect-logs.sh ${output_dir:+"$output_dir"})
+}
+
+cirith_smoketest() {
+    local mode
+    mode=$(render_cirith_config "${1:-fast}")
+    (cd "$CIRITH_DIR" && CIRITH_SYNC_MODE="$mode" ./tools/smoketest.sh "$mode")
+}
+
+cirith_help() {
+    cat << EOF
+Cirith Ungol ETC Testbed Commands:
+  fukuii-cli cirith-ungol start [fast|snap]     Start containers in desired sync mode
+  fukuii-cli cirith-ungol stop                  Stop containers
+  fukuii-cli cirith-ungol restart [mode]        Restart containers (default mode: fast)
+  fukuii-cli cirith-ungol status                Show container status
+  fukuii-cli cirith-ungol logs [service]        Tail logs
+  fukuii-cli cirith-ungol collect-logs [dir]    Capture logs and RPC samples
+  fukuii-cli cirith-ungol smoketest [mode]      Run smoketest validation
+  fukuii-cli cirith-ungol clean                 Remove containers and volumes
+EOF
+}
+
 show_version() {
     echo "Fukuii CLI v1.0.0"
     echo "Unified command-line tool for Fukuii node management"
@@ -395,6 +533,46 @@ case $COMMAND in
         ;;
     collect-logs)
         collect_logs_cmd "$@"
+        ;;
+    cirith-ungol)
+        subcommand=${1:-help}
+        if [[ $# -gt 0 ]]; then
+            shift
+        fi
+        case $subcommand in
+            start)
+                cirith_start "$@"
+                ;;
+            stop)
+                cirith_stop
+                ;;
+            restart)
+                cirith_restart "$@"
+                ;;
+            status)
+                cirith_status
+                ;;
+            logs)
+                cirith_logs "$@"
+                ;;
+            collect-logs)
+                cirith_collect_logs "$@"
+                ;;
+            smoketest)
+                cirith_smoketest "$@"
+                ;;
+            clean)
+                cirith_clean
+                ;;
+            help|--help|-h)
+                cirith_help
+                ;;
+            *)
+                echo -e "${RED}Unknown cirith-ungol subcommand: $subcommand${NC}" >&2
+                cirith_help
+                exit 1
+                ;;
+        esac
         ;;
     help|--help|-h)
         print_usage

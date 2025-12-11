@@ -1,6 +1,8 @@
 # Ignore log collection output
 logs-*/
 *.log
+captured-logs/
+smoketest-artifacts/
 
 # Ignore local data directories (docker volumes handle persistence)
 data/
@@ -28,3 +30,7 @@ Thumbs.db
 # Local testing configurations
 *-local.yml
 *-local.conf
+
+# Generated runtime configuration (managed by fukuii-cli)
+conf/generated/
+conf/runtime.conf

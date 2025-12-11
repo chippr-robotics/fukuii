@@ -1,7 +1,7 @@
 # Cirith Ungol Docker Compose Configuration
 # Named after the pass of the spider in Mordor
-# Fukuii node configured for ETC mainnet testing
-# Focus: General testing and validation
+# Fukuii node configured for Ethereum Classic mainnet testing
+# Focus: FastSync/SNAP validation with production traffic
 
 networks:
   fukuii-cirith-ungol:
@@ -23,8 +23,8 @@ services:
       - "30303:30303/tcp"
       - "30303:30303/udp"
     volumes:
-      # Configuration files
-      - ./conf/etc.conf:/app/conf/etc.conf:ro
+      # Mode-specific configuration is rendered by fukuii-cli into conf/generated/
+      - ./conf/generated/runtime.conf:/app/conf/etc.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
       # Data directory (persistent)
       - fukuii-cirith-ungol-data:/app/data
@@ -34,6 +34,7 @@ services:
       # Set node identifier for logging
       - FUKUII_NODE_ID=cirith-ungol
       - FUKUII_ENV=cirith-ungol-mainnet
+      - FUKUII_SYNC_MODE=${CIRITH_SYNC_MODE:-fast}
     # Configuration files are loaded from /app/conf/
     command: ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
     healthcheck:

@@ -69,20 +69,52 @@ do-fast-sync = false   # Disabled to isolate SNAP behavior
 
 ## Usage
 
-### Quick Start
+### Quick Start (preferred CLI workflow)
 
 ```bash
-cd ops/cirith-ungol
+cd ops
 
-# Start the node
-./start.sh start
+# Start ETC FastSync (default)
+./tools/fukuii-cli.sh cirith-ungol start fast
 
-# View logs (live)
-./start.sh logs
+# Switch to SNAP mode when needed
+./tools/fukuii-cli.sh cirith-ungol start snap
 
-# Stop the node
-./start.sh stop
+# Follow logs / status
+./tools/fukuii-cli.sh cirith-ungol logs
+./tools/fukuii-cli.sh cirith-ungol status
+
+# Stop or clean up
+./tools/fukuii-cli.sh cirith-ungol stop
+# Remove volumes entirely
+./tools/fukuii-cli.sh cirith-ungol clean
 ```
+
+> `ops/cirith-ungol/start.sh` now delegates to the CLI for backward compatibility.
+
+### Smoketest & Validation
+
+Automate the sanity checks described in [`VALIDATION.md`](./VALIDATION.md):
+
+```bash
+cd ops
+# FastSync validation
+./tools/fukuii-cli.sh cirith-ungol smoketest fast
+
+# SNAP validation (collects SNAP-specific telemetry)
+./tools/fukuii-cli.sh cirith-ungol smoketest snap
+```
+
+Artifacts land under `ops/cirith-ungol/smoketest-artifacts/` and include RPC snapshots, block deltas, and log tails.
+
+### Log Collection Bundle
+
+```bash
+cd ops
+./tools/fukuii-cli.sh cirith-ungol collect-logs ./captured-logs/fast-run
+```
+
+This wrapper (requires local `jq` + `curl`) saves `docker inspect` output, RPC snapshots (`eth_syncing`, `net_peerCount`, `eth_blockNumber`), and `sync-highlights.log` for later analysis.
 
 ### Monitoring
 
@@ -320,19 +352,16 @@ docker compose logs fukuii | grep -i "progress\|downloaded"
 ### Quick Start
 
 ```bash
-cd ops/cirith-ungol
+cd ops
 
-# Start the node
-./start.sh start
+# Start FastSync on ETC
+./tools/fukuii-cli.sh cirith-ungol start fast
 
-# View logs (live)
-./start.sh logs
+# Tail logs with FastSync filters
+./tools/fukuii-cli.sh cirith-ungol logs | grep -i "fast\|pivot\|progress"
 
-# Monitor FastSync progress
-docker compose logs fukuii | grep -i "fast\|pivot\|progress"
-
-# Stop the node
-./start.sh stop
+# Stop the node once done
+./tools/fukuii-cli.sh cirith-ungol stop
 ```
 
 ### What to Look For
