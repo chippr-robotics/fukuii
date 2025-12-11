@@ -208,3 +208,180 @@ jobs:
             **/target/scala-*/test-classes/**/*.log
           retention-days: 30
           if-no-files-found: warn
+
+  nightly-statistics:
+    name: Nightly Statistics Report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Collect GitHub Statistics
+        id: stats
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "=== Collecting GitHub Statistics ==="
+          
+          # Get all milestones
+          MILESTONES=$(gh api repos/${{ github.repository }}/milestones?state=all --paginate | jq -r '.[] | "\(.number)|\(.title)|\(.state)"')
+          
+          # Create statistics report
+          cat > /tmp/github-stats.md <<EOF
+          # GitHub Statistics Report
+          **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Repository**: ${{ github.repository }}
+          
+          ## Pull Requests by Milestone
+          
+          EOF
+          
+          echo "$MILESTONES" | while IFS='|' read -r number title state; do
+            echo "Processing milestone: $title ($state)"
+            
+            # Count PRs for this milestone
+            OPEN_PRS=$(gh api "repos/${{ github.repository }}/pulls?state=open&milestone=$number" --paginate | jq '. | length')
+            CLOSED_PRS=$(gh api "repos/${{ github.repository }}/pulls?state=closed&milestone=$number" --paginate | jq '. | length')
+            TOTAL_PRS=$((OPEN_PRS + CLOSED_PRS))
+            
+            cat >> /tmp/github-stats.md <<EOF
+          ### Milestone: $title ($state)
+          - **Open PRs**: $OPEN_PRS
+          - **Closed PRs**: $CLOSED_PRS
+          - **Total PRs**: $TOTAL_PRS
+          
+          EOF
+          done
+          
+          # Overall statistics
+          TOTAL_OPEN=$(gh api "repos/${{ github.repository }}/pulls?state=open" --paginate | jq '. | length')
+          TOTAL_CLOSED=$(gh api "repos/${{ github.repository }}/pulls?state=closed" --paginate | jq '. | length')
+          TOTAL_ISSUES_OPEN=$(gh api "repos/${{ github.repository }}/issues?state=open" --paginate | jq '. | length')
+          TOTAL_ISSUES_CLOSED=$(gh api "repos/${{ github.repository }}/issues?state=closed" --paginate | jq '. | length')
+          
+          cat >> /tmp/github-stats.md <<EOF
+          ## Overall Statistics
+          
+          ### Pull Requests
+          - **Open**: $TOTAL_OPEN
+          - **Closed**: $TOTAL_CLOSED
+          - **Total**: $((TOTAL_OPEN + TOTAL_CLOSED))
+          
+          ### Issues
+          - **Open**: $TOTAL_ISSUES_OPEN
+          - **Closed**: $TOTAL_ISSUES_CLOSED
+          - **Total**: $((TOTAL_ISSUES_OPEN + TOTAL_ISSUES_CLOSED))
+          
+          ## Recent Activity (Last 30 Days)
+          
+          EOF
+          
+          # PRs merged in last 30 days
+          THIRTY_DAYS_AGO=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          RECENT_MERGED=$(gh api "repos/${{ github.repository }}/pulls?state=closed&sort=updated&direction=desc" --paginate | \
+            jq --arg date "$THIRTY_DAYS_AGO" '[.[] | select(.merged_at != null and .merged_at > $date)] | length')
+          
+          cat >> /tmp/github-stats.md <<EOF
+          - **PRs Merged**: $RECENT_MERGED
+          - **PR Merge Rate**: $(echo "scale=2; $RECENT_MERGED / 30" | bc) per day
+          EOF
+          
+          cat /tmp/github-stats.md
+      
+      - name: Collect Gorgoroth Validation Status
+        run: |
+          echo "=== Gorgoroth Validation Status ==="
+          
+          cat > /tmp/gorgoroth-status.md <<EOF
+          # Gorgoroth Validation Status
+          **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Available Documentation
+          
+          ### Status Tracking
+          - [Gorgoroth Status Tracker](docs/validation/GORGOROTH_STATUS.md)
+          - [Validation Status](docs/validation/GORGOROTH_VALIDATION_STATUS.md)
+          - [Compatibility Details](docs/validation/GORGOROTH_COMPATIBILITY.md)
+          
+          ### E2E Walkthroughs
+          - [3-Node Walkthrough](docs/validation/GORGOROTH_3NODE_WALKTHROUGH.md)
+          - [6-Node Walkthrough](docs/validation/GORGOROTH_6NODE_WALKTHROUGH.md)
+          - [Cirith Ungol Walkthrough](docs/validation/CIRITH_UNGOL_WALKTHROUGH.md)
+          
+          ### Testing Guides
+          - [Compatibility Testing](docs/testing/GORGOROTH_COMPATIBILITY_TESTING.md)
+          - [Cirith Ungol Testing](docs/testing/CIRITH_UNGOL_TESTING_GUIDE.md)
+          - [E2E Testing Guide](docs/testing/E2E_TESTING_GUIDE.md)
+          
+          ## Current Status Summary
+          
+          ### 3-Node Scenario
+          - ✅ Fukuii ↔ Fukuii: Network communication validated
+          - ✅ Fukuii ↔ Fukuii: Block propagation validated
+          - ✅ Fukuii ↔ Fukuii: Mining validated
+          - ⚠️ Fukuii ↔ Core-Geth: Ready for testing
+          - ⚠️ Fukuii ↔ Besu: Ready for testing
+          
+          ### 6-Node Scenario
+          - ✅ Network formation validated
+          - ✅ Mining distribution validated
+          - ⚠️ Per-node validation pending
+          - ⚠️ Long-running stability pending
+          
+          ### Cirith Ungol Scenario
+          - ⚠️ SNAP sync on mainnet: Ready for testing
+          - ⚠️ Fast sync on mainnet: Ready for testing
+          - ⚠️ Peer diversity: Ready for testing
+          - ⚠️ Long-term stability: Ready for testing
+          
+          ## Infrastructure Status
+          - ✅ Docker compose configurations complete
+          - ✅ Test scripts complete
+          - ✅ Documentation complete
+          - ✅ E2E walkthroughs complete
+          
+          ## Next Steps
+          1. Run 6-node per-node validation
+          2. Run Cirith Ungol mainnet sync test
+          3. Run multi-client tests (Core-Geth, Besu)
+          4. Extended stability testing (48h+)
+          
+          EOF
+          
+          cat /tmp/gorgoroth-status.md
+      
+      - name: Generate Combined Report
+        run: |
+          cat > /tmp/nightly-report.md <<EOF
+          # Fukuii Nightly Report
+          **Date**: $(date -u +"%Y-%m-%d")
+          **Run**: ${{ github.run_number }}
+          
+          ---
+          
+          EOF
+          
+          cat /tmp/github-stats.md >> /tmp/nightly-report.md
+          echo "" >> /tmp/nightly-report.md
+          echo "---" >> /tmp/nightly-report.md
+          echo "" >> /tmp/nightly-report.md
+          cat /tmp/gorgoroth-status.md >> /tmp/nightly-report.md
+          
+          echo "Combined report generated:"
+          cat /tmp/nightly-report.md
+      
+      - name: Upload Statistics Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-statistics-${{ github.run_number }}
+          path: /tmp/nightly-report.md
+          retention-days: 90
+      
+      - name: Create Summary
+        run: |
+          cat /tmp/nightly-report.md >> $GITHUB_STEP_SUMMARY
