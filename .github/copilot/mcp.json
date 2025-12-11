@@ -1,0 +1,98 @@
+{
+  "mcpServers": {
+    "fukuii": {
+      "command": "fukuii",
+      "args": [],
+      "env": {
+        "FUKUII_NETWORK": "etc"
+      },
+      "description": "Fukuii Ethereum Classic node MCP server for AI assistant control and monitoring",
+      "transport": "http",
+      "url": "http://localhost:8545",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "capabilities": {
+        "tools": [
+          {
+            "name": "mcp_node_status",
+            "description": "Get current status of the Fukuii node including running state, sync status, peer count, and current block",
+            "schema": {}
+          },
+          {
+            "name": "mcp_node_info",
+            "description": "Get general information about the Fukuii node including version, network, and capabilities",
+            "schema": {}
+          },
+          {
+            "name": "mcp_blockchain_info",
+            "description": "Get blockchain information including latest block number, difficulty, and timestamp",
+            "schema": {}
+          },
+          {
+            "name": "mcp_sync_status",
+            "description": "Get detailed sync status including current block, highest block, and sync progress percentage",
+            "schema": {}
+          },
+          {
+            "name": "mcp_peer_list",
+            "description": "Get list of connected peers with their connection information",
+            "schema": {}
+          }
+        ],
+        "resources": [
+          {
+            "uri": "fukuii://node/status",
+            "name": "Node Status",
+            "description": "Current runtime status of the Fukuii node",
+            "mimeType": "application/json"
+          },
+          {
+            "uri": "fukuii://node/config",
+            "name": "Node Configuration",
+            "description": "Current configuration of the Fukuii node",
+            "mimeType": "application/json"
+          },
+          {
+            "uri": "fukuii://blockchain/latest",
+            "name": "Latest Block",
+            "description": "Information about the latest block on the blockchain",
+            "mimeType": "application/json"
+          },
+          {
+            "uri": "fukuii://peers/connected",
+            "name": "Connected Peers",
+            "description": "List of currently connected peers",
+            "mimeType": "application/json"
+          },
+          {
+            "uri": "fukuii://sync/status",
+            "name": "Sync Status",
+            "description": "Current blockchain synchronization status",
+            "mimeType": "application/json"
+          }
+        ],
+        "prompts": [
+          {
+            "name": "mcp_node_health_check",
+            "description": "Perform a comprehensive health check of the Fukuii node"
+          },
+          {
+            "name": "mcp_sync_troubleshooting",
+            "description": "Help troubleshoot synchronization issues"
+          },
+          {
+            "name": "mcp_peer_management",
+            "description": "Guide for managing peer connections"
+          }
+        ]
+      },
+      "configuration": {
+        "rpcEnabled": true,
+        "rpcPort": 8545,
+        "rpcApis": ["eth", "web3", "net", "personal", "mcp"],
+        "network": "etc"
+      }
+    }
+  }
+}

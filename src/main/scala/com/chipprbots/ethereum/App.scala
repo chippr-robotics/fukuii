@@ -178,6 +178,12 @@ object App extends Logger {
         |  signature-validator <pubkey> <sig> <hash>
         |                         Validate ECDSA signature against public key and message hash
         |
+        |MCP (Model Context Protocol) Support:
+        |  MCP methods are available via the JSON-RPC API on port 8545
+        |  Enable with: fukuii.network.rpc.apis = [..., "mcp"]
+        |  Methods: mcp_initialize, tools/list, tools/call, resources/list,
+        |           resources/read, prompts/list, prompts/get
+        |
         |Options:
         |  --help, -h             Show this help message
         |  --tui                  Enable the Terminal UI (disabled by default)

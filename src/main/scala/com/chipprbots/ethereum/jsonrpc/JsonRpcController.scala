@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.jsonrpc.EthTxService._
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.McpService._
 import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
@@ -45,6 +46,7 @@ case class JsonRpcController(
     qaService: QAService,
     checkpointingService: CheckpointingService,
     fukuiiService: FukuiiService,
+    mcpService: McpService,
     proofService: ProofService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
@@ -65,6 +67,7 @@ case class JsonRpcController(
   import QAJsonMethodsImplicits._
   import TestJsonMethodsImplicits._
   import FukuiiJsonMethodImplicits._
+  import McpJsonMethodsImplicits._
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
@@ -72,6 +75,7 @@ case class JsonRpcController(
     Apis.Net -> handleNetRequest,
     Apis.Personal -> handlePersonalRequest,
     Apis.Fukuii -> handleFukuiiRequest,
+    Apis.Mcp -> handleMcpRequest,
     Apis.Rpc -> handleRpcRequest,
     Apis.Debug -> handleDebugRequest,
     Apis.Test -> handleTestRequest,
@@ -319,6 +323,23 @@ case class JsonRpcController(
   private def handleFukuiiRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "fukuii_getAccountTransactions", _, _) =>
       handle[GetAccountTransactionsRequest, GetAccountTransactionsResponse](fukuiiService.getAccountTransactions, req)
+  }
+
+  private def handleMcpRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "mcp_initialize", _, _) =>
+      handle[McpInitializeRequest, McpInitializeResponse](mcpService.initialize, req)
+    case req @ JsonRpcRequest(_, "tools/list", _, _) =>
+      handle[McpToolsListRequest, McpToolsListResponse](mcpService.toolsList, req)
+    case req @ JsonRpcRequest(_, "tools/call", _, _) =>
+      handle[McpToolsCallRequest, McpToolsCallResponse](mcpService.toolsCall, req)
+    case req @ JsonRpcRequest(_, "resources/list", _, _) =>
+      handle[McpResourcesListRequest, McpResourcesListResponse](mcpService.resourcesList, req)
+    case req @ JsonRpcRequest(_, "resources/read", _, _) =>
+      handle[McpResourcesReadRequest, McpResourcesReadResponse](mcpService.resourcesRead, req)
+    case req @ JsonRpcRequest(_, "prompts/list", _, _) =>
+      handle[McpPromptsListRequest, McpPromptsListResponse](mcpService.promptsList, req)
+    case req @ JsonRpcRequest(_, "prompts/get", _, _) =>
+      handle[McpPromptsGetRequest, McpPromptsGetResponse](mcpService.promptsGet, req)
   }
 
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

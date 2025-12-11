@@ -275,6 +275,7 @@ class QaJRCSpec
     val ethFilterService: EthFilterService = mock[EthFilterService]
     val checkpointingService: CheckpointingService = mock[CheckpointingService]
     val fukuiiService: FukuiiService = mock[FukuiiService]
+    val mcpService: McpService = mock[McpService]
     val qaService: QAService = mock[QAService]
 
     val jsonRpcController =
@@ -293,6 +294,7 @@ class QaJRCSpec
         qaService,
         checkpointingService,
         fukuiiService,
+        mcpService,
         ProofServiceDummy,
         config
       )

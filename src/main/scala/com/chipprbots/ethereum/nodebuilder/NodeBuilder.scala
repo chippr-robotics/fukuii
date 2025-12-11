@@ -584,6 +584,12 @@ trait FukuiiServiceBuilder {
   lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
 }
 
+trait McpServiceBuilder {
+  self: PeerManagerActorBuilder with SyncControllerBuilder with ActorSystemBuilder =>
+
+  lazy val mcpService = new McpService(peerManager, syncController)(system.dispatcher)
+}
+
 trait KeyStoreBuilder {
   self: SecureRandomBuilder with KeyStoreConfigBuilder =>
   lazy val keyStore: KeyStore = new KeyStoreImpl(keyStoreConfig, secureRandom)
@@ -596,6 +602,7 @@ trait ApisBuilder extends ApisBase {
     val Net = "net"
     val Personal = "personal"
     val Fukuii = "fukuii"
+    val Mcp = "mcp"
     val Debug = "debug"
     val Rpc = "rpc"
     val Test = "test"
@@ -605,7 +612,7 @@ trait ApisBuilder extends ApisBase {
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Debug, Test, Iele, Qa, Checkpointing)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Checkpointing)
 }
 
 trait JSONRpcConfigBuilder {
@@ -630,7 +637,8 @@ trait JSONRpcControllerBuilder {
     with JSONRpcConfigBuilder
     with QaServiceBuilder
     with CheckpointingServiceBuilder
-    with FukuiiServiceBuilder =>
+    with FukuiiServiceBuilder
+    with McpServiceBuilder =>
 
   protected def testService: Option[TestService] = None
 
@@ -650,6 +658,7 @@ trait JSONRpcControllerBuilder {
       qaService,
       checkpointingService,
       fukuiiService,
+      mcpService,
       ethProofService,
       jsonRpcConfig
     )
@@ -901,6 +910,7 @@ trait Node
     with QaServiceBuilder
     with CheckpointingServiceBuilder
     with FukuiiServiceBuilder
+    with McpServiceBuilder
     with KeyStoreBuilder
     with ApisBuilder
     with JSONRpcConfigBuilder
