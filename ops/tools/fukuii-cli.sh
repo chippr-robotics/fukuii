@@ -40,6 +40,7 @@ Commands:
   
   Node Configuration:
     sync-static-nodes     - Synchronize static-nodes.json across running containers
+    populate-volumes [config] - Pre-populate static-nodes.json in Docker volumes
     collect-logs [config] - Collect logs from all containers
 
   Help:
@@ -56,6 +57,7 @@ EOF
 
 Examples:
   fukuii-cli start 3nodes
+  fukuii-cli populate-volumes 3nodes
   fukuii-cli sync-static-nodes
   fukuii-cli logs fukuii-geth
   fukuii-cli status
@@ -90,6 +92,11 @@ start_network() {
     
     echo -e "${GREEN}Starting Gorgoroth test network with configuration: $config${NC}"
     echo "Using compose file: $compose_file"
+    
+    # Pre-populate static-nodes.json in volumes before starting
+    echo ""
+    populate_static_nodes_volumes "$config"
+    echo ""
     
     cd "$GORGOROTH_DIR"
     docker compose -f "$compose_file" up -d
@@ -161,6 +168,56 @@ clean_network() {
 # ============================================================================
 # Node Configuration Commands
 # ============================================================================
+
+populate_static_nodes_volumes() {
+    local config="${1:-3nodes}"
+    echo -e "${BLUE}=== Pre-populating static-nodes.json in Docker volumes ===${NC}"
+    echo ""
+    
+    # Determine node count based on config
+    local node_count=3
+    if [[ "$config" == "6nodes" ]]; then
+        node_count=6
+    fi
+    
+    local volumes_populated=0
+    for i in $(seq 1 $node_count); do
+        local config_file="$GORGOROTH_DIR/conf/node${i}/static-nodes.json"
+        local volume_name="gorgoroth_fukuii-node${i}-data"
+        
+        echo -n "  node${i}: "
+        
+        # Check if config file exists
+        if [ ! -f "$config_file" ]; then
+            echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
+            continue
+        fi
+        
+        # Check if volume already has static-nodes.json
+        local file_size=$(docker run --rm -v "$volume_name:/data" busybox sh -c 'test -f /data/static-nodes.json && wc -c < /data/static-nodes.json || echo 0' 2>/dev/null)
+        
+        if [ "$file_size" -gt 3 ]; then
+            echo -e "${GREEN}✓ already populated ($file_size bytes)${NC}"
+            continue
+        fi
+        
+        # Copy static-nodes.json from host to volume
+        if docker run --rm -v "$volume_name:/data" -v "$GORGOROTH_DIR/conf/node${i}:/host:ro" busybox cp /host/static-nodes.json /data/static-nodes.json >/dev/null 2>&1; then
+            local new_size=$(docker run --rm -v "$volume_name:/data" busybox wc -c < /data/static-nodes.json 2>/dev/null)
+            echo -e "${GREEN}✓ populated ($new_size bytes)${NC}"
+            volumes_populated=$((volumes_populated + 1))
+        else
+            echo -e "${RED}✗ failed to populate${NC}"
+        fi
+    done
+    
+    echo ""
+    if [ $volumes_populated -gt 0 ]; then
+        echo -e "${GREEN}Successfully populated $volumes_populated volume(s)${NC}"
+    else
+        echo -e "${GREEN}All volumes already populated${NC}"
+    fi
+}
 
 sync_static_nodes() {
     echo -e "${BLUE}=== Fukuii Static Nodes Synchronization ===${NC}"
@@ -245,6 +302,26 @@ sync_static_nodes() {
                 echo "]"
             } > "$config_file"
             echo -e "${GREEN}✓ updated ($peer_count peer(s))${NC}"
+        else
+            echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${BLUE}Copying static-nodes.json into Docker volumes...${NC}"
+    for container in $CONTAINERS; do
+        node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
+        config_file="$GORGOROTH_DIR/conf/node${node_num}/static-nodes.json"
+        volume_name="gorgoroth_fukuii-node${node_num}-data"
+        
+        echo -n "  node${node_num}: "
+        if [ -f "$config_file" ]; then
+            # Copy static-nodes.json from host to volume
+            if docker run --rm -v "$volume_name:/data" -v "$GORGOROTH_DIR/conf/node${node_num}:/host:ro" busybox cp /host/static-nodes.json /data/static-nodes.json >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ copied to volume${NC}"
+            else
+                echo -e "${RED}✗ (failed to copy)${NC}"
+            fi
         else
             echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
         fi
@@ -392,6 +469,9 @@ case $COMMAND in
         ;;
     sync-static-nodes)
         sync_static_nodes
+        ;;
+    populate-volumes)
+        populate_static_nodes_volumes "$@"
         ;;
     collect-logs)
         collect_logs_cmd "$@"

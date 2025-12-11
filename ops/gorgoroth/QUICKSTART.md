@@ -77,22 +77,22 @@ The nodes need about 60-90 seconds to:
 sleep 90
 ```
 
-⚠️ **First Run Behavior**: On the very first startup, each node will generate a unique node key and persist it in a Docker volume. The static-nodes.json files in the repository contain the persistent enode IDs that these keys will generate, so nodes should connect automatically.
+⚠️ **First Run Behavior**: On the very first startup, each node will generate a unique node key and persist it in a Docker volume. The `fukuii-cli start` command automatically pre-populates static-nodes.json files into Docker volumes before starting containers, so peer connectivity should work immediately.
 
-⚠️ **Volume Shadowing Fix (v0.1.147+)**: Previous versions had a Docker volume configuration issue where bind-mounted static-nodes.json files were shadowed by named volumes. This has been fixed in v0.1.147 by removing the conflicting bind mounts. The static-nodes.json files are now initialized when volumes are first created.
+⚠️ **Volume Shadowing Fix (v0.1.147+)**: Previous versions had a Docker volume configuration issue where bind-mounted static-nodes.json files were shadowed by named volumes. This has been fixed in v0.1.147 by:
+- Removing the conflicting bind mounts from all docker-compose files
+- Automatically populating volumes with static-nodes.json on startup
 
 **If Nodes Don't Connect (Troubleshooting)**:
 
-If peer count remains at 0 after 2 minutes, you may need to populate the volumes with the static-nodes.json files:
+If peer count remains at 0 after 2 minutes, you can manually populate the volumes:
 
 ```bash
 # Stop the network first
 fukuii-cli stop 3nodes
 
-# Pre-populate static-nodes.json in volumes
-docker run --rm -v gorgoroth_fukuii-node1-data:/data -v $(pwd)/conf/node1:/host busybox cp /host/static-nodes.json /data/static-nodes.json
-docker run --rm -v gorgoroth_fukuii-node2-data:/data -v $(pwd)/conf/node2:/host busybox cp /host/static-nodes.json /data/static-nodes.json
-docker run --rm -v gorgoroth_fukuii-node3-data:/data -v $(pwd)/conf/node3:/host busybox cp /host/static-nodes.json /data/static-nodes.json
+# Manually populate static-nodes.json in volumes (automatic with 'start' command)
+fukuii-cli populate-volumes 3nodes
 
 # Restart the network
 fukuii-cli start 3nodes
