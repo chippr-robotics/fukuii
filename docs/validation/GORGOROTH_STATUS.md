@@ -56,7 +56,7 @@ This document provides a comprehensive status tracker for all Gorgoroth battlene
 ### Documentation Links
 - [Setup Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#3-node-setup)
 - [Validation Status](GORGOROTH_VALIDATION_STATUS.md)
-- [E2E Walkthrough](GORGOROTH_3NODE_WALKTHROUGH.md) *(to be created)*
+- [E2E Walkthrough](GORGOROTH_3NODE_WALKTHROUGH.md)
 
 ### Test Scripts
 ```bash
@@ -120,7 +120,7 @@ For **each of the 6 nodes**, validate:
 
 ### Documentation Links
 - [Setup Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#6-node-setup)
-- [E2E Walkthrough](GORGOROTH_6NODE_WALKTHROUGH.md) *(to be created)*
+- [E2E Walkthrough](GORGOROTH_6NODE_WALKTHROUGH.md)
 
 ### Test Scripts
 ```bash
@@ -194,7 +194,7 @@ cd test-scripts
 - [Cirith Ungol Testing Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md)
 - [Setup Instructions](../testing/CIRITH_UNGOL_TESTING_GUIDE.md#quick-start)
 - [Monitoring Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md#monitoring)
-- [E2E Walkthrough](CIRITH_UNGOL_WALKTHROUGH.md) *(to be created)*
+- [E2E Walkthrough](CIRITH_UNGOL_WALKTHROUGH.md)
 
 ### Test Scripts
 ```bash
@@ -262,19 +262,19 @@ Detailed step-by-step walkthroughs for each testing scenario:
 
 ### Available Walkthroughs
 
-1. **[3-Node E2E Walkthrough](GORGOROTH_3NODE_WALKTHROUGH.md)** *(to be created)*
+1. **[3-Node E2E Walkthrough](GORGOROTH_3NODE_WALKTHROUGH.md)**
    - Complete setup from scratch
    - Mining and syncing validation
    - Block propagation testing
    - Results collection
 
-2. **[6-Node E2E Walkthrough](GORGOROTH_6NODE_WALKTHROUGH.md)** *(to be created)*
+2. **[6-Node E2E Walkthrough](GORGOROTH_6NODE_WALKTHROUGH.md)**
    - Extended network setup
    - Per-node validation steps
    - Long-running stability testing
    - Performance monitoring
 
-3. **[Cirith Ungol E2E Walkthrough](CIRITH_UNGOL_WALKTHROUGH.md)** *(to be created)*
+3. **[Cirith Ungol E2E Walkthrough](CIRITH_UNGOL_WALKTHROUGH.md)**
    - Mainnet sync setup
    - SNAP and Fast sync procedures
    - Peer diversity validation

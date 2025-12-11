@@ -288,7 +288,7 @@ jobs:
           
           cat >> /tmp/github-stats.md <<EOF
           - **PRs Merged**: $RECENT_MERGED
-          - **PR Merge Rate**: $(echo "scale=2; $RECENT_MERGED / 30" | bc) per day
+          - **PR Merge Rate**: $(awk "BEGIN {printf \"%.2f\", $RECENT_MERGED / 30}") per day
           EOF
           
           cat /tmp/github-stats.md
