@@ -52,7 +52,7 @@ Fukuii is built with **Scala 3.3.4 (LTS)**, the latest long-term support version
 
 ### Quick Start with GitHub Codespaces
 
-For the fastest setup, use GitHub Codespaces which provides a pre-configured development environment. See [.devcontainer/README.md](.devcontainer/README.md) for details.
+For the fastest setup, use GitHub Codespaces which provides a pre-configured development environment. See [.devcontainer/README.md](https://github.com/chippr-robotics/fukuii/blob/develop/.devcontainer/README.md) for details.
 
 ## Development Workflow
 
@@ -182,8 +182,8 @@ sbt testAll      # Run all tests
 - The project is Scala 3 only (no cross-compilation)
 - All dependencies are Scala 3 compatible
 - CI pipeline tests on Scala 3.3.4 with JDK 21
-- See [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md) for the architectural decision
-- See [Migration History](docs/MIGRATION_HISTORY.md) for details on the completed migration
+- See [INF-001: Scala 3 Migration](adr/infrastructure/INF-001-scala-3-migration.md) for the architectural decision
+- See [Migration History](historical/MIGRATION_HISTORY.md) for details on the completed migration
 
 ## Pre-commit Hooks
 
@@ -445,13 +445,13 @@ task
 - **Unclear contract**: The error handling isn't explicit in the code
 
 **For more information:**
-- [Actor IO Error Handling Pattern (INF-004)](docs/adr/infrastructure/INF-004-actor-io-error-handling.md)
+- [Actor IO Error Handling Pattern (INF-004)](adr/infrastructure/INF-004-actor-io-error-handling.md)
 
 **For more information on test strategy and KPI baselines:**
-- [Test Suite Strategy and KPIs (TEST-002)](docs/adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
-- [Testing Documentation](docs/testing/README.md)
-- [KPI Baselines](docs/testing/KPI_BASELINES.md)
-- [KPI Monitoring Guide](docs/testing/KPI_MONITORING_GUIDE.md)
+- [Test Suite Strategy and KPIs (TEST-002)](adr/testing/TEST-002-test-suite-strategy-and-kpis.md)
+- [Testing Documentation](testing/README.md)
+- [KPI Baselines](testing/KPI_BASELINES.md)
+- [KPI Monitoring Guide](testing/KPI_MONITORING_GUIDE.md)
 
 ## Submitting Changes
 
@@ -550,7 +550,7 @@ Release notes are automatically drafted as PRs are merged. Use descriptive commi
 - `security:` for security fixes
 - `docs:` for documentation
 
-See [.github/workflows/README.md](.github/workflows/README.md) for detailed release process documentation.
+See [.github/workflows/README.md](https://github.com/chippr-robotics/fukuii/blob/develop/.github/workflows/README.md) for detailed release process documentation.
 
 ## Guidelines for LLM Agents
 
@@ -667,12 +667,12 @@ Before submitting a PR, verify:
 ## Additional Resources
 
 - [📖 Hosted Documentation](https://chippr-robotics.github.io/fukuii/) - Browsable documentation site
-- [GitHub Workflow Documentation](.github/workflows/README.md)
-- [Quick Start Guide](.github/QUICKSTART.md)
-- [Branch Protection Setup](.github/BRANCH_PROTECTION.md)
-- [Architectural Decision Records](docs/adr/README.md)
-- [Migration History](docs/MIGRATION_HISTORY.md)
-- [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)
+- [GitHub Workflow Documentation](https://github.com/chippr-robotics/fukuii/blob/develop/.github/workflows/README.md)
+- [Quick Start Guide](https://github.com/chippr-robotics/fukuii/blob/develop/.github/QUICKSTART.md)
+- [Branch Protection Setup](https://github.com/chippr-robotics/fukuii/blob/develop/.github/BRANCH_PROTECTION.md)
+- [Architectural Decision Records](adr/README.md)
+- [Migration History](historical/MIGRATION_HISTORY.md)
+- [Static Analysis Inventory](reports/STATIC_ANALYSIS_INVENTORY.md)
 - [Scalafmt Documentation](https://scalameta.org/scalafmt/)
 - [Scalafix Documentation](https://scalacenter.github.io/scalafix/)
 
