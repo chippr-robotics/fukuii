@@ -1,4 +1,4 @@
-## <i>Gorgoroth Status</i>: 🟡 [eth/68, snap/1] 
+## <i>Gorgoroth Status</i>: 🟡 [eth/68, snap/1] - [View Status & Walkthroughs](docs/validation/GORGOROTH_STATUS.md) 
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
