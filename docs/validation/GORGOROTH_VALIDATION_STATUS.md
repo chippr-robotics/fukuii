@@ -1,11 +1,13 @@
 # Gorgoroth Network - Validation Status
 
-**Last Updated**: December 8, 2025  
-**Status**: ✅ **CORE FUNCTIONALITY VALIDATED - TESTING INFRASTRUCTURE COMPLETE**
+**Last Updated**: December 11, 2025  
+**Status**: ⚠️ **CORE FUNCTIONALITY VALIDATED - CRITICAL FIX PENDING DEPLOYMENT**
 
 ## Executive Summary
 
-The Gorgoroth test network has been successfully established and core functionality has been validated. This document tracks the validation status for all compatibility areas requested in the original issue.
+The Gorgoroth test network infrastructure has been successfully established and initial core functionality has been validated. A critical block header encoding issue related to ECIP-1097 was discovered during Phase 2 validation on December 11, 2025, which prevented node synchronization. This issue has been identified, fixed in code, and configuration has been updated to disable ECIP-1097 (aligning with production ETC where it was withdrawn). The fix is pending deployment and re-validation.
+
+**Current Focus**: Deploy fixes and complete Phase 2 mining validation.
 
 **Bonus**: For advanced real-world sync testing, see [Cirith Ungol Testing Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md).
 
@@ -14,14 +16,14 @@ The Gorgoroth test network has been successfully established and core functional
 The following areas need to be validated for Fukuii compatibility with core-geth and besu:
 
 1. ✅ Network Communication
-2. ✅ Mining
+2. ⚠️ Mining
 3. ⚠️ Fast Sync (infrastructure ready, needs extended testing)
 4. ⚠️ Snap Sync (infrastructure ready, needs extended testing)
 5. ⚠️ Faucet Service (infrastructure ready, needs validation)
 
 ## Current Status
 
-### 1. Network Communication - ✅ VALIDATED
+### 1. Network Communicaion - ✅ VALIDATED
 
 **Status**: Fully validated and documented
 
@@ -30,7 +32,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 **What was tested**:
 - ✅ Peer discovery and handshakes
 - ✅ Protocol compatibility (ETH68, SNAP1)
-- ✅ Block propagation across Fukuii nodes
+- ⚠️ Block propagation across Fukuii nodes
 - ✅ Network connectivity in Docker environment
 - ✅ Static node configuration
 
@@ -51,35 +53,63 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 3. Execute automated test suite
 4. Document results
 
-### 2. Mining - ✅ VALIDATED
+### 2. Mining - ⚠️ FIX IMPLEMENTED, DEPLOYMENT PENDING
 
-**Status**: Validated on Fukuii-only network
+**Status**: Critical issue identified and fixed, awaiting deployment validation
 
-**Evidence**: See `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal validation report)
+**Latest Update (2025-12-11)**: 
+A critical block header encoding issue was discovered during Phase 2 validation that prevented follower nodes from synchronizing with the mining node. The issue has been resolved through code fixes and configuration changes.
+
+**Issue Discovered**:
+- **Symptom**: Follower nodes (node2/node3) rejected headers from miner (node1) as "unrequested" with error "Given headers should form a sequence without gaps"
+- **Root Cause**: ECIP-1097 header encoding normalization was removing the extra RLP field in decoded headers, causing hash recomputation mismatches
+- **Impact**: Nodes could not synchronize, preventing Phase 2 validation completion
+
+**Fix Implemented**:
+- Updated `BlockHeader.scala` to preserve `HefPostEcip1097` structure even with empty checkpoints
+- Extended property tests to cover edge cases with `HefPostEcip1097(None)`
+- Added regression test in `BlockHeaderSpec` for empty checkpoint headers
+- Disabled ECIP-1097 in all PoW test configs (Gorgoroth, Pottery, Nomad) by setting activation block to `1000000000000000000`
+
+**Rationale for ECIP-1097 Disable**:
+- ECIP-1097 was withdrawn and will never be implemented in production ETC
+- Disabling aligns test networks with production configuration
+- Prevents false positives from testing features that won't be deployed
+- Maintains test clarity and relevance
+
+**Evidence**: See detailed analysis in [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md)
 
 **What was tested**:
-- ✅ Mining enabled on all nodes
-- ✅ PoW consensus mechanism
-- ✅ Block production
-- ✅ Difficulty adjustment
-- ✅ Mining coordinator instantiation
+- ⚠️ Mining enabled on node1 only
+- ⚠️ PoW consensus mechanism  
+- ⚠️ Block production on node1 (successful to block 0xe7)
+- ⚠️ Header propagation to follower nodes (blocked by encoding issue)
+- ⚠️ Node synchronization (blocked by encoding issue)
 
 **Results**:
-- Mining works correctly on Fukuii nodes
-- Blocks are produced consistently
-- PoW consensus maintained
+- Node1 successfully mined blocks up to 0xe7 with `eth_mining=true`
+- Follower nodes reported `eth_syncing` but could not accept headers
+- Issue root cause identified: RLP field normalization breaking hash chain
+- Code fix implemented and validated with unit tests
+- Configuration updated to disable ECIP-1097
 
 **Multi-client status**:
-- ✅ Fukuii mining: Validated
-- ⚠️ Mixed client mining: Infrastructure ready
-- ⚠️ Cross-client block acceptance: Infrastructure ready
+- ⚠️ Fukuii mining: Fix implemented, deployment pending
+- ⚠️ Mixed client mining: Infrastructure ready, blocked by Fukuii fix deployment
+- ⚠️ Cross-client block acceptance: Infrastructure ready, blocked by Fukuii fix deployment
 
 **Next steps for complete validation**:
-1. Start mixed client network (fukuii-geth or fukuii-besu)
-2. Verify blocks mined by Core-Geth are accepted by Fukuii
-3. Verify blocks mined by Fukuii are accepted by Core-Geth/Besu
-4. Run mining compatibility tests
-5. Document block distribution and consensus
+1. Build new Fukuii Docker image with header encoding fixes
+2. Deploy updated image to 3-node Gorgoroth network
+3. Re-run Phase 2 validation: verify node1 mines and followers sync
+4. Execute `test-mining.sh` to confirm end-to-end mining workflow
+5. Validate `BlockFetcher` no longer emits "sequence gaps" warnings
+6. Once Fukuii-to-Fukuii validated, proceed with mixed client testing
+7. Start mixed client network (fukuii-geth or fukuii-besu)
+8. Verify blocks mined by Core-Geth are accepted by Fukuii
+9. Verify blocks mined by Fukuii are accepted by Core-Geth/Besu
+10. Run mining compatibility tests
+11. Document block distribution and consensus
 
 ### 3. Fast Sync - ⚠️ INFRASTRUCTURE READY
 
@@ -245,8 +275,8 @@ cd test-scripts
 |---------|-----------------|-------------------|---------------|
 | **Network Communication** | ✅ Validated | ⚠️ Ready to test | ⚠️ Ready to test |
 | **Peer Discovery** | ✅ Validated | ⚠️ Ready to test | ⚠️ Ready to test |
-| **Block Propagation** | ✅ Validated | ⚠️ Ready to test | ⚠️ Ready to test |
-| **Mining Consensus** | ✅ Validated | ⚠️ Ready to test | ⚠️ Ready to test |
+| **Block Propagation** | ⚠️ Fix pending | ⚠️ Blocked | ⚠️ Blocked |
+| **Mining Consensus** | ⚠️ Fix pending | ⚠️ Blocked | ⚠️ Blocked |
 | **Fast Sync (as client)** | ⚠️ Ready to test | ⚠️ Ready to test | ⚠️ Ready to test |
 | **Fast Sync (as server)** | ⚠️ Ready to test | ⚠️ Ready to test | ⚠️ Ready to test |
 | **Snap Sync (as client)** | ⚠️ Ready to test | ⚠️ Ready to test | ⚠️ Ready to test |
@@ -256,19 +286,26 @@ cd test-scripts
 **Legend**:
 - ✅ Validated: Tested and confirmed working
 - ⚠️ Ready to test: Infrastructure in place, needs execution
+- ⚠️ Fix pending: Issue identified and fixed, awaiting deployment
+- ⚠️ Blocked: Cannot test due to dependency or limitation
 - ❌ Failed: Test executed but failed
 - ⏸️ Blocked: Cannot test due to dependency or limitation
+
+**Note**: Block Propagation and Mining Consensus are marked "Fix pending" due to ECIP-1097 header encoding issue discovered on 2025-12-11. Fix has been implemented in code and is awaiting deployment and validation.
 
 ### Expected Timeline for Full Validation
 
 | Phase | Tasks | Estimated Time | Status |
 |-------|-------|----------------|--------|
 | Phase 1 | Basic Fukuii validation | 1 day | ✅ Complete |
-| Phase 2 | Multi-client network comm | 2 days | ⚠️ Ready |
-| Phase 3 | Multi-client mining | 2 days | ⚠️ Ready |
-| Phase 4 | Fast sync testing | 3 days | ⚠️ Ready |
-| Phase 5 | Snap sync testing | 3 days | ⚠️ Ready |
-| **Total** | **Full validation** | **~2 weeks** | **30% Complete** |
+| Phase 2 | Fukuii mining & sync | 2 days | ⚠️ Fix implemented, deployment pending |
+| Phase 3 | Multi-client network comm | 2 days | ⚠️ Blocked by Phase 2 |
+| Phase 4 | Multi-client mining | 2 days | ⚠️ Blocked by Phase 2 |
+| Phase 5 | Fast sync testing | 3 days | ⚠️ Ready |
+| Phase 6 | Snap sync testing | 3 days | ⚠️ Ready |
+| **Total** | **Full validation** | **~2 weeks** | **~35% Complete** |
+
+**Current Blocker**: ECIP-1097 header encoding fix needs deployment and validation before proceeding with Phase 2 completion and subsequent phases.
 
 ## Completed Work
 
@@ -284,9 +321,12 @@ cd test-scripts
 ### Validation
 - ✅ 3-node Fukuii network validated
 - ✅ Peer connectivity confirmed
-- ✅ Mining confirmed working
+- ✅ Mining confirmed working (node1 reached block 0xe7)
 - ✅ Protocol compatibility verified
-- ✅ Block propagation validated
+- ⚠️ Block propagation issue identified and fixed (pending deployment)
+- ✅ ECIP-1097 header encoding issue root cause identified
+- ✅ Code fix implemented and unit tested
+- ✅ Configuration aligned with production ETC (ECIP-1097 disabled)
 
 ### Documentation
 - ✅ Quick start guide for community testers
@@ -294,6 +334,7 @@ cd test-scripts
 - ✅ Troubleshooting documentation
 - ✅ Automated test suite
 - ✅ Validation status tracking (this document)
+- ✅ Phase 2 Field Report with detailed session analysis
 
 ## Next Steps for Community Testers
 
@@ -430,28 +471,77 @@ When you complete testing, please report results by:
 - Attach or link to logs
 ```
 
+## Recent Findings & Known Issues
+
+### Critical Issues (2025-12-11)
+
+#### ECIP-1097 Header Encoding Issue - ✅ FIXED, PENDING DEPLOYMENT
+
+**Discovered**: 2025-12-11 during Phase 2 validation  
+**Status**: Code fix implemented, awaiting deployment and re-validation  
+**Severity**: Critical - blocked node synchronization
+
+**Description**:
+When ECIP-1097 checkpointing is enabled (even with empty checkpoints), the block header codec was normalizing the extra RLP field from `HefPostEcip1097` back to `HefEmpty` during decode. This caused the locally recomputed block hash to differ from the original, breaking the parent-child hash chain and causing follower nodes to reject headers as "unrequested."
+
+**Impact**:
+- Follower nodes could not synchronize with mining nodes
+- Headers were rejected with "Given headers should form a sequence without gaps"
+- Mining node was blacklisted by followers for "UnrequestedHeaders"
+- Phase 2 validation blocked
+
+**Fix Applied**:
+- Modified `BlockHeader.scala` to preserve `HefPostEcip1097` structure in decoded headers
+- Extended property tests to cover `HefPostEcip1097(None)` edge case
+- Added regression test for empty checkpoint header encoding/decoding
+- Unit tests validate hash stability across encode/decode cycles
+
+**Configuration Change**:
+- ECIP-1097 disabled in all PoW test configs (Gorgoroth, Pottery, Nomad)
+- Activation block set to `1000000000000000000` (effectively never)
+- Aligns with production ETC where ECIP-1097 was withdrawn
+- Prevents testing of features that won't be deployed
+
+**Validation Required**:
+1. Build Docker image with fixes
+2. Deploy to 3-node network
+3. Verify follower nodes sync successfully
+4. Confirm no "unrequested headers" warnings
+5. Execute full Phase 2 test suite
+
+**Reference**: See [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md) for detailed analysis
+
+### Open Issues
+
+**None currently blocking validation** (pending deployment of ECIP-1097 fix)
+
 ## Known Limitations
 
 1. **Gorgoroth is a test network**: Results may differ on public networks
 2. **Limited peer count**: Test network has small number of nodes
 3. **Controlled environment**: Docker networking may behave differently than real internet
 4. **Genesis configuration**: Custom genesis may not match mainnet exactly
+5. **ECIP-1097 Disabled**: Test networks do not test checkpointing functionality (intentional, matches production)
 
 ## Success Criteria
 
 The validation will be considered complete when:
 
 - ✅ All network communication tests pass for all client combinations
-- ✅ All mining compatibility tests pass for all client combinations
-- ✅ Fast sync works bidirectionally between all supported clients
-- ✅ Snap sync works (if supported by clients) for all combinations
-- ✅ Long-running tests (24+ hours) show no consensus issues
+- ⚠️ All mining compatibility tests pass for all client combinations (blocked by header encoding fix deployment)
+- ⚠️ Block propagation works correctly between all Fukuii nodes (fix implemented, pending deployment)
+- ⚠️ Fast sync works bidirectionally between all supported clients
+- ⚠️ Snap sync works (if supported by clients) for all combinations
+- ⚠️ Long-running tests (24+ hours) show no consensus issues
 - ✅ Results are documented and reviewed
-- ✅ Community testers have validated the findings
+- ⚠️ Community testers have validated the findings
+
+**Current Progress**: ~35% complete. Phase 2 mining and synchronization validation blocked pending deployment of ECIP-1097 header encoding fix.
 
 ## References
 
 - [Main README](README.md)
+- [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md) - **NEW: Detailed session analysis and findings**
 - [Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 - Quick Start Guide: `ops/gorgoroth/QUICKSTART.md` (internal)
 - Verification Complete Report: `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal)
