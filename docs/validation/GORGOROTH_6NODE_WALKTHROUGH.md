@@ -17,7 +17,7 @@
 5. [Phase 2: Mining Distribution](#phase-2-mining-distribution)
 6. [Phase 3: Per-Node Validation](#phase-3-per-node-validation)
 7. [Phase 4: Sync Testing](#phase-4-sync-testing)
-8. [Phase 5: Long-Running Stability](#phase-5-long-running-stability)
+8. [Phase 5: Long-Running Stability](#phase-5-long-running-multi-client-stability)
 9. [Phase 6: Results Collection](#phase-6-results-collection)
 10. [Cleanup](#cleanup)
 11. [Troubleshooting](#troubleshooting)

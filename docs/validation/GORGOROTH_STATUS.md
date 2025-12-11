@@ -55,7 +55,7 @@ This document provides a comprehensive status tracker for all Gorgoroth battlene
 - [ ] State verification after sync
 
 ### Documentation Links
-- [Setup Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#3-node-setup)
+- [Setup Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#scenario-1-fukuii-only-network-baseline)
 - [Validation Status](GORGOROTH_VALIDATION_STATUS.md)
 - [E2E Walkthrough](GORGOROTH_3NODE_WALKTHROUGH.md)
 
