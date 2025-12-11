@@ -227,8 +227,6 @@ sleep 30
 
 ### Step 1.7: Verify Peer Connectivity
 
-```
-
 > ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, and **8550 (node3)**. The matching WebSocket endpoints stay on 8545/8547/8549. All examples below use the HTTP ports.
 
 ```bash
@@ -255,7 +253,7 @@ curl -X POST http://localhost:8546 \
 - Peer connections established
 - Network formed successfully
 
-> ⚠️ **Enable mining before continuing:** The default `docker-compose-3nodes.yml` ships with `-Dfukuii.mining.mining-enabled=false` for every node to keep idle clusters quiet. Edit each service's `JAVA_OPTS` (or temporarily set `JAVA_OPTS=-Dfukuii.mining.mining-enabled=true` before calling `fukuii-cli start 3nodes`) so that all three nodes actually mine during this walkthrough. After editing, restart the network and re-run `fukuii-cli sync-static-nodes`.
+> ℹ️ **Mining is enabled by default:** The current `docker-compose-3nodes.yml` configuration sets `-Dfukuii.mining.mining-enabled=true` for all three nodes. No manual changes are required—mining will begin automatically during this walkthrough.
 
 ---
 
@@ -313,8 +311,6 @@ cd ops/gorgoroth/test-scripts
 ./test-mining.sh
 cd -
 ```
-
-> ℹ️ The helper scripts still probe the legacy HTTP ports (8545/8547/8549). Update the port lists inside the scripts or rely on the manual `curl` checks above until the tooling is patched.
 
 **Expected results**:
 - ✅ All nodes mining

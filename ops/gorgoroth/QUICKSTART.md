@@ -155,7 +155,7 @@ curl -X POST -H "Content-Type: application/json" \
   http://localhost:8546
 ```
 
-### 7. Test Block Production
+### Test Block Production
 
 ⚠️ **Mining is now enabled by default** in the 3-node configuration. Wait a few minutes for blocks to be mined, then check the block number:
 
