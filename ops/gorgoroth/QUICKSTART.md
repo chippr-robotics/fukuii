@@ -147,7 +147,7 @@ curl -X POST -H "Content-Type: application/json" \
 
 **Note**: Fukuii uses port 8546 for HTTP JSON-RPC and port 8545 for WebSocket connections.
 
-### 6. Check Sync Status
+### Check Sync Status
 
 ```bash
 curl -X POST -H "Content-Type: application/json" \
@@ -157,7 +157,7 @@ curl -X POST -H "Content-Type: application/json" \
 
 ### 7. Test Block Production
 
-Wait a few minutes for blocks to be mined, then check the block number:
+⚠️ **Mining is now enabled by default** in the 3-node configuration. Wait a few minutes for blocks to be mined, then check the block number:
 
 ```bash
 curl -X POST -H "Content-Type: application/json" \
@@ -169,15 +169,15 @@ curl -X POST -H "Content-Type: application/json" \
 
 ### HTTP JSON-RPC Endpoints
 
-- Node 1: http://localhost:8545
-- Node 2: http://localhost:8547
-- Node 3: http://localhost:8549
+- Node 1: http://localhost:8546
+- Node 2: http://localhost:8548
+- Node 3: http://localhost:8550
 
 ### WebSocket Endpoints
 
-- Node 1: ws://localhost:8546
-- Node 2: ws://localhost:8548
-- Node 3: ws://localhost:8550
+- Node 1: ws://localhost:8545
+- Node 2: ws://localhost:8547
+- Node 3: ws://localhost:8549
 
 ### P2P Ports (for external peers)
 
@@ -233,6 +233,17 @@ fukuii-cli clean 3nodes
 ```
 
 ⚠️ **Warning**: This will delete all blockchain data and node keys. The network will start fresh on next run.
+
+**Manual Volume Cleanup** (if needed):
+```bash
+# List volumes
+docker volume ls | grep gorgoroth
+
+# Remove individual volumes (note: prefix is "gorgoroth_fukuii-")
+docker volume rm gorgoroth_fukuii-node1-data
+docker volume rm gorgoroth_fukuii-node2-data
+docker volume rm gorgoroth_fukuii-node3-data
+```
 
 ## Troubleshooting
 
@@ -319,7 +330,12 @@ This setup includes recent fixes for:
 
 ## Known Limitations
 
-### Version 0.1.146
+### Version 0.1.147+
+
+**Mining Enabled by Default**:
+- Mining is now enabled by default in docker-compose-3nodes.yml
+- All nodes will produce blocks once properly connected
+- To disable mining, edit docker-compose-3nodes.yml and set `-Dfukuii.mining.mining-enabled=false`
 
 **Peer Discovery on First Run**:
 - On first run, nodes generate unique keys that don't match placeholder enode IDs in static-nodes.json
@@ -327,9 +343,13 @@ This setup includes recent fixes for:
 - **Note**: This only affects first run. Subsequent restarts use persisted keys and maintain connectivity
 
 **RPC Port Configuration**:
-- Fukuii uses non-standard port assignment: HTTP RPC on 8546, WebSocket on 8545
+- Fukuii uses non-standard port assignment: HTTP RPC on 8546/8548/8550, WebSocket on 8545/8547/8549
 - Standard Ethereum clients use: HTTP on 8545, WebSocket on 8546
-- **Note**: Be sure to use port 8546 when testing HTTP JSON-RPC endpoints
+- **Note**: Be sure to use port 8546 when testing HTTP JSON-RPC endpoints on node1
+
+**Mining Configuration**:
+- Mining is enabled by default in version 0.1.147+ for the 3-node configuration
+- To disable mining, edit docker-compose-3nodes.yml and set `-Dfukuii.mining.mining-enabled=false`
 
 ### Prerequisites
 

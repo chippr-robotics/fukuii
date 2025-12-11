@@ -13,8 +13,8 @@ FUKUII_PORTS=()
 GETH_PORTS=()
 BESU_PORTS=()
 
-# Detect running Fukuii nodes
-for port in 8545 8547 8549; do
+# Detect running Fukuii nodes (HTTP RPC on 8546, 8548, 8550)
+for port in 8546 8548 8550; do
   if curl -s -f -m 2 http://localhost:$port > /dev/null 2>&1; then
     FUKUII_PORTS+=($port)
   fi
