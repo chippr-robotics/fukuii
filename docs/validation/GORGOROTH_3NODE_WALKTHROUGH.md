@@ -121,6 +121,25 @@ fukuii-cli help
 fukuii-cli clean 3nodes
 ```
 
+> ⚠️ The `clean` command prompts for confirmation. Type `yes` when you really mean to delete the existing containers and volumes.
+
+### Step 3: Ensure Config Mounts Exist (First-Time Setup)
+
+The Docker Compose file mounts `ops/gorgoroth/conf/node*/gorgoroth.conf` and `static-nodes.json` into each container. On fresh clones these files (especially for `node1`) may not exist yet, which causes `docker compose` to fail with `not a directory` errors. Run the following helper once before your first start:
+
+```bash
+mkdir -p ops/gorgoroth/conf/node1
+cp src/main/resources/conf/gorgoroth.conf ops/gorgoroth/conf/node1/gorgoroth.conf
+
+for node in node1 node2 node3; do
+  if [ ! -f "ops/gorgoroth/conf/$node/static-nodes.json" ]; then
+    echo "[]" > "ops/gorgoroth/conf/$node/static-nodes.json"
+  fi
+done
+```
+
+Make sure each of the files above is a **regular file** (not a directory or symlink) so Docker can mount it.
+
 ---
 
 ## Phase 1: Network Formation
@@ -169,7 +188,8 @@ fukuii-cli logs 3nodes
 # Look for successful startup messages:
 # - "Starting Fukuii node"
 # - "Ethereum node ready"
-# - "Mining enabled"
+# - "JSON RPC HTTP server listening on ...:8546"
+#   (Mining logs only appear after you re-enable mining per the note below)
 ```
 
 ### Step 1.5: Sync Static Nodes (Establish Peer Connections)
@@ -195,6 +215,8 @@ Collected 3 enode(s)
 === Static nodes synchronization complete ===
 ```
 
+> ⏱️ `sync-static-nodes` restarts every container after rewriting `static-nodes.json`. Give Docker ~30 seconds to bring the nodes back before checking peer counts.
+
 ### Step 1.6: Wait for Peer Connections
 
 ```bash
@@ -205,9 +227,13 @@ sleep 30
 
 ### Step 1.7: Verify Peer Connectivity
 
+```
+
+> ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, and **8550 (node3)**. The matching WebSocket endpoints stay on 8545/8547/8549. All examples below use the HTTP ports.
+
 ```bash
 # Query node1 peer count
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -229,6 +255,8 @@ curl -X POST http://localhost:8545 \
 - Peer connections established
 - Network formed successfully
 
+> ⚠️ **Enable mining before continuing:** The default `docker-compose-3nodes.yml` ships with `-Dfukuii.mining.mining-enabled=false` for every node to keep idle clusters quiet. Edit each service's `JAVA_OPTS` (or temporarily set `JAVA_OPTS=-Dfukuii.mining.mining-enabled=true` before calling `fukuii-cli start 3nodes`) so that all three nodes actually mine during this walkthrough. After editing, restart the network and re-run `fukuii-cli sync-static-nodes`.
+
 ---
 
 ## Phase 2: Mining Validation
@@ -236,8 +264,8 @@ curl -X POST http://localhost:8545 \
 ### Step 2.1: Check Initial Block Number
 
 ```bash
-# Query block number on all nodes
-for port in 8545 8546 8547; do
+# Query block number on all nodes (HTTP ports 8546/8548/8550)
+for port in 8546 8548 8550; do
   echo "Node at port $port:"
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -263,7 +291,7 @@ sleep 60
 
 ```bash
 # Check block numbers again
-for port in 8545 8546 8547; do
+for port in 8546 8548 8550; do
   echo "Node at port $port:"
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -281,10 +309,12 @@ done
 ### Step 2.4: Run Automated Mining Test
 
 ```bash
-cd test-scripts
+cd ops/gorgoroth/test-scripts
 ./test-mining.sh
-cd ..
+cd -
 ```
+
+> ℹ️ The helper scripts still probe the legacy HTTP ports (8545/8547/8549). Update the port lists inside the scripts or rely on the manual `curl` checks above until the tooling is patched.
 
 **Expected results**:
 - ✅ All nodes mining
@@ -295,8 +325,8 @@ cd ..
 ### Step 2.5: Inspect a Mined Block
 
 ```bash
-# Get latest block from node1
-curl -X POST http://localhost:8545 \
+# Get latest block from node1 (HTTP port 8546)
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -326,7 +356,7 @@ curl -X POST http://localhost:8545 \
 ```bash
 # Save current state
 echo "Recording block numbers..."
-for port in 8545 8546 8547; do
+for port in 8546 8548 8550; do
   echo -n "Node $port: "
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -353,7 +383,7 @@ sleep 120
 ```bash
 # Compare block numbers
 echo "Block numbers after waiting:"
-for port in 8545 8546 8547; do
+for port in 8546 8548 8550; do
   echo -n "Node $port: "
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -389,7 +419,7 @@ cd ..
 ```bash
 # Get latest block hash from each node
 echo "Block hashes:"
-for port in 8545 8546 8547; do
+for port in 8546 8548 8550; do
   echo -n "Node $port: "
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -423,7 +453,7 @@ fukuii-cli stop 3nodes
 cd /path/to/fukuii/ops/gorgoroth
 
 # Remove only node3 data
-docker volume rm gorgoroth_node3-data || true
+docker volume rm gorgoroth_fukuii-node3-data || true
 
 # Restart network
 cd /path/to/fukuii
@@ -461,8 +491,8 @@ fukuii-cli logs 3nodes
 echo "Waiting for sync to complete..."
 sleep 180
 
-# Check block number
-curl -X POST http://localhost:8547 \
+# Check block number (node3 HTTP port 8550)
+curl -X POST http://localhost:8550 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -471,8 +501,8 @@ curl -X POST http://localhost:8547 \
     "id": 1
   }' | jq -r '.result'
 
-# Compare with other nodes
-curl -X POST http://localhost:8545 \
+# Compare with other nodes (node1 HTTP port 8546)
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -488,7 +518,7 @@ curl -X POST http://localhost:8545 \
 
 ```bash
 # Query genesis block from all nodes
-for port in 8545 8546 8547; do
+for port in 8546 8548 8550; do
   echo "Node $port genesis:"
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -533,13 +563,13 @@ cat > /tmp/gorgoroth-3node-results/final-state.txt <<EOF
 Date: $(date)
 Duration: 1-2 hours
 
-Node 1 Block: $(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-Node 2 Block: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-Node 3 Block: $(curl -s -X POST http://localhost:8547 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+Node 1 Block: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+Node 2 Block: $(curl -s -X POST http://localhost:8548 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+Node 3 Block: $(curl -s -X POST http://localhost:8550 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 
-Node 1 Peers: $(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
-Node 2 Peers: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
-Node 3 Peers: $(curl -s -X POST http://localhost:8547 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
+Node 1 Peers: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
+Node 2 Peers: $(curl -s -X POST http://localhost:8548 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
+Node 3 Peers: $(curl -s -X POST http://localhost:8550 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 
 All tests completed successfully!
 EOF
@@ -603,7 +633,7 @@ fukuii-cli restart 3nodes
 fukuii-cli logs 3nodes | grep -i mining
 
 # Verify difficulty
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:8546 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' | jq '.result.difficulty'
 
