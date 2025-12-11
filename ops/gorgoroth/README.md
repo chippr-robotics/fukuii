@@ -297,7 +297,7 @@ The network uses a custom genesis block with:
 
 Each Fukuii node is configured with:
 
-- **Mining enabled by default** with unique coinbase addresses
+- **Mining enabled** with unique coinbase addresses (enabled as of version 0.1.147 for validation testing)
 - **Discovery disabled** (static peer connections only)
 - **Fast sync disabled** (full sync for test network)
 - **SNAP sync disabled** (not needed for small network)
