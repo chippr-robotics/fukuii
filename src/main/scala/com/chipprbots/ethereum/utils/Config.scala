@@ -91,7 +91,8 @@ object Config {
       val pruneIncomingPeers: Int = peerConfig.getInt("prune-incoming-peers")
       val minPruneAge: FiniteDuration = peerConfig.getDuration("min-prune-age").toMillis.millis
       val networkId: Int = blockchainConfig.networkId
-      val p2pVersion: Int = peerConfig.getInt("p2p-version")
+      // Default to v5 (highest known p2p version supporting Snappy compression) if not explicitly set
+      val p2pVersion: Int = if (peerConfig.hasPath("p2p-version")) peerConfig.getInt("p2p-version") else 5
 
       val rlpxConfiguration: RLPxConfiguration = new RLPxConfiguration {
         val waitForHandshakeTimeout: FiniteDuration =
