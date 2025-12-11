@@ -66,60 +66,40 @@ Or if you have fukuii-cli installed globally:
 fukuii-cli start 3nodes
 ```
 
-### 3. Wait for Nodes to Initialize and Sync Static Peers
+### 3. Wait for DAG Generation and Peer Discovery
 
-The nodes need about 30-45 seconds to fully initialize and generate node keys.
-
-```bash
-sleep 45
-```
-
-⚠️ **Important Note on First Run**: The static-nodes.json files contain placeholder enode IDs. On first startup, each node will generate its own unique node key and enode ID. These won't match the placeholders, so nodes won't connect automatically. 
-
-**Automated Peer Synchronization (Recommended)**:
-
-Use the `sync-static-nodes` command to automatically collect enode IDs and update static-nodes.json files:
+The nodes need about 60-90 seconds to:
+1. Generate the DAG (Directed Acyclic Graph) for mining
+2. Load static peer configurations
+3. Establish connections with peer nodes
 
 ```bash
-fukuii-cli sync-static-nodes
+sleep 90
 ```
 
-This command will:
-1. Collect enode URLs from all running nodes
-2. Update static-nodes.json files for each node (excluding self-references)
-3. Restart containers to apply the configuration
-4. Nodes will connect to each other within 30 seconds
+⚠️ **First Run Behavior**: On the very first startup, each node will generate a unique node key and persist it in a Docker volume. The static-nodes.json files in the repository contain the persistent enode IDs that these keys will generate, so nodes should connect automatically.
 
-**Manual Peer Synchronization (Alternative)**:
+⚠️ **Volume Shadowing Fix (v0.1.147+)**: Previous versions had a Docker volume configuration issue where bind-mounted static-nodes.json files were shadowed by named volumes. This has been fixed in v0.1.147 by removing the conflicting bind mounts. The static-nodes.json files are now initialized when volumes are first created.
 
-If you prefer to manually configure peers:
+**If Nodes Don't Connect (Troubleshooting)**:
 
-1. Collect the actual enode IDs from the logs:
-   ```bash
-   # Wait for nodes to fully initialize (important!)
-   sleep 45
-   
-   echo "Node 1:"
-   docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
-   echo "Node 2:"
-   docker logs gorgoroth-fukuii-node2 2>&1 | grep "Node address" | tail -1
-   echo "Node 3:"
-   docker logs gorgoroth-fukuii-node3 2>&1 | grep "Node address" | tail -1
-   ```
+If peer count remains at 0 after 2 minutes, you may need to populate the volumes with the static-nodes.json files:
 
-2. Update the static-nodes.json files with the actual enode IDs:
-   - `ops/gorgoroth/conf/node1/static-nodes.json` - add node2 and node3 enodes
-   - `ops/gorgoroth/conf/node2/static-nodes.json` - add node1 and node3 enodes
-   - `ops/gorgoroth/conf/node3/static-nodes.json` - add node1 and node2 enodes
-   
-   Format: `enode://<public-key>@<hostname>:30303`
+```bash
+# Stop the network first
+fukuii-cli stop 3nodes
 
-3. Restart the network to apply the changes:
-   ```bash
-   fukuii-cli restart 3nodes
-   ```
+# Pre-populate static-nodes.json in volumes
+docker run --rm -v gorgoroth_fukuii-node1-data:/data -v $(pwd)/conf/node1:/host busybox cp /host/static-nodes.json /data/static-nodes.json
+docker run --rm -v gorgoroth_fukuii-node2-data:/data -v $(pwd)/conf/node2:/host busybox cp /host/static-nodes.json /data/static-nodes.json
+docker run --rm -v gorgoroth_fukuii-node3-data:/data -v $(pwd)/conf/node3:/host busybox cp /host/static-nodes.json /data/static-nodes.json
 
-**Note**: Once node keys are persisted in Docker volumes, subsequent restarts will use the same keys and the static-nodes.json files will remain valid.
+# Restart the network
+fukuii-cli start 3nodes
+sleep 90
+```
+
+**Note**: Once the static-nodes.json files are in the volumes, they persist across restarts. Node keys also persist in volumes, so enode IDs remain constant.
 
 ### 4. Verify Nodes are Running
 
@@ -252,14 +232,20 @@ fukuii-cli clean 3nodes
 
 3. Verify static nodes configuration matches actual enode IDs:
    ```bash
-   # Check what's in the static-nodes.json
+   # Check what's in the static-nodes.json inside the container
    docker exec gorgoroth-fukuii-node1 cat /app/data/static-nodes.json
    
    # Check the actual enode ID for this node
    docker logs gorgoroth-fukuii-node1 2>&1 | grep "Node address" | tail -1
    ```
    
-4. If enode IDs don't match, update static-nodes.json files and restart (see Step 3 above).
+4. If the static-nodes.json file is empty or missing inside the container, populate the volumes manually (see Step 3 troubleshooting section above).
+
+5. If using volumes from a previous version (&lt;0.1.147), you may have empty static-nodes.json files. Clean up and start fresh:
+   ```bash
+   fukuii-cli clean 3nodes
+   fukuii-cli start 3nodes
+   ```
 
 ### No Blocks Being Mined
 
@@ -309,6 +295,8 @@ This setup includes recent fixes for:
 1. ✅ **Configuration Loading Bug**: Fixed App.scala to properly load gorgoroth.conf from classpath
 2. ✅ **Port Mismatch**: Updated static-nodes.json to use correct port (30303)
 3. ✅ **Persistent Node Keys**: Configured datadir to persist node keys in Docker volumes
+4. ✅ **Docker Volume Shadowing (v0.1.147)**: Fixed conflicting bind mount that prevented static-nodes.json from being loaded
+5. ✅ **Static Peer Loading**: Implemented static peer loading feature with clear logging
 
 ## Next Steps
 
@@ -319,12 +307,13 @@ This setup includes recent fixes for:
 
 ## Known Limitations
 
-### Version 0.1.146
+### Version 0.1.147+
 
-**Peer Discovery on First Run**:
-- On first run, nodes generate unique keys that don't match placeholder enode IDs in static-nodes.json
-- **Solution**: Use `fukuii-cli sync-static-nodes` after first startup to automatically configure peers
-- **Note**: This only affects first run. Subsequent restarts use persisted keys and maintain connectivity
+**Static-Nodes Pre-population**:
+- Static-nodes.json files must be pre-populated in Docker volumes on first run
+- If volumes were created before v0.1.147, they may contain empty files
+- **Solution**: Run the volume pre-population commands (see Step 3 troubleshooting) or clean volumes and restart
+- **Note**: Once populated, static-nodes.json files persist across restarts
 
 **RPC Port Configuration**:
 - Fukuii uses non-standard port assignment: HTTP RPC on 8546, WebSocket on 8545
