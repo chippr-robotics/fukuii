@@ -122,7 +122,7 @@ For **Fukuii nodes in mixed network**, validate:
 - [ ] Block production consistency
 
 ### Documentation Links
-- [Setup Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#6-node-setup)
+- [Setup Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md#test-scenarios)
 - [E2E Walkthrough](GORGOROTH_6NODE_WALKTHROUGH.md)
 
 ### Test Scripts
@@ -206,7 +206,7 @@ fukuii-cli collect-logs fukuii-geth /tmp/results
 ### Documentation Links
 - [Cirith Ungol Testing Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md)
 - [Setup Instructions](../testing/CIRITH_UNGOL_TESTING_GUIDE.md#quick-start)
-- [Monitoring Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md#monitoring)
+- [Monitoring Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md#monitoring-sync-progress)
 - [E2E Walkthrough](CIRITH_UNGOL_WALKTHROUGH.md)
 
 ### Test Scripts
