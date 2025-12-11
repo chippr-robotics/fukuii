@@ -11,7 +11,7 @@ echo ""
 # Configuration
 FAUCET_PORT=${FAUCET_PORT:-8099}
 FAUCET_URL="http://localhost:${FAUCET_PORT}"
-NODE_PORT=${NODE_PORT:-8545}
+NODE_PORT=${NODE_PORT:-8546}  # Fukuii HTTP RPC port
 NODE_URL="http://localhost:${NODE_PORT}"
 
 # Check if faucet is running

@@ -82,7 +82,7 @@ log_info "Step 2: Verifying seed node connectivity..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 CONNECTIVITY_OK=true
-for port in 8545 8547 8549; do
+for port in 8546 8548 8550; do  # Fukuii HTTP RPC ports
   PEERS=$(curl -s -X POST -H "Content-Type: application/json" \
     --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
     http://localhost:$port 2>/dev/null | jq -r '.result // "0x0"')
@@ -118,7 +118,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 BLOCK_HEX=$(curl -s -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://localhost:8545 2>/dev/null | jq -r '.result // "0x0"')
+  http://localhost:8546 2>/dev/null | jq -r '.result // "0x0"')  # Fukuii HTTP RPC port
 
 if [ -z "$BLOCK_HEX" ] || [ "$BLOCK_HEX" = "null" ]; then
   log_error "Failed to get block number from seed node"
@@ -253,7 +253,7 @@ COMMON_BLOCK_HEX=$(printf "0x%x" $COMMON_BLOCK)
 
 SEED_HASH=$(curl -s -X POST -H "Content-Type: application/json" \
   --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$COMMON_BLOCK_HEX\",false],\"id\":1}" \
-  http://localhost:8545 2>/dev/null | jq -r '.result.hash // "null"')
+  http://localhost:8546 2>/dev/null | jq -r '.result.hash // "null"')  # Fukuii HTTP RPC port
 
 NODE6_HASH=$(curl -s -X POST -H "Content-Type: application/json" \
   --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$COMMON_BLOCK_HEX\",false],\"id\":1}" \
