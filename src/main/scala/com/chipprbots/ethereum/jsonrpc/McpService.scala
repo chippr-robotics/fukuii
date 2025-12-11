@@ -1,21 +1,16 @@
 package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.actor.ActorRef
-import org.apache.pekko.pattern.ask
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
-import cats.implicits._
 
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
 import org.json4s.JsonAST.JValue
 
-import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.jsonrpc.mcp.{McpToolRegistry, McpResourceRegistry, McpPromptRegistry}
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.BuildInfo
 
 object McpService {

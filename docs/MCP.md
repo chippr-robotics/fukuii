@@ -340,7 +340,7 @@ We welcome contributions to enhance the MCP integration! Areas for improvement i
 - Performance optimizations
 - Documentation improvements
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines on contributing to Fukuii.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to Fukuii.
 
 ## References
 

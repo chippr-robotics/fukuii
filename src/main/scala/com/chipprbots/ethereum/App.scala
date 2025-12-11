@@ -5,7 +5,6 @@ import java.io.File
 import scala.sys
 
 import com.chipprbots.ethereum.cli.CliLauncher
-import com.chipprbots.ethereum.crypto.EcKeyGen
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
 import com.chipprbots.ethereum.utils.Logger
@@ -32,7 +31,6 @@ object App extends Logger {
   private val launchKeytool = "keytool"
   private val downloadBootstrap = "bootstrap"
   private val faucet = "faucet"
-  private val ecKeyGen = "eckeygen"
   private val cli = "cli"
   private val sigValidator = "signature-validator"
 
@@ -253,7 +251,6 @@ object App extends Logger {
       // HIBERNATED: vm-server case commented out
       // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
-      case Some(`ecKeyGen`)     => EcKeyGen.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)
       case Some(network) if isNetwork(network) =>

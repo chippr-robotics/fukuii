@@ -141,5 +141,15 @@ class McpServiceSpec
       result.description shouldBe defined
       result.messages should not be empty
     }
+
+    "return error for unknown prompt" in {
+      val request = McpPromptsGetRequest("unknown_prompt", None)
+      val response = service.promptsGet(request).unsafeRunSync()
+
+      response.isRight shouldBe true
+      val result = response.getOrElse(throw new Exception("Expected Right"))
+      result.description shouldBe defined
+      result.description.get should include("Unknown prompt")
+    }
   }
 }
