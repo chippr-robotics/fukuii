@@ -62,7 +62,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
           val downloader = new AccountRangeDownloader(
             stateRoot = stateRoot,
-            etcPeerManager = etcPeerManager.ref,
+            networkPeerManager = etcPeerManager.ref,
             requestTracker = requestTracker,
             mptStorage = mptStorage,
             concurrency = 4
@@ -93,7 +93,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
           val downloader = new AccountRangeDownloader(
             stateRoot = stateRoot,
-            etcPeerManager = etcPeerManager.ref,
+            networkPeerManager = etcPeerManager.ref,
             requestTracker = requestTracker,
             mptStorage = mptStorage,
             concurrency = 4
@@ -148,7 +148,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
           val healer = new TrieNodeHealer(
             stateRoot = stateRoot,
-            etcPeerManager = etcPeerManager.ref,
+            networkPeerManager = etcPeerManager.ref,
             requestTracker = requestTracker,
             mptStorage = mptStorage,
             batchSize = 16
@@ -194,7 +194,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
           val downloader = new AccountRangeDownloader(
             stateRoot = stateRoot,
-            etcPeerManager = etcPeerManager.ref,
+            networkPeerManager = etcPeerManager.ref,
             requestTracker = requestTracker,
             mptStorage = mptStorage,
             concurrency = 4
@@ -226,7 +226,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
           val downloader = new AccountRangeDownloader(
             stateRoot = stateRoot,
-            etcPeerManager = etcPeerManager.ref,
+            networkPeerManager = etcPeerManager.ref,
             requestTracker = requestTracker,
             mptStorage = mptStorage,
             concurrency = 4
