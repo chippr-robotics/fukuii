@@ -5555,20 +5555,20 @@
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>sleep<span class="w"> </span><span class="m">30</span>
 </span></code></pre></div>
 <h3 id="step-17-verify-peer-connectivity">Step 1.7: Verify Peer Connectivity<a class="headerlink" href="#step-17-verify-peer-connectivity" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>&gt; ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, and **8550 (node3)**. The matching WebSocket endpoints stay on 8545/8547/8549. All examples below use the HTTP ports.
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>```bash
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a># Query node1 peer count
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>curl -X POST http://localhost:8546 \
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>  -H &quot;Content-Type: application/json&quot; \
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>  -d &#39;{
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>    &quot;jsonrpc&quot;: &quot;2.0&quot;,
-</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>    &quot;method&quot;: &quot;net_peerCount&quot;,
-</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>    &quot;params&quot;: [],
-</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>    &quot;id&quot;: 1
-</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>  }&#39; | jq
-</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>
-</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a># Expected: &quot;result&quot;: &quot;0x2&quot; (2 peers)
+<blockquote>
+<p>ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports <strong>8546 (node1)</strong>, <strong>8548 (node2)</strong>, and <strong>8550 (node3)</strong>. The matching WebSocket endpoints stay on 8545/8547/8549. All examples below use the HTTP ports.</p>
+</blockquote>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Query node1 peer count</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="s1">    &quot;jsonrpc&quot;: &quot;2.0&quot;,</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="s1">    &quot;method&quot;: &quot;net_peerCount&quot;,</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="s1">    &quot;params&quot;: [],</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="s1">    &quot;id&quot;: 1</span>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="s1">  }&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="c1"># Expected: &quot;result&quot;: &quot;0x2&quot; (2 peers)</span>
 </span></code></pre></div>
 <p><strong>Expected results</strong>:
 - ✅ Each node reports 2 peers connected
@@ -5581,7 +5581,7 @@
 <li>Network formed successfully</li>
 </ul>
 <blockquote>
-<p>⚠️ <strong>Enable mining before continuing:</strong> The default <code>docker-compose-3nodes.yml</code> ships with <code>-Dfukuii.mining.mining-enabled=false</code> for every node to keep idle clusters quiet. Edit each service's <code>JAVA_OPTS</code> (or temporarily set <code>JAVA_OPTS=-Dfukuii.mining.mining-enabled=true</code> before calling <code>fukuii-cli start 3nodes</code>) so that all three nodes actually mine during this walkthrough. After editing, restart the network and re-run <code>fukuii-cli sync-static-nodes</code>.</p>
+<p>ℹ️ <strong>Mining is enabled by default:</strong> The current <code>docker-compose-3nodes.yml</code> configuration sets <code>-Dfukuii.mining.mining-enabled=true</code> for all three nodes. No manual changes are required—mining will begin automatically during this walkthrough.</p>
 </blockquote>
 <hr />
 <h2 id="phase-2-mining-validation">Phase 2: Mining Validation<a class="headerlink" href="#phase-2-mining-validation" title="Permanent link">&para;</a></h2>
@@ -5624,9 +5624,6 @@
 </span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>./test-mining.sh
 </span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nb">cd</span><span class="w"> </span>-
 </span></code></pre></div>
-<blockquote>
-<p>ℹ️ The helper scripts still probe the legacy HTTP ports (8545/8547/8549). Update the port lists inside the scripts or rely on the manual <code>curl</code> checks above until the tooling is patched.</p>
-</blockquote>
 <p><strong>Expected results</strong>:
 - ✅ All nodes mining
 - ✅ Block numbers increasing

@@ -4768,6 +4768,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#important-port-configuration-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Important Port Configuration Note
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5553,6 +5564,17 @@
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># Verify installation</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>fukuii-cli<span class="w"> </span>--help
 </span></code></pre></div>
+<h3 id="important-port-configuration-note">Important Port Configuration Note<a class="headerlink" href="#important-port-configuration-note" title="Permanent link">&para;</a></h3>
+<p>⚠️ <strong>Fukuii uses non-standard port assignments</strong>: 
+- <strong>HTTP RPC</strong>: 8546, 8548, 8550 (even ports)
+- <strong>WebSocket</strong>: 8545, 8547, 8549 (odd ports)</p>
+<p>This is reversed from standard Ethereum clients (which use 8545 for HTTP, 8546 for WS).</p>
+<p><strong>When using examples in this guide</strong>: Adjust port numbers when testing Fukuii nodes specifically. Where examples show <code>localhost:8545</code>, substitute <code>localhost:8546</code> for Fukuii node1, <code>localhost:8548</code> for node2, etc. Examples showing standard ports (8545) are correct for Core-Geth and Besu nodes in mixed-network testing.</p>
+<p>Port mapping for reference:
+- Fukuii node1: HTTP 8546, WS 8545
+- Fukuii node2: HTTP 8548, WS 8547<br />
+- Fukuii node3: HTTP 8550, WS 8549
+- Geth/Besu nodes: Standard ports (8551+)</p>
 <h2 id="test-scenarios">Test Scenarios<a class="headerlink" href="#test-scenarios" title="Permanent link">&para;</a></h2>
 <h3 id="scenario-1-fukuii-only-network-baseline">Scenario 1: Fukuii-only Network (Baseline)<a class="headerlink" href="#scenario-1-fukuii-only-network-baseline" title="Permanent link">&para;</a></h3>
 <p><strong>Purpose</strong>: Establish baseline performance and verify Fukuii works correctly in isolation.</p>
