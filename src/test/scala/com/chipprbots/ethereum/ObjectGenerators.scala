@@ -198,19 +198,10 @@ trait ObjectGenerators {
     td <- bigIntGen
   } yield NewBlock(Block(blockHeader, BlockBody(stxs, uncles)), td)
 
-  def extraFieldsGen: Gen[HeaderExtraFields] = for {
-    shouldCheckpoint <- Arbitrary.arbitrary[Option[Boolean]]
-    checkpoint <- if (shouldCheckpoint.isDefined) Gen.option(fakeCheckpointOptGen(0, 5)) else Gen.const(None)
-  } yield checkpoint match {
-    case Some(Some(definedCheckpoint)) if definedCheckpoint.signatures.nonEmpty =>
-      HefPostEcip1097(Some(definedCheckpoint)) // Has actual checkpoint with signatures
-    case Some(Some(_)) =>
-      HefEmpty // Checkpoint exists but has no signatures, normalize to HefEmpty
-    case Some(None) =>
-      HefEmpty // Checkpoint is None, normalize to HefEmpty (matches decoder normalization)
-    case None =>
-      HefEmpty // No checkpoint at all
-  }
+  def extraFieldsGen: Gen[HeaderExtraFields] = Gen.oneOf(
+    Gen.const(HefEmpty),
+    Gen.option(fakeCheckpointGen(0, 5)).map(cp => HefPostEcip1097(cp))
+  )
 
   def blockHeaderGen: Gen[BlockHeader] = for {
     parentHash <- byteStringOfLengthNGen(32)
@@ -249,9 +240,6 @@ trait ObjectGenerators {
   )
 
   def seqBlockHeaderGen: Gen[Seq[BlockHeader]] = Gen.listOf(blockHeaderGen)
-
-  private def fakeCheckpointOptGen(min: Int, max: Int): Gen[Option[Checkpoint]] =
-    Gen.option(fakeCheckpointGen(min, max))
 
   def fakeCheckpointGen(minSignatures: Int, maxSignatures: Int): Gen[Checkpoint] =
     for {

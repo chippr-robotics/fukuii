@@ -13,7 +13,6 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.testing.Tags._
@@ -159,6 +158,17 @@ class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyC
       )
 
       rlp.encode(expectedRLPEncoded) shouldBe (postECIP1097Header.toBytes: Array[Byte])
+    }
+
+    "should decode post ECIP1097 headers without checkpoint without losing the extra field" in {
+      val originalHeader = Fixtures.Blocks.ValidBlock.header.copy(
+        extraFields = HefPostEcip1097(None)
+      )
+
+      val decoded = originalHeader.toBytes.toBlockHeader
+
+      decoded.extraFields shouldBe HefPostEcip1097(None)
+      decoded.hash shouldBe originalHeader.hash
     }
   }
 

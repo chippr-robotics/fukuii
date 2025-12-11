@@ -14,14 +14,14 @@ The Gorgoroth test network has been successfully established and core functional
 The following areas need to be validated for Fukuii compatibility with core-geth and besu:
 
 1. ✅ Network Communication
-2. ✅ Mining
+2. ⚠️ Mining
 3. ⚠️ Fast Sync (infrastructure ready, needs extended testing)
 4. ⚠️ Snap Sync (infrastructure ready, needs extended testing)
 5. ⚠️ Faucet Service (infrastructure ready, needs validation)
 
 ## Current Status
 
-### 1. Network Communication - ✅ VALIDATED
+### 1. Network Communicaion - ✅ VALIDATED
 
 **Status**: Fully validated and documented
 
@@ -30,7 +30,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 **What was tested**:
 - ✅ Peer discovery and handshakes
 - ✅ Protocol compatibility (ETH68, SNAP1)
-- ✅ Block propagation across Fukuii nodes
+- ⚠️ Block propagation across Fukuii nodes
 - ✅ Network connectivity in Docker environment
 - ✅ Static node configuration
 
@@ -58,19 +58,20 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 **Evidence**: See `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal validation report)
 
 **What was tested**:
-- ✅ Mining enabled on all nodes
-- ✅ PoW consensus mechanism
-- ✅ Block production
-- ✅ Difficulty adjustment
-- ✅ Mining coordinator instantiation
+- ⚠️ Mining enabled on all nodes
+- ⚠️ PoW consensus mechanism
+- ⚠️ Block production
+- ⚠️ Difficulty adjustment
+- ⚠️ Mining coordinator instantiation
 
 **Results**:
 - Mining works correctly on Fukuii nodes
 - Blocks are produced consistently
 - PoW consensus maintained
+- ECIP-1097 checkpointing is intentionally disabled (set beyond reach) so PoW tests mirror production ETC behavior
 
 **Multi-client status**:
-- ✅ Fukuii mining: Validated
+- ⚠️ Fukuii mining: Validated
 - ⚠️ Mixed client mining: Infrastructure ready
 - ⚠️ Cross-client block acceptance: Infrastructure ready
 
