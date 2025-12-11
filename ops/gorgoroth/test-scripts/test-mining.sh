@@ -8,12 +8,12 @@ echo "=== Mining Compatibility Test ==="
 echo "Testing mining across different clients..."
 echo ""
 
-# Detect running nodes
+# Detect running nodes (Fukuii uses HTTP on 8546/8548/8550)
 FUKUII_PORTS=()
 GETH_PORTS=()
 BESU_PORTS=()
 
-for port in 8545 8547 8549; do
+for port in 8546 8548 8550; do
   if curl -s -f -m 2 http://localhost:$port > /dev/null 2>&1; then
     FUKUII_PORTS+=($port)
   fi

@@ -16,9 +16,9 @@ echo "Test duration: $DURATION_MINUTES minutes"
 echo "Check interval: $CHECK_INTERVAL seconds"
 echo ""
 
-# Detect running nodes
+# Detect running nodes (Fukuii uses HTTP on 8546/8548/8550, others use standard ports)
 ALL_PORTS=()
-for port in 8545 8547 8549 8551 8553 8555 8557 8559 8561; do
+for port in 8546 8548 8550 8551 8553 8555 8557 8559 8561; do
   if curl -s -f -m 2 http://localhost:$port > /dev/null 2>&1; then
     ALL_PORTS+=($port)
   fi

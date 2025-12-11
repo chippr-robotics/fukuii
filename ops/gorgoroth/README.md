@@ -35,9 +35,9 @@ fukuii-cli start 3nodes
 ```
 
 **Nodes:**
-- `fukuii-node1` - HTTP: 8545, WS: 8546, P2P: 30303
-- `fukuii-node2` - HTTP: 8547, WS: 8548, P2P: 30304
-- `fukuii-node3` - HTTP: 8549, WS: 8550, P2P: 30305
+- `fukuii-node1` - HTTP: 8546, WS: 8545, P2P: 30303
+- `fukuii-node2` - HTTP: 8548, WS: 8547, P2P: 30304
+- `fukuii-node3` - HTTP: 8550, WS: 8549, P2P: 30305
 
 ### 2. Six Fukuii Nodes (`6nodes`)
 Larger Fukuii-only network for scalability testing.
@@ -59,7 +59,7 @@ fukuii-cli start fukuii-geth
 ```
 
 **Fukuii Nodes:**
-- Ports: 8545-8550
+- HTTP: 8546/8548/8550, WS: 8545/8547/8549
 
 **Core-Geth Nodes:**
 - Ports: 8551-8556
@@ -73,7 +73,7 @@ fukuii-cli start fukuii-besu
 ```
 
 **Fukuii Nodes:**
-- Ports: 8545-8550
+- HTTP: 8546/8548/8550, WS: 8545/8547/8549
 
 **Besu Nodes:**
 - Ports: 8551-8556
@@ -87,7 +87,7 @@ fukuii-cli start mixed
 ```
 
 **Fukuii Nodes:**
-- 3 nodes, ports: 8545-8550
+- 3 nodes, HTTP ports: 8546/8548/8550, WS ports: 8545/8547/8549
 
 **Core-Geth Nodes:**
 - 3 nodes, ports: 8551-8556
@@ -153,20 +153,20 @@ fukuii-cli status 3nodes
 ### Testing the Network
 
 ```bash
-# Check block number on node 1
+# Check block number on node 1 (using HTTP RPC port 8546)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 
-# Get peer count
+# Get peer count (HTTP RPC port 8546)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 
-# Check syncing status
+# Check syncing status (HTTP RPC port 8546)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 ```
 
 ### Connecting Peers
@@ -193,7 +193,7 @@ This command will:
 You can also manually inspect or add peers using the admin API:
 
 ```bash
-# Get node info (including enode URL)
+# Get node info (including enode URL) - use HTTP RPC port 8546
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
   http://localhost:8546
@@ -297,11 +297,11 @@ The network uses a custom genesis block with:
 
 Each Fukuii node is configured with:
 
-- **Mining enabled** with unique coinbase addresses
+- **Mining enabled** with unique coinbase addresses (enabled as of version 0.1.147 for validation testing)
 - **Discovery disabled** (static peer connections only)
 - **Fast sync disabled** (full sync for test network)
 - **SNAP sync disabled** (not needed for small network)
-- **JSON-RPC enabled** on all nodes
+- **JSON-RPC enabled** on all nodes (HTTP on even ports: 8546/8548/8550, WebSocket on odd ports: 8545/8547/8549)
 
 ### Genesis Accounts
 
@@ -360,11 +360,11 @@ fukuii-cli start 3nodes
 
 The network uses discovery disabled mode. Nodes should connect automatically via Docker networking (using service names as hostnames). If nodes are not connecting:
 
-1. **Check if admin API is available**:
+1. **Check if admin API is available** (use HTTP RPC port 8546):
    ```bash
    curl -X POST -H "Content-Type: application/json" \
      --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
-     http://localhost:8545
+     http://localhost:8546
    ```
 
 2. **Manually add peers** using the admin API with the enode URL from step 1
@@ -384,10 +384,10 @@ The network uses discovery disabled mode. Nodes should connect automatically via
 Check that mining is enabled on at least one node:
 
 ```bash
-# Check mining status
+# Check mining status (use HTTP RPC port 8546)
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' \
-  http://localhost:8545
+  http://localhost:8546
 ```
 
 ### Collect Logs for Debugging
@@ -406,28 +406,28 @@ ls -lh ./debug-logs/
 
 | Node | HTTP RPC | WebSocket | P2P |
 |------|----------|-----------|-----|
-| fukuii-node1 | 8545 | 8546 | 30303 |
-| fukuii-node2 | 8547 | 8548 | 30304 |
-| fukuii-node3 | 8549 | 8550 | 30305 |
+| fukuii-node1 | 8546 | 8545 | 30303 |
+| fukuii-node2 | 8548 | 8547 | 30304 |
+| fukuii-node3 | 8550 | 8549 | 30305 |
 
 ### 6-Node Configuration
 
 | Node | HTTP RPC | WebSocket | P2P |
 |------|----------|-----------|-----|
-| fukuii-node1 | 8545 | 8546 | 30303 |
-| fukuii-node2 | 8547 | 8548 | 30304 |
-| fukuii-node3 | 8549 | 8550 | 30305 |
-| fukuii-node4 | 8551 | 8552 | 30306 |
-| fukuii-node5 | 8553 | 8554 | 30307 |
-| fukuii-node6 | 8555 | 8556 | 30308 |
+| fukuii-node1 | 8546 | 8545 | 30303 |
+| fukuii-node2 | 8548 | 8547 | 30304 |
+| fukuii-node3 | 8550 | 8549 | 30305 |
+| fukuii-node4 | 8552 | 8551 | 30306 |
+| fukuii-node5 | 8554 | 8553 | 30307 |
+| fukuii-node6 | 8556 | 8555 | 30308 |
 
 ### Mixed Configuration (fukuii-geth)
 
 | Node | HTTP RPC | WebSocket | P2P |
 |------|----------|-----------|-----|
-| fukuii-node1 | 8545 | 8546 | 30303 |
-| fukuii-node2 | 8547 | 8548 | 30304 |
-| fukuii-node3 | 8549 | 8550 | 30305 |
+| fukuii-node1 | 8546 | 8545 | 30303 |
+| fukuii-node2 | 8548 | 8547 | 30304 |
+| fukuii-node3 | 8550 | 8549 | 30305 |
 | geth-node1 | 8551 | 8552 | 30306 |
 | geth-node2 | 8553 | 8554 | 30307 |
 | geth-node3 | 8555 | 8556 | 30308 |

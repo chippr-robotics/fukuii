@@ -36,7 +36,7 @@ services:
       FUKUII_ENV: gorgoroth
       JAVA_OPTS: >-
         -Dfukuii.datadir=/app/data
-        -Dfukuii.mining.mining-enabled=false
+        -Dfukuii.mining.mining-enabled=true
         -Dlogging.logs-level=DEBUG
         -Dpekko.loglevel=DEBUG
         -Dpekko.log-dead-letters=off
@@ -75,7 +75,7 @@ services:
       FUKUII_ENV: gorgoroth
       JAVA_OPTS: >-
         -Dfukuii.datadir=/app/data
-        -Dfukuii.mining.mining-enabled=false
+        -Dfukuii.mining.mining-enabled=true
         -Dfukuii.network.peer.p2p-version=4
         -Dlogging.logs-level=DEBUG
         -Dpekko.loglevel=DEBUG
@@ -112,7 +112,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false
+      - JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=true
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]

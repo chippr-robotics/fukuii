@@ -62,6 +62,22 @@ sudo chmod +x /usr/local/bin/fukuii-cli
 fukuii-cli --help
 ```
 
+### Important Port Configuration Note
+
+⚠️ **Fukuii uses non-standard port assignments**: 
+- **HTTP RPC**: 8546, 8548, 8550 (even ports)
+- **WebSocket**: 8545, 8547, 8549 (odd ports)
+
+This is reversed from standard Ethereum clients (which use 8545 for HTTP, 8546 for WS).
+
+**When using examples in this guide**: Adjust port numbers when testing Fukuii nodes specifically. Where examples show `localhost:8545`, substitute `localhost:8546` for Fukuii node1, `localhost:8548` for node2, etc. Examples showing standard ports (8545) are correct for Core-Geth and Besu nodes in mixed-network testing.
+
+Port mapping for reference:
+- Fukuii node1: HTTP 8546, WS 8545
+- Fukuii node2: HTTP 8548, WS 8547  
+- Fukuii node3: HTTP 8550, WS 8549
+- Geth/Besu nodes: Standard ports (8551+)
+
 ## Test Scenarios
 
 ### Scenario 1: Fukuii-only Network (Baseline)

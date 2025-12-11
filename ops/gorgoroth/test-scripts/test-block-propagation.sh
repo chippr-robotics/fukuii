@@ -8,9 +8,9 @@ echo "=== Block Propagation Test ==="
 echo "Testing block propagation across network..."
 echo ""
 
-# Detect running nodes
+# Detect running nodes (Fukuii uses 8546/8548/8550 for HTTP, others use odd ports)
 ALL_PORTS=()
-for port in 8545 8547 8549 8551 8553 8555 8557 8559 8561; do
+for port in 8546 8548 8550 8551 8553 8555 8557 8559 8561; do
   if curl -s -f -m 2 http://localhost:$port > /dev/null 2>&1; then
     ALL_PORTS+=($port)
   fi
