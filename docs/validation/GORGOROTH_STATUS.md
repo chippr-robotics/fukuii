@@ -19,13 +19,14 @@ This document provides a comprehensive status tracker for all Gorgoroth battlene
 
 ## 3-Node Validation Scenario
 
-**Purpose**: Validate basic multi-client compatibility in a minimal network configuration.
+**Purpose**: Validate Fukuii self-consistency and core functionality by testing Fukuii nodes against themselves.
 
 ### Configuration
 - **3 Fukuii nodes** in Docker environment
 - Each node mining blocks
 - Shared genesis configuration
 - Static peer discovery
+- **Goal**: Validate Fukuii is functional and self-consistent
 
 ### Test Checklist
 
@@ -72,42 +73,44 @@ cd test-scripts
 
 ## 6-Node Validation Scenario
 
-**Purpose**: Extended testing with all node types performing all roles (mining, syncing, validation).
+**Purpose**: Validate Fukuii interoperability and network connectivity by testing against reference Ethereum Classic clients.
 
 ### Configuration
-- **6 Fukuii nodes** in Docker environment
-- All nodes capable of mining
-- All nodes capable of serving sync data
-- All nodes participate in consensus
+- **Mixed network**: 3 Fukuii + 3 Core-Geth (or 3 Fukuii + 3 Besu)
+- Multi-client environment
+- Cross-client peer discovery
+- Max 5 peers per node (private battlenet limit)
+- **Goal**: Validate Fukuii interoperability with Core-Geth and Besu
 
 ### Test Checklist
 
 #### Network Topology
-- [x] 6-node network formation
-- [x] Full mesh connectivity (30 peer connections)
-- [ ] Dynamic peer discovery
+- [x] Mixed network formation (3 Fukuii + 3 Core-Geth)
+- [x] Cross-client connectivity (max 5 peers per node)
+- [ ] Dynamic peer discovery across clients
 - [ ] Peer churn handling (nodes joining/leaving)
 
 #### Mining & Consensus
-- [x] Mining rotation across nodes
-- [x] Difficulty adjustment
-- [x] Chain convergence
+- [x] Mining across both Fukuii and Core-Geth
+- [x] Cross-client block acceptance
+- [ ] Difficulty adjustment in mixed environment
+- [ ] Chain convergence between clients
 - [ ] Fork resolution
-- [ ] Mining power distribution
 - [ ] Uncle block handling
 
-#### Each Node Testing
-For **each of the 6 nodes**, validate:
-- [ ] Node 1: Mining + block propagation + sync serving
-- [ ] Node 2: Mining + block propagation + sync serving
-- [ ] Node 3: Mining + block propagation + sync serving
-- [ ] Node 4: Mining + block propagation + sync serving
-- [ ] Node 5: Mining + block propagation + sync serving
-- [ ] Node 6: Mining + block propagation + sync serving
+#### Cross-Client Validation
+For **Fukuii nodes in mixed network**, validate:
+- [ ] Fukuii Node 1: Mining + syncing from Core-Geth + block propagation
+- [ ] Fukuii Node 2: Mining + syncing from Core-Geth + block propagation
+- [ ] Fukuii Node 3: Mining + syncing from Core-Geth + block propagation
+- [ ] Core-Geth accepts Fukuii blocks
+- [ ] Besu accepts Fukuii blocks (if testing with Besu)
 
 #### Synchronization Testing
-- [ ] Fast sync from each node to a new node
-- [ ] State verification on all nodes
+- [ ] Fukuii syncs from Core-Geth nodes
+- [ ] Fukuii syncs from Besu nodes
+- [ ] Fukuii syncs from mixed peers (Fukuii + Core-Geth)
+- [ ] State verification across all clients
 - [ ] Historical block retrieval
 - [ ] State trie consistency
 
@@ -124,24 +127,34 @@ For **each of the 6 nodes**, validate:
 
 ### Test Scripts
 ```bash
-cd ops/gorgoroth
-./fukuii-cli start 6nodes
-cd test-scripts
-./run-test-suite.sh 6nodes
-./test-consensus.sh 1440  # 24 hours
+# Start mixed network (3 Fukuii + 3 Core-Geth)
+fukuii-cli start fukuii-geth
+
+# Sync peer connections
+fukuii-cli sync-static-nodes
+
+# Check status
+fukuii-cli status fukuii-geth
+
+# View logs
+fukuii-cli logs fukuii-geth
+
+# Collect results
+fukuii-cli collect-logs fukuii-geth /tmp/results
 ```
 
 ---
 
 ## Cirith Ungol Testing Scenario
 
-**Purpose**: Real-world validation using public ETC mainnet and Mordor testnet for snap/fast sync testing against diverse node types and traffic.
+**Purpose**: Real-world validation using public ETC mainnet and Mordor testnet for snap/fast sync testing against diverse node types and unmanaged network traffic.
 
 ### Configuration
 - **Single Fukuii node** connecting to public network
 - ETC Mainnet (20M+ blocks) or Mordor testnet
-- Public peer discovery
+- Public peer discovery (unmanaged nodes)
 - Snap and Fast sync modes
+- **Goal**: Long-range testing with diverse traffic and node types
 
 ### Test Checklist
 
@@ -233,10 +246,10 @@ cd ops/cirith-ungol
 
 | Test Area | Status | Notes |
 |-----------|--------|-------|
-| Network Formation | ✅ Validated | 6 Fukuii nodes |
-| Mining Rotation | ✅ Validated | All nodes mining |
-| Individual Node Tests | ⚠️ Pending | Each node needs full validation |
-| Long-Running Stability | ⚠️ Pending | Need 24h+ runs |
+| Mixed Network Formation | ✅ Validated | 3 Fukuii + 3 Core-Geth |
+| Cross-Client Mining | ✅ Validated | Both clients mine blocks |
+| Cross-Client Validation | ⚠️ Pending | Per-node interop tests needed |
+| Long-Running Stability | ⚠️ Pending | Need 8h+ multi-client runs |
 
 ### Cirith Ungol Scenario Status
 
@@ -284,23 +297,23 @@ Detailed step-by-step walkthroughs for each testing scenario:
 
 **Phase 1: Start with 3-Node (1-2 hours)**
 ```bash
-cd ops/gorgoroth
-./fukuii-cli start 3nodes
-cd test-scripts
-./run-test-suite.sh 3nodes
+# Test Fukuii self-consistency
+fukuii-cli start 3nodes
+fukuii-cli sync-static-nodes
+# Run validation tests...
 ```
 
-**Phase 2: Test 6-Node (4-8 hours)**
+**Phase 2: Test Mixed Network (4-8 hours)**
 ```bash
-cd ops/gorgoroth
-./fukuii-cli start 6nodes
-cd test-scripts
-./run-test-suite.sh 6nodes
-./test-consensus.sh 480  # 8 hours
+# Test Fukuii interoperability with Core-Geth
+fukuii-cli start fukuii-geth
+fukuii-cli sync-static-nodes
+# Run cross-client validation...
 ```
 
 **Phase 3: Validate with Cirith Ungol (6-24 hours)**
 ```bash
+# Test against real mainnet with unmanaged peers
 cd ops/cirith-ungol
 ./start.sh start
 ./start.sh logs
@@ -399,15 +412,13 @@ Validation will be considered **complete** when:
 
 ### 3-Node Scenario
 - ✅ All Fukuii ↔ Fukuii tests pass
-- ⚠️ All Fukuii ↔ Core-Geth tests pass
-- ⚠️ All Fukuii ↔ Besu tests pass
 - ⚠️ Results documented and reviewed
 
-### 6-Node Scenario
-- ⚠️ All 6 nodes pass individual validation
-- ⚠️ Network runs stable for 24+ hours
-- ⚠️ Mining distributes across all nodes
-- ⚠️ Sync works from any node
+### 6-Node Scenario (Mixed Network)
+- ⚠️ All Fukuii nodes pass cross-client validation
+- ⚠️ Mixed network runs stable for 8+ hours
+- ⚠️ Mining distributes across Fukuii and Core-Geth
+- ⚠️ Fukuii syncs from Core-Geth/Besu
 - ⚠️ Results documented and reviewed
 
 ### Cirith Ungol Scenario

@@ -1,10 +1,10 @@
-# Gorgoroth 6-Node E2E Validation Walkthrough
+# Gorgoroth 6-Node (Mixed Network) E2E Validation Walkthrough
 
-**Purpose**: Complete step-by-step guide for validating Fukuii in a 6-node test network where each node performs all roles: mining, syncing, and serving sync data.
+**Purpose**: Complete step-by-step guide for validating Fukuii interoperability and network connectivity in a mixed-client test network with Core-Geth and Besu. This tests Fukuii against reference clients to validate multi-client compatibility.
 
 **Time Required**: 4-8 hours  
 **Difficulty**: Intermediate  
-**Prerequisites**: Completed 3-node walkthrough, Docker, monitoring tools
+**Prerequisites**: Completed 3-node walkthrough, Docker, monitoring tools, fukuii-cli.sh installed or aliased
 
 ---
 
@@ -26,32 +26,33 @@
 
 ## Overview
 
-This walkthrough validates advanced multi-node scenarios:
-- ✅ Full mesh network with 6 nodes (30 connections)
-- ✅ Each node mining blocks
-- ✅ Each node serving sync data
-- ✅ Each node participating in consensus
+**Goal**: Validate Fukuii interoperability and network connectivity by testing against reference Ethereum Classic clients (Core-Geth and Besu).
+
+This walkthrough validates advanced multi-client scenarios:
+- ✅ Mixed network with 3 Fukuii + 3 Core-Geth nodes (or 3 Fukuii + 3 Besu)
+- ✅ Cross-client peer connectivity (max 5 peers per node in battlenet)
+- ✅ Cross-client mining and block validation
+- ✅ Cross-client block propagation
+- ✅ Cross-client synchronization
 - ✅ Long-running stability (8+ hours)
 
 ### Network Topology
 
 ```
-┌─────────┐     ┌─────────┐     ┌─────────┐
-│  Node1  │────▶│  Node2  │────▶│  Node3  │
-│(Mining) │◀────│(Mining) │◀────│(Mining) │
-└────┬────┘     └────┬────┘     └────┬────┘
-     │               │               │
-     │    ┌─────────┐│┌─────────┐   │
-     └───▶│  Node4  │└│  Node5  │◀──┘
-          │(Mining) │ │(Mining) │
-          └────┬────┘ └────┬────┘
-               │           │
-               └──▶┌───────┴───┐
-                   │   Node6   │
-                   │ (Mining)  │
-                   └───────────┘
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│ Fukuii 1 │────▶│ Fukuii 2 │────▶│ Fukuii 3 │
+│ (Mining) │◀────│ (Mining) │◀────│ (Mining) │
+└────┬─────┘     └────┬─────┘     └────┬─────┘
+     │                │                │
+     ├────────────────┼────────────────┤
+     │                │                │
+┌────▼─────┐     ┌───▼──────┐     ┌──▼───────┐
+│  Geth 1  │────▶│  Geth 2  │────▶│  Geth 3  │
+│ (Mining) │◀────│ (Mining) │◀────│ (Mining) │
+└──────────┘     └──────────┘     └──────────┘
 
-Each node connects to all others (full mesh)
+Multi-client network (max 5 peers per node)
+Testing interoperability between clients
 ```
 
 ---
@@ -77,150 +78,233 @@ docker compose version    # Docker Compose 2.0+
 curl --version
 jq --version
 watch --version           # For monitoring
+
+# Verify fukuii-cli is installed
+fukuii-cli version
 ```
 
 ---
 
 ## Setup
 
-### Step 1: Navigate to Gorgoroth Directory
+### Step 1: Choose Configuration
+
+For this walkthrough, we'll use the **mixed** configuration (3 Fukuii + 3 Core-Geth nodes).
 
 ```bash
-cd /path/to/fukuii/ops/gorgoroth
-ls -la docker-compose-6nodes.yml
+# Available options for multi-client testing:
+# - fukuii-geth: 3 Fukuii + 3 Core-Geth nodes
+# - fukuii-besu: 3 Fukuii + 3 Besu nodes  
+# - mixed: 3 Fukuii + 3 Core-Geth + 3 Besu (9 nodes total - advanced)
+
+export GORGOROTH_CONFIG="fukuii-geth"
 ```
 
 ### Step 2: Clean Previous State
 
 ```bash
-# Stop any running containers
-docker compose -f docker-compose-6nodes.yml down -v
-
-# Clean volumes
-docker volume prune -f
-
-# Verify clean state
-docker ps -a | grep gorgoroth
+# Stop and clean any running network
+fukuii-cli clean $GORGOROTH_CONFIG
 ```
 
 ### Step 3: Verify Configuration
 
 ```bash
-# Check 6-node configuration
-cat docker-compose-6nodes.yml | grep -A 5 "node[1-6]:"
+# View available configurations
+fukuii-cli help
 
-# Verify all 6 nodes are defined
-# Verify ports: 8545-8550 for RPC, 30303-30308 for P2P
+# Verify fukuii-geth is listed
 ```
 
 ---
 
 ## Phase 1: Network Formation & Topology
 
-### Step 1.1: Start All Nodes
+### Step 1.1: Start Mixed Network
 
 ```bash
-docker compose -f docker-compose-6nodes.yml up -d
+# Start Fukuii + Core-Geth network
+fukuii-cli start $GORGOROTH_CONFIG
 ```
 
 **Expected output**:
 ```
+Starting Gorgoroth test network with configuration: fukuii-geth
+Using compose file: docker-compose-fukuii-geth.yml
 [+] Running 6/6
- ✔ Container gorgoroth-node1  Started
- ✔ Container gorgoroth-node2  Started
- ✔ Container gorgoroth-node3  Started
- ✔ Container gorgoroth-node4  Started
- ✔ Container gorgoroth-node5  Started
- ✔ Container gorgoroth-node6  Started
+ ✔ Container gorgoroth-fukuii-node1  Started
+ ✔ Container gorgoroth-fukuii-node2  Started
+ ✔ Container gorgoroth-fukuii-node3  Started
+ ✔ Container gorgoroth-geth-node1    Started
+ ✔ Container gorgoroth-geth-node2    Started
+ ✔ Container gorgoroth-geth-node3    Started
+Network started successfully!
 ```
 
 ### Step 1.2: Wait for Initialization
 
 ```bash
-echo "Waiting for nodes to initialize (60 seconds)..."
-sleep 60
+echo "Waiting for nodes to initialize (90 seconds for multi-client network)..."
+sleep 90
 ```
 
 ### Step 1.3: Verify All Containers Running
 
 ```bash
-docker compose -f docker-compose-6nodes.yml ps
+fukuii-cli status $GORGOROTH_CONFIG
 ```
 
-**Expected**: All 6 containers show status "Up"
+**Expected**: All 6 containers show status "Up" (3 Fukuii + 3 Core-Geth)
 
-### Step 1.4: Check Full Mesh Connectivity
+### Step 1.4: Sync Static Nodes
+
+```bash
+# Establish peer connections across all clients
+fukuii-cli sync-static-nodes
+```
+
+**Expected output**:
+```
+=== Fukuii Static Nodes Synchronization ===
+Found running containers:
+  - gorgoroth-fukuii-node1
+  - gorgoroth-fukuii-node2
+  - gorgoroth-fukuii-node3
+Collecting enode URLs...
+...
+=== Static nodes synchronization complete ===
+```
+
+**Note**: The sync-static-nodes command syncs Fukuii nodes. Core-Geth and Besu nodes use their own discovery mechanisms and will connect automatically.
+
+### Step 1.5: Wait for Cross-Client Peer Discovery
+
+```bash
+# Wait for all clients to discover each other
+echo "Waiting for cross-client peer discovery (60 seconds)..."
+sleep 60
+```
+
+### Step 1.6: Check Multi-Client Connectivity
 
 ```bash
 # Create a script to check peer counts
-cat > /tmp/check-peers.sh <<'EOF'
+cat > /tmp/check-peers-mixed.sh <<'EOF'
 #!/bin/bash
-echo "=== Peer Count Check ==="
-for port in 8545 8546 8547 8548 8549 8550; do
+echo "=== Multi-Client Peer Count Check ==="
+echo ""
+echo "Fukuii Nodes:"
+for port in 8545 8546 8547; do
   node=$((port - 8544))
   count=$(curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
-  echo "Node $node (port $port): $count peers"
+    -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+  echo "  Fukuii Node $node (port $port): $count peers"
+done
+
+echo ""
+echo "Core-Geth Nodes:"
+for port in 8548 8549 8550; do
+  node=$((port - 8547))
+  count=$(curl -s -X POST http://localhost:$port \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+  echo "  Geth Node $node (port $port): $count peers"
 done
 EOF
 
-chmod +x /tmp/check-peers.sh
-/tmp/check-peers.sh
+chmod +x /tmp/check-peers-mixed.sh
+/tmp/check-peers-mixed.sh
 ```
 
-**Expected**: Each node should have 5 peers (connected to all other nodes)
+**Expected**: Each node should have 2-5 peers (max 5 peers per node in private battlenet)
 
-### Step 1.5: Run Connectivity Test
+### Step 1.7: Verify Cross-Client Connections
+
+Look at the logs to confirm Fukuii is connecting to Core-Geth nodes:
 
 ```bash
-cd test-scripts
-./test-connectivity.sh
-cd ..
+# Check Fukuii logs for Core-Geth peer connections
+fukuii-cli logs $GORGOROTH_CONFIG | grep -i "peer\|geth" | tail -20
 ```
 
-**Expected results**:
-- ✅ All 6 nodes running
-- ✅ Each node has 5 peer connections
-- ✅ Full mesh topology established
-- ✅ All handshakes successful
-
 ### ✅ Phase 1 Complete
-- Network topology validated
-- All nodes connected
-- Full mesh operational
+- Mixed network topology established
+- All 6 nodes connected (3 Fukuii + 3 Core-Geth)
+- Cross-client peer discovery working
+- Fukuii ↔ Core-Geth communication validated
 
 ---
 
-## Phase 2: Mining Distribution
+## Phase 2: Cross-Client Mining & Block Validation
 
 ### Step 2.1: Monitor Initial Mining
 
 ```bash
 # Watch block numbers in real-time
-watch -n 5 '/tmp/check-blocks.sh'
+watch -n 5 '/tmp/check-blocks-mixed.sh'
 ```
 
 Create the monitoring script:
 ```bash
-cat > /tmp/check-blocks.sh <<'EOF'
+cat > /tmp/check-blocks-mixed.sh <<'EOF'
 #!/bin/bash
-echo "=== Block Numbers ==="
-for port in 8545 8546 8547 8548 8549 8550; do
+echo "=== Block Numbers (Multi-Client) ==="
+echo ""
+echo "Fukuii Nodes:"
+for port in 8545 8546 8547; do
   node=$((port - 8544))
-  block=$(curl -s -X POST http://localhost:$port \
+  block=$(curl -s --max-time 5 -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-  echo "Node $node: $block"
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+  echo "  Fukuii Node $node: $block"
+done
+
+echo ""
+echo "Core-Geth Nodes:"
+for port in 8548 8549 8550; do
+  node=$((port - 8547))
+  block=$(curl -s --max-time 5 -X POST http://localhost:$port \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+  echo "  Geth Node $node: $block"
 done
 EOF
 
-chmod +x /tmp/check-blocks.sh
+chmod +x /tmp/check-blocks-mixed.sh
 ```
 
 Watch for 5 minutes, then press Ctrl+C
 
-### Step 2.2: Analyze Block Production
+### Step 2.2: Validate Cross-Client Block Acceptance
+
+```bash
+# Get a block from Fukuii node
+FUKUII_BLOCK=$(curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' | jq '.result')
+
+FUKUII_HASH=$(echo "$FUKUII_BLOCK" | jq -r '.hash')
+FUKUII_NUMBER=$(echo "$FUKUII_BLOCK" | jq -r '.number')
+
+echo "Fukuii latest block: $FUKUII_NUMBER ($FUKUII_HASH)"
+
+# Query same block from Core-Geth node
+GETH_BLOCK=$(curl -s -X POST http://localhost:8548 \
+  -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$FUKUII_NUMBER\",false],\"id\":1}" | jq '.result')
+
+GETH_HASH=$(echo "$GETH_BLOCK" | jq -r '.hash')
+
+echo "Core-Geth same block: $FUKUII_NUMBER ($GETH_HASH)"
+
+# Compare
+if [ "$FUKUII_HASH" == "$GETH_HASH" ]; then
+  echo "✅ Block hashes match! Cross-client block validation working."
+else
+  echo "❌ Block hashes differ! Potential compatibility issue."
+fi
+```
 
 ```bash
 # Collect last 100 blocks and check miners
@@ -263,250 +347,229 @@ chmod +x /tmp/check-miners.sh
 
 **Expected**: Blocks should be distributed across multiple miners (may not be perfectly even)
 
-### Step 2.3: Run Mining Test
+### Step 2.3: Analyze Mining Distribution by Client
 
 ```bash
-cd test-scripts
-./test-mining.sh
-cd ..
-```
-
-**Expected results**:
-- ✅ All nodes producing blocks
-- ✅ Mining power distributed
-- ✅ Difficulty adjusting properly
-- ✅ No single node monopolizing
-
-### ✅ Phase 2 Complete
-- Mining operational on all nodes
-- Block production distributed
-- Mining consensus working
-
----
-
-## Phase 3: Per-Node Validation
-
-**Goal**: Validate that EACH of the 6 nodes can mine, propagate, and serve sync data.
-
-### Step 3.1: Node 1 Validation
-
-```bash
-echo "=== Validating Node 1 ==="
-
-# 1. Check mining
-BLOCK1=$(curl -s -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-
-sleep 60
-
-BLOCK2=$(curl -s -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-
-echo "Node 1 - Block increase: $BLOCK1 -> $BLOCK2"
-
-# 2. Check it can serve data
-curl -s -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["0x1",false],"id":1}' \
-  | jq '.result.number'
-
-# 3. Check peer connectivity
-curl -s -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-  | jq '.result'
-
-echo "✅ Node 1 validated"
-```
-
-### Step 3.2: Node 2 Validation
-
-```bash
-echo "=== Validating Node 2 ==="
-
-# Repeat same checks for Node 2 (port 8546)
-BLOCK1=$(curl -s -X POST http://localhost:8546 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-
-sleep 60
-
-BLOCK2=$(curl -s -X POST http://localhost:8546 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-
-echo "Node 2 - Block increase: $BLOCK1 -> $BLOCK2"
-
-curl -s -X POST http://localhost:8546 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["0x1",false],"id":1}' \
-  | jq '.result.number'
-
-curl -s -X POST http://localhost:8546 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-  | jq '.result'
-
-echo "✅ Node 2 validated"
-```
-
-### Step 3.3: Automated Per-Node Validation
-
-```bash
-# Create comprehensive per-node validation script
-cat > /tmp/validate-all-nodes.sh <<'EOF'
+# Collect last 50 blocks and check which client mined them
+cat > /tmp/check-miners-mixed.sh <<'EOF'
 #!/bin/bash
-echo "=== Per-Node Validation ==="
+echo "=== Mining Distribution by Client (Last 50 Blocks) ==="
 
-for port in 8545 8546 8547 8548 8549 8550; do
-  node=$((port - 8544))
-  echo ""
-  echo "=== Validating Node $node (port $port) ==="
-  
-  # 1. Mining check
-  BLOCK1=$(curl -s -X POST http://localhost:$port \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-  
-  sleep 30
-  
-  BLOCK2=$(curl -s -X POST http://localhost:$port \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-  
-  echo "  Mining: $BLOCK1 -> $BLOCK2"
-  
-  # 2. Data serving check
-  GENESIS=$(curl -s -X POST http://localhost:$port \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["0x0",false],"id":1}' \
-    | jq -r '.result.hash')
-  echo "  Serves genesis: $GENESIS"
-  
-  # 3. Peer connectivity
-  PEERS=$(curl -s -X POST http://localhost:$port \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-    | jq -r '.result')
-  echo "  Peer count: $PEERS"
-  
-  if [ "$BLOCK1" != "$BLOCK2" ] && [ "$GENESIS" != "null" ] && [ "$PEERS" == "0x5" ]; then
-    echo "  ✅ Node $node PASSED"
-  else
-    echo "  ❌ Node $node FAILED"
-  fi
-done
+# Get current block number (from Fukuii node)
+LATEST=$(curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+
+LATEST_DEC=$(printf "%d" $LATEST)
+START=$((LATEST_DEC - 50))
+
+# Get known miner addresses for each node type
+# (These would be from genesis or configuration)
+echo "Analyzing blocks $START to $LATEST_DEC..."
+
+# Count blocks (simplified - in real testing you'd check actual miner addresses)
+echo "Note: In a real test, analyze miner addresses to determine which client mined each block"
+echo "Expected: Mix of Fukuii and Core-Geth blocks"
 EOF
 
-chmod +x /tmp/validate-all-nodes.sh
-/tmp/validate-all-nodes.sh
+chmod +x /tmp/check-miners-mixed.sh
+/tmp/check-miners-mixed.sh
 ```
 
-**Expected**: All 6 nodes pass validation
+**Expected**: Blocks should be distributed across both Fukuii and Core-Geth nodes
 
-### ✅ Phase 3 Complete
-- Each node validated individually
-- All nodes mining successfully
-- All nodes serving data
-- All nodes properly connected
+### Step 2.4: Verify Block Propagation
+
+```bash
+# Wait for some blocks to be mined
+sleep 120
+
+# Check that all nodes have same latest block
+echo "=== Checking Block Synchronization ==="
+/tmp/check-blocks-mixed.sh
+```
+
+**Expected**: All nodes (both Fukuii and Core-Geth) should have similar block numbers (difference < 3 blocks)
+
+### ✅ Phase 2 Complete
+- Mining operational on both Fukuii and Core-Geth nodes
+- Cross-client block acceptance validated
+- Block propagation working across clients
+- Multi-client consensus maintained
 
 ---
 
-## Phase 4: Sync Testing
+## Phase 3: Cross-Client Validation
 
-### Step 4.1: Test Sync from Each Node
+**Goal**: Validate that each Fukuii node can interoperate with Core-Geth nodes.
 
-We'll test that a new node can sync from any of the 6 nodes.
+### Step 3.1: Fukuii Node 1 Cross-Client Validation
 
 ```bash
-# Stop node6 and clear its data
-docker compose -f docker-compose-6nodes.yml stop node6
-docker volume rm gorgoroth_node6-data || true
+echo "=== Validating Fukuii Node 1 Interoperability ==="
 
-# Let network continue mining
-echo "Network mining without node6..."
-sleep 120
+# 1. Check it's connected to Core-Geth peers
+curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq '.result'
 
-# Check other nodes progressed
-/tmp/check-blocks.sh
+# 2. Verify it can retrieve blocks from Core-Geth
+# Get a block that was likely mined by Core-Geth
+LATEST=$(curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+
+curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"$LATEST\",false],\"id\":1}" | jq '.result.number'
+
+echo "✅ Fukuii Node 1 can query and sync from multi-client network"
 ```
 
-### Step 4.2: Sync Node 6 from the Network
+### Step 3.2: Validate All Fukuii Nodes
 
 ```bash
-# Restart node6
-docker compose -f docker-compose-6nodes.yml up -d node6
-
-echo "Node 6 syncing..."
-sleep 30
-
-# Monitor sync progress
-docker compose -f docker-compose-6nodes.yml logs -f node6 &
-LOGS_PID=$!
-
-sleep 180
-kill $LOGS_PID 2>/dev/null
-```
-
-### Step 4.3: Verify Sync Completion
-
-```bash
-# Compare block numbers
-echo "=== Block Numbers After Sync ==="
-for port in 8545 8546 8547 8548 8549 8550; do
+# Test each Fukuii node
+for port in 8545 8546 8547; do
   node=$((port - 8544))
+  echo ""
+  echo "=== Fukuii Node $node ==="
+  
+  # Peer count
+  peers=$(curl -s -X POST http://localhost:$port \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+  echo "  Peers: $peers"
+  
+  # Block number
   block=$(curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-  echo "Node $node: $block"
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+  echo "  Block: $block"
+  
+  if [ "$peers" != "N/A" ] && [ "$block" != "N/A" ]; then
+    echo "  ✅ Node $node operational"
+  else
+    echo "  ❌ Node $node has issues"
+  fi
 done
 ```
 
-**Expected**: Node 6 should be within 2-3 blocks of other nodes
-
-### Step 4.4: Test Sync from Specific Node
-
-```bash
-# Stop node5, let it fall behind
-docker compose -f docker-compose-6nodes.yml stop node5
-sleep 180
-
-# Restart and ensure it syncs from node1
-docker compose -f docker-compose-6nodes.yml up -d node5
-sleep 120
-
-# Verify caught up
-curl -s -X POST http://localhost:8549 \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq '.result'
-```
-
-### ✅ Phase 4 Complete
-- Sync tested from multiple nodes
-- All nodes can serve sync data
-- State consistency maintained
+### ✅ Phase 3 Complete
+- All Fukuii nodes validated for cross-client interoperability
+- Fukuii ↔ Core-Geth communication confirmed
+- All nodes mining and syncing in multi-client network
 
 ---
 
-## Phase 5: Long-Running Stability
+## Phase 4: Cross-Client Sync Testing
+
+### Step 4.1: Test Sync from Mixed Network
+
+We'll test that a new Fukuii node can sync from a network with both Fukuii and Core-Geth nodes.
+
+```bash
+# Stop the entire network
+fukuii-cli stop $GORGOROTH_CONFIG
+
+# Navigate to Gorgoroth directory to remove specific volume
+cd /path/to/fukuii/ops/gorgoroth
+
+# Clear data for one Fukuii node
+docker volume rm gorgoroth_fukuii-node3-data || true
+
+# Restart network
+cd /path/to/fukuii
+fukuii-cli start $GORGOROTH_CONFIG
+
+# Let network mine some blocks
+echo "Network mining without node3 having data..."
+sleep 90
+
+# Sync static nodes
+fukuii-cli sync-static-nodes
+
+# Check other nodes progressed
+/tmp/check-blocks-mixed.sh
+```
+
+### Step 4.2: Verify Fukuii Syncs from Multi-Client Network
+
+```bash
+echo "Fukuii Node 3 should now be syncing from both Fukuii and Core-Geth peers..."
+sleep 180
+
+# Compare block numbers
+echo "=== Block Numbers After Sync ==="
+/tmp/check-blocks-mixed.sh
+```
+
+**Expected**: Fukuii Node 3 should catch up to the same block number as other nodes, having synced from both Fukuii and Core-Geth peers
+
+### ✅ Phase 4 Complete
+- Fukuii successfully syncs from multi-client network
+- Cross-client sync validated
+- State consistency maintained across clients
+
+---
+
+## Phase 5: Long-Running Multi-Client Stability
 
 ### Step 5.1: Start Long-Running Test (8 Hours)
 
 ```bash
-cd test-scripts
+echo "Starting 8-hour stability test for multi-client network..."
+echo "Start time: $(date)"
 
-# Run consensus test for 8 hours (480 minutes)
-./test-consensus.sh 480 &
-CONSENSUS_PID=$!
+# Create monitoring script for long-running test
+cat > /tmp/long-run-monitor.sh <<'EOF'
+#!/bin/bash
+LOG_FILE="/tmp/stability-log.txt"
+echo "=== Multi-Client Stability Test ===" | tee -a "$LOG_FILE"
+echo "Start: $(date)" | tee -a "$LOG_FILE"
 
-echo "Long-running test started (PID: $CONSENSUS_PID)"
-echo "This will run for 8 hours. You can:"
-echo "  - Check progress: tail -f test-scripts/consensus-test.log"
-echo "  - Stop early: kill $CONSENSUS_PID"
+while true; do
+  echo "" | tee -a "$LOG_FILE"
+  echo "Check at: $(date)" | tee -a "$LOG_FILE"
+  
+  # Check Fukuii nodes
+  for port in 8545 8546 8547; do
+    node=$((port - 8544))
+    block=$(curl -s --max-time 10 -X POST http://localhost:$port \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "ERROR")
+    peers=$(curl -s --max-time 10 -X POST http://localhost:$port \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "ERROR")
+    echo "  Fukuii Node $node: Block $block, Peers $peers" | tee -a "$LOG_FILE"
+  done
+  
+  # Check Core-Geth nodes
+  for port in 8548 8549 8550; do
+    node=$((port - 8547))
+    block=$(curl -s --max-time 10 -X POST http://localhost:$port \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "ERROR")
+    peers=$(curl -s --max-time 10 -X POST http://localhost:$port \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "ERROR")
+    echo "  Geth Node $node: Block $block, Peers $peers" | tee -a "$LOG_FILE"
+  done
+  
+  sleep 600  # Check every 10 minutes
+done
+EOF
 
-cd ..
+chmod +x /tmp/long-run-monitor.sh
+
+# Run in background
+nohup /tmp/long-run-monitor.sh > /dev/null 2>&1 &
+MONITOR_PID=$!
+
+echo "Monitor running (PID: $MONITOR_PID)"
+echo "Logs: /tmp/stability-log.txt"
+echo "This test will run for 8 hours..."
+```
 ```
 
 ### Step 5.2: Monitor During Test
@@ -515,32 +578,42 @@ cd ..
 # Create monitoring dashboard script
 cat > /tmp/6node-dashboard.sh <<'EOF'
 #!/bin/bash
-echo "=== Gorgoroth 6-Node Dashboard ==="
+echo "=== Gorgoroth Mixed Network Dashboard ==="
 echo "Time: $(date)"
 echo ""
 
-echo "Block Numbers:"
-for port in 8545 8546 8547 8548 8549 8550; do
+echo "Fukuii Nodes - Block Numbers:"
+for port in 8545 8546 8547; do
   node=$((port - 8544))
   block=$(curl -s --max-time 5 -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
-  echo "  Node $node: $block"
+  echo "  Fukuii Node $node: $block"
+done
+
+echo ""
+echo "Core-Geth Nodes - Block Numbers:"
+for port in 8548 8549 8550; do
+  node=$((port - 8547))
+  block=$(curl -s --max-time 5 -X POST http://localhost:$port \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+  echo "  Geth Node $node: $block"
 done
 
 echo ""
 echo "Peer Counts:"
-for port in 8545 8546 8547 8548 8549 8550; do
+for port in 8545 8546 8547; do
   node=$((port - 8544))
   peers=$(curl -s --max-time 5 -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
-  echo "  Node $node: $peers peers"
+  echo "  Fukuii Node $node: $peers peers"
 done
 
 echo ""
 echo "Container Status:"
-docker compose -f docker-compose-6nodes.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || echo "  Unable to get container status"
+docker ps --filter name=gorgoroth --format "table {{.Names}}\t{{.Status}}" 2>/dev/null || echo "  Unable to get container status"
 EOF
 
 chmod +x /tmp/6node-dashboard.sh
@@ -551,30 +624,47 @@ watch -n 60 /tmp/6node-dashboard.sh
 
 ### Step 5.3: Collect Stability Metrics
 
-After the 8-hour test completes (or manually stopped):
+After the 8-hour test completes:
 
 ```bash
+# Stop monitoring
+pkill -f long-run-monitor.sh
+
+# Check stability log
+tail -100 /tmp/stability-log.txt
+
 # Check if any errors occurred
 echo "=== Error Summary ==="
-docker compose -f docker-compose-6nodes.yml logs | grep -i "error\|fatal\|panic" | wc -l
+fukuii-cli logs $GORGOROTH_CONFIG | grep -i "error\|fatal\|panic" | wc -l
 
-# Check for forks
+# Check for forks (all nodes should be on same chain)
 echo "=== Fork Detection ==="
-for port in 8545 8546 8547 8548 8549 8550; do
-  node=$((port - 8544))
-  hash=$(curl -s -X POST http://localhost:$port \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' \
-    | jq -r '.result.hash')
-  echo "Node $node latest hash: $hash"
-done
+/tmp/check-blocks-mixed.sh
+
+# Compare block hashes between Fukuii and Core-Geth
+FUKUII_HASH=$(curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' | jq -r '.result.hash')
+
+GETH_HASH=$(curl -s -X POST http://localhost:8548 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' | jq -r '.result.hash')
+
+echo "Fukuii latest hash: $FUKUII_HASH"
+echo "Geth latest hash: $GETH_HASH"
+
+if [ "$FUKUII_HASH" == "$GETH_HASH" ]; then
+  echo "✅ All clients on same chain"
+else
+  echo "⚠️ Clients may be on different chains - investigate"
+fi
 ```
 
 **Expected**:
 - Few or no errors
-- All nodes on same chain (same block hashes)
+- All nodes on same chain (matching block hashes)
 - Stable memory usage
-- Consistent peer counts
+- Consistent peer counts (2-5 peers per node)
 
 ### ✅ Phase 5 Complete
 - Long-running stability validated
@@ -585,29 +675,11 @@ done
 
 ## Phase 6: Results Collection
 
-### Step 6.1: Generate Final Report
+### Step 6.1: Collect All Logs
 
 ```bash
-cd test-scripts
-./generate-report.sh
-cd ..
-```
-
-### Step 6.2: Collect All Logs
-
-```bash
-# Create results directory
-mkdir -p /tmp/gorgoroth-6node-results
-
-# Save all logs
-docker compose -f docker-compose-6nodes.yml logs > /tmp/gorgoroth-6node-results/all-logs.txt
-
-# Save individual node logs
-for i in 1 2 3 4 5 6; do
-  docker compose -f docker-compose-6nodes.yml logs node$i > /tmp/gorgoroth-6node-results/node$i.log
-done
-
-echo "Logs saved to /tmp/gorgoroth-6node-results/"
+# Use fukuii-cli to collect logs
+fukuii-cli collect-logs $GORGOROTH_CONFIG /tmp/gorgoroth-mixed-results
 ```
 
 ### Step 6.3: Create Summary Report
@@ -675,12 +747,12 @@ cat /tmp/gorgoroth-6node-results/SUMMARY.md
 
 ```bash
 # Stop network
-docker compose -f docker-compose-6nodes.yml down
+fukuii-cli stop $GORGOROTH_CONFIG
 
 # Remove volumes (optional)
-docker compose -f docker-compose-6nodes.yml down -v
+fukuii-cli clean $GORGOROTH_CONFIG
 
-# Results preserved in /tmp/gorgoroth-6node-results/
+# Results preserved in /tmp/gorgoroth-mixed-results/
 ```
 
 ---
@@ -735,9 +807,9 @@ docker compose -f docker-compose-6nodes.yml restart
 
 ## Next Steps
 
-1. **Report Results**: Create GitHub issue with validation results
-2. **Real-World Testing**: Move to [Cirith Ungol](CIRITH_UNGOL_WALKTHROUGH.md)
-3. **Multi-Client**: Try fukuii-geth or fukuii-besu configurations
+1. **Report Results**: Create GitHub issue with multi-client validation results
+2. **Test Other Configurations**: Try fukuii-besu or full mixed configuration
+3. **Real-World Testing**: Move to [Cirith Ungol](CIRITH_UNGOL_WALKTHROUGH.md)
 
 ---
 
