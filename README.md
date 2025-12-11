@@ -1,4 +1,4 @@
-Gorgoroth status 🔴 - limited. rplx compression bug
+## <i>Gorgoroth Status</i>: 🟡 [eth/68, snap/1] 
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
