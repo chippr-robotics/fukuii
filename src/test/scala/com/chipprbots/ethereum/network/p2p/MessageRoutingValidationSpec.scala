@@ -26,7 +26,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
 
   val exampleForkId: ForkId = ForkId(
     hash = BigInt(1, Hex.decode("12345678")),
-    next = Some(BigInt(0))
+    next = None
   )
 
   "MessageDecoders" should "route ETH64 Status messages to ETH64MessageDecoder" taggedAs (
