@@ -16,10 +16,8 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits._
 
-import fs2.Stream
-import fs2.concurrent.Topic
-
 import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.FiniteDuration
 import scala.util.Random
 
 import org.scalatest.concurrent.ScalaFutures
@@ -35,16 +33,21 @@ import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolvedSuccessful
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.StartBranchResolver
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor._
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{
+  BlockHeaders => ETH62BlockHeaders,
+  GetBlockHeaders => ETH62GetBlockHeaders
+}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{
+  BlockHeaders => ETH66BlockHeaders,
+  GetBlockHeaders => ETH66GetBlockHeaders
+}
 import com.chipprbots.ethereum.utils.Logger
 
 class FastSyncBranchResolverActorSpec
@@ -59,7 +62,10 @@ class FastSyncBranchResolverActorSpec
 
   "FastSyncBranchResolver" - {
     "fetch headers from the new master peer" - {
-      "the chain is repaired from the first request to the new master pair and then the last two blocks are removed" taggedAs(UnitTest, SyncTest) in new TestSetup {
+      "the chain is repaired from the first request to the new master pair and then the last two blocks are removed" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new TestSetup {
         implicit override lazy val system = self.system
         implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -89,9 +95,9 @@ class FastSyncBranchResolverActorSpec
         val blocksSentFromPeer: Map[Int, List[Block]] = Map(1 -> firstBatchBlockHeaders)
 
         saveBlocks(blocksSaved)
-        val etcPeerManager = createEtcPeerManager(handshakedPeers, blocksSentFromPeer)
+        val networkPeerManager = createNetworkPeerManager(handshakedPeers, blocksSentFromPeer)
         val fastSyncBranchResolver =
-          creatFastSyncBranchResolver(sender.ref, etcPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
+          creatFastSyncBranchResolver(sender.ref, networkPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
 
         val expectation: PartialFunction[Any, BranchResolvedSuccessful] = {
           case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
@@ -99,7 +105,7 @@ class FastSyncBranchResolverActorSpec
 
         val response = (for {
           _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
-          response <- IO(sender.expectMsgPF()(expectation))
+          response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
           _ <- IO(stopController(fastSyncBranchResolver))
         } yield response).unsafeRunSync()
         assert(getBestPeers.contains(response.masterPeer))
@@ -128,9 +134,9 @@ class FastSyncBranchResolverActorSpec
           )
 
           saveBlocks(blocksSaved)
-          val etcPeerManager = createEtcPeerManager(handshakedPeers, blocksSentFromPeer)
+          val networkPeerManager = createNetworkPeerManager(handshakedPeers, blocksSentFromPeer)
           val fastSyncBranchResolver =
-            creatFastSyncBranchResolver(sender.ref, etcPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
+            creatFastSyncBranchResolver(sender.ref, networkPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
 
           val expectation: PartialFunction[Any, BranchResolvedSuccessful] = {
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
@@ -138,7 +144,7 @@ class FastSyncBranchResolverActorSpec
 
           val response = (for {
             _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
-            response <- IO(sender.expectMsgPF()(expectation))
+            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
             _ <- IO(stopController(fastSyncBranchResolver))
           } yield response).unsafeRunSync()
           assert(getBestPeers.contains(response.masterPeer))
@@ -166,9 +172,9 @@ class FastSyncBranchResolverActorSpec
           )
 
           saveBlocks(blocksSaved)
-          val etcPeerManager = createEtcPeerManager(handshakedPeers, blocksSentFromPeer)
+          val networkPeerManager = createNetworkPeerManager(handshakedPeers, blocksSentFromPeer)
           val fastSyncBranchResolver =
-            creatFastSyncBranchResolver(sender.ref, etcPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
+            creatFastSyncBranchResolver(sender.ref, networkPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
 
           val expectation: PartialFunction[Any, BranchResolvedSuccessful] = {
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(3) => r
@@ -176,7 +182,7 @@ class FastSyncBranchResolverActorSpec
 
           val response = (for {
             _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
-            response <- IO(sender.expectMsgPF()(expectation))
+            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
             _ <- IO(stopController(fastSyncBranchResolver))
           } yield response).unsafeRunSync()
           assert(getBestPeers.contains(response.masterPeer))
@@ -204,9 +210,9 @@ class FastSyncBranchResolverActorSpec
           )
 
           saveBlocks(blocksSaved)
-          val etcPeerManager = createEtcPeerManager(handshakedPeers, blocksSentFromPeer)
+          val networkPeerManager = createNetworkPeerManager(handshakedPeers, blocksSentFromPeer)
           val fastSyncBranchResolver =
-            creatFastSyncBranchResolver(sender.ref, etcPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
+            creatFastSyncBranchResolver(sender.ref, networkPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
 
           val expectation: PartialFunction[Any, BranchResolvedSuccessful] = {
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(6) => r
@@ -214,7 +220,7 @@ class FastSyncBranchResolverActorSpec
 
           val response = (for {
             _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
-            response <- IO(sender.expectMsgPF()(expectation))
+            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
             _ <- IO(stopController(fastSyncBranchResolver))
           } yield response).unsafeRunSync()
           assert(getBestPeers.contains(response.masterPeer))
@@ -242,9 +248,9 @@ class FastSyncBranchResolverActorSpec
         )
 
         saveBlocks(blocksSaved)
-        val etcPeerManager = createEtcPeerManager(handshakedPeers, blocksSentFromPeer)
+        val networkPeerManager = createNetworkPeerManager(handshakedPeers, blocksSentFromPeer)
         val fastSyncBranchResolver =
-          creatFastSyncBranchResolver(sender.ref, etcPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
+          creatFastSyncBranchResolver(sender.ref, networkPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
 
         log.debug(s"*** peers: ${handshakedPeers.map(p => (p._1.id, p._2.maxBlockNumber))}")
         (for {
@@ -258,13 +264,15 @@ class FastSyncBranchResolverActorSpec
 
   trait TestSetup extends EphemBlockchainTestSetup with TestSyncConfig with TestSyncPeers {
 
+    protected val branchResolutionTimeout: FiniteDuration = syncConfig.peerResponseTimeout + 2.seconds
+
     def peerId(number: Int): PeerId = PeerId(s"peer_$number")
     def getPeer(id: PeerId): Peer =
       Peer(id, new InetSocketAddress("127.0.0.1", 0), TestProbe(id.value).ref, incomingConnection = false)
     def getPeerInfo(peer: Peer): PeerInfo = {
       val status =
         RemoteStatus(
-          Capability.ETC64,
+          Capability.ETH68,
           1,
           ChainWeight.totalDifficultyOnly(1),
           ByteString(s"${peer.id}_bestHash"),
@@ -287,27 +295,26 @@ class FastSyncBranchResolverActorSpec
         blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(1), saveAsBestBlock = true)
       )
 
-    def createEtcPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]])(implicit
+    def createNetworkPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]])(implicit
         ioRuntime: IORuntime
     ): ActorRef = {
-      val etcPeerManager = TestProbe("etc_peer_manager")
+      val networkPeerManager = TestProbe("network_peer_manager")
       val autoPilot =
-        new EtcPeerManagerAutoPilot(
-          responsesTopic,
+        new NetworkPeerManagerAutoPilot(
           peersConnectedDeferred,
           peers,
           blocks
         )
-      etcPeerManager.setAutoPilot(autoPilot)
-      etcPeerManager.ref
+      networkPeerManager.setAutoPilot(autoPilot)
+      networkPeerManager.ref
     }
 
-    def creatFastSyncBranchResolver(fastSync: ActorRef, etcPeerManager: ActorRef, blacklist: Blacklist): ActorRef =
+    def creatFastSyncBranchResolver(fastSync: ActorRef, networkPeerManager: ActorRef, blacklist: Blacklist): ActorRef =
       system.actorOf(
         FastSyncBranchResolverActor.props(
           fastSync = fastSync,
           peerEventBus = TestProbe("peer_event_bus").ref,
-          etcPeerManager = etcPeerManager,
+          networkPeerManager = networkPeerManager,
           blockchain = blockchain,
           blockchainReader = blockchainReader,
           blacklist = blacklist,
@@ -331,20 +338,9 @@ object FastSyncBranchResolverActorSpec extends Logger {
 
   private val BlacklistMaxElements: Int = 100
 
-  private val responsesTopicIO: IO[Topic[IO, MessageFromPeer]] = Topic[IO, MessageFromPeer]
-  private val responsesTopic: Topic[IO, MessageFromPeer] = responsesTopicIO.unsafeRunSync()(IORuntime.global)
   private val peersConnectedDeferred = Deferred.unsafe[IO, Unit]
 
-  var responses: Stream[IO, MessageFromPeer] = responsesTopic.subscribe(100)
-
-  def fetchedHeaders: Stream[IO, Seq[BlockHeader]] =
-    responses
-      .collect { case MessageFromPeer(BlockHeaders(headers), _) =>
-        headers
-      }
-
-  class EtcPeerManagerAutoPilot(
-      responses: Topic[IO, MessageFromPeer],
+  class NetworkPeerManagerAutoPilot(
       peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
       blocks: Map[Int, List[Block]]
@@ -354,21 +350,26 @@ object FastSyncBranchResolverActorSpec extends Logger {
     var blockIndex = 0
     lazy val blocksSetSize = blocks.size
 
-    def run(sender: ActorRef, msg: Any): EtcPeerManagerAutoPilot = {
+    def run(sender: ActorRef, msg: Any): NetworkPeerManagerAutoPilot = {
       msg match {
-        case EtcPeerManagerActor.GetHandshakedPeers =>
-          sender ! EtcPeerManagerActor.HandshakedPeers(peers)
+        case NetworkPeerManagerActor.GetHandshakedPeers =>
+          sender ! NetworkPeerManagerActor.HandshakedPeers(peers)
           peersConnected.complete(()).handleError(_ => ()).unsafeRunSync()
-        case EtcPeerManagerActor.SendMessage(rawMsg, peerId) =>
+        case NetworkPeerManagerActor.SendMessage(rawMsg, peerId) =>
           val response = rawMsg.underlyingMsg match {
-            case GetBlockHeaders(_, _, _, false) =>
+            case req: ETH66GetBlockHeaders if !req.reverse =>
               if (blockIndex < blocksSetSize)
                 blockIndex += 1
-              BlockHeaders(blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
+              ETH66BlockHeaders(req.requestId, blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
+            case req: ETH62GetBlockHeaders if !req.reverse =>
+              if (blockIndex < blocksSetSize)
+                blockIndex += 1
+              ETH62BlockHeaders(blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
+            case other =>
+              throw new RuntimeException(s"Unexpected message sent to NetworkPeerManagerAutoPilot: $other")
           }
           val theResponse = MessageFromPeer(response, peerId)
           sender ! theResponse
-          responses.publish1(theResponse).unsafeRunSync()
           if (blockIndex == blocksSetSize) ()
       }
       this

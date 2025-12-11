@@ -6,8 +6,8 @@ import org.scalatest.BeforeAndAfterEach
 
 import com.chipprbots.ethereum.testing.Tags._
 
-/** Integration tests for App launcher command line argument parsing. These tests verify that the launcher
-  * correctly handles different argument combinations for network selection and modifiers.
+/** Integration tests for App launcher command line argument parsing. These tests verify that the launcher correctly
+  * handles different argument combinations for network selection and modifiers.
   */
 class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach {
 
@@ -24,21 +24,18 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
     method
   }
 
-  private def extractModifiers(args: Array[String]): Set[String] = {
+  private def extractModifiers(args: Array[String]): Set[String] =
     args.filter { arg =>
       getIsModifierMethod.invoke(App, arg).asInstanceOf[Boolean]
     }.toSet
-  }
 
-  private def applyModifiers(modifiers: Set[String]): Unit = {
+  private def applyModifiers(modifiers: Set[String]): Unit =
     getApplyModifiersMethod.invoke(App, modifiers)
-  }
 
-  private def filterOutModifiers(args: Array[String]): Array[String] = {
+  private def filterOutModifiers(args: Array[String]): Array[String] =
     args.filterNot { arg =>
       getIsModifierMethod.invoke(App, arg).asInstanceOf[Boolean]
     }
-  }
 
   override def beforeEach(): Unit = {
     // Clear system properties before each test
@@ -77,7 +74,7 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
 
     // Verify discovery is enabled
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
-    
+
     // Verify network argument is still present after filtering
     val argsWithoutModifiers = filterOutModifiers(args)
     argsWithoutModifiers should contain("etc")
@@ -90,7 +87,7 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
 
     // Verify discovery is enabled
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
-    
+
     // Verify network argument is still present after filtering
     val argsWithoutModifiers = filterOutModifiers(args)
     argsWithoutModifiers should contain("mordor")
@@ -103,7 +100,7 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
 
     // Verify discovery is enabled
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
-    
+
     // Verify option flag is still present after filtering
     val argsWithoutModifiers = filterOutModifiers(args)
     argsWithoutModifiers should contain("--tui")
@@ -120,13 +117,13 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
     orderings.foreach { args =>
       // Clear properties
       System.clearProperty("fukuii.network.discovery.discovery-enabled")
-      
+
       val modifiers = extractModifiers(args)
       applyModifiers(modifiers)
 
       // All orderings should set discovery
       System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
-      
+
       // All orderings should preserve non-modifier args
       val argsWithoutModifiers = filterOutModifiers(args)
       argsWithoutModifiers should contain("etc")
@@ -143,7 +140,7 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
-    
+
     val modifiers = extractModifiers(Array("enterprise"))
     applyModifiers(modifiers)
 
@@ -157,21 +154,21 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
 
   it should "configure enterprise settings when 'fukuii enterprise pottery' is used" taggedAs (IntegrationTest) in {
     val args = Array("enterprise", "pottery")
-    
+
     // Clear properties
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
     System.clearProperty("fukuii.network.discovery.reuse-known-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
-    
+
     val modifiers = extractModifiers(args)
     applyModifiers(modifiers)
 
     // Verify enterprise settings
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
     System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
-    
+
     // Verify network argument is still present after filtering
     val argsWithoutModifiers = filterOutModifiers(args)
     argsWithoutModifiers should contain("pottery")
@@ -179,17 +176,17 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
 
   it should "preserve options when 'fukuii enterprise --tui' is used" taggedAs (IntegrationTest) in {
     val args = Array("enterprise", "--tui")
-    
+
     // Clear properties
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
-    
+
     val modifiers = extractModifiers(args)
     applyModifiers(modifiers)
 
     // Verify enterprise settings
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
-    
+
     // Verify option flag is still present after filtering
     val argsWithoutModifiers = filterOutModifiers(args)
     argsWithoutModifiers should contain("--tui")

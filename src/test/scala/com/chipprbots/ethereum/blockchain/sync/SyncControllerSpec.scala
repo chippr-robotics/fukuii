@@ -35,14 +35,16 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.VMImpl
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.HandshakedPeers
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.SendMessage
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies, GetBlockBodies => ETH62GetBlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockBodies.GetBlockBodiesEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.{GetBlockHeadersEnc => ETH62GetBlockHeadersEnc}
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.{
+  GetBlockHeadersEnc => ETH62GetBlockHeadersEnc
+}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData.{GetNodeDataEnc => ETH63GetNodeDataEnc}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetReceipts.{GetReceiptsEnc => ETH63GetReceiptsEnc}
@@ -50,8 +52,12 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.{GetNodeData => ETH63G
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{GetReceipts => ETH63GetReceipts}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{NodeData => ETH63NodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{Receipts => ETH63Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.{GetBlockHeadersEnc => ETH66GetBlockHeadersEnc}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockBodies.{GetBlockBodiesEnc => ETH66GetBlockBodiesEnc}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.{
+  GetBlockHeadersEnc => ETH66GetBlockHeadersEnc
+}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetNodeData.{GetNodeDataEnc => ETH66GetNodeDataEnc}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetReceipts.{GetReceiptsEnc => ETH66GetReceiptsEnc}
@@ -81,7 +87,7 @@ class SyncControllerSpec
 
     val handshakedPeers = HandshakedPeers(twoAcceptedPeers)
 
-    setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(Seq()))
+    setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(Seq()))
 
     eventually {
       someTimePasses()
@@ -105,7 +111,7 @@ class SyncControllerSpec
     val newBlocks =
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-    setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
+    setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
 
     val watcher = TestProbe()
     watcher.watch(syncController)
@@ -137,7 +143,7 @@ class SyncControllerSpec
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
     setupAutoPilot(
-      etcPeerManager,
+      networkPeerManager,
       handshakedPeers,
       defaultPivotBlockHeader,
       BlockchainData(newBlocks),
@@ -184,7 +190,7 @@ class SyncControllerSpec
     val newBlocks =
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-    setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks), 0, 0)
+    setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks), 0, 0)
 
     val watcher = TestProbe()
     watcher.watch(syncController)
@@ -233,7 +239,7 @@ class SyncControllerSpec
     val blockHeaders =
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, 10)
 
-    setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(blockHeaders))
+    setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(blockHeaders))
 
     val watcher = TestProbe()
     watcher.watch(syncController)
@@ -266,7 +272,7 @@ class SyncControllerSpec
     val newBlocks =
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-    setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
+    setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
     val fast = syncController.getSingleChild("fast-sync")
 
     // Send block that is way forward, we should ignore that block and blacklist that peer
@@ -323,7 +329,8 @@ class SyncControllerSpec
     val newBlocks =
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-    val autopilot = setupAutoPilot(etcPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
+    val autopilot =
+      setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
 
     eventually {
       littleTimePasses()
@@ -367,7 +374,13 @@ class SyncControllerSpec
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
     val pilot =
-      setupAutoPilot(etcPeerManager, staleHandshakedPeers, staleHeader, BlockchainData(newBlocks), onlyPivot = true)
+      setupAutoPilot(
+        networkPeerManager,
+        staleHandshakedPeers,
+        staleHeader,
+        BlockchainData(newBlocks),
+        onlyPivot = true
+      )
 
     eventually {
       someTimePasses()
@@ -382,53 +395,55 @@ class SyncControllerSpec
     }
   }
 
-  it should "start state download only when pivot block is fresh enough" taggedAs (UnitTest, SyncTest) in withTestSetup() {
-    testSetup =>
-      import testSetup._
-      startWithState(defaultStateBeforeNodeRestart)
-      syncController ! SyncProtocol.Start
+  it should "start state download only when pivot block is fresh enough" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup._
+    startWithState(defaultStateBeforeNodeRestart)
+    syncController ! SyncProtocol.Start
 
-      val freshHeader = defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 9)
-      val freshPeerInfo1 = defaultPeer1Info.copy(maxBlockNumber = bestBlock + 9)
-      val freshHandshakedPeers = HandshakedPeers(Map(peer1 -> freshPeerInfo1))
+    val freshHeader = defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 9)
+    val freshPeerInfo1 = defaultPeer1Info.copy(maxBlockNumber = bestBlock + 9)
+    val freshHandshakedPeers = HandshakedPeers(Map(peer1 -> freshPeerInfo1))
 
-      val watcher = TestProbe()
-      watcher.watch(syncController)
+    val watcher = TestProbe()
+    watcher.watch(syncController)
 
-      val newBlocks = getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, 50)
+    val newBlocks = getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, 50)
+    val pilot =
+      setupAutoPilot(networkPeerManager, freshHandshakedPeers, freshHeader, BlockchainData(newBlocks))
+    eventually {
+      someTimePasses()
+      storagesInstance.storages.fastSyncStateStorage
+        .getSyncState()
+        .get
+        .bestBlockHeaderNumber shouldBe freshHeader.number + syncConfig.fastSyncBlockValidationX
+    }
 
-      val pilot = setupAutoPilot(etcPeerManager, freshHandshakedPeers, freshHeader, BlockchainData(newBlocks))
-      eventually {
-        someTimePasses()
-        storagesInstance.storages.fastSyncStateStorage
-          .getSyncState()
-          .get
-          .bestBlockHeaderNumber shouldBe freshHeader.number + syncConfig.fastSyncBlockValidationX
-      }
+    val freshHeader1 = defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 19)
+    val freshPeerInfo1a = defaultPeer1Info.copy(maxBlockNumber = bestBlock + 19)
+    val freshHandshakedPeers1 = HandshakedPeers(Map(peer1 -> freshPeerInfo1a))
 
-      val freshHeader1 = defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 19)
-      val freshPeerInfo1a = defaultPeer1Info.copy(maxBlockNumber = bestBlock + 19)
-      val freshHandshakedPeers1 = HandshakedPeers(Map(peer1 -> freshPeerInfo1a))
+    // set up new received header previously received header will need update
+    pilot.updateAutoPilot(freshHandshakedPeers1, freshHeader1, BlockchainData(newBlocks))
 
-      // set up new received header previously received header will need update
-      pilot.updateAutoPilot(freshHandshakedPeers1, freshHeader1, BlockchainData(newBlocks))
+    eventually {
+      someTimePasses()
+      storagesInstance.storages.fastSyncStateStorage
+        .getSyncState()
+        .get
+        .bestBlockHeaderNumber shouldBe freshHeader1.number + syncConfig.fastSyncBlockValidationX
+    }
 
-      eventually {
-        someTimePasses()
-        storagesInstance.storages.fastSyncStateStorage
-          .getSyncState()
-          .get
-          .bestBlockHeaderNumber shouldBe freshHeader1.number + syncConfig.fastSyncBlockValidationX
-      }
-
-      eventually {
-        someTimePasses()
-        assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-        // switch to regular download
-        val children = syncController.children
-        assert(children.exists(ref => ref.path.name == "regular-sync"))
-        assert(blockchainReader.getBestBlockNumber() == freshHeader1.number)
-      }
+    eventually {
+      someTimePasses()
+      assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
+      // switch to regular download
+      val children = syncController.children
+      assert(children.exists(ref => ref.path.name == "regular-sync"))
+      assert(blockchainReader.getBestBlockNumber() == freshHeader1.number)
+    }
   }
 
   it should "re-enqueue block bodies when empty response is received" in withTestSetup() { testSetup =>
@@ -446,7 +461,7 @@ class SyncControllerSpec
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
     setupAutoPilot(
-      etcPeerManager,
+      networkPeerManager,
       handshakedPeers,
       defaultPivotBlockHeader,
       BlockchainData(newBlocks),
@@ -476,7 +491,7 @@ class SyncControllerSpec
         getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, 50)
 
       val pilot = setupAutoPilot(
-        etcPeerManager,
+        networkPeerManager,
         handshakedPeers,
         defaultPivotBlockHeader,
         BlockchainData(newBlocks),
@@ -546,7 +561,7 @@ class SyncControllerSpec
 
     // + cake overrides
 
-    val etcPeerManager: TestProbe = TestProbe()
+    val networkPeerManager: TestProbe = TestProbe()
     val peerMessageBus: TestProbe = TestProbe()
     val pendingTransactionsManager: TestProbe = TestProbe()
 
@@ -560,6 +575,7 @@ class SyncControllerSpec
       checkForNewBlockInterval = 1.second,
       blockHeadersPerRequest = 10,
       blockBodiesPerRequest = 10,
+      maximumTargetUpdateFailures = 50,
       minPeersToChoosePivotBlock = 1,
       peersScanInterval = 1.second,
       redownloadMissingStateNodes = false,
@@ -588,7 +604,7 @@ class SyncControllerSpec
           peerMessageBus.ref,
           pendingTransactionsManager.ref,
           ommersPool.ref,
-          etcPeerManager.ref,
+          networkPeerManager.ref,
           blacklist,
           syncConfig,
           this,
@@ -631,7 +647,7 @@ class SyncControllerSpec
     ) extends AutoPilot {
       override def run(sender: ActorRef, msg: Any): AutoPilot =
         msg match {
-          case EtcPeerManagerActor.GetHandshakedPeers =>
+          case NetworkPeerManagerActor.GetHandshakedPeers =>
             sender ! handshakedPeers
             this
 
@@ -687,6 +703,17 @@ class SyncControllerSpec
               this
             }
 
+          case SendMessage(msg: ETH66GetBlockBodiesEnc, peer) if !onlyPivot =>
+            val requestId = msg.underlyingMsg.requestId
+            if (failedBodiesTries > 0) {
+              sender ! MessageFromPeer(ETH66BlockBodies(requestId, Seq.empty), peer)
+              this.copy(failedBodiesTries = failedBodiesTries - 1)
+            } else {
+              val bod = msg.underlyingMsg.hashes.flatMap(h => blockchainData.bodies.get(h))
+              sender ! MessageFromPeer(ETH66BlockBodies(requestId, bod), peer)
+              this
+            }
+
           case SendMessage(msg: GetBlockBodiesEnc, peer) if !onlyPivot =>
             if (failedBodiesTries > 0) {
               sender ! MessageFromPeer(BlockBodies(Seq()), peer)
@@ -702,7 +729,10 @@ class SyncControllerSpec
             val requestId = msg.underlyingMsg.requestId
             stateDownloadStarted = true
             if (!failedNodeRequest) {
-              sender ! MessageFromPeer(ETH66NodeData(requestId, RLPList(RLPValue(defaultStateMptLeafWithAccount.toArray))), peer)
+              sender ! MessageFromPeer(
+                ETH66NodeData(requestId, RLPList(RLPValue(defaultStateMptLeafWithAccount.toArray))),
+                peer
+              )
             }
             this
 
@@ -712,6 +742,9 @@ class SyncControllerSpec
             if (!failedNodeRequest) {
               sender ! MessageFromPeer(ETH63NodeData(Seq(defaultStateMptLeafWithAccount)), peer)
             }
+            this
+
+          case SendMessage(_, _) =>
             this
 
           case AutoPilotUpdateData(peers, pivot, data, failedReceipts, failedBodies, onlyPivot, failedNode) =>

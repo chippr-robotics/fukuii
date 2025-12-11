@@ -603,8 +603,8 @@ object PeerManagerActor {
   case class RemoveFromBlacklistRequest(address: String)
   case class RemoveFromBlacklistResponse(removed: Boolean)
 
-  /** Default blacklist duration when none specified (permanent blacklist).
-    * Set to 365 days as a practical "permanent" duration.
+  /** Default blacklist duration when none specified (permanent blacklist). Set to 365 days as a practical "permanent"
+    * duration.
     */
   val DefaultPermanentBlacklistDuration: FiniteDuration = 365.days
 

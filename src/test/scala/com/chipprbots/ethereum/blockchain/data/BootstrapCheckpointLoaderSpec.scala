@@ -72,7 +72,7 @@ class BootstrapCheckpointLoaderSpec extends AnyFlatSpec with Matchers with MockF
     val loader = new BootstrapCheckpointLoader(mockReader, mockAppStateStorage)
 
     (mockReader.getBestBlockNumber _).expects().returning(BigInt(0))
-    
+
     import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
     val stubUpdate = DataSourceBatchUpdate(mockDataSource, Array.empty)
     (mockAppStateStorage.putBootstrapPivotBlock _)

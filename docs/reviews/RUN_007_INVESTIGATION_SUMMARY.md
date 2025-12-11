@@ -250,7 +250,7 @@ INFO [12-03|22:59:18.680] Syncing: state download in progress
 1. `src/main/scala/com/chipprbots/ethereum/network/handshaker/EtcHelloExchangeState.scala`
    - Peer capability detection (line 36)
 
-2. `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+2. `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
    - SNAP message routing (lines 123-143)
    - GetBlockBodies handling
 

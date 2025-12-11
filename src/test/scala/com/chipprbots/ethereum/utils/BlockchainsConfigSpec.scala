@@ -20,11 +20,10 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     tempDir.deleteOnExit()
   }
 
-  override def afterEach(): Unit = {
+  override def afterEach(): Unit =
     if (tempDir != null && tempDir.exists()) {
       deleteDirectory(tempDir)
     }
-  }
 
   private def deleteDirectory(dir: File): Unit = {
     if (dir.isDirectory) {
@@ -83,7 +82,7 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     val blockchainsConfig = BlockchainsConfig(config)
 
     blockchainsConfig.network shouldBe "etc"
-    blockchainsConfig.blockchains should contain key "etc"
+    (blockchainsConfig.blockchains should contain).key("etc")
     blockchainsConfig.blockchainConfig.networkId shouldBe 1
     // Chain ID 0x3d (61 in decimal) is the ETC mainnet chain ID
     blockchainsConfig.blockchainConfig.chainId shouldBe 0x3d
@@ -138,7 +137,7 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
     val chainFile = new File(tempDir, "customnet-chain.conf")
     Files.write(chainFile.toPath, customChainConfig.getBytes)
-    
+
     // Verify file was created successfully
     chainFile.exists() shouldBe true
     chainFile.length() should be > 0L
@@ -151,7 +150,7 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     val blockchainsConfig = BlockchainsConfig(config)
 
     blockchainsConfig.network shouldBe "customnet"
-    blockchainsConfig.blockchains should contain key "customnet"
+    (blockchainsConfig.blockchains should contain).key("customnet")
     blockchainsConfig.blockchainConfig.networkId shouldBe 9999
     // Chain ID 0x270f (9999) is now properly stored as BigInt
     blockchainsConfig.blockchainConfig.chainId shouldBe 9999

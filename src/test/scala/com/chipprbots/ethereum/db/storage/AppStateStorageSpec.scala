@@ -92,14 +92,17 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       val storage = newAppStateStorage()
       val pivotNumber = BigInt(10500000)
       val pivotHash = ByteString(Array.fill[Byte](32)(0xab.toByte))
-      
+
       storage.putBootstrapPivotBlock(pivotNumber, pivotHash).commit()
-      
+
       assert(storage.getBootstrapPivotBlock() == pivotNumber)
       assert(storage.getBootstrapPivotBlockHash() == pivotHash)
     }
 
-    "get zero and empty hash for bootstrap pivot when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+    "get zero and empty hash for bootstrap pivot when storage is empty" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
       val storage = newAppStateStorage()
       assert(storage.getBootstrapPivotBlock() == 0)
       assert(storage.getBootstrapPivotBlockHash() == ByteString.empty)
@@ -108,9 +111,9 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     "insert and get SNAP sync progress properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       val storage = newAppStateStorage()
       val progressJson = """{"phase":"AccountRangeSync","accountsSynced":1000,"bytecodes":0}"""
-      
+
       storage.putSnapSyncProgress(progressJson).commit()
-      
+
       val retrieved = storage.getSnapSyncProgress()
       assert(retrieved.isDefined)
       assert(retrieved.get == progressJson)

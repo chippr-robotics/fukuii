@@ -46,7 +46,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
   "SyncProgress" should "format progress string correctly" taggedAs UnitTest in {
     import SNAPSyncController._
-    
+
     val progress = SyncProgress(
       phase = AccountRangeSync,
       accountsSynced = 1000,
@@ -78,9 +78,9 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
   it should "handle different phases correctly" taggedAs UnitTest in {
     import SNAPSyncController._
-    
+
     val phases = Seq(Idle, AccountRangeSync, ByteCodeSync, StorageRangeSync, StateHealing, StateValidation, Completed)
-    
+
     phases.foreach { phase =>
       val progress = SyncProgress(
         phase = phase,
@@ -105,14 +105,14 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
         startTime = System.currentTimeMillis(),
         phaseStartTime = System.currentTimeMillis()
       )
-      
+
       progress.formattedString should not be empty
     }
   }
 
   "SNAPSyncController messages" should "be defined correctly" taggedAs UnitTest in {
     import SNAPSyncController._
-    
+
     // Test that all message types are defined
     val start = Start
     val done = Done
@@ -122,7 +122,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val healingComplete = StateHealingComplete
     val validationComplete = StateValidationComplete
     val getProgress = GetProgress
-    
+
     // Verify they exist
     start shouldBe Start
     done shouldBe Done
@@ -131,7 +131,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
   it should "have correct phase types" taggedAs UnitTest in {
     import SNAPSyncController._
-    
+
     // Test phase hierarchy
     val idle: SyncPhase = Idle
     val accountRange: SyncPhase = AccountRangeSync
@@ -140,7 +140,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val healing: SyncPhase = StateHealing
     val validation: SyncPhase = StateValidation
     val complete: SyncPhase = Completed
-    
+
     // All phases should be SyncPhase instances
     idle shouldBe a[SyncPhase]
     accountRange shouldBe a[SyncPhase]
@@ -151,4 +151,3 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     complete shouldBe a[SyncPhase]
   }
 }
-

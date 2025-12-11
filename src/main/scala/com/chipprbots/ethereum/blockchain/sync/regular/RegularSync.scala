@@ -31,7 +31,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class RegularSync(
     peersClient: ActorRef,
-    etcPeerManager: ActorRef,
+    networkPeerManager: ActorRef,
     peerEventBus: ActorRef,
     consensus: ConsensusAdapter,
     blockchainReader: BlockchainReader,
@@ -57,7 +57,14 @@ class RegularSync(
 
   val broadcaster: ActorRef = context.actorOf(
     BlockBroadcasterActor
-      .props(new BlockBroadcast(etcPeerManager), peerEventBus, etcPeerManager, blacklist, syncConfig, scheduler),
+      .props(
+        new BlockBroadcast(networkPeerManager),
+        peerEventBus,
+        networkPeerManager,
+        blacklist,
+        syncConfig,
+        scheduler
+      ),
     "block-broadcaster"
   )
   val importer: ActorRef =
@@ -135,7 +142,7 @@ object RegularSync {
   // scalastyle:off parameter.number
   def props(
       peersClient: ActorRef,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       consensus: ConsensusAdapter,
       blockchainReader: BlockchainReader,
@@ -152,7 +159,7 @@ object RegularSync {
     Props(
       new RegularSync(
         peersClient,
-        etcPeerManager,
+        networkPeerManager,
         peerEventBus,
         consensus,
         blockchainReader,

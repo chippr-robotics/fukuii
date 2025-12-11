@@ -43,7 +43,11 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
     executeTest(parentBlock)
   }
 
-  it should "mine valid block on the beginning of the new epoch" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+  it should "mine valid block on the beginning of the new epoch" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in new TestSetup {
     val epochLength: Int = EthashUtils.EPOCH_LENGTH_BEFORE_ECIP_1099
     val parentBlockNumber: Int =
       epochLength - 1 // 29999, mined block will be 30000 (first block of the new epoch)
@@ -65,7 +69,7 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
 
   class TestSetup extends ScalaTestWithActorTestKit with MinerSpecSetup {
     import scala.concurrent.ExecutionContext.Implicits.global
-    
+
     // Implement abstract mock members - created in test class with MockFactory context
     override lazy val mockBlockchainReader: BlockchainReader = mock[BlockchainReader]
     override lazy val mockBlockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -74,7 +78,7 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
     override lazy val mockEthMiningService: EthMiningService = mock[EthMiningService]
     override lazy val mockEvmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
     override lazy val mockMptStorage: MptStorage = mock[MptStorage]
-    
+
     implicit private val durationTimeout: Duration = Timeouts.miningTimeout
 
     implicit override lazy val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
@@ -97,7 +101,9 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
         parentBlock: Block,
         block: Block,
         fakeWorld: InMemoryWorldStateProxy
-    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState] =
+    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[
+      InMemoryWorldStateProxy
+    ], BlockchainConfig, PendingBlockAndState] =
       (blockGenerator
         .generateBlock(
           _: Block,

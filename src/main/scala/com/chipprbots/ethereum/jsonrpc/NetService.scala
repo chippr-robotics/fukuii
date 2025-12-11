@@ -83,12 +83,12 @@ trait NetServiceAPI {
   def version(req: VersionRequest): ServiceResponse[VersionResponse]
   def listening(req: ListeningRequest): ServiceResponse[ListeningResponse]
   def peerCount(req: PeerCountRequest): ServiceResponse[PeerCountResponse]
-  
+
   // Enhanced peer management API
   def listPeers(req: ListPeersRequest): ServiceResponse[ListPeersResponse]
   def disconnectPeer(req: DisconnectPeerRequest): ServiceResponse[DisconnectPeerResponse]
   def connectToPeer(req: ConnectToPeerRequest): ServiceResponse[ConnectToPeerResponse]
-  
+
   // Blacklist management API
   def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse]
   def addToBlacklist(req: AddToBlacklistRequest): ServiceResponse[AddToBlacklistResponse]
@@ -151,7 +151,7 @@ class NetService(
       .map(response => Right(DisconnectPeerResponse(response.disconnected)))
   }
 
-  def connectToPeer(req: ConnectToPeerRequest): ServiceResponse[ConnectToPeerResponse] = {
+  def connectToPeer(req: ConnectToPeerRequest): ServiceResponse[ConnectToPeerResponse] =
     try {
       val uri = new URI(req.uri)
       // Note: This sends the connect message and returns immediately.
@@ -163,9 +163,8 @@ class NetService(
       case e: Exception =>
         IO.pure(Left(JsonRpcError.InvalidParams(s"Invalid peer URI: ${e.getMessage}")))
     }
-  }
 
-  def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse] = {
+  def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse] =
     IO.pure {
       // Note: Current Blacklist implementation doesn't store reason or timestamp with entries.
       // These fields are populated with placeholder values. See GitHub issue for enhancement.
@@ -178,7 +177,6 @@ class NetService(
       }.toList
       Right(ListBlacklistedPeersResponse(blacklistedPeers))
     }
-  }
 
   def addToBlacklist(req: AddToBlacklistRequest): ServiceResponse[AddToBlacklistResponse] = {
     implicit val timeout: Timeout = Timeout(config.peerManagerTimeout)

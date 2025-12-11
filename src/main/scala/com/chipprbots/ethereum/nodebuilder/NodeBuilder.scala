@@ -46,14 +46,14 @@ import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.KeyStoreImpl
 import com.chipprbots.ethereum.ledger._
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network._
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
-import com.chipprbots.ethereum.network.handshaker.EtcHandshaker
-import com.chipprbots.ethereum.network.handshaker.EtcHandshakerConfiguration
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
@@ -233,8 +233,8 @@ trait HandshakerBuilder {
     with ForkResolverBuilder
     with BlockchainConfigBuilder =>
 
-  private val handshakerConfiguration: EtcHandshakerConfiguration =
-    new EtcHandshakerConfiguration {
+  private val handshakerConfiguration: NetworkHandshakerConfiguration =
+    new NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = self.forkResolverOpt
       override val nodeStatusHolder: AtomicReference[NodeStatus] = self.nodeStatusHolder
       override val peerConfiguration: PeerConfiguration = self.peerConfiguration
@@ -244,7 +244,7 @@ trait HandshakerBuilder {
       override val blockchainConfig: BlockchainConfig = self.blockchainConfig
     }
 
-  lazy val handshaker: Handshaker[PeerInfo] = EtcHandshaker(handshakerConfiguration)
+  lazy val handshaker: Handshaker[PeerInfo] = NetworkHandshaker(handshakerConfiguration)
 }
 
 trait AuthHandshakerBuilder {
@@ -310,16 +310,17 @@ trait PeerManagerActorBuilder {
 
 }
 
-trait EtcPeerManagerActorBuilder {
+trait NetworkPeerManagerActorBuilder {
   self: ActorSystemBuilder
     with PeerManagerActorBuilder
     with PeerEventBusBuilder
     with ForkResolverBuilder
     with StorageBuilder =>
 
-  lazy val etcPeerManager: ActorRef = system.actorOf(
-    EtcPeerManagerActor.props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, forkResolverOpt),
-    "etc-peer-manager"
+  lazy val networkPeerManager: ActorRef = system.actorOf(
+    NetworkPeerManagerActor
+      .props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, forkResolverOpt),
+    "network-peer-manager"
   )
 
 }
@@ -329,7 +330,7 @@ trait BlockchainHostBuilder {
     with BlockchainBuilder
     with StorageBuilder
     with PeerManagerActorBuilder
-    with EtcPeerManagerActorBuilder
+    with NetworkPeerManagerActorBuilder
     with PeerEventBusBuilder =>
 
   val blockchainHost: ActorRef = system.actorOf(
@@ -338,7 +339,7 @@ trait BlockchainHostBuilder {
       storagesInstance.storages.evmCodeStorage,
       peerConfiguration,
       peerEventBus,
-      etcPeerManager
+      networkPeerManager
     ),
     "blockchain-host"
   )
@@ -374,12 +375,12 @@ object PendingTransactionsManagerBuilder {
   trait Default extends PendingTransactionsManagerBuilder {
     self: ActorSystemBuilder
       with PeerManagerActorBuilder
-      with EtcPeerManagerActorBuilder
+      with NetworkPeerManagerActorBuilder
       with PeerEventBusBuilder
       with TxPoolConfigBuilder =>
 
     lazy val pendingTransactionsManager: ActorRef =
-      system.actorOf(PendingTransactionsManager.props(txPoolConfig, peerManager, etcPeerManager, peerEventBus))
+      system.actorOf(PendingTransactionsManager.props(txPoolConfig, peerManager, networkPeerManager, peerEventBus))
   }
 }
 
@@ -423,9 +424,9 @@ trait FilterManagerBuilder {
 }
 
 trait DebugServiceBuilder {
-  self: EtcPeerManagerActorBuilder with PeerManagerActorBuilder =>
+  self: NetworkPeerManagerActorBuilder with PeerManagerActorBuilder =>
 
-  lazy val debugService = new DebugService(peerManager, etcPeerManager)
+  lazy val debugService = new DebugService(peerManager, networkPeerManager)
 }
 
 trait EthProofServiceBuilder {
@@ -535,7 +536,7 @@ trait PersonalServiceBuilder {
     with StorageBuilder
     with TxPoolConfigBuilder =>
 
-  lazy val personalService = new PersonalService(
+  lazy val personalService: PersonalServiceAPI = new PersonalService(
     keyStore,
     blockchainReader,
     pendingTransactionsManager,
@@ -742,7 +743,7 @@ trait SyncControllerBuilder {
     with PeerEventBusBuilder
     with PendingTransactionsManagerBuilder
     with OmmersPoolBuilder
-    with EtcPeerManagerActorBuilder
+    with NetworkPeerManagerActorBuilder
     with SyncConfigBuilder
     with ShutdownHookBuilder
     with MiningBuilder
@@ -764,7 +765,7 @@ trait SyncControllerBuilder {
       peerEventBus,
       pendingTransactionsManager,
       ommersPool,
-      etcPeerManager,
+      networkPeerManager,
       blacklist,
       syncConfig,
       this
@@ -917,7 +918,7 @@ trait Node
     with PeerEventBusBuilder
     with PendingTransactionsManagerBuilder.Default
     with OmmersPoolBuilder
-    with EtcPeerManagerActorBuilder
+    with NetworkPeerManagerActorBuilder
     with BlockchainHostBuilder
     with FilterManagerBuilder
     with FilterConfigBuilder

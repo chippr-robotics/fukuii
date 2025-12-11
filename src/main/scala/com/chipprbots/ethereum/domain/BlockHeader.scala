@@ -227,9 +227,9 @@ object BlockHeaderImplicits {
           val decodedCheckpoint = checkpointOptionDecoder.decode(encodedCheckpoint)
           // Normalize: HefPostEcip1097(None) or empty checkpoint should be HefEmpty for consistency
           val extraFields = decodedCheckpoint match {
-            case None => HefEmpty
+            case None                              => HefEmpty
             case Some(cp) if cp.signatures.isEmpty => HefEmpty
-            case Some(_) => HefPostEcip1097(decodedCheckpoint)
+            case Some(_)                           => HefPostEcip1097(decodedCheckpoint)
           }
           BlockHeader(
             byteStringFromEncodeable(parentHash),

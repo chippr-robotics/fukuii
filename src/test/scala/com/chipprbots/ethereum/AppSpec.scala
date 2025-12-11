@@ -82,14 +82,14 @@ class AppSpec extends AnyFlatSpec with Matchers {
     // Clear any existing property
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
-    
+
     // Apply public modifier
     getApplyModifiersMethod.invoke(App, Set("public"))
-    
+
     // Verify system property is set
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
     System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "true"
-    
+
     // Cleanup
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
@@ -98,10 +98,10 @@ class AppSpec extends AnyFlatSpec with Matchers {
   it should "not set discovery system property when no modifiers are present" taggedAs (UnitTest) in {
     // Clear any existing property
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
-    
+
     // Apply empty modifier set
     getApplyModifiersMethod.invoke(App, Set.empty[String])
-    
+
     // Verify system property is not set
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe null
   }
@@ -114,10 +114,10 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
-    
+
     // Apply enterprise modifier
     getApplyModifiersMethod.invoke(App, Set("enterprise"))
-    
+
     // Verify enterprise properties are set
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
     System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
@@ -125,7 +125,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "false"
     System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
     System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
-    
+
     // Cleanup
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
     System.clearProperty("fukuii.network.automatic-port-forwarding")
@@ -141,17 +141,17 @@ class AppSpec extends AnyFlatSpec with Matchers {
     val args1 = Array("public", "etc", "--tui")
     val modifiers1 = args1.filter(isModifier)
     val filtered1 = args1.filterNot(isModifier)
-    
+
     modifiers1 should contain("public")
     filtered1 should contain("etc")
     filtered1 should contain("--tui")
-    filtered1 should not contain("public")
+    filtered1 should not contain ("public")
   }
 
   it should "handle multiple 'public' keywords" taggedAs (UnitTest) in {
     val args = Array("public", "public", "etc")
     val modifiers = args.filter(isModifier)
-    
+
     modifiers.toSet shouldBe Set("public")
   }
 
@@ -159,7 +159,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     val args1 = Array("public", "etc")
     val args2 = Array("etc", "public")
     val args3 = Array("public", "--tui", "etc")
-    
+
     args1.filter(isModifier).toSet shouldBe Set("public")
     args2.filter(isModifier).toSet shouldBe Set("public")
     args3.filter(isModifier).toSet shouldBe Set("public")
@@ -169,7 +169,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
     val args1 = Array("enterprise", "pottery")
     val args2 = Array("pottery", "enterprise")
     val args3 = Array("enterprise", "--tui", "pottery")
-    
+
     args1.filter(isModifier).toSet shouldBe Set("enterprise")
     args2.filter(isModifier).toSet shouldBe Set("enterprise")
     args3.filter(isModifier).toSet shouldBe Set("enterprise")

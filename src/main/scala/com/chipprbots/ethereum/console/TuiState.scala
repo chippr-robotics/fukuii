@@ -43,8 +43,8 @@ case class TuiState(
   def uptimeSeconds: Long =
     Duration.between(startTime, Instant.now()).getSeconds
 
-  /** Estimate sync time based on current progress.
-    * Requires minimum uptime of MinUptimeForEstimationSeconds to provide accurate estimates.
+  /** Estimate sync time based on current progress. Requires minimum uptime of MinUptimeForEstimationSeconds to provide
+    * accurate estimates.
     */
   def estimatedSyncTimeSeconds: Option[Long] =
     val uptime = uptimeSeconds
@@ -54,8 +54,8 @@ case class TuiState(
       else None
     else None
 
-  /** Calculate sync speed in blocks per second.
-    * Requires minimum uptime of MinUptimeForEstimationSeconds to provide accurate estimates.
+  /** Calculate sync speed in blocks per second. Requires minimum uptime of MinUptimeForEstimationSeconds to provide
+    * accurate estimates.
     */
   def syncSpeedBlocksPerSec: Option[Double] =
     val uptime = uptimeSeconds
@@ -115,32 +115,32 @@ case class SnapSyncState(
         25.0 + (bytecodesDownloaded.toDouble / estimatedTotalBytecodes * 15.0) // 15% of total
       case "StorageRangeSync" if estimatedTotalSlots > 0 =>
         40.0 + (storageSlotsSynced.toDouble / estimatedTotalSlots * 40.0) // 40% of total
-      case "StateHealing" => 80.0 // Healing is variable but assume 80-95%
+      case "StateHealing"    => 80.0 // Healing is variable but assume 80-95%
       case "StateValidation" => 95.0
-      case "Completed" => 100.0
-      case _ => 0.0
+      case "Completed"       => 100.0
+      case _                 => 0.0
 
   /** Get formatted phase description. */
   def phaseDescription: String = phase match
     case "AccountRangeSync" => "📦 Downloading accounts"
-    case "ByteCodeSync" => "💾 Downloading bytecodes"
+    case "ByteCodeSync"     => "💾 Downloading bytecodes"
     case "StorageRangeSync" => "🗄️  Downloading storage"
-    case "StateHealing" => "🔧 Healing trie nodes"
-    case "StateValidation" => "✓ Validating state"
-    case "Completed" => "✅ SNAP sync complete"
-    case _ => "⏸️  Idle"
+    case "StateHealing"     => "🔧 Healing trie nodes"
+    case "StateValidation"  => "✓ Validating state"
+    case "Completed"        => "✅ SNAP sync complete"
+    case _                  => "⏸️  Idle"
 
   /** Get primary metric for current phase. */
   def primaryMetric: (String, Long, Double) = phase match
     case "AccountRangeSync" => ("Accounts", accountsSynced, recentAccountsPerSec)
-    case "ByteCodeSync" => ("Bytecodes", bytecodesDownloaded, recentBytecodesPerSec)
+    case "ByteCodeSync"     => ("Bytecodes", bytecodesDownloaded, recentBytecodesPerSec)
     case "StorageRangeSync" => ("Slots", storageSlotsSynced, recentSlotsPerSec)
-    case "StateHealing" => ("Nodes", nodesHealed, recentNodesPerSec)
-    case _ => ("Items", 0L, 0.0)
+    case "StateHealing"     => ("Nodes", nodesHealed, recentNodesPerSec)
+    case _                  => ("Items", 0L, 0.0)
 
 object TuiState:
-  /** Minimum uptime in seconds before sync estimates are provided.
-    * This ensures we have enough data points for accurate speed calculations.
+  /** Minimum uptime in seconds before sync estimates are provided. This ensures we have enough data points for accurate
+    * speed calculations.
     */
   val MinUptimeForEstimationSeconds: Long = 10
 

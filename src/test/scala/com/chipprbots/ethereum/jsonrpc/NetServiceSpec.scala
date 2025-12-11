@@ -78,8 +78,12 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
             false,
             nodeId = Some(ByteString("abcd1234"))
           ) -> PeerActor.Status.Handshaked,
-          Peer(PeerId("peer2"), new InetSocketAddress("192.168.1.2", 30303), testRef, true) -> PeerActor.Status
-            .Connecting
+          Peer(
+            PeerId("peer2"),
+            new InetSocketAddress("192.168.1.2", 30303),
+            testRef,
+            true
+          ) -> PeerActor.Status.Connecting
         )
       )
     )
@@ -195,6 +199,11 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
       discoveryStatus = ServerStatus.NotListening
     )
     val netService =
-      new NetService(new AtomicReference[NodeStatus](nodeStatus), peerManager.ref, blacklist, NetServiceConfig(5.seconds))
+      new NetService(
+        new AtomicReference[NodeStatus](nodeStatus),
+        peerManager.ref,
+        blacklist,
+        NetServiceConfig(5.seconds)
+      )
   }
 }

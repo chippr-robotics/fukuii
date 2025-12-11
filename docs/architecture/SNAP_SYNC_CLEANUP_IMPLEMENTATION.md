@@ -135,7 +135,7 @@ def runningSnapSync(snapSync: ActorRef): Receive = {
 
 **Implementation:**
 
-**File:** `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+**File:** `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
 
 #### Message Routing
 Added routing for incoming SNAP request messages in the `MessageFromPeer` handler:
@@ -393,7 +393,7 @@ Added tests in `AppStateStorageSpec`:
      - Transitions to fast sync on repeated SNAP failures
 
 4. **Peer Manager:**
-   - `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+  - `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
      - Added server-side SNAP request handlers
      - Added message routing for incoming requests
 

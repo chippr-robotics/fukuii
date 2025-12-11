@@ -39,7 +39,7 @@ case class JsonRpcController(
     ethTxService: EthTxService,
     ethUserService: EthUserService,
     ethFilterService: EthFilterService,
-    personalService: PersonalService,
+  personalService: PersonalServiceAPI,
     testServiceOpt: Option[TestService],
     debugService: DebugService,
     qaService: QAService,

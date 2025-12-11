@@ -74,13 +74,29 @@ object PersonalService {
   val defaultUnlockTime = 300
 }
 
+trait PersonalServiceAPI {
+  import PersonalService._
+
+  def importRawKey(req: ImportRawKeyRequest): ServiceResponse[ImportRawKeyResponse]
+  def newAccount(req: NewAccountRequest): ServiceResponse[NewAccountResponse]
+  def listAccounts(request: ListAccountsRequest): ServiceResponse[ListAccountsResponse]
+  def unlockAccount(request: UnlockAccountRequest): ServiceResponse[UnlockAccountResponse]
+  def lockAccount(request: LockAccountRequest): ServiceResponse[LockAccountResponse]
+  def sign(request: SignRequest): ServiceResponse[SignResponse]
+  def ecRecover(req: EcRecoverRequest): ServiceResponse[EcRecoverResponse]
+  def sendTransaction(request: SendTransactionWithPassphraseRequest): ServiceResponse[SendTransactionWithPassphraseResponse]
+  def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse]
+  def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse]
+}
+
 class PersonalService(
     keyStore: KeyStore,
     blockchainReader: BlockchainReader,
     txPool: ActorRef,
     txPoolConfig: TxPoolConfig,
     configBuilder: BlockchainConfigBuilder
-) extends Logger {
+) extends PersonalServiceAPI
+    with Logger {
   import configBuilder._
 
   private val unlockedWallets: ExpiringMap[Address, Wallet] = ExpiringMap.empty(Duration.ofSeconds(defaultUnlockTime))

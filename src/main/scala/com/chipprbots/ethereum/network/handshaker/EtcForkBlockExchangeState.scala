@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.network.handshaker
 
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.Logger
 
 case class EtcForkBlockExchangeState(
-    handshakerConfiguration: EtcHandshakerConfiguration,
+    handshakerConfiguration: NetworkHandshakerConfiguration,
     forkResolver: ForkResolver,
     remoteStatus: RemoteStatus
 ) extends InProgressState[PeerInfo]
@@ -28,7 +28,13 @@ case class EtcForkBlockExchangeState(
   def nextMessage: NextMessage = {
     val getBlockHeadersMsg: MessageSerializable =
       if (Capability.usesRequestId(remoteStatus.capability))
-        ETH66GetBlockHeaders(ETH66.nextRequestId, Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
+        ETH66GetBlockHeaders(
+          ETH66.nextRequestId,
+          Left(forkResolver.forkBlockNumber),
+          maxHeaders = 1,
+          skip = 0,
+          reverse = false
+        )
       else
         ETH62GetBlockHeaders(Left(forkResolver.forkBlockNumber), maxHeaders = 1, skip = 0, reverse = false)
 

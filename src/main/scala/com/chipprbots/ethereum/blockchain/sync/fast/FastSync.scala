@@ -38,7 +38,7 @@ import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -69,7 +69,7 @@ class FastSync(
     nodeStorage: NodeStorage,
     val validators: Validators,
     val peerEventBus: ActorRef,
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val blacklist: Blacklist,
     val syncConfig: SyncConfig,
     implicit val scheduler: Scheduler,
@@ -110,7 +110,7 @@ class FastSync(
   def startFromScratch(): Unit = {
     log.info("Starting fast sync from scratch")
     val pivotBlockSelector = context.actorOf(
-      PivotBlockSelector.props(etcPeerManager, peerEventBus, syncConfig, scheduler, context.self, blacklist),
+      PivotBlockSelector.props(networkPeerManager, peerEventBus, syncConfig, scheduler, context.self, blacklist),
       "pivot-block-selector"
     )
     pivotBlockSelector ! PivotBlockSelector.SelectPivotBlock
@@ -175,7 +175,7 @@ class FastSync(
             syncConfig.stateSyncBloomFilterSize
           ),
           syncConfig,
-          etcPeerManager,
+          networkPeerManager,
           peerEventBus,
           blacklist,
           scheduler
@@ -296,7 +296,11 @@ class FastSync(
           eth66Receipts.receiptsForBlocks.items.flatMap {
             case r: RLPList => Some(r.items.toTypedRLPEncodables.map(_.toReceipt))
             case other =>
-              log.warning("Unexpected RLP item type in ETH66Receipts from peer [{}]: {}", peer.id, other.getClass.getSimpleName)
+              log.warning(
+                "Unexpected RLP item type in ETH66Receipts from peer [{}]: {}",
+                peer.id,
+                other.getClass.getSimpleName
+              )
               None
           }
         }
@@ -314,7 +318,7 @@ class FastSync(
       log.debug("Asking for new pivot block")
       val pivotBlockSelector =
         context.actorOf(
-          PivotBlockSelector.props(etcPeerManager, peerEventBus, syncConfig, scheduler, context.self, blacklist),
+          PivotBlockSelector.props(networkPeerManager, peerEventBus, syncConfig, scheduler, context.self, blacklist),
           s"$countActor-pivot-block-selector-update"
         )
       pivotBlockSelector ! PivotBlockSelector.SelectPivotBlock
@@ -859,7 +863,7 @@ class FastSync(
           PeerRequestHandler.props[ETH66.GetReceipts, ETH66Receipts](
             peer,
             peerResponseTimeout,
-            etcPeerManager,
+            networkPeerManager,
             peerEventBus,
             requestMsg = ETH66.GetReceipts(ETH66.nextRequestId, receiptsToGet),
             responseMsgCode = Codes.ReceiptsCode
@@ -872,7 +876,7 @@ class FastSync(
           PeerRequestHandler.props[GetReceipts, Receipts](
             peer,
             peerResponseTimeout,
-            etcPeerManager,
+            networkPeerManager,
             peerEventBus,
             requestMsg = GetReceipts(receiptsToGet),
             responseMsgCode = Codes.ReceiptsCode
@@ -904,7 +908,7 @@ class FastSync(
           PeerRequestHandler.props[ETH66.GetBlockBodies, ETH66BlockBodies](
             peer,
             peerResponseTimeout,
-            etcPeerManager,
+            networkPeerManager,
             peerEventBus,
             requestMsg = ETH66.GetBlockBodies(ETH66.nextRequestId, blockBodiesToGet),
             responseMsgCode = Codes.BlockBodiesCode
@@ -917,7 +921,7 @@ class FastSync(
           PeerRequestHandler.props[GetBlockBodies, BlockBodies](
             peer,
             peerResponseTimeout,
-            etcPeerManager,
+            networkPeerManager,
             peerEventBus,
             requestMsg = GetBlockBodies(blockBodiesToGet),
             responseMsgCode = Codes.BlockBodiesCode
@@ -951,10 +955,15 @@ class FastSync(
           PeerRequestHandler.props[ETH66.GetBlockHeaders, ETH66BlockHeaders](
             peer,
             peerResponseTimeout,
-            etcPeerManager,
+            networkPeerManager,
             peerEventBus,
-            requestMsg =
-              ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
+            requestMsg = ETH66.GetBlockHeaders(
+              ETH66.nextRequestId,
+              Left(syncState.bestBlockHeaderNumber + 1),
+              limit,
+              skip = 0,
+              reverse = false
+            ),
             responseMsgCode = Codes.BlockHeadersCode
           ),
           BlockHeadersHandlerName
@@ -967,7 +976,7 @@ class FastSync(
           PeerRequestHandler.props[GetBlockHeaders, BlockHeaders](
             peer,
             peerResponseTimeout,
-            etcPeerManager,
+            networkPeerManager,
             peerEventBus,
             requestMsg = GetBlockHeaders(Left(syncState.bestBlockHeaderNumber + 1), limit, skip = 0, reverse = false),
             responseMsgCode = Codes.BlockHeadersCode
@@ -1033,7 +1042,7 @@ object FastSync {
       nodeStorage: NodeStorage,
       validators: Validators,
       peerEventBus: ActorRef,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       scheduler: Scheduler,
@@ -1052,7 +1061,7 @@ object FastSync {
         nodeStorage,
         validators,
         peerEventBus,
-        etcPeerManager,
+        networkPeerManager,
         blacklist,
         syncConfig,
         scheduler,

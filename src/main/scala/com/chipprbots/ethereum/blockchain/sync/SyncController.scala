@@ -43,7 +43,7 @@ class SyncController(
     peerEventBus: ActorRef,
     pendingTransactionsManager: ActorRef,
     ommersPool: ActorRef,
-    etcPeerManager: ActorRef,
+    networkPeerManager: ActorRef,
     blacklist: Blacklist,
     syncConfig: SyncConfig,
     configBuilder: BlockchainConfigBuilder,
@@ -54,15 +54,14 @@ class SyncController(
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(context.system.scheduler)
 
   /** Load SNAP sync configuration with fallback to defaults */
-  private def loadSnapSyncConfig(): SNAPSyncConfig = {
-    try {
+  private def loadSnapSyncConfig(): SNAPSyncConfig =
+    try
       SNAPSyncConfig.fromConfig(Config.config.getConfig("sync"))
-    } catch {
+    catch {
       case e: Exception =>
         log.warning(s"Failed to load SNAP sync config, using defaults: ${e.getMessage}")
         SNAPSyncConfig()
     }
-  }
 
   override def receive: Receive = idle
 
@@ -83,29 +82,28 @@ class SyncController(
       snapSync ! PoisonPill
       log.info("SNAP sync completed, transitioning to regular sync")
       startRegularSync()
-    
+
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
       snapSync ! PoisonPill
       log.warning("SNAP sync failed repeatedly, falling back to fast sync")
       startFastSync()
-    
+
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
-    
+
     case msg =>
       snapSync.forward(msg)
   }
 
-  def runningRegularSync(regularSync: ActorRef): Receive = {
-    case other =>
-      regularSync.forward(other)
+  def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
+    regularSync.forward(other)
   }
 
   def start(): Unit = {
     import syncConfig.{doFastSync, doSnapSync}
 
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
-    
+
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
       case (false, _, true, _) =>
         // SNAP sync requested - just start it
@@ -144,7 +142,7 @@ class SyncController(
         nodeStorage,
         validators,
         peerEventBus,
-        etcPeerManager,
+        networkPeerManager,
         blacklist,
         syncConfig,
         scheduler,
@@ -158,18 +156,18 @@ class SyncController(
 
   def startSnapSync(): Unit = {
     log.info("Starting SNAP sync mode")
-    
+
     val snapSyncConfig = loadSnapSyncConfig()
-    
+
     val mptStorage = stateStorage.getReadOnlyStorage
-    
+
     val snapSync = context.actorOf(
       SNAPSyncController.props(
         blockchainReader,
         appStateStorage,
         mptStorage,
         evmCodeStorage,
-        etcPeerManager,
+        networkPeerManager,
         peerEventBus,
         syncConfig,
         snapSyncConfig,
@@ -177,21 +175,24 @@ class SyncController(
       ),
       "snap-sync"
     )
-    
-    // Register SNAPSyncController with EtcPeerManagerActor for message routing
-    etcPeerManager ! com.chipprbots.ethereum.network.EtcPeerManagerActor.RegisterSnapSyncController(snapSync)
-    
+
+    // Register SNAPSyncController with NetworkPeerManagerActor for message routing
+    networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(snapSync)
+
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
   }
 
   def startRegularSync(): Unit = {
     val peersClient =
-      context.actorOf(PeersClient.props(etcPeerManager, peerEventBus, blacklist, syncConfig, scheduler), "peers-client")
+      context.actorOf(
+        PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+        "peers-client"
+      )
     val regularSync = context.actorOf(
       RegularSync.props(
         peersClient,
-        etcPeerManager,
+        networkPeerManager,
         peerEventBus,
         consensus,
         blockchainReader,
@@ -230,7 +231,7 @@ object SyncController {
       peerEventBus: ActorRef,
       pendingTransactionsManager: ActorRef,
       ommersPool: ActorRef,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       configBuilder: BlockchainConfigBuilder
@@ -251,7 +252,7 @@ object SyncController {
         peerEventBus,
         pendingTransactionsManager,
         ommersPool,
-        etcPeerManager,
+        networkPeerManager,
         blacklist,
         syncConfig,
         configBuilder

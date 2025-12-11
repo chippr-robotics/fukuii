@@ -19,14 +19,13 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 
@@ -44,19 +43,20 @@ class BlockBroadcastSpec
     // Block that should be sent as it's total difficulty is higher than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 3)
     val newBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
-    val newBlock: NewBlock =
-      NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(2))
+    val chainWeight = initialPeerInfo.chainWeight.increaseTotalDifficulty(2)
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
+    val newBlockMsg = BaseETH6XMessages.NewBlock(block, chainWeight.totalDifficulty)
 
     // when
     blockBroadcast.broadcastBlock(
-      BlockToBroadcast(newBlock.block, newBlock.chainWeight),
+      BlockToBroadcast(block, chainWeight),
       Map(peer.id -> PeerWithInfo(peer, initialPeerInfo))
     )
 
     // then
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(newBlock, peer.id))
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(newBlockNewHashes, peer.id))
-    etcPeerManagerProbe.expectNoMessage()
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockNewHashes, peer.id))
+    networkPeerManagerProbe.expectNoMessage()
   }
 
   it should "send a new block when it is not known by the peer (known by comparing chain weights) (ETH63)" taggedAs (
@@ -70,19 +70,19 @@ class BlockBroadcastSpec
     val peerInfo: PeerInfo = initialPeerInfo
       .copy(remoteStatus = peerStatus.copy(capability = Capability.ETH63))
       .withChainWeight(ChainWeight.totalDifficultyOnly(initialPeerInfo.chainWeight.totalDifficulty))
-    val newBlock: com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock =
-      BaseETH6XMessages.NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), peerInfo.chainWeight.totalDifficulty + 2)
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
+    val newBlockMsg = BaseETH6XMessages.NewBlock(block, peerInfo.chainWeight.totalDifficulty + 2)
 
     // when
     blockBroadcast.broadcastBlock(
-      BlockToBroadcast(newBlock.block, ChainWeight.totalDifficultyOnly(newBlock.totalDifficulty)),
+      BlockToBroadcast(block, ChainWeight.totalDifficultyOnly(newBlockMsg.totalDifficulty)),
       Map(peer.id -> PeerWithInfo(peer, peerInfo))
     )
 
     // then
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(newBlock, peer.id))
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(newBlockNewHashes, peer.id))
-    etcPeerManagerProbe.expectNoMessage()
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockNewHashes, peer.id))
+    networkPeerManagerProbe.expectNoMessage()
   }
 
   it should "not send a new block when it is known by the peer (known by comparing total difficulties)" taggedAs (
@@ -92,17 +92,17 @@ class BlockBroadcastSpec
     // given
     // Block that shouldn't be sent as it's number and total difficulty is lower than known by peer
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 2)
-    val newBlock: NewBlock =
-      NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
+    val chainWeight = initialPeerInfo.chainWeight.increaseTotalDifficulty(-2)
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
 
     // when
     blockBroadcast.broadcastBlock(
-      BlockToBroadcast(newBlock.block, newBlock.chainWeight),
+      BlockToBroadcast(block, chainWeight),
       Map(peer.id -> PeerWithInfo(peer, initialPeerInfo))
     )
 
     // then
-    etcPeerManagerProbe.expectNoMessage()
+    networkPeerManagerProbe.expectNoMessage()
   }
 
   it should "send a new block when it is not known by the peer (known by comparing max block number)" taggedAs (
@@ -112,19 +112,20 @@ class BlockBroadcastSpec
     // given
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber + 4)
     val newBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
-    val newBlock: NewBlock =
-      NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
+    val chainWeight = initialPeerInfo.chainWeight.increaseTotalDifficulty(-2)
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
+    val newBlockMsg = BaseETH6XMessages.NewBlock(block, chainWeight.totalDifficulty)
 
     // when
     blockBroadcast.broadcastBlock(
-      BlockToBroadcast(newBlock.block, newBlock.chainWeight),
+      BlockToBroadcast(block, chainWeight),
       Map(peer.id -> PeerWithInfo(peer, initialPeerInfo))
     )
 
     // then
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(newBlock, peer.id))
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(newBlockNewHashes, peer.id))
-    etcPeerManagerProbe.expectNoMessage()
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockNewHashes, peer.id))
+    networkPeerManagerProbe.expectNoMessage()
   }
 
   it should "not send a new block only when it is known by the peer (known by comparing max block number)" taggedAs (
@@ -134,17 +135,17 @@ class BlockBroadcastSpec
     // given
     // Block should already be known by the peer due to max block known
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 2)
-    val newBlock: NewBlock =
-      NewBlock(Block(blockHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
+    val chainWeight = initialPeerInfo.chainWeight.increaseTotalDifficulty(-2)
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
 
     // when
     blockBroadcast.broadcastBlock(
-      BlockToBroadcast(newBlock.block, newBlock.chainWeight),
+      BlockToBroadcast(block, chainWeight),
       Map(peer.id -> PeerWithInfo(peer, initialPeerInfo))
     )
 
     // then
-    etcPeerManagerProbe.expectNoMessage()
+    networkPeerManagerProbe.expectNoMessage()
   }
 
   it should "send block hashes to all peers while the blocks only to sqrt of them" taggedAs (
@@ -154,8 +155,9 @@ class BlockBroadcastSpec
     // given
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber + 4)
     val firstBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(firstHeader.hash, firstHeader.number)))
-    val firstBlock: NewBlock =
-      NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), initialPeerInfo.chainWeight.increaseTotalDifficulty(-2))
+    val firstChainWeight = initialPeerInfo.chainWeight.increaseTotalDifficulty(-2)
+    val firstBlock = Block(firstHeader, BlockBody(Nil, Nil))
+    val firstBlockMsg = BaseETH6XMessages.NewBlock(firstBlock, firstChainWeight.totalDifficulty)
 
     val peer2Probe: TestProbe = TestProbe()
     val peer2: Peer = Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 0), peer2Probe.ref, false)
@@ -169,34 +171,34 @@ class BlockBroadcastSpec
     val peersIds: Seq[PeerId] = peers.map(_.id)
     val peersWithInfo: Map[PeerId, PeerWithInfo] =
       peers.map(peer => peer.id -> PeerWithInfo(peer, initialPeerInfo)).toMap
-    blockBroadcast.broadcastBlock(BlockToBroadcast(firstBlock.block, firstBlock.chainWeight), peersWithInfo)
+    blockBroadcast.broadcastBlock(BlockToBroadcast(firstBlock, firstChainWeight), peersWithInfo)
 
     // then
     // Only two peers receive the complete block
-    etcPeerManagerProbe.expectMsgPF() {
-      case EtcPeerManagerActor.SendMessage(b, p) if b.underlyingMsg == firstBlock && peersIds.contains(p) => ()
+    networkPeerManagerProbe.expectMsgPF() {
+      case NetworkPeerManagerActor.SendMessage(b, p) if b.underlyingMsg == firstBlockMsg && peersIds.contains(p) => ()
     }
-    etcPeerManagerProbe.expectMsgPF() {
-      case EtcPeerManagerActor.SendMessage(b, p) if b.underlyingMsg == firstBlock && peersIds.contains(p) => ()
+    networkPeerManagerProbe.expectMsgPF() {
+      case NetworkPeerManagerActor.SendMessage(b, p) if b.underlyingMsg == firstBlockMsg && peersIds.contains(p) => ()
     }
 
     // All the peers should receive the block hashes
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(firstBlockNewHashes, peer.id))
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(firstBlockNewHashes, peer2.id))
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(firstBlockNewHashes, peer3.id))
-    etcPeerManagerProbe.expectMsg(EtcPeerManagerActor.SendMessage(firstBlockNewHashes, peer4.id))
-    etcPeerManagerProbe.expectNoMessage()
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(firstBlockNewHashes, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(firstBlockNewHashes, peer2.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(firstBlockNewHashes, peer3.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(firstBlockNewHashes, peer4.id))
+    networkPeerManagerProbe.expectNoMessage()
   }
 
   class TestSetup(implicit system: ActorSystem) {
-    val etcPeerManagerProbe: TestProbe = TestProbe()
+    val networkPeerManagerProbe: TestProbe = TestProbe()
 
-    val blockBroadcast = new BlockBroadcast(etcPeerManagerProbe.ref)
+    val blockBroadcast = new BlockBroadcast(networkPeerManagerProbe.ref)
 
     val baseBlockHeader = Fixtures.Blocks.Block3125369.header
 
     val peerStatus: RemoteStatus = RemoteStatus(
-      capability = Capability.ETC64,
+      capability = Capability.ETH68,
       networkId = 1,
       chainWeight = ChainWeight(10, 10000),
       bestHash = Fixtures.Blocks.Block3125369.header.hash,

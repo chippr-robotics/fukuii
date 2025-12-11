@@ -9,7 +9,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
@@ -40,7 +40,7 @@ class BlockchainHostActor(
     evmCodeStorage: EvmCodeStorage,
     peerConfiguration: PeerConfiguration,
     peerEventBusActor: ActorRef,
-    etcPeerManagerActor: ActorRef
+    networkPeerManagerActor: ActorRef
 ) extends Actor
     with ActorLogging {
 
@@ -51,7 +51,7 @@ class BlockchainHostActor(
   override def receive: Receive = { case MessageFromPeer(message, peerId) =>
     val responseOpt = handleBlockFastDownload(message).orElse(handleEvmCodeMptFastDownload(message))
     responseOpt.foreach { response =>
-      etcPeerManagerActor ! EtcPeerManagerActor.SendMessage(response, peerId)
+      networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(response, peerId)
     }
   }
 
@@ -201,7 +201,7 @@ object BlockchainHostActor {
       evmCodeStorage: EvmCodeStorage,
       peerConfiguration: PeerConfiguration,
       peerEventBusActor: ActorRef,
-      etcPeerManagerActor: ActorRef
+      networkPeerManagerActor: ActorRef
   ): Props =
     Props(
       new BlockchainHostActor(
@@ -209,7 +209,7 @@ object BlockchainHostActor {
         evmCodeStorage,
         peerConfiguration,
         peerEventBusActor,
-        etcPeerManagerActor
+        networkPeerManagerActor
       )
     )
 

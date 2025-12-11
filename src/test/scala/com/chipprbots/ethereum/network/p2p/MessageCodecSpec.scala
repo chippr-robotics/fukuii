@@ -55,7 +55,8 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     (UnitTest, NetworkTest) in new TestSetup {
       enableInboundCompressionOnAllCodecs()
       val statusBytes = status.toBytes
-      val uncompressedFrame = Frame(Header(statusBytes.length, 0, None, None), Codes.StatusCode, ByteString(statusBytes))
+      val uncompressedFrame =
+        Frame(Header(statusBytes.length, 0, None, None), Codes.StatusCode, ByteString(statusBytes))
       val bytes = remoteFrameCodec.writeFrames(Seq(uncompressedFrame))
 
       val decoded = messageCodec.readMessages(bytes)
