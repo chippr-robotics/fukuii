@@ -674,6 +674,10 @@ cp /tmp/stability-start.txt /tmp/cirith-ungol-results/
 ### Step 7.2: Generate Final Report
 
 ```bash
+# Get current state (with error handling)
+CURRENT_BLOCK=$(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+CURRENT_PEERS=$(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
+
 cat > /tmp/cirith-ungol-results/FINAL-REPORT.md <<EOF
 # Cirith Ungol Validation Results
 
@@ -686,8 +690,8 @@ cat > /tmp/cirith-ungol-results/FINAL-REPORT.md <<EOF
 ### SNAP Sync
 - ✅ Completed successfully
 - Duration: [X hours]
-- Final block: $(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
-- Peers: $(curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
+- Final block: $CURRENT_BLOCK
+- Peers: $CURRENT_PEERS
 
 ### Fast Sync
 - ✅ Completed successfully

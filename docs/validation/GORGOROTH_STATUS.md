@@ -423,17 +423,14 @@ Validation will be considered **complete** when:
 ## Next Steps
 
 ### High Priority
-1. Create 3-node E2E walkthrough document
-2. Create 6-node E2E walkthrough document
-3. Create Cirith Ungol E2E walkthrough document
-4. Run 6-node per-node validation tests
-5. Run Cirith Ungol mainnet sync test
+1. Run 6-node per-node validation tests
+2. Run Cirith Ungol mainnet sync test
+3. Run multi-client tests (Core-Geth, Besu)
 
 ### Medium Priority
-1. Add GitHub statistics to nightly CI/CD
-2. Run multi-client tests (Core-Geth, Besu)
-3. Extended stability testing (48h, 7d)
-4. Performance benchmarking
+1. Extended stability testing (48h, 7d)
+2. Performance benchmarking
+3. Community engagement for validation results
 
 ### Low Priority
 1. Automated CI validation

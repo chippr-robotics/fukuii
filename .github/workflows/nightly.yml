@@ -244,6 +244,9 @@ jobs:
           echo "$MILESTONES" | while IFS='|' read -r number title state; do
             echo "Processing milestone: $title ($state)"
             
+            # Add small delay to avoid rate limiting
+            sleep 1
+            
             # Count PRs for this milestone
             OPEN_PRS=$(gh api "repos/${{ github.repository }}/pulls?state=open&milestone=$number" --paginate | jq '. | length')
             CLOSED_PRS=$(gh api "repos/${{ github.repository }}/pulls?state=closed&milestone=$number" --paginate | jq '. | length')

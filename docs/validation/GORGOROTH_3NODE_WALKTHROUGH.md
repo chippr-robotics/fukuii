@@ -71,7 +71,10 @@ jq --version
 ### Clone Repository
 
 ```bash
+# Clone the repository (adjust URL if using a fork)
 git clone https://github.com/chippr-robotics/fukuii.git
+# Or your fork: git clone https://github.com/YOUR_USERNAME/fukuii.git
+
 cd fukuii
 git submodule update --init --recursive
 ```

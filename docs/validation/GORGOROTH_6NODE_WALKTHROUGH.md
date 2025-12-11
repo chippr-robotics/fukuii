@@ -512,29 +512,41 @@ cd ..
 ### Step 5.2: Monitor During Test
 
 ```bash
-# Create monitoring dashboard
-watch -n 60 'cat > /tmp/dashboard.txt <<EOF
-=== Gorgoroth 6-Node Dashboard ===
-Time: $(date)
+# Create monitoring dashboard script
+cat > /tmp/6node-dashboard.sh <<'EOF'
+#!/bin/bash
+echo "=== Gorgoroth 6-Node Dashboard ==="
+echo "Time: $(date)"
+echo ""
 
-Block Numbers:
-$(for port in 8545 8546 8547 8548 8549 8550; do
+echo "Block Numbers:"
+for port in 8545 8546 8547 8548 8549 8550; do
   node=$((port - 8544))
-  block=$(curl -s -X POST http://localhost:$port -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" | jq -r ".result")
+  block=$(curl -s --max-time 5 -X POST http://localhost:$port \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
   echo "  Node $node: $block"
-done)
+done
 
-Peer Counts:
-$(for port in 8545 8546 8547 8548 8549 8550; do
+echo ""
+echo "Peer Counts:"
+for port in 8545 8546 8547 8548 8549 8550; do
   node=$((port - 8544))
-  peers=$(curl -s -X POST http://localhost:$port -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}" | jq -r ".result")
+  peers=$(curl -s --max-time 5 -X POST http://localhost:$port \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' 2>/dev/null | jq -r '.result' || echo "N/A")
   echo "  Node $node: $peers peers"
-done)
+done
 
-Container Status:
-$(docker compose -f docker-compose-6nodes.yml ps --format "table {{.Name}}\t{{.Status}}")
+echo ""
+echo "Container Status:"
+docker compose -f docker-compose-6nodes.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || echo "  Unable to get container status"
 EOF
-cat /tmp/dashboard.txt'
+
+chmod +x /tmp/6node-dashboard.sh
+
+# Run dashboard every minute
+watch -n 60 /tmp/6node-dashboard.sh
 ```
 
 ### Step 5.3: Collect Stability Metrics
