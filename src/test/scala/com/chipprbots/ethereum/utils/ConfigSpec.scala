@@ -10,32 +10,30 @@ class ConfigSpec extends AnyFlatSpec with Matchers {
     Config.clientId shouldBe VersionInfo.nodeName()
   }
 
-  "p2pVersion" should "default to 5 when not explicitly set" taggedAs (UnitTest) in {
-    // The actual Config should have p2p-version = 5 from base.conf
-    // This tests that when the config is present, it reads correctly
+  "p2pVersion" should "read configured value from base.conf" taggedAs (UnitTest) in {
+    // Verify that Config reads the p2p-version value correctly when present in config
     Config.Network.peer.p2pVersion shouldBe 5
   }
 
-  "p2pVersion" should "use configured value when explicitly set" taggedAs (UnitTest) in {
-    // The actual Config should read from base.conf which has p2p-version = 5
-    Config.Network.peer.p2pVersion shouldBe 5
-  }
-
-  "p2pVersion" should "default to 5 when config key is missing" taggedAs (UnitTest) in {
-    // Test that the default logic works by checking if hasPath would return false
+  "p2pVersion default logic" should "use 5 when hasPath returns false" taggedAs (UnitTest) in {
+    // Test the default logic pattern used in Config.scala
+    // This verifies that the hasPath check with default value works correctly
     val testConfig = ConfigFactory.parseString("""
       fukuii {
         network {
           peer {
-            # p2p-version not set
+            # p2p-version intentionally omitted
           }
         }
       }
     """)
     val peerConfig = testConfig.getConfig("fukuii.network.peer")
     
-    // Verify our default logic: if not set, use 5
+    // Simulate the logic from Config.scala
     val p2pVersion = if (peerConfig.hasPath("p2p-version")) peerConfig.getInt("p2p-version") else 5
+    
+    // Verify default is applied when key is missing
+    peerConfig.hasPath("p2p-version") shouldBe false
     p2pVersion shouldBe 5
   }
 }

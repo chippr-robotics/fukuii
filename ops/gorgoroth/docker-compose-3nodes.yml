@@ -36,7 +36,7 @@ services:
       FUKUII_ENV: gorgoroth
       JAVA_OPTS: >-
         -Dfukuii.datadir=/app/data
-        -Dfukuii.mining.mining-enabled=true
+        -Dfukuii.mining.mining-enabled=false
         -Dlogging.logs-level=DEBUG
         -Dpekko.loglevel=DEBUG
         -Dpekko.log-dead-letters=off

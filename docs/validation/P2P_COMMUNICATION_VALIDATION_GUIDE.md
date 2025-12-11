@@ -19,7 +19,6 @@ After the ETC64 removal, we need to verify:
 - Docker and Docker Compose installed
 - Fukuii built and available in Docker image
 - Access to the Gorgoroth test network configuration
-- Fukuii CLI helper available at `ops/tools/fukuii-cli.sh` (invoke with `./ops/tools/fukuii-cli.sh <command> <config>`)
 
 ## Validation Test Plan
 
@@ -33,32 +32,22 @@ cd ops/gorgoroth
 # Start 3 Fukuii nodes
 fukuii-cli start 3nodes
 
-# (Optional) confirm containers are up
-fukuii-cli status 3nodes
-
 # Wait for nodes to start (30 seconds)
 sleep 30
 
-# Check peer connectivity and mining state on node1 (WS RPC bound to 8546)
-curl -s --ipv4 -X POST http://localhost:8546 -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'
+# Check peer connections on node1
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"admin_peers","params":[],"id":1}' \
+  | jq '.result[].caps' 
 
-curl -s --ipv4 -X POST http://localhost:8546 -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}'
+# Expected: Should show "eth/64", "eth/65", or higher - NOT "etc/64"
 
-curl -s --ipv4 -X POST http://localhost:8546 -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_hashrate","params":[],"id":1}'
+# Check that nodes are syncing blocks
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
-# Admin namespace is disabled in the hardened Gorgoroth configs, so use logs to check
-# capability negotiation instead of `admin_peers`:
-docker logs gorgoroth-fukuii-node1 2>&1 | grep -i "PEER_CAPABILITIES"
-docker logs gorgoroth-fukuii-node1 2>&1 | grep -i "Negotiated protocol"
-
-# Check that nodes are syncing blocks (HTTP ports map to 8546/8548/8550 via `check-blocks.sh` helper)
-./check-blocks.sh
-
-# Collect logs for analysis (stores output under ops/gorgoroth/logs-<timestamp>)
-fukuii-cli collect-logs 3nodes ops/gorgoroth/logs-$(date +%Y%m%d-%H%M%S)
+# Collect logs for analysis
+fukuii-cli logs collect
 
 # Check logs for protocol negotiation
 grep -i "negotiated protocol" logs/fukuii-node1/*.log
@@ -71,11 +60,10 @@ fukuii-cli stop 3nodes
 
 **Success Criteria:**
 - ✅ All nodes connect to each other
-- ✅ Peer capability logs show "eth/64" or higher (NOT "etc/64")
-- ✅ Blocks are being created and synced (check-blocks.sh shows matching heights once sync completes)
+- ✅ Peer capabilities show "eth/64" or higher (NOT "etc/64")
+- ✅ Blocks are being created and synced
 - ✅ No "etc63" or "etc64" references in logs
 - ✅ STATUS_EXCHANGE logs show ForkId for ETH64+ connections
-- ✅ `eth_mining` returns `true` and `eth_hashrate` is non-zero on the active mining node
 
 ### Test 2: Mixed Network (Fukuii + Core-Geth)
 
