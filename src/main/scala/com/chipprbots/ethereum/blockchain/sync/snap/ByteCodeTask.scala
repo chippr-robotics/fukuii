@@ -4,14 +4,15 @@ import org.apache.pekko.util.ByteString
 
 /** ByteCode download task for SNAP sync
   *
-  * Represents a batch of contract bytecodes to download.
-  * Follows core-geth patterns from eth/protocols/snap/sync.go
+  * Represents a batch of contract bytecodes to download. Follows core-geth patterns from eth/protocols/snap/sync.go
   *
-  * Unlike AccountTask and StorageTask which represent ranges, ByteCodeTask
-  * represents a specific sequence of bytecode hashes to download for contract accounts.
+  * Unlike AccountTask and StorageTask which represent ranges, ByteCodeTask represents a specific sequence of bytecode
+  * hashes to download for contract accounts.
   *
-  * @param codeHashes Sequence of bytecode hashes to download
-  * @param accountHashes Corresponding account hashes (for logging/debugging)
+  * @param codeHashes
+  *   Sequence of bytecode hashes to download
+  * @param accountHashes
+  *   Corresponding account hashes (for logging/debugging)
   */
 case class ByteCodeTask(
     codeHashes: Seq[ByteString],
@@ -23,8 +24,10 @@ case class ByteCodeTask(
 ) {
 
   require(codeHashes.nonEmpty, "ByteCodeTask must have at least one code hash")
-  require(accountHashes.isEmpty || accountHashes.size == codeHashes.size,
-    "If accountHashes is provided, it must match codeHashes size")
+  require(
+    accountHashes.isEmpty || accountHashes.size == codeHashes.size,
+    "If accountHashes is provided, it must match codeHashes size"
+  )
 
   /** Check if this task is completed */
   def isComplete: Boolean = done
@@ -40,11 +43,10 @@ case class ByteCodeTask(
   }
 
   /** Calculate progress based on downloaded bytecodes */
-  def progress: Double = {
+  def progress: Double =
     if (done) 1.0
     else if (bytecodes.isEmpty) 0.0
     else bytecodes.size.toDouble / codeHashes.size
-  }
 
   /** Get number of hashes in this task */
   def size: Int = codeHashes.size
@@ -54,9 +56,8 @@ object ByteCodeTask {
 
   /** Default batch size for bytecode requests
     *
-    * Following core-geth, we batch multiple bytecode requests together.
-    * Typical contract bytecode is 5-50 KB, so 16 codes per request gives
-    * reasonable response sizes (~100-500 KB).
+    * Following core-geth, we batch multiple bytecode requests together. Typical contract bytecode is 5-50 KB, so 16
+    * codes per request gives reasonable response sizes (~100-500 KB).
     */
   val DEFAULT_BATCH_SIZE = 16
 
@@ -64,9 +65,12 @@ object ByteCodeTask {
     *
     * Batches contract code hashes into tasks of the specified batch size.
     *
-    * @param contractAccounts Sequence of (accountHash, codeHash) for contract accounts
-    * @param batchSize Number of bytecodes per task (default 16)
-    * @return Sequence of bytecode tasks
+    * @param contractAccounts
+    *   Sequence of (accountHash, codeHash) for contract accounts
+    * @param batchSize
+    *   Number of bytecodes per task (default 16)
+    * @return
+    *   Sequence of bytecode tasks
     */
   def createBytecodeTasksFromAccounts(
       contractAccounts: Seq[(ByteString, ByteString)],
@@ -91,8 +95,10 @@ object ByteCodeTask {
 
   /** Create a single bytecode task from code hashes
     *
-    * @param codeHashes Sequence of code hashes to download
-    * @return ByteCode task
+    * @param codeHashes
+    *   Sequence of code hashes to download
+    * @return
+    *   ByteCode task
     */
   def createTask(codeHashes: Seq[ByteString]): ByteCodeTask = {
     require(codeHashes.nonEmpty, "Must provide at least one code hash")
@@ -101,9 +107,12 @@ object ByteCodeTask {
 
   /** Create bytecode tasks by batching code hashes
     *
-    * @param codeHashes Sequence of code hashes to download
-    * @param batchSize Number of bytecodes per task
-    * @return Sequence of bytecode tasks
+    * @param codeHashes
+    *   Sequence of code hashes to download
+    * @param batchSize
+    *   Number of bytecodes per task
+    * @return
+    *   Sequence of bytecode tasks
     */
   def createBatchedTasks(
       codeHashes: Seq[ByteString],

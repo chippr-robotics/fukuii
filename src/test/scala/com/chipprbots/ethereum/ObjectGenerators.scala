@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
-import com.chipprbots.ethereum.network.p2p.messages.ETC64
 
 // scalastyle:off number.of.methods
 trait ObjectGenerators {
@@ -199,25 +198,18 @@ trait ObjectGenerators {
     td <- bigIntGen
   } yield NewBlock(Block(blockHeader, BlockBody(stxs, uncles)), td)
 
-  def newBlock64Gen(secureRandom: SecureRandom, chainId: Option[BigInt]): Gen[ETC64.NewBlock] = for {
-    blockHeader <- blockHeaderGen
-    stxs <- signedTxSeqGen(10, secureRandom, chainId)
-    uncles <- seqBlockHeaderGen
-    chainWeight <- chainWeightGen
-  } yield ETC64.NewBlock(Block(blockHeader, BlockBody(stxs, uncles)), chainWeight)
-
-    def extraFieldsGen: Gen[HeaderExtraFields] = for {
+  def extraFieldsGen: Gen[HeaderExtraFields] = for {
     shouldCheckpoint <- Arbitrary.arbitrary[Option[Boolean]]
     checkpoint <- if (shouldCheckpoint.isDefined) Gen.option(fakeCheckpointOptGen(0, 5)) else Gen.const(None)
   } yield checkpoint match {
-    case Some(Some(definedCheckpoint)) if definedCheckpoint.signatures.nonEmpty => 
-      HefPostEcip1097(Some(definedCheckpoint))  // Has actual checkpoint with signatures
-    case Some(Some(_)) => 
-      HefEmpty  // Checkpoint exists but has no signatures, normalize to HefEmpty
-    case Some(None) => 
-      HefEmpty  // Checkpoint is None, normalize to HefEmpty (matches decoder normalization)
-    case None => 
-      HefEmpty  // No checkpoint at all
+    case Some(Some(definedCheckpoint)) if definedCheckpoint.signatures.nonEmpty =>
+      HefPostEcip1097(Some(definedCheckpoint)) // Has actual checkpoint with signatures
+    case Some(Some(_)) =>
+      HefEmpty // Checkpoint exists but has no signatures, normalize to HefEmpty
+    case Some(None) =>
+      HefEmpty // Checkpoint is None, normalize to HefEmpty (matches decoder normalization)
+    case None =>
+      HefEmpty // No checkpoint at all
   }
 
   def blockHeaderGen: Gen[BlockHeader] = for {
@@ -227,7 +219,7 @@ trait ObjectGenerators {
     stateRoot <- byteStringOfLengthNGen(32)
     transactionsRoot <- byteStringOfLengthNGen(32)
     receiptsRoot <- byteStringOfLengthNGen(32)
-    logsBloom <- byteStringOfLengthNGen(256)  // BloomFilter.BloomFilterByteSize = 256
+    logsBloom <- byteStringOfLengthNGen(256) // BloomFilter.BloomFilterByteSize = 256
     difficulty <- bigIntGen
     number <- bigIntGen
     gasLimit <- bigIntGen
@@ -272,7 +264,7 @@ trait ObjectGenerators {
       r <- bigIntGen
       s <- bigIntGen
       v <- byteGen
-    } yield ECDSASignature(r, s, BigInt(v & 0xFF))  // Convert signed byte to unsigned (0-255) for RLP compatibility
+    } yield ECDSASignature(r, s, BigInt(v & 0xff)) // Convert signed byte to unsigned (0-255) for RLP compatibility
 
   def listOfNodes(min: Int, max: Int): Gen[Seq[MptNode]] = for {
     size <- intGen(min, max)

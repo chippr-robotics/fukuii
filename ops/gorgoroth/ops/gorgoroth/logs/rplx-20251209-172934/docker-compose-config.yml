@@ -1,0 +1,256 @@
+name: gorgoroth
+services:
+  fukuii-node1:
+    command:
+      - fukuii
+      - enterprise
+      - gorgoroth
+    container_name: gorgoroth-fukuii-node1
+    environment:
+      FUKUII_ENV: gorgoroth
+      FUKUII_NODE_ID: node1
+      JAVA_OPTS: -Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=true
+    hostname: fukuii-node1
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8546/health
+      timeout: 10s
+      interval: 30s
+      retries: 3
+      start_period: 1m0s
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.11
+    ports:
+      - mode: ingress
+        target: 8545
+        published: "8545"
+        protocol: tcp
+      - mode: ingress
+        target: 8546
+        published: "8546"
+        protocol: tcp
+      - mode: ingress
+        target: 30303
+        published: "30303"
+        protocol: tcp
+      - mode: ingress
+        target: 30303
+        published: "30303"
+        protocol: udp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/app-gorgoroth-override.conf
+        target: /app/fukuii/conf/app.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/base-gorgoroth.conf
+        target: /app/fukuii/conf/base-gorgoroth.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node1/gorgoroth.conf
+        target: /app/fukuii/conf/gorgoroth.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node1/static-nodes.json
+        target: /app/data/static-nodes.json
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: volume
+        source: fukuii-node1-data
+        target: /app/data
+        volume: {}
+      - type: volume
+        source: fukuii-node1-logs
+        target: /app/logs
+        volume: {}
+  fukuii-node2:
+    command:
+      - fukuii
+      - enterprise
+      - gorgoroth
+    container_name: gorgoroth-fukuii-node2
+    environment:
+      FUKUII_ENV: gorgoroth
+      FUKUII_NODE_ID: node2
+      JAVA_OPTS: -Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false
+    hostname: fukuii-node2
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8546/health
+      timeout: 10s
+      interval: 30s
+      retries: 3
+      start_period: 1m0s
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.12
+    ports:
+      - mode: ingress
+        target: 8545
+        published: "8547"
+        protocol: tcp
+      - mode: ingress
+        target: 8546
+        published: "8548"
+        protocol: tcp
+      - mode: ingress
+        target: 30303
+        published: "30304"
+        protocol: tcp
+      - mode: ingress
+        target: 30303
+        published: "30304"
+        protocol: udp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/app-gorgoroth-override.conf
+        target: /app/fukuii/conf/app.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/base-gorgoroth.conf
+        target: /app/fukuii/conf/base-gorgoroth.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node2/gorgoroth.conf
+        target: /app/fukuii/conf/gorgoroth.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node2/static-nodes.json
+        target: /app/data/static-nodes.json
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: volume
+        source: fukuii-node2-data
+        target: /app/data
+        volume: {}
+      - type: volume
+        source: fukuii-node2-logs
+        target: /app/logs
+        volume: {}
+  fukuii-node3:
+    command:
+      - fukuii
+      - enterprise
+      - gorgoroth
+    container_name: gorgoroth-fukuii-node3
+    environment:
+      FUKUII_ENV: gorgoroth
+      FUKUII_NODE_ID: node3
+      JAVA_OPTS: -Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false
+    hostname: fukuii-node3
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8546/health
+      timeout: 10s
+      interval: 30s
+      retries: 3
+      start_period: 1m0s
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.13
+    ports:
+      - mode: ingress
+        target: 8545
+        published: "8549"
+        protocol: tcp
+      - mode: ingress
+        target: 8546
+        published: "8550"
+        protocol: tcp
+      - mode: ingress
+        target: 30303
+        published: "30305"
+        protocol: tcp
+      - mode: ingress
+        target: 30303
+        published: "30305"
+        protocol: udp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/app-gorgoroth-override.conf
+        target: /app/fukuii/conf/app.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/base-gorgoroth.conf
+        target: /app/fukuii/conf/base-gorgoroth.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node3/gorgoroth.conf
+        target: /app/fukuii/conf/gorgoroth.conf
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /chipprbots/blockchain/fukuii/ops/gorgoroth/conf/node3/static-nodes.json
+        target: /app/data/static-nodes.json
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: volume
+        source: fukuii-node3-data
+        target: /app/data
+        volume: {}
+      - type: volume
+        source: fukuii-node3-logs
+        target: /app/logs
+        volume: {}
+networks:
+  gorgoroth:
+    name: gorgoroth_gorgoroth
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+volumes:
+  fukuii-node1-data:
+    name: gorgoroth_fukuii-node1-data
+    driver: local
+  fukuii-node1-logs:
+    name: gorgoroth_fukuii-node1-logs
+    driver: local
+  fukuii-node2-data:
+    name: gorgoroth_fukuii-node2-data
+    driver: local
+  fukuii-node2-logs:
+    name: gorgoroth_fukuii-node2-logs
+    driver: local
+  fukuii-node3-data:
+    name: gorgoroth_fukuii-node3-data
+    driver: local
+  fukuii-node3-logs:
+    name: gorgoroth_fukuii-node3-logs
+    driver: local

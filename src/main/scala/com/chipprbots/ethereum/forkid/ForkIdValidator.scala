@@ -82,8 +82,12 @@ object ForkIdValidator {
 
     for {
       _ <- Logger[F].debug(s"FORKID_VALIDATION: Validating remote $remoteId against local state")
-      _ <- Logger[F].debug(s"FORKID_VALIDATION: Local height: $currentHeight, unpassed fork: $unpassedFork at index $unpassedForkIndex")
-      _ <- Logger[F].debug(s"FORKID_VALIDATION: Local expected checksum: 0x${checksums(unpassedForkIndex).toString(16)}, remote hash: $remoteId")
+      _ <- Logger[F].debug(
+        s"FORKID_VALIDATION: Local height: $currentHeight, unpassed fork: $unpassedFork at index $unpassedForkIndex"
+      )
+      _ <- Logger[F].debug(
+        s"FORKID_VALIDATION: Local expected checksum: 0x${checksums(unpassedForkIndex).toString(16)}, remote hash: $remoteId"
+      )
       _ <- Logger[F].trace(s"FORKID_VALIDATION: Fork list: $forks")
       _ <- Logger[F].trace(s"FORKID_VALIDATION: Checksum list: $checksums")
       res <- validate.map(_.swap)

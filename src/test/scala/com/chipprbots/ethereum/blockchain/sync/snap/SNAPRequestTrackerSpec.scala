@@ -23,9 +23,8 @@ class SNAPRequestTrackerSpec
     with Matchers
     with BeforeAndAfterAll {
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     TestKit.shutdownActorSystem(system)
-  }
 
   implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
 
@@ -36,8 +35,8 @@ class SNAPRequestTrackerSpec
     val id2 = tracker.generateRequestId()
     val id3 = tracker.generateRequestId()
 
-    id1 should not equal id2
-    id2 should not equal id3
+    (id1 should not).equal(id2)
+    (id2 should not).equal(id3)
     id1 should be < id2
     id2 should be < id3
   }
@@ -88,10 +87,10 @@ class SNAPRequestTrackerSpec
     }
 
     tracker.isPending(requestId) shouldBe true
-    
+
     // Wait for timeout to trigger using awaitCond
     awaitCond(!tracker.isPending(requestId), max = 300.millis)
-    
+
     tracker.isPending(requestId) shouldBe false
     timeoutCalled shouldBe true
   }
@@ -111,7 +110,7 @@ class SNAPRequestTrackerSpec
     within(100.millis) {
       tracker.completeRequest(requestId)
     }
-    
+
     // Wait a bit longer than timeout to ensure callback doesn't fire
     awaitCond(true, max = 300.millis)
 

@@ -37,7 +37,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 class SyncStateSchedulerActor(
     sync: SyncStateScheduler,
     val syncConfig: SyncConfig,
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
     val scheduler: org.apache.pekko.actor.Scheduler
@@ -61,7 +61,7 @@ class SyncStateSchedulerActor(
       PeerRequestHandler.props[GetNodeData, NodeData](
         request.peer,
         syncConfig.peerResponseTimeout,
-        etcPeerManager,
+        networkPeerManager,
         peerEventBus,
         requestMsg = GetNodeData(request.nodes.toList),
         responseMsgCode = Codes.NodeDataCode
@@ -374,12 +374,14 @@ object SyncStateSchedulerActor {
   def props(
       sync: SyncStateScheduler,
       syncConfig: SyncConfig,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       blacklist: Blacklist,
       scheduler: org.apache.pekko.actor.Scheduler
   ): Props =
-    Props(new SyncStateSchedulerActor(sync, syncConfig, etcPeerManager, peerEventBus, blacklist, scheduler)(scheduler))
+    Props(
+      new SyncStateSchedulerActor(sync, syncConfig, networkPeerManager, peerEventBus, blacklist, scheduler)(scheduler)
+    )
 
   case object PrintInfo
   case object PrintInfoKey

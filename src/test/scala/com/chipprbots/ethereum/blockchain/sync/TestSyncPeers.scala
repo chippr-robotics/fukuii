@@ -6,8 +6,8 @@ import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -25,7 +25,7 @@ trait TestSyncPeers { self: TestSyncConfig =>
 
   val peer1Status: RemoteStatus =
     RemoteStatus(
-      Capability.ETC64,
+      Capability.ETH68,
       1,
       ChainWeight.totalDifficultyOnly(20),
       ByteString("peer1_bestHash"),

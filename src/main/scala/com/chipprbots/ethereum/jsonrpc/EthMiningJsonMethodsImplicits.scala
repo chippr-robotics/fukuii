@@ -87,9 +87,9 @@ object EthMiningJsonMethodsImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: GetMinerStatusResponse): JValue = {
         import org.json4s.JsonDSL._
         ("isMining" -> t.isMining) ~
-        ("coinbase" -> encodeAsHex(t.coinbase.bytes)) ~
-        ("hashRate" -> encodeAsHex(t.hashRate)) ~
-        ("blocksMinedCount" -> t.blocksMinedCount.map(_.toString))
+          ("coinbase" -> encodeAsHex(t.coinbase.bytes)) ~
+          ("hashRate" -> encodeAsHex(t.hashRate)) ~
+          ("blocksMinedCount" -> t.blocksMinedCount.map(_.toString))
       }
     }
 

@@ -52,7 +52,7 @@ Documents:
 
 **Key Files Modified:**
 - `SNAPSyncController.scala` - Core sync orchestration
-- `EtcPeerManagerActor.scala` - Message routing
+- `NetworkPeerManagerActor.scala` - Message routing
 - Handshaker states - SNAP capability detection
 
 ## For New Contributors

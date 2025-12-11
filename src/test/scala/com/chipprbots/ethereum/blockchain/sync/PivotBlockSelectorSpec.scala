@@ -23,10 +23,10 @@ import com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector.Result
 import com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector.SelectPivotBlock
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.HandshakedPeers
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -63,11 +64,7 @@ class PivotBlockSelectorSpec
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer3.id)))
     )
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer2.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer3.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), expectedPivotBlock)
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer1.id)
@@ -107,11 +104,7 @@ class PivotBlockSelectorSpec
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer3.id)))
     )
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(0), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(0), 1, 0, reverse = false), peer2.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(0), 1, 0, reverse = false), peer3.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), blockNumber = 0)
   }
 
   it should "retry if there are no enough peers" taggedAs (UnitTest, SyncTest) in new TestSetup {
@@ -143,11 +136,7 @@ class PivotBlockSelectorSpec
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer3.id)))
     )
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer2.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer3.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), expectedPivotBlock)
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer1.id)
@@ -188,11 +177,7 @@ class PivotBlockSelectorSpec
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer3.id)))
     )
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer2.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer3.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), expectedPivotBlock)
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer1.id)
@@ -231,9 +216,7 @@ class PivotBlockSelectorSpec
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer1.id)))
     )
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer1), expectedPivotBlock)
 
     // peer responds with block header number
     pivotBlockSelector ! MessageFromPeer(
@@ -266,12 +249,8 @@ class PivotBlockSelectorSpec
     )
     peerMessageBus.expectNoMessage()
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer2.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer3.id)
-    )
-    etcPeerManager.expectNoMessage()
+    expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), expectedPivotBlock)
+    networkPeerManager.expectNoMessage()
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer1.id)
@@ -304,12 +283,8 @@ class PivotBlockSelectorSpec
     )
     peerMessageBus.expectNoMessage()
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer2.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer3.id)
-    )
-    etcPeerManager.expectNoMessage()
+    expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), expectedPivotBlock)
+    networkPeerManager.expectNoMessage()
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer1.id)
@@ -325,9 +300,7 @@ class PivotBlockSelectorSpec
       ) // Next peer will be asked
     )
 
-    etcPeerManager.expectMsg(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer4.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer4), expectedPivotBlock)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer4.id)
 
     peerMessageBus.expectMsgAllOf(
@@ -354,12 +327,8 @@ class PivotBlockSelectorSpec
     )
     peerMessageBus.expectNoMessage()
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer2.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer3.id)
-    )
-    etcPeerManager.expectNoMessage()
+    expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), expectedPivotBlock)
+    networkPeerManager.expectNoMessage()
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer1.id)
@@ -375,9 +344,7 @@ class PivotBlockSelectorSpec
       ) // Next peer will be asked
     )
 
-    etcPeerManager.expectMsg(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer4.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer4), expectedPivotBlock)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(nextAnotherDifferentBlockHeader)), peer4.id)
 
     peerMessageBus.expectMsgAllOf(
@@ -431,11 +398,7 @@ class PivotBlockSelectorSpec
     )
     peerMessageBus.expectNoMessage()
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer3.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(expectedPivotBlock), 1, 0, reverse = false), peer4.id)
-    )
+    expectGetBlockHeadersRequests(Seq(peer1, peer3, peer4), expectedPivotBlock)
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(pivotBlockHeader)), peer1.id)
@@ -478,12 +441,8 @@ class PivotBlockSelectorSpec
       Subscribe(MessageClassifier(Set(Codes.BlockHeadersCode), PeerSelector.WithId(peer4.id)))
     )
 
-    etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(900), 1, 0, reverse = false), peer1.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(900), 1, 0, reverse = false), peer3.id),
-      EtcPeerManagerActor.SendMessage(GetBlockHeaders(Left(900), 1, 0, reverse = false), peer4.id)
-    )
-    etcPeerManager.expectNoMessage()
+    expectGetBlockHeadersRequests(Seq(peer1, peer3, peer4), blockNumber = 900)
+    networkPeerManager.expectNoMessage()
 
     // Collecting pivot block (for voting)
     pivotBlockSelector ! MessageFromPeer(BlockHeaders(Seq(baseBlockHeader.copy(number = 900))), peer1.id)
@@ -510,10 +469,44 @@ class PivotBlockSelectorSpec
       case _           => false
     }
 
-    val etcPeerManager: TestProbe = TestProbe()
-    etcPeerManager.ignoreMsg {
-      case EtcPeerManagerActor.SendMessage(msg, _) if isNewBlock(msg.underlyingMsg) => true
-      case EtcPeerManagerActor.GetHandshakedPeers                                   => true
+  def expectGetBlockHeadersRequests(peers: Seq[Peer], blockNumber: BigInt): Unit = {
+      val expectedPeerIds = peers.map(_.id)
+      val receivedMessages = (1 to expectedPeerIds.size).map(_ =>
+        networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage]
+      )
+
+      expectedPeerIds.foreach { peerId =>
+        val sendMsg = receivedMessages.find(_.peerId == peerId).getOrElse(
+          fail(s"Expected GetBlockHeaders request for peer $peerId, but received ${receivedMessages.map(_.peerId)}")
+        )
+        assertGetBlockHeaders(sendMsg.message.underlyingMsg, blockNumber)
+      }
+
+      val unexpectedPeers = receivedMessages.map(_.peerId).filterNot(expectedPeerIds.contains)
+      withClue(s"Unexpected GetBlockHeaders requests for peers: $unexpectedPeers") {
+        unexpectedPeers shouldBe empty
+      }
+    }
+
+  private def assertGetBlockHeaders(msg: Message, expectedBlockNumber: BigInt): Unit = msg match {
+      case GetBlockHeaders(Left(number), maxHeaders, skip, reverse) =>
+        number shouldBe expectedBlockNumber
+        maxHeaders shouldBe 1
+        skip shouldBe 0
+        reverse shouldBe false
+      case ETH66.GetBlockHeaders(_, Left(number), maxHeaders, skip, reverse) =>
+        number shouldBe expectedBlockNumber
+        maxHeaders shouldBe 1
+        skip shouldBe 0
+        reverse shouldBe false
+      case other =>
+        fail(s"Expected GetBlockHeaders for block $expectedBlockNumber but received $other")
+    }
+
+    val networkPeerManager: TestProbe = TestProbe()
+    networkPeerManager.ignoreMsg {
+      case NetworkPeerManagerActor.SendMessage(msg, _) if isNewBlock(msg.underlyingMsg) => true
+      case NetworkPeerManagerActor.GetHandshakedPeers                                   => true
     }
 
     val peerMessageBus: TestProbe = TestProbe()
@@ -549,7 +542,7 @@ class PivotBlockSelectorSpec
 
     lazy val pivotBlockSelector: ActorRef = system.actorOf(
       PivotBlockSelector.props(
-        etcPeerManager.ref,
+        networkPeerManager.ref,
         peerMessageBus.ref,
         defaultSyncConfig,
         testScheduler,
@@ -584,7 +577,7 @@ class PivotBlockSelectorSpec
 
     val peer1Status: RemoteStatus =
       RemoteStatus(
-        Capability.ETC64,
+        Capability.ETH68,
         1,
         ChainWeight.totalDifficultyOnly(20),
         ByteString("peer1_bestHash"),

@@ -1,3 +1,5 @@
+Gorgoroth status 🔴 - limited. rplx compression bug
+
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
 </div>

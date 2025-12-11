@@ -68,7 +68,6 @@ class TuiUpdater(
                 // Use the provided shutdown hook for graceful shutdown
                 shutdownHook()
             case None => // No input
-
           // Sleep for a bit
           Thread.sleep(config.updateIntervalMs)
         catch

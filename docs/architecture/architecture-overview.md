@@ -258,7 +258,7 @@ graph TB
         
         subgraph "Peer Management"
             PA[PeerActor]
-            EPM[EtcPeerManagerActor]
+            EPM[NetworkPeerManagerActor]
             PS[PeerStatistics]
             KN[KnownNodesManager]
         end

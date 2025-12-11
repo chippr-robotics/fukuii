@@ -7,10 +7,10 @@ import com.chipprbots.ethereum.utils.Logger
 /** Error handling and recovery for SNAP sync
   *
   * Provides:
-  * - Exponential backoff for retry logic
-  * - Circuit breaker for repeatedly failing tasks
-  * - Peer performance tracking and blacklisting
-  * - Error context and logging
+  *   - Exponential backoff for retry logic
+  *   - Circuit breaker for repeatedly failing tasks
+  *   - Peer performance tracking and blacklisting
+  *   - Error context and logging
   *
   * Based on patterns from core-geth snap sync error handling.
   */
@@ -34,11 +34,13 @@ class SNAPErrorHandler(
 
   /** Calculate backoff duration for a retry attempt
     *
-    * Uses exponential backoff: initialBackoff * 2^(attempt - 1)
-    * Capped at maxBackoff to prevent unreasonably long delays.
+    * Uses exponential backoff: initialBackoff * 2^(attempt - 1) Capped at maxBackoff to prevent unreasonably long
+    * delays.
     *
-    * @param attempt The retry attempt number (1-indexed)
-    * @return Backoff duration for this attempt
+    * @param attempt
+    *   The retry attempt number (1-indexed)
+    * @return
+    *   Backoff duration for this attempt
     */
   def calculateBackoff(attempt: Int): FiniteDuration = {
     val backoffMs = math.min(
@@ -50,9 +52,12 @@ class SNAPErrorHandler(
 
   /** Record a task retry
     *
-    * @param taskId Unique identifier for the task
-    * @param error Error that caused the retry
-    * @return Retry state with updated attempt count and backoff
+    * @param taskId
+    *   Unique identifier for the task
+    * @param error
+    *   Error that caused the retry
+    * @return
+    *   Retry state with updated attempt count and backoff
     */
   def recordRetry(taskId: String, error: String): RetryState = synchronized {
     val currentState = taskRetries.getOrElse(taskId, RetryState(taskId, 0, System.currentTimeMillis(), None))
@@ -79,27 +84,31 @@ class SNAPErrorHandler(
 
   /** Check if a task should be retried
     *
-    * @param taskId Unique identifier for the task
-    * @return true if task should be retried, false if max retries exceeded
+    * @param taskId
+    *   Unique identifier for the task
+    * @return
+    *   true if task should be retried, false if max retries exceeded
     */
   def shouldRetry(taskId: String): Boolean = synchronized {
     taskRetries.get(taskId) match {
       case Some(state) => state.attempts < maxRetries
-      case None => true // First attempt
+      case None        => true // First attempt
     }
   }
 
   /** Check if a task is ready for retry (backoff period elapsed)
     *
-    * @param taskId Unique identifier for the task
-    * @return true if backoff period has elapsed
+    * @param taskId
+    *   Unique identifier for the task
+    * @return
+    *   true if backoff period has elapsed
     */
   def isRetryReady(taskId: String): Boolean = synchronized {
     taskRetries.get(taskId) match {
       case Some(state) =>
         state.nextRetryTime match {
           case Some(nextTime) => System.currentTimeMillis() >= nextTime
-          case None => true
+          case None           => true
         }
       case None => true
     }
@@ -107,7 +116,8 @@ class SNAPErrorHandler(
 
   /** Reset retry state for a task (called on success)
     *
-    * @param taskId Unique identifier for the task
+    * @param taskId
+    *   Unique identifier for the task
     */
   def resetRetries(taskId: String): Unit = synchronized {
     taskRetries.remove(taskId).foreach { state =>
@@ -119,13 +129,18 @@ class SNAPErrorHandler(
 
   /** Record a peer failure
     *
-    * @param peerId Peer identifier
-    * @param errorType Type of error (e.g., "timeout", "invalid_proof", "malformed_response")
-    * @param context Additional context about the failure
-    * @return Updated peer failure state
+    * @param peerId
+    *   Peer identifier
+    * @param errorType
+    *   Type of error (e.g., "timeout", "invalid_proof", "malformed_response")
+    * @param context
+    *   Additional context about the failure
+    * @return
+    *   Updated peer failure state
     */
   def recordPeerFailure(peerId: String, errorType: String, context: String = ""): PeerFailureState = synchronized {
-    val currentState = peerFailures.getOrElse(peerId, PeerFailureState(peerId, 0, Map.empty, System.currentTimeMillis()))
+    val currentState =
+      peerFailures.getOrElse(peerId, PeerFailureState(peerId, 0, Map.empty, System.currentTimeMillis()))
     val errorCounts = currentState.errorsByType
     val newCount = errorCounts.getOrElse(errorType, 0) + 1
 
@@ -146,11 +161,13 @@ class SNAPErrorHandler(
   /** Check if a peer should be blacklisted
     *
     * Blacklist criteria:
-    * - Too many total failures
-    * - Too many failures of a specific severe type (e.g., invalid_proof)
+    *   - Too many total failures
+    *   - Too many failures of a specific severe type (e.g., invalid_proof)
     *
-    * @param peerId Peer identifier
-    * @return true if peer should be blacklisted
+    * @param peerId
+    *   Peer identifier
+    * @return
+    *   true if peer should be blacklisted
     */
   def shouldBlacklistPeer(peerId: String): Boolean = synchronized {
     peerFailures.get(peerId) match {
@@ -184,7 +201,8 @@ class SNAPErrorHandler(
     *
     * Reduces failure count to allow recovery of temporarily problematic peers.
     *
-    * @param peerId Peer identifier
+    * @param peerId
+    *   Peer identifier
     */
   def recordPeerSuccess(peerId: String): Unit = synchronized {
     peerFailures.get(peerId).foreach { state =>
@@ -205,8 +223,10 @@ class SNAPErrorHandler(
 
   /** Get peer failure statistics
     *
-    * @param peerId Peer identifier
-    * @return Peer failure state if tracked
+    * @param peerId
+    *   Peer identifier
+    * @return
+    *   Peer failure state if tracked
     */
   def getPeerFailureState(peerId: String): Option[PeerFailureState] = synchronized {
     peerFailures.get(peerId)
@@ -214,14 +234,19 @@ class SNAPErrorHandler(
 
   /** Circuit breaker: record a failure for a task type
     *
-    * Circuit breaker prevents repeatedly attempting tasks that consistently fail.
-    * After threshold failures, the circuit "opens" and blocks further attempts.
+    * Circuit breaker prevents repeatedly attempting tasks that consistently fail. After threshold failures, the circuit
+    * "opens" and blocks further attempts.
     *
-    * @param taskType Type of task (e.g., "account_range_download")
-    * @return Updated circuit breaker state
+    * @param taskType
+    *   Type of task (e.g., "account_range_download")
+    * @return
+    *   Updated circuit breaker state
     */
   def recordCircuitBreakerFailure(taskType: String): CircuitBreakerState = synchronized {
-    val currentState = circuitBreakers.getOrElse(taskType, CircuitBreakerState(taskType, 0, CircuitState.Closed, System.currentTimeMillis()))
+    val currentState = circuitBreakers.getOrElse(
+      taskType,
+      CircuitBreakerState(taskType, 0, CircuitState.Closed, System.currentTimeMillis())
+    )
     val newFailures = currentState.consecutiveFailures + 1
 
     val newCircuitState = if (newFailures >= circuitBreakerThreshold) {
@@ -245,7 +270,8 @@ class SNAPErrorHandler(
     *
     * Resets consecutive failure count and closes the circuit if open.
     *
-    * @param taskType Type of task
+    * @param taskType
+    *   Type of task
     */
   def recordCircuitBreakerSuccess(taskType: String): Unit = synchronized {
     circuitBreakers.get(taskType).foreach { state =>
@@ -258,20 +284,24 @@ class SNAPErrorHandler(
 
   /** Check if circuit breaker is open for a task type
     *
-    * @param taskType Type of task
-    * @return true if circuit is open (task should not be attempted)
+    * @param taskType
+    *   Type of task
+    * @return
+    *   true if circuit is open (task should not be attempted)
     */
   def isCircuitOpen(taskType: String): Boolean = synchronized {
     circuitBreakers.get(taskType) match {
       case Some(state) => state.state == CircuitState.Open
-      case None => false
+      case None        => false
     }
   }
 
   /** Get circuit breaker state
     *
-    * @param taskType Type of task
-    * @return Circuit breaker state if tracked
+    * @param taskType
+    *   Type of task
+    * @return
+    *   Circuit breaker state if tracked
     */
   def getCircuitBreakerState(taskType: String): Option[CircuitBreakerState] = synchronized {
     circuitBreakers.get(taskType)
@@ -279,11 +309,16 @@ class SNAPErrorHandler(
 
   /** Create error context for logging
     *
-    * @param phase Current sync phase
-    * @param peerId Peer identifier
-    * @param requestId Request ID if applicable
-    * @param taskId Task identifier if applicable
-    * @return Formatted error context string
+    * @param phase
+    *   Current sync phase
+    * @param peerId
+    *   Peer identifier
+    * @param requestId
+    *   Request ID if applicable
+    * @param taskId
+    *   Task identifier if applicable
+    * @return
+    *   Formatted error context string
     */
   def createErrorContext(
       phase: String,
@@ -358,7 +393,7 @@ object SNAPErrorHandler {
   sealed trait CircuitState
   object CircuitState {
     case object Closed extends CircuitState // Normal operation
-    case object Open extends CircuitState   // Circuit tripped, blocking operations
+    case object Open extends CircuitState // Circuit tripped, blocking operations
   }
 
   case class CircuitBreakerState(

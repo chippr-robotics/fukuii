@@ -8,8 +8,8 @@ import org.apache.pekko.actor.Scheduler
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
@@ -27,7 +27,7 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
 
   protected val bigIntReverseOrdering: Ordering[BigInt] = Ordering[BigInt].reverse
 
-  def etcPeerManager: ActorRef
+  def networkPeerManager: ActorRef
   def peerEventBus: ActorRef
   def blacklist: Blacklist
   def syncConfig: SyncConfig
@@ -38,13 +38,13 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
   scheduler.scheduleWithFixedDelay(
     0.seconds,
     syncConfig.peersScanInterval,
-    etcPeerManager,
-    EtcPeerManagerActor.GetHandshakedPeers
+    networkPeerManager,
+    NetworkPeerManagerActor.GetHandshakedPeers
   )(ec, context.self)
 
   def handlePeerListMessages: Receive = {
-    case EtcPeerManagerActor.HandshakedPeers(peers) => updatePeers(peers)
-    case PeerDisconnected(peerId)                   => removePeerById(peerId)
+    case NetworkPeerManagerActor.HandshakedPeers(peers) => updatePeers(peers)
+    case PeerDisconnected(peerId)                       => removePeerById(peerId)
   }
 
   def peersToDownloadFrom: Map[PeerId, PeerWithInfo] = {

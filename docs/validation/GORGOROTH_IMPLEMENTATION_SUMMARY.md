@@ -115,7 +115,7 @@ The implementation supports 5 different test configurations:
 
 1. **Network Communication (Fukuii-only)** - Fully validated
    - Peer discovery and handshakes ✅
-   - Protocol compatibility (ETC64, SNAP1) ✅
+   - Protocol compatibility (ETH68, SNAP1) ✅
    - Block propagation ✅
    - All nodes successfully connect ✅
 

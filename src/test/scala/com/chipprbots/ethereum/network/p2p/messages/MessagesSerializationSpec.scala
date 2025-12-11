@@ -7,7 +7,6 @@ import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
@@ -81,39 +80,6 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
     }
   }
 
-  "ETC64" when {
-    "encoding and decoding Status" should {
-      "return same result for Status v64" in {
-        val msg = ETC64.Status(1, 2, ChainWeight(2, 5), ByteString("HASH"), ByteString("HASH2"))
-        verify(msg, (m: ETC64.Status) => m.toBytes, Codes.StatusCode, Capability.ETC64)
-      }
-
-      // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
-      // BigInt.toByteArray uses two's complement which adds leading 0x00 for values with high bit set
-      // (e.g., 128 -> [0x00, 0x80] instead of [0x80]). This tests the fix using bigIntToUnsignedByteArray.
-      "handle values >= 128 correctly (two's complement edge case)" in {
-        val msg = ETC64.Status(
-          protocolVersion = 128,  // Tests high bit in single byte
-          networkId = 256,        // Tests value requiring 2 bytes
-          chainWeight = ChainWeight(
-            lastCheckpointNumber = BigInt("9000000000000000", 16), // Tests high bit in checkpoint
-            totalDifficulty = BigInt("8000000000000000", 16)       // Tests high bit in difficulty
-          ),
-          bestHash = ByteString("HASH"),
-          genesisHash = ByteString("HASH2")
-        )
-        verify(msg, (m: ETC64.Status) => m.toBytes, Codes.StatusCode, Capability.ETC64)
-      }
-    }
-
-    "encoding and decoding NewBlock" should {
-      "return same result for NewBlock v64" in {
-        val msg = ETC64.NewBlock(Fixtures.Blocks.Block3125369.block, ChainWeight(2323, 21))
-        verify(msg, (m: ETC64.NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETC64)
-      }
-    }
-  }
-
   "ETH63" when {
     val version = Capability.ETH63
     "encoding and decoding Status" should {
@@ -127,8 +93,8 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       // (e.g., 128 -> [0x00, 0x80] instead of [0x80]). This tests the fix using bigIntToUnsignedByteArray.
       "handle values >= 128 correctly (two's complement edge case)" in {
         val msg = Status(
-          protocolVersion = 128,  // Tests high bit in single byte
-          networkId = 256,        // Tests value requiring 2 bytes
+          protocolVersion = 128, // Tests high bit in single byte
+          networkId = 256, // Tests value requiring 2 bytes
           totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
           bestHash = ByteString("HASH"),
           genesisHash = ByteString("HASH2")
@@ -150,8 +116,8 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
       "handle values >= 128 correctly (two's complement edge case)" in {
         val msg = ETH64.Status(
-          protocolVersion = 128,  // Tests high bit in single byte
-          networkId = 256,        // Tests value requiring 2 bytes
+          protocolVersion = 128, // Tests high bit in single byte
+          networkId = 256, // Tests value requiring 2 bytes
           totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
           bestHash = ByteString("HASH"),
           genesisHash = ByteString("HASH2"),

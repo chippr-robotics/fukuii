@@ -47,7 +47,7 @@ The SNAP sync implementation in Fukuii has achieved **production readiness** wit
    - **All compilation errors resolved - code compiles successfully**
 
 5. ✅ **Message Routing (P0 - Critical)**
-   - Message routing from EtcPeerManagerActor to SNAPSyncController complete
+   - Message routing from NetworkPeerManagerActor to SNAPSyncController complete
    - All SNAP response messages properly routed to downloaders
    - Integration tested with existing sync infrastructure
 
@@ -130,7 +130,7 @@ The SNAP sync implementation in Fukuii has achieved **production readiness** wit
 - ✅ AppStateStorage methods for persistence
 - ✅ Comprehensive configuration in base.conf
 - ✅ SyncController integration complete
-- ✅ Message routing from EtcPeerManagerActor to SNAPSyncController
+- ✅ Message routing from NetworkPeerManagerActor to SNAPSyncController
 - ✅ **All compilation errors fixed - production ready**
 - ⚠️ **TODO**: Complete StateValidator implementation for missing node detection
 
@@ -161,7 +161,7 @@ The SNAP sync implementation in Fukuii has achieved **production readiness** wit
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/StorageRangeDownloader.scala`
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/TrieNodeHealer.scala`
-- `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+- `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/Blacklist.scala` (usage)
 
 **Documentation Created:**
@@ -174,7 +174,7 @@ The SNAP sync implementation in Fukuii has achieved **production readiness** wit
 3. Herald P0/P1/P2 fixes applied (+109, -61)
 4. LRU cache fixes + deadlock prevention (+19, -20)
 5. Compilation fixes Part 1: Blacklist, SyncProgressMonitor, StorageTrieCache (+32, -1)
-6. Compilation fixes Part 2: EtcPeerManagerActor overloaded apply methods (+7, -4)
+6. Compilation fixes Part 2: NetworkPeerManagerActor overloaded apply methods (+7, -4)
 7. Compilation fixes Part 3: LoggingAdapter and RemoteStatus type issues (+24, -4)
 
 **Total Changes:** ~1,484 insertions, ~177 deletions across 7 files
@@ -498,7 +498,7 @@ The SNAP sync implementation in Fukuii has achieved **production readiness** wit
 ### Recent Accomplishments (2025-12-02)
 
 1. ✅ **Message Routing (P0 - Critical)**
-   - Message routing from EtcPeerManagerActor to SNAPSyncController complete
+   - Message routing from NetworkPeerManagerActor to SNAPSyncController complete
    - All SNAP response messages properly routed to downloaders
    - Integration tested with existing sync infrastructure
 
@@ -576,7 +576,7 @@ The SNAP sync implementation in Fukuii has achieved **production readiness** wit
 - ✅ AppStateStorage methods for persistence
 - ✅ Comprehensive configuration in base.conf
 - ✅ SyncController integration complete
-- ✅ **COMPLETED**: Message routing from EtcPeerManagerActor to SNAPSyncController
+- ✅ **COMPLETED**: Message routing from NetworkPeerManagerActor to SNAPSyncController
 - ⚠️ **TODO**: Actual state validation implementation
 
 ## Critical Gaps (P0 - Must Fix for Basic Functionality)
@@ -586,10 +586,10 @@ The SNAP sync implementation in Fukuii has achieved **production readiness** wit
 **Effort:** 1 week (completed)  
 **Blocking:** Everything (unblocked)
 
-Message routing from EtcPeerManagerActor to SNAPSyncController is now fully implemented and tested.
+Message routing from NetworkPeerManagerActor to SNAPSyncController is now fully implemented and tested.
 
 **Completed Work:**
-- ✅ Added SNAP message codes to EtcPeerManagerActor subscription list
+- ✅ Added SNAP message codes to NetworkPeerManagerActor subscription list
 - ✅ Implemented message routing for AccountRange, StorageRanges, TrieNodes, ByteCodes
 - ✅ Added RegisterSnapSyncController message for late binding
 - ✅ Integrated SNAPSyncController registration in SyncController
@@ -597,7 +597,7 @@ Message routing from EtcPeerManagerActor to SNAPSyncController is now fully impl
 - ✅ All existing tests pass (250 tests, 0 failures)
 
 **Files Modified:**
-- `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+- `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala`
 - `src/test/scala/com/chipprbots/ethereum/network/EtcPeerManagerSpec.scala`
 
@@ -619,7 +619,7 @@ Message routing from EtcPeerManagerActor to SNAPSyncController is now fully impl
 
 **Files Modified:**
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
-- `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+- `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
 - `src/main/scala/com/chipprbots/ethereum/network/handshaker/EtcHelloExchangeState.scala`
 - `src/main/scala/com/chipprbots/ethereum/network/handshaker/EtcNodeStatus64ExchangeState.scala`
 - `src/main/scala/com/chipprbots/ethereum/network/handshaker/EthNodeStatus63ExchangeState.scala`
@@ -777,7 +777,7 @@ Update developer documentation.
 
 ### Immediate Next Steps (This Week)
 1. **Message Routing** (P0.1) - 3-5 days
-   - Add SNAP message handlers to EtcPeerManagerActor
+   - Add SNAP message handlers to NetworkPeerManagerActor
    - Route to SNAPSyncController components
    - Test message flow end-to-end
 

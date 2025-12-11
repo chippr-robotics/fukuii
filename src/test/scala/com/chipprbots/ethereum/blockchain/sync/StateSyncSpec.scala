@@ -35,7 +35,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor._
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerId
@@ -196,12 +196,12 @@ class StateSyncSpec
       }
     }
 
-    val etcPeerManager: TestProbe = TestProbe()
+    val networkPeerManager: TestProbe = TestProbe()
 
     val peerEventBus: TestProbe = TestProbe()
 
     def setAutoPilotWithProvider(trieProvider: TrieProvider, peerConfig: PeerConfig = defaultPeerConfig): Unit =
-      etcPeerManager.setAutoPilot(new AutoPilot {
+      networkPeerManager.setAutoPilot(new AutoPilot {
         override def run(sender: ActorRef, msg: Any): AutoPilot =
           msg match {
             case SendMessage(msg: GetNodeDataEnc, peer) =>
@@ -265,7 +265,7 @@ class StateSyncSpec
             syncConfig.stateSyncBloomFilterSize
           ),
           syncConfig,
-          etcPeerManager.ref,
+          networkPeerManager.ref,
           peerEventBus.ref,
           blacklist,
           system.scheduler

@@ -6,12 +6,15 @@ import com.chipprbots.ethereum.domain.Account
 
 /** Account range task for SNAP sync
   *
-  * Represents a range of accounts to download from the state trie.
-  * Follows core-geth patterns from eth/protocols/snap/sync.go
+  * Represents a range of accounts to download from the state trie. Follows core-geth patterns from
+  * eth/protocols/snap/sync.go
   *
-  * @param next Next account hash to sync in this interval
-  * @param last Last account hash to sync in this interval (exclusive upper bound)
-  * @param rootHash State root hash for verification
+  * @param next
+  *   Next account hash to sync in this interval
+  * @param last
+  *   Last account hash to sync in this interval (exclusive upper bound)
+  * @param rootHash
+  *   State root hash for verification
   */
 case class AccountTask(
     next: ByteString,
@@ -38,7 +41,7 @@ case class AccountTask(
   }
 
   /** Calculate progress based on downloaded accounts */
-  def progress: Double = {
+  def progress: Double =
     if (done) 1.0
     else if (accounts.isEmpty) 0.0
     else {
@@ -46,46 +49,47 @@ case class AccountTask(
       // Typical ranges contain hundreds to thousands of accounts
       math.min(0.9, accounts.size.toDouble / AccountTask.ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE)
     }
-  }
 }
 
 object AccountTask {
 
-  /** 
-    * Estimated number of accounts that represents "almost complete" (90% progress).
-    * This is a rough heuristic based on typical account range sizes in SNAP sync.
-    * Actual ranges can vary significantly based on state distribution.
+  /** Estimated number of accounts that represents "almost complete" (90% progress). This is a rough heuristic based on
+    * typical account range sizes in SNAP sync. Actual ranges can vary significantly based on state distribution.
     */
   val ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE = 1000.0
 
   /** Create initial account tasks by dividing the account space
     *
-    * Following core-geth pattern, divide into chunks for parallel download.
-    * Default is 16 concurrent chunks.
+    * Following core-geth pattern, divide into chunks for parallel download. Default is 16 concurrent chunks.
     *
-    * @param rootHash State root to sync
-    * @param concurrency Number of parallel tasks (default 16)
-    * @return List of account tasks covering the full account space
+    * @param rootHash
+    *   State root to sync
+    * @param concurrency
+    *   Number of parallel tasks (default 16)
+    * @return
+    *   List of account tasks covering the full account space
     */
   def createInitialTasks(rootHash: ByteString, concurrency: Int = 16): Seq[AccountTask] = {
     require(concurrency > 0, "Concurrency must be positive")
 
     if (concurrency == 1) {
       // Single task covers entire range
-      return Seq(AccountTask(
-        next = ByteString.empty, // 0x00...
-        last = ByteString.empty, // 0xFF... (exclusive)
-        rootHash = rootHash
-      ))
+      return Seq(
+        AccountTask(
+          next = ByteString.empty, // 0x00...
+          last = ByteString.empty, // 0xFF... (exclusive)
+          rootHash = rootHash
+        )
+      )
     }
 
     // Divide 256-bit space into equal chunks
     val chunkSize = BigInt(2).pow(256) / concurrency
-    
+
     (0 until concurrency).map { i =>
       val start = if (i == 0) BigInt(0) else chunkSize * i
       val end = if (i == concurrency - 1) BigInt(2).pow(256) - 1 else chunkSize * (i + 1)
-      
+
       AccountTask(
         next = bigIntTo32ByteString(start),
         last = bigIntTo32ByteString(end),
@@ -98,8 +102,10 @@ object AccountTask {
     *
     * Handles sign bit properly and ensures correct padding for hash values.
     *
-    * @param bi BigInt to convert
-    * @return 32-byte ByteString in big-endian format
+    * @param bi
+    *   BigInt to convert
+    * @return
+    *   32-byte ByteString in big-endian format
     */
   private def bigIntTo32ByteString(bi: BigInt): ByteString = {
     val bytes = bi.toByteArray

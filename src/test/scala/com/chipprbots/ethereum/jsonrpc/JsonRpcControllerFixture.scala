@@ -154,7 +154,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     filterManager.ref,
     filterConfig
   )
-  val personalService: PersonalService = mock[PersonalService]
+  val personalService: PersonalServiceAPI = mock[PersonalServiceAPI]
   val debugService: DebugService = mock[DebugService]
   val qaService: QAService = mock[QAService]
   val checkpointingService: CheckpointingService = mock[CheckpointingService]

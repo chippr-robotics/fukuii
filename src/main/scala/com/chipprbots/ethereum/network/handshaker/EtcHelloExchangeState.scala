@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.network.handshaker
 
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.ServerStatus
 
-case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfiguration)
+case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfiguration)
     extends InProgressState[PeerInfo]
     with Logger {
 
@@ -31,15 +31,19 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
     log.debug("Protocol handshake finished with peer ({})", hello)
     // Store full capability list from peer
     val peerCapabilities = hello.capabilities.toList
-    
+
     // Enhanced logging for peer capabilities and protocol version
-    log.info("PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}]", 
-      hello.clientId, hello.p2pVersion, peerCapabilities.mkString(", "))
-    
+    log.info(
+      "PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}]",
+      hello.clientId,
+      hello.p2pVersion,
+      peerCapabilities.mkString(", ")
+    )
+
     // Check if peer supports SNAP/1 protocol
     val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
     log.info("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
-    
+
     // Log compression decision based on p2p version
     val compressionPolicy =
       CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
@@ -50,12 +54,9 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
       compressionPolicy.compressOutbound,
       compressionPolicy.expectInboundCompressed
     )
-    
+
     // FIXME in principle this should be already negotiated
     Capability.negotiate(peerCapabilities, Config.supportedCapabilities) match {
-      case Some(Capability.ETC64) =>
-        log.debug("Negotiated protocol version with client {} is etc/64", hello.clientId)
-        EtcNodeStatus64ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
       case Some(Capability.ETH63) =>
         log.debug("Negotiated protocol version with client {} is eth/63", hello.clientId)
         EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
@@ -66,7 +67,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
         EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities)
       case _ =>
         log.debug(
-          s"Connected peer does not support eth/63-68 or etc/64 protocol. Disconnecting."
+          s"Connected peer does not support eth/63-68 protocol. Disconnecting."
         )
         DisconnectedState(Disconnect.Reasons.IncompatibleP2pProtocolVersion)
     }

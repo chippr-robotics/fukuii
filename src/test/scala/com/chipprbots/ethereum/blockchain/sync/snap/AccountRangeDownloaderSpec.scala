@@ -21,9 +21,8 @@ class AccountRangeDownloaderSpec
     with Matchers
     with BeforeAndAfterAll {
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     TestKit.shutdownActorSystem(system)
-  }
 
   implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
 
@@ -35,7 +34,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -57,7 +56,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -83,7 +82,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -94,7 +93,7 @@ class AccountRangeDownloaderSpec
 
     requestId1 shouldBe defined
     requestId2 shouldBe defined
-    requestId1.get should not equal requestId2.get
+    (requestId1.get should not).equal(requestId2.get)
 
     // Both requests should be sent
     etcPeerManager.expectMsgType[Any]
@@ -112,7 +111,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -135,13 +134,13 @@ class AccountRangeDownloaderSpec
 
     // Handle response - may fail on proof verification but shouldn't crash
     val result = downloader.handleResponse(response)
-    
+
     result match {
-      case Right(count) => 
+      case Right(count) =>
         count shouldBe 2
       case Left(error) =>
         // Accept proof verification failures in unit tests
-        error should (include("proof") or include("Unknown request"))
+        error should (include("proof").or(include("Unknown request")))
     }
   }
 
@@ -153,7 +152,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -182,7 +181,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -224,7 +223,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -246,7 +245,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 1 // Single task for simplicity
@@ -278,7 +277,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4
@@ -297,7 +296,7 @@ class AccountRangeDownloaderSpec
 
     val downloader = new AccountRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       concurrency = 4

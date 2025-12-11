@@ -269,8 +269,8 @@ class PeerActor[R <: HandshakeResult](
       if (d.reason == Other) {
         log.info(
           s"DISCONNECT_DEBUG: Subprotocol disconnect (0x10) from ${peerAddress.getHostString}:${peerAddress.getPort}. " +
-          s"This typically indicates: ForkId mismatch, malformed message, or protocol incompatibility. " +
-          s"Check peer logs or enable debug logging for RLP bytes."
+            s"This typically indicates: ForkId mismatch, malformed message, or protocol incompatibility. " +
+            s"Check peer logs or enable debug logging for RLP bytes."
         )
       }
       d.reason match {

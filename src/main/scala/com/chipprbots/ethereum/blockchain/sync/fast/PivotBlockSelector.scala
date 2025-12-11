@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.PivotBl
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
@@ -37,7 +37,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ET
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class PivotBlockSelector(
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val syncConfig: SyncConfig,
     val scheduler: Scheduler,
@@ -254,7 +254,7 @@ class PivotBlockSelector(
         ETH62GetBlockHeaders(Left(blockNumber), 1, 0, reverse = false)
     }
 
-    etcPeerManager ! EtcPeerManagerActor.SendMessage(getBlockHeadersMsg, peer)
+    networkPeerManager ! NetworkPeerManagerActor.SendMessage(getBlockHeadersMsg, peer)
   }
 
   private def collectVoters(previousBestBlockNumber: Option[BigInt] = None): ElectionDetails = {
@@ -286,14 +286,16 @@ class PivotBlockSelector(
 
 object PivotBlockSelector {
   def props(
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       syncConfig: SyncConfig,
       scheduler: Scheduler,
       fastSync: ActorRef,
       blacklist: Blacklist
   ): Props =
-    Props(new PivotBlockSelector(etcPeerManager: ActorRef, peerEventBus, syncConfig, scheduler, fastSync, blacklist))
+    Props(
+      new PivotBlockSelector(networkPeerManager: ActorRef, peerEventBus, syncConfig, scheduler, fastSync, blacklist)
+    )
 
   case object SelectPivotBlock
   final case class Result(targetBlockHeader: BlockHeader)

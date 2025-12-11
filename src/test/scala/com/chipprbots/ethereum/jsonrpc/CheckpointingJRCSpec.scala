@@ -268,7 +268,7 @@ class CheckpointingJRCSpec
       com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist.empty(100),
       com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
     )
-    val personalService: PersonalService = mock[PersonalService]
+    val personalService: PersonalServiceAPI = mock[PersonalServiceAPI]
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
     val ethMiningService: EthMiningService = mock[EthMiningService]

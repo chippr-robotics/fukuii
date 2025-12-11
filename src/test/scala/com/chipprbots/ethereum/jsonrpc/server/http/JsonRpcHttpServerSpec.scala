@@ -37,12 +37,11 @@ import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitCo
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Logger
 
-/** Mockable stub controller for testing. This is needed because JsonRpcBaseController 
-  * has self-type constraints that make it unmockable directly with ScalaMock in Scala 3.
-  * 
-  * Note: When this class is used with ScalaMock via `mock[MockableJsonRpcController]`, 
-  * all method calls including `config` are intercepted by the mock framework.
-  * The null value here is never actually accessed in practice.
+/** Mockable stub controller for testing. This is needed because JsonRpcBaseController has self-type constraints that
+  * make it unmockable directly with ScalaMock in Scala 3.
+  *
+  * Note: When this class is used with ScalaMock via `mock[MockableJsonRpcController]`, all method calls including
+  * `config` are intercepted by the mock framework. The null value here is never actually accessed in practice.
   */
 class MockableJsonRpcController extends JsonRpcBaseController with ApisBase with Logger {
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map.empty
@@ -60,7 +59,7 @@ class JsonRpcHttpServerSpec
     with org.scalamock.scalatest.MockFactory {
 
   import JsonRpcHttpServerSpec._
-  
+
   // Provide implicit MockFactory reference for TestSetup instances
   implicit val mockFactoryInstance: org.scalamock.scalatest.MockFactory = this
 
@@ -81,7 +80,10 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "respond to healthcheck with an error if one healthcheck fails" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "respond to healthcheck with an error if one healthcheck fails" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     (mockJsonRpcHealthChecker.healthCheck _)
       .expects()
       .returning(
@@ -200,7 +202,10 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "accept json request with ip restriction and only one request" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "accept json request with ip restriction and only one request" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(IO.pure(jsonRpcResponseSuccessful))
@@ -237,7 +242,10 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return method not allowed error for batch request with ip-restriction enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return method not allowed error for batch request with ip-restriction enabled" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     // When rate limiting is enabled, batch requests should be rejected without calling handleRequest
     val jsonRequests =
       ByteString("""[{"jsonrpc":"2.0", "method": "asd", "id": "1"}, {"jsonrpc":"2.0", "method": "asd", "id": "2"}]""")
@@ -249,7 +257,10 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "accept json request after rejected request with ip-restriction enabled once time has passed" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "accept json request after rejected request with ip-restriction enabled once time has passed" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -280,7 +291,10 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "accept json requests from different IPs with ip-restriction enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "accept json requests from different IPs with ip-restriction enabled" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .twice()
@@ -340,7 +354,10 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return status code BadRequest when request invalid is received" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return status code BadRequest when request invalid is received" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     (mockJsonRpcController.handleRequest _)
       .expects(*)
       .returning(
@@ -400,7 +417,10 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  it should "return status code BadRequest when the request has invalid params" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "return status code BadRequest when the request has invalid params" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val error = JsonRpcError.InvalidParams()
     (mockJsonRpcController.handleRequest _)
       .expects(*)

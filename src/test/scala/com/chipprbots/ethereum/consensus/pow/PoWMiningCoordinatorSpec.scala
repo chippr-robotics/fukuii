@@ -43,17 +43,27 @@ import com.chipprbots.ethereum.testing.Tags._
 // ACTOR SYSTEM FIX: TestSetup now overrides classicSystem to use ScalaTestWithActorTestKit's
 // actor system (converted to classic), preventing actor system conflicts between the test kit
 // and MinerSpecSetup.
-class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with Matchers with org.scalamock.scalatest.MockFactory {
+class PoWMiningCoordinatorSpec
+    extends ScalaTestWithActorTestKit
+    with AnyFreeSpecLike
+    with Matchers
+    with org.scalamock.scalatest.MockFactory {
 
   "PoWMinerCoordinator actor" - {
-    "should throw exception when starting with other message than StartMining(mode)" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+    "should throw exception when starting with other message than StartMining(mode)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new TestSetup {
       override def coordinatorName = "FailedCoordinator"
       LoggingTestKit.error("StopMining").expect {
         coordinator ! StopMining
       }
     }
 
-    "should start recurrent mining when receiving message StartMining(RecurrentMining)" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+    "should start recurrent mining when receiving message StartMining(RecurrentMining)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new TestSetup {
       override def coordinatorName = "RecurrentMining"
       setBlockForMining(parentBlock)
       LoggingTestKit.info("Received message SetMiningMode(RecurrentMining)").expect {
@@ -62,7 +72,10 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
       coordinator ! StopMining
     }
 
-    "should start on demand mining when receiving message StartMining(OnDemandMining)" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+    "should start on demand mining when receiving message StartMining(OnDemandMining)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new TestSetup {
       override def coordinatorName = "OnDemandMining"
       LoggingTestKit.info("Received message SetMiningMode(OnDemandMining)").expect {
         coordinator ! SetMiningMode(OnDemandMining)
@@ -71,7 +84,11 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
     }
 
     "in Recurrent Mining" - {
-      "MineNext starts EthashMiner if mineWithKeccak is false" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+      "MineNext starts EthashMiner if mineWithKeccak is false" taggedAs (
+        UnitTest,
+        ConsensusTest,
+        SlowTest
+      ) in new TestSetup {
         override def coordinatorName = "EthashMining"
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
@@ -82,7 +99,11 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "MineNext starts KeccakMiner if mineWithKeccak is true" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+      "MineNext starts KeccakMiner if mineWithKeccak is true" taggedAs (
+        UnitTest,
+        ConsensusTest,
+        SlowTest
+      ) in new TestSetup {
         override def coordinatorName = "KeccakMining"
         override val coordinator = system.systemActorOf(
           PoWMiningCoordinator(
@@ -135,7 +156,11 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         coordinator ! StopMining
       }
 
-      "Continue to attempt to mine if blockchainReader.getBestBlock() return None" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+      "Continue to attempt to mine if blockchainReader.getBestBlock() return None" taggedAs (
+        UnitTest,
+        ConsensusTest,
+        SlowTest
+      ) in new TestSetup {
         override def coordinatorName = "AlwaysMine"
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
@@ -191,11 +216,11 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
 
   class TestSetup extends MinerSpecSetup {
     def coordinatorName: String = "DefaultCoordinator"
-    
+
     // Override classicSystem to use the ScalaTestWithActorTestKit's actor system (converted to classic)
     // This prevents actor system conflicts between the test kit and MinerSpecSetup.
-    override implicit def classicSystem: ClassicSystem = PoWMiningCoordinatorSpec.this.system.toClassic
-    
+    implicit override def classicSystem: ClassicSystem = PoWMiningCoordinatorSpec.this.system.toClassic
+
     // Implement abstract mock members - created in test class with MockFactory context
     override lazy val mockBlockchainReader: BlockchainReader = mock[BlockchainReader]
     override lazy val mockBlockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -204,7 +229,7 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
     override lazy val mockEthMiningService: EthMiningService = mock[EthMiningService]
     override lazy val mockEvmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
     override lazy val mockMptStorage: MptStorage = mock[MptStorage]
-    
+
     override lazy val mining: PoWMining = buildPoWConsensus().withBlockGenerator(blockGenerator)
 
     val parentBlockNumber: Int = 23499
@@ -247,7 +272,9 @@ class PoWMiningCoordinatorSpec extends ScalaTestWithActorTestKit with AnyFreeSpe
         parentBlock: Block,
         block: Block,
         fakeWorld: InMemoryWorldStateProxy
-    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState] =
+    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[
+      InMemoryWorldStateProxy
+    ], BlockchainConfig, PendingBlockAndState] =
       (blockGenerator
         .generateBlock(
           _: Block,

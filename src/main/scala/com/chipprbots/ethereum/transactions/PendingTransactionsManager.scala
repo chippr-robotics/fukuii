@@ -18,7 +18,7 @@ import com.google.common.cache.RemovalNotification
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.metrics.MetricsContainer
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
@@ -37,10 +37,10 @@ object PendingTransactionsManager {
   def props(
       txPoolConfig: TxPoolConfig,
       peerManager: ActorRef,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerMessageBus: ActorRef
   ): Props =
-    Props(new PendingTransactionsManager(txPoolConfig, peerManager, etcPeerManager, peerMessageBus))
+    Props(new PendingTransactionsManager(txPoolConfig, peerManager, networkPeerManager, peerMessageBus))
 
   case class AddTransactions(signedTransactions: Set[SignedTransactionWithSender])
 
@@ -67,7 +67,7 @@ object PendingTransactionsManager {
 class PendingTransactionsManager(
     txPoolConfig: TxPoolConfig,
     peerManager: ActorRef,
-    etcPeerManager: ActorRef,
+    networkPeerManager: ActorRef,
     peerEventBus: ActorRef
 ) extends Actor
     with MetricsContainer
@@ -173,7 +173,7 @@ class PendingTransactionsManager(
       peers.foreach { peer =>
         val txsToNotify = stillPending.filterNot(stx => isTxKnown(stx.tx, peer.id)) // and not known by peer
         if (txsToNotify.nonEmpty) {
-          etcPeerManager ! EtcPeerManagerActor.SendMessage(SignedTransactions(txsToNotify.map(_.tx)), peer.id)
+          networkPeerManager ! NetworkPeerManagerActor.SendMessage(SignedTransactions(txsToNotify.map(_.tx)), peer.id)
           txsToNotify.foreach(stx => setTxKnown(stx.tx, peer.id))
         }
       }

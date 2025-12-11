@@ -5,8 +5,8 @@ import cats.effect.SyncIO
 import com.chipprbots.ethereum.forkid.Connect
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkIdValidator
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 case class EthNodeStatus64ExchangeState(
-    handshakerConfiguration: EtcHandshakerConfiguration,
+    handshakerConfiguration: NetworkHandshakerConfiguration,
     negotiatedCapability: Capability,
     supportsSnap: Boolean = false,
     peerCapabilities: List[Capability] = List.empty
@@ -66,8 +66,12 @@ case class EthNodeStatus64ExchangeState(
             // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+
             // When ForkId validation passes, we go directly to connected state
             // without needing to do the old-style fork block handshake
-            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)")
-            ConnectedState(PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities)))
+            log.info(
+              "STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)"
+            )
+            ConnectedState(
+              PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities))
+            )
           case other =>
             log.warn(
               "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
@@ -84,15 +88,15 @@ case class EthNodeStatus64ExchangeState(
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
-    
+
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
       .getOrElse(
         throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
       )
-    
+
     val genesisHash = blockchainReader.genesisHeader.hash
-    
+
     // ALIGNMENT WITH CORE-GETH: Use actual current block number for ForkId calculation
     // Core-geth implementation (eth/handler.go):
     //   head = h.chain.CurrentHeader()

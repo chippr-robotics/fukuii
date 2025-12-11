@@ -12,7 +12,7 @@ import scala.reflect.ClassTag
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
@@ -34,7 +34,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Rece
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class PeersClient(
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
     val syncConfig: SyncConfig,
@@ -128,7 +128,7 @@ class PeersClient(
       PeerRequestHandler.props[RequestMsg, ResponseMsg](
         peer = peer,
         responseTimeout = syncConfig.peerResponseTimeout,
-        etcPeerManager = etcPeerManager,
+        networkPeerManager = networkPeerManager,
         peerEventBus = peerEventBus,
         requestMsg = requestMsg,
         responseMsgCode = responseMsgCode
@@ -186,21 +186,21 @@ class PeersClient(
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {
-      case _: ETH66GetBlockHeaders     => implicitly[ClassTag[ETH66BlockHeaders]]
-      case _: ETH62.GetBlockHeaders    => implicitly[ClassTag[ETH62.BlockHeaders]]
-      case _: ETH66GetBlockBodies      => implicitly[ClassTag[ETH66BlockBodies]]
-      case _: ETH62.GetBlockBodies     => implicitly[ClassTag[ETH62.BlockBodies]]
-      case _: ETH66GetReceipts         => implicitly[ClassTag[ETH66Receipts]]
-      case _: ETH63.GetReceipts        => implicitly[ClassTag[ETH63.Receipts]]
-      case _: GetNodeData              => implicitly[ClassTag[NodeData]]
+      case _: ETH66GetBlockHeaders  => implicitly[ClassTag[ETH66BlockHeaders]]
+      case _: ETH62.GetBlockHeaders => implicitly[ClassTag[ETH62.BlockHeaders]]
+      case _: ETH66GetBlockBodies   => implicitly[ClassTag[ETH66BlockBodies]]
+      case _: ETH62.GetBlockBodies  => implicitly[ClassTag[ETH62.BlockBodies]]
+      case _: ETH66GetReceipts      => implicitly[ClassTag[ETH66Receipts]]
+      case _: ETH63.GetReceipts     => implicitly[ClassTag[ETH63.Receipts]]
+      case _: GetNodeData           => implicitly[ClassTag[NodeData]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
     requestMsg match {
-      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders  => Codes.BlockHeadersCode
-      case _: ETH66GetBlockBodies | _: ETH62.GetBlockBodies    => Codes.BlockBodiesCode
-      case _: ETH66GetReceipts | _: ETH63.GetReceipts          => Codes.ReceiptsCode
-      case _: GetNodeData                                      => Codes.NodeDataCode
+      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders => Codes.BlockHeadersCode
+      case _: ETH66GetBlockBodies | _: ETH62.GetBlockBodies   => Codes.BlockBodiesCode
+      case _: ETH66GetReceipts | _: ETH63.GetReceipts         => Codes.ReceiptsCode
+      case _: GetNodeData                                     => Codes.NodeDataCode
     }
 
   private def printStatus(requesters: Requesters): Unit = {
@@ -225,13 +225,13 @@ class PeersClient(
 object PeersClient {
 
   def props(
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       scheduler: Scheduler
   ): Props =
-    Props(new PeersClient(etcPeerManager, peerEventBus, blacklist, syncConfig, scheduler))
+    Props(new PeersClient(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler))
 
   type Requesters = Map[ActorRef, ActorRef]
 

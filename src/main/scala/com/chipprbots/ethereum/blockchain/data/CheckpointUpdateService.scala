@@ -129,14 +129,15 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
         try {
           val checkpoints = response.checkpoints.zipWithIndex.map { case (cp, idx) =>
             // Validate and parse block number
-            val blockNumber = try {
-              BigInt(cp.blockNumber)
-            } catch {
-              case _: NumberFormatException =>
-                throw new IllegalArgumentException(
-                  s"Invalid block number at checkpoint $idx: '${cp.blockNumber}' is not a valid number"
-                )
-            }
+            val blockNumber =
+              try
+                BigInt(cp.blockNumber)
+              catch {
+                case _: NumberFormatException =>
+                  throw new IllegalArgumentException(
+                    s"Invalid block number at checkpoint $idx: '${cp.blockNumber}' is not a valid number"
+                  )
+              }
 
             // Validate and decode block hash
             val hexString = cp.blockHash.stripPrefix("0x")
@@ -145,14 +146,15 @@ class CheckpointUpdateService(implicit system: ActorSystem, ec: ExecutionContext
                 s"Invalid block hash at checkpoint $idx: expected 64 hex characters, got ${hexString.length}"
               )
             }
-            val hashBytes = try {
-              Hex.decode(hexString)
-            } catch {
-              case _: Exception =>
-                throw new IllegalArgumentException(
-                  s"Invalid block hash at checkpoint $idx: '${hexString}' contains invalid hex characters"
-                )
-            }
+            val hashBytes =
+              try
+                Hex.decode(hexString)
+              catch {
+                case _: Exception =>
+                  throw new IllegalArgumentException(
+                    s"Invalid block hash at checkpoint $idx: '${hexString}' contains invalid hex characters"
+                  )
+              }
 
             BootstrapCheckpoint(blockNumber, ByteString(hashBytes))
           }

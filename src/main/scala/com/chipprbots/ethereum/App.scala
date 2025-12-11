@@ -51,8 +51,7 @@ object App extends Logger {
     val launcherConfigDir = currentConfigFile
       .flatMap(path => Option(new File(path).getParentFile))
 
-    val candidateDirs = Seq(envConfiguredDir, systemConfiguredDir, launcherConfigDir)
-      .flatten
+    val candidateDirs = Seq(envConfiguredDir, systemConfiguredDir, launcherConfigDir).flatten
       .map(_.getAbsoluteFile)
       .distinctBy(_.getAbsolutePath)
 
@@ -92,8 +91,8 @@ object App extends Logger {
   private def determineNetworkArg(args: Array[String]): Option[String] =
     args.headOption match {
       case Some(`launchFukuii`) => args.tail.find(isNetwork)
-      case Some(`launchKeytool`) | Some(`downloadBootstrap`) | Some(`faucet`) | Some(`sigValidator`) |
-          Some(`cli`) => None
+      case Some(`launchKeytool`) | Some(`downloadBootstrap`) | Some(`faucet`) | Some(`sigValidator`) | Some(`cli`) =>
+        None
       case Some(network) if isNetwork(network) => Some(network)
       case _                                   => None
     }
@@ -107,29 +106,29 @@ object App extends Logger {
       log.info("Public discovery explicitly enabled")
       log.info("- Using both bootstrap nodes and static-nodes.json for peer discovery")
     }
-    
+
     if (modifiers.contains("enterprise")) {
       // Enterprise mode: Best practices for private/permissioned EVM networks
-      
+
       // Disable public peer discovery - use static nodes only
       System.setProperty("fukuii.network.discovery.discovery-enabled", "false")
-      
+
       // Disable automatic port forwarding (not needed in enterprise environments)
       System.setProperty("fukuii.network.automatic-port-forwarding", "false")
-      
+
       // Use known nodes from configuration/bootstrap only
       System.setProperty("fukuii.network.discovery.reuse-known-nodes", "true")
-      
+
       // Enterprise mode: ignore bootstrap nodes, use only static-nodes.json
       System.setProperty("fukuii.network.discovery.use-bootstrap-nodes", "false")
-      
+
       // Disable sync blacklisting to allow retry in controlled environments
       System.setProperty("fukuii.sync.blacklist-duration", "0.seconds")
-      
+
       // Set RPC interface to localhost by default for security
       // Can be overridden with explicit config if needed
       System.setProperty("fukuii.network.rpc.http.interface", "localhost")
-      
+
       log.info("Enterprise mode enabled: configured for private/permissioned network")
       log.info("- Public discovery disabled")
       log.info("- Using ONLY static-nodes.json (bootstrap nodes ignored)")
@@ -235,14 +234,14 @@ object App extends Logger {
     argsWithoutModifiers.headOption match {
       case None                  => Fukuii.main(argsWithoutModifiers)
       case Some("--help" | "-h") => showHelp()
-      case Some(`launchFukuii`) =>
+      case Some(`launchFukuii`)  =>
         // Filter out network name from remaining args to avoid passing it to Fukuii.main
         val remainingArgs = argsWithoutModifiers.tail.headOption.filter(isNetwork) match {
           case Some(_) => argsWithoutModifiers.tail.tail
           case None    => argsWithoutModifiers.tail
         }
         Fukuii.main(remainingArgs)
-      case Some(`launchKeytool`) => KeyTool.main(argsWithoutModifiers.tail)
+      case Some(`launchKeytool`)     => KeyTool.main(argsWithoutModifiers.tail)
       case Some(`downloadBootstrap`) =>
         // Import Config locally to ensure it's loaded after any network config is set.
         // This delayed import is intentional - Config is a lazy-initialized object that

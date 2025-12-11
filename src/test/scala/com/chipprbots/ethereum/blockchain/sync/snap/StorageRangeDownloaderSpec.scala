@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-
-
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.ByteString
@@ -9,7 +7,6 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
-
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.{Peer, PeerId}
@@ -23,12 +20,10 @@ class StorageRangeDownloaderSpec
     with Matchers
     with BeforeAndAfterAll {
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     TestKit.shutdownActorSystem(system)
-  }
 
   implicit val scheduler: org.apache.pekko.actor.Scheduler = system.scheduler
-
 
   "StorageRangeDownloader" should "initialize with proper state" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
@@ -38,7 +33,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -56,7 +51,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -85,7 +80,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -119,7 +114,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -155,7 +150,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -188,13 +183,13 @@ class StorageRangeDownloaderSpec
 
     // Handle response
     val result = downloader.handleResponse(response)
-    
+
     result match {
-      case Right(count) => 
+      case Right(count) =>
         count should be >= 0
       case Left(error) =>
         // Accept proof verification failures or other expected errors
-        error should (include("proof") or include("Unknown request") or include("task"))
+        error should (include("proof").or(include("Unknown request")).or(include("task")))
     }
   }
 
@@ -206,7 +201,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -232,7 +227,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -251,7 +246,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -281,7 +276,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -303,7 +298,7 @@ class StorageRangeDownloaderSpec
 
     val downloader = new StorageRangeDownloader(
       stateRoot = stateRoot,
-      etcPeerManager = etcPeerManager.ref,
+      networkPeerManager = etcPeerManager.ref,
       requestTracker = requestTracker,
       mptStorage = storage,
       maxAccountsPerBatch = 8
@@ -329,11 +324,11 @@ class StorageRangeDownloaderSpec
     )
 
     val result = downloader.handleResponse(response)
-    
+
     // Should handle gracefully
     result match {
       case Right(count) => count shouldBe 0
-      case Left(error) => error should (include("proof") or include("Unknown") or include("task"))
+      case Left(error)  => error should (include("proof").or(include("Unknown")).or(include("task")))
     }
   }
 

@@ -43,8 +43,8 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.KnownNodesManager
 import com.chipprbots.ethereum.network.PeerEventBusActor
@@ -56,8 +56,8 @@ import com.chipprbots.ethereum.network.ServerActor
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager.DiscoveredNodesInfo
-import com.chipprbots.ethereum.network.handshaker.EtcHandshaker
-import com.chipprbots.ethereum.network.handshaker.EtcHandshakerConfiguration
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
@@ -175,7 +175,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val pruneIncomingPeers = 0
     override val minPruneAge: FiniteDuration = 1.minute
     override val networkId: Int = 1
-  override val p2pVersion: Int = Config.Network.peer.p2pVersion
+    override val p2pVersion: Int = Config.Network.peer.p2pVersion
 
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds
     override val updateNodesInterval: FiniteDuration = 20.seconds
@@ -187,8 +187,8 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   lazy val peerEventBus: ActorRef = system.actorOf(PeerEventBusActor.props, "peer-event-bus")
 
-  private val handshakerConfiguration: EtcHandshakerConfiguration =
-    new EtcHandshakerConfiguration {
+  private val handshakerConfiguration: NetworkHandshakerConfiguration =
+    new NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = None
       override val nodeStatusHolder: AtomicReference[NodeStatus] = nh
       override val peerConfiguration: PeerConfiguration = peerConf
@@ -198,7 +198,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       override val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
     }
 
-  lazy val handshaker: Handshaker[PeerInfo] = EtcHandshaker(handshakerConfiguration)
+  lazy val handshaker: Handshaker[PeerInfo] = NetworkHandshaker(handshakerConfiguration)
 
   lazy val authHandshaker: AuthHandshaker = AuthHandshaker(nodeKey, secureRandom)
 
@@ -224,7 +224,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   )
 
   lazy val etcPeerManager: ActorRef = system.actorOf(
-    EtcPeerManagerActor.props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, None),
+    NetworkPeerManagerActor.props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, None),
     "etc-peer-manager"
   )
 

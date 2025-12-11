@@ -29,15 +29,15 @@ import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProof
 import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProofKey
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxyStorage
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.PeerStatisticsActor
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
-import com.chipprbots.ethereum.network.handshaker.EtcHandshaker
-import com.chipprbots.ethereum.network.handshaker.EtcHandshakerConfiguration
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.nodebuilder.AuthHandshakerBuilder
@@ -76,7 +76,7 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
     override val pruneIncomingPeers: Int = Config.Network.peer.pruneIncomingPeers
     override val minPruneAge: FiniteDuration = Config.Network.peer.minPruneAge
     override val networkId: Int = privateNetworkId
-  override val p2pVersion: Int = Config.Network.peer.p2pVersion
+    override val p2pVersion: Int = Config.Network.peer.p2pVersion
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds
     override val updateNodesInterval: FiniteDuration = 20.seconds
     override val shortBlacklistDuration: FiniteDuration = 1.minute
@@ -105,8 +105,8 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
   lazy val forkResolverOpt: Option[ForkResolver.EtcForkResolver] =
     blockchainConfig.daoForkConfig.map(new ForkResolver.EtcForkResolver(_))
 
-  private val handshakerConfiguration: EtcHandshakerConfiguration =
-    new EtcHandshakerConfiguration {
+  private val handshakerConfiguration: NetworkHandshakerConfiguration =
+    new NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = DumpChainApp.forkResolverOpt
       override val nodeStatusHolder: AtomicReference[NodeStatus] = DumpChainApp.nodeStatusHolder
       override val peerConfiguration: PeerConfiguration = peerConfig
@@ -118,7 +118,7 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
       override val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
     }
 
-  lazy val handshaker: Handshaker[PeerInfo] = EtcHandshaker(handshakerConfiguration)
+  lazy val handshaker: Handshaker[PeerInfo] = NetworkHandshaker(handshakerConfiguration)
 
   val peerMessageBus: ActorRef = actorSystem.actorOf(PeerEventBusActor.props)
 

@@ -30,7 +30,11 @@ class PoWMiningSpec
     with Matchers
     with org.scalamock.scalatest.MockFactory {
 
-  "PoWMining" should "use NoAdditionalPoWData block generator for PoWBlockGeneratorImpl" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+  "PoWMining" should "use NoAdditionalPoWData block generator for PoWBlockGeneratorImpl" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in new TestSetup {
     val powMining = PoWMining(
       vm,
       storagesInstance.storages.evmCodeStorage,
@@ -44,7 +48,11 @@ class PoWMiningSpec
     powMining.blockGenerator.isInstanceOf[PoWBlockGeneratorImpl] shouldBe true
   }
 
-  it should "use RestrictedPoWBlockGeneratorImpl block generator for RestrictedPoWMinerData" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+  it should "use RestrictedPoWBlockGeneratorImpl block generator for RestrictedPoWMinerData" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in new TestSetup {
     // MIGRATION: Can't mock Java classes in Scala 3 - use real instance instead
     val key = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
 
@@ -80,7 +88,11 @@ class PoWMiningSpec
     powMining.mockedMinerRef shouldBe None
   }
 
-  it should "start only one mocked miner when miner protocol is MockedPow" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+  it should "start only one mocked miner when miner protocol is MockedPow" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in new TestSetup {
     val configNoMining = miningConfig.copy(miningEnabled = true, protocol = Protocol.MockedPow)
     val fullMiningConfig = FullMiningConfig(configNoMining, ethashConfig)
 
@@ -99,7 +111,11 @@ class PoWMiningSpec
     powMining.mockedMinerRef.isDefined shouldBe true
   }
 
-  it should "start only the normal miner when miner protocol is PoW" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+  it should "start only the normal miner when miner protocol is PoW" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in new TestSetup {
     val configNoMining = miningConfig.copy(miningEnabled = true, protocol = Protocol.PoW)
     val fullMiningConfig = FullMiningConfig(configNoMining, ethashConfig)
 
@@ -118,7 +134,11 @@ class PoWMiningSpec
     powMining.minerCoordinatorRef.isDefined shouldBe true
   }
 
-  it should "start only the normal miner when miner protocol is RestrictedPoW" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+  it should "start only the normal miner when miner protocol is RestrictedPoW" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in new TestSetup {
     val configNoMining = miningConfig.copy(miningEnabled = true, protocol = Protocol.RestrictedPoW)
     val fullMiningConfig = FullMiningConfig(configNoMining, ethashConfig)
 

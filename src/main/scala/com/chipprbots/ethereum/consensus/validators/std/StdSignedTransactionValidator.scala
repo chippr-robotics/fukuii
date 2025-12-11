@@ -115,7 +115,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
           val chainIdFromV = (v - 35) / 2
           v == chainIdFromV * 2 + 35 || v == chainIdFromV * 2 + 36
         } else false
-        
+
         if (beforeEIP155) isUnprotected
         else isUnprotected || isEIP155Protected
     }

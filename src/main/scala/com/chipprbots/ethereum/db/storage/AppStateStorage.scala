@@ -149,14 +149,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
 
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
-    * 
-    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController.
-    * Integration is planned to enable resumable SNAP sync after process restarts.
-    * 
-    * This method retrieves a JSON representation of the SNAP sync progress. The JSON format
-    * is flexible and not tied to any specific case class structure, allowing for evolution
-    * of the progress format over time without breaking compatibility.
-    * 
+    *
+    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController. Integration is
+    * planned to enable resumable SNAP sync after process restarts.
+    *
+    * This method retrieves a JSON representation of the SNAP sync progress. The JSON format is flexible and not tied to
+    * any specific case class structure, allowing for evolution of the progress format over time without breaking
+    * compatibility.
+    *
     * Example JSON format:
     * ```json
     * {
@@ -167,7 +167,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     *   "nodesHealed": 10
     * }
     * ```
-    * 
+    *
     * @return
     *   Optional JSON string if progress has been saved, None otherwise
     */
@@ -175,14 +175,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     get(Keys.SnapSyncProgress)
 
   /** Store the SNAP sync progress (optional - for progress persistence across restarts)
-    * 
-    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController.
-    * Integration is planned to enable resumable SNAP sync after process restarts.
-    * 
-    * This method stores a JSON representation of the SNAP sync progress. The JSON format
-    * is flexible and allows the caller to determine what fields to include. This design
-    * provides forward/backward compatibility as the progress tracking evolves.
-    * 
+    *
+    * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController. Integration is
+    * planned to enable resumable SNAP sync after process restarts.
+    *
+    * This method stores a JSON representation of the SNAP sync progress. The JSON format is flexible and allows the
+    * caller to determine what fields to include. This design provides forward/backward compatibility as the progress
+    * tracking evolves.
+    *
     * @param progressJson
     *   JSON string representation of the sync progress
     * @return
@@ -190,17 +190,17 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def putSnapSyncProgress(progressJson: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncProgress, progressJson)
-  
-  /** Get the target block number for SNAP sync bootstrap via regular sync.
-    * This is used when SNAP sync requires a minimum number of blocks to start.
+
+  /** Get the target block number for SNAP sync bootstrap via regular sync. This is used when SNAP sync requires a
+    * minimum number of blocks to start.
     * @return
     *   Target block number for bootstrap, or None if not set
     */
   def getSnapSyncBootstrapTarget(): Option[BigInt] =
     get(Keys.SnapSyncBootstrapTarget).map(BigInt(_))
-  
-  /** Store the target block number for SNAP sync bootstrap.
-    * Regular sync will sync to this block number before transitioning to SNAP sync.
+
+  /** Store the target block number for SNAP sync bootstrap. Regular sync will sync to this block number before
+    * transitioning to SNAP sync.
     * @param targetBlock
     *   The block number to reach before starting SNAP sync
     * @return
@@ -208,7 +208,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def putSnapSyncBootstrapTarget(targetBlock: BigInt): DataSourceBatchUpdate =
     put(Keys.SnapSyncBootstrapTarget, targetBlock.toString)
-  
+
   /** Clear the SNAP sync bootstrap target (called after transition to SNAP sync)
     * @return
     *   DataSourceBatchUpdate for chaining

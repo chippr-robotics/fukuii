@@ -62,10 +62,10 @@ This document provides a comprehensive inventory of remaining implementation and
 
 ### 1. Message Handling Integration ✅
 
-**Current State:** COMPLETED - Message routing from EtcPeerManagerActor to SNAPSyncController is fully implemented
+**Current State:** COMPLETED - Message routing from NetworkPeerManagerActor to SNAPSyncController is fully implemented
 
 **Completed Work:**
-- [x] Create SNAP message handler in EtcPeerManagerActor
+- [x] Create SNAP message handler in NetworkPeerManagerActor
 - [x] Route AccountRange responses to SNAPSyncController
 - [x] Route StorageRanges responses to SNAPSyncController
 - [x] Route TrieNodes responses to SNAPSyncController
@@ -80,12 +80,12 @@ This document provides a comprehensive inventory of remaining implementation and
 - [x] Handle GetByteCodes requests from peers (optional) ✅
 
 **Files Modified:**
-- `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+- `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala`
 - `src/test/scala/com/chipprbots/ethereum/network/EtcPeerManagerSpec.scala`
 
 **Implementation Notes:**
-- Add pattern matching for SNAP messages in EtcPeerManagerActor.receive
+- Add pattern matching for SNAP messages in NetworkPeerManagerActor.receive
 - Forward responses to SNAPSyncController actor
 - SNAPSyncController should forward to appropriate downloader based on current phase
 
@@ -108,7 +108,7 @@ This document provides a comprehensive inventory of remaining implementation and
 
 **Files Modified:**
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
-- `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+- `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
 - `src/main/scala/com/chipprbots/ethereum/network/handshaker/EtcHelloExchangeState.scala`
 - `src/main/scala/com/chipprbots/ethereum/network/handshaker/EtcNodeStatus64ExchangeState.scala`
 - `src/main/scala/com/chipprbots/ethereum/network/handshaker/EthNodeStatus63ExchangeState.scala`
@@ -194,7 +194,7 @@ This document provides a comprehensive inventory of remaining implementation and
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/StorageRangeDownloader.scala`
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
 - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/TrieNodeHealer.scala`
-- `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+- `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`
 
 **Documentation Created:**
 - `docs/architecture/SNAP_SYNC_STATE_STORAGE_REVIEW.md` (41KB, 1,093 lines)

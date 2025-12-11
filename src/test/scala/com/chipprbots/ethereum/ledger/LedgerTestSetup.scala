@@ -217,11 +217,14 @@ trait DaoForkTestSetup extends TestSetup {
   def testBlockchainReader: BlockchainReader
   def testBlockchain: BlockchainImpl
   def worldState: InMemoryWorldStateProxy
-  
+
   val proDaoBlock: Block = Fixtures.Blocks.ProDaoForkBlock.block
 
   // Helper to create stub world state - to be called from implementing class
-  protected def createStubWorldStateProxy(stubEvmCodeStorage: EvmCodeStorage, stubMptStorage: MptStorage): InMemoryWorldStateProxy = {
+  protected def createStubWorldStateProxy(
+      stubEvmCodeStorage: EvmCodeStorage,
+      stubMptStorage: MptStorage
+  ): InMemoryWorldStateProxy =
     InMemoryWorldStateProxy(
       stubEvmCodeStorage,
       stubMptStorage,
@@ -231,7 +234,6 @@ trait DaoForkTestSetup extends TestSetup {
       noEmptyAccounts = false,
       ethCompatibleStorage = true
     )
-  }
 
   val supportDaoForkConfig: DaoForkConfig = new DaoForkConfig {
     override val blockExtraData: Option[ByteString] = Some(ByteString("refund extra data"))

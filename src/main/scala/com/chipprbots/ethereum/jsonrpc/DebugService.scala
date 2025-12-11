@@ -11,9 +11,9 @@ import scala.concurrent.duration._
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfoResponse
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfoResponse
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
@@ -25,7 +25,7 @@ object DebugService {
   case class ListPeersInfoResponse(peers: List[PeerInfo])
 }
 
-class DebugService(peerManager: ActorRef, etcPeerManager: ActorRef) {
+class DebugService(peerManager: ActorRef, networkPeerManager: ActorRef) {
 
   def listPeersInfo(getPeersInfoRequest: ListPeersInfoRequest): ServiceResponse[ListPeersInfoResponse] =
     for {
@@ -45,8 +45,8 @@ class DebugService(peerManager: ActorRef, etcPeerManager: ActorRef) {
   private def getPeerInfo(peer: PeerId): IO[Option[PeerInfo]] = {
     implicit val timeout: Timeout = Timeout(20.seconds)
 
-    etcPeerManager
-      .askFor[PeerInfoResponse](EtcPeerManagerActor.PeerInfoRequest(peer))
+    networkPeerManager
+      .askFor[PeerInfoResponse](NetworkPeerManagerActor.PeerInfoRequest(peer))
       .map(resp => resp.peerInfo)
   }
 }

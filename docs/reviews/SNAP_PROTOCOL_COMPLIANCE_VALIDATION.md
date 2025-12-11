@@ -195,7 +195,7 @@ val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
 
 **Spec Requirement:** SNAP messages must be routable to sync handler
 
-**Implementation:** `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala:123-143`
+**Implementation:** `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala:123-143`
 
 ```scala
 case MessageFromPeer(message, peerId) =>
@@ -303,7 +303,7 @@ val pivotBlockNumber = bestBlockNumber - snapSyncConfig.pivotBlockOffset
 
 **Spec Requirement:** "Nodes must always respond to the query"
 
-**Implementation:** Server-side handlers exist in `EtcPeerManagerActor`
+**Implementation:** Server-side handlers exist in `NetworkPeerManagerActor`
 
 ✅ **Status:** Compliant (handlers implemented)
 
@@ -433,4 +433,4 @@ The implementation provides a solid foundation for SNAP sync functionality.
   - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPSyncController.scala`
   - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/AccountRangeDownloader.scala`
   - `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/MerkleProofVerifier.scala`
-  - `src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala`
+  - `src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala`

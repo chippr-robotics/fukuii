@@ -50,9 +50,12 @@ object Config {
   // Per DevP2P spec: advertise only the highest version of each protocol family
   // ETH versions are backward compatible (eth/68 includes eth/63-67)
   // SNAP is a separate protocol
-  // ETC64 is the Ethereum Classic specific extension
+  // 
+  // Historical note: ETC64 protocol support was removed in favor of standard ETH protocols.
+  // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
+  // See docs/validation/ETC64_REMOVAL_VALIDATION.md for details.
   import com.chipprbots.ethereum.network.p2p.messages.Capability
-  val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.ETC64, Capability.SNAP1)
+  val supportedCapabilities: List[Capability] = List(Capability.ETH68, Capability.SNAP1)
 
   val blockchains: BlockchainsConfig = BlockchainsConfig(config.getConfig("blockchains"))
 
@@ -374,24 +377,24 @@ object BlockchainsConfig extends Logger {
   def apply(rawConfig: TypesafeConfig): BlockchainsConfig = {
     // Get the network name first
     val network = rawConfig.getString(networkKey)
-    
+
     // Load built-in blockchain configs
     val builtInBlockchains = keys(rawConfig)
       .filterNot(k => k == networkKey || k == customChainsDirKey)
       .map(name => name -> BlockchainConfig.fromRawConfig(rawConfig.getConfig(name)))
       .toMap
-    
+
     // Check for custom chains directory
     val customBlockchains = if (rawConfig.hasPath(customChainsDirKey)) {
       val customChainsDir = rawConfig.getString(customChainsDirKey)
       val chainsDir = new File(customChainsDir)
-      
+
       if (chainsDir.exists() && chainsDir.isDirectory) {
         log.info(s"Loading custom chain configurations from: $customChainsDir")
         val chainFiles = chainsDir.listFiles().filter { f =>
           f.isFile && f.getName.endsWith("-chain.conf")
         }
-        
+
         // TODO: Future optimization - cache parsed configurations and check file modification
         // times to avoid re-parsing unchanged files on restart
         chainFiles.flatMap { chainFile =>
@@ -401,11 +404,11 @@ object BlockchainsConfig extends Logger {
             val chainConfig = ConfigFactory.parseFile(chainFile)
             chainName -> BlockchainConfig.fromRawConfig(chainConfig)
           }
-          
+
           result.failed.foreach { e =>
             log.error(s"Failed to load chain config from ${chainFile.getName}: ${e.getMessage}", e)
           }
-          
+
           result.toOption
         }.toMap
       } else {
@@ -419,14 +422,16 @@ object BlockchainsConfig extends Logger {
     } else {
       Map.empty[String, BlockchainConfig]
     }
-    
+
     // Merge blockchains, with custom configs taking precedence
     val allBlockchains = builtInBlockchains ++ customBlockchains
-    
+
     if (customBlockchains.nonEmpty) {
-      log.info(s"Loaded ${customBlockchains.size} custom chain configuration(s): ${customBlockchains.keys.mkString(", ")}")
+      log.info(
+        s"Loaded ${customBlockchains.size} custom chain configuration(s): ${customBlockchains.keys.mkString(", ")}"
+      )
     }
-    
+
     BlockchainsConfig(network, allBlockchains)
   }
 }

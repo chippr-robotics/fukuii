@@ -1,41 +1,13 @@
 package com.chipprbots.ethereum.network.handshaker
 
-import java.util.concurrent.atomic.AtomicReference
+@deprecated("Use NetworkHandshaker", "v1.0")
+type EtcHandshaker = NetworkHandshaker
 
-import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.domain.Blockchain
-import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.ForkResolver
-import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
-import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.NodeStatus
+@deprecated("Use NetworkHandshakerConfiguration", "v1.0")
+type EtcHandshakerConfiguration = NetworkHandshakerConfiguration
 
-case class EtcHandshaker private (
-    handshakerState: HandshakerState[PeerInfo],
-    handshakerConfiguration: EtcHandshakerConfiguration
-) extends Handshaker[PeerInfo] {
-
-  protected def copy(handshakerState: HandshakerState[PeerInfo]): Handshaker[PeerInfo] =
-    EtcHandshaker(handshakerState, handshakerConfiguration)
-
-}
-
+@deprecated("Use NetworkHandshaker", "v1.0")
 object EtcHandshaker {
-
-  def apply(handshakerConfiguration: EtcHandshakerConfiguration): EtcHandshaker = {
-    val initialState = EtcHelloExchangeState(handshakerConfiguration)
-    EtcHandshaker(initialState, handshakerConfiguration)
-  }
-
-}
-
-trait EtcHandshakerConfiguration {
-  val nodeStatusHolder: AtomicReference[NodeStatus]
-  val blockchain: Blockchain
-  val blockchainReader: BlockchainReader
-  val appStateStorage: AppStateStorage
-  val peerConfiguration: PeerConfiguration
-  val forkResolverOpt: Option[ForkResolver]
-  val blockchainConfig: BlockchainConfig
+  def apply(handshakerConfiguration: NetworkHandshakerConfiguration): NetworkHandshaker =
+    NetworkHandshaker(handshakerConfiguration)
 }
