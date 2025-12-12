@@ -7,14 +7,22 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 ### Core API Documentation
 
 1. **[JSON-RPC API Reference](./JSON_RPC_API_REFERENCE.md)**
-   - Complete reference for all 78 JSON-RPC endpoints
+   - Complete reference for all JSON-RPC endpoints
    - Request/response examples for each method
    - Parameter descriptions and validation rules
    - Error codes and handling
    - Best practices for API usage
    - **Use this for**: Learning the API, integrating clients, reference lookup
 
-2. **[JSON-RPC Coverage Analysis](./JSON_RPC_COVERAGE_ANALYSIS.md)**
+2. **[RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md)** 🆕
+   - Comprehensive catalog of all 97 RPC endpoints
+   - Organized by namespace with safety classifications
+   - MCP coverage analysis
+   - Production readiness indicators
+   - Priority gaps for agent control
+   - **Use this for**: Complete RPC endpoint reference, MCP planning
+
+3. **[JSON-RPC Coverage Analysis](./JSON_RPC_COVERAGE_ANALYSIS.md)**
    - Comprehensive gap analysis vs Ethereum specification
    - Implementation status by namespace
    - Missing methods and their priority
@@ -22,9 +30,24 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
    - Recommendations for completeness
    - **Use this for**: Understanding what's implemented, planning enhancements
 
-### Integration Guides
+### MCP & Agent Control Documentation
 
-3. **[MCP Integration Guide](./MCP_INTEGRATION_GUIDE.md)**
+4. **[MCP Analysis Summary](./MCP_ANALYSIS_SUMMARY.md)** 🆕
+   - Executive summary of RPC inventory and MCP planning
+   - Key findings and strategic recommendations
+   - Security architecture overview
+   - Implementation timeline and success metrics
+   - **Use this for**: Understanding MCP strategy, stakeholder communication
+
+5. **[MCP Enhancement Plan](./MCP_ENHANCEMENT_PLAN.md)** 🆕
+   - Complete roadmap for agent-controlled node management
+   - 6-phase implementation plan (12-16 weeks)
+   - 45+ new tools, 20+ resources, 15+ prompts
+   - Security considerations and acceptance criteria
+   - Testing strategy and documentation requirements
+   - **Use this for**: Implementing complete agent control, detailed planning
+
+6. **[MCP Integration Guide](./MCP_INTEGRATION_GUIDE.md)**
    - Architecture for Model Context Protocol server
    - Resource and tool definitions
    - Security considerations and authentication
@@ -76,10 +99,10 @@ Fukuii organizes JSON-RPC methods into namespaces:
 
 | Namespace | Endpoints | Purpose | Production Ready |
 |-----------|-----------|---------|------------------|
-| **ETH** | 40 | Core blockchain operations | ✅ Yes |
-<!-- Note: Keep endpoint counts synchronized with JSON_RPC_API_REFERENCE.md -->
+| **ETH** | 52 | Core blockchain operations | ✅ Yes |
+<!-- Note: Keep endpoint counts synchronized with RPC_ENDPOINT_INVENTORY.md -->
 | **WEB3** | 2 | Utility methods | ✅ Yes |
-| **NET** | 3 | Network information | ✅ Yes |
+| **NET** | 9 | Network & peer management | ✅ Yes |
 | **PERSONAL** | 8 | Account management | ⚠️ Dev only |
 | **DEBUG** | 3 | Debugging and analysis | ⚠️ Use with caution |
 | **QA** | 3 | Testing utilities | ❌ Testing only |
@@ -87,7 +110,9 @@ Fukuii organizes JSON-RPC methods into namespaces:
 | **FUKUII** | 1 | Custom extensions | ✅ Yes |
 | **TEST** | 7 | Test harness | ❌ Testing only |
 | **IELE** | 2 | IELE VM support | ⚠️ If IELE enabled |
+| **MCP** | 7 | Model Context Protocol | ✅ Yes |
 | **RPC** | 1 | RPC metadata | ✅ Yes |
+| **TOTAL** | 97 | All namespaces | Mixed |
 
 ### Core Features
 
@@ -372,17 +397,25 @@ When updating API documentation:
 
 ## 📋 Changelog
 
+### 2025-12-12
+- ✅ Complete RPC endpoint inventory (97 endpoints cataloged)
+- ✅ MCP analysis and enhancement plan created
+- ✅ Identified MCP coverage gaps (7.2% → 85% target)
+- ✅ 6-phase roadmap for agent-controlled node management
+- ✅ Security architecture for multi-level access control
+
 ### 2025-11-24
 - ✅ Created comprehensive API documentation
 - ✅ Completed coverage analysis
 - ✅ Added MCP integration guide
 - ✅ Updated Insomnia workspace
-- ✅ Documented all 78 endpoints
+- ✅ Documented all endpoints
 
 ### Future Plans
-- [ ] Implement missing EIP-1559 methods
+- [ ] Implement MCP Enhancement Plan (Phases 1-6)
+- [ ] Add 45+ new MCP tools for complete node control
+- [ ] Implement multi-level access control for agents
 - [ ] Add transaction tracing (debug namespace)
-- [ ] Create MCP server implementation
 - [ ] Add WebSocket subscription support
 - [ ] Implement GraphQL endpoint (optional)
 
