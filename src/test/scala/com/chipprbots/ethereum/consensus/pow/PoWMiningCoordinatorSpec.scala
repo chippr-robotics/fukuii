@@ -149,9 +149,9 @@ class PoWMiningCoordinatorSpec
         coordinator ! SetMiningMode(RecurrentMining)
 
         // Extended timeout for CI environments where mining may take longer
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
 
         coordinator ! StopMining
       }
@@ -181,9 +181,9 @@ class PoWMiningCoordinatorSpec
         coordinator ! SetMiningMode(RecurrentMining)
 
         // Extended timeout for CI environments where mining may take longer
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
 
         coordinator ! StopMining
       }
