@@ -276,11 +276,21 @@ get_enode_from_logs() {
     # Extract enode from container logs
     # Expected log format: "Node address: enode://<64-hex-chars>@[0:0:0:0:0:0:0:0]:<port>"
     # Example: "INFO [ServerActor] - Node address: enode://abc123...@[0:0:0:0:0:0:0:0]:30303"
-    local enode=$(docker logs "$container_name" 2>&1 | \
+    local log_tail="${FUKUII_LOG_TAIL:-500}"
+    local enode=""
+
+    enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
         grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
         tail -1 | \
-        sed 's/Node address: //' || echo "")
-    
+        sed 's/Node address: //' || true)
+
+    if [ -z "$enode" ]; then
+        enode=$(docker logs "$container_name" 2>&1 | \
+            grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
+            tail -1 | \
+            sed 's/Node address: //' || true)
+    fi
+
     if [ -n "$enode" ]; then
         # Validate enode format (should start with "enode://" and contain @)
         if [[ ! "$enode" =~ ^enode://[0-9a-f]+@\[0:0:0:0:0:0:0:0\]:[0-9]+$ ]]; then

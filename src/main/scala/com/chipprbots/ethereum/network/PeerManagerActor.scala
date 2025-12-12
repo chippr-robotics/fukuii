@@ -349,6 +349,8 @@ class PeerManagerActor(
         // same time as we do
         log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to him")
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+        // Keep the current connectedPeers state; the Terminated message will clean up the peer
+        context.become(listening(connectedPeers))
       } else {
         context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
       }
