@@ -6,7 +6,14 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 
 ### Core API Documentation
 
-1. **[JSON-RPC API Reference](./JSON_RPC_API_REFERENCE.md)**
+1. **[Interactive API Reference](./interactive-api-reference.md)** 🆕
+   - **Fully browsable OpenAPI specification** with Swagger UI
+   - All 83 JSON-RPC endpoints with live examples
+   - Organized by namespace with filtering
+   - Try-it-out functionality for testing endpoints
+   - **Use this for**: Exploring the API interactively, testing endpoints, integration planning
+
+2. **[JSON-RPC API Reference](./JSON_RPC_API_REFERENCE.md)**
    - Complete reference for all JSON-RPC endpoints
    - Request/response examples for each method
    - Parameter descriptions and validation rules
@@ -14,7 +21,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
    - Best practices for API usage
    - **Use this for**: Learning the API, integrating clients, reference lookup
 
-2. **[RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md)** 🆕
+3. **[RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md)** 🆕
    - Comprehensive catalog of all 97 RPC endpoints
    - Organized by namespace with safety classifications
    - MCP coverage analysis
@@ -57,7 +64,9 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 
 ### Quick Links
 
+- **[Interactive API Reference](./interactive-api-reference.md)** - Browse all endpoints with Swagger UI
 - **[Insomnia Guide](INSOMNIA_WORKSPACE_GUIDE.md)** - How to use the Insomnia API collection
+- **[Maintaining API Reference](MAINTAINING_API_REFERENCE.md)** - Guide for updating the API spec
 - **[Runbooks](../runbooks/README.md)** - Operational documentation
 - **[Documentation Home](../index.md)** - Project overview and getting started
 
@@ -372,10 +381,28 @@ Found an issue or want to suggest an improvement? See our [Contributing Guide](.
 When updating API documentation:
 
 1. Update the relevant markdown file
-2. Update the Insomnia workspace in repository root if adding endpoints
-3. Update [coverage analysis](./JSON_RPC_COVERAGE_ANALYSIS.md) if implementation status changes
-4. Test all examples and code snippets
-5. Submit PR with clear description
+2. **Update the Insomnia workspace** (`insomnia_workspace.json` in repository root) if adding/modifying endpoints
+3. **Regenerate the OpenAPI spec** by running: `python3 scripts/convert_insomnia_to_openapi.py`
+4. Update [coverage analysis](./JSON_RPC_COVERAGE_ANALYSIS.md) if implementation status changes
+5. Test all examples and code snippets
+6. Submit PR with clear description
+
+#### Updating the Interactive API Reference
+
+The interactive API reference is automatically generated from the Insomnia workspace:
+
+```bash
+# 1. Update insomnia_workspace.json with new/modified endpoints
+# 2. Run the conversion script
+python3 scripts/convert_insomnia_to_openapi.py
+
+# 3. Verify the OpenAPI spec
+python3 -c "import json; print(json.load(open('docs/api/openapi.json'))['info']['title'])"
+
+# 4. Build and preview the docs
+mkdocs serve
+# Visit http://localhost:8000/api/interactive-api-reference/
+```
 
 ## 📚 Additional Resources
 

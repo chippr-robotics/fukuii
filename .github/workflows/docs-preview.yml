@@ -13,6 +13,9 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - 'scripts/convert_insomnia_to_openapi.py'
+      - 'scripts/validate_openapi.py'
+      - 'insomnia_workspace.json'
       - '.github/workflows/docs-preview.yml'
     types:
       - opened
@@ -54,6 +57,10 @@ jobs:
       - name: Install dependencies
         if: github.event.action != 'closed'
         run: pip install -r requirements-docs.txt
+
+      - name: Validate OpenAPI spec
+        if: github.event.action != 'closed'
+        run: python3 scripts/validate_openapi.py
 
       - name: Build documentation
         if: github.event.action != 'closed'
