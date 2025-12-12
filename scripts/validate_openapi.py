@@ -40,17 +40,40 @@ def main():
     # Count paths in OpenAPI spec
     openapi_paths = openapi_data.get("paths", {})
     
+    # Get method names from both sources
+    insomnia_methods = {r.get("name") for r in insomnia_requests}
+    openapi_methods = {path.lstrip('/') for path in openapi_paths.keys()}
+    
     print("=== Validation Results ===")
     print(f"Insomnia requests: {len(insomnia_requests)}")
     print(f"OpenAPI paths: {len(openapi_paths)}")
     
-    # Check if counts match
-    if len(insomnia_requests) == len(openapi_paths):
+    # Check for missing or extra endpoints
+    missing_in_openapi = insomnia_methods - openapi_methods
+    extra_in_openapi = openapi_methods - insomnia_methods
+    
+    if missing_in_openapi:
+        print(f"\n⚠️  Missing in OpenAPI ({len(missing_in_openapi)}):")
+        for method in sorted(missing_in_openapi)[:5]:
+            print(f"   - {method}")
+        if len(missing_in_openapi) > 5:
+            print(f"   ... and {len(missing_in_openapi) - 5} more")
+    
+    if extra_in_openapi:
+        print(f"\n⚠️  Extra in OpenAPI ({len(extra_in_openapi)}):")
+        for method in sorted(extra_in_openapi)[:5]:
+            print(f"   - {method}")
+        if len(extra_in_openapi) > 5:
+            print(f"   ... and {len(extra_in_openapi) - 5} more")
+    
+    # Check if counts match and no differences
+    if len(insomnia_requests) == len(openapi_paths) and not missing_in_openapi and not extra_in_openapi:
         print("✅ OpenAPI spec is in sync with Insomnia workspace")
         return 0
     else:
-        print("❌ OpenAPI spec is OUT OF SYNC with Insomnia workspace")
-        print(f"   Expected {len(insomnia_requests)} paths, found {len(openapi_paths)}")
+        print("\n❌ OpenAPI spec is OUT OF SYNC with Insomnia workspace")
+        if len(insomnia_requests) != len(openapi_paths):
+            print(f"   Count mismatch: Expected {len(insomnia_requests)} paths, found {len(openapi_paths)}")
         print("   Run: python3 scripts/convert_insomnia_to_openapi.py")
         return 1
 

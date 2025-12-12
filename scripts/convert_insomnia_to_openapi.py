@@ -288,17 +288,14 @@ fukuii.network.rpc {
             body_text = body_data.get("text", "{}")
             body_json = parse_json_body(body_text)
             
-            # Create operation ID from method name
-            operation_id = method_name.replace("_", "").replace("-", "")
+            # Create operation ID from method name (ensure uniqueness)
+            operation_id = method_name.replace("-", "_")  # Keep underscores for uniqueness
             
             # Create path (we'll use /{method} pattern)
             path = f"/{method_name}"
             
             if path not in openapi_spec["paths"]:
                 openapi_spec["paths"][path] = {}
-            
-            # Build parameter schema from example
-            param_schemas = extract_params_from_body(body_json)
             
             # Create request body schema
             request_schema = {

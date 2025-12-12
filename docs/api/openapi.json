@@ -31,7 +31,7 @@
         ],
         "summary": "checkpointing_getLatestBlock",
         "description": "Get latest checkpoint block",
-        "operationId": "checkpointinggetLatestBlock",
+        "operationId": "checkpointing_getLatestBlock",
         "requestBody": {
           "required": true,
           "content": {
@@ -117,7 +117,7 @@
         ],
         "summary": "checkpointing_pushCheckpoint",
         "description": "Push checkpoint with signatures",
-        "operationId": "checkpointingpushCheckpoint",
+        "operationId": "checkpointing_pushCheckpoint",
         "requestBody": {
           "required": true,
           "content": {
@@ -211,7 +211,7 @@
         ],
         "summary": "debug_accountRange",
         "description": "Get account range",
-        "operationId": "debugaccountRange",
+        "operationId": "debug_accountRange",
         "requestBody": {
           "required": true,
           "content": {
@@ -311,7 +311,7 @@
         ],
         "summary": "debug_listPeersInfo",
         "description": "List connected peers information",
-        "operationId": "debuglistPeersInfo",
+        "operationId": "debug_listPeersInfo",
         "requestBody": {
           "required": true,
           "content": {
@@ -393,7 +393,7 @@
         ],
         "summary": "debug_storageRangeAt",
         "description": "Get storage range",
-        "operationId": "debugstorageRangeAt",
+        "operationId": "debug_storageRangeAt",
         "requestBody": {
           "required": true,
           "content": {
@@ -491,7 +491,7 @@
         ],
         "summary": "eth_accounts",
         "description": "List accounts",
-        "operationId": "ethaccounts",
+        "operationId": "eth_accounts",
         "requestBody": {
           "required": true,
           "content": {
@@ -573,7 +573,7 @@
         ],
         "summary": "eth_blockNumber",
         "description": "Returns the number of most recent block",
-        "operationId": "ethblockNumber",
+        "operationId": "eth_blockNumber",
         "requestBody": {
           "required": true,
           "content": {
@@ -655,7 +655,7 @@
         ],
         "summary": "eth_call",
         "description": "Execute call without transaction",
-        "operationId": "ethcall",
+        "operationId": "eth_call",
         "requestBody": {
           "required": true,
           "content": {
@@ -751,7 +751,7 @@
         ],
         "summary": "eth_chainId",
         "description": "Get chain ID",
-        "operationId": "ethchainId",
+        "operationId": "eth_chainId",
         "requestBody": {
           "required": true,
           "content": {
@@ -833,7 +833,7 @@
         ],
         "summary": "eth_coinbase",
         "description": "Get coinbase address",
-        "operationId": "ethcoinbase",
+        "operationId": "eth_coinbase",
         "requestBody": {
           "required": true,
           "content": {
@@ -915,7 +915,7 @@
         ],
         "summary": "eth_estimateGas",
         "description": "Estimate gas for transaction",
-        "operationId": "ethestimateGas",
+        "operationId": "eth_estimateGas",
         "requestBody": {
           "required": true,
           "content": {
@@ -1009,7 +1009,7 @@
         ],
         "summary": "eth_gasPrice",
         "description": "Get current gas price",
-        "operationId": "ethgasPrice",
+        "operationId": "eth_gasPrice",
         "requestBody": {
           "required": true,
           "content": {
@@ -1091,7 +1091,7 @@
         ],
         "summary": "eth_getBalance",
         "description": "Get balance of address",
-        "operationId": "ethgetBalance",
+        "operationId": "eth_getBalance",
         "requestBody": {
           "required": true,
           "content": {
@@ -1179,7 +1179,7 @@
         ],
         "summary": "eth_getBlockByHash",
         "description": "Returns block by hash",
-        "operationId": "ethgetBlockByHash",
+        "operationId": "eth_getBlockByHash",
         "requestBody": {
           "required": true,
           "content": {
@@ -1267,7 +1267,7 @@
         ],
         "summary": "eth_getBlockByNumber",
         "description": "Returns block by number",
-        "operationId": "ethgetBlockByNumber",
+        "operationId": "eth_getBlockByNumber",
         "requestBody": {
           "required": true,
           "content": {
@@ -1355,7 +1355,7 @@
         ],
         "summary": "eth_getBlockTransactionCountByHash",
         "description": "Returns transaction count in block by hash",
-        "operationId": "ethgetBlockTransactionCountByHash",
+        "operationId": "eth_getBlockTransactionCountByHash",
         "requestBody": {
           "required": true,
           "content": {
@@ -1441,7 +1441,7 @@
         ],
         "summary": "eth_getBlockTransactionCountByNumber",
         "description": "Returns transaction count in block by number",
-        "operationId": "ethgetBlockTransactionCountByNumber",
+        "operationId": "eth_getBlockTransactionCountByNumber",
         "requestBody": {
           "required": true,
           "content": {
@@ -1527,7 +1527,7 @@
         ],
         "summary": "eth_getCode",
         "description": "Get code at address",
-        "operationId": "ethgetCode",
+        "operationId": "eth_getCode",
         "requestBody": {
           "required": true,
           "content": {
@@ -1615,7 +1615,7 @@
         ],
         "summary": "eth_getFilterChanges",
         "description": "Get filter changes",
-        "operationId": "ethgetFilterChanges",
+        "operationId": "eth_getFilterChanges",
         "requestBody": {
           "required": true,
           "content": {
@@ -1701,7 +1701,7 @@
         ],
         "summary": "eth_getFilterLogs",
         "description": "Get all logs for filter",
-        "operationId": "ethgetFilterLogs",
+        "operationId": "eth_getFilterLogs",
         "requestBody": {
           "required": true,
           "content": {
@@ -1787,7 +1787,7 @@
         ],
         "summary": "eth_getLogs",
         "description": "Get logs matching filter",
-        "operationId": "ethgetLogs",
+        "operationId": "eth_getLogs",
         "requestBody": {
           "required": true,
           "content": {
@@ -1881,7 +1881,7 @@
         ],
         "summary": "eth_getProof",
         "description": "Get Merkle proof for account (EIP-1186)",
-        "operationId": "ethgetProof",
+        "operationId": "eth_getProof",
         "requestBody": {
           "required": true,
           "content": {
@@ -1975,7 +1975,7 @@
         ],
         "summary": "eth_getRawTransactionByBlockHashAndIndex",
         "description": "Get raw transaction by block hash and index (ETC extension)",
-        "operationId": "ethgetRawTransactionByBlockHashAndIndex",
+        "operationId": "eth_getRawTransactionByBlockHashAndIndex",
         "requestBody": {
           "required": true,
           "content": {
@@ -2063,7 +2063,7 @@
         ],
         "summary": "eth_getRawTransactionByBlockNumberAndIndex",
         "description": "Get raw transaction by block number and index (ETC extension)",
-        "operationId": "ethgetRawTransactionByBlockNumberAndIndex",
+        "operationId": "eth_getRawTransactionByBlockNumberAndIndex",
         "requestBody": {
           "required": true,
           "content": {
@@ -2151,7 +2151,7 @@
         ],
         "summary": "eth_getRawTransactionByHash",
         "description": "Get raw transaction by hash (ETC extension)",
-        "operationId": "ethgetRawTransactionByHash",
+        "operationId": "eth_getRawTransactionByHash",
         "requestBody": {
           "required": true,
           "content": {
@@ -2237,7 +2237,7 @@
         ],
         "summary": "eth_getStorageAt",
         "description": "Get storage at position",
-        "operationId": "ethgetStorageAt",
+        "operationId": "eth_getStorageAt",
         "requestBody": {
           "required": true,
           "content": {
@@ -2327,7 +2327,7 @@
         ],
         "summary": "eth_getStorageRoot",
         "description": "Get storage root (ETC extension)",
-        "operationId": "ethgetStorageRoot",
+        "operationId": "eth_getStorageRoot",
         "requestBody": {
           "required": true,
           "content": {
@@ -2415,7 +2415,7 @@
         ],
         "summary": "eth_getTransactionByBlockHashAndIndex",
         "description": "Get transaction by block hash and index",
-        "operationId": "ethgetTransactionByBlockHashAndIndex",
+        "operationId": "eth_getTransactionByBlockHashAndIndex",
         "requestBody": {
           "required": true,
           "content": {
@@ -2503,7 +2503,7 @@
         ],
         "summary": "eth_getTransactionByBlockNumberAndIndex",
         "description": "Get transaction by block number and index",
-        "operationId": "ethgetTransactionByBlockNumberAndIndex",
+        "operationId": "eth_getTransactionByBlockNumberAndIndex",
         "requestBody": {
           "required": true,
           "content": {
@@ -2591,7 +2591,7 @@
         ],
         "summary": "eth_getTransactionByHash",
         "description": "Get transaction by hash",
-        "operationId": "ethgetTransactionByHash",
+        "operationId": "eth_getTransactionByHash",
         "requestBody": {
           "required": true,
           "content": {
@@ -2677,7 +2677,7 @@
         ],
         "summary": "eth_getTransactionCount",
         "description": "Get nonce for address",
-        "operationId": "ethgetTransactionCount",
+        "operationId": "eth_getTransactionCount",
         "requestBody": {
           "required": true,
           "content": {
@@ -2765,7 +2765,7 @@
         ],
         "summary": "eth_getTransactionReceipt",
         "description": "Get transaction receipt",
-        "operationId": "ethgetTransactionReceipt",
+        "operationId": "eth_getTransactionReceipt",
         "requestBody": {
           "required": true,
           "content": {
@@ -2851,7 +2851,7 @@
         ],
         "summary": "eth_getUncleByBlockHashAndIndex",
         "description": "Returns uncle by block hash and index",
-        "operationId": "ethgetUncleByBlockHashAndIndex",
+        "operationId": "eth_getUncleByBlockHashAndIndex",
         "requestBody": {
           "required": true,
           "content": {
@@ -2939,7 +2939,7 @@
         ],
         "summary": "eth_getUncleByBlockNumberAndIndex",
         "description": "Returns uncle by block number and index",
-        "operationId": "ethgetUncleByBlockNumberAndIndex",
+        "operationId": "eth_getUncleByBlockNumberAndIndex",
         "requestBody": {
           "required": true,
           "content": {
@@ -3027,7 +3027,7 @@
         ],
         "summary": "eth_getUncleCountByBlockHash",
         "description": "Returns uncle count by block hash",
-        "operationId": "ethgetUncleCountByBlockHash",
+        "operationId": "eth_getUncleCountByBlockHash",
         "requestBody": {
           "required": true,
           "content": {
@@ -3113,7 +3113,7 @@
         ],
         "summary": "eth_getUncleCountByBlockNumber",
         "description": "Returns uncle count by block number",
-        "operationId": "ethgetUncleCountByBlockNumber",
+        "operationId": "eth_getUncleCountByBlockNumber",
         "requestBody": {
           "required": true,
           "content": {
@@ -3199,7 +3199,7 @@
         ],
         "summary": "eth_getWork",
         "description": "Get work for mining",
-        "operationId": "ethgetWork",
+        "operationId": "eth_getWork",
         "requestBody": {
           "required": true,
           "content": {
@@ -3281,7 +3281,7 @@
         ],
         "summary": "eth_hashrate",
         "description": "Get current hashrate",
-        "operationId": "ethhashrate",
+        "operationId": "eth_hashrate",
         "requestBody": {
           "required": true,
           "content": {
@@ -3363,7 +3363,7 @@
         ],
         "summary": "eth_mining",
         "description": "Check if mining",
-        "operationId": "ethmining",
+        "operationId": "eth_mining",
         "requestBody": {
           "required": true,
           "content": {
@@ -3445,7 +3445,7 @@
         ],
         "summary": "eth_newBlockFilter",
         "description": "Create new block filter",
-        "operationId": "ethnewBlockFilter",
+        "operationId": "eth_newBlockFilter",
         "requestBody": {
           "required": true,
           "content": {
@@ -3527,7 +3527,7 @@
         ],
         "summary": "eth_newFilter",
         "description": "Create new log filter",
-        "operationId": "ethnewFilter",
+        "operationId": "eth_newFilter",
         "requestBody": {
           "required": true,
           "content": {
@@ -3621,7 +3621,7 @@
         ],
         "summary": "eth_newPendingTransactionFilter",
         "description": "Create new pending transaction filter",
-        "operationId": "ethnewPendingTransactionFilter",
+        "operationId": "eth_newPendingTransactionFilter",
         "requestBody": {
           "required": true,
           "content": {
@@ -3703,7 +3703,7 @@
         ],
         "summary": "eth_pendingTransactions",
         "description": "Get pending transactions",
-        "operationId": "ethpendingTransactions",
+        "operationId": "eth_pendingTransactions",
         "requestBody": {
           "required": true,
           "content": {
@@ -3785,7 +3785,7 @@
         ],
         "summary": "eth_protocolVersion",
         "description": "Get protocol version",
-        "operationId": "ethprotocolVersion",
+        "operationId": "eth_protocolVersion",
         "requestBody": {
           "required": true,
           "content": {
@@ -3867,7 +3867,7 @@
         ],
         "summary": "eth_sendRawTransaction",
         "description": "Send a raw signed transaction",
-        "operationId": "ethsendRawTransaction",
+        "operationId": "eth_sendRawTransaction",
         "requestBody": {
           "required": true,
           "content": {
@@ -3953,7 +3953,7 @@
         ],
         "summary": "eth_sendTransaction",
         "description": "Send a transaction",
-        "operationId": "ethsendTransaction",
+        "operationId": "eth_sendTransaction",
         "requestBody": {
           "required": true,
           "content": {
@@ -4051,7 +4051,7 @@
         ],
         "summary": "eth_sign",
         "description": "Sign data with address",
-        "operationId": "ethsign",
+        "operationId": "eth_sign",
         "requestBody": {
           "required": true,
           "content": {
@@ -4139,7 +4139,7 @@
         ],
         "summary": "eth_submitHashrate",
         "description": "Submit hashrate",
-        "operationId": "ethsubmitHashrate",
+        "operationId": "eth_submitHashrate",
         "requestBody": {
           "required": true,
           "content": {
@@ -4227,7 +4227,7 @@
         ],
         "summary": "eth_submitWork",
         "description": "Submit proof-of-work",
-        "operationId": "ethsubmitWork",
+        "operationId": "eth_submitWork",
         "requestBody": {
           "required": true,
           "content": {
@@ -4317,7 +4317,7 @@
         ],
         "summary": "eth_syncing",
         "description": "Get sync status",
-        "operationId": "ethsyncing",
+        "operationId": "eth_syncing",
         "requestBody": {
           "required": true,
           "content": {
@@ -4399,7 +4399,7 @@
         ],
         "summary": "eth_uninstallFilter",
         "description": "Uninstall filter",
-        "operationId": "ethuninstallFilter",
+        "operationId": "eth_uninstallFilter",
         "requestBody": {
           "required": true,
           "content": {
@@ -4485,7 +4485,7 @@
         ],
         "summary": "faucet_sendFunds",
         "description": "Send testnet tokens to an address",
-        "operationId": "faucetsendFunds",
+        "operationId": "faucet_sendFunds",
         "requestBody": {
           "required": true,
           "content": {
@@ -4571,7 +4571,7 @@
         ],
         "summary": "faucet_status",
         "description": "Get faucet status",
-        "operationId": "faucetstatus",
+        "operationId": "faucet_status",
         "requestBody": {
           "required": true,
           "content": {
@@ -4653,7 +4653,7 @@
         ],
         "summary": "fukuii_getAccountTransactions",
         "description": "Get account transactions in block range",
-        "operationId": "fukuiigetAccountTransactions",
+        "operationId": "fukuii_getAccountTransactions",
         "requestBody": {
           "required": true,
           "content": {
@@ -4743,7 +4743,7 @@
         ],
         "summary": "iele_call",
         "description": "Execute IELE call",
-        "operationId": "ielecall",
+        "operationId": "iele_call",
         "requestBody": {
           "required": true,
           "content": {
@@ -4839,7 +4839,7 @@
         ],
         "summary": "iele_sendTransaction",
         "description": "Send IELE transaction",
-        "operationId": "ielesendTransaction",
+        "operationId": "iele_sendTransaction",
         "requestBody": {
           "required": true,
           "content": {
@@ -4935,7 +4935,7 @@
         ],
         "summary": "miner_getStatus",
         "description": "Get comprehensive mining status",
-        "operationId": "minergetStatus",
+        "operationId": "miner_getStatus",
         "requestBody": {
           "required": true,
           "content": {
@@ -5017,7 +5017,7 @@
         ],
         "summary": "miner_setEtherbase",
         "description": "Set etherbase address",
-        "operationId": "minersetEtherbase",
+        "operationId": "miner_setEtherbase",
         "requestBody": {
           "required": true,
           "content": {
@@ -5103,7 +5103,7 @@
         ],
         "summary": "miner_start",
         "description": "Start mining",
-        "operationId": "minerstart",
+        "operationId": "miner_start",
         "requestBody": {
           "required": true,
           "content": {
@@ -5185,7 +5185,7 @@
         ],
         "summary": "miner_stop",
         "description": "Stop mining",
-        "operationId": "minerstop",
+        "operationId": "miner_stop",
         "requestBody": {
           "required": true,
           "content": {
@@ -5267,7 +5267,7 @@
         ],
         "summary": "net_listening",
         "description": "Check if listening for connections",
-        "operationId": "netlistening",
+        "operationId": "net_listening",
         "requestBody": {
           "required": true,
           "content": {
@@ -5349,7 +5349,7 @@
         ],
         "summary": "net_peerCount",
         "description": "Get peer count",
-        "operationId": "netpeerCount",
+        "operationId": "net_peerCount",
         "requestBody": {
           "required": true,
           "content": {
@@ -5431,7 +5431,7 @@
         ],
         "summary": "net_version",
         "description": "Get network ID",
-        "operationId": "netversion",
+        "operationId": "net_version",
         "requestBody": {
           "required": true,
           "content": {
@@ -5513,7 +5513,7 @@
         ],
         "summary": "personal_ecRecover",
         "description": "Recover address from signature",
-        "operationId": "personalecRecover",
+        "operationId": "personal_ecRecover",
         "requestBody": {
           "required": true,
           "content": {
@@ -5601,7 +5601,7 @@
         ],
         "summary": "personal_importRawKey",
         "description": "Import raw private key",
-        "operationId": "personalimportRawKey",
+        "operationId": "personal_importRawKey",
         "requestBody": {
           "required": true,
           "content": {
@@ -5689,7 +5689,7 @@
         ],
         "summary": "personal_listAccounts",
         "description": "List all accounts",
-        "operationId": "personallistAccounts",
+        "operationId": "personal_listAccounts",
         "requestBody": {
           "required": true,
           "content": {
@@ -5771,7 +5771,7 @@
         ],
         "summary": "personal_lockAccount",
         "description": "Lock account",
-        "operationId": "personallockAccount",
+        "operationId": "personal_lockAccount",
         "requestBody": {
           "required": true,
           "content": {
@@ -5857,7 +5857,7 @@
         ],
         "summary": "personal_newAccount",
         "description": "Create new account",
-        "operationId": "personalnewAccount",
+        "operationId": "personal_newAccount",
         "requestBody": {
           "required": true,
           "content": {
@@ -5943,7 +5943,7 @@
         ],
         "summary": "personal_sendTransaction",
         "description": "Send transaction with passphrase",
-        "operationId": "personalsendTransaction",
+        "operationId": "personal_sendTransaction",
         "requestBody": {
           "required": true,
           "content": {
@@ -6039,7 +6039,7 @@
         ],
         "summary": "personal_sign",
         "description": "Sign data with passphrase",
-        "operationId": "personalsign",
+        "operationId": "personal_sign",
         "requestBody": {
           "required": true,
           "content": {
@@ -6129,7 +6129,7 @@
         ],
         "summary": "personal_unlockAccount",
         "description": "Unlock account",
-        "operationId": "personalunlockAccount",
+        "operationId": "personal_unlockAccount",
         "requestBody": {
           "required": true,
           "content": {
@@ -6219,7 +6219,7 @@
         ],
         "summary": "qa_generateCheckpoint",
         "description": "Generate checkpoint",
-        "operationId": "qagenerateCheckpoint",
+        "operationId": "qa_generateCheckpoint",
         "requestBody": {
           "required": true,
           "content": {
@@ -6311,7 +6311,7 @@
         ],
         "summary": "qa_getFederationMembersInfo",
         "description": "Get federation members info",
-        "operationId": "qagetFederationMembersInfo",
+        "operationId": "qa_getFederationMembersInfo",
         "requestBody": {
           "required": true,
           "content": {
@@ -6393,7 +6393,7 @@
         ],
         "summary": "qa_mineBlocks",
         "description": "Mine blocks (QA)",
-        "operationId": "qamineBlocks",
+        "operationId": "qa_mineBlocks",
         "requestBody": {
           "required": true,
           "content": {
@@ -6481,7 +6481,7 @@
         ],
         "summary": "rpc_modules",
         "description": "List enabled RPC modules",
-        "operationId": "rpcmodules",
+        "operationId": "rpc_modules",
         "requestBody": {
           "required": true,
           "content": {
@@ -6563,7 +6563,7 @@
         ],
         "summary": "test_getLogHash",
         "description": "Get log hash",
-        "operationId": "testgetLogHash",
+        "operationId": "test_getLogHash",
         "requestBody": {
           "required": true,
           "content": {
@@ -6649,7 +6649,7 @@
         ],
         "summary": "test_importRawBlock",
         "description": "Import raw block",
-        "operationId": "testimportRawBlock",
+        "operationId": "test_importRawBlock",
         "requestBody": {
           "required": true,
           "content": {
@@ -6735,7 +6735,7 @@
         ],
         "summary": "test_mineBlocks",
         "description": "Mine blocks (test)",
-        "operationId": "testmineBlocks",
+        "operationId": "test_mineBlocks",
         "requestBody": {
           "required": true,
           "content": {
@@ -6821,7 +6821,7 @@
         ],
         "summary": "test_modifyTimestamp",
         "description": "Modify timestamp",
-        "operationId": "testmodifyTimestamp",
+        "operationId": "test_modifyTimestamp",
         "requestBody": {
           "required": true,
           "content": {
@@ -6907,7 +6907,7 @@
         ],
         "summary": "test_rewindToBlock",
         "description": "Rewind to block",
-        "operationId": "testrewindToBlock",
+        "operationId": "test_rewindToBlock",
         "requestBody": {
           "required": true,
           "content": {
@@ -6993,7 +6993,7 @@
         ],
         "summary": "test_setChainParams",
         "description": "Set chain parameters",
-        "operationId": "testsetChainParams",
+        "operationId": "test_setChainParams",
         "requestBody": {
           "required": true,
           "content": {
@@ -7085,7 +7085,7 @@
         ],
         "summary": "web3_clientVersion",
         "description": "Get client version",
-        "operationId": "web3clientVersion",
+        "operationId": "web3_clientVersion",
         "requestBody": {
           "required": true,
           "content": {
@@ -7167,7 +7167,7 @@
         ],
         "summary": "web3_sha3",
         "description": "Keccak-256 hash",
-        "operationId": "web3sha3",
+        "operationId": "web3_sha3",
         "requestBody": {
           "required": true,
           "content": {
