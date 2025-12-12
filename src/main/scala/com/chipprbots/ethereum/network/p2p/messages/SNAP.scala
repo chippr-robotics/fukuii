@@ -18,28 +18,49 @@ import com.chipprbots.ethereum.utils.ByteUtils
   *
   * See: https://github.com/ethereum/devp2p/blob/master/caps/snap.md
   *
-  * Message codes:
-  *   - 0x00: GetAccountRange
-  *   - 0x01: AccountRange
-  *   - 0x02: GetStorageRanges
-  *   - 0x03: StorageRanges
-  *   - 0x04: GetByteCodes
-  *   - 0x05: ByteCodes
-  *   - 0x06: GetTrieNodes
-  *   - 0x07: TrieNodes
+  * Message codes (wire protocol):
+  * SNAP is a satellite protocol that follows ETH in capability negotiation.
+  * ETH/68 uses codes 0x10-0x20, so SNAP/1 starts at 0x21.
+  *
+  * Wire codes:
+  *   - 0x21: GetAccountRange
+  *   - 0x22: AccountRange
+  *   - 0x23: GetStorageRanges
+  *   - 0x24: StorageRanges
+  *   - 0x25: GetByteCodes
+  *   - 0x26: ByteCodes
+  *   - 0x27: GetTrieNodes
+  *   - 0x28: TrieNodes
+  *
+  * Note: The SNAP spec defines these as 0x00-0x07, but on the wire they are offset by 0x21
+  * to follow ETH protocol messages. This matches coregeth and besu implementations.
   */
 object SNAP {
 
-  /** Message codes for SNAP/1 protocol */
+  /** SNAP protocol offset
+    *
+    * SNAP/1 is a satellite protocol that runs alongside ETH/68. According to the devp2p spec, each capability gets its
+    * own message ID space. ETH/68 occupies codes 0x10-0x20, so SNAP/1 starts at 0x21.
+    *
+    * This matches the behavior in coregeth and besu where SNAP messages are sent with absolute wire codes, not
+    * relative codes.
+    */
+  val SnapProtocolOffset = 0x21
+
+  /** Message codes for SNAP/1 protocol
+    *
+    * These are the actual wire protocol codes used for SNAP messages. While the SNAP spec documents these as 0x00-0x07
+    * (relative to the protocol), on the wire they must be offset to follow ETH protocol messages.
+    */
   object Codes {
-    val GetAccountRangeCode: Int = 0x00
-    val AccountRangeCode: Int = 0x01
-    val GetStorageRangesCode: Int = 0x02
-    val StorageRangesCode: Int = 0x03
-    val GetByteCodesCode: Int = 0x04
-    val ByteCodesCode: Int = 0x05
-    val GetTrieNodesCode: Int = 0x06
-    val TrieNodesCode: Int = 0x07
+    val GetAccountRangeCode: Int = SnapProtocolOffset + 0x00 // 0x21
+    val AccountRangeCode: Int = SnapProtocolOffset + 0x01 // 0x22
+    val GetStorageRangesCode: Int = SnapProtocolOffset + 0x02 // 0x23
+    val StorageRangesCode: Int = SnapProtocolOffset + 0x03 // 0x24
+    val GetByteCodesCode: Int = SnapProtocolOffset + 0x04 // 0x25
+    val ByteCodesCode: Int = SnapProtocolOffset + 0x05 // 0x26
+    val GetTrieNodesCode: Int = SnapProtocolOffset + 0x06 // 0x27
+    val TrieNodesCode: Int = SnapProtocolOffset + 0x07 // 0x28
   }
 
   /** GetAccountRange message (0x00)

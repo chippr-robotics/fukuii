@@ -1,6 +1,6 @@
 # SNAP Protocol Compliance Validation
 
-**Date:** 2025-12-04  
+**Date:** 2025-12-04 (Updated: 2025-12-12)  
 **Reference Spec:** https://github.com/ethereum/devp2p/blob/master/caps/snap.md  
 **Review Scope:** fukuii SNAP/1 protocol implementation
 
@@ -9,6 +9,8 @@
 ✅ **Overall Compliance: PASSED**
 
 fukuii's SNAP/1 protocol implementation is **compliant with the devp2p specification**. All message formats, encodings, and routing mechanisms match the specification requirements.
+
+**Update 2025-12-12:** Fixed message code offset handling to match coregeth/besu implementations. SNAP messages now correctly use wire codes 0x21-0x28 (spec codes 0x00-0x07 + offset 0x21). See [SNAP Message Offset Validation](../validation/SNAP_MESSAGE_OFFSET_VALIDATION.md) for details.
 
 ## Detailed Validation
 
@@ -178,7 +180,34 @@ val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
 
 ---
 
-#### 2.2 Satellite Protocol Status
+#### 2.2 Message Code Offsets ✅
+
+**Spec Requirement:** SNAP messages must use capability-specific offset per devp2p RLPx spec
+
+**Implementation:** `src/main/scala/com/chipprbots/ethereum/network/p2p/messages/SNAP.scala`
+
+```scala
+val SnapProtocolOffset = 0x21  // After ETH/68 (0x10-0x20)
+
+object Codes {
+  val GetAccountRangeCode: Int = SnapProtocolOffset + 0x00  // 0x21
+  val AccountRangeCode: Int = SnapProtocolOffset + 0x01     // 0x22
+  // ... etc
+}
+```
+
+**Wire Protocol Message Code Map:**
+- Wire Protocol (p2p): 0x00-0x0f
+- ETH/68: 0x10-0x20
+- SNAP/1: 0x21-0x28
+
+✅ **Status:** Compliant (Fixed 2025-12-12)
+
+**Note:** SNAP spec defines messages as 0x00-0x07 (protocol-relative), but on the wire they use offset codes 0x21-0x28 to follow ETH protocol. This matches coregeth and besu implementations. See [SNAP Message Offset Validation](../validation/SNAP_MESSAGE_OFFSET_VALIDATION.md).
+
+---
+
+#### 2.3 Satellite Protocol Status
 
 **Spec Requirement:** "SNAP is a dependent satellite of ETH (to run snap, you need to run eth too)"
 
@@ -191,7 +220,7 @@ val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
 
 ---
 
-#### 2.3 Message Routing
+#### 2.4 Message Routing
 
 **Spec Requirement:** SNAP messages must be routable to sync handler
 
@@ -216,7 +245,7 @@ case MessageFromPeer(message, peerId) =>
 
 ---
 
-#### 2.4 Request ID Handling
+#### 2.5 Request ID Handling
 
 **Spec Requirement:** Request IDs must match responses to requests
 
