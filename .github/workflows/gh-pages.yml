@@ -22,11 +22,6 @@ on:
       - main
       - master
       - develop
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - 'requirements-docs.txt'
-      - '.github/workflows/gh-pages.yml'
   pull_request:
     branches:
       - main
