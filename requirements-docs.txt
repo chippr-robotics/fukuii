@@ -4,3 +4,4 @@
 mkdocs-material>=9.5.0
 pymdown-extensions>=10.7.0
 mkdocs-mermaid2-plugin>=1.1.1
+mkdocs-swagger-ui-tag>=0.6.10
