@@ -10,6 +10,7 @@
     "petersburgBlock": 1000000000,
     "istanbulBlock": 1000000000,
     "berlinBlock": 1000000000,
+    "londonBlock": 1000000000,
     "ecip1017EraRounds": 5000000,
     "ethash": {}
   },
