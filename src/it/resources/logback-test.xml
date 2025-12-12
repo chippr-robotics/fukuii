@@ -25,20 +25,9 @@
         </encoder>
     </appender>
 
-    <!-- Enhanced logging for RLPxConnectionHandler to diagnose test failures -->
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
-    
-    <!-- Reduce log noise from sync components in integration tests -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="WARN" />
+    <!-- Silent by default - enable specific loggers when troubleshooting integration tests -->
 
-    <root level="INFO">
+    <root level="ERROR">
         <appender-ref ref="STDOUT" />
         <appender-ref ref="FILE" />
     </root>
