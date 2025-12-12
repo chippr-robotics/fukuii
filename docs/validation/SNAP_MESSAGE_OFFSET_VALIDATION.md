@@ -207,7 +207,7 @@ The SNAP message offset fix ensures fukuii correctly implements the devp2p speci
 
 ---
 
-**Implementation Commit**: 2f662c9  
+**Implementation Date**: 2025-12-12  
 **Files Changed**:
 - `src/main/scala/com/chipprbots/ethereum/network/p2p/messages/SNAP.scala`
 - `src/main/scala/com/chipprbots/ethereum/network/rlpx/RLPxConnectionHandler.scala`
