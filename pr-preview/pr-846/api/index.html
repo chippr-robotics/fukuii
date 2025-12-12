@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="en" class="no-js" data-fukuii-version="0.1.158">
+<html lang="en" class="no-js" data-fukuii-version="0.1.159">
   <head>
     
       <meta charset="utf-8">
@@ -18,7 +18,7 @@
         <link rel="prev" href="../testing/PERFORMANCE_BASELINES/">
       
       
-        <link rel="next" href="JSON_RPC_API_REFERENCE/">
+        <link rel="next" href="interactive-api-reference/">
       
       
         
@@ -75,7 +75,7 @@
 
     
     
-  <script>window.__FUKUII_VERSION__ = "0.1.158";</script>
+  <script>window.__FUKUII_VERSION__ = "0.1.159";</script>
 </head>
   
   
@@ -2140,6 +2140,8 @@
       
         
       
+        
+      
     
     
     
@@ -2195,6 +2197,34 @@
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="interactive-api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -6272,7 +6302,17 @@
 <h2 id="documentation-index">📚 Documentation Index<a class="headerlink" href="#documentation-index" title="Permanent link">&para;</a></h2>
 <h3 id="core-api-documentation">Core API Documentation<a class="headerlink" href="#core-api-documentation" title="Permanent link">&para;</a></h3>
 <ol>
-<li><strong><a href="JSON_RPC_API_REFERENCE/">JSON-RPC API Reference</a></strong></li>
+<li><strong><a href="interactive-api-reference/">Interactive API Reference</a></strong> 🆕</li>
+<li><strong>Fully browsable OpenAPI specification</strong> with Swagger UI</li>
+<li>All 83 JSON-RPC endpoints with live examples</li>
+<li>Organized by namespace with filtering</li>
+<li>Try-it-out functionality for testing endpoints</li>
+<li>
+<p><strong>Use this for</strong>: Exploring the API interactively, testing endpoints, integration planning</p>
+</li>
+<li>
+<p><strong><a href="JSON_RPC_API_REFERENCE/">JSON-RPC API Reference</a></strong></p>
+</li>
 <li>Complete reference for all JSON-RPC endpoints</li>
 <li>Request/response examples for each method</li>
 <li>Parameter descriptions and validation rules</li>
@@ -6335,7 +6375,9 @@
 </ol>
 <h3 id="quick-links">Quick Links<a class="headerlink" href="#quick-links" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong><a href="interactive-api-reference/">Interactive API Reference</a></strong> - Browse all endpoints with Swagger UI</li>
 <li><strong><a href="INSOMNIA_WORKSPACE_GUIDE/">Insomnia Guide</a></strong> - How to use the Insomnia API collection</li>
+<li><strong><a href="MAINTAINING_API_REFERENCE/">Maintaining API Reference</a></strong> - Guide for updating the API spec</li>
 <li><strong><a href="../runbooks/">Runbooks</a></strong> - Operational documentation</li>
 <li><strong><a href="../">Documentation Home</a></strong> - Project overview and getting started</li>
 </ul>
@@ -6676,11 +6718,25 @@
 <p>When updating API documentation:</p>
 <ol>
 <li>Update the relevant markdown file</li>
-<li>Update the Insomnia workspace in repository root if adding endpoints</li>
+<li><strong>Update the Insomnia workspace</strong> (<code>insomnia_workspace.json</code> in repository root) if adding/modifying endpoints</li>
+<li><strong>Regenerate the OpenAPI spec</strong> by running: <code>python3 scripts/convert_insomnia_to_openapi.py</code></li>
 <li>Update <a href="JSON_RPC_COVERAGE_ANALYSIS/">coverage analysis</a> if implementation status changes</li>
 <li>Test all examples and code snippets</li>
 <li>Submit PR with clear description</li>
 </ol>
+<h4 id="updating-the-interactive-api-reference">Updating the Interactive API Reference<a class="headerlink" href="#updating-the-interactive-api-reference" title="Permanent link">&para;</a></h4>
+<p>The interactive API reference is automatically generated from the Insomnia workspace:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># 1. Update insomnia_workspace.json with new/modified endpoints</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="c1"># 2. Run the conversion script</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>python3<span class="w"> </span>scripts/convert_insomnia_to_openapi.py
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="c1"># 3. Verify the OpenAPI spec</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import json; print(json.load(open(&#39;docs/api/openapi.json&#39;))[&#39;info&#39;][&#39;title&#39;])&quot;</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="c1"># 4. Build and preview the docs</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>mkdocs<span class="w"> </span>serve
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="c1"># Visit http://localhost:8000/api/interactive-api-reference/</span>
+</span></code></pre></div>
 <h2 id="additional-resources">📚 Additional Resources<a class="headerlink" href="#additional-resources" title="Permanent link">&para;</a></h2>
 <h3 id="official-documentation">Official Documentation<a class="headerlink" href="#official-documentation" title="Permanent link">&para;</a></h3>
 <ul>
@@ -6787,13 +6843,13 @@
         
         
           
-          <a href="JSON_RPC_API_REFERENCE/" class="md-footer__link md-footer__link--next" aria-label="Next: JSON-RPC Reference">
+          <a href="interactive-api-reference/" class="md-footer__link md-footer__link--next" aria-label="Next: Interactive API Reference">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                JSON-RPC Reference
+                Interactive API Reference
               </div>
             </div>
             <div class="md-footer__button md-icon">
