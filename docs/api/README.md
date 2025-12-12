@@ -64,7 +64,9 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 
 ### Quick Links
 
+- **[Interactive API Reference](./interactive-api-reference.md)** - Browse all endpoints with Swagger UI
 - **[Insomnia Guide](INSOMNIA_WORKSPACE_GUIDE.md)** - How to use the Insomnia API collection
+- **[Maintaining API Reference](MAINTAINING_API_REFERENCE.md)** - Guide for updating the API spec
 - **[Runbooks](../runbooks/README.md)** - Operational documentation
 - **[Documentation Home](../index.md)** - Project overview and getting started
 
