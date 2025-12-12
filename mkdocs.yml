@@ -96,6 +96,7 @@ markdown_extensions:
 plugins:
   - search:
       separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
+  - swagger-ui-tag
 
 # Hooks for version injection
 hooks:
@@ -175,6 +176,7 @@ nav:
   
   - API Reference:
     - api/README.md
+    - Interactive API Reference: api/interactive-api-reference.md
     - JSON-RPC Reference: api/JSON_RPC_API_REFERENCE.md
     - RPC Coverage Analysis: api/JSON_RPC_COVERAGE_ANALYSIS.md
     - Insomnia Workspace: api/INSOMNIA_WORKSPACE_GUIDE.md
