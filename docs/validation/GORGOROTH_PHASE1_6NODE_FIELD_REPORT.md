@@ -447,7 +447,6 @@ The RLPx handshake issue is particularly concerning as it was also reported in t
 - [Gorgoroth 6-Node Walkthrough](GORGOROTH_6NODE_WALKTHROUGH.md)
 - [Gorgoroth Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md)
 - [Gorgoroth README](../../ops/gorgoroth/README.md)
-- [Issue: Complete Phase 1 Validation](https://github.com/chippr-robotics/fukuii/issues/XXX)
 
 ---
 
