@@ -52,7 +52,8 @@ class PoWMiningCoordinatorSpec
   "PoWMinerCoordinator actor" - {
     "should throw exception when starting with other message than StartMining(mode)" taggedAs (
       UnitTest,
-      ConsensusTest
+      ConsensusTest,
+      SlowTest
     ) in new TestSetup {
       override def coordinatorName = "FailedCoordinator"
       LoggingTestKit.error("StopMining").expect {
@@ -62,7 +63,8 @@ class PoWMiningCoordinatorSpec
 
     "should start recurrent mining when receiving message StartMining(RecurrentMining)" taggedAs (
       UnitTest,
-      ConsensusTest
+      ConsensusTest,
+      SlowTest
     ) in new TestSetup {
       override def coordinatorName = "RecurrentMining"
       setBlockForMining(parentBlock)
@@ -74,7 +76,8 @@ class PoWMiningCoordinatorSpec
 
     "should start on demand mining when receiving message StartMining(OnDemandMining)" taggedAs (
       UnitTest,
-      ConsensusTest
+      ConsensusTest,
+      SlowTest
     ) in new TestSetup {
       override def coordinatorName = "OnDemandMining"
       LoggingTestKit.info("Received message SetMiningMode(OnDemandMining)").expect {
