@@ -625,7 +625,7 @@ object RLPxConnectionHandler {
       new RLPxConnectionHandler(
         capabilities,
         authHandshaker,
-  ethMessageCodecFactory,
+        ethMessageCodecFactory,
         rlpxConfiguration,
         HelloCodec.apply
       )
