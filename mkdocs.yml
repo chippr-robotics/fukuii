@@ -235,6 +235,23 @@ nav:
     - Gas Calculation: troubleshooting/GAS_CALCULATION_ISSUES.md
     - Log Review: troubleshooting/LOG_REVIEW_RESOLUTION.md
   
+  - Validation:
+    - validation/README.md
+    - Executive Summary: validation/EXECUTIVE_SUMMARY.md
+    - Gorgoroth Network:
+      - Compatibility: validation/GORGOROTH_COMPATIBILITY.md
+      - Implementation Summary: validation/GORGOROTH_IMPLEMENTATION_SUMMARY.md
+      - Validation Status: validation/GORGOROTH_VALIDATION_STATUS.md
+      - Status: validation/GORGOROTH_STATUS.md
+      - 3-Node Walkthrough: validation/GORGOROTH_3NODE_WALKTHROUGH.md
+      - 6-Node Walkthrough: validation/GORGOROTH_6NODE_WALKTHROUGH.md
+      - Phase 2 Field Report: validation/GORGOROTH_PHASE2_FIELD_REPORT.md
+    - Protocol Validation:
+      - P2P Communication Guide: validation/P2P_COMMUNICATION_VALIDATION_GUIDE.md
+      - Cirith Ungol Walkthrough: validation/CIRITH_UNGOL_WALKTHROUGH.md
+      - EIP-155 BigInt Validation: validation/EIP155_BIGINT_VALIDATION.md
+      - ETC64 Removal Validation: validation/ETC64_REMOVAL_VALIDATION.md
+  
   - Background:
     - Historical:
       - historical/README.md
@@ -244,10 +261,21 @@ nav:
       - FastSync Timeout: investigation/FASTSYNC_TIMEOUT_INVESTIGATION.md
       - Contract Test Failure: investigation/CONTRACT_TEST_FAILURE_ANALYSIS.md
       - Integration Tests: investigation/INTEGRATION_TEST_CLASSIFICATION.md
+    - Analysis:
+      - EIP-2124 Implementation: analysis/EIP-2124_IMPLEMENTATION_ANALYSIS.md
+      - RLPx Handshake Analysis: analysis/RLPX_HANDSHAKE_AND_MESSAGE_ENCODING_ANALYSIS.md
+      - RLPx Hello Regression: analysis/rlpx-hello-regression.md
+    - Reviews:
+      - Compression Fix: reviews/COMPRESSION_FIX_WIRE_PROTOCOL.md
+      - Run 007 Investigation: reviews/RUN_007_INVESTIGATION_SUMMARY.md
+      - SNAP Protocol Compliance: reviews/SNAP_PROTOCOL_COMPLIANCE_VALIDATION.md
+      - SNAP Sync Implementation: reviews/SNAP_SYNC_IMPLEMENTATION_REVIEW.md
     - Reports:
       - reports/README.md
       - Network Test Report: reports/NETWORK_TEST_REPORT.md
       - Implementation Complete: reports/IMPLEMENTATION_COMPLETE.md
+    - Announcements:
+      - Gorgoroth Trials: announcements/gorgoroth-trials-announcement.md
     - Tools:
       - tools/README.md
       - Configuration Wizard: tools/configuration-wizard.md
