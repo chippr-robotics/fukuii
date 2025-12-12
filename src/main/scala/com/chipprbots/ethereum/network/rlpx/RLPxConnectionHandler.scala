@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder._
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
+import com.chipprbots.ethereum.network.p2p.SNAPMessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
@@ -46,7 +47,7 @@ import com.chipprbots.ethereum.utils.ByteUtils
 class RLPxConnectionHandler(
     capabilities: List[Capability],
     authHandshaker: AuthHandshaker,
-    messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy) => MessageCodec,
+  messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
     rlpxConfiguration: RLPxConfiguration,
     extractor: Secrets => HelloCodec
 ) extends Actor
@@ -364,8 +365,20 @@ class RLPxConnectionHandler(
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
           CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+        val supportsSnap =
+          capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
+        if (supportsSnap) {
+          log.info("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
+        }
         (
-          messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion, hello.clientId, compressionPolicy),
+          messageCodecFactory(
+            extractor.frameCodec,
+            negotiated,
+            hello.p2pVersion,
+            hello.clientId,
+            compressionPolicy,
+            supportsSnap
+          ),
           negotiated
         )
       }
@@ -612,7 +625,7 @@ object RLPxConnectionHandler {
       new RLPxConnectionHandler(
         capabilities,
         authHandshaker,
-        ethMessageCodecFactory,
+  ethMessageCodecFactory,
         rlpxConfiguration,
         HelloCodec.apply
       )
@@ -623,10 +636,15 @@ object RLPxConnectionHandler {
       negotiated: Capability,
       p2pVersion: Long,
       clientId: String,
-      compressionPolicy: CompressionPolicy
+      compressionPolicy: CompressionPolicy,
+      supportsSnap: Boolean
   ): MessageCodec = {
-    val md = NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))
-    new MessageCodec(frameCodec, md, p2pVersion, clientId, compressionPolicy)
+    val ethDecoder = EthereumMessageDecoder.ethMessageDecoder(negotiated)
+    val decoderWithSnap =
+      if (supportsSnap) NetworkMessageDecoder.orElse(SNAPMessageDecoder).orElse(ethDecoder)
+      else NetworkMessageDecoder.orElse(ethDecoder)
+
+    new MessageCodec(frameCodec, decoderWithSnap, p2pVersion, clientId, compressionPolicy)
   }
 
   case class ConnectTo(uri: URI)
