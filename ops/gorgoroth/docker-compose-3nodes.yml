@@ -67,7 +67,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
-      - ./conf/logback-rlpx-debug.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
@@ -107,6 +107,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:
