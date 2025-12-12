@@ -20,32 +20,6 @@ def parse_json_body(body_text: str) -> Dict[str, Any]:
         return {}
 
 
-def extract_params_from_body(body: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract parameter information from JSON-RPC request body."""
-    params = body.get("params", [])
-    if not params:
-        return []
-    
-    # Generate schema for params array
-    param_schemas = []
-    for i, param in enumerate(params):
-        param_type = type(param).__name__
-        if param_type == "str":
-            param_schemas.append({"type": "string", "example": param})
-        elif param_type == "int":
-            param_schemas.append({"type": "integer", "example": param})
-        elif param_type == "bool":
-            param_schemas.append({"type": "boolean", "example": param})
-        elif param_type == "dict":
-            param_schemas.append({"type": "object", "example": param})
-        elif param_type == "list":
-            param_schemas.append({"type": "array", "example": param})
-        else:
-            param_schemas.append({"example": param})
-    
-    return param_schemas
-
-
 def convert_insomnia_to_openapi(insomnia_file: Path, output_file: Path):
     """Convert Insomnia workspace to OpenAPI 3.0 specification."""
     
