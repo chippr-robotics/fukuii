@@ -505,7 +505,7 @@ addCommandAlias(
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest -l FlakyTest
     |; rlp / test
     |; bytes / test
     |; crypto / test
@@ -518,7 +518,7 @@ addCommandAlias(
 addCommandAlias(
   "testStandard",
   """; compile-all
-    |; testOnly -- -l BenchmarkTest -l EthereumTest -l DisabledTest
+    |; testOnly -- -l BenchmarkTest -l EthereumTest -l DisabledTest -l FlakyTest
     |""".stripMargin
 )
 

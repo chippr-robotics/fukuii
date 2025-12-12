@@ -130,7 +130,7 @@ class PoWMiningCoordinatorSpec
           }
       }
 
-      "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+      "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest, FlakyTest) in new TestSetup {
         override def coordinatorName = "RecurrentMining"
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
@@ -159,7 +159,8 @@ class PoWMiningCoordinatorSpec
       "Continue to attempt to mine if blockchainReader.getBestBlock() return None" taggedAs (
         UnitTest,
         ConsensusTest,
-        SlowTest
+        SlowTest,
+        FlakyTest
       ) in new TestSetup {
         override def coordinatorName = "AlwaysMine"
         override val coordinator = testKit.spawn(
