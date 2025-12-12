@@ -6,7 +6,7 @@
     <!--read properties from application.conf using PropertyDefiner (logback 1.5.x compatible)-->
     <define name="LOGSLEVEL" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
         <key>logging.logs-level</key>
-        <defaultValue>INFO</defaultValue>
+        <defaultValue>ERROR</defaultValue>
     </define>
     <define name="ASJSON" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
         <key>logging.json-output</key>
@@ -257,9 +257,6 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPErrorHandler" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="ERROR" />
     
-    <!-- =================================================================== -->
-    <!-- OTHER COMPONENTS (inherit ERROR from root)                          -->
-    <!-- =================================================================== -->
     <!-- =================================================================== -->
     <!-- OTHER COMPONENTS (inherit ERROR from root)                          -->
     <!-- =================================================================== -->
