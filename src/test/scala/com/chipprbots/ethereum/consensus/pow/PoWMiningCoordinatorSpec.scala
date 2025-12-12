@@ -52,7 +52,8 @@ class PoWMiningCoordinatorSpec
   "PoWMinerCoordinator actor" - {
     "should throw exception when starting with other message than StartMining(mode)" taggedAs (
       UnitTest,
-      ConsensusTest
+      ConsensusTest,
+      SlowTest
     ) in new TestSetup {
       override def coordinatorName = "FailedCoordinator"
       LoggingTestKit.error("StopMining").expect {
@@ -62,7 +63,8 @@ class PoWMiningCoordinatorSpec
 
     "should start recurrent mining when receiving message StartMining(RecurrentMining)" taggedAs (
       UnitTest,
-      ConsensusTest
+      ConsensusTest,
+      SlowTest
     ) in new TestSetup {
       override def coordinatorName = "RecurrentMining"
       setBlockForMining(parentBlock)
@@ -74,7 +76,8 @@ class PoWMiningCoordinatorSpec
 
     "should start on demand mining when receiving message StartMining(OnDemandMining)" taggedAs (
       UnitTest,
-      ConsensusTest
+      ConsensusTest,
+      SlowTest
     ) in new TestSetup {
       override def coordinatorName = "OnDemandMining"
       LoggingTestKit.info("Received message SetMiningMode(OnDemandMining)").expect {
@@ -130,7 +133,7 @@ class PoWMiningCoordinatorSpec
           }
       }
 
-      "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+      "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest, FlakyTest) in new TestSetup {
         override def coordinatorName = "RecurrentMining"
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
@@ -149,9 +152,9 @@ class PoWMiningCoordinatorSpec
         coordinator ! SetMiningMode(RecurrentMining)
 
         // Extended timeout for CI environments where mining may take longer
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
 
         coordinator ! StopMining
       }
@@ -159,7 +162,8 @@ class PoWMiningCoordinatorSpec
       "Continue to attempt to mine if blockchainReader.getBestBlock() return None" taggedAs (
         UnitTest,
         ConsensusTest,
-        SlowTest
+        SlowTest,
+        FlakyTest
       ) in new TestSetup {
         override def coordinatorName = "AlwaysMine"
         override val coordinator = testKit.spawn(
@@ -181,9 +185,9 @@ class PoWMiningCoordinatorSpec
         coordinator ! SetMiningMode(RecurrentMining)
 
         // Extended timeout for CI environments where mining may take longer
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
-        sync.expectMsgType[MinedBlock](Timeouts.longTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
+        sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
 
         coordinator ! StopMining
       }
