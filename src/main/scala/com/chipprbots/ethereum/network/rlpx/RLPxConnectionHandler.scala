@@ -640,8 +640,12 @@ object RLPxConnectionHandler {
       supportsSnap: Boolean
   ): MessageCodec = {
     val ethDecoder = EthereumMessageDecoder.ethMessageDecoder(negotiated)
+    // Decoder chain order matches message code ranges:
+    // - NetworkMessageDecoder: 0x00-0x0f (Wire protocol: Hello, Disconnect, Ping, Pong)
+    // - ethDecoder: 0x10-0x20 (ETH protocol: Status, NewBlockHashes, etc.)
+    // - SNAPMessageDecoder: 0x21-0x28 (SNAP protocol: GetAccountRange, AccountRange, etc.)
     val decoderWithSnap =
-      if (supportsSnap) NetworkMessageDecoder.orElse(SNAPMessageDecoder).orElse(ethDecoder)
+      if (supportsSnap) NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAPMessageDecoder)
       else NetworkMessageDecoder.orElse(ethDecoder)
 
     new MessageCodec(frameCodec, decoderWithSnap, p2pVersion, clientId, compressionPolicy)
