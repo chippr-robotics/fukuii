@@ -79,7 +79,7 @@ The 3-node test network is configured with the following **production-ready** se
 - Connection Mode: Normal (can dial and accept connections)
 - Static Nodes: Contains node1 and node2 (connects to both)
 
-> **Note**: These settings represent the validated, production-ready configuration for the 3-node test network. The configuration uses P2P v5 with Snappy compression enabled for optimal performance, while keeping Snap Sync disabled for focused validation of regular and fast sync mechanisms.
+> **Note**: This allows node1 to produce blocks while node2 fast-syncs and node3 regular-syncs from it, validating mining, fast sync, and regular sync functionality. These settings represent the validated, production-ready configuration for the 3-node test network. The configuration uses P2P v5 with Snappy compression enabled for optimal performance, while keeping Snap Sync disabled for focused validation of regular and fast sync mechanisms.
 
 ---
 
@@ -286,7 +286,7 @@ curl -X POST http://localhost:8546 \
 - Peer connections established
 - Network formed successfully
 
-> ℹ️ **Mining configuration:** The current `docker-compose-3nodes.yml` configuration enables mining only on node1 (the bootstrap node). This allows node1 to produce blocks while node2 and node3 can sync from it, validating both mining and synchronization functionality.
+> ℹ️ **Mining configuration:** The current `docker-compose-3nodes.yml` configuration enables mining only on node1 (the bootstrap node). Mining will begin automatically on node1 during this walkthrough, while node2 and node3 will sync from it.
 
 ---
 

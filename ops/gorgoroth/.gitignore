@@ -39,12 +39,11 @@ Thumbs.db
 # The updated files with real enode IDs are ignored to prevent committing runtime-generated values
 conf/node*/static-nodes.json
 
-# Configuration files - base configs are committed, but node-specific runtime configs are ignored
-# This prevents runtime-modified configs from being committed accidentally
+# Configuration backups and local overrides are ignored to prevent runtime-modified configs from being committed accidentally
 conf/node*/gorgoroth.conf.bak
 conf/node*/*.conf.local
 
 # Log files - both runtime logs and log collection outputs are ignored
 logs/
-*.log
+logs-*/**/*.log
 conf/node*/logback*.xml.local
