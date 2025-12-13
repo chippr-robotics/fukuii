@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => ETH62BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockBodies => ETH62GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.security.SecureRandomBuilder
@@ -418,7 +419,7 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       peersClient.reply(PeersClient.Response(fakePeer, firstGetBlockHeadersResponse))
     }
 
-    // First bodies request - using ETH62 format (current BodiesFetcher implementation)
+    // First bodies request - request uses ETH62 format while peers may answer using ETH66 format
     val firstGetBlockBodiesRequest: ETH62GetBlockBodies = ETH62GetBlockBodies(firstBlocksBatch.map(_.hash))
     def handleFirstBlockBatchBodies(): Unit = {
       // Expect ETH62 format message (no requestId)
@@ -426,8 +427,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
         case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => ()
       }
 
-      // Respond with ETH62 format (matching request format)
-      val firstGetBlockBodiesResponse = ETH62BlockBodies(firstBlocksBatch.map(_.body))
+      // Respond with ETH66 format (requestId defaults to 0 when not provided)
+      val firstGetBlockBodiesResponse = ETH66BlockBodies(0, firstBlocksBatch.map(_.body))
       peersClient.reply(PeersClient.Response(fakePeer, firstGetBlockBodiesResponse))
     }
 

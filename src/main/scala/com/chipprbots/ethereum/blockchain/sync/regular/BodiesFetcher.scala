@@ -15,12 +15,12 @@ import scala.util.Success
 
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
-import com.chipprbots.ethereum.blockchain.sync.regular.BodiesFetcher.BodiesFetcherCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockBodies
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockBodies
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => Eth62BlockBodies, GetBlockBodies => Eth62GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => Eth66BlockBodies}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class BodiesFetcher(
@@ -29,16 +29,17 @@ class BodiesFetcher(
     val supervisor: ActorRef[FetchCommand],
     context: ActorContext[BodiesFetcher.BodiesFetcherCommand]
 ) extends AbstractBehavior[BodiesFetcher.BodiesFetcherCommand](context)
-    with FetchRequest[BodiesFetcherCommand] {
+    with FetchRequest[BodiesFetcher.BodiesFetcherCommand] {
 
   val log = context.log
   implicit val runtime: IORuntime = IORuntime.global
 
   import BodiesFetcher._
+  private type Command = BodiesFetcher.BodiesFetcherCommand
 
-  override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): BodiesFetcherCommand = AdaptedMessage(peer, msg)
+  override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): Command = AdaptedMessage(peer, msg)
 
-  override def onMessage(message: BodiesFetcherCommand): Behavior[BodiesFetcherCommand] =
+  override def onMessage(message: Command): Behavior[Command] =
     message match {
       case FetchBodies(hashes) =>
         log.debug("Start fetching bodies for {} hashes", hashes.size)
@@ -47,14 +48,10 @@ class BodiesFetcher(
         }
         requestBodies(hashes)
         Behaviors.same
-      case AdaptedMessage(peer, BlockBodies(bodies)) =>
-        log.debug("Received {} block bodies from peer {}", bodies.size, peer.id)
-        if (bodies.isEmpty) {
-          log.debug("Received empty bodies response from peer {}", peer.id)
-        }
-        // Always forward bodies to supervisor to ensure state is cleared
-        supervisor ! BlockFetcher.ReceivedBodies(peer, bodies)
-        Behaviors.same
+      case AdaptedMessage(peer, eth62Bodies: Eth62BlockBodies) =>
+        handleBodiesResponse(peer, eth62Bodies.bodies, protocolLabel = "ETH62")
+      case AdaptedMessage(peer, eth66Bodies: Eth66BlockBodies) =>
+        handleBodiesResponse(peer, eth66Bodies.bodies, protocolLabel = "ETH66")
       case BodiesFetcher.RetryBodiesRequest =>
         log.debug("Retrying bodies request")
         // Always forward retry to supervisor to ensure state is cleared
@@ -65,9 +62,23 @@ class BodiesFetcher(
         Behaviors.unhandled
     }
 
+  private def handleBodiesResponse(
+      peer: Peer,
+      bodies: Seq[BlockBody],
+      protocolLabel: String
+  ): Behavior[Command] = {
+    log.debug("Received {} block bodies from peer {} via {}", bodies.size, peer.id, protocolLabel)
+    if (bodies.isEmpty) {
+      log.debug("Received empty bodies response from peer {}", peer.id)
+    }
+    // Always forward bodies to supervisor to ensure state is cleared
+    supervisor ! BlockFetcher.ReceivedBodies(peer, bodies)
+    Behaviors.same
+  }
+
   private def requestBodies(hashes: Seq[ByteString]): Unit = {
     log.debug("Requesting {} block bodies", hashes.size)
-    val resp = makeRequest(Request.create(GetBlockBodies(hashes), BestPeer), BodiesFetcher.RetryBodiesRequest)
+    val resp = makeRequest(Request.create(Eth62GetBlockBodies(hashes), BestPeer), BodiesFetcher.RetryBodiesRequest)
     context.pipeToSelf(resp.unsafeToFuture()) {
       case Success(res: BodiesFetcher.RetryBodiesRequest.type) =>
         log.debug("Bodies request will be retried")

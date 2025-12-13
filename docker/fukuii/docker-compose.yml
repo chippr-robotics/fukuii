@@ -37,7 +37,7 @@ services:
       retries: 3
 
   fukuii:
-    image: fukuii:latest
+    image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: fukuii
     restart: unless-stopped
     ports:
