@@ -48,6 +48,39 @@ This walkthrough validates the following:
          (self-consistency validation)
 ```
 
+### Network Configuration
+
+The 3-node test network is configured with the following **production-ready** settings:
+
+**Node 1 (Miner & Bootstrap)**:
+- Role: Primary miner and bootstrap node
+- P2P Version: v5 (Snappy compression enabled)
+- Mining: Enabled
+- Fast Sync: Disabled (miner node)
+- Snap Sync: Disabled
+- Connection Mode: Inbound-only (accepts connections but doesn't dial out)
+- Static Nodes: Empty (other nodes connect to it)
+
+**Node 2 (Syncing Peer)**:
+- Role: Syncing peer node
+- P2P Version: v5 (Snappy compression enabled)
+- Mining: Disabled
+- Fast Sync: **Enabled** (validates fast sync functionality)
+- Snap Sync: Disabled
+- Connection Mode: Normal (can dial and accept connections)
+- Static Nodes: Contains node1 (connects to bootstrap node)
+
+**Node 3 (Regular Peer)**:
+- Role: Regular peer node
+- P2P Version: v5 (Snappy compression enabled)
+- Mining: Disabled
+- Fast Sync: Disabled
+- Snap Sync: Disabled
+- Connection Mode: Normal (can dial and accept connections)
+- Static Nodes: Contains node1 and node2 (connects to both)
+
+> **Note**: These settings represent the validated, production-ready configuration for the 3-node test network. The configuration uses P2P v5 with Snappy compression enabled for optimal performance, while keeping Snap Sync disabled for focused validation of regular and fast sync mechanisms.
+
 ---
 
 ## Prerequisites
@@ -253,7 +286,7 @@ curl -X POST http://localhost:8546 \
 - Peer connections established
 - Network formed successfully
 
-> ℹ️ **Mining is enabled by default:** The current `docker-compose-3nodes.yml` configuration sets `-Dfukuii.mining.mining-enabled=true` for all three nodes. No manual changes are required—mining will begin automatically during this walkthrough.
+> ℹ️ **Mining configuration:** The current `docker-compose-3nodes.yml` configuration enables mining only on node1 (the bootstrap node). This allows node1 to produce blocks while node2 and node3 can sync from it, validating both mining and synchronization functionality.
 
 ---
 

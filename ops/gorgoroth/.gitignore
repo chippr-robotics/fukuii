@@ -36,7 +36,15 @@ Thumbs.db
 # These provide the initial configuration structure for docker-compose mounts
 # 
 # After first run, the fukuii-cli sync-static-nodes command updates these files with actual enode IDs
-# You can commit the updated files to preserve the network configuration, or regenerate them
-# 
-# To prevent committing updated static-nodes.json files, uncomment the line below:
-# conf/node*/static-nodes.json
+# The updated files with real enode IDs are ignored to prevent committing runtime-generated values
+conf/node*/static-nodes.json
+
+# Configuration files - base configs are committed, but node-specific runtime configs are ignored
+# This prevents runtime-modified configs from being committed accidentally
+conf/node*/gorgoroth.conf.bak
+conf/node*/*.conf.local
+
+# Log files - both runtime logs and log collection outputs are ignored
+logs/
+*.log
+conf/node*/logback*.xml.local

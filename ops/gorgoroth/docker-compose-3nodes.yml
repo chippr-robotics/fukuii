@@ -76,7 +76,6 @@ services:
       JAVA_OPTS: >-
         -Dfukuii.datadir=/app/data
         -Dfukuii.mining.mining-enabled=false
-        -Dfukuii.network.peer.p2p-version=5
         -Dlogging.logs-level=DEBUG
         -Dpekko.loglevel=DEBUG
         -Dpekko.log-dead-letters=off
