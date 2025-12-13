@@ -19,8 +19,9 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.Message
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => Eth62BlockBodies, GetBlockBodies => Eth62GetBlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => Eth66BlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => Eth62BlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => Eth66BlockBodies, GetBlockBodies => Eth66GetBlockBodies}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class BodiesFetcher(
@@ -78,7 +79,8 @@ class BodiesFetcher(
 
   private def requestBodies(hashes: Seq[ByteString]): Unit = {
     log.debug("Requesting {} block bodies", hashes.size)
-    val resp = makeRequest(Request.create(Eth62GetBlockBodies(hashes), BestPeer), BodiesFetcher.RetryBodiesRequest)
+    val msg = Eth66GetBlockBodies(ETH66.nextRequestId, hashes)
+    val resp = makeRequest(Request.create(msg, BestPeer), BodiesFetcher.RetryBodiesRequest)
     context.pipeToSelf(resp.unsafeToFuture()) {
       case Success(res: BodiesFetcher.RetryBodiesRequest.type) =>
         log.debug("Bodies request will be retried")
