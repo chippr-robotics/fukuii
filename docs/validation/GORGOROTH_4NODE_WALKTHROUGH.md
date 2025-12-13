@@ -272,7 +272,7 @@ sleep 30
 
 ### Step 1.7: Verify Peer Connectivity
 
-> ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, and **8550 (node3 and node4)**. The matching WebSocket endpoints stay on 8545/8547/8549/8551. All examples below use the HTTP ports.
+> ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, **8550 (node3)**, and **8552 (node4)**. The matching WebSocket endpoints stay on 8545/8547/8549/8551. All examples below use the HTTP ports.
 
 ```bash
 # Query node1 peer count
@@ -493,8 +493,8 @@ fukuii-cli stop 4nodes
 # Navigate to Gorgoroth directory
 cd /path/to/fukuii/ops/gorgoroth
 
-# Remove only node3 and node4 data
-docker volume rm gorgoroth_fukuii-node3 and node4-data || true
+# Remove only node4 data (to test node4 syncing)
+docker volume rm gorgoroth_fukuii-node4-data || true
 
 # Restart network
 cd /path/to/fukuii
@@ -515,11 +515,11 @@ sleep 30
 ### Step 4.3: Monitor Sync Progress
 
 ```bash
-# Check all logs to see node3 and node4 syncing
+# Check all logs to see node4 syncing
 fukuii-cli logs 4nodes
 
 # Press Ctrl+C after observing sync messages
-# Look for sync messages from node3 and node4:
+# Look for sync messages from node4:
 # - "Starting blockchain sync"
 # - "Downloading blocks"
 # - "Imported new chain segment"
@@ -532,8 +532,8 @@ fukuii-cli logs 4nodes
 echo "Waiting for sync to complete..."
 sleep 180
 
-# Check block number (node3 and node4 HTTP port 8550)
-curl -X POST http://localhost:8550 \
+# Check block number (node4 HTTP port 8552)
+curl -X POST http://localhost:8552 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -553,7 +553,7 @@ curl -X POST http://localhost:8546 \
   }' | jq -r '.result'
 ```
 
-**Expected**: Node3 should catch up to the same block number as other nodes
+**Expected**: Node4 should catch up to the same block number as other nodes
 
 ### Step 4.5: Verify State Consistency
 
@@ -600,17 +600,19 @@ fukuii-cli collect-logs 4nodes /tmp/gorgoroth-4node-results
 ```bash
 # Final state
 cat > /tmp/gorgoroth-4node-results/final-state.txt <<EOF
-=== Gorgoroth 3-Node Validation Results ===
+=== Gorgoroth 4-Node Validation Results ===
 Date: $(date)
 Duration: 1-2 hours
 
 Node 1 Block: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 Node 2 Block: $(curl -s -X POST http://localhost:8548 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 Node 3 Block: $(curl -s -X POST http://localhost:8550 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+Node 4 Block: $(curl -s -X POST http://localhost:8552 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 
 Node 1 Peers: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 Node 2 Peers: $(curl -s -X POST http://localhost:8548 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 Node 3 Peers: $(curl -s -X POST http://localhost:8550 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
+Node 4 Peers: $(curl -s -X POST http://localhost:8552 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 
 All tests completed successfully!
 EOF
