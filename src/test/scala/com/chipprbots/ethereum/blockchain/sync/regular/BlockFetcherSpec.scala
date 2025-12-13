@@ -39,7 +39,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => ETH62BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
