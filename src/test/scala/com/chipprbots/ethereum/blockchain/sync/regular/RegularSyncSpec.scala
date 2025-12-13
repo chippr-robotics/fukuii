@@ -214,12 +214,11 @@ class RegularSyncSpec
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
-        val getBodies: PeersClient.Request[GetBlockBodies] = PeersClient.Request.create(
-          GetBlockBodies(testBlocksChunked.head.headers.map(_.hash)),
-          PeersClient.BestPeer
-        )
-
-        peersClient.expectMsgEq(getBodies)
+        // Now expects ETH66 GetBlockBodies with requestId
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
+            if hashes == testBlocksChunked.head.headers.map(_.hash) => ()
+        }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
         fetcher ! BlockFetcher.ReceivedHeaders(defaultPeer, testBlocksChunked(3).headers)
@@ -245,12 +244,11 @@ class RegularSyncSpec
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
-        val getBodies: PeersClient.Request[GetBlockBodies] = PeersClient.Request.create(
-          GetBlockBodies(testBlocksChunked.head.headers.map(_.hash)),
-          PeersClient.BestPeer
-        )
-
-        peersClient.expectMsgEq(getBodies)
+        // Now expects ETH66 GetBlockBodies with requestId
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
+            if hashes == testBlocksChunked.head.headers.map(_.hash) => ()
+        }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
         fetcher ! BlockFetcher.ReceivedBodies(defaultPeer, testBlocksChunked(3).bodies)
@@ -294,9 +292,12 @@ class RegularSyncSpec
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-        peersClient.expectMsgEq(
-          PeersClient.Request.create(GetBlockBodies(testBlocksChunked.head.hashes), PeersClient.BestPeer)
-        )
+        
+        // Now expects ETH66 GetBlockBodies with requestId
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
+            if hashes == testBlocksChunked.head.hashes => ()
+        }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
         peersClient.expectNoMessage()
@@ -409,7 +410,14 @@ class RegularSyncSpec
         class ForkingAutoPilot(blocksToRespond: List[Block], forkedBlocks: Option[List[Block]])
             extends PeersClientAutoPilot(blocksToRespond) {
           override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+            // Handle both ETH62 and ETH66 GetBlockBodies
             case req @ PeersClient.Request(GetBlockBodies(hashes), _, _) =>
+              val defaultResult = defaultHandlers(sender)(req)
+              if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
+                Some(new ForkingAutoPilot(forkedBlocks.get, None))
+              } else
+                defaultResult
+            case req @ PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
               val defaultResult = defaultHandlers(sender)(req)
               if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
                 Some(new ForkingAutoPilot(forkedBlocks.get, None))
