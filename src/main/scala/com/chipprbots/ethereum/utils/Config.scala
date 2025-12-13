@@ -53,9 +53,10 @@ object Config {
   // Geth advertises: eth/66, eth/67, eth/68, snap/1
   // We advertise: eth/65, eth/66, eth/67, eth/68, snap/1 to maximize compatibility
   // 
-  // Note: ETH63 and ETH64 are legacy but still supported for backward compatibility
-  // during the negotiation phase, but not actively advertised in the Hello message
-  // as they are very old and rarely used.
+  // Note: ETH63 and ETH64 are legacy protocols from 2016-2019 and are not actively
+  // advertised in the Hello message. However, they remain supported during the
+  // negotiation phase for backward compatibility with very old clients.
+  // ETH65+ are advertised as they are still commonly used in the ecosystem.
   // 
   // Historical note: ETC64 protocol support was removed in favor of standard ETH protocols.
   // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
