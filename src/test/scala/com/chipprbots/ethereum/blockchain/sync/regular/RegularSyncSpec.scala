@@ -214,12 +214,13 @@ class RegularSyncSpec
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
-        val getBodies: PeersClient.Request[GetBlockBodies] = PeersClient.Request.create(
-          GetBlockBodies(testBlocksChunked.head.headers.map(_.hash)),
-          PeersClient.BestPeer
-        )
-
-        peersClient.expectMsgEq(getBodies)
+        // Now expects ETH66 GetBlockBodies with requestId
+        // requestId is dynamic (generated per request) so we ignore it with _
+        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
+            if hashes.toSet == expectedHashes => ()
+        }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
         fetcher ! BlockFetcher.ReceivedHeaders(defaultPeer, testBlocksChunked(3).headers)
@@ -245,12 +246,13 @@ class RegularSyncSpec
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
-        val getBodies: PeersClient.Request[GetBlockBodies] = PeersClient.Request.create(
-          GetBlockBodies(testBlocksChunked.head.headers.map(_.hash)),
-          PeersClient.BestPeer
-        )
-
-        peersClient.expectMsgEq(getBodies)
+        // Now expects ETH66 GetBlockBodies with requestId
+        // requestId is dynamic (generated per request) so we ignore it with _
+        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
+            if hashes.toSet == expectedHashes => ()
+        }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
         fetcher ! BlockFetcher.ReceivedBodies(defaultPeer, testBlocksChunked(3).bodies)
@@ -294,9 +296,14 @@ class RegularSyncSpec
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-        peersClient.expectMsgEq(
-          PeersClient.Request.create(GetBlockBodies(testBlocksChunked.head.hashes), PeersClient.BestPeer)
-        )
+        
+        // Now expects ETH66 GetBlockBodies with requestId
+        // requestId is dynamic (generated per request) so we ignore it with _
+        val expectedHashes = testBlocksChunked.head.hashes.toSet
+        peersClient.expectMsgPF() {
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
+            if hashes.toSet == expectedHashes => ()
+        }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
         peersClient.expectNoMessage()
@@ -409,12 +416,20 @@ class RegularSyncSpec
         class ForkingAutoPilot(blocksToRespond: List[Block], forkedBlocks: Option[List[Block]])
             extends PeersClientAutoPilot(blocksToRespond) {
           override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+            // Handle both ETH62 and ETH66 GetBlockBodies for transition compatibility
+            // The base autopilot handles both formats, but we need custom fork logic
             case req @ PeersClient.Request(GetBlockBodies(hashes), _, _) =>
-              val defaultResult = defaultHandlers(sender)(req)
-              if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
-                Some(new ForkingAutoPilot(forkedBlocks.get, None))
-              } else
-                defaultResult
+              handleForkLogic(hashes, req, sender)
+            case req @ PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
+              handleForkLogic(hashes, req, sender)
+          }
+          
+          private def handleForkLogic(hashes: Seq[ByteString], req: Any, sender: ActorRef): Option[AutoPilot] = {
+            val defaultResult = defaultHandlers(sender)(req)
+            if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
+              Some(new ForkingAutoPilot(forkedBlocks.get, None))
+            } else
+              defaultResult
           }
         }
 

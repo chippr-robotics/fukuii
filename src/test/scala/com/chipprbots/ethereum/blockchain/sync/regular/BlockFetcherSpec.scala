@@ -39,9 +39,9 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => ETH62BlockBodies}
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockBodies => ETH62GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.Config
@@ -161,7 +161,9 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
       // Fetcher should blacklist the peer and retry asking for the same bodies
       peersClient.expectMsgClass(classOf[BlacklistPeer])
-      peersClient.expectMsgPF() { case PeersClient.Request(msg, _, _) if msg == firstGetBlockBodiesRequest => () }
+      peersClient.expectMsgPF() { 
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => () 
+      }
 
       // Fetcher should not enqueue any new block
       importer.send(blockFetcher.toClassic, PickBlocks(syncConfig.blocksBatchSize, importer.ref))
@@ -175,23 +177,23 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
       handleFirstBlockBatchHeaders()
 
-      val getBlockBodiesRequest1: ETH62GetBlockBodies = ETH62GetBlockBodies(firstBlocksBatch.map(_.hash))
+      // Expect ETH66 format message with requestId
       peersClient.fishForMessage() {
-        case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => true
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => true
       }
 
       // It will receive all the requested bodies, but splitted in 2 parts.
       val (subChain1, subChain2) = firstBlocksBatch.splitAt(syncConfig.blockBodiesPerRequest / 2)
 
-      val getBlockBodiesResponse1: ETH62BlockBodies = ETH62BlockBodies(subChain1.map(_.body))
+      val getBlockBodiesResponse1: ETH66BlockBodies = ETH66BlockBodies(0, subChain1.map(_.body))
       peersClient.reply(PeersClient.Response(fakePeer, getBlockBodiesResponse1))
 
-      val getBlockBodiesRequest2: ETH62GetBlockBodies = ETH62GetBlockBodies(subChain2.map(_.hash))
+      // Second part request
       peersClient.fishForSpecificMessage() {
-        case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) if msg.hashes == subChain2.map(_.hash) => true
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == subChain2.map(_.hash) => true
       }
 
-      val getBlockBodiesResponse2: ETH62BlockBodies = ETH62BlockBodies(subChain2.map(_.body))
+      val getBlockBodiesResponse2: ETH66BlockBodies = ETH66BlockBodies(0, subChain2.map(_.body))
       peersClient.reply(PeersClient.Response(fakePeer, getBlockBodiesResponse2))
 
       // We need to wait a while in order to allow fetcher to process all the blocks
@@ -212,24 +214,24 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
       handleFirstBlockBatchHeaders()
 
-      val getBlockBodiesRequest1: ETH62GetBlockBodies = ETH62GetBlockBodies(firstBlocksBatch.map(_.hash))
+      // Expect ETH66 format message with requestId
       peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => ()
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => ()
       }
 
       // It will receive part of the requested bodies.
       val (subChain1, subChain2) = firstBlocksBatch.splitAt(syncConfig.blockBodiesPerRequest / 2)
 
-      val getBlockBodiesResponse1: ETH62BlockBodies = ETH62BlockBodies(subChain1.map(_.body))
+      val getBlockBodiesResponse1: ETH66BlockBodies = ETH66BlockBodies(0, subChain1.map(_.body))
       peersClient.reply(PeersClient.Response(fakePeer, getBlockBodiesResponse1))
 
-      val getBlockBodiesRequest2: ETH62GetBlockBodies = ETH62GetBlockBodies(subChain2.map(_.hash))
+      // Second part request
       peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) if msg.hashes == subChain2.map(_.hash) => ()
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == subChain2.map(_.hash) => ()
       }
 
       // We receive empty bodies instead of the second part
-      val getBlockBodiesResponse2: ETH62BlockBodies = ETH62BlockBodies(List())
+      val getBlockBodiesResponse2: ETH66BlockBodies = ETH66BlockBodies(0, List())
       peersClient.reply(PeersClient.Response(fakePeer, getBlockBodiesResponse2))
 
       // If we try to pick the whole chain we should only receive the first part
@@ -261,20 +263,20 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
         reverse = false
       )
 
-      val msgs: Seq[(ETH66GetBlockHeaders | ETH62GetBlockBodies, org.apache.pekko.actor.ActorRef)] =
+      val msgs: Seq[(ETH66GetBlockHeaders | ETH66GetBlockBodies, org.apache.pekko.actor.ActorRef)] =
         peersClient.receiveWhile() {
           // Save the reference to respond to the ask pattern on fetcher
           case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _)
               if msg.block == Left(secondBlocksBatch.head.number) =>
             (msg, peersClient.lastSender)
-          // First bodies request (ETH62 format)
-          case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) =>
+          // First bodies request (ETH66 format)
+          case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) =>
             (msg, peersClient.lastSender)
         }
 
       val (refForAnswerSecondHeaderReq, refForAnswerFirstBodiesReq) = msgs match {
-        case Seq((msg1: ETH66GetBlockHeaders, s1), (msg2: ETH62GetBlockBodies, s2)) => (s1, s2)
-        case Seq((msg2: ETH62GetBlockBodies, s2), (msg1: ETH66GetBlockHeaders, s1)) => (s1, s2)
+        case Seq((msg1: ETH66GetBlockHeaders, s1), (msg2: ETH66GetBlockBodies, s2)) => (s1, s2)
+        case Seq((msg2: ETH66GetBlockBodies, s2), (msg1: ETH66GetBlockHeaders, s1)) => (s1, s2)
         case _ => fail("missing body or header request")
       }
 
@@ -287,7 +289,7 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       val secondGetBlockHeadersResponse: ETH66BlockHeaders = ETH66BlockHeaders(0, secondBlocksBatch.map(_.header))
       peersClient.send(refForAnswerSecondHeaderReq, PeersClient.Response(fakePeer, secondGetBlockHeadersResponse))
 
-      val firstGetBlockBodiesResponse: ETH62BlockBodies = ETH62BlockBodies(firstBlocksBatch.map(_.body))
+      val firstGetBlockBodiesResponse: ETH66BlockBodies = ETH66BlockBodies(0, firstBlocksBatch.map(_.body))
       peersClient.send(refForAnswerFirstBodiesReq, PeersClient.Response(fakePeer, firstGetBlockBodiesResponse))
 
       // Third headers request with response pending
@@ -295,14 +297,14 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
         peersClient.lastSender
       }
 
-      // Second bodies request (ETH62 format)
+      // Second bodies request (ETH66 format)
       val refForAnswerSecondBodiesReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) =>
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) =>
           peersClient.lastSender
       }
       peersClient.send(
         refForAnswerSecondBodiesReq,
-        PeersClient.Response(fakePeer, ETH62BlockBodies(alternativeSecondBlocksBatch.drop(6).map(_.body)))
+        PeersClient.Response(fakePeer, ETH66BlockBodies(0, alternativeSecondBlocksBatch.drop(6).map(_.body)))
       )
 
       importer.send(blockFetcher.toClassic, PickBlocks(syncConfig.blocksBatchSize, importer.ref))
@@ -418,16 +420,15 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       peersClient.reply(PeersClient.Response(fakePeer, firstGetBlockHeadersResponse))
     }
 
-    // First bodies request - using ETH62 format (current BodiesFetcher implementation)
-    val firstGetBlockBodiesRequest: ETH62GetBlockBodies = ETH62GetBlockBodies(firstBlocksBatch.map(_.hash))
+    // First bodies request - now uses ETH66 format with requestId
     def handleFirstBlockBatchBodies(): Unit = {
-      // Expect ETH62 format message (no requestId)
+      // Expect ETH66 format message with requestId
       peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETH62GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => ()
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => ()
       }
 
-      // Respond with ETH62 format (matching request format)
-      val firstGetBlockBodiesResponse = ETH62BlockBodies(firstBlocksBatch.map(_.body))
+      // Respond with ETH66 format
+      val firstGetBlockBodiesResponse = ETH66BlockBodies(0, firstBlocksBatch.map(_.body))
       peersClient.reply(PeersClient.Response(fakePeer, firstGetBlockBodiesResponse))
     }
 
