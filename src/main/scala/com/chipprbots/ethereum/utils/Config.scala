@@ -51,16 +51,18 @@ object Config {
   // While ETH versions are backward compatible, advertising all versions ensures
   // proper capability negotiation with peers that may only support older versions.
   // Geth advertises: eth/66, eth/67, eth/68, snap/1
-  // We advertise: eth/66, eth/67, eth/68, snap/1 to match Geth's behavior
+  // We advertise: eth/65, eth/66, eth/67, eth/68, snap/1 to maximize compatibility
   // 
-  // Note: ETH63, ETH64, ETH65 are legacy but still supported for backward compatibility
-  // during the negotiation phase, but not actively advertised in the Hello message.
+  // Note: ETH63 and ETH64 are legacy but still supported for backward compatibility
+  // during the negotiation phase, but not actively advertised in the Hello message
+  // as they are very old and rarely used.
   // 
   // Historical note: ETC64 protocol support was removed in favor of standard ETH protocols.
   // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
   // See docs/validation/ETC64_REMOVAL_VALIDATION.md for details.
   import com.chipprbots.ethereum.network.p2p.messages.Capability
   val supportedCapabilities: List[Capability] = List(
+    Capability.ETH65,
     Capability.ETH66,
     Capability.ETH67,
     Capability.ETH68,
