@@ -1,0 +1,177 @@
+# Gorgoroth Internal Test Network - 4 Fukuii Nodes
+# Named after the plateau in Mordor where Sauron trained his armies
+# This configuration creates a private test network with 4 Fukuii nodes
+# Fast sync requires 3 peers to activate, so 4 nodes ensure proper testing
+
+networks:
+  gorgoroth:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+services:
+  fukuii-node1:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node1
+    hostname: fukuii-node1
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.11
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+    volumes:
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-rlpx-debug.xml:/app/fukuii/conf/logback.xml:ro
+      - fukuii-node1-data:/app/data
+      - fukuii-node1-logs:/app/logs
+    environment:
+      FUKUII_NODE_ID: node1
+      FUKUII_ENV: gorgoroth
+      JAVA_OPTS: >-
+        -Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=true
+        -Dlogging.logs-level=DEBUG
+        -Dpekko.loglevel=DEBUG
+        -Dpekko.log-dead-letters=off
+        -Dpekko.log-dead-letters-during-shutdown=off
+    command: ["fukuii", "enterprise", "gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  fukuii-node2:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node2
+    hostname: fukuii-node2
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.12
+    ports:
+      - "8547:8545"
+      - "8548:8546"
+      - "30304:30303/tcp"
+      - "30304:30303/udp"
+    volumes:
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - fukuii-node2-data:/app/data
+      - fukuii-node2-logs:/app/logs
+    environment:
+      FUKUII_NODE_ID: node2
+      FUKUII_ENV: gorgoroth
+      JAVA_OPTS: >-
+        -Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+        -Dlogging.logs-level=DEBUG
+        -Dpekko.loglevel=DEBUG
+        -Dpekko.log-dead-letters=off
+        -Dpekko.log-dead-letters-during-shutdown=off
+    command: ["fukuii", "enterprise", "gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  fukuii-node3:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node3
+    hostname: fukuii-node3
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.13
+    ports:
+      - "8549:8545"
+      - "8550:8546"
+      - "30305:30303/tcp"
+      - "30305:30303/udp"
+    volumes:
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - fukuii-node3-data:/app/data
+      - fukuii-node3-logs:/app/logs
+    environment:
+      FUKUII_NODE_ID: node3
+      FUKUII_ENV: gorgoroth
+      JAVA_OPTS: >-
+        -Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+    command: ["fukuii", "enterprise", "gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  fukuii-node4:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node4
+    hostname: fukuii-node4
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.14
+    ports:
+      - "8551:8545"
+      - "8552:8546"
+      - "30306:30303/tcp"
+      - "30306:30303/udp"
+    volumes:
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node4/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node4/static-nodes.json:/app/data/static-nodes.json:ro
+      - fukuii-node4-data:/app/data
+      - fukuii-node4-logs:/app/logs
+    environment:
+      FUKUII_NODE_ID: node4
+      FUKUII_ENV: gorgoroth
+      JAVA_OPTS: >-
+        -Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+    command: ["fukuii", "enterprise", "gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  fukuii-node1-data:
+    driver: local
+  fukuii-node1-logs:
+    driver: local
+  fukuii-node2-data:
+    driver: local
+  fukuii-node2-logs:
+    driver: local
+  fukuii-node3-data:
+    driver: local
+  fukuii-node3-logs:
+    driver: local
+  fukuii-node4-data:
+    driver: local
+  fukuii-node4-logs:
+    driver: local
