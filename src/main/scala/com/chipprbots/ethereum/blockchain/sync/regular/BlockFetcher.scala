@@ -233,12 +233,19 @@ class BlockFetcher(
         fetchBlocks(newState)
 
       case ReceivedHeaders(peer, _) if !state.isFetchingHeaders =>
-        peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
-        Behaviors.same
+        log.warn("Received late/duplicate headers from peer {} (not fetching). Clearing state.", peer.id)
+        // Don't blacklist - this could be a late response from a previous request
+        // Just ensure we're not stuck by attempting to fetch if needed
+        fetchBlocks(state)
 
       case RetryHeadersRequest if state.isFetchingHeaders =>
         log.debug("Retrying headers request (likely due to no suitable peer available)")
         fetchBlocks(state.withHeaderFetchReceived)
+
+      case RetryHeadersRequest if !state.isFetchingHeaders =>
+        log.warn("Received late/duplicate RetryHeadersRequest (not fetching). Clearing state and retrying fetch.")
+        // Ensure state is cleared and attempt to fetch if needed
+        fetchBlocks(state)
 
       case ReceivedBodies(peer, bodies) if state.isFetchingBodies =>
         log.debug("Received {} block bodies from peer {}", bodies.size, peer.id)
@@ -282,13 +289,20 @@ class BlockFetcher(
           fetchBlocks(newState)
         }
 
-      case ReceivedBodies(peer, _) if !state.isFetchingBodies =>
-        peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedBodies)
-        Behaviors.same
+      case ReceivedBodies(peer, bodies) if !state.isFetchingBodies =>
+        log.warn("Received late/duplicate block bodies ({} bodies) from peer {} (not fetching). Clearing state.", bodies.size, peer.id)
+        // Don't blacklist - this could be a late response from a previous request
+        // Just ensure we're not stuck by attempting to fetch if needed
+        fetchBlocks(state)
 
       case RetryBodiesRequest if state.isFetchingBodies =>
         log.debug("Retrying bodies request (likely due to no suitable peer available)")
         fetchBlocks(state.withBodiesFetchReceived)
+
+      case RetryBodiesRequest if !state.isFetchingBodies =>
+        log.warn("Received late/duplicate RetryBodiesRequest (not fetching). Clearing state and retrying fetch.")
+        // Ensure state is cleared and attempt to fetch if there are waiting headers
+        fetchBlocks(state)
 
       case FetchStateNode(hash, replyTo) =>
         log.debug("Fetching state node for hash {}", ByteStringUtils.hash2string(hash))

@@ -52,14 +52,16 @@ class BodiesFetcher(
         if (bodies.isEmpty) {
           log.debug("Received empty bodies response from peer {}", peer.id)
         }
+        // Always forward bodies to supervisor to ensure state is cleared
         supervisor ! BlockFetcher.ReceivedBodies(peer, bodies)
         Behaviors.same
       case BodiesFetcher.RetryBodiesRequest =>
         log.debug("Retrying bodies request")
+        // Always forward retry to supervisor to ensure state is cleared
         supervisor ! BlockFetcher.RetryBodiesRequest
         Behaviors.same
-      case _ =>
-        log.debug("BodiesFetcher received unhandled message")
+      case other =>
+        log.warn("BodiesFetcher received unhandled message of type: {}", other.getClass.getSimpleName)
         Behaviors.unhandled
     }
 
