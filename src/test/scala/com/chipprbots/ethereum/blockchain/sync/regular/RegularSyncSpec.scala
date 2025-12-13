@@ -215,9 +215,10 @@ class RegularSyncSpec
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
         // Now expects ETH66 GetBlockBodies with requestId
+        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
         peersClient.expectMsgPF() {
           case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes == testBlocksChunked.head.headers.map(_.hash) => ()
+            if hashes.toSet == expectedHashes => ()
         }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
@@ -245,9 +246,10 @@ class RegularSyncSpec
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
         // Now expects ETH66 GetBlockBodies with requestId
+        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
         peersClient.expectMsgPF() {
           case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes == testBlocksChunked.head.headers.map(_.hash) => ()
+            if hashes.toSet == expectedHashes => ()
         }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
@@ -294,9 +296,10 @@ class RegularSyncSpec
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
         
         // Now expects ETH66 GetBlockBodies with requestId
+        val expectedHashes = testBlocksChunked.head.hashes.toSet
         peersClient.expectMsgPF() {
           case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes == testBlocksChunked.head.hashes => ()
+            if hashes.toSet == expectedHashes => ()
         }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
