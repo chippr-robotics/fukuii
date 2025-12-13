@@ -215,6 +215,7 @@ class RegularSyncSpec
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
         // Now expects ETH66 GetBlockBodies with requestId
+        // requestId is dynamic (generated per request) so we ignore it with _
         val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
         peersClient.expectMsgPF() {
           case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
@@ -246,6 +247,7 @@ class RegularSyncSpec
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
         // Now expects ETH66 GetBlockBodies with requestId
+        // requestId is dynamic (generated per request) so we ignore it with _
         val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
         peersClient.expectMsgPF() {
           case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
@@ -296,6 +298,7 @@ class RegularSyncSpec
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
         
         // Now expects ETH66 GetBlockBodies with requestId
+        // requestId is dynamic (generated per request) so we ignore it with _
         val expectedHashes = testBlocksChunked.head.hashes.toSet
         peersClient.expectMsgPF() {
           case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
@@ -413,19 +416,20 @@ class RegularSyncSpec
         class ForkingAutoPilot(blocksToRespond: List[Block], forkedBlocks: Option[List[Block]])
             extends PeersClientAutoPilot(blocksToRespond) {
           override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-            // Handle both ETH62 and ETH66 GetBlockBodies
+            // Handle both ETH62 and ETH66 GetBlockBodies for transition compatibility
+            // The base autopilot handles both formats, but we need custom fork logic
             case req @ PeersClient.Request(GetBlockBodies(hashes), _, _) =>
-              val defaultResult = defaultHandlers(sender)(req)
-              if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
-                Some(new ForkingAutoPilot(forkedBlocks.get, None))
-              } else
-                defaultResult
+              handleForkLogic(hashes, req, sender)
             case req @ PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
-              val defaultResult = defaultHandlers(sender)(req)
-              if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
-                Some(new ForkingAutoPilot(forkedBlocks.get, None))
-              } else
-                defaultResult
+              handleForkLogic(hashes, req, sender)
+          }
+          
+          private def handleForkLogic(hashes: Seq[ByteString], req: Any, sender: ActorRef): Option[AutoPilot] = {
+            val defaultResult = defaultHandlers(sender)(req)
+            if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
+              Some(new ForkingAutoPilot(forkedBlocks.get, None))
+            } else
+              defaultResult
           }
         }
 
