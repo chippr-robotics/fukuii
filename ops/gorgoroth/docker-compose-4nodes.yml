@@ -1,6 +1,7 @@
-# Gorgoroth Internal Test Network - 3 Fukuii Nodes
+# Gorgoroth Internal Test Network - 4 Fukuii Nodes
 # Named after the plateau in Mordor where Sauron trained his armies
-# This configuration creates a private test network with 3 Fukuii nodes
+# This configuration creates a private test network with 4 Fukuii nodes
+# Fast sync requires 3 peers to activate, so 4 nodes ensure proper testing
 
 networks:
   gorgoroth:
@@ -123,6 +124,41 @@ services:
       retries: 3
       start_period: 60s
 
+  fukuii-node4:
+    image: ghcr.io/chippr-robotics/fukuii:latest
+    container_name: gorgoroth-fukuii-node4
+    hostname: fukuii-node4
+    restart: unless-stopped
+    networks:
+      gorgoroth:
+        ipv4_address: 172.25.0.14
+    ports:
+      - "8551:8545"
+      - "8552:8546"
+      - "30306:30303/tcp"
+      - "30306:30303/udp"
+    volumes:
+      - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
+      - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
+      - ./conf/node4/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node4/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-rlpx-debug.xml:/app/fukuii/conf/logback.xml:ro
+      - fukuii-node4-data:/app/data
+      - fukuii-node4-logs:/app/logs
+    environment:
+      FUKUII_NODE_ID: node4
+      FUKUII_ENV: gorgoroth
+      JAVA_OPTS: >-
+        -Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+    command: ["fukuii", "enterprise", "gorgoroth"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 volumes:
   fukuii-node1-data:
     driver: local
@@ -135,4 +171,8 @@ volumes:
   fukuii-node3-data:
     driver: local
   fukuii-node3-logs:
+    driver: local
+  fukuii-node4-data:
+    driver: local
+  fukuii-node4-logs:
     driver: local

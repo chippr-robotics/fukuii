@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 # Available configurations for Gorgoroth test network
 CONFIGS=(
     "3nodes:docker-compose-3nodes.yml:3 Fukuii nodes"
+    "4nodes:docker-compose-4nodes.yml:4 Fukuii nodes (fast sync requires 3 peers)"
     "6nodes:docker-compose-6nodes.yml:6 Fukuii nodes"
     "fukuii-geth:docker-compose-fukuii-geth.yml:3 Fukuii + 3 Core-Geth nodes"
     "fukuii-besu:docker-compose-fukuii-besu.yml:3 Fukuii + 3 Besu nodes"
@@ -31,7 +32,7 @@ Usage: fukuii-cli <command> [options]
 
 Commands:
   Network Deployment:
-    start [config]        - Start the Gorgoroth test network (default: 3nodes)
+    start [config]        - Start the Gorgoroth test network (default: 4nodes)
     stop [config]         - Stop the network
     restart [config]      - Restart the network
     status [config]       - Show status of all containers
@@ -55,7 +56,7 @@ EOF
     cat << EOF
 
 Examples:
-  fukuii-cli start 3nodes
+  fukuii-cli start 4nodes
   fukuii-cli sync-static-nodes
   fukuii-cli logs fukuii-geth
   fukuii-cli status
@@ -66,7 +67,7 @@ EOF
 }
 
 get_compose_file() {
-    local config_name="${1:-3nodes}"
+    local config_name="${1:-4nodes}"
     for config in "${CONFIGS[@]}"; do
         IFS=: read -r name file desc <<< "$config"
         if [[ "$name" == "$config_name" ]]; then

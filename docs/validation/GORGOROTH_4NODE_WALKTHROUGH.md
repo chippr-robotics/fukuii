@@ -1,6 +1,6 @@
-# Gorgoroth 3-Node E2E Validation Walkthrough
+# Gorgoroth 4-Node E2E Validation Walkthrough
 
-**Purpose**: Complete step-by-step guide for validating Fukuii self-consistency in a 3-node test network. This test validates that Fukuii is functional and self-consistent by testing Fukuii nodes against themselves, covering mining, syncing, and block propagation.
+**Purpose**: Complete step-by-step guide for validating Fukuii self-consistency in a 4-node test network. This test validates that Fukuii is functional and self-consistent by testing Fukuii nodes against themselves, covering mining, syncing, and block propagation. **Fast sync requires 3 peers to activate**, so a 4-node setup ensures proper fast sync testing.
 
 **Time Required**: 1-2 hours  
 **Difficulty**: Beginner  
@@ -28,7 +28,7 @@
 **Goal**: Validate Fukuii self-consistency and core functionality by testing Fukuii nodes against themselves.
 
 This walkthrough validates the following:
-- ✅ Network formation with 3 Fukuii nodes
+- ✅ Network formation with 4 Fukuii nodes
 - ✅ Peer discovery and connectivity
 - ✅ Mining functionality
 - ✅ Block propagation across nodes
@@ -38,19 +38,19 @@ This walkthrough validates the following:
 ### What You'll Test
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ Fukuii Node1│────▶│ Fukuii Node2│────▶│ Fukuii Node3│
-│  (Miner)    │◀────│  (Miner)    │◀────│  (Miner)    │
-└─────────────┘     └─────────────┘     └─────────────┘
-       │                   │                   │
-       └───────────────────┴───────────────────┘
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Fukuii Node1│────▶│ Fukuii Node2│────▶│ Fukuii Node3│────▶│ Fukuii Node4│
+│  (Miner)    │◀────│ (Fast Sync) │◀────│(Regular Sync)◀────│(Regular Sync│
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+       │                   │                   │                   │
+       └───────────────────┴───────────────────┴───────────────────┘
      All Fukuii nodes mine and sync together
-         (self-consistency validation)
+         (self-consistency validation with fast sync)
 ```
 
 ### Network Configuration
 
-The 3-node test network is configured with the following **production-ready** settings:
+The 4-node test network is configured with the following **production-ready** settings:
 
 **Node 1 (Miner & Bootstrap)**:
 - Role: Primary miner and bootstrap node
@@ -79,7 +79,16 @@ The 3-node test network is configured with the following **production-ready** se
 - Connection Mode: Normal (can dial and accept connections)
 - Static Nodes: Contains node1 and node2 (connects to both)
 
-> **Note**: This allows node1 to produce blocks while node2 fast-syncs and node3 regular-syncs from it, validating mining, fast sync, and regular sync functionality. These settings represent the validated, production-ready configuration for the 3-node test network. The configuration uses P2P v5 with Snappy compression enabled for optimal performance, while keeping Snap Sync disabled for focused validation of regular and fast sync mechanisms.
+**Node 4 (Regular Peer)**:
+- Role: Regular peer node (provides 4th peer for fast sync activation)
+- P2P Version: v5 (Snappy compression enabled)
+- Mining: Disabled
+- Fast Sync: Disabled
+- Snap Sync: Disabled
+- Connection Mode: Normal (can dial and accept connections)
+- Static Nodes: Contains node1, node2, and node3
+
+> **Note**: This allows node1 to produce blocks while node2 fast-syncs and node3/node4 regular-sync from it, validating mining, fast sync, and regular sync functionality. **Fast sync requires a minimum of 3 peers to activate**, making the 4-node setup essential for proper fast sync testing. These settings represent the validated, production-ready configuration for the 4-node test network. The configuration uses P2P v5 with Snappy compression enabled for optimal performance, while keeping Snap Sync disabled for focused validation of regular and fast sync mechanisms.
 
 ---
 
@@ -151,7 +160,7 @@ fukuii-cli help
 
 ```bash
 # Stop and clean any running network
-fukuii-cli clean 3nodes
+fukuii-cli clean 4nodes
 ```
 
 > ⚠️ The `clean` command prompts for confirmation. Type `yes` when you really mean to delete the existing containers and volumes.
@@ -164,7 +173,7 @@ The Docker Compose file mounts `ops/gorgoroth/conf/node*/gorgoroth.conf` and `st
 mkdir -p ops/gorgoroth/conf/node1
 cp src/main/resources/conf/gorgoroth.conf ops/gorgoroth/conf/node1/gorgoroth.conf
 
-for node in node1 node2 node3; do
+for node in node1 node2 node3 node4; do
   if [ ! -f "ops/gorgoroth/conf/$node/static-nodes.json" ]; then
     echo "[]" > "ops/gorgoroth/conf/$node/static-nodes.json"
   fi
@@ -180,18 +189,19 @@ Make sure each of the files above is a **regular file** (not a directory or syml
 ### Step 1.1: Start the Network
 
 ```bash
-# Start 3-node Fukuii network for self-consistency testing
-fukuii-cli start 3nodes
+# Start 4-node Fukuii network for self-consistency testing
+fukuii-cli start 4nodes
 ```
 
 **Expected output**:
 ```
-Starting Gorgoroth test network with configuration: 3nodes
-Using compose file: docker-compose-3nodes.yml
-[+] Running 3/3
+Starting Gorgoroth test network with configuration: 4nodes
+Using compose file: docker-compose-4nodes.yml
+[+] Running 4/4
  ✔ Container gorgoroth-node1  Started
  ✔ Container gorgoroth-node2  Started
  ✔ Container gorgoroth-node3  Started
+ ✔ Container gorgoroth-node4  Started
 Network started successfully!
 ```
 
@@ -205,7 +215,7 @@ sleep 30
 ### Step 1.3: Check Container Status
 
 ```bash
-fukuii-cli status 3nodes
+fukuii-cli status 4nodes
 ```
 
 **Expected output**: All containers should show status "Up"
@@ -214,7 +224,7 @@ fukuii-cli status 3nodes
 
 ```bash
 # Follow logs to see startup
-fukuii-cli logs 3nodes
+fukuii-cli logs 4nodes
 
 # Press Ctrl+C to stop following logs
 
@@ -239,11 +249,13 @@ Found running containers:
   - gorgoroth-fukuii-node1
   - gorgoroth-fukuii-node2
   - gorgoroth-fukuii-node3
+  - gorgoroth-fukuii-node4
 Collecting enode URLs from containers...
   gorgoroth-fukuii-node1: ✓
   gorgoroth-fukuii-node2: ✓
   gorgoroth-fukuii-node3: ✓
-Collected 3 enode(s)
+  gorgoroth-fukuii-node4: ✓
+Collected 4 enode(s)
 ...
 === Static nodes synchronization complete ===
 ```
@@ -260,7 +272,7 @@ sleep 30
 
 ### Step 1.7: Verify Peer Connectivity
 
-> ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, and **8550 (node3)**. The matching WebSocket endpoints stay on 8545/8547/8549. All examples below use the HTTP ports.
+> ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, **8550 (node3)**, and **8552 (node4)**. The matching WebSocket endpoints stay on 8545/8547/8549/8551. All examples below use the HTTP ports.
 
 ```bash
 # Query node1 peer count
@@ -273,20 +285,20 @@ curl -X POST http://localhost:8546 \
     "id": 1
   }' | jq
 
-# Expected: "result": "0x2" (2 peers)
+# Expected: "result": "0x3" (3 peers)
 ```
 
 **Expected results**:
-- ✅ Each node reports 2 peers connected
+- ✅ Each node reports 3 peers connected
 - ✅ All handshakes successful
 - ✅ Protocol versions match (eth/68, snap/1)
 
 ### ✅ Phase 1 Complete
-- All 3 nodes are running
+- All 4 nodes are running
 - Peer connections established
 - Network formed successfully
 
-> ℹ️ **Mining configuration:** The current `docker-compose-3nodes.yml` configuration enables mining only on node1 (the bootstrap node). Mining will begin automatically on node1 during this walkthrough, while node2 and node3 will sync from it.
+> ℹ️ **Mining configuration:** The current `docker-compose-4nodes.yml` configuration enables mining only on node1 (the bootstrap node). Mining will begin automatically on node1 during this walkthrough, while node2, node3, and node4 will sync from it.
 
 ---
 
@@ -296,7 +308,7 @@ curl -X POST http://localhost:8546 \
 
 ```bash
 # Query block number on all nodes (HTTP ports 8546/8548/8550)
-for port in 8546 8548 8550; do
+for port in 8546 8548 8550 8552; do
   echo "Node at port $port:"
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -322,7 +334,7 @@ sleep 60
 
 ```bash
 # Check block numbers again
-for port in 8546 8548 8550; do
+for port in 8546 8548 8550 8552; do
   echo "Node at port $port:"
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -385,7 +397,7 @@ curl -X POST http://localhost:8546 \
 ```bash
 # Save current state
 echo "Recording block numbers..."
-for port in 8546 8548 8550; do
+for port in 8546 8548 8550 8552; do
   echo -n "Node $port: "
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -412,7 +424,7 @@ sleep 120
 ```bash
 # Compare block numbers
 echo "Block numbers after waiting:"
-for port in 8546 8548 8550; do
+for port in 8546 8548 8550 8552; do
   echo -n "Node $port: "
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -448,7 +460,7 @@ cd ..
 ```bash
 # Get latest block hash from each node
 echo "Block hashes:"
-for port in 8546 8548 8550; do
+for port in 8546 8548 8550 8552; do
   echo -n "Node $port: "
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -476,17 +488,17 @@ done
 
 ```bash
 # Stop entire network
-fukuii-cli stop 3nodes
+fukuii-cli stop 4nodes
 
 # Navigate to Gorgoroth directory
 cd /path/to/fukuii/ops/gorgoroth
 
-# Remove only node3 data
-docker volume rm gorgoroth_fukuii-node3-data || true
+# Remove only node4 data (to test node4 syncing)
+docker volume rm gorgoroth_fukuii-node4-data || true
 
 # Restart network
 cd /path/to/fukuii
-fukuii-cli start 3nodes
+fukuii-cli start 4nodes
 
 # Re-sync peers
 sleep 30
@@ -503,11 +515,11 @@ sleep 30
 ### Step 4.3: Monitor Sync Progress
 
 ```bash
-# Check all logs to see node3 syncing
-fukuii-cli logs 3nodes
+# Check all logs to see node4 syncing
+fukuii-cli logs 4nodes
 
 # Press Ctrl+C after observing sync messages
-# Look for sync messages from node3:
+# Look for sync messages from node4:
 # - "Starting blockchain sync"
 # - "Downloading blocks"
 # - "Imported new chain segment"
@@ -520,8 +532,8 @@ fukuii-cli logs 3nodes
 echo "Waiting for sync to complete..."
 sleep 180
 
-# Check block number (node3 HTTP port 8550)
-curl -X POST http://localhost:8550 \
+# Check block number (node4 HTTP port 8552)
+curl -X POST http://localhost:8552 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -541,13 +553,13 @@ curl -X POST http://localhost:8546 \
   }' | jq -r '.result'
 ```
 
-**Expected**: Node3 should catch up to the same block number as other nodes
+**Expected**: Node4 should catch up to the same block number as other nodes
 
 ### Step 4.5: Verify State Consistency
 
 ```bash
 # Query genesis block from all nodes
-for port in 8546 8548 8550; do
+for port in 8546 8548 8550 8552; do
   echo "Node $port genesis:"
   curl -s -X POST http://localhost:$port \
     -H "Content-Type: application/json" \
@@ -575,7 +587,7 @@ done
 
 ```bash
 # Use fukuii-cli to collect logs from all nodes
-fukuii-cli collect-logs 3nodes /tmp/gorgoroth-3node-results
+fukuii-cli collect-logs 4nodes /tmp/gorgoroth-4node-results
 ```
 
 **This will collect**:
@@ -587,23 +599,25 @@ fukuii-cli collect-logs 3nodes /tmp/gorgoroth-3node-results
 
 ```bash
 # Final state
-cat > /tmp/gorgoroth-3node-results/final-state.txt <<EOF
-=== Gorgoroth 3-Node Validation Results ===
+cat > /tmp/gorgoroth-4node-results/final-state.txt <<EOF
+=== Gorgoroth 4-Node Validation Results ===
 Date: $(date)
 Duration: 1-2 hours
 
 Node 1 Block: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 Node 2 Block: $(curl -s -X POST http://localhost:8548 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 Node 3 Block: $(curl -s -X POST http://localhost:8550 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
+Node 4 Block: $(curl -s -X POST http://localhost:8552 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq -r '.result')
 
 Node 1 Peers: $(curl -s -X POST http://localhost:8546 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 Node 2 Peers: $(curl -s -X POST http://localhost:8548 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 Node 3 Peers: $(curl -s -X POST http://localhost:8550 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
+Node 4 Peers: $(curl -s -X POST http://localhost:8552 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' | jq -r '.result')
 
 All tests completed successfully!
 EOF
 
-cat /tmp/gorgoroth-3node-results/final-state.txt
+cat /tmp/gorgoroth-4node-results/final-state.txt
 ```
 
 ### ✅ Phase 5 Complete
@@ -619,17 +633,17 @@ cat /tmp/gorgoroth-3node-results/final-state.txt
 
 ```bash
 # Stop all containers
-fukuii-cli stop 3nodes
+fukuii-cli stop 4nodes
 
 # Remove volumes (optional, to start fresh next time)
-fukuii-cli clean 3nodes
+fukuii-cli clean 4nodes
 ```
 
 ### Remove Results (Optional)
 
 ```bash
 # Keep or remove results directory
-# rm -rf /tmp/gorgoroth-3node-results
+# rm -rf /tmp/gorgoroth-4node-results
 ```
 
 ---
@@ -646,10 +660,10 @@ fukuii-cli clean 3nodes
 fukuii-cli sync-static-nodes
 
 # Check status after sync
-fukuii-cli status 3nodes
+fukuii-cli status 4nodes
 
 # Restart network if needed
-fukuii-cli restart 3nodes
+fukuii-cli restart 4nodes
 ```
 
 ### No Blocks Being Mined
@@ -659,7 +673,7 @@ fukuii-cli restart 3nodes
 **Solution**:
 ```bash
 # Check logs for mining activity
-fukuii-cli logs 3nodes | grep -i mining
+fukuii-cli logs 4nodes | grep -i mining
 
 # Verify difficulty
 curl -X POST http://localhost:8546 \
@@ -667,7 +681,7 @@ curl -X POST http://localhost:8546 \
   -d '{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",false],"id":1}' | jq '.result.difficulty'
 
 # Restart if needed
-fukuii-cli restart 3nodes
+fukuii-cli restart 4nodes
 ```
 
 ### Nodes Out of Sync
@@ -677,10 +691,10 @@ fukuii-cli restart 3nodes
 **Solution**:
 ```bash
 # Check logs for errors
-fukuii-cli logs 3nodes | grep -i error
+fukuii-cli logs 4nodes | grep -i error
 
 # Restart entire network
-fukuii-cli restart 3nodes
+fukuii-cli restart 4nodes
 
 # Re-sync peers
 sleep 30
@@ -706,7 +720,7 @@ docker system prune -f
 # (varies by OS)
 
 # Try again
-docker compose -f docker-compose-3nodes.yml up -d
+docker compose -f docker-compose-4nodes.yml up -d
 ```
 
 ---

@@ -58,4 +58,10 @@ __pycache__/
 # Ops data directories
 ops/data/
 ops/*/captured-logs/
+ops/*/logs/
+
+# Gorgoroth test network runtime files
+ops/gorgoroth/conf/node*/static-nodes.json
+ops/gorgoroth/enode-*.txt
+ops/gorgoroth/enodes.txt
 
