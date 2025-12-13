@@ -173,7 +173,7 @@ The Docker Compose file mounts `ops/gorgoroth/conf/node*/gorgoroth.conf` and `st
 mkdir -p ops/gorgoroth/conf/node1
 cp src/main/resources/conf/gorgoroth.conf ops/gorgoroth/conf/node1/gorgoroth.conf
 
-for node in node1 node2 node3 and node4; do
+for node in node1 node2 node3 node4; do
   if [ ! -f "ops/gorgoroth/conf/$node/static-nodes.json" ]; then
     echo "[]" > "ops/gorgoroth/conf/$node/static-nodes.json"
   fi
@@ -253,9 +253,9 @@ Found running containers:
 Collecting enode URLs from containers...
   gorgoroth-fukuii-node1: ✓
   gorgoroth-fukuii-node2: ✓
-  gorgoroth-fukuii-node3
-  - gorgoroth-fukuii-node4: ✓
-Collected 3 enode(s)
+  gorgoroth-fukuii-node3: ✓
+  gorgoroth-fukuii-node4: ✓
+Collected 4 enode(s)
 ...
 === Static nodes synchronization complete ===
 ```

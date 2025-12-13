@@ -142,6 +142,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node4/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node4/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-rlpx-debug.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node4-data:/app/data
       - fukuii-node4-logs:/app/logs
     environment:
