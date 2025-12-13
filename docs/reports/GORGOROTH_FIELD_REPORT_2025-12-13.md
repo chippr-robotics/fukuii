@@ -23,7 +23,7 @@ Testing of the Gorgoroth mixed-client network (3 Fukuii nodes + 3 Core-Geth node
 ## System Information
 
 - **OS**: Ubuntu 24.04.3 LTS
-- **Kernel**: 6.14.0-36-generic
+- **Kernel**: 6.8.0-36-generic
 - **Docker Version**: 29.1.2, build 890dcca
 - **Docker Compose Version**: v2.33.1-desktop.1
 - **Available RAM**: 31Gi (24Gi available)
