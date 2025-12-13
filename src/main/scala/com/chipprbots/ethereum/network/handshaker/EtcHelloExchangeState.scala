@@ -39,6 +39,12 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
       hello.p2pVersion,
       peerCapabilities.mkString(", ")
     )
+    
+    // Log our advertised capabilities for comparison
+    log.info(
+      "OUR_CAPABILITIES: capabilities=[{}]",
+      Config.supportedCapabilities.mkString(", ")
+    )
 
     // Check if peer supports SNAP/1 protocol
     val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
@@ -55,19 +61,35 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
       compressionPolicy.expectInboundCompressed
     )
 
-    // FIXME in principle this should be already negotiated
-    Capability.negotiate(peerCapabilities, Config.supportedCapabilities) match {
+    // Negotiate protocol capability
+    val negotiationResult = Capability.negotiate(peerCapabilities, Config.supportedCapabilities)
+    log.info(
+      "CAPABILITY_NEGOTIATION: peerCaps=[{}], ourCaps=[{}], negotiated={}",
+      peerCapabilities.mkString(", "),
+      Config.supportedCapabilities.mkString(", "),
+      negotiationResult.map(_.toString).getOrElse("NONE")
+    )
+
+    negotiationResult match {
       case Some(Capability.ETH63) =>
-        log.debug("Negotiated protocol version with client {} is eth/63", hello.clientId)
+        log.info("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
         EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
           ) =>
-        log.debug("Negotiated protocol version with client {} is {}", hello.clientId, negotiated)
+        log.info(
+          "PROTOCOL_NEGOTIATED: clientId={}, protocol={}, usesRequestId={}",
+          hello.clientId,
+          negotiated,
+          Capability.usesRequestId(negotiated)
+        )
         EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities)
       case _ =>
-        log.debug(
-          s"Connected peer does not support eth/63-68 protocol. Disconnecting."
+        log.warn(
+          "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",
+          hello.clientId,
+          peerCapabilities.mkString(", "),
+          Config.supportedCapabilities.mkString(", ")
         )
         DisconnectedState(Disconnect.Reasons.IncompatibleP2pProtocolVersion)
     }
