@@ -290,7 +290,7 @@ class BlockFetcher(
         }
 
       case ReceivedBodies(peer, bodies) if !state.isFetchingBodies =>
-        log.warn("Received late/duplicate block bodies from peer {} (not fetching). Clearing state.", peer.id)
+        log.warn("Received late/duplicate block bodies ({} bodies) from peer {} (not fetching). Clearing state.", bodies.size, peer.id)
         // Don't blacklist - this could be a late response from a previous request
         // Just ensure we're not stuck by attempting to fetch if needed
         fetchBlocks(state)

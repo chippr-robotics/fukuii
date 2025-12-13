@@ -61,7 +61,7 @@ class BodiesFetcher(
         supervisor ! BlockFetcher.RetryBodiesRequest
         Behaviors.same
       case other =>
-        log.warn("BodiesFetcher received unhandled message of type: {}", other.getClass.getName)
+        log.warn("BodiesFetcher received unhandled message of type: {}", other.getClass.getSimpleName)
         Behaviors.unhandled
     }
 
