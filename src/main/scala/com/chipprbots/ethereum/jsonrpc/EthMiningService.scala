@@ -90,7 +90,6 @@ class EthMiningService(
 
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)
-  private val currentEtherbase = new AtomicReference[Address](miningConfig.coinbase)
 
   def getMining(req: GetMiningRequest): ServiceResponse[GetMiningResponse] =
     ifEthash(req) { _ =>
@@ -113,7 +112,7 @@ class EthMiningService(
             val PendingBlockAndState(pb, _) = blockGenerator.generateBlock(
               block,
               pendingTxs.pendingTransactions.map(_.stx.tx),
-              currentEtherbase.get(),
+              coinbaseProvider.get(),
               ommers.headers,
               None
             )
