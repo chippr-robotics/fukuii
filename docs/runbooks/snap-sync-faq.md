@@ -54,6 +54,32 @@ Yes, SNAP sync works with:
 
 The same SNAP sync implementation works across all networks.
 
+### Can SNAP sync start from genesis (block 0)?
+
+Yes! **New in this version**: SNAP sync now automatically bootstraps from genesis.
+
+When starting a node from block 0, SNAP sync will:
+1. Automatically use regular sync to download the first 1025 blocks
+2. Seamlessly transition to SNAP sync once enough blocks are available
+3. Complete the sync using the faster SNAP protocol
+
+This happens automatically with no user configuration required. The bootstrap process:
+- Typically takes a few minutes to sync the initial blocks
+- Progress is logged and visible in monitoring
+- Is resumable if interrupted (stored in AppStateStorage)
+
+**Example log output:**
+```
+[INFO] Cannot start SNAP sync: best block (0) - pivot offset (1024) = -1024
+[INFO] Blockchain needs at least 1025 blocks to start SNAP sync
+[INFO] Starting automatic bootstrap: regular sync to block 1025
+[INFO] Bootstrap progress: block 500 / 1025 blocks
+[INFO] Bootstrap target 1025 reached - transitioning to SNAP sync
+[INFO] SNAP sync pivot block: 1025, state root: 0x...
+```
+
+This eliminates the previous limitation where SNAP sync would fall back to fast sync at genesis.
+
 ## Configuration Questions
 
 ### Is SNAP sync enabled by default?

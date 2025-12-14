@@ -20,15 +20,41 @@ SNAP sync is part of the SNAP/1 protocol (devp2p specification) that enables nod
 ### When to Use SNAP Sync
 
 **Use SNAP sync when:**
-- ✅ Setting up a new node that needs to sync from scratch
+- ✅ Setting up a new node that needs to sync from scratch (including from genesis/block 0)
 - ✅ You want the fastest possible initial sync
 - ✅ You have limited bandwidth or want to minimize network usage
 - ✅ You're syncing to a recent state (within ~1024 blocks of chain head)
 
 **Don't use SNAP sync when:**
-- ❌ You need to validate the entire blockchain from genesis (use full sync)
+- ❌ You need to validate the entire blockchain from genesis with full block-by-block verification (use full sync)
 - ❌ You're running an archive node (SNAP sync only syncs recent state)
 - ❌ You have very few SNAP-capable peers (SNAP requires compatible peers)
+
+### SNAP Sync from Genesis
+
+**New Feature**: SNAP sync now supports starting from genesis (block 0) with automatic bootstrap.
+
+When you start a node from genesis with SNAP sync enabled:
+1. The node automatically uses regular sync to download the first 1025 blocks
+2. Once the minimum blocks are available, it seamlessly transitions to SNAP sync
+3. The bootstrap process is fully automatic and requires no user intervention
+
+This eliminates the previous limitation where nodes starting from genesis would fall back to fast sync.
+
+**Example startup sequence:**
+```
+[INFO] Starting SNAP sync mode
+[INFO] Cannot start SNAP sync: best block (0) - pivot offset (1024) = -1024
+[INFO] Starting automatic bootstrap: regular sync to block 1025
+[INFO] Bootstrap progress: block 250 / 1025 blocks
+[INFO] Bootstrap progress: block 500 / 1025 blocks
+[INFO] Bootstrap progress: block 750 / 1025 blocks
+[INFO] Bootstrap target 1025 reached - transitioning to SNAP sync
+[INFO] SNAP sync pivot block: 1025, state root: 0x...
+[INFO] Starting account range sync...
+```
+
+The bootstrap phase typically completes in a few minutes depending on network conditions.
 
 ## Enabling SNAP Sync
 
