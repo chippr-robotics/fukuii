@@ -65,6 +65,9 @@ object EthMiningService {
       hashRate: BigInt,
       blocksMinedCount: Option[Long]
   )
+
+  case class SetEtherbaseRequest(etherbase: Address)
+  case class SetEtherbaseResponse(success: Boolean)
 }
 
 class EthMiningService(
@@ -85,6 +88,7 @@ class EthMiningService(
 
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)
+  private val currentEtherbase = new AtomicReference[Address](miningConfig.coinbase)
 
   def getMining(req: GetMiningRequest): ServiceResponse[GetMiningResponse] =
     ifEthash(req) { _ =>
@@ -107,7 +111,7 @@ class EthMiningService(
             val PendingBlockAndState(pb, _) = blockGenerator.generateBlock(
               block,
               pendingTxs.pendingTransactions.map(_.stx.tx),
-              miningConfig.coinbase,
+              currentEtherbase.get(),
               ommers.headers,
               None
             )
@@ -147,7 +151,7 @@ class EthMiningService(
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   def getCoinbase(req: GetCoinbaseRequest): ServiceResponse[GetCoinbaseResponse] =
-    IO.pure(Right(GetCoinbaseResponse(miningConfig.coinbase)))
+    IO.pure(Right(GetCoinbaseResponse(currentEtherbase.get())))
 
   def submitHashRate(req: SubmitHashRateRequest): ServiceResponse[SubmitHashRateResponse] =
     ifEthash(req) { req =>
@@ -208,10 +212,17 @@ class EthMiningService(
 
       GetMinerStatusResponse(
         isMining = isMining,
-        coinbase = miningConfig.coinbase,
+        coinbase = currentEtherbase.get(),
         hashRate = currentHashRate,
         blocksMinedCount = None // Reserved for future implementation - would require tracking mined blocks
       )
+    }
+
+  def setEtherbase(req: SetEtherbaseRequest): ServiceResponse[SetEtherbaseResponse] =
+    IO {
+      currentEtherbase.set(req.etherbase)
+      log.info(s"Etherbase updated to ${req.etherbase.toString}")
+      Right(SetEtherbaseResponse(true))
     }
 
   // NOTE This is called from places that guarantee we are running Ethash consensus.
