@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.MinedBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator._
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -251,11 +252,14 @@ class PoWMiningCoordinatorSpec
 
     val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
 
+    val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+
     override lazy val blockCreator = new PoWBlockCreator(
       pendingTransactionsManager = pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout = getTransactionFromPoolTimeout,
       mining = mining,
-      ommersPool = ommersPool.ref
+      ommersPool = ommersPool.ref,
+      coinbaseProvider = coinbaseProvider
     )
 
     val coordinator: typed.ActorRef[CoordinatorProtocol] = testKit.spawn(

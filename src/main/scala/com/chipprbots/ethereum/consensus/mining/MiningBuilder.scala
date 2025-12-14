@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 trait MiningBuilder {
   def mining: Mining
+  def coinbaseProvider: CoinbaseProvider
 }
 
 /** A mining builder is responsible to instantiate the consensus protocol. This is done dynamically when Fukuii boots,
@@ -34,6 +35,8 @@ trait StdMiningBuilder extends MiningBuilder {
     with Logger =>
 
   private lazy val fukuiiConfig = Config.config
+
+  lazy val coinbaseProvider: CoinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
 
   private def newConfig[C <: AnyRef](c: C): FullMiningConfig[C] =
     FullMiningConfig(miningConfig, c)

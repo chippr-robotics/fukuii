@@ -481,7 +481,8 @@ trait EthMiningServiceBuilder {
     syncController,
     pendingTransactionsManager,
     txPoolConfig.getTransactionFromPoolTimeout,
-    this
+    this,
+    coinbaseProvider
   )
 }
 trait EthTxServiceBuilder {

@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
@@ -435,6 +436,8 @@ class EthMiningServiceSpec
       override def healthConfig: JsonRpcHealthConfig = baseJsonRpcConfig.healthConfig
     }
 
+    override lazy val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+
     lazy val ethMiningService = new EthMiningService(
       blockchainReader,
       mining,
@@ -443,7 +446,8 @@ class EthMiningServiceSpec
       syncingController.ref,
       pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout,
-      this
+      this,
+      coinbaseProvider
     )
 
     val difficulty = 131072

@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
@@ -120,6 +121,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     Timeouts.shortTimeout
   )
 
+  override lazy val coinbaseProvider = new CoinbaseProvider(mining.config.generic.coinbase)
+
   val ethMiningService = new EthMiningService(
     blockchainReader,
     mining,
@@ -128,7 +131,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     syncingController.ref,
     pendingTransactionsManager.ref,
     getTransactionFromPoolTimeout,
-    this
+    this,
+    coinbaseProvider
   )
 
   val ethBlocksService = new EthBlocksService(blockchain, blockchainReader, mining, blockQueue)
