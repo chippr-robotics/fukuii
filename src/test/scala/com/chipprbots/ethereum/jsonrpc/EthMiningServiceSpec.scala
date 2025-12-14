@@ -336,6 +336,66 @@ class EthMiningServiceSpec
     status2.toOption.get.hashRate shouldEqual BigInt(100)
   }
 
+  it should "set and get the etherbase address" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Get initial coinbase
+    val response1: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
+    response1.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(miningConfig.coinbase))
+
+    // Set new etherbase
+    val newEtherbase = Address("0x1234567890123456789012345678901234567890")
+    val setResponse: ServiceResponse[EthMiningService.SetEtherbaseResponse] = 
+      ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(newEtherbase))
+    setResponse.unsafeRunSync() shouldEqual Right(EthMiningService.SetEtherbaseResponse(true))
+
+    // Verify new coinbase
+    val response2: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
+    response2.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(newEtherbase))
+
+    // Verify miner status shows new coinbase
+    val statusResponse: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val status = statusResponse.unsafeRunSync()
+    status shouldBe Symbol("right")
+    status.toOption.get.coinbase shouldEqual newEtherbase
+  }
+
+  it should "use updated etherbase in block generation" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Set new etherbase
+    val newEtherbase = Address("0x1234567890123456789012345678901234567890")
+    ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(newEtherbase)).unsafeRunSync()
+
+    // Setup block generation with expectation that new etherbase is used
+    (blockGenerator
+      .generateBlock(
+        _: Block,
+        _: Seq[SignedTransaction],
+        _: Address,
+        _: Seq[BlockHeader],
+        _: Option[InMemoryWorldStateProxy]
+      )(_: BlockchainConfig))
+      .expects(parentBlock, Nil, newEtherbase, *, *, *)
+      .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
+    
+    blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+
+    // Start the getWork call asynchronously
+    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] =
+      ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+
+    // Handle the actor messages
+    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
+    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
+
+    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
+    ommersPool.reply(OmmersPool.Ommers(Nil))
+
+    // Wait for the result
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    val response = Await.result(workFuture, 10.seconds)
+
+    response shouldBe Symbol("right")
+  }
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
