@@ -179,6 +179,7 @@ object McpToolRegistry {
     McpToolDefinition(PeerListTool.name, PeerListTool.description),
     McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description),
     McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description)
+    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description)
   )
   
   /**
