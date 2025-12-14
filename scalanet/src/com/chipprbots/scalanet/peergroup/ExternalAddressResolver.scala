@@ -16,17 +16,40 @@ class ExternalAddressResolver(urls: List[String]) {
 }
 
 object ExternalAddressResolver {
+  // Timeout values for external IP address resolution
+  private val ConnectionTimeoutMillis = 5000 // 5 seconds
+  private val ReadTimeoutMillis = 5000       // 5 seconds
+
   val default = new ExternalAddressResolver(List("http://checkip.amazonaws.com", "http://bot.whatismyipaddress.com"))
 
   /** Retrieve the external address from a URL that returns a single line containing the IP. */
   def checkUrl(url: String): IO[InetAddress] = IO.async { cb =>
     IO {
+      var maybeReader: Option[BufferedReader] = None
       try {
         val ipCheckUrl = new URL(url)
-        val in: BufferedReader = new BufferedReader(new InputStreamReader(ipCheckUrl.openStream()))
-        cb(Right(InetAddress.getByName(in.readLine())))
+        val connection = ipCheckUrl.openConnection()
+        // Set connection and read timeouts to prevent hanging indefinitely
+        connection.setConnectTimeout(ConnectionTimeoutMillis)
+        connection.setReadTimeout(ReadTimeoutMillis)
+        val reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))
+        maybeReader = Some(reader)
+        val ipAddress = reader.readLine()
+        if (ipAddress == null || ipAddress.trim.isEmpty) {
+          cb(Left(new IllegalStateException(s"No IP address returned from $url")))
+        } else {
+          cb(Right(InetAddress.getByName(ipAddress.trim)))
+        }
       } catch {
         case NonFatal(ex) => cb(Left(ex))
+      } finally {
+        maybeReader.foreach { reader =>
+          try {
+            reader.close()
+          } catch {
+            case NonFatal(_) => // Ignore errors during cleanup
+          }
+        }
       }
       None
     }
