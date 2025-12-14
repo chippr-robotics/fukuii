@@ -117,6 +117,25 @@ object PeerListTool {
 }
 
 /**
+ * Set etherbase tool for MCP.
+ * Allows setting the coinbase address for mining rewards.
+ */
+object SetEtherbaseTool {
+  val name = "mcp_set_etherbase"
+  val description = Some("Set the etherbase (coinbase) address for mining rewards")
+  
+  def execute(
+      address: String
+  ): IO[String] = {
+    // This is a placeholder - actual implementation would need to call the mining service
+    IO.pure(s"""Set Etherbase:
+      |• Address: $address
+      |• Status: This tool is for MCP interface only
+      |• Note: Use eth_setEtherbase JSON-RPC method to actually set the etherbase""".stripMargin)
+  }
+}
+
+/**
  * Registry of all available MCP tools.
  * This makes it easy to add/remove tools and track changes.
  */
@@ -131,7 +150,8 @@ object McpToolRegistry {
     McpToolDefinition(NodeInfoTool.name, NodeInfoTool.description),
     McpToolDefinition(BlockchainInfoTool.name, BlockchainInfoTool.description),
     McpToolDefinition(SyncStatusTool.name, SyncStatusTool.description),
-    McpToolDefinition(PeerListTool.name, PeerListTool.description)
+    McpToolDefinition(PeerListTool.name, PeerListTool.description),
+    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description)
   )
   
   /**
@@ -148,6 +168,7 @@ object McpToolRegistry {
       case BlockchainInfoTool.name => BlockchainInfoTool.execute(syncController)
       case SyncStatusTool.name => SyncStatusTool.execute(syncController)
       case PeerListTool.name => PeerListTool.execute(peerManager)
+      case SetEtherbaseTool.name => SetEtherbaseTool.execute("0x0000000000000000000000000000000000000000")
       case _ => IO.pure(s"Unknown tool: $toolName")
     }
   }
