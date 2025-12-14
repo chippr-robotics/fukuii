@@ -25,20 +25,26 @@ object ExternalAddressResolver {
   /** Retrieve the external address from a URL that returns a single line containing the IP. */
   def checkUrl(url: String): IO[InetAddress] = IO.async { cb =>
     IO {
-      var reader: BufferedReader = null
+      var maybeReader: Option[BufferedReader] = None
       try {
         val ipCheckUrl = new URL(url)
         val connection = ipCheckUrl.openConnection()
         // Set connection and read timeouts to prevent hanging indefinitely
         connection.setConnectTimeout(ConnectionTimeoutMillis)
         connection.setReadTimeout(ReadTimeoutMillis)
-        reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))
+        val reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))
+        maybeReader = Some(reader)
+        
         val ipAddress = reader.readLine()
-        cb(Right(InetAddress.getByName(ipAddress)))
+        if (ipAddress == null || ipAddress.trim.isEmpty) {
+          cb(Left(new IllegalStateException(s"No IP address returned from $url")))
+        } else {
+          cb(Right(InetAddress.getByName(ipAddress.trim)))
+        }
       } catch {
         case NonFatal(ex) => cb(Left(ex))
       } finally {
-        if (reader != null) {
+        maybeReader.foreach { reader =>
           try {
             reader.close()
           } catch {
