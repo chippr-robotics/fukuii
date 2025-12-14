@@ -34,7 +34,6 @@ object ExternalAddressResolver {
         connection.setReadTimeout(ReadTimeoutMillis)
         val reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))
         maybeReader = Some(reader)
-        
         val ipAddress = reader.readLine()
         if (ipAddress == null || ipAddress.trim.isEmpty) {
           cb(Left(new IllegalStateException(s"No IP address returned from $url")))
