@@ -56,18 +56,6 @@ object EthMiningJsonMethodsImplicits extends JsonMethodsImplicits {
         encodeAsHex(t.address.bytes)
     }
 
-  implicit val eth_setEtherbase: JsonMethodDecoder[SetEtherbaseRequest] with JsonEncoder[SetEtherbaseResponse] =
-    new JsonMethodDecoder[SetEtherbaseRequest] with JsonEncoder[SetEtherbaseResponse] {
-      override def decodeJson(params: Option[JsonAST.JArray]): Either[JsonRpcError, SetEtherbaseRequest] =
-        params match {
-          case Some(JArray(JString(address) :: Nil)) =>
-            extractAddress(address).map(SetEtherbaseRequest(_))
-          case _ => Left(InvalidParams())
-        }
-
-      override def encodeJson(t: SetEtherbaseResponse): JsonAST.JValue = JBool(t.success)
-    }
-
   implicit val eth_submitWork: JsonMethodDecoder[SubmitWorkRequest] with JsonEncoder[SubmitWorkResponse] =
     new JsonMethodDecoder[SubmitWorkRequest] with JsonEncoder[SubmitWorkResponse] {
       override def decodeJson(params: Option[JsonAST.JArray]): Either[JsonRpcError, SubmitWorkRequest] = params match {
