@@ -12,6 +12,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{StartRegularSyncBootstrap, BootstrapComplete}
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -78,6 +79,15 @@ class SyncController(
   }
 
   def runningSnapSync(snapSync: ActorRef): Receive = {
+    case StartRegularSyncBootstrap(targetBlock) =>
+      log.info(s"SNAP sync requested bootstrap via regular sync to block ${targetBlock}")
+      
+      // Don't kill SNAP sync actor - just start regular sync
+      // SNAP sync is in bootstrapping state waiting for BootstrapComplete
+      
+      val regularSync = startRegularSyncForBootstrap()
+      context.become(runningRegularSyncBootstrap(regularSync, targetBlock, snapSync))
+    
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       snapSync ! PoisonPill
       log.info("SNAP sync completed, transitioning to regular sync")
@@ -97,6 +107,31 @@ class SyncController(
 
   def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
     regularSync.forward(other)
+  }
+
+  def runningRegularSyncBootstrap(regularSync: ActorRef, targetBlock: BigInt, originalSnapSyncRef: ActorRef): Receive = {
+    case RegularSync.ProgressProtocol.ImportedBlock(blockNumber, _) =>
+      log.debug(s"Bootstrap progress: block $blockNumber / $targetBlock")
+      
+      if (blockNumber >= targetBlock) {
+        log.info(s"Bootstrap target ${targetBlock} reached - transitioning to SNAP sync")
+        
+        // Stop regular sync
+        regularSync ! PoisonPill
+        
+        // Notify SNAP sync controller that bootstrap is complete
+        originalSnapSyncRef ! BootstrapComplete
+        
+        // Switch back to runningSnapSync state
+        context.become(runningSnapSync(originalSnapSyncRef))
+      }
+    
+    case SyncProtocol.GetStatus =>
+      // Forward status requests to regular sync
+      regularSync.forward(SyncProtocol.GetStatus)
+    
+    case other => 
+      regularSync.forward(other)
   }
 
   def start(): Unit = {
@@ -210,6 +245,37 @@ class SyncController(
     )
     regularSync ! SyncProtocol.Start
     context.become(runningRegularSync(regularSync))
+  }
+
+  def startRegularSyncForBootstrap(): ActorRef = {
+    log.info("Starting regular sync for SNAP sync bootstrap")
+    
+    val peersClient =
+      context.actorOf(
+        PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+        "peers-client-bootstrap"
+      )
+    val regularSync = context.actorOf(
+      RegularSync.props(
+        peersClient,
+        networkPeerManager,
+        peerEventBus,
+        consensus,
+        blockchainReader,
+        stateStorage,
+        new BranchResolution(blockchainReader),
+        validators.blockValidator,
+        blacklist,
+        syncConfig,
+        ommersPool,
+        pendingTransactionsManager,
+        scheduler,
+        configBuilder
+      ),
+      "regular-sync-bootstrap"
+    )
+    regularSync ! SyncProtocol.Start
+    regularSync
   }
 
 }
