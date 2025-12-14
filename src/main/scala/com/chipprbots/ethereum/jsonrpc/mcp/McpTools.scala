@@ -117,6 +117,25 @@ object PeerListTool {
 }
 
 /**
+ * Set etherbase tool for MCP.
+ * Provides information about the eth_setEtherbase JSON-RPC method.
+ * Note: This is an informational tool only. Use eth_setEtherbase JSON-RPC method to actually set the etherbase.
+ */
+object SetEtherbaseTool {
+  val name = "mcp_etherbase_info"
+  val description = Some("Get information about setting the etherbase (coinbase) address for mining rewards via JSON-RPC")
+  
+  def execute(): IO[String] = {
+    IO.pure(s"""Etherbase (Coinbase) Configuration:
+      |• Method: eth_setEtherbase
+      |• Description: Sets the coinbase address for mining rewards
+      |• Usage: Send JSON-RPC request with method "eth_setEtherbase" and address parameter
+      |• Example: {"jsonrpc":"2.0","method":"eth_setEtherbase","params":["0x1234..."],"id":1}
+      |• Note: Changes take effect immediately for newly generated blocks""".stripMargin)
+  }
+}
+
+/**
  * Registry of all available MCP tools.
  * This makes it easy to add/remove tools and track changes.
  */
@@ -131,7 +150,8 @@ object McpToolRegistry {
     McpToolDefinition(NodeInfoTool.name, NodeInfoTool.description),
     McpToolDefinition(BlockchainInfoTool.name, BlockchainInfoTool.description),
     McpToolDefinition(SyncStatusTool.name, SyncStatusTool.description),
-    McpToolDefinition(PeerListTool.name, PeerListTool.description)
+    McpToolDefinition(PeerListTool.name, PeerListTool.description),
+    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description)
   )
   
   /**
@@ -148,6 +168,7 @@ object McpToolRegistry {
       case BlockchainInfoTool.name => BlockchainInfoTool.execute(syncController)
       case SyncStatusTool.name => SyncStatusTool.execute(syncController)
       case PeerListTool.name => PeerListTool.execute(peerManager)
+      case SetEtherbaseTool.name => SetEtherbaseTool.execute()
       case _ => IO.pure(s"Unknown tool: $toolName")
     }
   }
