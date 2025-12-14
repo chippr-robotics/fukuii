@@ -149,12 +149,11 @@ class SNAPSyncController(
                   self ! AccountRangeSyncComplete
                 case Left(error) =>
                   log.error(s"Failed to finalize state trie: $error")
+                  log.error("Trie finalization is critical for subsequent phases. Cannot proceed.")
                   if (recordCriticalFailure(s"Trie finalization failed: $error")) {
                     fallbackToFastSync()
-                  } else {
-                    // Retry by continuing anyway
-                    self ! AccountRangeSyncComplete
                   }
+                  // Do not send AccountRangeSyncComplete - sync cannot proceed without finalization
               }
             }
 
@@ -869,23 +868,25 @@ class SNAPSyncController(
                 if (error.contains("Missing root node")) {
                   validationRetryCount += 1
                   
-                  if (validationRetryCount >= MaxValidationRetries) {
+                  if (validationRetryCount > MaxValidationRetries) {
                     log.error(s"Root node missing error persists after $validationRetryCount attempts")
-                    log.error("Maximum validation retries reached - falling back to fast sync")
+                    log.error("Maximum validation retries exceeded - falling back to fast sync")
                     if (recordCriticalFailure("Root node persistence failure after retries")) {
                       fallbackToFastSync()
                     }
                   } else {
-                    log.error(s"Root node is missing even after finalization (attempt $validationRetryCount/$MaxValidationRetries)")
+                    log.error(s"Root node is missing even after finalization (attempt $validationRetryCount of $MaxValidationRetries)")
                     log.error("Attempting recovery by re-finalizing the trie...")
                     
                     // Try one more finalization
                     downloader.finalizeTrie() match {
                       case Right(_) =>
-                        log.info(s"Re-finalization successful, retrying validation (attempt $validationRetryCount/$MaxValidationRetries)...")
-                        // Retry validation by transitioning to healing and back
-                        currentPhase = StateHealing
-                        startStateHealing()
+                        log.info(s"Re-finalization successful, retrying validation (attempt $validationRetryCount of $MaxValidationRetries)...")
+                        // Directly retry validation without going through the healing phase
+                        // (healing will find no missing nodes since we built the trie locally)
+                        scheduler.scheduleOnce(500.millis) {
+                          self ! StateHealingComplete
+                        }(ec)
                       case Left(finalizeError) =>
                         log.error(s"Re-finalization failed: $finalizeError")
                         log.error("Cannot proceed with validation - falling back to fast sync")

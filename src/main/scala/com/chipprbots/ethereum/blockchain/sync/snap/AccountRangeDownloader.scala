@@ -378,42 +378,34 @@ class AccountRangeDownloader(
   /** Finalize the trie and ensure all nodes including the root are persisted to storage.
     *
     * This method should be called after all account ranges have been downloaded and before state validation begins. It
-    * ensures that the complete trie structure, including the root node, is persisted to storage.
+    * ensures that the complete trie structure, including the root node, is flushed to storage. Note that the trie nodes
+    * are already written to storage through put() operations, but this method ensures a final flush to disk.
     *
     * @return
     *   Either error message or success
     */
   def finalizeTrie(): Either[String, Unit] =
     try {
-      // Perform node persistence in synchronized block
-      val needsPersist = synchronized {
-        log.info("Finalizing state trie and persisting all nodes...")
+      synchronized {
+        log.info("Finalizing state trie and ensuring all nodes are persisted...")
         
-        // Get the current root hash
+        // Get the current root hash for logging
         val currentRootHash = ByteString(stateTrie.getRootHash)
         log.info(s"Current state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
         
-        // Force a re-persist of the current trie state
-        // This ensures all nodes including the root are in storage
-        stateTrie.rootNode match {
-          case Some(rootNode) =>
-            // Use the storage's updateNodesInStorage to persist the current root
-            // This persists the root node and all child nodes to storage
-            mptStorage.updateNodesInStorage(Some(rootNode), Nil)
-            log.info(s"Persisted root node to storage")
-            true
-            
-          case None =>
-            log.warn("No root node to persist (empty trie)")
-            false
+        // Check if we have a non-empty trie
+        if (currentRootHash.isEmpty || currentRootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+          log.warn("State trie is empty, nothing to finalize")
+        } else {
+          log.info("State trie has content, proceeding with finalization")
         }
       }
       
-      // Persist to disk outside synchronized block to avoid deadlock
-      if (needsPersist) {
-        mptStorage.persist()
-        log.info("Flushed trie nodes to disk")
-      }
+      // Flush all pending writes to disk outside synchronized block to avoid deadlock
+      // Note: The trie nodes have already been written to storage through put() operations
+      // which call updateNodesInStorage(). This persist() ensures they are flushed to disk.
+      mptStorage.persist()
+      log.info("Flushed all trie nodes to disk")
       
       log.info("State trie finalization complete")
       Right(())
