@@ -342,26 +342,24 @@ class EthMiningServiceSpec
     response1.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(miningConfig.coinbase))
 
     // Set new etherbase
-    val newEtherbase = Address("0x1234567890123456789012345678901234567890")
     val setResponse: ServiceResponse[EthMiningService.SetEtherbaseResponse] = 
-      ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(newEtherbase))
+      ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(testEtherbaseAddress))
     setResponse.unsafeRunSync() shouldEqual Right(EthMiningService.SetEtherbaseResponse(true))
 
     // Verify new coinbase
     val response2: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
-    response2.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(newEtherbase))
+    response2.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(testEtherbaseAddress))
 
     // Verify miner status shows new coinbase
     val statusResponse: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
     val status = statusResponse.unsafeRunSync()
     status shouldBe Symbol("right")
-    status.toOption.get.coinbase shouldEqual newEtherbase
+    status.toOption.get.coinbase shouldEqual testEtherbaseAddress
   }
 
   it should "use updated etherbase in block generation" taggedAs (UnitTest, RPCTest) in new TestSetup {
     // Set new etherbase
-    val newEtherbase = Address("0x1234567890123456789012345678901234567890")
-    ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(newEtherbase)).unsafeRunSync()
+    ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(testEtherbaseAddress)).unsafeRunSync()
 
     // Setup block generation with expectation that new etherbase is used
     (blockGenerator
@@ -372,7 +370,7 @@ class EthMiningServiceSpec
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
       )(_: BlockchainConfig))
-      .expects(parentBlock, Nil, newEtherbase, *, *, *)
+      .expects(parentBlock, Nil, testEtherbaseAddress, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
     
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
@@ -408,6 +406,9 @@ class EthMiningServiceSpec
 
     val minerActiveTimeout: FiniteDuration = 2.seconds // Short timeout for tests
     val getTransactionFromPoolTimeout: FiniteDuration = 20.seconds
+    
+    // Test constants
+    val testEtherbaseAddress: Address = Address("0x1234567890123456789012345678901234567890")
 
     lazy val minerKey: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(
       ByteStringUtils.string2hash("00f7500a7178548b8a4488f78477660b548c9363e16b584c21e0208b3f1e0dc61f")
