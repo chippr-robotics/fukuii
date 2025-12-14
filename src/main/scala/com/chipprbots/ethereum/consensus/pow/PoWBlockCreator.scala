@@ -41,7 +41,7 @@ class PoWBlockCreator(
       blockGenerator.generateBlock(
         parentBlock,
         pendingTxs.pendingTransactions.map(_.stx.tx),
-  coinbaseProvider.get(),
+        coinbaseProvider.get(),
         ommers.headers,
         initialWorldStateBeforeExecution
       )

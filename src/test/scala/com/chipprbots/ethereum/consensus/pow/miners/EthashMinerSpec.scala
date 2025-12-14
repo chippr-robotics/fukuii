@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.MiningPatience
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.MinerSpecSetup
 import com.chipprbots.ethereum.consensus.pow.PoWBlockCreator
@@ -98,11 +99,14 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
 
     val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
 
+    val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+
     override lazy val blockCreator = new PoWBlockCreator(
       pendingTransactionsManager = pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout = getTransactionFromPoolTimeout,
       mining = mining,
-      ommersPool = ommersPool.ref
+      ommersPool = ommersPool.ref,
+      coinbaseProvider = coinbaseProvider
     )
 
     val dagManager = new EthashDAGManager(blockCreator)
