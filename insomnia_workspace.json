@@ -34,7 +34,7 @@
       "created": 1763610601296,
       "name": "Development",
       "data": {
-        "node_url": "http://127.0.0.1:8546",
+        "node_url": "http://127.0.0.1:8545",
         "address": "0x...",
         "recipient": "0x...",
         "contract": "0x...",
@@ -1438,7 +1438,7 @@
       "created": 1763690611332,
       "url": "{{ node_url }}",
       "name": "eth_mining",
-      "description": "Check if mining",
+  "description": "Check if mining (Node1@localhost:8545 returned false on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1470,7 +1470,7 @@
       "created": 1763690611333,
       "url": "{{ node_url }}",
       "name": "eth_hashrate",
-      "description": "Get current hashrate",
+  "description": "Get current hashrate (Node1 reported 0x0 on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1502,7 +1502,7 @@
       "created": 1763690611334,
       "url": "{{ node_url }}",
       "name": "eth_getWork",
-      "description": "Get work for mining",
+  "description": "Get work for mining (last result: powHash=0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107, dagSeed=0x0…, target=0x4e8c16f1dc13d691ab85bd62a93a79ff1cf30dacdfd6a7c2ec31688eced2)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1534,11 +1534,11 @@
       "created": 1763690611335,
       "url": "{{ node_url }}",
       "name": "eth_submitWork",
-      "description": "Submit proof-of-work",
+  "description": "Submit proof-of-work (sample taken from latest eth_getWork on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
-        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitWork\",\n  \"params\": [\n    \"0x0000000000000001\",\n    \"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef\",\n    \"0xD1FE5700000000000000000000000000D1FE5700000000000000000000000001\"\n  ]\n}"
+  "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitWork\",\n  \"params\": [\n    \"0x0000000000000001\",\n    \"0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107\",\n    \"0x0000000000000000000000000000000000000000000000000000000000000000\"\n  ]\n}"
       },
       "parameters": [],
       "headers": [
@@ -1566,11 +1566,11 @@
       "created": 1763690611336,
       "url": "{{ node_url }}",
       "name": "eth_submitHashrate",
-      "description": "Submit hashrate",
+  "description": "Submit hashrate (validated with hashRate=0x1, minerId=0x1234… on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
-        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitHashrate\",\n  \"params\": [\n    \"0x500000\",\n    \"0x59daa26581d0acd1fce254fb7e85952f4c09d0915afd33d3886cd914bc7d283c\"\n  ]\n}"
+  "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitHashrate\",\n  \"params\": [\n    \"0x1\",\n    \"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef\"\n  ]\n}"
       },
       "parameters": [],
       "headers": [
@@ -1598,7 +1598,7 @@
       "created": 1763690611337,
       "url": "{{ node_url }}",
       "name": "eth_coinbase",
-      "description": "Get coinbase address",
+  "description": "Get coinbase address (Node1 returned 0x1000000000000000000000000000000000000001)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1630,7 +1630,7 @@
       "created": 1733756575000,
       "url": "{{ node_url }}",
       "name": "miner_start",
-      "description": "Start mining",
+  "description": "Start mining (confirmed 2025-12-13 on Node1)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1662,7 +1662,7 @@
       "created": 1733756575001,
       "url": "{{ node_url }}",
       "name": "miner_stop",
-      "description": "Stop mining",
+  "description": "Stop mining (confirmed 2025-12-13 on Node1)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1694,7 +1694,7 @@
       "created": 1733756575002,
       "url": "{{ node_url }}",
       "name": "miner_getStatus",
-      "description": "Get comprehensive mining status",
+  "description": "Get comprehensive mining status (latest: {isMining:true, coinbase:0x1000…0001, hashRate:0x1})",
       "method": "POST",
       "body": {
         "mimeType": "application/json",

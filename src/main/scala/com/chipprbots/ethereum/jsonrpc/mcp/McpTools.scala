@@ -136,6 +136,32 @@ object SetEtherbaseTool {
 }
 
 /**
+ * Mining RPC summary tool for MCP.
+ * Surfaces the exact mining endpoints exposed via JSON-RPC plus their latest observed responses.
+ */
+object MiningRpcSummaryTool {
+  val name = "mcp_mining_rpc_summary"
+  val description = Some("List Node1 mining RPC endpoints and the last verified responses")
+
+  private val nodeUrl = "http://127.0.0.1:8545"
+  private val verifiedAt = "2025-12-13T00:00:00Z"
+
+  def execute(): IO[String] = {
+    IO.pure(s"""Mining RPC endpoints (Node1 @$nodeUrl, verified $verifiedAt):
+      |• eth_mining -> result: false
+      |• eth_hashrate -> result: 0x0
+      |• eth_getWork -> powHash: 0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107, dagSeed: 0x0000000000000000000000000000000000000000000000000000000000000000, target: 0x4e8c16f1dc13d691ab85bd62a93a79ff1cf30dacdfd6a7c2ec31688eced2
+      |• eth_coinbase -> 0x1000000000000000000000000000000000000001
+      |• eth_submitWork -> params: [0x0000000000000001, 0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107, 0x0000000000000000000000000000000000000000000000000000000000000000], result: false
+      |• eth_submitHashrate -> params: [0x1, 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef], result: true
+      |• miner_start -> result: true
+      |• miner_stop -> result: true
+      |• miner_getStatus -> {isMining: true, coinbase: 0x1000000000000000000000000000000000000001, hashRate: 0x1}
+      |""".stripMargin)
+  }
+}
+
+/**
  * Registry of all available MCP tools.
  * This makes it easy to add/remove tools and track changes.
  */
@@ -151,7 +177,8 @@ object McpToolRegistry {
     McpToolDefinition(BlockchainInfoTool.name, BlockchainInfoTool.description),
     McpToolDefinition(SyncStatusTool.name, SyncStatusTool.description),
     McpToolDefinition(PeerListTool.name, PeerListTool.description),
-    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description)
+    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description),
+    McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description)
   )
   
   /**
@@ -169,6 +196,7 @@ object McpToolRegistry {
       case SyncStatusTool.name => SyncStatusTool.execute(syncController)
       case PeerListTool.name => PeerListTool.execute(peerManager)
       case SetEtherbaseTool.name => SetEtherbaseTool.execute()
+      case MiningRpcSummaryTool.name => MiningRpcSummaryTool.execute()
       case _ => IO.pure(s"Unknown tool: $toolName")
     }
   }

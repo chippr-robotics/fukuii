@@ -41,6 +41,7 @@ Commands:
   Node Configuration:
     sync-static-nodes     - Synchronize static-nodes.json across running containers
     collect-logs [config] - Collect logs from all containers
+        pitya-lore [options]  - "Short nap" watcher that stops the net once a target block is reached
 
   Help:
     help                  - Show this help message
@@ -184,8 +185,11 @@ sync_static_nodes() {
     declare -A ENODES_MAP  # Associate container name with its enode
     for container in $CONTAINERS; do
         echo -n "  $container: "
-        enode=$(get_enode_from_container "$container")
-        if [ $? -eq 0 ] && [ -n "$enode" ]; then
+        if enode=$(get_enode_from_container "$container"); then
+            if [ -z "$enode" ]; then
+                echo -e "${YELLOW}⚠ extracted empty enode${NC}"
+                continue
+            fi
             ENODES_MAP["$container"]="$enode"
             echo -e "${GREEN}✓${NC}"
         else
@@ -201,8 +205,33 @@ sync_static_nodes() {
     echo ""
     echo -e "${GREEN}Collected ${#ENODES_MAP[@]} enode(s)${NC}"
     
+    local validator_container=${FUKUII_VALIDATOR_CONTAINER:-gorgoroth-fukuii-node1}
+    if [[ -n "$FUKUII_VALIDATOR_NODE" ]]; then
+        validator_container="gorgoroth-fukuii-${FUKUII_VALIDATOR_NODE}"
+    fi
+
+    if [[ -n "$FUKUII_VALIDATOR_CONTAINER" && -n "$FUKUII_VALIDATOR_NODE" ]]; then
+        echo -e "${YELLOW}Warning: both FUKUII_VALIDATOR_CONTAINER and FUKUII_VALIDATOR_NODE set; using container override${NC}"
+    fi
+
+    if [[ -z "${ENODES_MAP[$validator_container]}" ]]; then
+        echo -e "${YELLOW}Warning: validator container '$validator_container' not detected or missing enode.${NC}"
+        # Fall back to the first container alphabetically if validator missing
+        validator_container=$(printf "%s\n" "${!ENODES_MAP[@]}" | sort | head -n1)
+        echo -e "${YELLOW}Falling back to '$validator_container' as validator reference.${NC}"
+    fi
+
+    local validator_enode="${ENODES_MAP[$validator_container]}"
+    if [[ -z "$validator_enode" ]]; then
+        echo -e "${RED}Error: unable to determine validator enode${NC}"
+        exit 1
+    fi
+
+    echo -e "${BLUE}Validator container:${NC} $validator_container"
+    echo -e "${BLUE}Validator enode:${NC} $validator_enode"
+
     # Update static-nodes.json for each container
-    # Each container's static-nodes.json should contain all OTHER nodes (excluding itself)
+    # Followers should include only the validator; validator should have none
     echo ""
     echo -e "${BLUE}Updating static-nodes.json in config directories...${NC}"
     for container in $CONTAINERS; do
@@ -211,40 +240,13 @@ sync_static_nodes() {
         
         echo -n "  node${node_num}: "
         if [ -f "$config_file" ]; then
-            # Count how many peer nodes this node has (excluding itself)
-            peer_count=0
-            for other_container in "${!ENODES_MAP[@]}"; do
-                if [ "$other_container" != "$container" ]; then
-                    peer_count=$((peer_count + 1))
-                fi
-            done
-            
-            # Validate that we have at least one peer
-            if [ $peer_count -eq 0 ]; then
-                echo -e "${YELLOW}⚠ no peers (only 1 node in network?)${NC}"
-                # Create empty array for single-node case
+            if [ "$container" == "$validator_container" ]; then
                 echo "[]" > "$config_file"
-                continue
+                echo -e "${GREEN}✓ validator: no static peers${NC}"
+            else
+                printf '[\n  "%s"\n]\n' "$validator_enode" > "$config_file"
+                echo -e "${GREEN}✓ follower -> validator${NC}"
             fi
-            
-            # Create static-nodes.json with all enodes EXCEPT this node's own
-            {
-                echo "["
-                first=true
-                for other_container in "${!ENODES_MAP[@]}"; do
-                    if [ "$other_container" != "$container" ]; then
-                        if [ "$first" = true ]; then
-                            printf '  "%s"' "${ENODES_MAP[$other_container]}"
-                            first=false
-                        else
-                            printf ',\n  "%s"' "${ENODES_MAP[$other_container]}"
-                        fi
-                    fi
-                done
-                echo ""
-                echo "]"
-            } > "$config_file"
-            echo -e "${GREEN}✓ updated ($peer_count peer(s))${NC}"
         else
             echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
         fi
@@ -369,6 +371,164 @@ show_version() {
     echo "Unified command-line tool for Fukuii node management"
 }
 
+pitya_lore_short_nap() {
+    local config="6nodes"
+    local rpc_url="http://localhost:8545"
+    local target_block=1000000
+    local poll_interval=30
+    local snapshot_dir="$GORGOROTH_DIR/debug-logs"
+    local miner_node="node1"
+    local stop_mode="stop"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --config)
+                config="$2"
+                shift 2
+                ;;
+            --rpc-url)
+                rpc_url="$2"
+                shift 2
+                ;;
+            --target-block)
+                target_block="$2"
+                shift 2
+                ;;
+            --interval)
+                poll_interval="$2"
+                shift 2
+                ;;
+            --snapshot-dir)
+                snapshot_dir="$2"
+                shift 2
+                ;;
+            --miner-node)
+                miner_node="$2"
+                shift 2
+                ;;
+            --stop-mode)
+                stop_mode="$2"
+                shift 2
+                ;;
+            --help|-h)
+                cat <<'EOF'
+Usage: fukuii-cli pitya-lore [options]
+
+Options:
+  --config <name>        Compose config to control (default: 6nodes)
+  --rpc-url <url>        RPC endpoint to poll (default: http://localhost:8545)
+  --target-block <num>   Block height to stop at (default: 1000000)
+  --interval <seconds>   Poll interval in seconds (default: 30)
+  --snapshot-dir <path>  Directory for miner snapshots (default: ops/gorgoroth/debug-logs)
+  --miner-node <node>    Container suffix for miner logs (default: node1)
+  --stop-mode <stop|down> Action to stop the compose stack (default: stop)
+EOF
+                return 0
+                ;;
+            *)
+                echo -e "${RED}Error: Unknown option '$1'${NC}" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    if [[ ! "$target_block" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Error: target block must be a positive integer${NC}" >&2
+        return 1
+    fi
+
+    if [[ ! "$poll_interval" =~ ^[0-9]+$ || "$poll_interval" -le 0 ]]; then
+        echo -e "${RED}Error: interval must be a positive integer${NC}" >&2
+        return 1
+    fi
+
+    if [[ "$stop_mode" != "stop" && "$stop_mode" != "down" ]]; then
+        echo -e "${RED}Error: stop-mode must be either 'stop' or 'down'${NC}" >&2
+        return 1
+    fi
+
+    local compose_file
+    compose_file=$(get_compose_file "$config") || return 1
+
+    local container_name="gorgoroth-fukuii-$miner_node"
+    mkdir -p "$snapshot_dir"
+
+    echo -e "${GREEN}Pitya-lórë watcher engaged — monitoring $rpc_url until block >= $target_block${NC}"
+    echo "Snapshot directory: $snapshot_dir"
+    echo "Stopping action: docker compose -f $compose_file $stop_mode"
+
+    local current_block=0
+    while true; do
+        local response
+        response=$(curl -s -X POST -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            "$rpc_url" || true)
+
+        local block_hex
+        block_hex=$(echo "$response" | grep -o '"result":"[^"]*"' | head -n1 | cut -d'"' -f4)
+
+        if [[ -z "$block_hex" ]]; then
+            echo -e "${YELLOW}[$(date '+%H:%M:%S')] Unable to parse block height from RPC response${NC}"
+            sleep "$poll_interval"
+            continue
+        fi
+
+        block_hex=${block_hex#0x}
+        if [[ -z "$block_hex" ]]; then
+            current_block=0
+        else
+            current_block=$((16#$block_hex))
+        fi
+
+        echo "[$(date '+%H:%M:%S')] Block height: $current_block / $target_block"
+
+        if (( current_block >= target_block )); then
+            break
+        fi
+
+        sleep "$poll_interval"
+    done
+
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    local snapshot_file="$snapshot_dir/pitya-lore-${timestamp}.log"
+    {
+        echo "Pitya-lórë short nap snapshot"
+        echo "Timestamp: $(date)"
+        echo "RPC URL: $rpc_url"
+        echo "Target block: $target_block"
+        echo "Reached block: $current_block"
+        echo "Config: $config"
+        echo "Miner container: $container_name"
+        echo "Stop mode: $stop_mode"
+        echo ""
+        echo "eth_mining"
+        curl -s -X POST -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' "$rpc_url"
+        echo ""
+        echo "eth_hashrate"
+        curl -s -X POST -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"eth_hashrate","params":[],"id":1}' "$rpc_url"
+        echo ""
+        echo "Recent miner logs"
+        echo "-----------------"
+    } > "$snapshot_file"
+
+    if ! docker logs "$container_name" --tail 500 >> "$snapshot_file" 2>&1; then
+        echo -e "${YELLOW}Warning: Unable to capture logs from $container_name${NC}" | tee -a "$snapshot_file"
+    fi
+
+    echo -e "${BLUE}Snapshot saved to $snapshot_file${NC}"
+
+    cd "$GORGOROTH_DIR"
+    echo -e "${YELLOW}Target met — issuing docker compose $stop_mode to let the network take its short nap${NC}"
+    if ! docker compose -f "$compose_file" "$stop_mode"; then
+        echo -e "${RED}Warning: docker compose $stop_mode failed${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}Pitya-lórë complete. Network is resting.${NC}"
+}
+
 # ============================================================================
 # Main Command Dispatcher
 # ============================================================================
@@ -405,6 +565,9 @@ case $COMMAND in
         ;;
     collect-logs)
         collect_logs_cmd "$@"
+        ;;
+    pitya-lore)
+        pitya_lore_short_nap "$@"
         ;;
     help|--help|-h)
         print_usage

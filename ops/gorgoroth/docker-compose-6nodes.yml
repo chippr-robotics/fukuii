@@ -35,10 +35,10 @@ services:
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dfukuii.network.peer.p2p-version=4"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.peer.p2p-version=4 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -61,16 +61,17 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node2/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.peer.p2p-version=4"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.peer.p2p-version=4 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -93,16 +94,17 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node3/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -125,16 +127,17 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node4/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node4/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node4/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node4-data:/app/data
       - fukuii-node4-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node4
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -157,16 +160,17 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node5/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node5/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node5/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node5-data:/app/data
       - fukuii-node5-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node5
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -189,16 +193,17 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node6/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/node6/gorgoroth.conf:/app/conf/gorgoroth.conf:ro
       - ./conf/node6/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node6-data:/app/data
       - fukuii-node6-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node6
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3
