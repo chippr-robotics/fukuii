@@ -65,6 +65,7 @@ class SNAPSyncController(
   // Retry counter for validation failures to prevent infinite loops
   private var validationRetryCount: Int = 0
   private val MaxValidationRetries = 3
+  private val ValidationRetryDelay = 500.millis
 
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
@@ -884,7 +885,7 @@ class SNAPSyncController(
                         log.info(s"Re-finalization successful, retrying validation (retry attempt $validationRetryCount of $MaxValidationRetries)...")
                         // Directly retry validation without going through the healing phase
                         // (healing will find no missing nodes since we built the trie locally)
-                        scheduler.scheduleOnce(500.millis) {
+                        scheduler.scheduleOnce(ValidationRetryDelay) {
                           self ! StateHealingComplete
                         }(ec)
                       case Left(finalizeError) =>
