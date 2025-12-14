@@ -23,7 +23,11 @@ object ExternalAddressResolver {
     IO {
       try {
         val ipCheckUrl = new URL(url)
-        val in: BufferedReader = new BufferedReader(new InputStreamReader(ipCheckUrl.openStream()))
+        val connection = ipCheckUrl.openConnection()
+        // Set connection and read timeouts to prevent hanging indefinitely
+        connection.setConnectTimeout(5000) // 5 seconds
+        connection.setReadTimeout(5000)    // 5 seconds
+        val in: BufferedReader = new BufferedReader(new InputStreamReader(connection.getInputStream()))
         cb(Right(InetAddress.getByName(in.readLine())))
       } catch {
         case NonFatal(ex) => cb(Left(ex))
