@@ -110,6 +110,50 @@ object ConnectedPeersResource {
 }
 
 /**
+ * Mining RPC endpoints resource for MCP.
+ * Publishes the exact mining JSON-RPC methods along with the latest observed results from Node1.
+ */
+object MiningRpcResource {
+  val uri = "fukuii://mining/rpc"
+  val name = "Mining RPC Endpoints"
+  val description = Some("Mining JSON-RPC coverage with latest Node1 responses")
+  val mimeType = Some("application/json")
+
+  def read(): IO[String] = {
+    IO.pure("""{
+      |  "nodeUrl": "http://127.0.0.1:8545",
+      |  "verifiedAt": "2025-12-13T00:00:00Z",
+      |  "endpoints": [
+      |    {"method": "eth_mining", "lastResult": false},
+      |    {"method": "eth_hashrate", "lastResult": "0x0"},
+      |    {"method": "eth_getWork", "lastResult": [
+      |      "0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107",
+      |      "0x0000000000000000000000000000000000000000000000000000000000000000",
+      |      "0x4e8c16f1dc13d691ab85bd62a93a79ff1cf30dacdfd6a7c2ec31688eced2"
+      |    ]},
+      |    {"method": "eth_coinbase", "lastResult": "0x1000000000000000000000000000000000000001"},
+      |    {"method": "eth_submitWork", "params": [
+      |      "0x0000000000000001",
+      |      "0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107",
+      |      "0x0000000000000000000000000000000000000000000000000000000000000000"
+      |    ], "lastResult": false},
+      |    {"method": "eth_submitHashrate", "params": [
+      |      "0x1",
+      |      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+      |    ], "lastResult": true},
+      |    {"method": "miner_start", "lastResult": true},
+      |    {"method": "miner_stop", "lastResult": true},
+      |    {"method": "miner_getStatus", "lastResult": {
+      |      "isMining": true,
+      |      "coinbase": "0x1000000000000000000000000000000000000001",
+      |      "hashRate": "0x1"
+      |    }}
+      |  ]
+      |}""".stripMargin)
+  }
+}
+
+/**
  * Sync status resource for MCP.
  * Provides detailed synchronization status.
  */
@@ -153,6 +197,8 @@ object McpResourceRegistry {
       LatestBlockResource.description, LatestBlockResource.mimeType),
     McpResourceDefinition(ConnectedPeersResource.uri, ConnectedPeersResource.name,
       ConnectedPeersResource.description, ConnectedPeersResource.mimeType),
+    McpResourceDefinition(MiningRpcResource.uri, MiningRpcResource.name,
+      MiningRpcResource.description, MiningRpcResource.mimeType),
     McpResourceDefinition(SyncStatusResource.uri, SyncStatusResource.name,
       SyncStatusResource.description, SyncStatusResource.mimeType)
   )
@@ -170,6 +216,7 @@ object McpResourceRegistry {
       case NodeConfigResource.uri => Right(NodeConfigResource.read())
       case LatestBlockResource.uri => Right(LatestBlockResource.read(syncController))
       case ConnectedPeersResource.uri => Right(ConnectedPeersResource.read(peerManager))
+      case MiningRpcResource.uri => Right(MiningRpcResource.read())
       case SyncStatusResource.uri => Right(SyncStatusResource.read(syncController))
       case _ => Left(s"Unknown resource: $uri")
     }

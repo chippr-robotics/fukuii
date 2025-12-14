@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
@@ -336,6 +337,38 @@ class EthMiningServiceSpec
     status2.toOption.get.hashRate shouldEqual BigInt(100)
   }
 
+  it should "set etherbase via RPC and reflect it in mining work" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val updated = Address("0xddbcceae19ea757681866a48b026e45227923c35")
+
+    ethMiningService.setEtherbase(SetEtherbaseRequest(updated)).unsafeRunSync() shouldEqual Right(
+      SetEtherbaseResponse(true)
+    )
+
+    val coinbaseResp = ethMiningService.getCoinbase(GetCoinbaseRequest()).unsafeRunSync()
+    coinbaseResp shouldEqual Right(GetCoinbaseResponse(updated))
+
+    (blockGenerator
+      .generateBlock(
+        _: Block,
+        _: Seq[SignedTransaction],
+        _: Address,
+        _: Seq[BlockHeader],
+        _: Option[InMemoryWorldStateProxy]
+      )(_: BlockchainConfig))
+      .expects(parentBlock, *, updated, *, *, *)
+      .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
+
+    blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+
+    val workFuture = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
+    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
+    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
+    ommersPool.reply(OmmersPool.Ommers(Nil))
+    import scala.concurrent.Await
+    Await.result(workFuture, 10.seconds)
+  }
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
@@ -374,6 +407,8 @@ class EthMiningServiceSpec
       override def healthConfig: JsonRpcHealthConfig = baseJsonRpcConfig.healthConfig
     }
 
+    val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+
     lazy val ethMiningService = new EthMiningService(
       blockchainReader,
       mining,
@@ -382,7 +417,8 @@ class EthMiningServiceSpec
       syncingController.ref,
       pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout,
-      this
+      this,
+      coinbaseProvider
     )
 
     val difficulty = 131072

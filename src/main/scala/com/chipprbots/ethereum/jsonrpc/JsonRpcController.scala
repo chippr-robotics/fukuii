@@ -152,6 +152,8 @@ case class JsonRpcController(
       handle[BestBlockNumberRequest, BestBlockNumberResponse](ethBlocksService.bestBlockNumber, req)
     case req @ JsonRpcRequest(_, "eth_coinbase", _, _) =>
       handle[GetCoinbaseRequest, GetCoinbaseResponse](ethMiningService.getCoinbase, req)
+    case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
+      handle[SetEtherbaseRequest, SetEtherbaseResponse](ethMiningService.setEtherbase, req)
     case req @ JsonRpcRequest(_, "eth_getBlockTransactionCountByHash", _, _) =>
       handle[TxCountByBlockHashRequest, TxCountByBlockHashResponse](
         ethBlocksService.getBlockTransactionCountByHash,
