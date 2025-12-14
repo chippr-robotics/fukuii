@@ -191,6 +191,7 @@ class PeerDiscoveryManager(
     maybeDiscoveredNodes
       .map(_ ++ alreadyDiscoveredNodes)
       .map(_.filterNot(isLocalNode))
+      .flatTap(nodes => IO(log.debug("Discovered nodes snapshot ({} total) sent to {}", nodes.size, recipient.path)))
       .map(DiscoveredNodesInfo(_))
   }
 
@@ -205,7 +206,7 @@ class PeerDiscoveryManager(
   ): Unit = maybeRandomNodes.foreach { consumer =>
     pipeToRecipient[RandomNodeInfo](recipient) {
       consumer.take(1).compile.lastOrError.flatMap { node =>
-        IO.pure(RandomNodeInfo(node))
+        IO(log.debug("Random node candidate {} delivered to {}", formatNodeForLogs(node), recipient.path)).as(RandomNodeInfo(node))
       }
     }
   }
@@ -242,6 +243,12 @@ class PeerDiscoveryManager(
 
   def isLocalNode(node: Node): Boolean =
     node.id == localNodeId
+
+  private def formatNodeForLogs(node: Node): String = {
+    val id = node.id.take(6).toArray
+    val hex = id.map("%02x".format(_)).mkString
+    s"${node.addr.getHostAddress}:${node.tcpPort}/$hex"
+  }
 
   def randomNodeId: ENode.Id = {
     // We could use `DiscoveryService.lookupRandom` which generates a random public key,
