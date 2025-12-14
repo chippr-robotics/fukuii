@@ -337,16 +337,32 @@ class EthMiningServiceSpec
     status2.toOption.get.hashRate shouldEqual BigInt(100)
   }
 
-  it should "set etherbase via RPC and reflect it in mining work" taggedAs (UnitTest, RPCTest) in new TestSetup {
-    val updated = Address("0xddbcceae19ea757681866a48b026e45227923c35")
+  it should "set and get the etherbase address" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Get initial coinbase
+    val response1: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
+    response1.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(miningConfig.coinbase))
 
-    ethMiningService.setEtherbase(SetEtherbaseRequest(updated)).unsafeRunSync() shouldEqual Right(
-      SetEtherbaseResponse(true)
-    )
+    // Set new etherbase
+    val setResponse: ServiceResponse[EthMiningService.SetEtherbaseResponse] = 
+      ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(testEtherbaseAddress))
+    setResponse.unsafeRunSync() shouldEqual Right(EthMiningService.SetEtherbaseResponse(true))
 
-    val coinbaseResp = ethMiningService.getCoinbase(GetCoinbaseRequest()).unsafeRunSync()
-    coinbaseResp shouldEqual Right(GetCoinbaseResponse(updated))
+    // Verify new coinbase
+    val response2: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
+    response2.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(testEtherbaseAddress))
 
+    // Verify miner status shows new coinbase
+    val statusResponse: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val status = statusResponse.unsafeRunSync()
+    status shouldBe Symbol("right")
+    status.toOption.get.coinbase shouldEqual testEtherbaseAddress
+  }
+
+  it should "use updated etherbase in block generation" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Set new etherbase
+    ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(testEtherbaseAddress)).unsafeRunSync()
+
+    // Setup block generation with expectation that new etherbase is used
     (blockGenerator
       .generateBlock(
         _: Block,
@@ -355,18 +371,28 @@ class EthMiningServiceSpec
         _: Seq[BlockHeader],
         _: Option[InMemoryWorldStateProxy]
       )(_: BlockchainConfig))
-      .expects(parentBlock, *, updated, *, *, *)
+      .expects(parentBlock, Nil, testEtherbaseAddress, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
-
+    
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
 
-    val workFuture = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+    // Start the getWork call asynchronously
+    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] =
+      ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+
+    // Handle the actor messages
     pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
     pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
+
     ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
     ommersPool.reply(OmmersPool.Ommers(Nil))
+
+    // Wait for the result
     import scala.concurrent.Await
-    Await.result(workFuture, 10.seconds)
+    import scala.concurrent.duration._
+    val response = Await.result(workFuture, 10.seconds)
+
+    response shouldBe Symbol("right")
   }
 
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
@@ -381,6 +407,9 @@ class EthMiningServiceSpec
 
     val minerActiveTimeout: FiniteDuration = 2.seconds // Short timeout for tests
     val getTransactionFromPoolTimeout: FiniteDuration = 20.seconds
+    
+    // Test constants
+    val testEtherbaseAddress: Address = Address("0x1234567890123456789012345678901234567890")
 
     lazy val minerKey: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(
       ByteStringUtils.string2hash("00f7500a7178548b8a4488f78477660b548c9363e16b584c21e0208b3f1e0dc61f")
