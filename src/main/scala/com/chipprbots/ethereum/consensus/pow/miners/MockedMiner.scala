@@ -149,7 +149,8 @@ object MockedMiner {
           pendingTransactionsManager = node.pendingTransactionsManager,
           getTransactionFromPoolTimeout = node.txPoolConfig.getTransactionFromPoolTimeout,
           mining = mining,
-          ommersPool = node.ommersPool
+          ommersPool = node.ommersPool,
+          coinbaseProvider = node.coinbaseProvider
         )
         val minerProps = props(
           blockchainReader = node.blockchainReader,

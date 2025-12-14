@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 import cats.effect.unsafe.IORuntime
 
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.jsonrpc.TestService
 import com.chipprbots.ethereum.testmode.SealEngineType
 import com.chipprbots.ethereum.testmode.TestEthBlockServiceWrapper
@@ -14,6 +15,9 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 class TestNode extends BaseNode {
 
   override lazy val ioRuntime: IORuntime = IORuntime.global
+
+  override lazy val coinbaseProvider: CoinbaseProvider = 
+    new CoinbaseProvider(miningConfig.coinbase)
 
   lazy val testModeComponentsProvider: TestModeComponentsProvider =
     new TestModeComponentsProvider(

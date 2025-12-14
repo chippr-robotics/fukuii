@@ -14,6 +14,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.MinerSpecSetup
 import com.chipprbots.ethereum.consensus.pow.PoWBlockCreator
@@ -87,11 +88,14 @@ class KeccakMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
     val ethService: EthInfoService = mock[EthInfoService]
     val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
 
+    val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+
     override lazy val blockCreator = new PoWBlockCreator(
       pendingTransactionsManager = pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout = getTransactionFromPoolTimeout,
       mining = mining,
-      ommersPool = ommersPool.ref
+      ommersPool = ommersPool.ref,
+      coinbaseProvider = coinbaseProvider
     )
 
     val miner = new KeccakMiner(blockCreator, sync.ref, ethMiningService)
