@@ -121,7 +121,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     Timeouts.shortTimeout
   )
 
-  val coinbaseProvider = new CoinbaseProvider(mining.config.generic.coinbase)
+  override lazy val coinbaseProvider = new CoinbaseProvider(mining.config.generic.coinbase)
 
   val ethMiningService = new EthMiningService(
     blockchainReader,

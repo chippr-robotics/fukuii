@@ -436,7 +436,7 @@ class EthMiningServiceSpec
       override def healthConfig: JsonRpcHealthConfig = baseJsonRpcConfig.healthConfig
     }
 
-    val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+    override lazy val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
 
     lazy val ethMiningService = new EthMiningService(
       blockchainReader,
