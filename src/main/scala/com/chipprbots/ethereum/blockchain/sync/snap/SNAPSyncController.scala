@@ -869,19 +869,19 @@ class SNAPSyncController(
                   validationRetryCount += 1
                   
                   if (validationRetryCount > MaxValidationRetries) {
-                    log.error(s"Root node missing error persists after $validationRetryCount attempts")
+                    log.error(s"Root node missing error persists (failed $validationRetryCount times total)")
                     log.error("Maximum validation retries exceeded - falling back to fast sync")
                     if (recordCriticalFailure("Root node persistence failure after retries")) {
                       fallbackToFastSync()
                     }
                   } else {
-                    log.error(s"Root node is missing even after finalization (attempt $validationRetryCount of $MaxValidationRetries)")
+                    log.error(s"Root node is missing even after finalization (retry attempt $validationRetryCount of $MaxValidationRetries)")
                     log.error("Attempting recovery by re-finalizing the trie...")
                     
                     // Try one more finalization
                     downloader.finalizeTrie() match {
                       case Right(_) =>
-                        log.info(s"Re-finalization successful, retrying validation (attempt $validationRetryCount of $MaxValidationRetries)...")
+                        log.info(s"Re-finalization successful, retrying validation (retry attempt $validationRetryCount of $MaxValidationRetries)...")
                         // Directly retry validation without going through the healing phase
                         // (healing will find no missing nodes since we built the trie locally)
                         scheduler.scheduleOnce(500.millis) {

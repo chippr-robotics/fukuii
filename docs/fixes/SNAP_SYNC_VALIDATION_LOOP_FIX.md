@@ -166,8 +166,13 @@ case Left(error) if error.contains("Missing root node") =>
 ```
 
 **Key improvements from PR review**:
-- Changed retry check from `>=` to `>` for correct attempt counting
-- Improved log messages to say "attempt X of Y" instead of "X/Y"
+- Changed retry check from `>=` to `>` to allow the full number of retry attempts specified by `MaxValidationRetries`
+- The counter is incremented before the check, so with `MaxValidationRetries = 3`:
+  - First failure: counter = 1, retries (attempt 1 of 3)
+  - Second failure: counter = 2, retries (attempt 2 of 3)
+  - Third failure: counter = 3, retries (attempt 3 of 3)
+  - Fourth failure: counter = 4, exceeds max (4 > 3), falls back to fast sync
+- Improved log messages to clearly distinguish between "retry attempt X of Y" and "failed N times total"
 - Directly send `StateHealingComplete` message to retry validation instead of going through StateHealing phase (which would just find no missing nodes and complete immediately, causing an inefficient loop)
 
 ### 4. Added Retry Counter to Prevent Infinite Loops

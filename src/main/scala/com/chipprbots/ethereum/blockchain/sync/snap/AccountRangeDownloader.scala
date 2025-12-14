@@ -394,7 +394,7 @@ class AccountRangeDownloader(
         log.info(s"Current state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
         
         // Check if we have a non-empty trie
-        if (currentRootHash.isEmpty || currentRootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+        if (currentRootHash.length == 0 || currentRootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
           log.warn("State trie is empty, nothing to finalize")
         } else {
           log.info("State trie has content, proceeding with finalization")
