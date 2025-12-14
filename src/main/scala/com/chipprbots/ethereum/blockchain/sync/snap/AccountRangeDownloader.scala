@@ -385,7 +385,8 @@ class AccountRangeDownloader(
     */
   def finalizeTrie(): Either[String, Unit] =
     try {
-      synchronized {
+      // Perform node persistence in synchronized block
+      val needsPersist = synchronized {
         log.info("Finalizing state trie and persisting all nodes...")
         
         // Get the current root hash
@@ -397,17 +398,21 @@ class AccountRangeDownloader(
         stateTrie.rootNode match {
           case Some(rootNode) =>
             // Use the storage's updateNodesInStorage to persist the current root
-            val persistedRoot = mptStorage.updateNodesInStorage(Some(rootNode), Nil)
+            // This persists the root node and all child nodes to storage
+            mptStorage.updateNodesInStorage(Some(rootNode), Nil)
             log.info(s"Persisted root node to storage")
+            true
             
           case None =>
             log.warn("No root node to persist (empty trie)")
+            false
         }
       }
       
-      // Persist to disk outside synchronized block
-      mptStorage.synchronized {
+      // Persist to disk outside synchronized block to avoid deadlock
+      if (needsPersist) {
         mptStorage.persist()
+        log.info("Flushed trie nodes to disk")
       }
       
       log.info("State trie finalization complete")

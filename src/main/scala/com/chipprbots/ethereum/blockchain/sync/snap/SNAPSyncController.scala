@@ -61,6 +61,10 @@ class SNAPSyncController(
 
   // Failure tracking for fallback to fast sync
   private var criticalFailureCount: Int = 0
+  
+  // Retry counter for validation failures to prevent infinite loops
+  private var validationRetryCount: Int = 0
+  private val MaxValidationRetries = 3
 
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
@@ -829,6 +833,9 @@ class SNAPSyncController(
             validator.validateAccountTrie(expectedRoot) match {
               case Right(missingAccountNodes) if missingAccountNodes.isEmpty =>
                 log.info("Account trie validation successful - no missing nodes")
+                
+                // Reset validation retry counter on success
+                validationRetryCount = 0
 
                 // Now validate storage tries
                 validator.validateAllStorageTries(expectedRoot) match {
@@ -860,22 +867,32 @@ class SNAPSyncController(
                 
                 // Check if this is a root node missing error after finalization
                 if (error.contains("Missing root node")) {
-                  log.error("Root node is missing even after finalization - this indicates a serious issue")
-                  log.error("Attempting final recovery by re-finalizing the trie...")
+                  validationRetryCount += 1
                   
-                  // Try one more finalization
-                  downloader.finalizeTrie() match {
-                    case Right(_) =>
-                      log.info("Re-finalization successful, retrying validation...")
-                      // Retry validation by transitioning to healing and back
-                      currentPhase = StateHealing
-                      startStateHealing()
-                    case Left(finalizeError) =>
-                      log.error(s"Re-finalization failed: $finalizeError")
-                      log.error("Cannot proceed with validation - falling back to fast sync")
-                      if (recordCriticalFailure("Root node persistence failure")) {
-                        fallbackToFastSync()
-                      }
+                  if (validationRetryCount >= MaxValidationRetries) {
+                    log.error(s"Root node missing error persists after $validationRetryCount attempts")
+                    log.error("Maximum validation retries reached - falling back to fast sync")
+                    if (recordCriticalFailure("Root node persistence failure after retries")) {
+                      fallbackToFastSync()
+                    }
+                  } else {
+                    log.error(s"Root node is missing even after finalization (attempt $validationRetryCount/$MaxValidationRetries)")
+                    log.error("Attempting recovery by re-finalizing the trie...")
+                    
+                    // Try one more finalization
+                    downloader.finalizeTrie() match {
+                      case Right(_) =>
+                        log.info(s"Re-finalization successful, retrying validation (attempt $validationRetryCount/$MaxValidationRetries)...")
+                        // Retry validation by transitioning to healing and back
+                        currentPhase = StateHealing
+                        startStateHealing()
+                      case Left(finalizeError) =>
+                        log.error(s"Re-finalization failed: $finalizeError")
+                        log.error("Cannot proceed with validation - falling back to fast sync")
+                        if (recordCriticalFailure("Root node persistence failure")) {
+                          fallbackToFastSync()
+                        }
+                    }
                   }
                 } else {
                   log.error("Attempting to recover through healing phase")
