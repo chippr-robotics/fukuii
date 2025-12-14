@@ -374,6 +374,46 @@ class AccountRangeDownloader(
   def getContractAccountCount: Int = synchronized {
     contractAccounts.size
   }
+
+  /** Finalize the trie and ensure all nodes including the root are persisted to storage.
+    *
+    * This method should be called after all account ranges have been downloaded and before state validation begins. It
+    * ensures that the complete trie structure, including the root node, is flushed to storage. Note that the trie nodes
+    * are already written to storage through put() operations, but this method ensures a final flush to disk.
+    *
+    * @return
+    *   Either error message or success
+    */
+  def finalizeTrie(): Either[String, Unit] =
+    try {
+      synchronized {
+        log.info("Finalizing state trie and ensuring all nodes are persisted...")
+        
+        // Get the current root hash for logging
+        val currentRootHash = ByteString(stateTrie.getRootHash)
+        log.info(s"Current state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
+        
+        // Check if we have a non-empty trie
+        if (currentRootHash.isEmpty || currentRootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+          log.warn("State trie is empty, nothing to finalize")
+        } else {
+          log.info("State trie has content, proceeding with finalization")
+        }
+      }
+      
+      // Flush all pending writes to disk outside synchronized block to avoid deadlock
+      // Note: The trie nodes have already been written to storage through put() operations
+      // which call updateNodesInStorage(). This persist() ensures they are flushed to disk.
+      mptStorage.persist()
+      log.info("Flushed all trie nodes to disk")
+      
+      log.info("State trie finalization complete")
+      Right(())
+    } catch {
+      case e: Exception =>
+        log.error(s"Failed to finalize trie: ${e.getMessage}", e)
+        Left(s"Trie finalization error: ${e.getMessage}")
+    }
 }
 
 object AccountRangeDownloader {
