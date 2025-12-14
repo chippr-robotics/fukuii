@@ -136,7 +136,22 @@ class SNAPSyncController(
               log.info("Account range sync complete!")
               accountRangeRequestTask.foreach(_.cancel())
               accountRangeRequestTask = None
-              self ! AccountRangeSyncComplete
+              
+              // Finalize the trie to ensure all nodes including root are persisted
+              log.info("Finalizing state trie before proceeding to bytecode sync...")
+              downloader.finalizeTrie() match {
+                case Right(_) =>
+                  log.info("State trie finalized successfully")
+                  self ! AccountRangeSyncComplete
+                case Left(error) =>
+                  log.error(s"Failed to finalize state trie: $error")
+                  if (recordCriticalFailure(s"Trie finalization failed: $error")) {
+                    fallbackToFastSync()
+                  } else {
+                    // Retry by continuing anyway
+                    self ! AccountRangeSyncComplete
+                  }
+              }
             }
 
           case Left(error) =>
@@ -794,6 +809,19 @@ class SNAPSyncController(
               s"✅ State root verification PASSED: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}"
             )
 
+            // Before proceeding with validation, ensure the trie is finalized
+            log.info("Ensuring trie is fully persisted before validation...")
+            downloader.finalizeTrie() match {
+              case Left(error) =>
+                log.error(s"Failed to finalize trie before validation: $error")
+                log.error("Attempting to recover through healing phase")
+                currentPhase = StateHealing
+                startStateHealing()
+                return
+              case Right(_) =>
+                log.info("Trie finalization confirmed before validation")
+            }
+
             // Proceed with full trie validation
             val validator = new StateValidator(mptStorage)
 
@@ -829,9 +857,31 @@ class SNAPSyncController(
 
               case Left(error) =>
                 log.error(s"Account trie validation failed: $error")
-                log.error("Attempting to recover through healing phase")
-                currentPhase = StateHealing
-                startStateHealing()
+                
+                // Check if this is a root node missing error after finalization
+                if (error.contains("Missing root node")) {
+                  log.error("Root node is missing even after finalization - this indicates a serious issue")
+                  log.error("Attempting final recovery by re-finalizing the trie...")
+                  
+                  // Try one more finalization
+                  downloader.finalizeTrie() match {
+                    case Right(_) =>
+                      log.info("Re-finalization successful, retrying validation...")
+                      // Retry validation by transitioning to healing and back
+                      currentPhase = StateHealing
+                      startStateHealing()
+                    case Left(finalizeError) =>
+                      log.error(s"Re-finalization failed: $finalizeError")
+                      log.error("Cannot proceed with validation - falling back to fast sync")
+                      if (recordCriticalFailure("Root node persistence failure")) {
+                        fallbackToFastSync()
+                      }
+                  }
+                } else {
+                  log.error("Attempting to recover through healing phase")
+                  currentPhase = StateHealing
+                  startStateHealing()
+                }
             }
           } else {
             // CRITICAL: State root mismatch - block sync completion

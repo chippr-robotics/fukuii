@@ -374,6 +374,49 @@ class AccountRangeDownloader(
   def getContractAccountCount: Int = synchronized {
     contractAccounts.size
   }
+
+  /** Finalize the trie and ensure all nodes including the root are persisted to storage.
+    *
+    * This method should be called after all account ranges have been downloaded and before state validation begins. It
+    * ensures that the complete trie structure, including the root node, is persisted to storage.
+    *
+    * @return
+    *   Either error message or success
+    */
+  def finalizeTrie(): Either[String, Unit] =
+    try {
+      synchronized {
+        log.info("Finalizing state trie and persisting all nodes...")
+        
+        // Get the current root hash
+        val currentRootHash = ByteString(stateTrie.getRootHash)
+        log.info(s"Current state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
+        
+        // Force a re-persist of the current trie state
+        // This ensures all nodes including the root are in storage
+        stateTrie.rootNode match {
+          case Some(rootNode) =>
+            // Use the storage's updateNodesInStorage to persist the current root
+            val persistedRoot = mptStorage.updateNodesInStorage(Some(rootNode), Nil)
+            log.info(s"Persisted root node to storage")
+            
+          case None =>
+            log.warn("No root node to persist (empty trie)")
+        }
+      }
+      
+      // Persist to disk outside synchronized block
+      mptStorage.synchronized {
+        mptStorage.persist()
+      }
+      
+      log.info("State trie finalization complete")
+      Right(())
+    } catch {
+      case e: Exception =>
+        log.error(s"Failed to finalize trie: ${e.getMessage}", e)
+        Left(s"Trie finalization error: ${e.getMessage}")
+    }
 }
 
 object AccountRangeDownloader {
