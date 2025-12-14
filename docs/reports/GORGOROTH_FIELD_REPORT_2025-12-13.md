@@ -480,4 +480,4 @@ The Gorgoroth 6-node mixed-client trial (2025-12-13) successfully validated **Fu
 - [EIP-1559: Fee Market Change](https://eips.ethereum.org/EIPS/eip-1559)
 - [EIP-4844: Shard Blob Transactions](https://eips.ethereum.org/EIPS/eip-4844)
 - [Fukuii Node Configuration Guide](../runbooks/node-configuration.md)
-- [Gorgoroth Trial Walkthrough](../testing/gorgoroth-walkthrough.md)
+- [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)

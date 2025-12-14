@@ -325,7 +325,7 @@ The high test pass rate (99.90%) suggests Fukuii's peer blacklisting logic is fu
 
 - [Gorgoroth Field Report 2025-12-13](./GORGOROTH_FIELD_REPORT_2025-12-13.md)
 - CI Build: GitHub Actions Run #20186277208 (logs archived internally)
-- [RegularSyncSpec Source](../../src/test/scala/com/chipprbots/ethereum/blockchain/sync/regular/RegularSyncSpec.scala)
+- RegularSyncSpec Source: `src/test/scala/com/chipprbots/ethereum/blockchain/sync/regular/RegularSyncSpec.scala`
 - [Pekko TestKit Documentation](https://pekko.apache.org/docs/pekko/current/testing.html)
 
 **Note**: Original CI build logs were retrieved from a temporary Azure blob storage URL. Key excerpts have been preserved in this document for historical reference.
