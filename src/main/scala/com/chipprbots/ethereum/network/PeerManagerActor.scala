@@ -141,11 +141,29 @@ class PeerManagerActor(
   private def maybeConnectToRandomNode(connectedPeers: ConnectedPeers, node: Node): Unit =
     if (connectedPeers.outgoingConnectionDemand > 0) {
       if (connectedPeers.canConnectTo(node)) {
+        log.debug(
+          "Random node candidate {} accepted (outgoing demand: {}, tried: {}, pending: {})",
+          formatNodeForLogs(node),
+          connectedPeers.outgoingConnectionDemand,
+          triedNodes.size,
+          connectedPeers.pendingPeersCount
+        )
         triedNodes.add(node.id)
         self ! ConnectToPeer(node.toUri)
       } else {
+        log.debug(
+          "Random node candidate {} rejected (already connected or blacklisted). Requesting replacement",
+          formatNodeForLogs(node)
+        )
         peerDiscoveryManager ! PeerDiscoveryManager.GetRandomNodeInfo
       }
+    } else {
+      log.debug(
+        "Skipping random node {} because outgoing demand is zero (handshaked {}/{})",
+        formatNodeForLogs(node),
+        connectedPeers.handshakedPeersCount,
+        peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers
+      )
     }
 
   private def maybeConnectToDiscoveredNodes(connectedPeers: ConnectedPeers, nodes: Set[Node]): Unit = {
@@ -189,6 +207,11 @@ class PeerManagerActor(
     if (connectedPeers.outgoingConnectionDemand > nodesToConnect.size) {
       peerDiscoveryManager ! PeerDiscoveryManager.GetRandomNodeInfo
     }
+  }
+
+  private def formatNodeForLogs(node: Node): String = {
+    val id = Hex.toHexString(node.id.take(6).toArray)
+    s"${node.addr.getHostAddress}:${node.tcpPort}/$id"
   }
 
   private def handleConnections(connectedPeers: ConnectedPeers): Receive = {

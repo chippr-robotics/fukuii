@@ -113,7 +113,7 @@
     <!-- EXTERNAL LIBRARIES                                                  -->
     <!-- =================================================================== -->
     <!-- Reduce noise from third-party libraries -->
-    <logger name="io.netty" level="WARN"/>
+    <logger name="io.netty" level="INFO"/>
     <logger name="org.jupnp.QueueingThreadPoolExecutor" level="WARN" />
     <logger name="org.jupnp.util.SpecificationViolationReporter" level="ERROR" />
     <logger name="org.jupnp.protocol.RetrieveRemoteDescriptors" level="ERROR" />
@@ -141,10 +141,10 @@
     <!-- NETWORK - Peer connections and communication (DEBUG FOR TESTBED)    -->
     <!-- Focus on peer handshake and capability exchange                      -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.network" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.PeerActor" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.ServerActor" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="INFO" />
     
@@ -163,10 +163,10 @@
     <!-- =================================================================== -->
     <!-- RLPX - Encrypted transport protocol (DEBUG FOR TESTBED)             -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.network.rlpx" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="DEBUG" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.network.rlpx" level="TRACE" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="TRACE" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="TRACE" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="TRACE" />
     <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="DEBUG" />
     
     <!-- =================================================================== -->
