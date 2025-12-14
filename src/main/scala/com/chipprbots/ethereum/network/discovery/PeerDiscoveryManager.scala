@@ -16,6 +16,8 @@ import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
 
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
 import com.chipprbots.scalanet.discovery.ethereum.v4
 import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
@@ -245,9 +247,8 @@ class PeerDiscoveryManager(
     node.id == localNodeId
 
   private def formatNodeForLogs(node: Node): String = {
-    val id = node.id.take(6).toArray
-    val hex = id.map("%02x".format(_)).mkString
-    s"${node.addr.getHostAddress}:${node.tcpPort}/$hex"
+    val id = Hex.toHexString(node.id.take(6).toArray)
+    s"${node.addr.getHostAddress}:${node.tcpPort}/$id"
   }
 
   def randomNodeId: ENode.Id = {
