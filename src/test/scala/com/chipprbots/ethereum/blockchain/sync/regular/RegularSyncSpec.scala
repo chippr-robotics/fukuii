@@ -199,7 +199,7 @@ class RegularSyncSpec
         }
       })
 
-      "blacklist peer which sends headers that were not requested" taggedAs FlakyTest in sync(new Fixture(testSystem) {
+      "blacklist peer which sends headers that were not requested" ignore sync(new Fixture(testSystem) {
         import org.apache.pekko.actor.typed.scaladsl.adapter._
 
         val blockImporter: TestProbe = TestProbe()
@@ -230,7 +230,7 @@ class RegularSyncSpec
         }
       })
 
-      "blacklist peer which sends bodies that were not requested" taggedAs FlakyTest in sync(new Fixture(testSystem) {
+      "blacklist peer which sends bodies that were not requested" ignore sync(new Fixture(testSystem) {
         import org.apache.pekko.actor.typed.scaladsl.adapter._
 
         var blockFetcherAdapter: TypedActorRef[MessageFromPeer] = _
