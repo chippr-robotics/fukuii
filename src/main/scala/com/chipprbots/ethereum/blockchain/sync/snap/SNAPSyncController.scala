@@ -511,12 +511,10 @@ class SNAPSyncController(
     val networkBestBlockOpt = getPeerWithHighestBlock.map(_.peerInfo.maxBlockNumber)
     
     // Core-geth approach: Calculate pivot from network height
-    // If height <= fsMinFullBlocks (64), start from genesis (origin = 0)
-    // Otherwise, pivot = networkHeight - fsMinFullBlocks + 1
+    // pivot = networkHeight - pivotBlockOffset (e.g., 23M - 64 = ~23M)
     val (baseBlockForPivot, pivotSelectionSource) = networkBestBlockOpt match {
       case Some(networkBestBlock) =>
-        val isNetworkSignificantlyAhead = networkBestBlock > localBestBlock + snapSyncConfig.pivotBlockOffset
-        if (!isNetworkSignificantlyAhead) {
+        if (networkBestBlock <= localBestBlock + snapSyncConfig.pivotBlockOffset) {
           log.warning(s"Network best block ($networkBestBlock) is not significantly ahead of local ($localBestBlock)")
           log.warning("This may indicate limited peer connectivity or already synced state")
         }
@@ -569,29 +567,11 @@ class SNAPSyncController(
       return
     }
 
-    if (pivotBlockNumber <= 0) {
-      // This shouldn't happen with the new logic, but keep as safety net
-      // Calculate how many blocks we need to bootstrap
-      val bootstrapTarget = snapSyncConfig.pivotBlockOffset + 1
-      val blocksNeeded = bootstrapTarget - localBestBlock
-      
-      log.info("=" * 80)
-      log.info("🚀 SNAP Sync Initialization")
-      log.info("=" * 80)
-      log.info(s"Current blockchain state: $localBestBlock blocks")
-      log.info(s"SNAP sync requires at least $bootstrapTarget blocks to begin")
-      log.info(s"System will gather $blocksNeeded initial blocks via regular sync")
-      log.info(s"Once complete, node will automatically transition to SNAP sync mode")
-      log.info("=" * 80)
-      log.info(s"⏳ Gathering initial blocks... (target: $bootstrapTarget)")
-      
-      // Store bootstrap target for persistence and potential restart recovery
-      appStateStorage.putSnapSyncBootstrapTarget(bootstrapTarget).commit()
-      
-      // Request parent to start regular sync bootstrap
-      context.parent ! StartRegularSyncBootstrap(bootstrapTarget)
-      context.become(bootstrapping)
-    } else if (pivotBlockNumber <= localBestBlock) {
+    // With network-based pivot and 64-block offset, pivotBlockNumber should always be > 0
+    // The genesis special case (above) handles when baseBlockForPivot <= 64
+    // This remaining code handles the normal case where we have a valid pivot > localBestBlock
+    
+    if (pivotBlockNumber <= localBestBlock) {
       // Sanity check: pivot must be ahead of local state
       log.warning("=" * 80)
       log.warning("⚠️  SNAP Sync Pivot Issue Detected")
