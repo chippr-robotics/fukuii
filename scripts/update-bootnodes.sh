@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Update ETC bootnodes in the configuration file
-# This script fetches active bootnodes from DNS discovery and updates the configuration
-# to maintain 20 active bootnodes at all times.
+# This script fetches active bootnodes from authoritative sources (core-geth, Besu)
+# and updates the configuration to maintain 20 active bootnodes at all times.
 #
 
 set -euo pipefail
@@ -79,7 +79,8 @@ extract_current_bootnodes() {
     log_info "Extracting current bootnodes from ${CONFIG_FILE}..."
     
     # Extract enodes from the bootstrap-nodes array
-    grep -A 100 'bootstrap-nodes = \[' "${CONFIG_FILE}" | \
+    # Use awk to find start and end of the array reliably
+    awk '/bootstrap-nodes = \[/,/^\s*\]/' "${CONFIG_FILE}" | \
         grep 'enode://' | \
         grep -o 'enode://[^"]*' | \
         sort -u > "${TEMP_DIR}/current_bootnodes.txt"
@@ -93,9 +94,10 @@ validate_enode() {
     local enode="$1"
     
     # Basic validation: should start with enode:// and have @ and :
-    if [[ "$enode" =~ ^enode://[a-f0-9]{128}@[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+ ]]; then
+    # Node IDs are 128 hex characters (can be lowercase or uppercase)
+    if [[ "$enode" =~ ^enode://[a-fA-F0-9]{128}@[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+ ]]; then
         return 0
-    elif [[ "$enode" =~ ^enode://[a-f0-9]{128}@[^:]+:[0-9]+(\?discport=[0-9]+)?$ ]]; then
+    elif [[ "$enode" =~ ^enode://[a-fA-F0-9]{128}@[^:]+:[0-9]+(\?discport=[0-9]+)?$ ]]; then
         return 0
     else
         return 1
@@ -219,15 +221,13 @@ update_config_file() {
     log_info "Created backup: ${backup_file}"
     
     # Create new bootnode section
-    cat > "${TEMP_DIR}/new_bootnodes.conf" <<'EOF'
+    cat > "${TEMP_DIR}/new_bootnodes.conf" <<EOF
   # Set of initial nodes
   # Updated automatically by scripts/update-bootnodes.sh on nightly schedule
-  # Last updated: 
+  # Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+  # Combined from core-geth and other authoritative sources
+  bootstrap-nodes = [
 EOF
-    
-    echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "${TEMP_DIR}/new_bootnodes.conf"
-    echo "  # Combined from core-geth and other authoritative sources" >> "${TEMP_DIR}/new_bootnodes.conf"
-    echo "  bootstrap-nodes = [" >> "${TEMP_DIR}/new_bootnodes.conf"
     
     # Read selected bootnodes and format them
     local first=true

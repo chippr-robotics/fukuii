@@ -227,6 +227,12 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
       
+      - name: Set date variables
+        id: date
+        run: |
+          echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          echo "datetime=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+      
       - name: Update bootnodes
         run: |
           echo "=== Updating ETC Bootnodes ==="
@@ -249,7 +255,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: update ETC bootnodes from authoritative sources"
-          title: "[Automated] Update ETC Bootnodes - $(date +%Y-%m-%d)"
+          title: "[Automated] Update ETC Bootnodes - ${{ steps.date.outputs.date }}"
           body: |
             ## Automated Bootnode Update
             
@@ -267,7 +273,7 @@ jobs:
             3. Removes inactive or unauthorized bootnodes
             4. Ensures exactly 20 active bootnodes with standard port (30303)
             
-            **Generated**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            **Generated**: ${{ steps.date.outputs.datetime }}
             **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           branch: automated/update-bootnodes-${{ github.run_number }}
           delete-branch: true
