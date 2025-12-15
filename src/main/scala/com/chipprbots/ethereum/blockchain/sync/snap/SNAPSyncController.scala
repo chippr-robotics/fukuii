@@ -46,16 +46,20 @@ class SNAPSyncController(
     circuitBreakerThreshold = 10
   )
 
-  private var accountRangeDownloader: Option[AccountRangeDownloader] = None
-  private var bytecodeDownloader: Option[ByteCodeDownloader] = None
-  private var storageRangeDownloader: Option[StorageRangeDownloader] = None
-  private var trieNodeHealer: Option[TrieNodeHealer] = None
+  // Actor-based coordinators
+  private var accountRangeCoordinator: Option[ActorRef] = None
+  private var bytecodeCoordinator: Option[ActorRef] = None
+  private var storageRangeCoordinator: Option[ActorRef] = None
+  private var trieNodeHealingCoordinator: Option[ActorRef] = None
 
   private val requestTracker = new SNAPRequestTracker()(scheduler)
 
   private var currentPhase: SyncPhase = Idle
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[ByteString] = None
+
+  // Contract accounts collected for bytecode download
+  private var contractAccounts = Seq.empty[(ByteString, ByteString)]
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -131,262 +135,56 @@ class SNAPSyncController(
     case msg: AccountRange =>
       log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
 
-      val taskId = s"account_range_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
-
-      accountRangeDownloader.foreach { downloader =>
-        downloader.handleResponse(msg) match {
-          case Right(count) =>
-            log.info(s"Successfully processed $count accounts from peer $peerId")
-            progressMonitor.incrementAccountsSynced(count)
-            errorHandler.resetRetries(taskId)
-            errorHandler.recordPeerSuccess(peerId)
-            errorHandler.recordCircuitBreakerSuccess("account_range_download")
-
-            // Check if account range sync is complete
-            if (downloader.isComplete) {
-              log.info("Account range sync complete!")
-              accountRangeRequestTask.foreach(_.cancel())
-              accountRangeRequestTask = None
-              
-              // Finalize the trie to ensure all nodes including root are persisted
-              log.info("Finalizing state trie before proceeding to bytecode sync...")
-              downloader.finalizeTrie() match {
-                case Right(_) =>
-                  log.info("State trie finalized successfully")
-                  self ! AccountRangeSyncComplete
-                case Left(error) =>
-                  log.error(s"Failed to finalize state trie: $error")
-                  log.error("Trie finalization is critical for subsequent phases. Cannot proceed.")
-                  if (recordCriticalFailure(s"Trie finalization failed: $error")) {
-                    fallbackToFastSync()
-                  }
-                  // Do not send AccountRangeSyncComplete - sync cannot proceed without finalization
-              }
-            }
-
-          case Left(error) =>
-            val context = errorHandler.createErrorContext(
-              phase = "AccountRangeSync",
-              peerId = Some(peerId),
-              requestId = Some(msg.requestId),
-              taskId = Some(taskId)
-            )
-            log.warning(s"Failed to process AccountRange: $error ($context)")
-
-            // Determine error type and record appropriately
-            val errorType = if (error.contains("proof")) {
-              SNAPErrorHandler.ErrorType.InvalidProof
-            } else if (error.contains("malformed") || error.contains("validation")) {
-              SNAPErrorHandler.ErrorType.MalformedResponse
-            } else if (error.contains("storage")) {
-              SNAPErrorHandler.ErrorType.StorageError
-            } else {
-              SNAPErrorHandler.ErrorType.ProcessingError
-            }
-
-            errorHandler.recordPeerFailure(peerId, errorType, error)
-            errorHandler.recordRetry(taskId, error)
-            errorHandler.recordCircuitBreakerFailure("account_range_download")
-
-            // Check if circuit breaker is open and fallback if needed
-            if (!checkCircuitBreakerAndTriggerFallback("account_range_download", error)) {
-              // Only proceed with blacklisting if fallback wasn't triggered
-              // Check if peer should be blacklisted
-              if (errorHandler.shouldBlacklistPeer(peerId)) {
-                log.error(s"Blacklisting peer $peerId due to repeated failures")
-                blacklist.add(
-                  PeerId(peerId),
-                  syncConfig.blacklistDuration,
-                  InvalidStateResponse("SNAP sync repeated failures")
-                )
-              }
-            }
-        }
+      // Actor-based: forward message to all account range workers
+      // The workers will check if the requestId matches their current task
+      context.children.foreach { child =>
+        child ! actors.Messages.AccountRangeResponseMsg(msg)
       }
 
     case msg: ByteCodes =>
       log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
 
-      val taskId = s"bytecode_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
-
-      bytecodeDownloader.foreach { downloader =>
-        downloader.handleResponse(msg) match {
-          case Right(count) =>
-            log.info(s"Successfully processed $count bytecodes from peer $peerId")
-            progressMonitor.incrementBytecodesDownloaded(count)
-            errorHandler.resetRetries(taskId)
-            errorHandler.recordPeerSuccess(peerId)
-            errorHandler.recordCircuitBreakerSuccess("bytecode_download")
-
-            // Check if bytecode sync is complete
-            if (downloader.isComplete) {
-              log.info("ByteCode sync complete!")
-              bytecodeRequestTask.foreach(_.cancel())
-              bytecodeRequestTask = None
-              self ! ByteCodeSyncComplete
-            }
-
-          case Left(error) =>
-            val context = errorHandler.createErrorContext(
-              phase = "ByteCodeSync",
-              peerId = Some(peerId),
-              requestId = Some(msg.requestId),
-              taskId = Some(taskId)
-            )
-            log.warning(s"Failed to process ByteCodes: $error ($context)")
-
-            val errorType = if (error.contains("hash")) {
-              SNAPErrorHandler.ErrorType.HashMismatch
-            } else if (error.contains("storage")) {
-              SNAPErrorHandler.ErrorType.StorageError
-            } else {
-              SNAPErrorHandler.ErrorType.ProcessingError
-            }
-
-            errorHandler.recordPeerFailure(peerId, errorType, error)
-            errorHandler.recordRetry(taskId, error)
-            errorHandler.recordCircuitBreakerFailure("bytecode_download")
-
-            // Check if circuit breaker is open and fallback if needed
-            if (!checkCircuitBreakerAndTriggerFallback("bytecode_download", error)) {
-              // Only proceed with blacklisting if fallback wasn't triggered
-              if (errorHandler.shouldBlacklistPeer(peerId)) {
-                log.error(s"Blacklisting peer $peerId due to repeated failures")
-                blacklist.add(
-                  PeerId(peerId),
-                  syncConfig.blacklistDuration,
-                  InvalidStateResponse("SNAP sync repeated failures")
-                )
-              }
-            }
-        }
+      // Forward message to all bytecode workers
+      context.children.foreach { child =>
+        child ! actors.Messages.ByteCodesResponseMsg(msg)
       }
 
     case msg: StorageRanges =>
       log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
 
-      val taskId = s"storage_range_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
-
-      storageRangeDownloader.foreach { downloader =>
-        downloader.handleResponse(msg) match {
-          case Right(count) =>
-            log.info(s"Successfully processed $count storage slots from peer $peerId")
-            progressMonitor.incrementStorageSlotsSynced(count)
-            errorHandler.resetRetries(taskId)
-            errorHandler.recordPeerSuccess(peerId)
-            errorHandler.recordCircuitBreakerSuccess("storage_range_download")
-
-            // Check if storage range sync is complete
-            if (downloader.isComplete) {
-              log.info("Storage range sync complete!")
-              storageRangeRequestTask.foreach(_.cancel())
-              storageRangeRequestTask = None
-              self ! StorageRangeSyncComplete
-            }
-
-          case Left(error) =>
-            val context = errorHandler.createErrorContext(
-              phase = "StorageRangeSync",
-              peerId = Some(peerId),
-              requestId = Some(msg.requestId),
-              taskId = Some(taskId)
-            )
-            log.warning(s"Failed to process StorageRanges: $error ($context)")
-
-            val errorType = if (error.contains("proof")) {
-              SNAPErrorHandler.ErrorType.InvalidProof
-            } else if (error.contains("storage")) {
-              SNAPErrorHandler.ErrorType.StorageError
-            } else {
-              SNAPErrorHandler.ErrorType.ProcessingError
-            }
-
-            errorHandler.recordPeerFailure(peerId, errorType, error)
-            errorHandler.recordRetry(taskId, error)
-            errorHandler.recordCircuitBreakerFailure("storage_range_download")
-
-            // Check if circuit breaker is open and fallback if needed
-            if (!checkCircuitBreakerAndTriggerFallback("storage_range_download", error)) {
-              // Only proceed with blacklisting if fallback wasn't triggered
-              if (errorHandler.shouldBlacklistPeer(peerId)) {
-                log.error(s"Blacklisting peer $peerId due to repeated failures")
-                blacklist.add(
-                  PeerId(peerId),
-                  syncConfig.blacklistDuration,
-                  InvalidStateResponse("SNAP sync repeated failures")
-                )
-              }
-            }
-        }
+      // Actor-based: forward message to all storage workers
+      context.children.foreach { child =>
+        child ! actors.Messages.StorageRangesResponseMsg(msg)
       }
 
     case msg: TrieNodes =>
       log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
 
-      val taskId = s"trie_nodes_${msg.requestId}"
-      val peerId = requestTracker.getPendingRequest(msg.requestId).map(_.peer.id.value).getOrElse("unknown")
-
-      trieNodeHealer.foreach { healer =>
-        healer.handleResponse(msg) match {
-          case Right(count) =>
-            log.info(s"Successfully healed $count trie nodes from peer $peerId")
-            progressMonitor.incrementNodesHealed(count)
-            errorHandler.resetRetries(taskId)
-            errorHandler.recordPeerSuccess(peerId)
-            errorHandler.recordCircuitBreakerSuccess("trie_node_healing")
-
-            // Check if healing is complete
-            if (healer.isComplete) {
-              log.info("State healing complete!")
-              healingRequestTask.foreach(_.cancel())
-              healingRequestTask = None
-              self ! StateHealingComplete
-            }
-
-          case Left(error) =>
-            val context = errorHandler.createErrorContext(
-              phase = "StateHealing",
-              peerId = Some(peerId),
-              requestId = Some(msg.requestId),
-              taskId = Some(taskId)
-            )
-            log.warning(s"Failed to process TrieNodes: $error ($context)")
-
-            val errorType = if (error.contains("hash")) {
-              SNAPErrorHandler.ErrorType.HashMismatch
-            } else if (error.contains("storage")) {
-              SNAPErrorHandler.ErrorType.StorageError
-            } else {
-              SNAPErrorHandler.ErrorType.ProcessingError
-            }
-
-            errorHandler.recordPeerFailure(peerId, errorType, error)
-            errorHandler.recordRetry(taskId, error)
-            errorHandler.recordCircuitBreakerFailure("trie_node_healing")
-
-            // Check if circuit breaker is open and fallback if needed
-            if (!checkCircuitBreakerAndTriggerFallback("trie_node_healing", error)) {
-              // Only proceed with blacklisting if fallback wasn't triggered
-              if (errorHandler.shouldBlacklistPeer(peerId)) {
-                log.error(s"Blacklisting peer $peerId due to repeated failures")
-                blacklist.add(
-                  PeerId(peerId),
-                  syncConfig.blacklistDuration,
-                  InvalidStateResponse("SNAP sync repeated failures")
-                )
-              }
-            }
-        }
+      // Forward message to all healing workers
+      context.children.foreach { child =>
+        child ! actors.Messages.TrieNodesResponseMsg(msg)
       }
 
     case AccountRangeSyncComplete =>
       log.info("Account range sync complete. Starting bytecode sync...")
-      progressMonitor.startPhase(ByteCodeSync)
-      currentPhase = ByteCodeSync
-      startBytecodeSync()
+      
+      // Query the coordinator for contract accounts
+      import org.apache.pekko.pattern.ask
+      import org.apache.pekko.util.Timeout
+      import scala.concurrent.duration._
+      implicit val timeout: Timeout = Timeout(5.seconds)
+      
+      accountRangeCoordinator.foreach { coordinator =>
+        import context.dispatcher
+        (coordinator ? actors.Messages.GetContractAccounts).mapTo[actors.Messages.ContractAccountsResponse].foreach { response =>
+          contractAccounts = response.accounts
+          log.info(s"Collected ${contractAccounts.size} contract accounts for bytecode sync from coordinator")
+          // Proceed with bytecode sync
+          progressMonitor.startPhase(ByteCodeSync)
+          currentPhase = ByteCodeSync
+          startBytecodeSync()
+        }
+      }
 
     case ByteCodeSyncComplete =>
       log.info("ByteCode sync complete. Starting storage range sync...")
@@ -814,12 +612,6 @@ class SNAPSyncController(
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
 
-    // Clear downloaders
-    accountRangeDownloader = None
-    bytecodeDownloader = None
-    storageRangeDownloader = None
-    trieNodeHealer = None
-
     // Stop progress monitoring
     progressMonitor.stopPeriodicLogging()
 
@@ -830,20 +622,26 @@ class SNAPSyncController(
 
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
     log.info(s"Starting account range sync with concurrency ${snapSyncConfig.accountConcurrency}")
-
-    accountRangeDownloader = Some(
-      new AccountRangeDownloader(
-        stateRoot = rootHash,
-        networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker,
-        mptStorage = mptStorage,
-        concurrency = snapSyncConfig.accountConcurrency
+    log.info("Using actor-based concurrency for account range sync")
+    
+    accountRangeCoordinator = Some(
+      context.actorOf(
+        actors.AccountRangeCoordinator.props(
+          stateRoot = rootHash,
+          networkPeerManager = networkPeerManager,
+          requestTracker = requestTracker,
+          mptStorage = mptStorage,
+          concurrency = snapSyncConfig.accountConcurrency,
+          snapSyncController = self
+        ),
+        "account-range-coordinator"
       )
     )
-
-    progressMonitor.startPhase(AccountRangeSync)
-
-    // Start periodic task to request account ranges from peers
+    
+    // Start the coordinator
+    accountRangeCoordinator.foreach(_ ! actors.Messages.StartAccountRangeSync(rootHash))
+    
+    // Periodically send peer availability notifications
     accountRangeRequestTask = Some(
       scheduler.scheduleWithFixedDelay(
         0.seconds,
@@ -852,45 +650,35 @@ class SNAPSyncController(
         RequestAccountRanges
       )(ec)
     )
+
+    progressMonitor.startPhase(AccountRangeSync)
   }
 
   // Internal message for periodic account range requests
   private case object RequestAccountRanges
 
-  private def requestAccountRanges(): Unit =
-    accountRangeDownloader.foreach { downloader =>
-      // Get SNAP-capable peers
+  private def requestAccountRanges(): Unit = {
+    // Notify coordinator of available peers
+    accountRangeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
 
-      // Update metrics - SNAP-capable peer count
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
       if (snapPeers.isEmpty) {
         log.debug("No SNAP-capable peers available for account range requests")
       } else {
-        log.debug(s"Requesting account ranges from ${snapPeers.size} SNAP peers")
-
-        // Request from each available peer
         snapPeers.foreach { peer =>
-          downloader.requestNextRange(peer) match {
-            case Some(requestId) =>
-              SNAPSyncMetrics.incrementAccountRangeRequests()
-              log.debug(s"Sent account range request $requestId to peer ${peer.id}")
-            case None =>
-              log.debug(s"No more account ranges to request")
-          }
+          coordinator ! actors.Messages.PeerAvailable(peer)
         }
       }
     }
+  }
 
   private def startBytecodeSync(): Unit = {
     log.info(s"Starting bytecode sync with batch size ${ByteCodeTask.DEFAULT_BATCH_SIZE}")
-
-    // Get contract accounts from account range downloader
-    val contractAccounts = accountRangeDownloader.map(_.getContractAccounts).getOrElse(Seq.empty)
 
     if (contractAccounts.isEmpty) {
       log.info("No contract accounts found, skipping bytecode sync")
@@ -899,22 +687,25 @@ class SNAPSyncController(
     }
 
     log.info(s"Found ${contractAccounts.size} contract accounts for bytecode download")
-
-    bytecodeDownloader = Some(
-      new ByteCodeDownloader(
-        evmCodeStorage = evmCodeStorage,
-        networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker,
-        batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE
-      )(scheduler)
+    log.info("Using actor-based concurrency for bytecode sync")
+    
+    bytecodeCoordinator = Some(
+      context.actorOf(
+        actors.ByteCodeCoordinator.props(
+          evmCodeStorage = evmCodeStorage,
+          networkPeerManager = networkPeerManager,
+          requestTracker = requestTracker,
+          batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
+          snapSyncController = self
+        ),
+        "bytecode-coordinator"
+      )
     )
-
-    // Queue contract accounts for download
-    bytecodeDownloader.foreach(_.queueContracts(contractAccounts))
-
-    progressMonitor.startPhase(ByteCodeSync)
-
-    // Start periodic task to request bytecodes from peers
+    
+    // Start the coordinator with contract accounts
+    bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(contractAccounts))
+    
+    // Periodically send peer availability notifications
     bytecodeRequestTask = Some(
       scheduler.scheduleWithFixedDelay(
         0.seconds,
@@ -923,14 +714,16 @@ class SNAPSyncController(
         RequestByteCodes
       )(ec)
     )
+
+    progressMonitor.startPhase(ByteCodeSync)
   }
 
   // Internal message for periodic bytecode requests
   private case object RequestByteCodes
 
-  private def requestByteCodes(): Unit =
-    bytecodeDownloader.foreach { downloader =>
-      // Get SNAP-capable peers
+  private def requestByteCodes(): Unit = {
+    // Notify coordinator of available peers
+    bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
@@ -939,49 +732,37 @@ class SNAPSyncController(
       if (snapPeers.isEmpty) {
         log.debug("No SNAP-capable peers available for bytecode requests")
       } else {
-        log.debug(s"Requesting bytecodes from ${snapPeers.size} SNAP peers")
-
-        // Request from each available peer
         snapPeers.foreach { peer =>
-          downloader.requestNextBatch(peer) match {
-            case Some(requestId) =>
-              log.debug(s"Sent bytecode request $requestId to peer ${peer.id}")
-            case None =>
-              log.debug(s"No more bytecodes to request")
-          }
+          coordinator ! actors.Messages.ByteCodePeerAvailable(peer)
         }
       }
-
-      // If no tasks and downloader is complete, trigger completion immediately
-      if (downloader.isComplete) {
-        log.info("ByteCode sync complete (no more bytecodes)")
-        bytecodeRequestTask.foreach(_.cancel())
-        bytecodeRequestTask = None
-        self ! ByteCodeSyncComplete
-      }
     }
+  }
 
   private def startStorageRangeSync(): Unit = {
     log.info(s"Starting storage range sync with concurrency ${snapSyncConfig.storageConcurrency}")
 
     stateRoot.foreach { root =>
-      storageRangeDownloader = Some(
-        new StorageRangeDownloader(
-          stateRoot = root,
-          networkPeerManager = networkPeerManager,
-          requestTracker = requestTracker,
-          mptStorage = mptStorage,
-          maxAccountsPerBatch = snapSyncConfig.storageBatchSize
+      log.info("Using actor-based concurrency for storage range sync")
+      
+      storageRangeCoordinator = Some(
+        context.actorOf(
+          actors.StorageRangeCoordinator.props(
+            stateRoot = root,
+            networkPeerManager = networkPeerManager,
+            requestTracker = requestTracker,
+            mptStorage = mptStorage,
+            maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+            snapSyncController = self
+          ),
+          "storage-range-coordinator"
         )
       )
-
-      progressMonitor.startPhase(StorageRangeSync)
-
-      // TODO: In a complete implementation, we would identify accounts with storage
-      // from the account range sync results and add them as tasks to the downloader.
-      // For now, we start the request loop which will complete immediately if no tasks.
-
-      // Start periodic task to request storage ranges from peers
+      
+      // Start the coordinator
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(root))
+      
+      // Periodically send peer availability notifications
       storageRangeRequestTask = Some(
         scheduler.scheduleWithFixedDelay(
           0.seconds,
@@ -990,15 +771,17 @@ class SNAPSyncController(
           RequestStorageRanges
         )(ec)
       )
+
+      progressMonitor.startPhase(StorageRangeSync)
     }
   }
 
   // Internal message for periodic storage range requests
   private case object RequestStorageRanges
 
-  private def requestStorageRanges(): Unit =
-    storageRangeDownloader.foreach { downloader =>
-      // Get SNAP-capable peers
+  private def requestStorageRanges(): Unit = {
+    // Notify coordinator of available peers
+    storageRangeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
@@ -1007,49 +790,37 @@ class SNAPSyncController(
       if (snapPeers.isEmpty) {
         log.debug("No SNAP-capable peers available for storage range requests")
       } else {
-        log.debug(s"Requesting storage ranges from ${snapPeers.size} SNAP peers")
-
-        // Request from each available peer
         snapPeers.foreach { peer =>
-          downloader.requestNextRanges(peer) match {
-            case Some(requestId) =>
-              log.debug(s"Sent storage range request $requestId to peer ${peer.id}")
-            case None =>
-              log.debug(s"No more storage ranges to request")
-          }
+          coordinator ! actors.Messages.StoragePeerAvailable(peer)
         }
       }
-
-      // If no tasks and downloader is complete, trigger completion immediately
-      if (downloader.isComplete) {
-        log.info("Storage range sync complete (no storage tasks)")
-        storageRangeRequestTask.foreach(_.cancel())
-        storageRangeRequestTask = None
-        self ! StorageRangeSyncComplete
-      }
     }
+  }
 
   private def startStateHealing(): Unit = {
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
     stateRoot.foreach { root =>
-      trieNodeHealer = Some(
-        new TrieNodeHealer(
-          stateRoot = root,
-          networkPeerManager = networkPeerManager,
-          requestTracker = requestTracker,
-          mptStorage = mptStorage,
-          batchSize = snapSyncConfig.healingBatchSize
+      log.info("Using actor-based concurrency for state healing")
+      
+      trieNodeHealingCoordinator = Some(
+        context.actorOf(
+          actors.TrieNodeHealingCoordinator.props(
+            stateRoot = root,
+            networkPeerManager = networkPeerManager,
+            requestTracker = requestTracker,
+            mptStorage = mptStorage,
+            batchSize = snapSyncConfig.healingBatchSize,
+            snapSyncController = self
+          ),
+          "trie-node-healing-coordinator"
         )
       )
-
-      progressMonitor.startPhase(StateHealing)
-
-      // TODO: In a complete implementation, we would detect missing nodes from
-      // account/storage sync and add them to the healer. For now, we start the
-      // request loop which will complete immediately if no missing nodes.
-
-      // Start periodic task to request trie node healing from peers
+      
+      // Start the coordinator
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.StartTrieNodeHealing(root))
+      
+      // Periodically send peer availability notifications
       healingRequestTask = Some(
         scheduler.scheduleWithFixedDelay(
           0.seconds,
@@ -1058,15 +829,17 @@ class SNAPSyncController(
           RequestTrieNodeHealing
         )(ec)
       )
+
+      progressMonitor.startPhase(StateHealing)
     }
   }
 
   // Internal message for periodic healing requests
   private case object RequestTrieNodeHealing
 
-  private def requestTrieNodeHealing(): Unit =
-    trieNodeHealer.foreach { healer =>
-      // Get SNAP-capable peers
+  private def requestTrieNodeHealing(): Unit = {
+    // Notify coordinator of available peers
+    trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
@@ -1075,27 +848,12 @@ class SNAPSyncController(
       if (snapPeers.isEmpty) {
         log.debug("No SNAP-capable peers available for healing requests")
       } else {
-        log.debug(s"Requesting trie node healing from ${snapPeers.size} SNAP peers")
-
-        // Request from each available peer
         snapPeers.foreach { peer =>
-          healer.requestNextBatch(peer) match {
-            case Some(requestId) =>
-              log.debug(s"Sent healing request $requestId to peer ${peer.id}")
-            case None =>
-              log.debug(s"No more nodes to heal")
-          }
+          coordinator ! actors.Messages.HealingPeerAvailable(peer)
         }
       }
-
-      // If no tasks and healer is complete, trigger completion immediately
-      if (healer.isComplete) {
-        log.info("State healing complete (no missing nodes)")
-        healingRequestTask.foreach(_.cancel())
-        healingRequestTask = None
-        self ! StateHealingComplete
-      }
     }
+  }
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
@@ -1108,125 +866,75 @@ class SNAPSyncController(
 
     (stateRoot, pivotBlock) match {
       case (Some(expectedRoot), Some(pivot)) =>
-        accountRangeDownloader.foreach { downloader =>
-          val computedRoot = downloader.getStateRoot
+        log.info(s"Validating state against expected root: ${expectedRoot.take(8).toHex}...")
+        
+        // With actor-based coordination, state is persisted directly to MPT storage
+        // No need for finalization - just validate what's in storage
+        val validator = new StateValidator(mptStorage)
 
-          if (computedRoot == expectedRoot) {
-            log.info(
-              s"✅ State root verification PASSED: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}"
-            )
+        // Validate account trie and collect missing nodes
+        validator.validateAccountTrie(expectedRoot) match {
+          case Right(missingAccountNodes) if missingAccountNodes.isEmpty =>
+            log.info("Account trie validation successful - no missing nodes")
+            
+            // Reset validation retry counter on success
+            validationRetryCount = 0
 
-            // Before proceeding with validation, ensure the trie is finalized
-            log.info("Ensuring trie is fully persisted before validation...")
-            downloader.finalizeTrie() match {
+            // Now validate storage tries
+            validator.validateAllStorageTries(expectedRoot) match {
+              case Right(missingStorageNodes) if missingStorageNodes.isEmpty =>
+                log.info("Storage trie validation successful - no missing nodes")
+                log.info("✅ State validation COMPLETE - all tries are intact")
+                self ! StateValidationComplete
+
+              case Right(missingStorageNodes) =>
+                log.warning(s"Storage trie validation found ${missingStorageNodes.size} missing nodes")
+                log.info("Triggering additional healing iteration for missing storage nodes...")
+                triggerHealingForMissingNodes(missingStorageNodes)
+
               case Left(error) =>
-                log.error(s"Failed to finalize trie before validation: $error")
+                log.error(s"Storage trie validation failed: $error")
                 log.error("Attempting to recover through healing phase")
+                // Transition back to healing to attempt recovery
                 currentPhase = StateHealing
                 startStateHealing()
-                return
-              case Right(_) =>
-                log.info("Trie finalization confirmed before validation")
             }
 
-            // Proceed with full trie validation
-            val validator = new StateValidator(mptStorage)
+          case Right(missingAccountNodes) =>
+            log.warning(s"Account trie validation found ${missingAccountNodes.size} missing nodes")
+            log.info("Triggering additional healing iteration for missing account nodes...")
+            triggerHealingForMissingNodes(missingAccountNodes)
 
-            // Validate account trie and collect missing nodes
-            validator.validateAccountTrie(expectedRoot) match {
-              case Right(missingAccountNodes) if missingAccountNodes.isEmpty =>
-                log.info("Account trie validation successful - no missing nodes")
-                
-                // Reset validation retry counter on success
-                validationRetryCount = 0
-
-                // Now validate storage tries
-                validator.validateAllStorageTries(expectedRoot) match {
-                  case Right(missingStorageNodes) if missingStorageNodes.isEmpty =>
-                    log.info("Storage trie validation successful - no missing nodes")
-                    log.info("✅ State validation COMPLETE - all tries are intact")
-                    self ! StateValidationComplete
-
-                  case Right(missingStorageNodes) =>
-                    log.warning(s"Storage trie validation found ${missingStorageNodes.size} missing nodes")
-                    log.info("Triggering additional healing iteration for missing storage nodes...")
-                    triggerHealingForMissingNodes(missingStorageNodes)
-
-                  case Left(error) =>
-                    log.error(s"Storage trie validation failed: $error")
-                    log.error("Attempting to recover through healing phase")
-                    // Transition back to healing to attempt recovery
-                    currentPhase = StateHealing
-                    startStateHealing()
+          case Left(error) =>
+            log.error(s"Account trie validation failed: $error")
+            
+            // Check if this is a root node missing error
+            if (error.contains("Missing root node")) {
+              validationRetryCount += 1
+              
+              if (validationRetryCount > MaxValidationRetries) {
+                log.error(s"Root node missing error persists (failed $validationRetryCount times total)")
+                log.error("Maximum validation retries exceeded - falling back to fast sync")
+                if (recordCriticalFailure("Root node persistence failure after retries")) {
+                  fallbackToFastSync()
                 }
-
-              case Right(missingAccountNodes) =>
-                log.warning(s"Account trie validation found ${missingAccountNodes.size} missing nodes")
-                log.info("Triggering additional healing iteration for missing account nodes...")
-                triggerHealingForMissingNodes(missingAccountNodes)
-
-              case Left(error) =>
-                log.error(s"Account trie validation failed: $error")
-                
-                // Check if this is a root node missing error after finalization
-                if (error.contains("Missing root node")) {
-                  validationRetryCount += 1
-                  
-                  if (validationRetryCount > MaxValidationRetries) {
-                    log.error(s"Root node missing error persists (failed $validationRetryCount times total)")
-                    log.error("Maximum validation retries exceeded - falling back to fast sync")
-                    if (recordCriticalFailure("Root node persistence failure after retries")) {
-                      fallbackToFastSync()
-                    }
-                  } else {
-                    log.error(s"Root node is missing even after finalization (retry attempt $validationRetryCount of $MaxValidationRetries)")
-                    log.error("Attempting recovery by re-finalizing the trie...")
-                    
-                    // Try one more finalization
-                    downloader.finalizeTrie() match {
-                      case Right(_) =>
-                        log.info(s"Re-finalization successful, retrying validation (retry attempt $validationRetryCount of $MaxValidationRetries)...")
-                        // Directly retry validation without going through the healing phase
-                        // (healing will find no missing nodes since we built the trie locally)
-                        scheduler.scheduleOnce(ValidationRetryDelay) {
-                          self ! StateHealingComplete
-                        }(ec)
-                      case Left(finalizeError) =>
-                        log.error(s"Re-finalization failed: $finalizeError")
-                        log.error("Cannot proceed with validation - falling back to fast sync")
-                        if (recordCriticalFailure("Root node persistence failure")) {
-                          fallbackToFastSync()
-                        }
-                    }
-                  }
-                } else {
-                  log.error("Attempting to recover through healing phase")
-                  currentPhase = StateHealing
-                  startStateHealing()
-                }
+              } else {
+                log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
+                log.info("Retrying validation after brief delay...")
+                // Retry validation after a short delay
+                scheduler.scheduleOnce(ValidationRetryDelay) {
+                  self ! StateHealingComplete
+                }(ec)
+              }
+            } else {
+              log.error("Attempting to recover through healing phase")
+              currentPhase = StateHealing
+              startStateHealing()
             }
-          } else {
-            // CRITICAL: State root mismatch - block sync completion
-            log.error(s"❌ CRITICAL: State root verification FAILED!")
-            log.error(s"  Expected: ${expectedRoot.take(8).toArray.map("%02x".format(_)).mkString}...")
-            log.error(s"  Computed: ${computedRoot.take(8).toArray.map("%02x".format(_)).mkString}...")
-            log.error(
-              s"  Sync cannot complete with mismatched state root - this indicates incomplete or corrupted state"
-            )
-
-            // DO NOT send StateValidationComplete - sync must not proceed
-            log.warning("State root mismatch detected - sync blocked until healing completes")
-
-            // Trigger healing to fix the mismatch
-            log.info("Transitioning back to healing phase to fix state root mismatch")
-            currentPhase = StateHealing
-            startStateHealing()
-          }
         }
 
       case _ =>
         log.error("Missing state root or pivot block for validation")
-        // Fail sync - we cannot proceed without validation
         log.error("Sync cannot complete - missing state root or pivot block")
     }
   }
@@ -1235,11 +943,11 @@ class SNAPSyncController(
   private def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = {
     log.info(s"Queueing ${missingNodes.size} missing nodes for healing")
 
-    // Add missing nodes to the healer, or log error if healer is not initialized
-    trieNodeHealer match {
-      case Some(healer) =>
-        // Use batch method for efficiency
-        healer.queueNodes(missingNodes)
+    // Add missing nodes to the healing coordinator
+    trieNodeHealingCoordinator match {
+      case Some(coordinator) =>
+        // Send missing nodes to coordinator for healing
+        coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
 
         // Transition back to healing phase
         currentPhase = StateHealing
@@ -1248,10 +956,19 @@ class SNAPSyncController(
         // Start healing requests
         scheduler.scheduleOnce(100.millis) {
           self ! RequestTrieNodeHealing
-        }
+        }(ec)
       case None =>
-        log.error("Cannot heal missing nodes - TrieNodeHealer not initialized")
-        log.error("Sync cannot complete - healing infrastructure unavailable")
+        log.error("Cannot heal missing nodes - TrieNodeHealingCoordinator not initialized")
+        log.info("Restarting healing phase to initialize coordinator")
+        currentPhase = StateHealing
+        startStateHealing()
+        
+        // After coordinator is started, queue the nodes
+        scheduler.scheduleOnce(500.millis) {
+          trieNodeHealingCoordinator.foreach { coordinator =>
+            coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+          }
+        }(ec)
     }
   }
 
