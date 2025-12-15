@@ -67,11 +67,17 @@ class SNAPSyncController(
   private val MaxValidationRetries = 3
   private val ValidationRetryDelay = 500.millis
 
+  // Retry counter for bootstrap-to-SNAP transition
+  private var bootstrapRetryCount: Int = 0
+  private val MaxBootstrapRetries = 10
+  private val BootstrapRetryDelay = 2.seconds
+
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
   private var storageRangeRequestTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
+  private var bootstrapCheckTask: Option[Cancellable] = None
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
@@ -84,6 +90,7 @@ class SNAPSyncController(
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
+    bootstrapCheckTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
     // Log final error handler statistics
@@ -417,7 +424,14 @@ class SNAPSyncController(
       // Clear bootstrap target from storage
       appStateStorage.clearSnapSyncBootstrapTarget().commit()
       
+      // Reset retry counter
+      bootstrapRetryCount = 0
+      
       // Now we have enough blocks - start SNAP sync properly
+      startSnapSync()
+    
+    case RetrySnapSyncStart =>
+      log.info("Retrying SNAP sync start after bootstrap delay")
       startSnapSync()
     
     case GetProgress =>
@@ -521,15 +535,36 @@ class SNAPSyncController(
 
           log.info(s"SNAP sync pivot block: $pivotBlockNumber, state root: ${header.stateRoot.toHex}")
 
+          // Reset bootstrap retry counter on success
+          bootstrapRetryCount = 0
+
           // Start account range sync
           currentPhase = AccountRangeSync
           startAccountRangeSync(header.stateRoot)
           context.become(syncing)
 
         case None =>
-          log.error(s"Cannot get header for pivot block $pivotBlockNumber")
-          log.info("Pivot block header not available - falling back to fast sync")
-          context.parent ! FallbackToFastSync
+          // Pivot block header not available - this can happen after bootstrap
+          // due to asynchronous block import
+          log.warning(s"Cannot get header for pivot block $pivotBlockNumber (attempt ${bootstrapRetryCount + 1}/$MaxBootstrapRetries)")
+          
+          if (bootstrapRetryCount < MaxBootstrapRetries) {
+            bootstrapRetryCount += 1
+            log.info(s"Scheduling retry in $BootstrapRetryDelay...")
+            
+            // Schedule a retry
+            scheduler.scheduleOnce(BootstrapRetryDelay) {
+              self ! RetrySnapSyncStart
+            }(ec)
+            
+            // Transition to bootstrapping state to handle the retry
+            context.become(bootstrapping)
+          } else {
+            log.error(s"Pivot block header still not available after $MaxBootstrapRetries retries")
+            log.error("Falling back to fast sync")
+            bootstrapRetryCount = 0
+            context.parent ! FallbackToFastSync
+          }
       }
     }
   }
@@ -1058,6 +1093,7 @@ object SNAPSyncController {
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
   case object BootstrapComplete // Signal from SyncController that bootstrap is done
+  private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete
