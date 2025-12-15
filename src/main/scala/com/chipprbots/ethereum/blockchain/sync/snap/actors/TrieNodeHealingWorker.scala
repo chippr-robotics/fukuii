@@ -10,62 +10,52 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 
 /** TrieNodeHealingWorker fetches trie nodes from a peer.
   *
+  * Workers request tasks from the coordinator, handle responses, and report results back.
+  *
   * @param coordinator
-  *   Parent coordinator
+  *   Parent coordinator that manages all healing logic
   * @param networkPeerManager
   *   Network manager
   * @param requestTracker
   *   Request tracker
-  * @param trieNodeHealer
-  *   Shared healer
   */
 class TrieNodeHealingWorker(
     coordinator: ActorRef,
     networkPeerManager: ActorRef,
-    requestTracker: SNAPRequestTracker,
-    trieNodeHealer: TrieNodeHealer
+    requestTracker: SNAPRequestTracker
 ) extends Actor
     with ActorLogging {
 
   import Messages._
 
   private var currentRequestId: Option[BigInt] = None
+  private var currentPeer: Option[Peer] = None
 
   override def receive: Receive = idle
 
   def idle: Receive = {
     case FetchTrieNodes(_, peer) =>
-      trieNodeHealer.requestNextBatch(peer) match {
-        case Some(requestId) =>
-          currentRequestId = Some(requestId)
-          context.become(working)
+      currentPeer = Some(peer)
+      // Request work from coordinator by notifying it of peer availability
+      coordinator ! HealingPeerAvailable(peer)
+      context.become(working)
           
-          import context.dispatcher
-          context.system.scheduler.scheduleOnce(30.seconds, self, HealingRequestTimeout(requestId))
-
-        case None =>
-          log.debug("No more trie nodes to heal")
-          context.stop(self)
-      }
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(30.seconds, self, HealingCheckIdle)
   }
 
   def working: Receive = {
     case TrieNodesResponseMsg(response) =>
-      currentRequestId match {
-        case Some(requestId) if response.requestId == requestId =>
-          trieNodeHealer.handleResponse(response) match {
-            case Right(count) =>
-              coordinator ! HealingTaskComplete(requestId, Right(count))
-              currentRequestId = None
-              context.become(idle)
+      // Forward response to coordinator for processing
+      coordinator ! TrieNodesResponseMsg(response)
+      currentRequestId = None
+      currentPeer = None
+      context.become(idle)
 
-            case Left(error) =>
-              coordinator ! HealingTaskFailed(requestId, error)
-              currentRequestId = None
-              context.become(idle)
-          }
-        case _ =>
-          log.debug("Received response for wrong request")
+    case HealingCheckIdle =>
+      // If still working after timeout, go back to idle
+      if (currentRequestId.isEmpty) {
+        context.become(idle)
       }
 
     case HealingRequestTimeout(requestId) =>
@@ -74,6 +64,7 @@ class TrieNodeHealingWorker(
           log.warning(s"Healing request $requestId timed out")
           coordinator ! HealingTaskFailed(requestId, "Timeout")
           currentRequestId = None
+          currentPeer = None
           context.become(idle)
         case _ =>
       }
@@ -84,8 +75,7 @@ object TrieNodeHealingWorker {
   def props(
       coordinator: ActorRef,
       networkPeerManager: ActorRef,
-      requestTracker: SNAPRequestTracker,
-      trieNodeHealer: TrieNodeHealer
+      requestTracker: SNAPRequestTracker
   ): Props =
-    Props(new TrieNodeHealingWorker(coordinator, networkPeerManager, requestTracker, trieNodeHealer))
+    Props(new TrieNodeHealingWorker(coordinator, networkPeerManager, requestTracker))
 }

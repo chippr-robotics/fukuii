@@ -43,8 +43,10 @@ object Messages {
 
   sealed trait ByteCodeWorkerMessage
   case class FetchByteCodes(task: ByteCodeTask, peer: Peer) extends ByteCodeWorkerMessage
+  case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt) extends ByteCodeWorkerMessage
   case class ByteCodesResponseMsg(response: ByteCodes) extends ByteCodeWorkerMessage
   case class ByteCodeRequestTimeout(requestId: BigInt) extends ByteCodeWorkerMessage
+  case class ByteCodeProgress(progress: Double, bytecodesDownloaded: Long, bytesDownloaded: Long)
 
   // ========================================
   // StorageRange Messages
@@ -53,6 +55,8 @@ object Messages {
   sealed trait StorageRangeCoordinatorMessage
 
   case class StartStorageRangeSync(stateRoot: ByteString) extends StorageRangeCoordinatorMessage
+  case class AddStorageTasks(tasks: Seq[StorageTask]) extends StorageRangeCoordinatorMessage
+  case class AddStorageTask(task: StorageTask) extends StorageRangeCoordinatorMessage
   case class StoragePeerAvailable(peer: Peer) extends StorageRangeCoordinatorMessage
   case class StorageTaskComplete(requestId: BigInt, result: Either[String, Int]) extends StorageRangeCoordinatorMessage
   case class StorageTaskFailed(requestId: BigInt, reason: String) extends StorageRangeCoordinatorMessage
@@ -63,6 +67,7 @@ object Messages {
   case class FetchStorageRanges(task: StorageTask, peer: Peer) extends StorageRangeWorkerMessage
   case class StorageRangesResponseMsg(response: StorageRanges) extends StorageRangeWorkerMessage
   case class StorageRequestTimeout(requestId: BigInt) extends StorageRangeWorkerMessage
+  case object StorageCheckIdle extends StorageRangeWorkerMessage
 
   // ========================================
   // TrieNodeHealing Messages
@@ -82,4 +87,5 @@ object Messages {
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends TrieNodeHealingWorkerMessage
   case class TrieNodesResponseMsg(response: TrieNodes) extends TrieNodeHealingWorkerMessage
   case class HealingRequestTimeout(requestId: BigInt) extends TrieNodeHealingWorkerMessage
+  case object HealingCheckIdle extends TrieNodeHealingWorkerMessage
 }
