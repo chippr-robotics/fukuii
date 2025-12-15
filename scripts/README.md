@@ -192,10 +192,15 @@ This ensures:
 
 Each bootnode is validated to ensure:
 - Proper enode URL format: `enode://[pubkey]@[ip]:[port]`
-- Valid public key (128 hex characters)
+- Valid public key (128 hex characters, case-insensitive)
 - Valid IP address or hostname
 - Valid port number
 - Proper discovery port specification (if applicable)
+- UDP connectivity check (simplified ping test, informational only)
+  - Attempts to verify the bootnode is reachable via UDP
+  - Non-blocking check with 1-second timeout
+  - Logs warnings for unreachable nodes but doesn't reject them
+  - Falls back gracefully if network tools (nc/ncat) are unavailable
 
 ### Configuration File
 

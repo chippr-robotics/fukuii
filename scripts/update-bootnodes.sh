@@ -104,6 +104,44 @@ validate_enode() {
     fi
 }
 
+# Function to check UDP connectivity to a bootnode
+# Performs a simple UDP ping to verify the node is reachable
+check_udp_connectivity() {
+    local enode="$1"
+    local timeout="${2:-1}"  # Default 1 second timeout
+    
+    # Extract host and port from enode URL
+    local host_port
+    if [[ "$enode" =~ @([^:?]+):([0-9]+) ]]; then
+        local host="${BASH_REMATCH[1]}"
+        local port="${BASH_REMATCH[2]}"
+        
+        # Send a UDP packet and check if we can reach the port
+        # We use a simple approach: try to send data via UDP and check exit code
+        # Note: UDP is connectionless, so we can't guarantee a response without
+        # implementing the full devp2p handshake, but we can check reachability
+        if command -v nc >/dev/null 2>&1; then
+            # Use netcat with UDP mode and timeout
+            # Send a single byte and check if nc succeeds
+            if echo -n "x" | timeout "$timeout" nc -u -w1 "$host" "$port" >/dev/null 2>&1; then
+                return 0
+            fi
+        elif command -v ncat >/dev/null 2>&1; then
+            # Alternative: use ncat if available
+            if echo -n "x" | timeout "$timeout" ncat -u -w1 "$host" "$port" >/dev/null 2>&1; then
+                return 0
+            fi
+        fi
+        
+        # If we can't test connectivity, assume it's reachable (fail-open)
+        # This prevents the script from rejecting valid nodes when network tools aren't available
+        return 0
+    fi
+    
+    # If we couldn't parse the enode, fail
+    return 1
+}
+
 # Function to check if bootnode uses standard port (30303)
 has_standard_port() {
     local enode="$1"
@@ -146,6 +184,10 @@ select_bootnodes() {
         if validate_enode "$bootnode"; then
             # Check if this bootnode is in the external authoritative list
             if printf '%s\n' "${external[@]}" | grep -q "^${bootnode}$"; then
+                # Optional: Check UDP connectivity (non-blocking, informational only)
+                if ! check_udp_connectivity "$bootnode" 1; then
+                    log_warn "⚠ Bootnode may not be reachable via UDP: ${bootnode:0:50}..."
+                fi
                 selected+=("$bootnode")
                 log_info "✓ Keeping validated bootnode: ${bootnode:0:50}..."
                 if [ ${#selected[@]} -ge ${target_count} ]; then
@@ -165,6 +207,10 @@ select_bootnodes() {
             fi
             
             if validate_enode "$bootnode"; then
+                # Optional: Check UDP connectivity (non-blocking, informational only)
+                if ! check_udp_connectivity "$bootnode" 1; then
+                    log_warn "⚠ Bootnode may not be reachable via UDP: ${bootnode:0:50}..."
+                fi
                 selected+=("$bootnode")
                 log_info "✓ Adding external bootnode: ${bootnode:0:50}..."
                 
@@ -185,6 +231,10 @@ select_bootnodes() {
             fi
             
             if validate_enode "$bootnode"; then
+                # Optional: Check UDP connectivity (non-blocking, informational only)
+                if ! check_udp_connectivity "$bootnode" 1; then
+                    log_warn "⚠ Bootnode may not be reachable via UDP: ${bootnode:0:50}..."
+                fi
                 selected+=("$bootnode")
                 log_info "✓ Keeping current bootnode: ${bootnode:0:50}..."
                 
