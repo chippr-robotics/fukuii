@@ -122,3 +122,131 @@ Potential improvements to the conversion script:
 - [ ] Add support for WebSocket endpoints
 - [ ] Include rate limiting information in spec
 - [ ] Auto-generate security scheme configurations
+
+---
+
+# Bootnode Management Script
+
+## update-bootnodes.sh
+
+Automatically updates the ETC bootnode configuration by fetching and validating bootnodes from authoritative sources.
+
+### Purpose
+
+The script ensures that Fukuii maintains a healthy list of 20 active bootnodes by:
+- Fetching bootnodes from authoritative sources (core-geth, Hyperledger Besu)
+- Validating current bootnodes against these authoritative lists
+- Removing bootnodes that are no longer in authoritative sources
+- Maintaining exactly 20 active bootnodes with proper port configuration
+
+### Usage
+
+```bash
+# Run manually
+bash scripts/update-bootnodes.sh
+
+# The script will:
+# 1. Extract current bootnodes from ops/barad-dur/fukuii-conf/chains/etc-chain.conf
+# 2. Fetch bootnodes from core-geth and Besu repositories
+# 3. Validate and select 20 bootnodes
+# 4. Update the configuration file
+# 5. Create a timestamped backup
+```
+
+### Automated Execution
+
+The script runs automatically via GitHub Actions on a nightly schedule:
+- Workflow: `.github/workflows/nightly.yml`
+- Job: `nightly-bootnode-update`
+- Schedule: Daily at 00:00 GMT (midnight UTC)
+
+When changes are detected, the workflow automatically creates a pull request with:
+- Updated bootnode configuration
+- Detailed change summary
+- Backup of previous configuration
+
+### Bootnode Sources
+
+1. **Core-geth**: https://github.com/etclabscore/core-geth
+   - Official Ethereum Classic client implementation
+   - Maintains authoritative list of ETC bootnodes
+
+2. **Hyperledger Besu**: https://github.com/hyperledger/besu
+   - Enterprise-grade Ethereum client
+   - Supports ETC mainnet with maintained bootnode list
+
+### Selection Logic
+
+The script uses a priority-based selection process:
+
+1. **Priority 1**: Keep current bootnodes that exist in external authoritative sources
+2. **Priority 2**: Add new bootnodes from external authoritative sources
+3. **Priority 3**: Keep remaining current bootnodes (up to 20 total)
+
+This ensures:
+- Stability: Current working bootnodes are preserved when possible
+- Freshness: New authoritative bootnodes are added
+- Reliability: Non-authoritative or inactive bootnodes are removed
+
+### Validation
+
+Each bootnode is validated to ensure:
+- Proper enode URL format: `enode://[pubkey]@[ip]:[port]`
+- Valid public key (128 hex characters)
+- Valid IP address or hostname
+- Valid port number
+- Proper discovery port specification (if applicable)
+
+### Configuration File
+
+Target file: `ops/barad-dur/fukuii-conf/chains/etc-chain.conf`
+
+The script updates the `bootstrap-nodes` array in the ETC chain configuration, maintaining:
+- Header comments indicating automated management
+- Timestamp of last update
+- Source attribution (core-geth, Besu)
+- Proper HOCON array formatting
+
+### Backups
+
+Before each update, the script creates a timestamped backup:
+```
+ops/barad-dur/fukuii-conf/chains/etc-chain.conf.backup.YYYYMMDD_HHMMSS
+```
+
+Backups are retained locally but are not committed to version control (excluded via .gitignore).
+
+### Manual Intervention
+
+If manual bootnode management is required:
+1. Update `ops/barad-dur/fukuii-conf/chains/etc-chain.conf` directly
+2. Commit your changes
+3. The script will respect your changes on the next run if they match authoritative sources
+
+To disable automated updates:
+1. Comment out or remove the `nightly-bootnode-update` job in `.github/workflows/nightly.yml`
+2. Or update the script to skip specific bootnodes
+
+### Troubleshooting
+
+**Issue**: Script reports "Only X bootnodes available (target: 20)"
+- **Cause**: Authoritative sources have fewer than 20 bootnodes
+- **Resolution**: This is expected; script will use all available bootnodes
+
+**Issue**: Important bootnode is being removed
+- **Cause**: Bootnode is not in core-geth or Besu authoritative lists
+- **Resolution**: 
+  1. Verify the bootnode is still active and reliable
+  2. Submit PR to core-geth or Besu to add the bootnode
+  3. Or manually maintain the bootnode in configuration and disable automation
+
+**Issue**: Script fails to fetch from external sources
+- **Cause**: Network issues or repository changes
+- **Resolution**: Check GitHub Actions logs for specific error messages
+
+### Related Files
+
+- `.github/workflows/nightly.yml` - GitHub Actions workflow
+- `ops/barad-dur/fukuii-conf/chains/etc-chain.conf` - Target configuration file
+- `ops/cirith-ungol/conf/static-nodes.json` - Additional static nodes configuration
+
