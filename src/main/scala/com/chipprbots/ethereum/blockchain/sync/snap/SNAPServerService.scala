@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.math.Ordering.Implicits.infixOrderingOps
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
@@ -10,7 +11,7 @@ import com.chipprbots.ethereum.domain.{Account, BlockchainReader}
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.Logger
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.ByteStringUtils.{ByteStringOps, byteStringOrdering}
 
 /** Server-side SNAP protocol service for serving state data to peers.
   *
@@ -30,10 +31,13 @@ class SNAPServerService(
     appStateStorage: AppStateStorage,
     mptStorage: MptStorage,
     evmCodeStorage: EvmCodeStorage,
-    config: SNAPServerConfig = SNAPServerConfig()
+    config: SNAPServerService.SNAPServerConfig = null
 ) extends Logger {
 
   import SNAPServerService._
+  
+  // Use default config if not provided
+  private val effectiveConfig = if (config == null) SNAPServerConfig() else config
 
   /** Handle GetAccountRange request and generate AccountRange response.
     *
@@ -62,7 +66,7 @@ class SNAPServerService(
       // Collect accounts in the requested range
       val accounts = mutable.ArrayBuffer[(ByteString, Account)]()
       var totalBytes = 0L
-      val maxBytes = Math.min(request.responseBytes.toLong, config.maxResponseBytes)
+      val maxBytes = Math.min(request.responseBytes.toLong, effectiveConfig.maxResponseBytes)
 
       // Traverse the account trie and collect accounts in range
       collectAccountsInRange(
@@ -131,7 +135,7 @@ class SNAPServerService(
       val allSlots = mutable.ArrayBuffer[Seq[(ByteString, ByteString)]]()
       val allProofs = mutable.ArrayBuffer[ByteString]()
       var totalBytes = 0L
-      val maxBytes = Math.min(request.responseBytes.toLong, config.maxResponseBytes)
+      val maxBytes = Math.min(request.responseBytes.toLong, effectiveConfig.maxResponseBytes)
 
       // For each requested account, retrieve its storage slots
       for (accountHash <- request.accountHashes if totalBytes < maxBytes) {
@@ -141,8 +145,8 @@ class SNAPServerService(
         accountOpt match {
           case Some(account) if account.storageRoot != Account.EmptyStorageRootHash =>
             // Account has storage - retrieve slots in the requested range
-            val storageRoot = try {
-              mptStorage.get(account.storageRoot.toArray)
+            val storageRootOpt = try {
+              Some(mptStorage.get(account.storageRoot.toArray))
             } catch {
               case _: MerklePatriciaTrie.MissingNodeException =>
                 log.debug(s"Storage root not found for account ${accountHash.take(8).toHex}")
@@ -150,7 +154,7 @@ class SNAPServerService(
                 None
             }
 
-            storageRoot.foreach { root =>
+            storageRootOpt.foreach { root =>
               val slots = mutable.ArrayBuffer[(ByteString, ByteString)]()
               collectStorageSlotsInRange(
                 root,
@@ -217,7 +221,7 @@ class SNAPServerService(
     try {
       val codes = mutable.ArrayBuffer[ByteString]()
       var totalBytes = 0L
-      val maxBytes = Math.min(request.responseBytes.toLong, config.maxResponseBytes)
+      val maxBytes = Math.min(request.responseBytes.toLong, effectiveConfig.maxResponseBytes)
 
       // Retrieve bytecodes for each requested hash
       for (codeHash <- request.hashes if totalBytes < maxBytes) {
@@ -280,7 +284,7 @@ class SNAPServerService(
 
       val nodes = mutable.ArrayBuffer[ByteString]()
       var totalBytes = 0L
-      val maxBytes = Math.min(request.responseBytes.toLong, config.maxResponseBytes)
+      val maxBytes = Math.min(request.responseBytes.toLong, effectiveConfig.maxResponseBytes)
 
       // For each path, retrieve the terminal node
       for (path <- request.paths if totalBytes < maxBytes) {
@@ -290,7 +294,7 @@ class SNAPServerService(
 
           try {
             val node = mptStorage.get(nodeHash.toArray)
-            val nodeEncoded = node.encoded
+            val nodeEncoded = node.encode
 
             if (totalBytes + nodeEncoded.size <= maxBytes) {
               nodes += ByteString(nodeEncoded)
@@ -342,18 +346,19 @@ class SNAPServerService(
     import com.chipprbots.ethereum.domain.Account.accountSerializer
 
     def traverse(currentNode: MptNode, currentPath: ByteString): Unit = {
-      if (accounts.map { case (h, a) => h.size + a.toBytes.size }.sum >= maxBytes) {
+      if (accounts.map { case (h, a) => h.size + accountSerializer.toBytes(a).length }.sum.toLong >= maxBytes) {
         return // Reached byte limit
       }
 
       currentNode match {
         case leaf: LeafNode =>
           // Reconstruct the full key from the path
-          val fullKey = currentPath ++ ByteString(HexPrefix.decode(leaf.key.toArray, leaf.isTerminal))
+          val (decodedKey, _) = HexPrefix.decode(leaf.key.toArray)
+          val fullKey = currentPath ++ ByteString(decodedKey)
           val accountHash = ByteString(Node.hashFn(fullKey.toArray))
 
           // Check if account hash is within range [startHash, limitHash)
-          if (accountHash.compareTo(startHash) >= 0 && accountHash.compareTo(limitHash) < 0) {
+          if (accountHash >= startHash && accountHash < limitHash) {
             try {
               val account = accountSerializer.fromBytes(leaf.value.toArray)
               accounts += ((accountHash, account))
@@ -365,14 +370,15 @@ class SNAPServerService(
 
         case ext: ExtensionNode =>
           // Continue down the extension
-          val extPath = ByteString(HexPrefix.decode(ext.key.toArray, false))
+          val (decodedKey, _) = HexPrefix.decode(ext.sharedKey.toArray)
+          val extPath = ByteString(decodedKey)
           traverse(ext.next, currentPath ++ extPath)
 
         case branch: BranchNode =>
           // Check if branch has a terminator (account at this node)
           branch.terminator.foreach { value =>
             val accountHash = ByteString(Node.hashFn(currentPath.toArray))
-            if (accountHash.compareTo(startHash) >= 0 && accountHash.compareTo(limitHash) < 0) {
+            if (accountHash >= startHash && accountHash < limitHash) {
               try {
                 val account = accountSerializer.fromBytes(value.toArray)
                 accounts += ((accountHash, account))
@@ -386,19 +392,19 @@ class SNAPServerService(
           // Traverse children
           branch.children.zipWithIndex.foreach { case (childNode, index) =>
             childNode match {
-              case _: NullNode => // Skip null children
+              case NullNode => // Skip null children
               case hash: HashNode =>
                 // Resolve hash node and continue
                 try {
                   val resolvedNode = mptStorage.get(hash.hash)
-                  traverse(resolvedNode, currentPath :+ index.toByte)
+                  traverse(resolvedNode, ByteString(currentPath :+ index.toByte))
                 } catch {
                   case _: MerklePatriciaTrie.MissingNodeException =>
                     // Node missing - skip this branch
                     ()
                 }
               case _ =>
-                traverse(childNode, currentPath :+ index.toByte)
+                traverse(childNode, ByteString(currentPath :+ index.toByte))
             }
           }
 
@@ -433,37 +439,39 @@ class SNAPServerService(
 
       currentNode match {
         case leaf: LeafNode =>
-          val fullKey = currentPath ++ ByteString(HexPrefix.decode(leaf.key.toArray, leaf.isTerminal))
+          val (decodedKey, _) = HexPrefix.decode(leaf.key.toArray)
+          val fullKey = currentPath ++ ByteString(decodedKey)
           val slotHash = ByteString(Node.hashFn(fullKey.toArray))
 
-          if (slotHash.compareTo(startHash) >= 0 && slotHash.compareTo(limitHash) < 0) {
+          if (slotHash >= startHash && slotHash < limitHash) {
             slots += ((slotHash, leaf.value))
           }
 
         case ext: ExtensionNode =>
-          val extPath = ByteString(HexPrefix.decode(ext.key.toArray, false))
+          val (decodedKey, _) = HexPrefix.decode(ext.sharedKey.toArray)
+          val extPath = ByteString(decodedKey)
           traverse(ext.next, currentPath ++ extPath)
 
         case branch: BranchNode =>
           branch.terminator.foreach { value =>
             val slotHash = ByteString(Node.hashFn(currentPath.toArray))
-            if (slotHash.compareTo(startHash) >= 0 && slotHash.compareTo(limitHash) < 0) {
+            if (slotHash >= startHash && slotHash < limitHash) {
               slots += ((slotHash, value))
             }
           }
 
           branch.children.zipWithIndex.foreach { case (childNode, index) =>
             childNode match {
-              case _: NullNode =>
+              case NullNode =>
               case hash: HashNode =>
                 try {
                   val resolvedNode = mptStorage.get(hash.hash)
-                  traverse(resolvedNode, currentPath :+ index.toByte)
+                  traverse(resolvedNode, ByteString(currentPath :+ index.toByte))
                 } catch {
                   case _: MerklePatriciaTrie.MissingNodeException => ()
                 }
               case _ =>
-                traverse(childNode, currentPath :+ index.toByte)
+                traverse(childNode, ByteString(currentPath :+ index.toByte))
             }
           }
 
@@ -539,7 +547,7 @@ class SNAPServerService(
     
     // For now, include the root node as a minimal proof
     // TODO: Implement full boundary proof generation following SNAP spec
-    proofNodes += ByteString(rootNode.encoded)
+    proofNodes += ByteString(rootNode.encode)
     
     proofNodes.toSeq
   }
@@ -560,7 +568,7 @@ class SNAPServerService(
     
     // Simplified proof - include root node
     // TODO: Implement full boundary proof generation
-    proofNodes += ByteString(rootNode.encoded)
+    proofNodes += ByteString(rootNode.encode)
     
     proofNodes.toSeq
   }
