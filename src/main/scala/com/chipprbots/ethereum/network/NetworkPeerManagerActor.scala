@@ -566,7 +566,7 @@ object NetworkPeerManagerActor {
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
         capabilities: List[Capability],
-        listenPort: Long = 0
+        listenPort: Long
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -596,7 +596,7 @@ object NetworkPeerManagerActor {
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
         capabilities: List[Capability],
-        listenPort: Long = 0
+        listenPort: Long
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
