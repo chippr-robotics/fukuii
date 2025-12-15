@@ -1,51 +1,98 @@
 # SNAP Sync Cold Start Fix
 
 ## Issue
-When a node starts at genesis (block 0), SNAP sync cannot begin because it requires at least 1500 blocks (configurable via `pivot-block-offset`, default 1024). The system should automatically fall back to regular sync for bootstrapping, then transition to SNAP sync once enough blocks are available. However, the transition from bootstrap mode to SNAP sync was not working correctly, leaving the node stuck in an idle state.
+When a node starts at genesis (block 0), SNAP sync cannot begin because it requires at least 1500 blocks (configurable via `pivot-block-offset`, default 1024). The system should automatically fall back to regular sync for bootstrapping, then transition to SNAP sync once enough blocks are available. 
 
-## Root Cause
-After receiving the `BootstrapComplete` message, SNAP sync calls `startSnapSync()` again to begin the actual SNAP sync process. However, due to asynchronous block import, the pivot block header may not yet be available in `blockchainReader` when this call is made. 
+**Critical Problem Discovered**: After bootstrap completes at ~40k blocks, SNAP sync was selecting the pivot based on the **local best block** instead of the **network's best block**. This caused:
+- Pivot selection of block ~39k when the chain is at 23M+ blocks
+- SNAP sync completing instantly with "zero work" (state already exists from bootstrap)
+- Node never catching up to the actual chain tip
 
-Previously, when `blockchainReader.getBlockHeaderByNumber(pivotBlockNumber)` returned `None`, the system would immediately fall back to fast sync. This was too aggressive and didn't account for the race condition between block import completion and header availability.
+## Root Causes
+1. **Pivot Selection Bug**: Used `localBestBlock - pivotOffset` instead of `networkBestBlock - pivotOffset`
+2. **Header Availability Race**: Pivot block header may not be available immediately after bootstrap due to asynchronous block import
+3. **No Sanity Checks**: System didn't validate that the pivot was meaningfully ahead of local state
 
 ## Solution
-Implemented a retry mechanism with the following features:
+Implemented a comprehensive fix with the following features:
 
-1. **Retry Counter**: Added `bootstrapRetryCount` to track retry attempts
-2. **Configurable Retry Parameters**:
-   - `MaxBootstrapRetries = 10` attempts
-   - `BootstrapRetryDelay = 2.seconds` between attempts
-   - Total retry window: up to 20 seconds
+### 1. Network-Based Pivot Selection
+- **Query peers** to find the highest block in the network using `getPeerWithHighestBlock`
+- **Select pivot** as `networkBestBlock - pivotBlockOffset` instead of `localBestBlock - pivotBlockOffset`
+- **Fallback logic** if no peers are available (retries or uses local block with warnings)
 
-3. **New Internal Message**: `RetrySnapSyncStart` to trigger retry attempts
+### 2. Sanity Checks and Validation
+- **Verify pivot is ahead** of local state before proceeding
+- **Detect zero-work scenarios** where pivot ≤ local best block
+- **Automatic transitions** to regular sync if already caught up
 
-4. **Graceful Degradation**: Only falls back to fast sync after all retry attempts are exhausted
+### 3. Retry Mechanism for Header Availability
+- **Retry Counter**: Track retry attempts with `bootstrapRetryCount`
+- **Configurable Parameters**:
+  - `MaxBootstrapRetries = 10` attempts
+  - `BootstrapRetryDelay = 2.seconds` between attempts
+  - Total retry window: up to 20 seconds
+- **Graceful Degradation**: Falls back to fast sync only after all retries exhausted
 
-5. **User Experience**: Clear, informative log messages with visual indicators (🚀 🎯 ✅ ⏳ 🔄 ❌) guide users through the bootstrap and transition process
+### 4. Enhanced Logging
+- **Clear visibility** into pivot selection decision-making
+- **Show both** local and network block numbers
+- **Indicate source** of pivot selection (network vs local)
+- **Visual indicators** (🚀 🎯 ✅ ⏳ 🔄 ⚠️ ❌) for different states
 
 ## Changes Made
 
-### SNAPSyncController.scala
+### SNAPSyncController.scala - `startSnapSync()` Method
 
-#### Added State Variables
+#### Pivot Selection Logic
 ```scala
-private var bootstrapRetryCount: Int = 0
-private val MaxBootstrapRetries = 10
-private val BootstrapRetryDelay = 2.seconds
-private var bootstrapCheckTask: Option[Cancellable] = None
+// Get local and network state for pivot selection
+val localBestBlock = appStateStorage.getBestBlockNumber()
+
+// Query peers to find the highest block in the network
+val networkBestBlockOpt = getPeerWithHighestBlock.map(_.peerInfo.maxBlockNumber)
+
+// Determine which block number to use as the base for pivot calculation
+val (baseBlockForPivot, pivotSelectionSource) = networkBestBlockOpt match {
+  case Some(networkBestBlock) if networkBestBlock > localBestBlock + snapSyncConfig.pivotBlockOffset =>
+    // Network is significantly ahead - use network best block for pivot
+    (networkBestBlock, "network")
+  case Some(networkBestBlock) =>
+    // Network is not far ahead
+    (networkBestBlock, "network")
+  case None =>
+    // No peers available yet - fall back to local best block
+    (localBestBlock, "local")
+}
+
+val pivotBlockNumber = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
 ```
 
-#### Enhanced `bootstrapping` Receive Block
+#### Sanity Checks
 ```scala
-case BootstrapComplete =>
-  log.info("Bootstrap phase complete - transitioning to SNAP sync")
-  appStateStorage.clearSnapSyncBootstrapTarget().commit()
-  bootstrapRetryCount = 0  // Reset retry counter
-  startSnapSync()
+if (pivotBlockNumber <= localBestBlock) {
+  // Pivot must be ahead of local state
+  if (pivotSelectionSource == "local" && networkBestBlockOpt.isEmpty) {
+    // No peers - retry
+    if (bootstrapRetryCount < MaxBootstrapRetries) {
+      // Schedule retry
+    } else {
+      // Fall back to fast sync
+    }
+  } else {
+    // Already synced - transition to regular sync
+    context.parent ! Done
+  }
+}
+```
 
-case RetrySnapSyncStart =>
-  log.info("Retrying SNAP sync start after bootstrap delay")
-  startSnapSync()
+#### Enhanced Logging
+```scala
+log.info("🎯 SNAP Sync Ready")
+log.info(s"Local best block: $localBestBlock")
+networkBestBlockOpt.foreach(netBest => log.info(s"Network best block: $netBest"))
+log.info(s"Selected pivot block: $pivotBlockNumber (source: $pivotSelectionSource)")
+log.info(s"Pivot offset: ${snapSyncConfig.pivotBlockOffset} blocks")
 ```
 
 #### Modified `startSnapSync()` Method
@@ -67,21 +114,28 @@ When pivot block header is not available:
 
 ## Testing Recommendations
 
-### Manual Testing
+### Scenario 1: Cold Start from Genesis (Primary Use Case)
 1. Start a fresh node from genesis with SNAP sync enabled
-2. Monitor logs for user-friendly status messages with visual indicators (🚀 🎯 ✅ ⏳ 🔄 ❌)
+2. Monitor logs for bootstrap process
+3. **Expected**: After bootstrap completes, SNAP sync should select pivot near network tip (e.g., 23M - 1024 = ~23M)
+4. **Expected**: SNAP sync should begin downloading accounts, bytecodes, storage for this high pivot block
+5. **Expected**: Logs should show both local block count (~40k) and network block count (~23M)
 
-### Expected Behavior
-- Node displays clear initialization message explaining the bootstrap process
-- Regular sync bootstrap gathers required initial blocks
-- After reaching target blocks, attempts SNAP sync transition with progress indicators
-- If pivot block header not immediately available, retries up to 10 times with 2-second delays
-- Successfully transitions to SNAP sync phases with clear confirmation
-- OR falls back to fast sync with clear error message if pivot block remains unavailable
+### Scenario 2: No Peers Available During Pivot Selection
+1. Start node in isolated environment or with limited connectivity
+2. **Expected**: System retries up to 10 times waiting for peers
+3. **Expected**: Clear warning messages about missing peers
+4. **Expected**: Falls back gracefully after max retries
 
-### Log Patterns to Verify
+### Scenario 3: Already Synced State
+1. Start node that already has most blocks synced
+2. **Expected**: Pivot calculation detects already-synced state
+3. **Expected**: Transitions to regular sync for final catch-up
+4. **Expected**: No wasted SNAP sync attempt
 
-**Successful cold start (no retries needed):**
+### Expected Log Patterns
+
+**Successful cold start with network-based pivot:**
 ```
 ================================================================================
 🚀 SNAP Sync Initialization
@@ -93,7 +147,7 @@ Once complete, node will automatically transition to SNAP sync mode
 ================================================================================
 ⏳ Gathering initial blocks... (target: 1025)
 
-[Regular sync progress...]
+[Regular sync bootstrap progress...]
 
 ================================================================================
 ✅ Bootstrap phase complete - transitioning to SNAP sync
@@ -102,44 +156,31 @@ Once complete, node will automatically transition to SNAP sync mode
 ================================================================================
 🎯 SNAP Sync Ready
 ================================================================================
-Pivot block: 1
-State root: 0xabcd1234...
-Beginning fast state sync with 16 concurrent workers
-================================================================================
-Starting account range sync with concurrency 16
-```
-
-**Retry scenario (pivot block not immediately available):**
-```
-================================================================================
-✅ Bootstrap phase complete - transitioning to SNAP sync
-================================================================================
-
-⏳ Waiting for pivot block header to become available...
-   Pivot block 1 not ready yet (attempt 1/10)
-   Retrying in 2 seconds...
-
-🔄 Retrying SNAP sync start after bootstrap delay...
-
-================================================================================
-🎯 SNAP Sync Ready
-================================================================================
-Pivot block: 1
+Local best block: 40700
+Network best block: 23456789
+Selected pivot block: 23455765 (source: network)
+Pivot offset: 1024 blocks
 State root: 0xabcd1234...
 Beginning fast state sync with 16 concurrent workers
 ================================================================================
 ```
 
-**Fallback scenario (should be extremely rare):**
+**Warning case - no peers available:**
 ```
-⏳ Waiting for pivot block header to become available...
-   Pivot block 1 not ready yet (attempt 10/10)
-   Retrying in 2 seconds...
+⚠️  SNAP Sync Pivot Issue Detected
+================================================================================
+Calculated pivot (-1024) is not ahead of local state (0)
+Pivot source: local, base block: 0, offset: 1024
+No peers available for pivot selection. Retrying in 2 seconds... (attempt 1/10)
+```
 
+**Optimal case - already synced:**
+```
+⚠️  SNAP Sync Pivot Issue Detected
 ================================================================================
-❌ Pivot block header not available after 10 retries
-   SNAP sync cannot proceed - falling back to fast sync
-================================================================================
+Calculated pivot (23455765) is not ahead of local state (23456000)
+Pivot block is not ahead of local state - likely already synced
+Transitioning to regular sync for final block catch-up
 ```
 
 ## Configuration
