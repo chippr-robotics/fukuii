@@ -423,14 +423,68 @@ class SNAPSyncController(
       log.info("✅ Bootstrap phase complete - transitioning to SNAP sync")
       log.info("=" * 80)
       
-      // Clear bootstrap target from storage
+      // Get the bootstrap target that we synced to (this is the pivot we wanted)
+      val bootstrapTarget = appStateStorage.getSnapSyncBootstrapTarget()
+      val localBestBlock = appStateStorage.getBestBlockNumber()
+      
+      log.info(s"Bootstrap target: ${bootstrapTarget.getOrElse("none")}, Local best block: $localBestBlock")
+      
+      // Clear bootstrap target from storage now that we've read it
       appStateStorage.clearSnapSyncBootstrapTarget().commit()
       
       // Reset retry counter
       bootstrapRetryCount = 0
       
-      // Now we have enough blocks - start SNAP sync properly
-      startSnapSync()
+      // If we have a bootstrap target and we've reached it, use that as our pivot
+      // This ensures we use the pivot we bootstrapped to, not a recalculated one
+      bootstrapTarget match {
+        case Some(targetPivot) if localBestBlock >= targetPivot =>
+          // We successfully reached the bootstrap target - use it as our pivot
+          log.info(s"Using bootstrap target $targetPivot as pivot (we synced to it)")
+          
+          // Try to get the header for this pivot block
+          blockchainReader.getBlockHeaderByNumber(targetPivot) match {
+            case Some(header) =>
+              // Perfect! We have the header for our target pivot
+              pivotBlock = Some(targetPivot)
+              stateRoot = Some(header.stateRoot)
+              appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
+              appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+              
+              SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+              
+              log.info("=" * 80)
+              log.info("🎯 SNAP Sync Ready (from bootstrap)")
+              log.info("=" * 80)
+              log.info(s"Local best block: $localBestBlock")
+              log.info(s"Using bootstrapped pivot block: $targetPivot")
+              log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+              log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+              log.info("=" * 80)
+              
+              // Start account range sync
+              currentPhase = AccountRangeSync
+              startAccountRangeSync(header.stateRoot)
+              context.become(syncing)
+              
+            case None =>
+              // Header not available yet - this shouldn't happen but handle it gracefully
+              log.warning(s"Bootstrap target $targetPivot reached but header not available yet")
+              log.warning("Falling back to recalculating pivot from current network state")
+              startSnapSync()
+          }
+          
+        case Some(targetPivot) =>
+          // We have a target but haven't reached it yet - this shouldn't happen
+          log.warning(s"Bootstrap incomplete: target=$targetPivot, current=$localBestBlock")
+          log.warning("Falling back to recalculating pivot from current network state")
+          startSnapSync()
+          
+        case None =>
+          // No bootstrap target stored - fall back to normal pivot selection
+          log.info("No bootstrap target stored - calculating pivot from network state")
+          startSnapSync()
+      }
     
     case RetrySnapSyncStart =>
       log.info("🔄 Retrying SNAP sync start after bootstrap delay...")
