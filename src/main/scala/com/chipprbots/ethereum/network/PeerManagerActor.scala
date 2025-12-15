@@ -362,7 +362,7 @@ class PeerManagerActor(
         peerInfo.remoteStatus.listenPort == 0
       ) {
         log.info(
-          "LISTENPORT_FILTER: Disconnecting outbound connection to peer {} ({}): peer advertises listenPort=0 (outbound-only)",
+          "LISTENPORT_FILTER: Disconnecting outbound connection to peer {} ({}): peer advertises listenPort=0",
           handshakedPeer.id,
           handshakedPeer.remoteAddress
         )
