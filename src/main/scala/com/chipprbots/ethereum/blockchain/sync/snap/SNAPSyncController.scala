@@ -515,17 +515,17 @@ class SNAPSyncController(
       case Some(networkBestBlock) if networkBestBlock > localBestBlock + snapSyncConfig.pivotBlockOffset =>
         // Network is significantly ahead - use network best block for pivot
         // This ensures we sync to a recent state, not just our local state
-        (networkBestBlock, "network")
+        (networkBestBlock, NetworkPivot)
       case Some(networkBestBlock) =>
         // Network is not far ahead or peers report similar blocks
         log.warning(s"Network best block ($networkBestBlock) is not significantly ahead of local ($localBestBlock)")
         log.warning("This may indicate limited peer connectivity or already synced state")
-        (networkBestBlock, "network")
+        (networkBestBlock, NetworkPivot)
       case None =>
         // No peers available yet - fall back to local best block
         log.warning("No peers available for pivot selection, using local best block")
         log.warning("SNAP sync may select a suboptimal pivot - will retry if peers become available")
-        (localBestBlock, "local")
+        (localBestBlock, LocalPivot)
     }
     
     val pivotBlockNumber = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
@@ -557,9 +557,9 @@ class SNAPSyncController(
       log.warning("⚠️  SNAP Sync Pivot Issue Detected")
       log.warning("=" * 80)
       log.warning(s"Calculated pivot ($pivotBlockNumber) is not ahead of local state ($localBestBlock)")
-      log.warning(s"Pivot source: $pivotSelectionSource, base block: $baseBlockForPivot, offset: ${snapSyncConfig.pivotBlockOffset}")
+      log.warning(s"Pivot source: ${pivotSelectionSource.name}, base block: $baseBlockForPivot, offset: ${snapSyncConfig.pivotBlockOffset}")
       
-      if (pivotSelectionSource == "local" && networkBestBlockOpt.isEmpty) {
+      if (pivotSelectionSource == LocalPivot && networkBestBlockOpt.isEmpty) {
         // No peers available - schedule retry
         if (bootstrapRetryCount < MaxBootstrapRetries) {
           bootstrapRetryCount += 1
@@ -607,7 +607,7 @@ class SNAPSyncController(
           log.info("=" * 80)
           log.info(s"Local best block: $localBestBlock")
           networkBestBlockOpt.foreach(netBest => log.info(s"Network best block: $netBest"))
-          log.info(s"Selected pivot block: $pivotBlockNumber (source: $pivotSelectionSource)")
+          log.info(s"Selected pivot block: $pivotBlockNumber (source: ${pivotSelectionSource.name})")
           log.info(s"Pivot offset: ${snapSyncConfig.pivotBlockOffset} blocks")
           log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
           log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
@@ -626,7 +626,7 @@ class SNAPSyncController(
           // This happens when we select a pivot based on network best block
           // but haven't synced that far yet
           
-          if (pivotSelectionSource == "network") {
+          if (pivotSelectionSource == NetworkPivot) {
             // We selected a network-based pivot but don't have the header yet
             // Need to bootstrap/sync to get closer to the pivot
             val targetForBootstrap = pivotBlockNumber
@@ -1200,6 +1200,17 @@ object SNAPSyncController {
   case object StateHealing extends SyncPhase
   case object StateValidation extends SyncPhase
   case object Completed extends SyncPhase
+
+  /** Source of pivot block selection */
+  sealed trait PivotSelectionSource {
+    def name: String
+  }
+  case object NetworkPivot extends PivotSelectionSource {
+    val name = "network"
+  }
+  case object LocalPivot extends PivotSelectionSource {
+    val name = "local"
+  }
 
   case object Start
   case object Done
