@@ -155,7 +155,7 @@ class StorageRangeCoordinator(
       }
 
     case StorageGetProgress =>
-      val stats = StorageRangeDownloader.SyncStatistics(
+      val stats = StorageRangeCoordinator.SyncStatistics(
         slotsDownloaded = slotsDownloaded,
         bytesDownloaded = bytesDownloaded,
         tasksCompleted = completedTasks.size,
@@ -430,4 +430,28 @@ object StorageRangeCoordinator {
         snapSyncController
       )
     )
+
+  /** Sync statistics for storage range download */
+  case class SyncStatistics(
+      slotsDownloaded: Long,
+      bytesDownloaded: Long,
+      tasksCompleted: Int,
+      tasksActive: Int,
+      tasksPending: Int,
+      elapsedTimeMs: Long,
+      progress: Double
+  ) {
+    def throughputSlotsPerSec: Double =
+      if (elapsedTimeMs > 0) slotsDownloaded.toDouble / (elapsedTimeMs / 1000.0)
+      else 0.0
+
+    def throughputBytesPerSec: Double =
+      if (elapsedTimeMs > 0) bytesDownloaded.toDouble / (elapsedTimeMs / 1000.0)
+      else 0.0
+
+    override def toString: String =
+      f"Progress: ${progress * 100}%.1f%%, Slots: $slotsDownloaded, " +
+        f"Bytes: ${bytesDownloaded / 1024}KB, Tasks: $tasksCompleted done, $tasksActive active, $tasksPending pending, " +
+        f"Speed: ${throughputSlotsPerSec}%.1f slots/s, ${throughputBytesPerSec / 1024}%.1f KB/s"
+  }
 }
