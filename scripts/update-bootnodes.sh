@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Update ETC bootnodes in the configuration file
-# This script fetches active bootnodes from authoritative sources (core-geth, Besu)
+# This script fetches active bootnodes from the etcnodes API
 # and updates the configuration to maintain 20 active bootnodes at all times.
 #
 
@@ -31,34 +31,27 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $*"
 }
 
-# Function to fetch bootnodes from multiple sources
+# Function to fetch bootnodes from etcnodes API
 fetch_bootnodes_from_sources() {
-    log_info "Fetching bootnodes from multiple sources..."
+    log_info "Fetching bootnodes from etcnodes API..."
     
-    # Source 1: Core-geth repository (authoritative)
-    local COREGETH_URL="https://raw.githubusercontent.com/etclabscore/core-geth/master/params/bootnodes_classic.go"
+    # Fetch from etcnodes API - the authoritative source of live ETC nodes
+    local ETCNODES_API="https://api.etcnodes.org/peers"
     
-    log_info "Fetching from core-geth..."
-    curl -s "${COREGETH_URL}" | \
+    log_info "Fetching from ${ETCNODES_API}..."
+    
+    # Fetch and extract enode URLs from JSON response
+    # Get all enodes, we'll prioritize standard port nodes during selection
+    curl -s "${ETCNODES_API}" | \
+        jq -r '.[].enode' 2>/dev/null | \
         grep -o 'enode://[^"]*' | \
-        sort -u > "${TEMP_DIR}/coregeth_bootnodes.txt"
+        sort -u > "${TEMP_DIR}/etcnodes_bootnodes.txt"
     
-    local coregeth_count=$(wc -l < "${TEMP_DIR}/coregeth_bootnodes.txt" || echo 0)
-    log_info "Found ${coregeth_count} bootnodes from core-geth"
+    local etcnodes_count=$(wc -l < "${TEMP_DIR}/etcnodes_bootnodes.txt" || echo 0)
+    log_info "Found ${etcnodes_count} live bootnodes from etcnodes API"
     
-    # Source 2: Hyperledger Besu ETC bootnodes (if available)
-    log_info "Fetching from Hyperledger Besu..."
-    curl -s "https://raw.githubusercontent.com/hyperledger/besu/main/config/src/main/resources/classic.json" 2>/dev/null | \
-        grep -o 'enode://[^"]*' | \
-        sort -u > "${TEMP_DIR}/besu_bootnodes.txt" || touch "${TEMP_DIR}/besu_bootnodes.txt"
-    
-    local besu_count=$(wc -l < "${TEMP_DIR}/besu_bootnodes.txt" || echo 0)
-    log_info "Found ${besu_count} bootnodes from Besu"
-    
-    # Combine all sources
-    cat "${TEMP_DIR}/coregeth_bootnodes.txt" \
-        "${TEMP_DIR}/besu_bootnodes.txt" 2>/dev/null | \
-        sort -u > "${TEMP_DIR}/all_external_bootnodes.txt"
+    # Use etcnodes as the external source
+    cp "${TEMP_DIR}/etcnodes_bootnodes.txt" "${TEMP_DIR}/all_external_bootnodes.txt"
     
     # Also add current bootnodes to available pool (they might still be valid)
     # Make sure current_bootnodes.txt exists before trying to cat it

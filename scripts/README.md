@@ -134,10 +134,11 @@ Automatically updates the ETC bootnode configuration by fetching and validating 
 ### Purpose
 
 The script ensures that Fukuii maintains a healthy list of 20 active bootnodes by:
-- Fetching bootnodes from authoritative sources (core-geth, Hyperledger Besu)
-- Validating current bootnodes against these authoritative lists
-- Removing bootnodes that are no longer in authoritative sources
-- Maintaining exactly 20 active bootnodes with proper port configuration
+- Fetching bootnodes from the etcnodes API (live ETC node network)
+- Validating current bootnodes against the live node list
+- Removing bootnodes that are no longer active
+- Maintaining exactly 20 active bootnodes
+- Prioritizing nodes with standard port (30303) when available
 
 ### Usage
 
@@ -147,7 +148,7 @@ bash scripts/update-bootnodes.sh
 
 # The script will:
 # 1. Extract current bootnodes from src/main/resources/conf/chains/etc-chain.conf
-# 2. Fetch bootnodes from core-geth and Besu repositories
+# 2. Fetch live bootnodes from etcnodes API
 # 3. Validate and select 20 bootnodes
 # 4. Update the configuration file
 # 5. Create a timestamped backup
@@ -167,26 +168,26 @@ When changes are detected, the workflow automatically creates a pull request wit
 
 ### Bootnode Sources
 
-1. **Core-geth**: https://github.com/etclabscore/core-geth
-   - Official Ethereum Classic client implementation
-   - Maintains authoritative list of ETC bootnodes
-
-2. **Hyperledger Besu**: https://github.com/hyperledger/besu
-   - Enterprise-grade Ethereum client
-   - Supports ETC mainnet with maintained bootnode list
+**etcnodes API**: https://api.etcnodes.org/peers
+- Real-time API of live ETC nodes on the network
+- Maintained by the ETC community
+- Provides up-to-date list of active nodes with connection information
+- GitHub: https://github.com/etclabscore/nodes-interface
+- Nodes with standard port 30303 are prioritized when available
 
 ### Selection Logic
 
 The script uses a priority-based selection process:
 
-1. **Priority 1**: Keep current bootnodes that exist in external authoritative sources
-2. **Priority 2**: Add new bootnodes from external authoritative sources
+1. **Priority 1**: Keep current bootnodes that exist in the live etcnodes API list
+2. **Priority 2**: Add new bootnodes from the live etcnodes API list
 3. **Priority 3**: Keep remaining current bootnodes (up to 20 total)
 
 This ensures:
 - Stability: Current working bootnodes are preserved when possible
-- Freshness: New authoritative bootnodes are added
-- Reliability: Non-authoritative or inactive bootnodes are removed
+- Freshness: New live bootnodes from the network are added
+- Liveness: All nodes are actively connected to the ETC network
+- Quality: Nodes with standard port 30303 are preferred
 
 ### Validation
 
