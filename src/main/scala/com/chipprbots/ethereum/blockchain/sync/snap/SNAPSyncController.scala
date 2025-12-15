@@ -432,6 +432,8 @@ class SNAPSyncController(
     
     case RetrySnapSyncStart =>
       log.info("Retrying SNAP sync start after bootstrap delay")
+      // Clear the bootstrap check task since it has fired
+      bootstrapCheckTask = None
       startSnapSync()
     
     case GetProgress =>
@@ -552,10 +554,12 @@ class SNAPSyncController(
             bootstrapRetryCount += 1
             log.info(s"Scheduling retry in $BootstrapRetryDelay...")
             
-            // Schedule a retry
-            scheduler.scheduleOnce(BootstrapRetryDelay) {
-              self ! RetrySnapSyncStart
-            }(ec)
+            // Schedule a retry and store the cancellable for proper cleanup
+            bootstrapCheckTask = Some(
+              scheduler.scheduleOnce(BootstrapRetryDelay) {
+                self ! RetrySnapSyncStart
+              }(ec)
+            )
             
             // Transition to bootstrapping state to handle the retry
             context.become(bootstrapping)
