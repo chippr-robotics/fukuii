@@ -398,12 +398,42 @@ class AccountRangeDownloader(
           log.warn("State trie is empty, nothing to finalize")
         } else {
           log.info("State trie has content, proceeding with finalization")
+          
+          // CRITICAL FIX: Force the root node to be explicitly persisted to storage
+          // The issue is that MerklePatriciaTrie may compute the root hash lazily without
+          // ensuring the root node itself is persisted. We force a re-persist by doing
+          // a dummy get operation which will trigger node persistence through the put cycle.
+          //
+          // Alternatively, we force a node update by putting and removing a dummy key.
+          // This ensures updateNodesInStorage is called with the current root.
+          val dummyKey = ByteString("__snap_finalize_dummy__")
+          val dummyValue = Account(
+            nonce = com.chipprbots.ethereum.domain.UInt256.Zero,
+            balance = com.chipprbots.ethereum.domain.UInt256.Zero,
+            storageRoot = ByteString(MerklePatriciaTrie.EmptyRootHash),
+            codeHash = ByteString(Account.EmptyCodeHash)
+          )
+          
+          // Put dummy account and immediately remove it
+          // This forces the trie to call updateNodesInStorage with the current root
+          val tempTrie = stateTrie.put(dummyKey, dummyValue)
+          stateTrie = tempTrie.remove(dummyKey)
+          
+          log.info(s"Forced root node persistence through dummy operation")
+          
+          // Verify the root hash hasn't changed
+          val finalRootHash = ByteString(stateTrie.getRootHash)
+          if (finalRootHash != currentRootHash) {
+            log.error(s"Root hash changed after dummy operation! Expected ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}, got ${finalRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
+            throw new RuntimeException("Root hash changed during finalization")
+          }
+          
+          log.info("Root node finalization verified")
         }
       }
       
       // Flush all pending writes to disk outside synchronized block to avoid deadlock
-      // Note: The trie nodes have already been written to storage through put() operations
-      // which call updateNodesInStorage(). This persist() ensures they are flushed to disk.
+      // This ensures all nodes including the root node are committed to persistent storage
       mptStorage.persist()
       log.info("Flushed all trie nodes to disk")
       

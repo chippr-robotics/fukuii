@@ -122,11 +122,26 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val healingComplete = StateHealingComplete
     val validationComplete = StateValidationComplete
     val getProgress = GetProgress
+    val bootstrapComplete = BootstrapComplete
+    val fallback = FallbackToFastSync
 
     // Verify they exist
     start shouldBe Start
     done shouldBe Done
     getProgress shouldBe GetProgress
+    bootstrapComplete shouldBe BootstrapComplete
+    fallback shouldBe FallbackToFastSync
+  }
+
+  it should "have bootstrap message with target block" taggedAs UnitTest in {
+    import SNAPSyncController._
+
+    // Test bootstrap message
+    val targetBlock = BigInt(1025)
+    val bootstrap = StartRegularSyncBootstrap(targetBlock)
+    
+    bootstrap.targetBlock shouldBe targetBlock
+    bootstrap shouldBe a[StartRegularSyncBootstrap]
   }
 
   it should "have correct phase types" taggedAs UnitTest in {

@@ -410,6 +410,52 @@ class SNAPSyncController(
       log.debug(s"Unhandled message in syncing state: $msg")
   }
 
+  def bootstrapping: Receive = handlePeerListMessages.orElse {
+    case BootstrapComplete =>
+      log.info("Bootstrap phase complete - transitioning to SNAP sync")
+      
+      // Clear bootstrap target from storage
+      appStateStorage.clearSnapSyncBootstrapTarget().commit()
+      
+      // Now we have enough blocks - start SNAP sync properly
+      startSnapSync()
+    
+    case GetProgress =>
+      // During bootstrap, report that we're preparing for SNAP sync
+      val currentBlock = appStateStorage.getBestBlockNumber()
+      val targetBlock = appStateStorage.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
+      
+      log.info(s"Bootstrap progress: $currentBlock / $targetBlock blocks")
+      
+      // Send a simple progress indicator - we're in bootstrap mode
+      sender() ! SyncProgress(
+        phase = Idle,
+        accountsSynced = 0,
+        bytecodesDownloaded = 0,
+        storageSlotsSynced = 0,
+        nodesHealed = 0,
+        elapsedSeconds = 0,
+        phaseElapsedSeconds = 0,
+        accountsPerSec = 0,
+        bytecodesPerSec = 0,
+        slotsPerSec = 0,
+        nodesPerSec = 0,
+        recentAccountsPerSec = 0,
+        recentBytecodesPerSec = 0,
+        recentSlotsPerSec = 0,
+        recentNodesPerSec = 0,
+        phaseProgress = if (targetBlock == 0) 0 else ((currentBlock.toDouble / targetBlock.toDouble) * 100).toInt,
+        estimatedTotalAccounts = 0,
+        estimatedTotalBytecodes = 0,
+        estimatedTotalSlots = 0,
+        startTime = System.currentTimeMillis(),
+        phaseStartTime = System.currentTimeMillis()
+      )
+    
+    case msg =>
+      log.debug(s"Unhandled message in bootstrapping state: $msg")
+  }
+
   def completed: Receive = {
     case GetProgress =>
       sender() ! progressMonitor.currentProgress
@@ -419,43 +465,72 @@ class SNAPSyncController(
   }
 
   private def startSnapSync(): Unit = {
+    // Check if there's an interrupted bootstrap to resume
+    appStateStorage.getSnapSyncBootstrapTarget() match {
+      case Some(bootstrapTarget) =>
+        val bestBlockNumber = appStateStorage.getBestBlockNumber()
+        
+        if (bestBlockNumber >= bootstrapTarget) {
+          // Bootstrap already complete - clear the target and proceed with SNAP sync
+          log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
+          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          // Continue to normal SNAP sync logic below
+        } else {
+          // Resume interrupted bootstrap
+          log.info(s"Resuming interrupted bootstrap: current block $bestBlockNumber / target $bootstrapTarget")
+          context.parent ! StartRegularSyncBootstrap(bootstrapTarget)
+          context.become(bootstrapping)
+          return
+        }
+      case None =>
+        // No bootstrap in progress - continue with normal logic
+    }
+    
     // Select pivot block
     val bestBlockNumber = appStateStorage.getBestBlockNumber()
     val pivotBlockNumber = bestBlockNumber - snapSyncConfig.pivotBlockOffset
 
     if (pivotBlockNumber <= 0) {
+      // Calculate how many blocks we need to bootstrap
+      val bootstrapTarget = snapSyncConfig.pivotBlockOffset + 1
+      
       log.info(
         s"Cannot start SNAP sync: best block ($bestBlockNumber) - pivot offset (${snapSyncConfig.pivotBlockOffset}) = $pivotBlockNumber"
       )
-      log.info(s"Blockchain needs at least ${snapSyncConfig.pivotBlockOffset + 1} blocks to start SNAP sync")
-      log.info("Falling back to fast sync to build initial blockchain")
-      context.parent ! FallbackToFastSync
-      return
-    }
+      log.info(s"Blockchain needs at least ${bootstrapTarget} blocks to start SNAP sync")
+      log.info(s"Starting automatic bootstrap: regular sync to block ${bootstrapTarget}")
+      
+      // Store bootstrap target for persistence and potential restart recovery
+      appStateStorage.putSnapSyncBootstrapTarget(bootstrapTarget).commit()
+      
+      // Request parent to start regular sync bootstrap
+      context.parent ! StartRegularSyncBootstrap(bootstrapTarget)
+      context.become(bootstrapping)
+    } else {
+      pivotBlock = Some(pivotBlockNumber)
 
-    pivotBlock = Some(pivotBlockNumber)
+      // Update metrics - pivot block
+      SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
 
-    // Update metrics - pivot block
-    SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
+      // Get state root for pivot block
+      blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
+        case Some(header) =>
+          stateRoot = Some(header.stateRoot)
+          appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
+          appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
-    // Get state root for pivot block
-    blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
-      case Some(header) =>
-        stateRoot = Some(header.stateRoot)
-        appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
-        appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+          log.info(s"SNAP sync pivot block: $pivotBlockNumber, state root: ${header.stateRoot.toHex}")
 
-        log.info(s"SNAP sync pivot block: $pivotBlockNumber, state root: ${header.stateRoot.toHex}")
+          // Start account range sync
+          currentPhase = AccountRangeSync
+          startAccountRangeSync(header.stateRoot)
+          context.become(syncing)
 
-        // Start account range sync
-        currentPhase = AccountRangeSync
-        startAccountRangeSync(header.stateRoot)
-        context.become(syncing)
-
-      case None =>
-        log.error(s"Cannot get header for pivot block $pivotBlockNumber")
-        log.info("Pivot block header not available - falling back to fast sync")
-        context.parent ! FallbackToFastSync
+        case None =>
+          log.error(s"Cannot get header for pivot block $pivotBlockNumber")
+          log.info("Pivot block header not available - falling back to fast sync")
+          context.parent ! FallbackToFastSync
+      }
     }
   }
 
@@ -981,6 +1056,8 @@ object SNAPSyncController {
   case object Start
   case object Done
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
+  case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
+  case object BootstrapComplete // Signal from SyncController that bootstrap is done
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete
