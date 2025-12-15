@@ -128,6 +128,11 @@ object Config {
 
       val statSlotDuration: FiniteDuration = peerConfig.getDuration("stat-slot-duration").toMillis.millis
       val statSlotCount: Int = peerConfig.getInt("stat-slot-count")
+      
+      // Whether to respect peers' listenPort=0 hint (outbound-only peers)
+      // When true, we won't attempt outbound connections to peers advertising listenPort=0
+      val respectPeerListenPort: Boolean = 
+        if (peerConfig.hasPath("respect-peer-listen-port")) peerConfig.getBoolean("respect-peer-listen-port") else true
     }
 
   }

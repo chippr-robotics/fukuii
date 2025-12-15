@@ -544,7 +544,8 @@ object NetworkPeerManagerActor {
       bestHash: ByteString,
       genesisHash: ByteString,
       supportsSnap: Boolean = false,
-      capabilities: List[Capability] = List.empty
+      capabilities: List[Capability] = List.empty,
+      listenPort: Long = 0
   ) {
     override def toString: String =
       s"RemoteStatus { " +
@@ -554,7 +555,8 @@ object NetworkPeerManagerActor {
         s"bestHash: ${ByteStringUtils.hash2string(bestHash)}, " +
         s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}, " +
         s"supportsSnap: $supportsSnap, " +
-        s"capabilities: ${capabilities.mkString("[", ", ", "]")}" +
+        s"capabilities: ${capabilities.mkString("[", ", ", "]")}, " +
+        s"listenPort: $listenPort" +
         s"}"
   }
 
@@ -563,7 +565,8 @@ object NetworkPeerManagerActor {
         status: ETH64.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        listenPort: Long = 0
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -572,7 +575,8 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        listenPort
       )
 
     def apply(status: ETH64.Status): RemoteStatus =
@@ -583,14 +587,16 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         false, // supportsSnap defaults to false
-        List.empty
+        List.empty,
+        0 // listenPort defaults to 0
       )
 
     def apply(
         status: BaseETH6XMessages.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        listenPort: Long = 0
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -599,7 +605,8 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        listenPort
       )
 
     def apply(status: BaseETH6XMessages.Status): RemoteStatus =
@@ -610,7 +617,8 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         false, // supportsSnap defaults to false
-        List.empty
+        List.empty,
+        0 // listenPort defaults to 0
       )
   }
 

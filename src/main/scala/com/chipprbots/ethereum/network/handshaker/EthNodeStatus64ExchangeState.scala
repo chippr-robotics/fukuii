@@ -17,7 +17,8 @@ case class EthNodeStatus64ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
     negotiatedCapability: Capability,
     supportsSnap: Boolean = false,
-    peerCapabilities: List[Capability] = List.empty
+    peerCapabilities: List[Capability] = List.empty,
+    peerListenPort: Long = 0
 ) extends EtcNodeStatusExchangeState[ETH64.Status] {
 
   import handshakerConfiguration._
@@ -70,7 +71,7 @@ case class EthNodeStatus64ExchangeState(
               "STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)"
             )
             ConnectedState(
-              PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities))
+              PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities, peerListenPort))
             )
           case other =>
             log.warn(
