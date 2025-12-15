@@ -21,6 +21,8 @@ Implemented a retry mechanism with the following features:
 
 4. **Graceful Degradation**: Only falls back to fast sync after all retry attempts are exhausted
 
+5. **User Experience**: Clear, informative log messages with visual indicators (🚀 🎯 ✅ ⏳ 🔄 ❌) guide users through the bootstrap and transition process
+
 ## Changes Made
 
 ### SNAPSyncController.scala
@@ -67,45 +69,77 @@ When pivot block header is not available:
 
 ### Manual Testing
 1. Start a fresh node from genesis with SNAP sync enabled
-2. Monitor logs for:
-   - "Starting automatic bootstrap: regular sync to block X"
-   - "Bootstrap phase complete - transitioning to SNAP sync"
-   - "Cannot get header for pivot block X (attempt Y/10)"
-   - "SNAP sync pivot block: X, state root: Y" (success)
-   OR
-   - "Pivot block header still not available after 10 retries" (fallback)
+2. Monitor logs for user-friendly status messages with visual indicators (🚀 🎯 ✅ ⏳ 🔄 ❌)
 
 ### Expected Behavior
-- Node starts regular sync bootstrap
-- After reaching target blocks, attempts SNAP sync transition
+- Node displays clear initialization message explaining the bootstrap process
+- Regular sync bootstrap gathers required initial blocks
+- After reaching target blocks, attempts SNAP sync transition with progress indicators
 - If pivot block header not immediately available, retries up to 10 times with 2-second delays
-- Successfully transitions to SNAP sync phases (AccountRange, ByteCode, Storage, Healing)
-- OR falls back to fast sync if pivot block remains unavailable
+- Successfully transitions to SNAP sync phases with clear confirmation
+- OR falls back to fast sync with clear error message if pivot block remains unavailable
 
 ### Log Patterns to Verify
 
-**Successful transition:**
+**Successful cold start (no retries needed):**
 ```
-Starting automatic bootstrap: regular sync to block 1025
-Bootstrap phase complete - transitioning to SNAP sync
-SNAP sync pivot block: 1, state root: 0xabcd...
+================================================================================
+🚀 SNAP Sync Initialization
+================================================================================
+Current blockchain state: 0 blocks
+SNAP sync requires at least 1025 blocks to begin
+System will gather 1025 initial blocks via regular sync
+Once complete, node will automatically transition to SNAP sync mode
+================================================================================
+⏳ Gathering initial blocks... (target: 1025)
+
+[Regular sync progress...]
+
+================================================================================
+✅ Bootstrap phase complete - transitioning to SNAP sync
+================================================================================
+
+================================================================================
+🎯 SNAP Sync Ready
+================================================================================
+Pivot block: 1
+State root: 0xabcd1234...
+Beginning fast state sync with 16 concurrent workers
+================================================================================
 Starting account range sync with concurrency 16
 ```
 
-**Retry scenario:**
+**Retry scenario (pivot block not immediately available):**
 ```
-Bootstrap phase complete - transitioning to SNAP sync
-Cannot get header for pivot block 1 (attempt 1/10)
-Scheduling retry in 2 seconds...
-Retrying SNAP sync start after bootstrap delay
-SNAP sync pivot block: 1, state root: 0xabcd...
+================================================================================
+✅ Bootstrap phase complete - transitioning to SNAP sync
+================================================================================
+
+⏳ Waiting for pivot block header to become available...
+   Pivot block 1 not ready yet (attempt 1/10)
+   Retrying in 2 seconds...
+
+🔄 Retrying SNAP sync start after bootstrap delay...
+
+================================================================================
+🎯 SNAP Sync Ready
+================================================================================
+Pivot block: 1
+State root: 0xabcd1234...
+Beginning fast state sync with 16 concurrent workers
+================================================================================
 ```
 
-**Fallback scenario (should be rare):**
+**Fallback scenario (should be extremely rare):**
 ```
-Cannot get header for pivot block 1 (attempt 10/10)
-Pivot block header still not available after 10 retries
-Falling back to fast sync
+⏳ Waiting for pivot block header to become available...
+   Pivot block 1 not ready yet (attempt 10/10)
+   Retrying in 2 seconds...
+
+================================================================================
+❌ Pivot block header not available after 10 retries
+   SNAP sync cannot proceed - falling back to fast sync
+================================================================================
 ```
 
 ## Configuration
