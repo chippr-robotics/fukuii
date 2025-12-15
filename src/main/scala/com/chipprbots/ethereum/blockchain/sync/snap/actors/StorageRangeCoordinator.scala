@@ -325,7 +325,7 @@ class StorageRangeCoordinator(
 
         storageTaskOpt match {
           case None =>
-            log.warn(s"No storage task found for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+            log.warning(s"No storage task found for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
             Left(s"No storage task found for account")
             
           case Some(storageTask) =>

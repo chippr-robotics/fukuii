@@ -697,7 +697,7 @@ class SNAPSyncController(
           requestTracker = requestTracker,
           batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
           snapSyncController = self
-        )(scheduler),
+        ),
         "bytecode-coordinator"
       )
     )
