@@ -67,11 +67,17 @@ class SNAPSyncController(
   private val MaxValidationRetries = 3
   private val ValidationRetryDelay = 500.millis
 
+  // Retry counter for bootstrap-to-SNAP transition
+  private var bootstrapRetryCount: Int = 0
+  private val MaxBootstrapRetries = 10
+  private val BootstrapRetryDelay = 2.seconds
+
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
   private var storageRangeRequestTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
+  private var bootstrapCheckTask: Option[Cancellable] = None
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
@@ -84,6 +90,7 @@ class SNAPSyncController(
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
+    bootstrapCheckTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
     // Log final error handler statistics
@@ -412,12 +419,23 @@ class SNAPSyncController(
 
   def bootstrapping: Receive = handlePeerListMessages.orElse {
     case BootstrapComplete =>
-      log.info("Bootstrap phase complete - transitioning to SNAP sync")
+      log.info("=" * 80)
+      log.info("✅ Bootstrap phase complete - transitioning to SNAP sync")
+      log.info("=" * 80)
       
       // Clear bootstrap target from storage
       appStateStorage.clearSnapSyncBootstrapTarget().commit()
       
+      // Reset retry counter
+      bootstrapRetryCount = 0
+      
       // Now we have enough blocks - start SNAP sync properly
+      startSnapSync()
+    
+    case RetrySnapSyncStart =>
+      log.info("🔄 Retrying SNAP sync start after bootstrap delay...")
+      // Clear the bootstrap check task since it has fired
+      bootstrapCheckTask = None
       startSnapSync()
     
     case GetProgress =>
@@ -493,12 +511,17 @@ class SNAPSyncController(
     if (pivotBlockNumber <= 0) {
       // Calculate how many blocks we need to bootstrap
       val bootstrapTarget = snapSyncConfig.pivotBlockOffset + 1
+      val blocksNeeded = bootstrapTarget - bestBlockNumber
       
-      log.info(
-        s"Cannot start SNAP sync: best block ($bestBlockNumber) - pivot offset (${snapSyncConfig.pivotBlockOffset}) = $pivotBlockNumber"
-      )
-      log.info(s"Blockchain needs at least ${bootstrapTarget} blocks to start SNAP sync")
-      log.info(s"Starting automatic bootstrap: regular sync to block ${bootstrapTarget}")
+      log.info("=" * 80)
+      log.info("🚀 SNAP Sync Initialization")
+      log.info("=" * 80)
+      log.info(s"Current blockchain state: $bestBlockNumber blocks")
+      log.info(s"SNAP sync requires at least $bootstrapTarget blocks to begin")
+      log.info(s"System will gather $blocksNeeded initial blocks via regular sync")
+      log.info(s"Once complete, node will automatically transition to SNAP sync mode")
+      log.info("=" * 80)
+      log.info(s"⏳ Gathering initial blocks... (target: $bootstrapTarget)")
       
       // Store bootstrap target for persistence and potential restart recovery
       appStateStorage.putSnapSyncBootstrapTarget(bootstrapTarget).commit()
@@ -519,7 +542,16 @@ class SNAPSyncController(
           appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
           appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
-          log.info(s"SNAP sync pivot block: $pivotBlockNumber, state root: ${header.stateRoot.toHex}")
+          log.info("=" * 80)
+          log.info("🎯 SNAP Sync Ready")
+          log.info("=" * 80)
+          log.info(s"Pivot block: $pivotBlockNumber")
+          log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+          log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+          log.info("=" * 80)
+
+          // Reset bootstrap retry counter on success
+          bootstrapRetryCount = 0
 
           // Start account range sync
           currentPhase = AccountRangeSync
@@ -527,9 +559,34 @@ class SNAPSyncController(
           context.become(syncing)
 
         case None =>
-          log.error(s"Cannot get header for pivot block $pivotBlockNumber")
-          log.info("Pivot block header not available - falling back to fast sync")
-          context.parent ! FallbackToFastSync
+          // Pivot block header not available - this can happen after bootstrap
+          // due to asynchronous block import
+          if (bootstrapRetryCount == 0) {
+            log.info("⏳ Waiting for pivot block header to become available...")
+          }
+          log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1}/$MaxBootstrapRetries)")
+          
+          if (bootstrapRetryCount < MaxBootstrapRetries) {
+            bootstrapRetryCount += 1
+            log.info(s"   Retrying in $BootstrapRetryDelay...")
+            
+            // Schedule a retry and store the cancellable for proper cleanup
+            bootstrapCheckTask = Some(
+              scheduler.scheduleOnce(BootstrapRetryDelay) {
+                self ! RetrySnapSyncStart
+              }(ec)
+            )
+            
+            // Transition to bootstrapping state to handle the retry
+            context.become(bootstrapping)
+          } else {
+            log.error("=" * 80)
+            log.error(s"❌ Pivot block header not available after $MaxBootstrapRetries retries")
+            log.error("   SNAP sync cannot proceed - falling back to fast sync")
+            log.error("=" * 80)
+            bootstrapRetryCount = 0
+            context.parent ! FallbackToFastSync
+          }
       }
     }
   }
@@ -1058,6 +1115,7 @@ object SNAPSyncController {
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
   case object BootstrapComplete // Signal from SyncController that bootstrap is done
+  private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete
