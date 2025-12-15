@@ -38,7 +38,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref
-      )(system.scheduler)
+      )
     )
 
     coordinator should not be null
@@ -57,7 +57,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref
-      )(system.scheduler)
+      )
     )
 
     val contractAccounts = Seq(
@@ -88,7 +88,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref
-      )(system.scheduler)
+      )
     )
 
     val contractAccounts = Seq(
@@ -115,7 +115,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref
-      )(system.scheduler)
+      )
     )
 
     coordinator ! Messages.ByteCodeTaskComplete(BigInt(123), Right(5))
@@ -138,7 +138,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref
-      )(system.scheduler)
+      )
     )
 
     // Start with empty contract list
@@ -162,7 +162,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref
-      )(system.scheduler)
+      )
     )
 
     coordinator ! Messages.ByteCodeTaskFailed(BigInt(123), "Test failure")
