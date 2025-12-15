@@ -1,0 +1,7606 @@
+
+<!doctype html>
+<html lang="en" class="no-js" data-fukuii-version="0.1.174">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Comprehensive documentation for the Fukuii Ethereum Classic client">
+      
+      
+        <meta name="author" content="Chippr Robotics LLC">
+      
+      
+        <link rel="canonical" href="https://chippr-robotics.github.io/fukuii/development/static-analysis/">
+      
+      
+        <link rel="prev" href="../REPOSITORY_STRUCTURE/">
+      
+      
+        <link rel="next" href="../ci-cd/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+    
+    
+      
+        <title>Static Analysis - Fukuii Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/wizard-theme.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+  <script>window.__FUKUII_VERSION__ = "0.1.174";</script>
+</head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#static-analysis-toolchain-inventory" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Fukuii Documentation" class="md-header__button md-logo" aria-label="Fukuii Documentation" data-md-component="logo">
+      
+  <img src="../../images/fukuii-logo-cute.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Fukuii Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Static Analysis
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chippr-robotics/fukuii" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    chippr-robotics/fukuii
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../for-node-operators/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  For Node Operators
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../for-operators/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  For Operators/SRE
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../for-developers/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  For Developers
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../specifications/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../troubleshooting/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Troubleshooting
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../validation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Validation
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../historical/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Background
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Fukuii Documentation" class="md-nav__button md-logo" aria-label="Fukuii Documentation" data-md-component="logo">
+      
+  <img src="../../images/fukuii-logo-cute.png" alt="logo">
+
+    </a>
+    Fukuii Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chippr-robotics/fukuii" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    chippr-robotics/fukuii
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../getting-started/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/codespaces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Codespaces
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/build-from-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build from Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../for-node-operators/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    For Node Operators
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    For Node Operators
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/first-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    First Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/node-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/operating-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/peering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Peering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/disk-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Disk Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/backup-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup & Restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/tls-operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/known-issues/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../for-operators/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    For Operators/SRE
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    For Operators/SRE
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/kong/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kong API Gateway
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/barad-dur-operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Barad-dûr Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/test-network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Test Network
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/metrics-and-monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics & Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/log-triage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Log Triage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/LOGGING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../for-developers/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    For Developers
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    For Developers
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_2" id="__nav_5_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/architecture-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fukuii Application Architecture Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/ARCHITECTURE_DIAGRAMS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Diagrams
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/console-ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/SNAP_SYNC_IMPLEMENTATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snap Sync
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5_3" id="__nav_5_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing to Fukuii
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../REPOSITORY_STRUCTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Repository Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Static Analysis
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Static Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executive Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scala-version-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scala Version Support
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Inventory
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool Inventory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-scalafmt-code-formatter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Scalafmt (Code Formatter)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-scalafix-refactoring-and-linting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Scalafix (Refactoring and Linting)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-scalastyle-style-checker-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Scalastyle (Style Checker) - ✅ REMOVED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-scala-3-migrate-migration-tooling-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Scala 3 Migrate (Migration Tooling) - ✅ REMOVED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-scapegoat-static-bug-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Scapegoat (Static Bug Detection)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-scoverage-code-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Scoverage (Code Coverage)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-sbt-sonar-sonarqube-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. SBT Sonar (SonarQube Integration)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-pipeline-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI Pipeline Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CI Pipeline Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#current-ci-workflow-githubworkflowsciyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current CI Workflow (.github/workflows/ci.yml)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#analysis-of-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Analysis of Ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-aliases-in-buildsbt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom Aliases in build.sbt
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Custom Aliases in build.sbt">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pp-prepare-pr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pp (Prepare PR)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        formatAll
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatcheck" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        formatCheck
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        testAll
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testcoverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        testCoverage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runscapegoat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        runScapegoat
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-comparison-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Comparison Matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#issues-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Issues Summary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Issues Summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resolved-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolved Issues ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minor-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Minor Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recommendations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#completed-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Completed Actions ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#low-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low Priority
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-updates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency Updates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appropriateness-assessment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Appropriateness Assessment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Appropriateness Assessment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tools-fit-for-purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tools Fit for Purpose ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#questionable-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Questionable Tools ⚠️
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tool-overlap-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Overlap Resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-time-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution Time Analysis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conclusion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next Steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci-cd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI/CD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../branch-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Branch Protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../codespaces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Codespaces
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../testing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5_4" id="__nav_5_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Testing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/TEST_TAGGING_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Test Tagging Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/E2E_TESTING_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    E2E Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/ETHEREUM_TESTS_CI_INTEGRATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethereum Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/KPI_MONITORING_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KPI Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/PERFORMANCE_BASELINES/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance Baselines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/interactive-api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/JSON_RPC_API_REFERENCE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    JSON-RPC Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/JSON_RPC_COVERAGE_ANALYSIS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RPC Coverage Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/INSOMNIA_WORKSPACE_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Insomnia Workspace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/MCP_INTEGRATION_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../specifications/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Specifications
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_1" id="__nav_7_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Specifications
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specifications/RLP_INTEGER_ENCODING_SPEC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RLP Encoding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EVM Compatibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADRs
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_2" id="__nav_7_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    ADRs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/infrastructure/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_2_2" id="__nav_7_2_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_2_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Infrastructure
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/infrastructure/INF-001-scala-3-migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scala 3 Migration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/infrastructure/INF-001a-netty-cats-effect-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Netty Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/infrastructure/INF-002-actor-system-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Actor Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/infrastructure/INF-003-jupnp-apache-httpclient-transport/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UPnP Transport
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/infrastructure/INF-004-actor-io-error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Actor IO Error Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/infrastructure/INF-005-docker-deployment-strategy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker Strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/consensus/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consensus
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_2_3" id="__nav_7_2_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_2_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Consensus
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/consensus/CON-001-rlpx-protocol-deviations-and-peer-bootstrap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RLPx Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/consensus/CON-002-bootstrap-checkpoints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootstrap Checkpoints
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/consensus/CON-003-block-sync-improvements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Sync
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/consensus/CON-004-mess-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MESS Implementation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/consensus/CON-005-eth66-protocol-aware-message-formatting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ETH66 Formatting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/consensus/CON-006-forkid-compatibility-during-initial-sync/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ForkID Compatibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/vm/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_2_4" id="__nav_7_2_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_2_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VM
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/vm/VM-001-eip-3541-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-3541
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/vm/VM-002-eip-3529-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-3529
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/vm/VM-003-eip-3651-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-3651
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/vm/VM-004-eip-3855-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-3855
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/vm/VM-005-eip-3860-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-3860
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/vm/VM-006-eip-6049-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-6049
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/vm/VM-007-eip-161-noemptyaccounts-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-161 Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/testing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_2_5" id="__nav_7_2_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_2_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Testing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/testing/TEST-001-ethereum-tests-adapter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethereum Tests Adapter
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/testing/TEST-002-test-suite-strategy-and-kpis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Test Suite Strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../adr/operations/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_2_6" id="__nav_7_2_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_2_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/operations/OPS-001-console-ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Console UI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/operations/OPS-002-logging-level-categorization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging Levels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_2_7" id="__nav_7_2_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocols
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_7_2_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Protocols
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/protocols/ADR-SNAP-001-protocol-infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SNAP Protocol Infra
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/protocols/ADR-SNAP-002-integration-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SNAP Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../guides/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7_3" id="__nav_7_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/mess-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MESS Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_8" id="__nav_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/BLOCK_SYNC_TROUBLESHOOTING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block Sync Issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/GAS_CALCULATION_ISSUES/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gas Calculation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/LOG_REVIEW_RESOLUTION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Log Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_9" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../validation/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validation
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Validation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/EXECUTIVE_SUMMARY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Executive Summary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_9_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_9_3" id="__nav_9_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gorgoroth Network
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_9_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Gorgoroth Network
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/GORGOROTH_COMPATIBILITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compatibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/GORGOROTH_IMPLEMENTATION_SUMMARY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Implementation Summary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/GORGOROTH_VALIDATION_STATUS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validation Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/GORGOROTH_STATUS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/GORGOROTH_3NODE_WALKTHROUGH/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    3-Node Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/GORGOROTH_6NODE_WALKTHROUGH/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    6-Node Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/GORGOROTH_PHASE2_FIELD_REPORT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Phase 2 Field Report
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_9_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_9_4" id="__nav_9_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol Validation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_9_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Protocol Validation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/P2P_COMMUNICATION_VALIDATION_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Communication Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/CIRITH_UNGOL_WALKTHROUGH/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cirith Ungol Walkthrough
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/EIP155_BIGINT_VALIDATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-155 BigInt Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../validation/ETC64_REMOVAL_VALIDATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ETC64 Removal Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Background
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Background
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../historical/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Historical
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_10_1" id="__nav_10_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Historical
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../historical/MIGRATION_HISTORY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration History
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../historical/ETHEREUM_TESTS_MIGRATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethereum Tests Migration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_2" id="__nav_10_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Investigation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Investigation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../investigation/FASTSYNC_TIMEOUT_INVESTIGATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FastSync Timeout
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../investigation/CONTRACT_TEST_FAILURE_ANALYSIS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Test Failure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../investigation/INTEGRATION_TEST_CLASSIFICATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_3" id="__nav_10_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../analysis/EIP-2124_IMPLEMENTATION_ANALYSIS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    EIP-2124 Implementation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../analysis/RLPX_HANDSHAKE_AND_MESSAGE_ENCODING_ANALYSIS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RLPx Handshake Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../analysis/rlpx-hello-regression/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RLPx Hello Regression
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_4" id="__nav_10_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reviews
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reviews
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reviews/COMPRESSION_FIX_WIRE_PROTOCOL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compression Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reviews/RUN_007_INVESTIGATION_SUMMARY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run 007 Investigation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reviews/SNAP_PROTOCOL_COMPLIANCE_VALIDATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SNAP Protocol Compliance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reviews/SNAP_SYNC_IMPLEMENTATION_REVIEW/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SNAP Sync Implementation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../reports/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reports
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_10_5" id="__nav_10_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reports
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reports/NETWORK_TEST_REPORT/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Test Report
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reports/IMPLEMENTATION_COMPLETE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Implementation Complete
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_6" id="__nav_10_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Announcements
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Announcements
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../announcements/gorgoroth-trials-announcement/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gorgoroth Trials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../tools/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_10_7" id="__nav_10_7_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tools
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/configuration-wizard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration Wizard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executive Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scala-version-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scala Version Support
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Inventory
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool Inventory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-scalafmt-code-formatter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Scalafmt (Code Formatter)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-scalafix-refactoring-and-linting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Scalafix (Refactoring and Linting)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-scalastyle-style-checker-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Scalastyle (Style Checker) - ✅ REMOVED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-scala-3-migrate-migration-tooling-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Scala 3 Migrate (Migration Tooling) - ✅ REMOVED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-scapegoat-static-bug-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Scapegoat (Static Bug Detection)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-scoverage-code-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Scoverage (Code Coverage)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-sbt-sonar-sonarqube-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. SBT Sonar (SonarQube Integration)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-pipeline-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI Pipeline Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CI Pipeline Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#current-ci-workflow-githubworkflowsciyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current CI Workflow (.github/workflows/ci.yml)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#analysis-of-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Analysis of Ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-aliases-in-buildsbt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom Aliases in build.sbt
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Custom Aliases in build.sbt">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pp-prepare-pr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pp (Prepare PR)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        formatAll
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatcheck" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        formatCheck
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        testAll
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testcoverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        testCoverage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runscapegoat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        runScapegoat
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-comparison-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Comparison Matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#issues-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Issues Summary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Issues Summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resolved-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolved Issues ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minor-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Minor Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recommendations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#completed-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Completed Actions ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#low-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Low Priority
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-updates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency Updates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appropriateness-assessment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Appropriateness Assessment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Appropriateness Assessment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tools-fit-for-purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tools Fit for Purpose ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#questionable-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Questionable Tools ⚠️
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tool-overlap-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool Overlap Resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-time-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution Time Analysis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conclusion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next Steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../../for-developers/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    For Developers
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../contributing/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Development
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/chippr-robotics/fukuii/edit/develop/docs/development/static-analysis.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="static-analysis-toolchain-inventory">Static Analysis Toolchain Inventory<a class="headerlink" href="#static-analysis-toolchain-inventory" title="Permanent link">&para;</a></h1>
+<p><strong>Date</strong>: October 26, 2025 <em>(Historical snapshot during Scala 2 to 3 migration)</em><br />
+<strong>Updated</strong>: November 1, 2025 <em>(Phase 5 Cleanup completed - Scala 3 only)</em><br />
+<strong>Repository</strong>: chippr-robotics/fukuii<br />
+<strong>Purpose</strong>: Inventory current static analysis toolchain for state, versioning, appropriateness, ordering, and current issues</p>
+<blockquote>
+<p><strong>Note</strong>: This document was originally created during the Scala 2 to 3 migration. The migration was completed in October 2025, and Phase 5 cleanup has been completed. The project now uses Scala 3.3.4 exclusively with all Scala 2 cross-compilation support removed.</p>
+</blockquote>
+<hr />
+<h2 id="executive-summary">Executive Summary<a class="headerlink" href="#executive-summary" title="Permanent link">&para;</a></h2>
+<p>The Fukuii project uses a comprehensive static analysis toolchain for Scala development consisting of 6 primary tools:
+1. <strong>Scalafmt</strong> - Code formatting (Scala 2 &amp; 3 support)
+2. <strong>Scalafix</strong> - Code refactoring and linting
+3. <strong>Scala3-Migrate</strong> - Scala 3 migration tooling (NEW)
+4. <strong>Scapegoat</strong> - Static code analysis for bugs
+5. <strong>Scoverage</strong> - Code coverage
+6. <strong>SBT Sonar</strong> - Integration with SonarQube</p>
+<p><strong>Current State</strong>: The toolchain is in excellent condition for Scala 3:
+- ✅ <strong>COMPLETED</strong>: Scala 3.3.4 (LTS) exclusive support
+- ✅ <strong>COMPLETED</strong>: Phase 5 cleanup - Scala 2 cross-compilation removed
+- ✅ <strong>UPDATED</strong>: Scalafmt 2.7.5 → 3.8.3 (Scala 3 native dialect)
+- ✅ <strong>UPDATED</strong>: sbt-scalafmt 2.4.2 → 2.5.2 (Scala 3 support)
+- ✅ <strong>REMOVED</strong>: sbt-scala3-migrate plugin (no longer needed)
+- ✅ <strong>RESOLVED</strong>: All Scalafix violations fixed (12 files updated)
+- ✅ <strong>UPDATED</strong>: Scalafix 0.9.29 → 0.10.4
+- ✅ <strong>UPDATED</strong>: organize-imports 0.5.0 → 0.6.0
+- ✅ <strong>REMOVED</strong>: Abandoned scaluzzi dependency
+- ✅ <strong>RESOLVED</strong>: All scalafmt formatting violations
+- ✅ <strong>REMOVED</strong>: Scalastyle (unmaintained since 2017) - functionality migrated to Scalafix
+- ✅ <strong>COMPLETED</strong>: Migration to Scala 3.3.4 (October 2025)
+- ✅ <strong>COMPLETED</strong>: Phase 5 cleanup (November 2025)</p>
+<hr />
+<h2 id="scala-version-support">Scala Version Support<a class="headerlink" href="#scala-version-support" title="Permanent link">&para;</a></h2>
+<p><strong>Primary Version:</strong> Scala 3.3.4 (LTS)</p>
+<p><strong>Migration Status:</strong>
+- ✅ Migration from Scala 2.13 completed in October 2025
+- ✅ Phase 5 cleanup completed in November 2025
+- ✅ All tooling updated for Scala 3 compatibility
+- ✅ Scala 3 only (no cross-compilation)
+- ✅ All Scala 2-specific code and configuration removed</p>
+<p>See <a href="../../historical/MIGRATION_HISTORY/">Migration History</a> for details on the completed Scala 2 to 3 migration and Phase 5 cleanup.</p>
+<hr />
+<h2 id="tool-inventory">Tool Inventory<a class="headerlink" href="#tool-inventory" title="Permanent link">&para;</a></h2>
+<h3 id="1-scalafmt-code-formatter">1. Scalafmt (Code Formatter)<a class="headerlink" href="#1-scalafmt-code-formatter" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Automatic code formatting to enforce consistent style across the codebase.</p>
+<p><strong>Configuration Files</strong>:
+- <code>.scalafmt.conf</code></p>
+<p><strong>Version Information</strong>:
+- <strong>Scalafmt Version</strong>: 3.8.3 (updated from 2.7.5)
+- <strong>SBT Plugin</strong>: org.scalameta:sbt-scalafmt:2.5.2 (updated from 2.4.2)</p>
+<p><strong>Configuration Details</strong>:
+<div class="language-scala highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;3.8.3&quot;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">align</span><span class="p">.</span><span class="n">preset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">some</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">maxColumn</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">120</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">runner</span><span class="p">.</span><span class="n">dialect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">scala3</span><span class="w">  </span><span class="n">#</span><span class="w"> </span><span class="nc">Scala</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="n">native</span><span class="w"> </span><span class="n">dialect</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">rewrite</span><span class="p">.</span><span class="n">rules</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="nc">AvoidInfix</span><span class="p">,</span><span class="w"> </span><span class="nc">RedundantBraces</span><span class="p">,</span><span class="w"> </span><span class="nc">RedundantParens</span><span class="p">,</span><span class="w"> </span><span class="nc">SortModifiers</span><span class="p">]</span>
+</span></code></pre></div></p>
+<p><strong>Current State</strong>: ✅ <strong>PASSING</strong> with Scala 3 native dialect
+- All files are formatted properly
+- Uses Scala 3 dialect exclusively</p>
+<p><strong>SBT Commands</strong>:
+- <code>sbt scalafmtAll</code> - Format all sources
+- <code>sbt scalafmtCheckAll</code> - Check formatting without modifying
+- <code>sbt bytes/scalafmtAll</code>, <code>crypto/scalafmtAll</code>, <code>rlp/scalafmtAll</code> - Format individual modules</p>
+<p><strong>Analysis</strong>:
+- ✅ <strong>Version</strong>: 3.8.3 is up-to-date with full Scala 3 support
+- ✅ <strong>Appropriateness</strong>: Excellent tool for automated formatting
+- ✅ <strong>Current State</strong>: All formatting checks passing
+- ✅ <strong>Ordering</strong>: Correctly runs early in CI pipeline before other checks
+- ✅ <strong>Scala 3 Support</strong>: Full support for Scala 3 syntax and cross-compilation</p>
+<p><strong>Recommendation</strong>: 
+- ✅ COMPLETED: Fixed the formatting violation in VMServerSpec.scala
+- ✅ COMPLETED: Updated to Scalafmt 3.8.3 with Scala 3 support
+- ✅ COMPLETED: Configured for Scala 3 native dialect (Phase 5 cleanup)</p>
+<hr />
+<h3 id="2-scalafix-refactoring-and-linting">2. Scalafix (Refactoring and Linting)<a class="headerlink" href="#2-scalafix-refactoring-and-linting" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Automated refactoring and enforcing code quality rules through semantic analysis.</p>
+<p><strong>Configuration Files</strong>:
+- <code>.scalafix.conf</code></p>
+<p><strong>Version Information</strong>:
+- <strong>SBT Plugin</strong>: ch.epfl.scala:sbt-scalafix:0.10.4 (updated from 0.9.29)
+- <strong>SemanticDB</strong>: Auto-configured via scalafixSemanticdb.revision</p>
+<p><strong>Rules Enabled</strong>:
+1. <code>DisableSyntax</code> - Prevent usage of certain language features (return, finalize)
+2. <code>ExplicitResultTypes</code> - Require explicit return types
+3. <code>NoAutoTupling</code> - Prevent automatic tupling
+4. <code>NoValInForComprehension</code> - Prevent val in for comprehensions
+5. <code>OrganizeImports</code> - Organize and clean up imports
+6. <code>ProcedureSyntax</code> - Remove deprecated procedure syntax
+7. <code>RemoveUnused</code> - Remove unused code</p>
+<p><strong>Additional Dependencies</strong>:
+- <code>com.github.liancheng:organize-imports:0.6.0</code> (updated from 0.5.0)
+- <del><code>com.github.vovapolu:scaluzzi:0.1.16</code></del> (removed - abandoned since 2020)</p>
+<p><strong>Configuration Details</strong>:
+<div class="language-scala highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nc">DisableSyntax</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="n">noReturns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="n">noFinalize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">}</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nc">OrganizeImports</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="n">groupedImports</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">Explode</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="n">groups</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="s">&quot;re:javax?\\.&quot;</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="s">&quot;akka.&quot;</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="s">&quot;cats.&quot;</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="s">&quot;monix.&quot;</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="s">&quot;scala.&quot;</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="s">&quot;scala.meta.&quot;</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="s">&quot;*&quot;</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="s">&quot;com.chipprbots.ethereum.&quot;</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">  </span><span class="n">removeUnused</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="p">}</span>
+</span></code></pre></div></p>
+<p><strong>Note on Scalastyle Migration</strong>:
+- Critical checks (return, finalize) migrated to DisableSyntax
+- Formatting rules now handled by Scalafmt
+- Some Scalastyle checks (null detection, println detection, code metrics) not replicated to maintain minimal changes
+- Existing return statements suppressed with <code>scalafix:ok DisableSyntax.return</code> comments</p>
+<p><strong>Current State</strong>: ✅ <strong>RESOLVED</strong>
+- All Scalafix violations have been fixed
+- ✅ FIXED: 2 unused imports in <code>src/it/scala/com/chipprbots/ethereum/sync/FastSyncItSpec.scala</code>
+- ✅ FIXED: 1 unused variable in <code>src/test/scala/com/chipprbots/ethereum/domain/SignedLegacyTransactionSpec.scala</code>
+- ✅ FIXED: Additional unused imports and variables in 9 other files</p>
+<p><strong>SBT Commands</strong>:
+- <code>sbt scalafixAll</code> - Apply fixes to all sources
+- <code>sbt scalafixAll --check</code> - Check without modifying
+- Module-specific: <code>bytes/scalafixAll</code>, <code>crypto/scalafixAll</code>, <code>rlp/scalafixAll</code></p>
+<p><strong>Analysis</strong>:
+- ✅ <strong>Version</strong>: 0.10.4 is up-to-date for Scala 2.13.6 (0.11.x requires Scala 2.13.8+)
+- ✅ <strong>Appropriateness</strong>: Excellent for semantic linting
+- ✅ <strong>Issues</strong>: All violations fixed
+- ✅ <strong>Ordering</strong>: Runs after compilation, appropriate placement
+- ✅ <strong>organize-imports</strong>: Updated to 0.6.0
+- ✅ <strong>scaluzzi</strong>: Removed (was abandoned since 2020)
+- ✅ <strong>DisableSyntax</strong>: Added to prevent return and finalize usage (migrated from Scalastyle)</p>
+<p><strong>Recommendation</strong>: 
+- ✅ COMPLETED: All violations fixed
+- ✅ COMPLETED: Updated sbt-scalafix to 0.10.4
+- ✅ COMPLETED: Updated organize-imports to 0.6.0
+- ✅ COMPLETED: Removed abandoned scaluzzi dependency
+- ✅ COMPLETED: Added DisableSyntax rule to replace key Scalastyle checks
+- ✅ COMPLETED: Updated suppression comments from scalastyle to scalafix format
+- Future: Consider Scala 2.13.8+ upgrade to enable Scalafix 0.11.x</p>
+<hr />
+<h3 id="3-scalastyle-style-checker-removed">3. Scalastyle (Style Checker) - ✅ REMOVED<a class="headerlink" href="#3-scalastyle-style-checker-removed" title="Permanent link">&para;</a></h3>
+<p><strong>Status</strong>: ✅ <strong>REMOVED</strong> (October 26, 2025)</p>
+<p><strong>Reason for Removal</strong>: 
+- Project unmaintained since 2017 (last release: version 1.0.0)
+- Functionality superseded by Scalafmt (formatting) and Scalafix (linting)
+- Community has moved to Scalafix for semantic linting</p>
+<p><strong>Migration Path</strong>:
+- <strong>Formatting rules</strong> (tabs, whitespace, line length, brackets) → Handled by <strong>Scalafmt</strong>
+- <strong>Semantic rules</strong> (return, finalize checks) → Migrated to <strong>Scalafix DisableSyntax</strong> rule
+- <strong>Type checking</strong> (explicit result types) → Already covered by <strong>Scalafix ExplicitResultTypes</strong>
+- <strong>Code quality metrics</strong> (cyclomatic complexity, method length) → Not enforced in CI, but remain as best practices in documentation
+- <strong>Other checks</strong> (null detection, println detection) → Not migrated to maintain minimal changes; can be addressed in future improvements</p>
+<p><strong>Previous Configuration</strong>:
+- Checked 401 main source files and 213 test files
+- All checks were passing at time of removal
+- Configuration files removed: <code>scalastyle-config.xml</code>, <code>scalastyle-test-config.xml</code></p>
+<p><strong>Recommendation</strong>: 
+- ✅ COMPLETED: Removed Scalastyle plugin and configuration
+- ✅ COMPLETED: Enhanced Scalafix rules to cover critical checks
+- Keep code quality guidelines in documentation for reference</p>
+<hr />
+<h3 id="3-scala-3-migrate-migration-tooling-removed">3. Scala 3 Migrate (Migration Tooling) - ✅ REMOVED<a class="headerlink" href="#3-scala-3-migrate-migration-tooling-removed" title="Permanent link">&para;</a></h3>
+<p><strong>Status</strong>: ✅ <strong>REMOVED</strong> (November 2025 - Phase 5 cleanup)</p>
+<p><strong>Reason for Removal</strong>: 
+- Migration to Scala 3.3.4 completed in October 2025
+- Plugin no longer needed for Scala 3-only project
+- Command aliases removed as part of Phase 5 cleanup</p>
+<p><strong>Previous Configuration</strong>:
+- Was used during migration to identify incompatibilities
+- Helped with syntax migration and compatibility checks
+- All migration tasks completed successfully</p>
+<p><strong>Recommendation</strong>: 
+- ✅ COMPLETED: Successfully migrated from Scala 2.13 to Scala 3.3.4
+- ✅ COMPLETED: Removed plugin and command aliases (Phase 5)</p>
+<hr />
+<h3 id="4-scapegoat-static-bug-detection">4. Scapegoat (Static Bug Detection)<a class="headerlink" href="#4-scapegoat-static-bug-detection" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Static code analysis to detect common bugs, anti-patterns, and code smells.</p>
+<p><strong>Configuration</strong>:
+- Configured in <code>build.sbt</code></p>
+<p><strong>Version Information</strong>:
+- <strong>SBT Plugin</strong>: com.sksamuel.scapegoat:sbt-scapegoat:1.2.13
+- <strong>Scapegoat Version</strong>: 1.4.11 (latest for Scala 2.13.6)</p>
+<p><strong>Output Format</strong>:
+- XML and HTML reports in <code>target/scala-2.13/scapegoat-report/</code></p>
+<p><strong>Configuration Details</strong>:
+<div class="language-scala highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">(</span><span class="nc">ThisBuild</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">scapegoatVersion</span><span class="p">)</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;1.4.11&quot;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">scapegoatReports</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nc">Seq</span><span class="p">(</span><span class="s">&quot;xml&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;html&quot;</span><span class="p">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">scapegoatConsoleOutput</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">false</span><span class="w">  </span><span class="c1">// Reduce CI log verbosity</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">scapegoatDisabledInspections</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nc">Seq</span><span class="p">(</span><span class="s">&quot;UnsafeTraversableMethods&quot;</span><span class="p">)</span><span class="w">  </span><span class="c1">// Too many false positives</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">scapegoatIgnoredFiles</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nc">Seq</span><span class="p">(</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="s">&quot;.*/src_managed/.*&quot;</span><span class="p">,</span><span class="w">           </span><span class="c1">// All generated sources</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="s">&quot;.*/target/.*protobuf/.*&quot;</span><span class="p">,</span><span class="w">     </span><span class="c1">// Protobuf generated code</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="s">&quot;.*/BuildInfo\\.scala&quot;</span><span class="w">         </span><span class="c1">// BuildInfo generated code</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">)</span>
+</span></code></pre></div></p>
+<p><strong>Current State</strong>: ✅ <strong>CONFIGURED AND PASSING</strong>
+- Updated to latest versions (plugin 1.2.13, analyzer 1.4.11)
+- Configured exclusions for generated code
+- Integrated into CI pipeline
+- Generates both XML and HTML reports
+- Disabled <code>UnsafeTraversableMethods</code> inspection (produces false positives when pattern matching guarantees safety)
+- Console output disabled to reduce CI log noise
+- <strong>Fixed legitimate issues</strong>: 6 critical unsafe code issues resolved in crypto and rlp modules</p>
+<p><strong>SBT Commands</strong>:
+- <code>sbt runScapegoat</code> - Run analysis on all modules and generate reports
+- <code>sbt scapegoat</code> - Run analysis on main module only
+- <code>sbt bytes/scapegoat</code>, <code>crypto/scapegoat</code>, <code>rlp/scapegoat</code> - Run analysis on individual modules</p>
+<p><strong>Analysis</strong>:
+- ✅ <strong>Version</strong>: 1.2.13 (plugin) and 1.4.11 (analyzer) are up-to-date for Scala 2.13.6
+- ✅ <strong>Appropriateness</strong>: Excellent for finding bugs and code quality issues
+- ✅ <strong>Configuration</strong>: Properly excludes generated code directories
+- ✅ <strong>Ordering</strong>: Integrated into CI pipeline after formatting checks
+- ✅ <strong>Reports</strong>: Generates both XML and HTML for easy review</p>
+<p><strong>Note</strong>: Scapegoat 3.x is only available for Scala 3. For Scala 2.13.6, version 1.4.11 is the latest.</p>
+<p><strong>Recommendation</strong>: 
+- ✅ COMPLETED: Updated to Scapegoat 1.4.11 (latest for Scala 2.13.6)
+- ✅ COMPLETED: Added scapegoat to CI pipeline
+- ✅ COMPLETED: Configured to exclude generated code directories
+- ✅ COMPLETED: Fixed 6 legitimate unsafe code issues (4 in crypto, 2 in rlp)
+- ✅ COMPLETED: Configured to disable overly strict <code>UnsafeTraversableMethods</code> inspection
+- ✅ COMPLETED: Set console output to false for cleaner CI logs
+- Review scapegoat reports regularly to fix remaining legitimate issues
+- Consider upgrading to Scala 2.13.8+ to use newer Scapegoat versions</p>
+<hr />
+<h3 id="5-scoverage-code-coverage">5. Scoverage (Code Coverage)<a class="headerlink" href="#5-scoverage-code-coverage" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Measure code coverage during test execution.</p>
+<p><strong>Configuration</strong>:
+- Configured in <code>build.sbt</code></p>
+<p><strong>Version Information</strong>:
+- <strong>SBT Plugin</strong>: org.scoverage:sbt-scoverage:2.0.10</p>
+<p><strong>Configuration Details</strong>:
+<div class="language-scala highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">coverageEnabled</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="c1">// Disabled by default, enable with `sbt coverage`</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">coverageMinimumStmtTotal</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">70</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">coverageFailOnMinimum</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">coverageHighlighting</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">coverageExcludedPackages</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nc">Seq</span><span class="p">(</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="s">&quot;com\\.chipprbots\\.ethereum\\.extvm\\.msg.*&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// Protobuf generated code</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="s">&quot;com\\.chipprbots\\.ethereum\\.utils\\.BuildInfo&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// BuildInfo generated code</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="s">&quot;.*\\.protobuf\\..*&quot;</span><span class="w">  </span><span class="c1">// All protobuf packages</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">).</span><span class="n">mkString</span><span class="p">(</span><span class="s">&quot;;&quot;</span><span class="p">)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">coverageExcludedFiles</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nc">Seq</span><span class="p">(</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span><span class="s">&quot;.*/src_managed/.*&quot;</span><span class="p">,</span><span class="w">  </span><span class="c1">// All managed sources</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span><span class="s">&quot;.*/target/.*/src_managed/.*&quot;</span><span class="w">  </span><span class="c1">// Target managed sources</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="p">).</span><span class="n">mkString</span><span class="p">(</span><span class="s">&quot;;&quot;</span><span class="p">)</span>
+</span></code></pre></div></p>
+<p><strong>Current State</strong>: ✅ <strong>CONFIGURED AND INTEGRATED</strong> (October 26, 2025)
+- Updated to version 2.0.10 (latest stable)
+- Integrated into CI pipeline with <code>testCoverage</code> command
+- Coverage thresholds set to 70% minimum statement coverage
+- Comprehensive exclusions for generated code
+- Coverage reports published as artifacts (30-day retention)</p>
+<p><strong>SBT Commands</strong>:
+- <code>sbt testCoverage</code> - Run all tests with coverage and generate reports
+- <code>sbt coverage</code> - Enable coverage instrumentation
+- <code>sbt coverageReport</code> - Generate coverage reports
+- <code>sbt coverageAggregate</code> - Aggregate coverage across modules
+- <code>sbt coverageOff</code> - Disable coverage instrumentation</p>
+<p><strong>Report Locations</strong>:
+- HTML report: <code>target/scala-2.13/scoverage-report/index.html</code>
+- XML report: <code>target/scala-2.13/scoverage-report/cobertura.xml</code></p>
+<p><strong>Analysis</strong>:
+- ✅ <strong>Version</strong>: 2.0.10 is the latest stable version for Scala 2.13
+- ✅ <strong>Appropriateness</strong>: Essential for measuring test coverage
+- ✅ <strong>Current State</strong>: Actively used in CI pipeline
+- ✅ <strong>Ordering</strong>: Runs during test phase, appropriate placement
+- ✅ <strong>Thresholds</strong>: 70% minimum statement coverage with enforcement
+- ✅ <strong>Exclusions</strong>: Comprehensive exclusions for generated code</p>
+<p><strong>Recommendation</strong>: 
+- ✅ COMPLETED: Updated to Scoverage 2.0.10
+- ✅ COMPLETED: Added coverage execution to CI pipeline
+- ✅ COMPLETED: Set minimum coverage threshold to 70%
+- ✅ COMPLETED: Configured proper exclusions for generated code
+- ✅ COMPLETED: Publishing coverage reports as CI artifacts
+- Monitor coverage trends and consider increasing threshold gradually
+- Review coverage reports regularly to identify untested code</p>
+<hr />
+<h3 id="6-sbt-sonar-sonarqube-integration">6. SBT Sonar (SonarQube Integration)<a class="headerlink" href="#6-sbt-sonar-sonarqube-integration" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Integration with SonarQube for centralized code quality management.</p>
+<p><strong>Configuration</strong>:
+- Available via plugin, likely needs additional setup</p>
+<p><strong>Version Information</strong>:
+- <strong>SBT Plugin</strong>: com.github.mwz:sbt-sonar:2.2.0</p>
+<p><strong>Current State</strong>: ⚠️ <strong>NOT ACTIVELY USED</strong>
+- Plugin is installed
+- No SonarQube server configured
+- Not integrated into CI pipeline</p>
+<p><strong>SBT Commands</strong>:
+- <code>sbt sonarScan</code> - Upload analysis to SonarQube</p>
+<p><strong>Analysis</strong>:
+- ⚠️ <strong>Version</strong>: 2.2.0 (2020) - moderately outdated
+- ✅ <strong>Appropriateness</strong>: Good for centralized quality management
+- ❌ <strong>Current State</strong>: Not being used
+- ❓ <strong>Prerequisites</strong>: Requires SonarQube server setup
+- ⚠️ <strong>Alternative</strong>: Could use SonarCloud for hosted solution</p>
+<p><strong>Recommendation</strong>: 
+- Decide if SonarQube/SonarCloud is needed
+- If yes: Set up server and configure project
+- If no: Remove plugin to reduce dependencies
+- Consider SonarCloud as easier alternative to self-hosted</p>
+<hr />
+<h2 id="ci-pipeline-analysis">CI Pipeline Analysis<a class="headerlink" href="#ci-pipeline-analysis" title="Permanent link">&para;</a></h2>
+<h3 id="current-ci-workflow-githubworkflowsciyml">Current CI Workflow (<code>.github/workflows/ci.yml</code>)<a class="headerlink" href="#current-ci-workflow-githubworkflowsciyml" title="Permanent link">&para;</a></h3>
+<p><strong>Build Strategy</strong>: ✅ Scala 3.3.4 only (Phase 5 cleanup completed)</p>
+<p><strong>Execution Order</strong>:
+1. <strong>Compile</strong> - <code>sbt compile-all</code> (compiles all modules)
+2. <strong>Format Check</strong> - <code>sbt formatCheck</code> (scalafmt + scalafix --check)
+3. <strong>Scapegoat Analysis</strong> - <code>sbt runScapegoat</code> (Scala 3 compatible version)
+4. <strong>Tests with Coverage</strong> - <code>sbt testCoverage</code> (runs all tests with coverage)
+5. <strong>Build</strong> - <code>sbt assembly</code> + <code>sbt dist</code> (distribution artifacts)</p>
+<p><strong>Configuration</strong>:
+- <strong>Scala 3.3.4 LTS</strong>: Single version pipeline (compilation, formatting, Scapegoat, tests, coverage, build artifacts)</p>
+<p><strong>Missing from CI</strong>:
+- ❌ SonarQube integration (optional enhancement)</p>
+<p><strong>Integrated in CI</strong>:
+- ✅ Scala 3.3.4 LTS (single version)
+- ✅ Scapegoat analysis (Scala 3 compatible)
+- ✅ Code coverage measurement with Scoverage
+- ✅ Coverage reports published as artifacts (30-day retention)</p>
+<h3 id="analysis-of-ordering">Analysis of Ordering<a class="headerlink" href="#analysis-of-ordering" title="Permanent link">&para;</a></h3>
+<p>✅ <strong>Good Ordering</strong>:
+1. Compile first - Ensures code compiles before style checks
+2. Formatting check early - Fast feedback on style issues (includes Scalafmt + Scalafix)
+3. Scapegoat runs after compilation and formatting - Finds bugs and code smells
+4. Tests with coverage run after all static checks - Comprehensive test validation with metrics</p>
+<p>✅ <strong>Current Implementation</strong>:
+The pipeline follows optimal ordering with all quality gates integrated:
+1. Compilation → 2. Formatting/Style → 3. Static Analysis → 4. Tests with Coverage → 5. Artifacts</p>
+<p><strong>Achieved Goals</strong>:
+- ✅ Fast feedback (fail early on style/formatting issues)
+- ✅ Comprehensive static analysis (Scapegoat + Scoverage)
+- ✅ Coverage measurement with 70% minimum threshold
+- ✅ Artifacts published for reports (Scapegoat + Coverage)
+- ✅ Scala 3 LTS version only (no cross-compilation overhead)</p>
+<hr />
+<h2 id="custom-aliases-in-buildsbt">Custom Aliases in build.sbt<a class="headerlink" href="#custom-aliases-in-buildsbt" title="Permanent link">&para;</a></h2>
+<p>The project defines several useful aliases for running multiple checks:</p>
+<h3 id="pp-prepare-pr"><code>pp</code> (Prepare PR)<a class="headerlink" href="#pp-prepare-pr" title="Permanent link">&para;</a></h3>
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>compile-all → scalafmt (all modules) → testQuick → IntegrationTest
+</span></code></pre></div>
+- Comprehensive pre-PR check
+- ⚠️ Missing scapegoat and coverage (consider adding in future)</p>
+<h3 id="formatall"><code>formatAll</code><a class="headerlink" href="#formatall" title="Permanent link">&para;</a></h3>
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>compile-all → scalafixAll → scalafmtAll (all modules)
+</span></code></pre></div>
+- Applies all formatting fixes
+- ✅ Good for batch updates</p>
+<h3 id="formatcheck"><code>formatCheck</code><a class="headerlink" href="#formatcheck" title="Permanent link">&para;</a></h3>
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>compile-all → scalafixAll --check → scalafmtCheckAll (all modules)
+</span></code></pre></div>
+- Checks all formatting without changes
+- ✅ Used in CI</p>
+<h3 id="testall"><code>testAll</code><a class="headerlink" href="#testall" title="Permanent link">&para;</a></h3>
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>compile-all → test (all modules + IntegrationTest)
+</span></code></pre></div>
+- Runs all tests
+- Use <code>testCoverage</code> for tests with coverage measurement</p>
+<h3 id="testcoverage"><code>testCoverage</code><a class="headerlink" href="#testcoverage" title="Permanent link">&para;</a></h3>
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>coverage → testAll → coverageReport → coverageAggregate
+</span></code></pre></div>
+- Runs all tests with coverage instrumentation
+- Generates HTML and XML coverage reports
+- Aggregates coverage across all modules
+- ✅ Used in CI</p>
+<h3 id="runscapegoat"><code>runScapegoat</code><a class="headerlink" href="#runscapegoat" title="Permanent link">&para;</a></h3>
+<p><div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>compile-all → scapegoat (all modules)
+</span></code></pre></div>
+- Runs static bug detection analysis on all modules
+- ✅ Integrated into CI pipeline
+- Generates XML and HTML reports</p>
+<hr />
+<h2 id="tool-comparison-matrix">Tool Comparison Matrix<a class="headerlink" href="#tool-comparison-matrix" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Version</th>
+<th>Status</th>
+<th>In CI</th>
+<th>Scala 3 Support</th>
+<th>Update Priority</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scalafmt</td>
+<td>3.8.3 / 2.5.2</td>
+<td>✅ Passing</td>
+<td>✅ Yes</td>
+<td>✅ Yes</td>
+<td>✅ Complete</td>
+</tr>
+<tr>
+<td>Scalafix</td>
+<td>0.10.4</td>
+<td>✅ Passing</td>
+<td>✅ Yes</td>
+<td>⚠️ Limited</td>
+<td>✅ Complete</td>
+</tr>
+<tr>
+<td>Scapegoat</td>
+<td>1.2.13 / 3.1.4</td>
+<td>✅ Configured</td>
+<td>✅ Yes</td>
+<td>✅ Yes</td>
+<td>✅ Complete</td>
+</tr>
+<tr>
+<td>Scoverage</td>
+<td>2.0.10</td>
+<td>✅ Configured</td>
+<td>✅ Yes</td>
+<td>✅ Yes</td>
+<td>✅ Complete</td>
+</tr>
+<tr>
+<td>SBT Sonar</td>
+<td>2.2.0</td>
+<td>⚠️ Inactive</td>
+<td>❌ No</td>
+<td>❓ Unknown</td>
+<td>Low</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Notes</strong>: 
+- Scalastyle has been removed (October 26, 2025) as it was unmaintained since 2017. Its functionality has been migrated to Scalafix and Scalafmt.
+- Scala3-Migrate has been removed (November 2025 - Phase 5) as migration is complete
+- CI runs on Scala 3.3.4 LTS only (no cross-compilation)
+- All tools are now Scala 3 compatible</p>
+<hr />
+<h2 id="issues-summary">Issues Summary<a class="headerlink" href="#issues-summary" title="Permanent link">&para;</a></h2>
+<h3 id="resolved-issues">Resolved Issues ✅<a class="headerlink" href="#resolved-issues" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Scala 3 Support</strong>: ✅ <strong>ADDED</strong> (October 26, 2025)</li>
+<li>Added Scala 3.3.4 (LTS) cross-compilation support</li>
+<li>Updated Scalafmt to 3.8.3 with Scala 3 support</li>
+<li>Updated sbt-scalafmt to 2.5.2</li>
+<li>Added scala3-migrate plugin (0.6.1)</li>
+<li>Configured CI matrix builds for both Scala 2.13 and 3.3</li>
+<li>
+<p>Added migration command aliases</p>
+</li>
+<li>
+<p><strong>Scapegoat</strong>: ✅ <strong>RESOLVED</strong> (October 26, 2025)</p>
+</li>
+<li>Updated to version 1.4.11 (latest for Scala 2.13.6)</li>
+<li>Added to CI pipeline</li>
+<li>Configured exclusions for generated code</li>
+<li>Generates both XML and HTML reports</li>
+<li><strong>Fixed 6 critical unsafe code issues</strong>:<ul>
+<li>crypto/ConcatKDFBytesGenerator: Replaced <code>.reduce</code> with <code>.foldLeft</code> for safe ByteString concatenation</li>
+<li>crypto/ECDSASignature: Replaced unsafe <code>.last</code> with safe indexed access after length check</li>
+<li>crypto/MGF1BytesGeneratorExt: Replaced <code>.reduce</code> with <code>.foldLeft</code> for safe ByteString concatenation</li>
+<li>crypto/BN128: Fixed comparison of unrelated types (BigInt vs Int)</li>
+<li>rlp/RLPImplicitDerivations: Replaced <code>.head</code>/<code>.tail</code> with safe indexed access (2 instances)</li>
+</ul>
+</li>
+<li>Disabled <code>UnsafeTraversableMethods</code> inspection to reduce false positives</li>
+<li>
+<p>Set console output to false for cleaner CI logs</p>
+</li>
+<li>
+<p><strong>Scalafix</strong>: ✅ <strong>RESOLVED</strong></p>
+</li>
+<li>Updated from 0.9.29 to 0.10.4</li>
+<li>Updated organize-imports from 0.5.0 to 0.6.0</li>
+<li>Removed abandoned scaluzzi dependency</li>
+<li>
+<p>Fixed all violations (12 files total)</p>
+</li>
+<li>
+<p><strong>Scalafmt</strong>: ✅ <strong>RESOLVED</strong> - All formatting violations fixed</p>
+</li>
+<li>
+<p><strong>Scalastyle</strong>: ✅ <strong>REMOVED</strong> (October 26, 2025) - Unmaintained since 2017</p>
+</li>
+<li>
+<p><strong>Scoverage</strong>: ✅ <strong>RESOLVED</strong> (October 26, 2025)</p>
+</li>
+<li>Updated to version 2.0.10 (latest stable)</li>
+<li>Integrated into CI pipeline with <code>testCoverage</code> command</li>
+<li>Set minimum coverage threshold to 70%</li>
+<li>Configured comprehensive exclusions for generated code</li>
+<li>Coverage reports published as artifacts</li>
+</ol>
+<h3 id="minor-issues">Minor Issues<a class="headerlink" href="#minor-issues" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>SBT Sonar</strong>: Installed but not configured or used</li>
+</ol>
+<hr />
+<h2 id="recommendations">Recommendations<a class="headerlink" href="#recommendations" title="Permanent link">&para;</a></h2>
+<h3 id="completed-actions">Completed Actions ✅<a class="headerlink" href="#completed-actions" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Scapegoat Configuration</strong>: ✅ <strong>COMPLETED</strong> (October 26, 2025)</li>
+<li>✅ Updated sbt-scapegoat plugin to 1.2.13 (from 1.1.0)</li>
+<li>✅ Updated scapegoat analyzer to 1.4.11 (from 1.4.9) - latest for Scala 2.13.6</li>
+<li>✅ Added to CI pipeline with <code>runScapegoat</code> command</li>
+<li>✅ Configured exclusions for generated code:<ul>
+<li>All files in <code>src_managed</code> directories</li>
+<li>Protobuf generated code</li>
+<li>BuildInfo generated code</li>
+</ul>
+</li>
+<li>✅ Enabled both XML and HTML report generation</li>
+<li>✅ Updated documentation</li>
+<li>
+<p>Note: Scapegoat 3.x is only available for Scala 3; 1.4.11 is the latest for Scala 2.13.6</p>
+</li>
+<li>
+<p><strong>Scalafix Updates</strong>: ✅ <strong>COMPLETED</strong></p>
+</li>
+<li>✅ Fixed all violations (unused imports and variables in 12 files)</li>
+<li>✅ Updated sbt-scalafix to 0.10.4 (0.11.x requires Scala 2.13.8+)</li>
+<li>✅ Updated organize-imports to 0.6.0</li>
+<li>✅ Removed abandoned scaluzzi dependency</li>
+<li>
+<p>✅ Added DisableSyntax rule to prevent null, return, finalize, and println usage</p>
+</li>
+<li>
+<p><strong>Scalafmt</strong>: ✅ <strong>COMPLETED</strong></p>
+</li>
+<li>
+<p>✅ All formatting violations fixed</p>
+</li>
+<li>
+<p><strong>Scalastyle Removal</strong>: ✅ <strong>COMPLETED</strong> (October 26, 2025)</p>
+</li>
+<li>✅ Removed Scalastyle plugin from project/plugins.sbt</li>
+<li>✅ Removed scalastyle-config.xml and scalastyle-test-config.xml</li>
+<li>✅ Removed Scalastyle checks from CI workflow</li>
+<li>✅ Updated build.sbt to remove Scalastyle references</li>
+<li>✅ Updated CONTRIBUTING.md to remove Scalastyle documentation</li>
+<li>
+<p>✅ Migrated critical checks to Scalafix DisableSyntax rule</p>
+</li>
+<li>
+<p><strong>Code Coverage with Scoverage</strong>: ✅ <strong>COMPLETED</strong> (October 26, 2025)</p>
+</li>
+<li>✅ Updated sbt-scoverage plugin to 2.0.10 (from 1.6.1)</li>
+<li>✅ Added to CI pipeline with <code>testCoverage</code> command</li>
+<li>✅ Set minimum coverage threshold to 70%</li>
+<li>✅ Configured comprehensive exclusions for generated code:<ul>
+<li>Protobuf generated packages</li>
+<li>BuildInfo generated code</li>
+<li>All managed sources</li>
+</ul>
+</li>
+<li>✅ Configured coverage to fail on minimum threshold</li>
+<li>✅ Enabled coverage highlighting</li>
+<li>✅ Publishing coverage reports as CI artifacts (30-day retention)</li>
+<li>
+<p>✅ Updated documentation (CONTRIBUTING.md, STATIC_ANALYSIS_INVENTORY.md)</p>
+</li>
+<li>
+<p><strong>Scala 3 Cross-Compilation Setup</strong>: ✅ <strong>COMPLETED</strong> (October 26, 2025)</p>
+</li>
+<li>✅ Added Scala 3.3.4 (LTS) to supported versions</li>
+<li>✅ Updated Scalafmt to 3.8.3 with Scala 3 support</li>
+<li>✅ Updated sbt-scalafmt plugin to 2.5.2</li>
+<li>✅ Added scala3-migrate plugin (0.6.1)</li>
+<li>✅ Configured cross-compilation in build.sbt</li>
+<li>✅ Separated Scala 2 and Scala 3 compiler options</li>
+<li>✅ Updated CI pipeline with matrix builds (Scala 2.13 + 3.3)</li>
+<li>✅ Added Scala 3 migration command aliases</li>
+<li>✅ Updated documentation (README, CONTRIBUTING, STATIC_ANALYSIS_INVENTORY)</li>
+</ol>
+<h3 id="low-priority">Low Priority<a class="headerlink" href="#low-priority" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Evaluate SonarQube</strong>:</li>
+<li>Decide if needed for the project</li>
+<li>If yes: Set up and configure</li>
+<li>If no: Remove plugin</li>
+</ol>
+<hr />
+<h2 id="dependency-updates">Dependency Updates<a class="headerlink" href="#dependency-updates" title="Permanent link">&para;</a></h2>
+<div class="language-scala highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1">// Current versions → Recommended/Updated versions</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c1">// Plugins (project/plugins.sbt)</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="s">&quot;ch.epfl.scala&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;sbt-scalafix&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;0.9.29&quot;</span><span class="w">              </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;0.10.4&quot;</span><span class="w"> </span><span class="p">(</span><span class="mf">0.11.1</span><span class="w"> </span><span class="n">requires</span><span class="w"> </span><span class="nc">Scala</span><span class="w"> </span><span class="mf">2.13.8</span><span class="o">+</span><span class="p">)</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="s">&quot;org.scalameta&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;sbt-scalafmt&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;2.4.2&quot;</span><span class="w">               </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;2.5.2&quot;</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="s">&quot;com.sksamuel.scapegoat&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;sbt-scapegoat&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;1.1.0&quot;</span><span class="w">    </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;1.2.13&quot;</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="s">&quot;org.scoverage&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;sbt-scoverage&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;1.6.1&quot;</span><span class="w">              </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;2.0.10&quot;</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="s">&quot;org.scalastyle&quot;</span><span class="w"> </span><span class="o">%%</span><span class="w"> </span><span class="s">&quot;scalastyle-sbt-plugin&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;1.0.0&quot;</span><span class="w">   </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="nc">Removed</span><span class="w"> </span><span class="p">(</span><span class="n">unmaintained</span><span class="p">)</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="s">&quot;ch.epfl.scala&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;sbt-scala3-migrate&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;N/A&quot;</span><span class="w">           </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;0.6.1&quot;</span><span class="w"> </span><span class="p">(</span><span class="nc">NEW</span><span class="p">)</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="s">&quot;com.github.mwz&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;sbt-sonar&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;2.2.0&quot;</span><span class="w">                 </span><span class="o">→</span><span class="w"> </span><span class="s">&quot;2.3.0&quot;</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="c1">// Configuration files</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="p">.</span><span class="n">scalafmt</span><span class="p">.</span><span class="n">conf</span><span class="p">:</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;2.7.5&quot;</span><span class="w">                        </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;3.8.3&quot;</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="c1">// Build.sbt dependencies</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="n">scapegoatVersion</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;1.4.9&quot;</span><span class="w">                              </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;1.4.11&quot;</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="s">&quot;com.github.liancheng&quot;</span><span class="w"> </span><span class="o">%%</span><span class="w"> </span><span class="s">&quot;organize-imports&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;0.5.0&quot;</span><span class="w">   </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="s">&quot;0.6.0&quot;</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="s">&quot;com.github.vovapolu&quot;</span><span class="w"> </span><span class="o">%%</span><span class="w"> </span><span class="s">&quot;scaluzzi&quot;</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="s">&quot;0.1.16&quot;</span><span class="w">           </span><span class="o">→</span><span class="w"> </span><span class="n">✅</span><span class="w"> </span><span class="nc">Removed</span><span class="w"> </span><span class="p">(</span><span class="n">abandoned</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>Note</strong>: Scapegoat 3.x (e.g., 3.2.2) is only available for Scala 3. For Scala 2.13.6, version 1.4.11 is the latest available.</p>
+<hr />
+<h2 id="appropriateness-assessment">Appropriateness Assessment<a class="headerlink" href="#appropriateness-assessment" title="Permanent link">&para;</a></h2>
+<h3 id="tools-fit-for-purpose">Tools Fit for Purpose ✅<a class="headerlink" href="#tools-fit-for-purpose" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Scalafmt</strong>: Perfect for automated formatting (with Scala 3 support)</li>
+<li><strong>Scalafix</strong>: Excellent for semantic linting and refactoring (now includes DisableSyntax rules)</li>
+<li><strong>Scala3-Migrate</strong>: Essential for gradual Scala 3 migration</li>
+<li><strong>Scapegoat</strong>: Great for bug detection (Scala 2.13 only)</li>
+<li><strong>Scoverage</strong>: Standard for coverage measurement (supports both Scala 2 and 3)</li>
+</ul>
+<h3 id="questionable-tools">Questionable Tools ⚠️<a class="headerlink" href="#questionable-tools" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>SBT Sonar</strong>: Not being used; either configure or remove</li>
+</ul>
+<h3 id="tool-overlap-resolution">Tool Overlap Resolution<a class="headerlink" href="#tool-overlap-resolution" title="Permanent link">&para;</a></h3>
+<p>Previous overlap between Scalastyle, Scalafix, and Scalafmt has been resolved:
+- <strong>Formatting</strong> → Scalafmt (exclusive, supports Scala 2 &amp; 3)
+- <strong>Semantic linting</strong> → Scalafix (exclusive, now includes DisableSyntax rules)
+- <strong>Bug detection</strong> → Scapegoat (exclusive domain, Scala 2.13 only)
+- <strong>Migration tooling</strong> → Scala3-Migrate (exclusive domain)</p>
+<p>✅ <strong>Scalastyle removed</strong> (October 26, 2025) - functionality migrated to Scalafix and Scalafmt</p>
+<hr />
+<h2 id="execution-time-analysis">Execution Time Analysis<a class="headerlink" href="#execution-time-analysis" title="Permanent link">&para;</a></h2>
+<p>Based on CI logs and manual runs (per Scala version in matrix):
+- <strong>Compile</strong>: ~60s (initial), ~10s (incremental)
+- <strong>Scalafmt check</strong>: ~20s
+- <strong>Scalafix check</strong>: ~170s (2m 50s) - slowest check
+- <strong>Scapegoat</strong>: ~43s (Scala 2.13 only)
+- <strong>Tests with Coverage</strong>: Variable (several minutes, longer than without coverage)</p>
+<p><strong>Total CI time</strong>: ~5-8 minutes (single Scala 3.3.4 version)
+- Scala 3.3.4: ~5-8 minutes (full pipeline)</p>
+<p><strong>Note</strong>: 
+- Coverage instrumentation adds ~20-30% overhead to test execution time, but provides valuable metrics
+- Simplified to single Scala version reduces CI overhead</p>
+<hr />
+<h2 id="conclusion">Conclusion<a class="headerlink" href="#conclusion" title="Permanent link">&para;</a></h2>
+<p>The Fukuii project has a comprehensive static analysis toolchain with excellent coverage of formatting, linting, code quality, and test coverage for Scala 3:</p>
+<ol>
+<li>✅ <strong>Formatting and linting unified</strong> under Scalafmt and Scalafix (Scala 3 native)</li>
+<li>✅ <strong>Removed unmaintained tools</strong> (Scalastyle, scala3-migrate)</li>
+<li>✅ <strong>Integrated bug detection</strong> (Scapegoat in CI with Scala 3 support)</li>
+<li>✅ <strong>Updated tools</strong> (Scapegoat to 3.1.4, Scoverage to 2.0.10, Scalafmt to 3.8.3)</li>
+<li>✅ <strong>Fixed legitimate code issues</strong> (6 critical unsafe code patterns resolved)</li>
+<li>✅ <strong>Comprehensive code coverage</strong> (Scoverage 2.0.10 with 70% threshold)</li>
+<li>✅ <strong>Scala 3 exclusive</strong> (Scala 3.3.4 LTS only, no cross-compilation)</li>
+<li>✅ <strong>Phase 5 cleanup complete</strong> (All Scala 2 artifacts removed)</li>
+</ol>
+<p><strong>Overall Assessment</strong>: 🟢 <strong>Excellent - Complete, modern, Scala 3 native toolchain</strong></p>
+<p>The toolchain has been fully modernized and simplified for Scala 3:
+- Scalastyle removed and migrated to Scalafix
+- Scapegoat updated to 3.1.4 for Scala 3 support
+- Scoverage updated to 2.0.10 and integrated into CI with coverage thresholds
+- Scalafmt updated to 3.8.3 with Scala 3 native dialect
+- Scala 3.3.4 (LTS) exclusive support
+- scala3-migrate plugin removed (migration complete)
+- All Scala 2 cross-compilation removed (Phase 5 cleanup)
+- All static analysis tools now running in CI pipeline and passing
+- Critical unsafe code issues fixed in crypto and rlp modules
+- Overly strict inspections disabled to prevent false positive failures
+- Coverage reports published as CI artifacts for tracking trends
+- Complete documentation updates for Scala 3 migration and Phase 5 cleanup</p>
+<hr />
+<h2 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
+<p>Based on this inventory, the following items have been addressed:</p>
+<ol>
+<li><strong>Fix Current Static Analysis Violations</strong> ✅ <strong>COMPLETED</strong></li>
+<li>✅ COMPLETED: Fixed all scalafmt formatting violations</li>
+<li>✅ COMPLETED: Fixed all scalafix violations in 12 files</li>
+<li>✅ COMPLETED: Removed unused imports in FastSyncItSpec.scala</li>
+<li>
+<p>✅ COMPLETED: Removed unused variable in SignedLegacyTransactionSpec.scala</p>
+</li>
+<li>
+<p><strong>Update Scalafix Toolchain</strong> ✅ <strong>COMPLETED</strong></p>
+</li>
+<li>✅ COMPLETED: Updated sbt-scalafix to 0.10.4</li>
+<li>✅ COMPLETED: Updated organize-imports to 0.6.0</li>
+<li>✅ COMPLETED: Removed abandoned scaluzzi dependency</li>
+<li>
+<p>Note: Scalafix 0.11.x requires Scala 2.13.8+; current version is 2.13.6</p>
+</li>
+<li>
+<p><strong>Migrate from Scalastyle to Scalafix</strong> ✅ <strong>COMPLETED</strong></p>
+</li>
+<li>✅ COMPLETED: Removed Scalastyle plugin and configuration files</li>
+<li>✅ COMPLETED: Added DisableSyntax rule to Scalafix for critical checks</li>
+<li>✅ COMPLETED: Updated CI workflow to remove Scalastyle</li>
+<li>
+<p>✅ COMPLETED: Updated documentation (CONTRIBUTING.md, STATIC_ANALYSIS_INVENTORY.md)</p>
+</li>
+<li>
+<p><strong>Integrate Scapegoat into CI and Fix Legitimate Issues</strong> ✅ <strong>COMPLETED</strong> (October 26, 2025)</p>
+</li>
+<li>✅ COMPLETED: Updated sbt-scapegoat plugin to 1.2.13</li>
+<li>✅ COMPLETED: Updated scapegoat analyzer to 1.4.11 (latest for Scala 2.13.6)</li>
+<li>✅ COMPLETED: Added to CI pipeline with <code>runScapegoat</code> command</li>
+<li>✅ COMPLETED: Configured exclusions for generated code</li>
+<li>✅ COMPLETED: Enabled XML and HTML report generation</li>
+<li>✅ COMPLETED: Fixed 6 critical unsafe code issues in crypto and rlp modules</li>
+<li>✅ COMPLETED: Disabled <code>UnsafeTraversableMethods</code> inspection (too many false positives)</li>
+<li>✅ COMPLETED: Set console output to false for cleaner CI logs</li>
+<li>✅ COMPLETED: Updated documentation</li>
+<li>✅ COMPLETED: Verified all tests pass (crypto: 65 tests, rlp: 24 tests)</li>
+<li>
+<p>Note: Scapegoat 3.x requires Scala 3; 1.4.11 is the latest for current Scala 2.13.6</p>
+</li>
+<li>
+<p><strong>Enable Code Coverage Tracking</strong> ✅ <strong>COMPLETED</strong> (October 26, 2025)</p>
+</li>
+<li>✅ COMPLETED: Updated sbt-scoverage to 2.0.10 (latest stable)</li>
+<li>✅ COMPLETED: Added to CI pipeline with <code>testCoverage</code> command</li>
+<li>✅ COMPLETED: Set minimum coverage threshold to 70%</li>
+<li>✅ COMPLETED: Configured comprehensive exclusions for generated code</li>
+<li>✅ COMPLETED: Enabled coverage highlighting and fail-on-minimum</li>
+<li>✅ COMPLETED: Publishing coverage reports as CI artifacts (30-day retention)</li>
+<li>
+<p>✅ COMPLETED: Updated documentation (CONTRIBUTING.md, STATIC_ANALYSIS_INVENTORY.md)</p>
+</li>
+<li>
+<p><strong>Setup Scala 3 Cross-Compilation</strong> ✅ <strong>COMPLETED</strong> (October 26, 2025)</p>
+</li>
+<li>✅ COMPLETED: Added Scala 3.3.4 (LTS) to build.sbt</li>
+<li>✅ COMPLETED: Updated Scalafmt to 3.8.3 with Scala 3 support</li>
+<li>✅ COMPLETED: Updated sbt-scalafmt plugin to 2.5.2</li>
+<li>✅ COMPLETED: Added scala3-migrate plugin (0.6.1)</li>
+<li>✅ COMPLETED: Configured cross-compilation for all modules</li>
+<li>✅ COMPLETED: Separated Scala 2 and Scala 3 compiler options</li>
+<li>✅ COMPLETED: Updated CI with matrix builds (Scala 2.13 + 3.3)</li>
+<li>✅ COMPLETED: Added migration command aliases (scala3Migrate, compileScala3, testScala3)</li>
+<li>
+<p>✅ COMPLETED: Updated documentation (README, CONTRIBUTING, STATIC_ANALYSIS_INVENTORY)</p>
+</li>
+<li>
+<p><strong>Tool Maintenance and Cleanup</strong> (Future Work)</p>
+</li>
+<li>Evaluate and configure or remove SBT Sonar</li>
+<li>Consider Scala 2.13.8+ upgrade to enable Scalafix 0.11.x and Scapegoat 3.x</li>
+<li>Monitor Scala 3 ecosystem for Scapegoat compatibility</li>
+</ol>
+<hr />
+<p><strong>Document Version</strong>: 1.5<br />
+<strong>Last Updated</strong>: October 26, 2025 (Scala 3 cross-compilation support added)<br />
+<strong>Author</strong>: Static Analysis Inventory Tool</p>
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../REPOSITORY_STRUCTURE/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Repository Structure">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Repository Structure
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../ci-cd/" class="md-footer__link md-footer__link--next" aria-label="Next: CI/CD">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                CI/CD
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/chippr-robotics/fukuii" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "navigation.footer", "navigation.indexes", "toc.follow", "search.suggest", "search.highlight", "search.share", "content.code.copy", "content.code.annotate", "content.tabs.link", "content.action.edit"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+        <script src="../../tools/wizard-app.js"></script>
+      
+    
+  </body>
+</html>
