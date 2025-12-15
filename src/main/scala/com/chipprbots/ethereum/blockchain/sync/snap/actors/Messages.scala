@@ -19,6 +19,8 @@ object Messages {
   case class TaskComplete(requestId: BigInt, result: Either[String, Int]) extends AccountRangeCoordinatorMessage
   case class TaskFailed(requestId: BigInt, reason: String) extends AccountRangeCoordinatorMessage
   case object GetProgress extends AccountRangeCoordinatorMessage
+  case object GetContractAccounts extends AccountRangeCoordinatorMessage
+  case class ContractAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   sealed trait AccountRangeWorkerMessage

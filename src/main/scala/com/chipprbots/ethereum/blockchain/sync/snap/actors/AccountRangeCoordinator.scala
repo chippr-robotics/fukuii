@@ -118,6 +118,10 @@ class AccountRangeCoordinator(
       val progress = calculateProgress()
       sender() ! progress
 
+    case GetContractAccounts =>
+      val contracts = accountRangeDownloader.getContractAccounts
+      sender() ! ContractAccountsResponse(contracts)
+
     case CheckCompletion =>
       if (isComplete) {
         log.info("Account range sync complete!")
