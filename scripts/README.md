@@ -196,11 +196,7 @@ Each bootnode is validated to ensure:
 - Valid IP address or hostname
 - Valid port number
 - Proper discovery port specification (if applicable)
-- UDP connectivity check (simplified ping test, informational only)
-  - Attempts to verify the bootnode is reachable via UDP
-  - Non-blocking check with 1-second timeout
-  - Logs warnings for unreachable nodes but doesn't reject them
-  - Falls back gracefully if network tools (nc/ncat) are unavailable
+- Presence in authoritative sources (core-geth, Hyperledger Besu)
 
 ### Configuration File
 
