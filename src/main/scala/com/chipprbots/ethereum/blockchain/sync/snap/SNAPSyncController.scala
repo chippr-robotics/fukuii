@@ -1287,7 +1287,8 @@ case class SNAPSyncConfig(
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
-    maxSnapSyncFailures: Int = 5 // Max failures before fallback to fast sync
+    maxSnapSyncFailures: Int = 5, // Max failures before fallback to fast sync
+    useActorConcurrency: Boolean = false // Enable actor-based concurrency (experimental)
 )
 
 object SNAPSyncConfig {
@@ -1307,7 +1308,11 @@ object SNAPSyncConfig {
       maxSnapSyncFailures =
         if (snapConfig.hasPath("max-snap-sync-failures"))
           snapConfig.getInt("max-snap-sync-failures")
-        else 5
+        else 5,
+      useActorConcurrency =
+        if (snapConfig.hasPath("use-actor-concurrency"))
+          snapConfig.getBoolean("use-actor-concurrency")
+        else false
     )
   }
 }
