@@ -444,7 +444,7 @@ class SNAPSyncController(
         recentBytecodesPerSec = 0,
         recentSlotsPerSec = 0,
         recentNodesPerSec = 0,
-        phaseProgress = ((currentBlock.toDouble / targetBlock.toDouble) * 100).toInt,
+        phaseProgress = if (targetBlock == 0) 0 else ((currentBlock.toDouble / targetBlock.toDouble) * 100).toInt,
         estimatedTotalAccounts = 0,
         estimatedTotalBytecodes = 0,
         estimatedTotalSlots = 0,
@@ -465,6 +465,27 @@ class SNAPSyncController(
   }
 
   private def startSnapSync(): Unit = {
+    // Check if there's an interrupted bootstrap to resume
+    appStateStorage.getSnapSyncBootstrapTarget() match {
+      case Some(bootstrapTarget) =>
+        val bestBlockNumber = appStateStorage.getBestBlockNumber()
+        
+        if (bestBlockNumber >= bootstrapTarget) {
+          // Bootstrap already complete - clear the target and proceed with SNAP sync
+          log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
+          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          // Continue to normal SNAP sync logic below
+        } else {
+          // Resume interrupted bootstrap
+          log.info(s"Resuming interrupted bootstrap: current block $bestBlockNumber / target $bootstrapTarget")
+          context.parent ! StartRegularSyncBootstrap(bootstrapTarget)
+          context.become(bootstrapping)
+          return
+        }
+      case None =>
+        // No bootstrap in progress - continue with normal logic
+    }
+    
     // Select pivot block
     val bestBlockNumber = appStateStorage.getBestBlockNumber()
     val pivotBlockNumber = bestBlockNumber - snapSyncConfig.pivotBlockOffset
