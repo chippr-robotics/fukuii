@@ -588,14 +588,16 @@ class SNAPSyncController(
       }
     } else {
       // Pivot is valid and ahead of local state
-      pivotBlock = Some(pivotBlockNumber)
-
-      // Update metrics - pivot block
-      SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
-
-      // Get state root for pivot block
+      
+      // Check if we have the pivot block header locally
       blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
         case Some(header) =>
+          // Pivot header is available - proceed with SNAP sync
+          pivotBlock = Some(pivotBlockNumber)
+
+          // Update metrics - pivot block
+          SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
+          
           stateRoot = Some(header.stateRoot)
           appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
           appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
@@ -620,33 +622,61 @@ class SNAPSyncController(
           context.become(syncing)
 
         case None =>
-          // Pivot block header not available - this can happen after bootstrap
-          // due to asynchronous block import
-          if (bootstrapRetryCount == 0) {
-            log.info("⏳ Waiting for pivot block header to become available...")
-          }
-          log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1}/$MaxBootstrapRetries)")
+          // Pivot block header not available locally
+          // This happens when we select a pivot based on network best block
+          // but haven't synced that far yet
           
-          if (bootstrapRetryCount < MaxBootstrapRetries) {
-            bootstrapRetryCount += 1
-            log.info(s"   Retrying in $BootstrapRetryDelay...")
+          if (pivotSelectionSource == "network") {
+            // We selected a network-based pivot but don't have the header yet
+            // Need to bootstrap/sync to get closer to the pivot
+            val targetForBootstrap = pivotBlockNumber
             
-            // Schedule a retry and store the cancellable for proper cleanup
-            bootstrapCheckTask = Some(
-              scheduler.scheduleOnce(BootstrapRetryDelay) {
-                self ! RetrySnapSyncStart
-              }(ec)
-            )
+            log.info("=" * 80)
+            log.info("🔄 SNAP Sync Pivot Header Not Available")
+            log.info("=" * 80)
+            log.info(s"Selected pivot: $pivotBlockNumber (based on network best block)")
+            log.info(s"Local best block: $localBestBlock")
+            log.info(s"Gap: ${pivotBlockNumber - localBestBlock} blocks")
+            log.info("Need to sync headers/blocks to reach pivot point")
+            log.info(s"Continuing regular sync to block $targetForBootstrap")
+            log.info("Will automatically transition to SNAP sync once pivot is reached")
+            log.info("=" * 80)
             
-            // Transition to bootstrapping state to handle the retry
+            // Store the bootstrap target
+            appStateStorage.putSnapSyncBootstrapTarget(targetForBootstrap).commit()
+            
+            // Request regular sync to continue to the pivot point
+            context.parent ! StartRegularSyncBootstrap(targetForBootstrap)
             context.become(bootstrapping)
           } else {
-            log.error("=" * 80)
-            log.error(s"❌ Pivot block header not available after $MaxBootstrapRetries retries")
-            log.error("   SNAP sync cannot proceed - falling back to fast sync")
-            log.error("=" * 80)
-            bootstrapRetryCount = 0
-            context.parent ! FallbackToFastSync
+            // Local pivot selected but header still not available
+            // This is the original race condition case - retry
+            if (bootstrapRetryCount == 0) {
+              log.info("⏳ Waiting for pivot block header to become available...")
+            }
+            log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1}/$MaxBootstrapRetries)")
+            
+            if (bootstrapRetryCount < MaxBootstrapRetries) {
+              bootstrapRetryCount += 1
+              log.info(s"   Retrying in $BootstrapRetryDelay...")
+              
+              // Schedule a retry and store the cancellable for proper cleanup
+              bootstrapCheckTask = Some(
+                scheduler.scheduleOnce(BootstrapRetryDelay) {
+                  self ! RetrySnapSyncStart
+                }(ec)
+              )
+              
+              // Transition to bootstrapping state to handle the retry
+              context.become(bootstrapping)
+            } else {
+              log.error("=" * 80)
+              log.error(s"❌ Pivot block header not available after $MaxBootstrapRetries retries")
+              log.error("   SNAP sync cannot proceed - falling back to fast sync")
+              log.error("=" * 80)
+              bootstrapRetryCount = 0
+              context.parent ! FallbackToFastSync
+            }
           }
       }
     }

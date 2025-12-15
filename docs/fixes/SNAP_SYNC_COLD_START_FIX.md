@@ -117,9 +117,11 @@ When pivot block header is not available:
 ### Scenario 1: Cold Start from Genesis (Primary Use Case)
 1. Start a fresh node from genesis with SNAP sync enabled
 2. Monitor logs for bootstrap process
-3. **Expected**: After bootstrap completes, SNAP sync should select pivot near network tip (e.g., 23M - 1024 = ~23M)
-4. **Expected**: SNAP sync should begin downloading accounts, bytecodes, storage for this high pivot block
-5. **Expected**: Logs should show both local block count (~40k) and network block count (~23M)
+3. **Expected**: Bootstrap starts to gather initial 1025 blocks
+4. **Expected**: After initial bootstrap, system discovers network is at ~23M blocks
+5. **Expected**: System continues syncing to reach pivot point (~23M - 1024)
+6. **Expected**: Once pivot header is available, SNAP sync begins downloading state for that high pivot
+7. **Expected**: Logs show progression: genesis → initial bootstrap → extended bootstrap → SNAP sync start
 
 ### Scenario 2: No Peers Available During Pivot Selection
 1. Start node in isolated environment or with limited connectivity
@@ -135,7 +137,7 @@ When pivot block header is not available:
 
 ### Expected Log Patterns
 
-**Successful cold start with network-based pivot:**
+**Successful cold start with network-based pivot (new behavior):**
 ```
 ================================================================================
 🚀 SNAP Sync Initialization
@@ -147,7 +149,24 @@ Once complete, node will automatically transition to SNAP sync mode
 ================================================================================
 ⏳ Gathering initial blocks... (target: 1025)
 
-[Regular sync bootstrap progress...]
+[Regular sync bootstrap to 1025 blocks...]
+
+================================================================================
+✅ Bootstrap phase complete - transitioning to SNAP sync
+================================================================================
+
+================================================================================
+🔄 SNAP Sync Pivot Header Not Available
+================================================================================
+Selected pivot: 23455765 (based on network best block)
+Local best block: 40700
+Gap: 23415065 blocks
+Need to sync headers/blocks to reach pivot point
+Continuing regular sync to block 23455765
+Will automatically transition to SNAP sync once pivot is reached
+================================================================================
+
+[Regular/fast sync continues to ~23M blocks...]
 
 ================================================================================
 ✅ Bootstrap phase complete - transitioning to SNAP sync
@@ -156,7 +175,7 @@ Once complete, node will automatically transition to SNAP sync mode
 ================================================================================
 🎯 SNAP Sync Ready
 ================================================================================
-Local best block: 40700
+Local best block: 23455765
 Network best block: 23456789
 Selected pivot block: 23455765 (source: network)
 Pivot offset: 1024 blocks
