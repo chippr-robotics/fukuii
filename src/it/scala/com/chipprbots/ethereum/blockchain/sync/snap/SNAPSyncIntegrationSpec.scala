@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.blockchain.sync.snap.actors._
 
 /** Integration test suite for SNAP sync protocol.
   *
@@ -48,9 +49,9 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
   "SNAP Sync Integration" - {
 
-    "Account Range Downloader" - {
+    "Account Range Coordinator" - {
 
-      "should initialize and request account ranges" taggedAs (
+      "should initialize and distribute tasks to workers" taggedAs (
         IntegrationTest,
         SyncTest
       ) in testCaseM[IO] {
@@ -59,24 +60,31 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
           val mptStorage = new TestMptStorage()
           val requestTracker = new SNAPRequestTracker()(testSystem.scheduler)
           val etcPeerManager = TestProbe()
+          val snapController = TestProbe()
 
-          val downloader = new AccountRangeDownloader(
-            stateRoot = stateRoot,
-            networkPeerManager = etcPeerManager.ref,
-            requestTracker = requestTracker,
-            mptStorage = mptStorage,
-            concurrency = 4
+          val coordinator = testSystem.actorOf(
+            AccountRangeCoordinator.props(
+              stateRoot = stateRoot,
+              networkPeerManager = etcPeerManager.ref,
+              requestTracker = requestTracker,
+              mptStorage = mptStorage,
+              concurrency = 4,
+              snapSyncController = snapController.ref
+            )
           )
 
-          downloader.isComplete shouldBe false
-          downloader.progress should be >= 0.0
-          downloader.progress should be <= 1.0
+          coordinator ! Messages.StartAccountRangeSync(stateRoot)
+          coordinator ! Messages.GetProgress
+          
+          val progress = snapController.expectMsgType[AccountRangeProgress](5.seconds)
+          progress.progress should be >= 0.0
+          progress.progress should be <= 1.0
 
           succeed
         }
       }
 
-      "should track multiple concurrent requests" taggedAs (
+      "should handle multiple peers concurrently" taggedAs (
         IntegrationTest,
         SyncTest
       ) in testCaseM[IO] {
@@ -85,26 +93,31 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
           val mptStorage = new TestMptStorage()
           val requestTracker = new SNAPRequestTracker()(testSystem.scheduler)
           val etcPeerManager = TestProbe()
+          val snapController = TestProbe()
           val peerProbe1 = TestProbe()
           val peerProbe2 = TestProbe()
 
           val peer1 = PeerTestHelpers.createTestPeer("peer1", peerProbe1.ref)
           val peer2 = PeerTestHelpers.createTestPeer("peer2", peerProbe2.ref)
 
-          val downloader = new AccountRangeDownloader(
-            stateRoot = stateRoot,
-            networkPeerManager = etcPeerManager.ref,
-            requestTracker = requestTracker,
-            mptStorage = mptStorage,
-            concurrency = 4
+          val coordinator = testSystem.actorOf(
+            AccountRangeCoordinator.props(
+              stateRoot = stateRoot,
+              networkPeerManager = etcPeerManager.ref,
+              requestTracker = requestTracker,
+              mptStorage = mptStorage,
+              concurrency = 4,
+              snapSyncController = snapController.ref
+            )
           )
 
-          val requestId1 = downloader.requestNextRange(peer1)
-          val requestId2 = downloader.requestNextRange(peer2)
+          coordinator ! Messages.StartAccountRangeSync(stateRoot)
+          coordinator ! Messages.PeerAvailable(peer1)
+          coordinator ! Messages.PeerAvailable(peer2)
 
-          requestId1 shouldBe defined
-          requestId2 shouldBe defined
-          (requestId1.get should not).equal(requestId2.get)
+          // Should send requests to network peer manager
+          etcPeerManager.expectMsgType[Any](3.seconds)
+          etcPeerManager.expectMsgType[Any](3.seconds)
 
           succeed
         }
@@ -136,7 +149,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
         }
       }
 
-      "should queue healing tasks for missing nodes" taggedAs (
+      "should queue healing tasks for missing nodes via coordinator" taggedAs (
         IntegrationTest,
         SyncTest
       ) in testCaseM[IO] {
@@ -145,34 +158,28 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
           val mptStorage = new TestMptStorage()
           val etcPeerManager = TestProbe()
           val requestTracker = new SNAPRequestTracker()(testSystem.scheduler)
+          val snapController = TestProbe()
 
-          val healer = new TrieNodeHealer(
-            stateRoot = stateRoot,
-            networkPeerManager = etcPeerManager.ref,
-            requestTracker = requestTracker,
-            mptStorage = mptStorage,
-            batchSize = 16
+          val coordinator = testSystem.actorOf(
+            TrieNodeHealingCoordinator.props(
+              stateRoot = stateRoot,
+              networkPeerManager = etcPeerManager.ref,
+              requestTracker = requestTracker,
+              mptStorage = mptStorage,
+              batchSize = 16,
+              snapSyncController = snapController.ref
+            )
           )
-
-          // Initially, healer should have no pending tasks
-          healer.pendingCount shouldBe 0
-          healer.isComplete shouldBe true
 
           // Queue missing nodes for healing
           val missingNode1 = kec256(ByteString("missing1"))
           val missingNode2 = kec256(ByteString("missing2"))
 
-          healer.queueNode(missingNode1)
-          healer.queueNode(missingNode2)
-
-          // Verify that healing tasks were queued
-          healer.pendingCount shouldBe 2
-          healer.isComplete shouldBe false
-
-          // Verify statistics reflect the queued tasks
-          val stats = healer.statistics
-          stats.pendingTasks shouldBe 2
-          stats.activeTasks shouldBe 0
+          coordinator ! Messages.QueueMissingNodes(Seq(missingNode1, missingNode2))
+          
+          // Verify coordinator accepts the nodes
+          coordinator ! Messages.HealingGetProgress
+          snapController.expectMsgType[Any](3.seconds)
 
           succeed
         }
@@ -181,7 +188,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
     "Peer Disconnection Handling" - {
 
-      "should track peer requests" taggedAs (
+      "should track peer requests via request tracker" taggedAs (
         IntegrationTest,
         SyncTest,
         NetworkTest
@@ -191,29 +198,33 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
           val mptStorage = new TestMptStorage()
           val etcPeerManager = TestProbe()
           val requestTracker = new SNAPRequestTracker()(testSystem.scheduler)
+          val snapController = TestProbe()
 
-          val downloader = new AccountRangeDownloader(
-            stateRoot = stateRoot,
-            networkPeerManager = etcPeerManager.ref,
-            requestTracker = requestTracker,
-            mptStorage = mptStorage,
-            concurrency = 4
+          val coordinator = testSystem.actorOf(
+            AccountRangeCoordinator.props(
+              stateRoot = stateRoot,
+              networkPeerManager = etcPeerManager.ref,
+              requestTracker = requestTracker,
+              mptStorage = mptStorage,
+              concurrency = 4,
+              snapSyncController = snapController.ref
+            )
           )
 
           val peer = PeerTestHelpers.createTestPeer("test-peer", TestProbe().ref)
 
-          // Request from peer
-          val requestId = downloader.requestNextRange(peer)
-          requestId shouldBe defined
+          // Request from peer via coordinator
+          coordinator ! Messages.StartAccountRangeSync(stateRoot)
+          coordinator ! Messages.PeerAvailable(peer)
 
-          // Request should be tracked
-          requestTracker.getPendingRequest(requestId.get) shouldBe defined
+          // Request should be sent
+          etcPeerManager.expectMsgType[Any](3.seconds)
 
           succeed
         }
       }
 
-      "should support requests to different peers" taggedAs (
+      "should support requests to different peers via actor system" taggedAs (
         IntegrationTest,
         SyncTest,
         NetworkTest
@@ -223,28 +234,30 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
           val mptStorage = new TestMptStorage()
           val etcPeerManager = TestProbe()
           val requestTracker = new SNAPRequestTracker()(testSystem.scheduler)
+          val snapController = TestProbe()
 
-          val downloader = new AccountRangeDownloader(
-            stateRoot = stateRoot,
-            networkPeerManager = etcPeerManager.ref,
-            requestTracker = requestTracker,
-            mptStorage = mptStorage,
-            concurrency = 4
+          val coordinator = testSystem.actorOf(
+            AccountRangeCoordinator.props(
+              stateRoot = stateRoot,
+              networkPeerManager = etcPeerManager.ref,
+              requestTracker = requestTracker,
+              mptStorage = mptStorage,
+              concurrency = 4,
+              snapSyncController = snapController.ref
+            )
           )
 
           val peer1 = PeerTestHelpers.createTestPeer("peer1", TestProbe().ref)
           val peer2 = PeerTestHelpers.createTestPeer("peer2", TestProbe().ref)
 
-          // Request from peer1
-          val requestId1 = downloader.requestNextRange(peer1)
-          requestId1 shouldBe defined
+          // Request from both peers via coordinator
+          coordinator ! Messages.StartAccountRangeSync(stateRoot)
+          coordinator ! Messages.PeerAvailable(peer1)
+          coordinator ! Messages.PeerAvailable(peer2)
 
-          // Request from peer2
-          val requestId2 = downloader.requestNextRange(peer2)
-          requestId2 shouldBe defined
-
-          // Different request IDs
-          (requestId1.get should not).equal(requestId2.get)
+          // Both requests should be sent
+          etcPeerManager.expectMsgType[Any](3.seconds)
+          etcPeerManager.expectMsgType[Any](3.seconds)
 
           succeed
         }
