@@ -14,7 +14,6 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
   * Responsibilities:
   * - Request single account range from peer
   * - Handle response and validate proofs
-  * - Delegate storage to coordinator's downloader
   * - Report result to coordinator
   *
   * Lifecycle:
@@ -29,14 +28,11 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
   *   Actor for network communication
   * @param requestTracker
   *   Tracker for requests
-  * @param accountRangeDownloader
-  *   Shared downloader for storage operations
   */
 class AccountRangeWorker(
     coordinator: ActorRef,
     networkPeerManager: ActorRef,
-    requestTracker: SNAPRequestTracker,
-    accountRangeDownloader: AccountRangeDownloader
+    requestTracker: SNAPRequestTracker
 ) extends Actor
     with ActorLogging {
 
@@ -58,64 +54,76 @@ class AccountRangeWorker(
     case FetchAccountRange(task, peer) =>
       log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id}")
       
-      // Use the downloader to send the request and track it
-      accountRangeDownloader.requestNextRange(peer) match {
-        case Some(requestId) =>
-          currentTask = Some((task, peer, requestId))
-          context.become(working)
-          
-          // Set up timeout
-          import context.dispatcher
-          context.system.scheduler.scheduleOnce(30.seconds, self, RequestTimeout(requestId))
-
-        case None =>
-          log.warning("Failed to send account range request")
-          coordinator ! TaskFailed(0, "Failed to send request")
-          context.stop(self)
+      // Send request directly via network peer manager
+      val requestId = requestTracker.generateRequestId()
+      
+      // Create GetAccountRange message
+      val request = GetAccountRange(
+        requestId = requestId,
+        rootHash = task.rootHash,
+        startingHash = task.next,
+        limitHash = task.last,
+        responseBytes = BigInt(512 * 1024)
+      )
+      
+      // Track the request with timeout
+      import context.dispatcher
+      requestTracker.trackRequest(
+        requestId,
+        peer,
+        SNAPRequestTracker.RequestType.GetAccountRange,
+        timeout = 30.seconds
+      ) {
+        self ! RequestTimeout(requestId)
       }
+      
+      // Send message to peer
+      import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+      import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
+      import com.chipprbots.ethereum.network.p2p.MessageSerializable
+      val messageSerializable: MessageSerializable = new GetAccountRangeEnc(request)
+      networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
+      
+      currentTask = Some((task, peer, requestId))
+      context.become(working)
   }
 
   def working: Receive = {
     case AccountRangeResponseMsg(response) =>
       currentTask match {
-        case Some((task, peer, requestId)) if response.requestId == requestId =>
-          log.debug(s"Received account range response for request $requestId")
+        case Some((task, peer, reqId)) if response.requestId == reqId =>
+          log.debug(s"Received account range response for request $reqId")
           
-          // Delegate to downloader for processing
-          accountRangeDownloader.handleResponse(response) match {
-            case Right(accountCount) =>
-              log.info(s"Successfully processed $accountCount accounts")
-              coordinator ! TaskComplete(requestId, Right(accountCount))
-              
-              // Return to idle state for potential reuse
-              currentTask = None
-              context.become(idle)
-
-            case Left(error) =>
-              log.warning(s"Failed to process account range: $error")
-              coordinator ! TaskFailed(requestId, error)
-              
-              // Return to idle state
-              currentTask = None
-              context.become(idle)
-          }
+          // Process response - extract accounts and report to coordinator
+          val accountCount = response.accounts.size
+          log.info(s"Successfully received $accountCount accounts")
+          
+          // Report result to coordinator with accounts
+          coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts)))
+          
+          // Complete the request in tracker
+          requestTracker.completeRequest(reqId)
+          
+          // Return to idle state for potential reuse
+          currentTask = None
+          context.become(idle)
 
         case _ =>
           log.warning(s"Received response for wrong request ID: ${response.requestId}")
       }
 
-    case RequestTimeout(requestId) =>
+    case RequestTimeout(reqId) =>
       currentTask match {
-        case Some((task, peer, reqId)) if reqId == requestId =>
-          log.warning(s"Request $requestId timed out")
-          coordinator ! TaskFailed(requestId, "Request timeout")
+        case Some((task, peer, currentReqId)) if currentReqId == reqId =>
+          log.warning(s"Request $reqId timed out")
+          coordinator ! TaskFailed(reqId, "Request timeout")
           
           // Return to idle state
           currentTask = None
           context.become(idle)
 
         case _ =>
-          log.debug(s"Timeout for old or unknown request $requestId")
+          log.debug(s"Timeout for old or unknown request $reqId")
       }
 
     case FetchAccountRange(task, peer) =>
@@ -128,15 +136,13 @@ object AccountRangeWorker {
   def props(
       coordinator: ActorRef,
       networkPeerManager: ActorRef,
-      requestTracker: SNAPRequestTracker,
-      accountRangeDownloader: AccountRangeDownloader
+      requestTracker: SNAPRequestTracker
   ): Props =
     Props(
       new AccountRangeWorker(
         coordinator,
         networkPeerManager,
-        requestTracker,
-        accountRangeDownloader
+        requestTracker
       )
     )
 }

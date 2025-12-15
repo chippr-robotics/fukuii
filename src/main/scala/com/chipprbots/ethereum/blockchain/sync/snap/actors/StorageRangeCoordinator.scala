@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** LRU cache for storage tries to limit memory usage */
 private class StorageTrieCache(maxSize: Int = 10000) {
@@ -232,17 +233,17 @@ class StorageRangeCoordinator(
   private def handleResponse(response: StorageRanges): Unit = {
     requestTracker.validateStorageRanges(response) match {
       case Left(error) =>
-        log.warn(s"Invalid StorageRanges response: $error")
+        log.warning(s"Invalid StorageRanges response: $error")
 
       case Right(validResponse) =>
         requestTracker.completeRequest(response.requestId) match {
           case None =>
-            log.warn(s"Received response for unknown request ID ${response.requestId}")
+            log.warning(s"Received response for unknown request ID ${response.requestId}")
 
           case Some(pendingReq) =>
             activeTasks.remove(response.requestId) match {
               case None =>
-                log.warn(s"No active tasks for request ID ${response.requestId}")
+                log.warning(s"No active tasks for request ID ${response.requestId}")
 
               case Some(batchTasks) =>
                 processStorageRanges(batchTasks, validResponse)
@@ -255,7 +256,7 @@ class StorageRangeCoordinator(
     log.info(s"Processing storage ranges for ${tasks.size} accounts, received ${response.slots.size} slot sets")
 
     if (response.slots.size > tasks.size) {
-      log.warn(s"Received more slot sets (${response.slots.size}) than requested accounts (${tasks.size})")
+      log.warning(s"Received more slot sets (${response.slots.size}) than requested accounts (${tasks.size})")
     }
 
     tasks.zipWithIndex.foreach { case (task, idx) =>
@@ -269,7 +270,7 @@ class StorageRangeCoordinator(
       val verifier = getOrCreateVerifier(task.storageRoot)
       verifier.verifyStorageRange(accountSlots, response.proof, task.next, task.last) match {
         case Left(error) =>
-          log.warn(s"Storage proof verification failed for account ${task.accountString}: $error")
+          log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
           task.pending = false
           this.tasks.enqueue(task)
 
@@ -278,7 +279,7 @@ class StorageRangeCoordinator(
 
           storeStorageSlots(task.accountHash, accountSlots) match {
             case Left(error) =>
-              log.warn(s"Failed to store storage slots for account ${task.accountString}: $error")
+              log.warning(s"Failed to store storage slots for account ${task.accountString}: $error")
               task.pending = false
               this.tasks.enqueue(task)
 
@@ -340,7 +341,7 @@ class StorageRangeCoordinator(
                     MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
                   } catch {
                     case e: MissingRootNodeException =>
-                      log.warn(s"Storage root not found for account, creating new trie")
+                      log.warning(s"Storage root not found for account, creating new trie")
                       MerklePatriciaTrie[ByteString, ByteString](mptStorage)
                   }
                 }
@@ -365,7 +366,7 @@ class StorageRangeCoordinator(
             val computedRoot = ByteString(currentTrie.getRootHash)
             val expectedRoot = storageTask.storageRoot
             if (computedRoot != expectedRoot) {
-              log.warn(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+              log.warning(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
             }
 
             mptStorage.synchronized {

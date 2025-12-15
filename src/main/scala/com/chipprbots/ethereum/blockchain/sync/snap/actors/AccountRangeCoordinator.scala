@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** AccountRangeCoordinator manages account range download workers.
   *
@@ -164,9 +165,7 @@ class AccountRangeCoordinator(
       AccountRangeWorker.props(
         coordinator = self,
         networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker,
-        stateRoot = stateRoot,
-        proofVerifier = proofVerifier
+        requestTracker = requestTracker
       )
     )
     workers += worker

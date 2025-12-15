@@ -16,7 +16,7 @@ object Messages {
 
   case class StartAccountRangeSync(stateRoot: ByteString) extends AccountRangeCoordinatorMessage
   case class PeerAvailable(peer: Peer) extends AccountRangeCoordinatorMessage
-  case class TaskComplete(requestId: BigInt, result: Either[String, Int]) extends AccountRangeCoordinatorMessage
+  case class TaskComplete(requestId: BigInt, result: Either[String, (Int, Seq[(ByteString, com.chipprbots.ethereum.domain.Account)])]) extends AccountRangeCoordinatorMessage
   case class TaskFailed(requestId: BigInt, reason: String) extends AccountRangeCoordinatorMessage
   case object GetProgress extends AccountRangeCoordinatorMessage
   case object GetContractAccounts extends AccountRangeCoordinatorMessage
