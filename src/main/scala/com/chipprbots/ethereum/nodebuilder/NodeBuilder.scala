@@ -315,11 +315,20 @@ trait NetworkPeerManagerActorBuilder {
     with PeerManagerActorBuilder
     with PeerEventBusBuilder
     with ForkResolverBuilder
+    with BlockchainBuilder
     with StorageBuilder =>
 
   lazy val networkPeerManager: ActorRef = system.actorOf(
-    NetworkPeerManagerActor
-      .props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, forkResolverOpt),
+    NetworkPeerManagerActor.props(
+      peerManager,
+      peerEventBus,
+      storagesInstance.storages.appStateStorage,
+      forkResolverOpt,
+      None, // snapSyncControllerOpt - will be set later via RegisterSnapSyncController
+      Some(blockchainReader), // Pass blockchainReader for SNAP server
+      Some(storagesInstance.storages.stateStorage.getBackingStorage(0)), // Pass MPT storage
+      Some(storagesInstance.storages.evmCodeStorage) // Pass EVM code storage
+    ),
     "network-peer-manager"
   )
 
