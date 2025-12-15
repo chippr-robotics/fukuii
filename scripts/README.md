@@ -133,12 +133,13 @@ Automatically updates the ETC bootnode configuration by fetching and validating 
 
 ### Purpose
 
-The script ensures that Fukuii maintains a healthy list of 20 active bootnodes by:
+The script ensures that Fukuii maintains a healthy list of 30 active bootnodes by:
 - Fetching bootnodes from the etcnodes API (live ETC node network)
 - Validating current bootnodes against the live node list
-- Removing bootnodes that are no longer active
-- Maintaining exactly 20 active bootnodes
-- Prioritizing nodes with standard port (30303) when available
+- Removing bootnodes that are no longer active (not in API = dead)
+- Maintaining exactly 30 active bootnodes (1.5x the default max outgoing connections of 20)
+- Normalizing all bootnodes to use standard port 30303
+- Prioritizing nodes by last seen timestamp (most recently active first)
 
 ### Usage
 
@@ -148,10 +149,12 @@ bash scripts/update-bootnodes.sh
 
 # The script will:
 # 1. Extract current bootnodes from src/main/resources/conf/chains/etc-chain.conf
-# 2. Fetch live bootnodes from etcnodes API
-# 3. Validate and select 20 bootnodes
-# 4. Update the configuration file
-# 5. Create a timestamped backup
+# 2. Fetch live bootnodes from etcnodes API with timestamps
+# 3. Normalize all ports to 30303 (standard ETC port)
+# 4. Sort by last seen timestamp (most recent first)
+# 5. Validate and select 30 bootnodes
+# 6. Update the configuration file
+# 7. Create a timestamped backup
 ```
 
 ### Automated Execution
@@ -171,23 +174,24 @@ When changes are detected, the workflow automatically creates a pull request wit
 **etcnodes API**: https://api.etcnodes.org/peers
 - Real-time API of live ETC nodes on the network
 - Maintained by the ETC community
-- Provides up-to-date list of active nodes with connection information
+- Provides up-to-date list of active nodes with connection information and timestamps
 - GitHub: https://github.com/etclabscore/nodes-interface
-- Nodes with standard port 30303 are prioritized when available
+- All ports are normalized to 30303 (standard ETC port)
+- Nodes are sorted by last seen timestamp (contact.last.unix)
 
 ### Selection Logic
 
 The script uses a priority-based selection process:
 
-1. **Priority 1**: Keep current bootnodes that exist in the live etcnodes API list
-2. **Priority 2**: Add new bootnodes from the live etcnodes API list
-3. **Priority 3**: Keep remaining current bootnodes (up to 20 total)
+1. **Priority 1**: Keep current bootnodes that exist in the live etcnodes API list (they're still alive)
+2. **Priority 2**: Add new bootnodes from the live etcnodes API list (sorted by last seen)
 
 This ensures:
-- Stability: Current working bootnodes are preserved when possible
-- Freshness: New live bootnodes from the network are added
-- Liveness: All nodes are actively connected to the ETC network
-- Quality: Nodes with standard port 30303 are preferred
+- Stability: Current working bootnodes are preserved when they're still alive
+- Freshness: New live bootnodes from the network are added based on activity
+- Liveness: Only nodes actively connected to the ETC network are used
+- Quality: Nodes are prioritized by most recent activity (last seen timestamp)
+- Consistency: All nodes use standard port 30303
 
 ### Validation
 

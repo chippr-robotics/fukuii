@@ -2,7 +2,8 @@
 #
 # Update ETC bootnodes in the configuration file
 # This script fetches active bootnodes from the etcnodes API
-# and updates the configuration to maintain 20 active bootnodes at all times.
+# and updates the configuration to maintain 30 active bootnodes at all times.
+# (1.5x the default max outgoing connections of 20)
 #
 
 set -euo pipefail
@@ -40,31 +41,31 @@ fetch_bootnodes_from_sources() {
     
     log_info "Fetching from ${ETCNODES_API}..."
     
-    # Fetch and extract enode URLs from JSON response
-    # Get all enodes, we'll prioritize standard port nodes during selection
-    curl -s "${ETCNODES_API}" | \
-        jq -r '.[].enode' 2>/dev/null | \
-        grep -o 'enode://[^"]*' | \
+    # Fetch full JSON and process it
+    # Extract enode, replace port with 30303, and include last seen timestamp for sorting
+    curl -s "${ETCNODES_API}" 2>/dev/null | \
+        jq -r '.[] | "\(.contact.last.unix)|\(.enode)"' | \
+        while IFS='|' read -r timestamp enode; do
+            # Replace the port in the enode with 30303
+            # Handle both formats: @ip:port and @ip:port?discport=X
+            if [[ "$enode" =~ ^(enode://[a-fA-F0-9]{128}@[^:]+):[0-9]+(.*)$ ]]; then
+                normalized_enode="${BASH_REMATCH[1]}:30303${BASH_REMATCH[2]}"
+                echo "${timestamp}|${normalized_enode}"
+            fi
+        done | sort -t'|' -k1,1nr > "${TEMP_DIR}/etcnodes_bootnodes_with_timestamps.txt"
+    
+    # Extract just the enodes (without timestamps) for compatibility with existing code
+    cut -d'|' -f2 "${TEMP_DIR}/etcnodes_bootnodes_with_timestamps.txt" | \
         sort -u > "${TEMP_DIR}/etcnodes_bootnodes.txt"
     
     local etcnodes_count=$(wc -l < "${TEMP_DIR}/etcnodes_bootnodes.txt" || echo 0)
-    log_info "Found ${etcnodes_count} live bootnodes from etcnodes API"
+    log_info "Found ${etcnodes_count} live bootnodes from etcnodes API (sorted by last seen)"
     
-    # Use etcnodes as the external source
+    # Use etcnodes as the ONLY external source (no geth/besu)
     cp "${TEMP_DIR}/etcnodes_bootnodes.txt" "${TEMP_DIR}/all_external_bootnodes.txt"
     
-    # Also add current bootnodes to available pool (they might still be valid)
-    # Make sure current_bootnodes.txt exists before trying to cat it
-    if [ -f "${TEMP_DIR}/current_bootnodes.txt" ]; then
-        cat "${TEMP_DIR}/current_bootnodes.txt" \
-            "${TEMP_DIR}/all_external_bootnodes.txt" 2>/dev/null | \
-            sort -u > "${TEMP_DIR}/available_bootnodes.txt"
-    else
-        cp "${TEMP_DIR}/all_external_bootnodes.txt" "${TEMP_DIR}/available_bootnodes.txt"
-    fi
-    
-    local count=$(wc -l < "${TEMP_DIR}/available_bootnodes.txt")
-    log_info "Total unique bootnodes from all sources: ${count}"
+    local count=$(wc -l < "${TEMP_DIR}/all_external_bootnodes.txt")
+    log_info "Total bootnodes from etcnodes API: ${count}"
 }
 
 # Function to extract current bootnodes from config
@@ -109,19 +110,14 @@ has_standard_port() {
 
 # Function to select best bootnodes
 select_bootnodes() {
-    local target_count=20
+    local target_count=30  # 1.5x the default max outgoing connections (20)
     
     log_info "Selecting ${target_count} best bootnodes..."
     
-    # Read available and current bootnodes
-    local -a available=()
+    # Read current and external bootnodes
     local -a current=()
     local -a external=()
     local -a selected=()
-    
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && available+=("$line")
-    done < "${TEMP_DIR}/available_bootnodes.txt"
     
     while IFS= read -r line; do
         [[ -n "$line" ]] && current+=("$line")
@@ -131,16 +127,16 @@ select_bootnodes() {
         [[ -n "$line" ]] && external+=("$line")
     done < "${TEMP_DIR}/all_external_bootnodes.txt"
     
-    log_info "Available: ${#available[@]}, Current: ${#current[@]}, External: ${#external[@]}"
+    log_info "Current: ${#current[@]}, External: ${#external[@]}"
     
-    # Priority 1: Keep current bootnodes that are in external authoritative sources
-    log_info "Phase 1: Keeping current bootnodes found in external sources..."
+    # Priority 1: Keep current bootnodes that are in external API (they're still alive)
+    log_info "Phase 1: Keeping current bootnodes found in live API..."
     for bootnode in "${current[@]}"; do
         if validate_enode "$bootnode"; then
-            # Check if this bootnode is in the external authoritative list
+            # Check if this bootnode is in the external API list
             if printf '%s\n' "${external[@]}" | grep -q "^${bootnode}$"; then
                 selected+=("$bootnode")
-                log_info "✓ Keeping validated bootnode: ${bootnode:0:50}..."
+                log_info "✓ Keeping live bootnode: ${bootnode:0:50}..."
                 if [ ${#selected[@]} -ge ${target_count} ]; then
                     break
                 fi
@@ -148,9 +144,9 @@ select_bootnodes() {
         fi
     done
     
-    # Priority 2: Add new bootnodes from external sources
+    # Priority 2: Add new bootnodes from API (sorted by last seen, most recent first)
     if [ ${#selected[@]} -lt ${target_count} ]; then
-        log_info "Phase 2: Adding new bootnodes from external sources..."
+        log_info "Phase 2: Adding new bootnodes from live API..."
         for bootnode in "${external[@]}"; do
             # Skip if already selected
             if printf '%s\n' "${selected[@]}" | grep -q "^${bootnode}$"; then
@@ -159,7 +155,7 @@ select_bootnodes() {
             
             if validate_enode "$bootnode"; then
                 selected+=("$bootnode")
-                log_info "✓ Adding external bootnode: ${bootnode:0:50}..."
+                log_info "✓ Adding live bootnode: ${bootnode:0:50}..."
                 
                 if [ ${#selected[@]} -ge ${target_count} ]; then
                     break
@@ -168,30 +164,10 @@ select_bootnodes() {
         done
     fi
     
-    # Priority 3: Keep current bootnodes even if not in external sources (up to target)
-    if [ ${#selected[@]} -lt ${target_count} ]; then
-        log_info "Phase 3: Adding remaining current bootnodes..."
-        for bootnode in "${current[@]}"; do
-            # Skip if already selected
-            if printf '%s\n' "${selected[@]}" | grep -q "^${bootnode}$"; then
-                continue
-            fi
-            
-            if validate_enode "$bootnode"; then
-                selected+=("$bootnode")
-                log_info "✓ Keeping current bootnode: ${bootnode:0:50}..."
-                
-                if [ ${#selected[@]} -ge ${target_count} ]; then
-                    break
-                fi
-            fi
-        done
-    fi
-    
-    # Log removed bootnodes
+    # Log removed bootnodes (nodes not in API are considered dead)
     for bootnode in "${current[@]}"; do
         if ! printf '%s\n' "${selected[@]}" | grep -q "^${bootnode}$"; then
-            log_warn "✗ Removing bootnode: ${bootnode:0:50}..."
+            log_warn "✗ Removing dead bootnode (not in live API): ${bootnode:0:50}..."
         fi
     done
     
