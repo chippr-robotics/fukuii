@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
+import org.bouncycastle.util.encoders.Hex
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -75,7 +76,7 @@ class TrieNodeHealingCoordinator(
 
   override def receive: Receive = {
     case StartTrieNodeHealing(root) =>
-      log.info(s"Starting trie node healing for state root ${root.take(8).toHex}")
+      log.info(s"Starting trie node healing for state root ${Hex.toHexString(root.take(8).toArray)}")
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
@@ -145,7 +146,7 @@ class TrieNodeHealingCoordinator(
       nodeData = None
     )
     pendingTasks = pendingTasks :+ task
-    log.debug(s"Queued node for healing: hash=${nodeHash.take(4).toHex}")
+    log.debug(s"Queued node for healing: hash=${Hex.toHexString(nodeHash.take(4).toArray)}")
   }
 
   private def queueNodes(nodeHashes: Seq[ByteString]): Unit = {
@@ -212,7 +213,7 @@ class TrieNodeHealingCoordinator(
     )
 
     if (tasksForRequest.isEmpty) {
-      log.warn(s"No active healing tasks found for request $requestId")
+      log.warning(s"No active healing tasks found for request $requestId")
       return
     }
 
@@ -228,7 +229,7 @@ class TrieNodeHealingCoordinator(
           log.debug(s"Healed node: ${task.toShortString}")
 
         case Left(error) =>
-          log.warn(s"Failed to heal node: ${task.toShortString} - $error")
+          log.warning(s"Failed to heal node: ${task.toShortString} - $error")
           task.pending = true
           pendingTasks = pendingTasks :+ task
       }
@@ -249,12 +250,12 @@ class TrieNodeHealingCoordinator(
     try {
       val nodeHash = ByteString(org.bouncycastle.jcajce.provider.digest.Keccak.Digest256().digest(nodeData.toArray))
       if (nodeHash != task.hash) {
-        return Left(s"Node hash mismatch: expected ${task.hash.take(4).toHex}, got ${nodeHash.take(4).toHex}")
+        return Left(s"Node hash mismatch: expected ${Hex.toHexString(task.hash.take(4).toArray)}, got ${Hex.toHexString(nodeHash.take(4).toArray)}")
       }
 
       storeTrieNode(nodeData, nodeHash)
 
-      log.debug(s"Stored healed trie node: hash=${nodeHash.take(4).toHex}, size=${nodeData.length} bytes")
+      log.debug(s"Stored healed trie node: hash=${Hex.toHexString(nodeHash.take(4).toArray)}, size=${nodeData.length} bytes")
       Right(())
     } catch {
       case e: Exception =>
@@ -277,11 +278,11 @@ class TrieNodeHealingCoordinator(
 
     mptStorage.persist()
 
-    log.debug(s"Persisted healed trie node: hash=${nodeHash.take(4).toHex}")
+    log.debug(s"Persisted healed trie node: hash=${Hex.toHexString(nodeHash.take(4).toArray)}")
   }
 
   private def handleTimeout(requestId: BigInt, tasks: Seq[HealingTask]): Unit = {
-    log.warn(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}")
+    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}")
 
     tasks.foreach { task =>
       task.pending = true
@@ -334,3 +335,14 @@ object TrieNodeHealingCoordinator {
       )
     )
 }
+
+case class HealingStatistics(
+    totalNodes: Int,
+    totalBytes: Long,
+    pendingTasks: Int,
+    activeTasks: Int,
+    completedTasks: Int,
+    nodesPerSecond: Double,
+    kilobytesPerSecond: Double,
+    progress: Double
+)

@@ -391,7 +391,7 @@ class StorageRangeCoordinator(
 
   private def handleTimeout(requestId: BigInt): Unit = {
     activeTasks.remove(requestId).foreach { batchTasks =>
-      log.warn(s"Storage range request timeout for ${batchTasks.size} accounts")
+      log.warning(s"Storage range request timeout for ${batchTasks.size} accounts")
       batchTasks.foreach { task =>
         task.pending = false
         tasks.enqueue(task)
