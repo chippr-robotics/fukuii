@@ -99,6 +99,18 @@ class ByteCodeCoordinator(
         }
       }
 
+    case ByteCodePeerAvailable(peer) =>
+      // Same as PeerAvailable - dispatch tasks to available peer
+      if (pendingTasks.nonEmpty && workers.size < maxWorkers) {
+        val worker = createWorker()
+        assignTaskToWorker(worker, peer)
+      } else if (pendingTasks.nonEmpty) {
+        // Find an idle worker
+        workers.headOption.foreach { worker =>
+          assignTaskToWorker(worker, peer)
+        }
+      }
+
     case ByteCodesResponseMsg(response) =>
       handleByteCodesResponse(response)
 
@@ -121,6 +133,9 @@ class ByteCodeCoordinator(
         task.pending = false
         pendingTasks.enqueue(task)
       }
+
+    case ByteCodeCheckCompletion =>
+      checkCompletion()
 
     case ByteCodeGetProgress =>
       val total = completedTasks.size + activeTasks.size + pendingTasks.size
