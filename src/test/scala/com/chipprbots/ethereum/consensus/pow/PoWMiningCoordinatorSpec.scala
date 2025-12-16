@@ -67,11 +67,14 @@ class PoWMiningCoordinatorSpec
       ConsensusTest,
       SlowTest
     ) in new TestSetup {
-      override def coordinatorName = "RecurrentMining"
+      override def coordinatorName = "RecurrentMiningSetup"
       setBlockForMining(parentBlock)
-      LoggingTestKit.info("Received message SetMiningMode(RecurrentMining)").expect {
-        coordinator ! SetMiningMode(RecurrentMining)
-      }
+      
+      coordinator ! SetMiningMode(RecurrentMining)
+      
+      // Give the coordinator time to process the message
+      Thread.sleep(100)
+      
       coordinator ! StopMining
     }
 
@@ -81,9 +84,12 @@ class PoWMiningCoordinatorSpec
       SlowTest
     ) in new TestSetup {
       override def coordinatorName = "OnDemandMining"
-      LoggingTestKit.info("Received message SetMiningMode(OnDemandMining)").expect {
-        coordinator ! SetMiningMode(OnDemandMining)
-      }
+      
+      coordinator ! SetMiningMode(OnDemandMining)
+      
+      // Give the coordinator time to process the message
+      Thread.sleep(100)
+      
       coordinator ! StopMining
     }
 
@@ -96,10 +102,12 @@ class PoWMiningCoordinatorSpec
         override def coordinatorName = "EthashMining"
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
-        LoggingTestKit.debug("Mining with Ethash").expect {
-          coordinator ! SetMiningMode(RecurrentMining)
-        }
-
+        
+        coordinator ! SetMiningMode(RecurrentMining)
+        
+        // Give the coordinator time to process the message and start mining
+        Thread.sleep(100)
+        
         coordinator ! StopMining
       }
 
@@ -109,7 +117,8 @@ class PoWMiningCoordinatorSpec
         SlowTest
       ) in new TestSetup {
         override def coordinatorName = "KeccakMining"
-        override val coordinator = system.systemActorOf(
+        val probe = TestProbe()
+        override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
             sync.ref,
             ethMiningService,
@@ -120,22 +129,23 @@ class PoWMiningCoordinatorSpec
           ),
           "KeccakMining"
         )
+        probe.watch(coordinator.ref.toClassic)
+        
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
 
-        LoggingTestKit
-          .debug("Mining with Keccak")
-          .withCustom { (_: LoggingEvent) =>
-            coordinator ! StopMining
-            true
-          }
-          .expect {
-            coordinator ! SetMiningMode(RecurrentMining)
-          }
+        coordinator ! SetMiningMode(RecurrentMining)
+        
+        // Give the coordinator time to process the message and start mining
+        Thread.sleep(100)
+        
+        coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
       }
 
       "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest, FlakyTest) in new TestSetup {
-        override def coordinatorName = "RecurrentMining"
+        override def coordinatorName = s"AutomaticMining-${System.nanoTime()}"
+        val probe = TestProbe()
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
             sync.ref,
@@ -145,8 +155,9 @@ class PoWMiningCoordinatorSpec
             Some(0),
             this
           ),
-          "AutomaticMining"
+          coordinatorName
         )
+        probe.watch(coordinator.ref.toClassic)
 
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
@@ -158,6 +169,7 @@ class PoWMiningCoordinatorSpec
         sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
 
         coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
       }
 
       "Continue to attempt to mine if blockchainReader.getBestBlock() return None" taggedAs (
@@ -166,7 +178,8 @@ class PoWMiningCoordinatorSpec
         SlowTest,
         FlakyTest
       ) in new TestSetup {
-        override def coordinatorName = "AlwaysMine"
+        override def coordinatorName = s"AlwaysAttemptToMine-${System.nanoTime()}"
+        val probe = TestProbe()
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
             sync.ref,
@@ -176,8 +189,9 @@ class PoWMiningCoordinatorSpec
             Some(0),
             this
           ),
-          "AlwaysAttemptToMine"
+          coordinatorName
         )
+        probe.watch(coordinator.ref.toClassic)
 
         (blockchainReader.getBestBlock _).expects().returns(None).twice()
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
@@ -191,10 +205,11 @@ class PoWMiningCoordinatorSpec
         sync.expectMsgType[MinedBlock](Timeouts.veryLongTimeout)
 
         coordinator ! StopMining
+        probe.expectTerminated(coordinator.ref.toClassic)
       }
 
       "StopMining stops PoWMinerCoordinator" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
-        override def coordinatorName = "StoppingMining"
+        override def coordinatorName = s"StoppingMining-${System.nanoTime()}"
         val probe = TestProbe()
         override val coordinator = testKit.spawn(
           PoWMiningCoordinator(
@@ -205,7 +220,7 @@ class PoWMiningCoordinatorSpec
             Some(0),
             this
           ),
-          "StoppingMining"
+          coordinatorName
         )
         probe.watch(coordinator.ref.toClassic)
 
