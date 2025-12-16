@@ -55,10 +55,24 @@ class GenesisHashCalculationSpec extends AnyFlatSpec with Matchers {
     // Debug RLP encoding
     import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
     import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
-    val rlpBytes = rlpEncode(genesisHeader.toRLPEncodable)
-    println(s"RLP size: ${rlpBytes.length} bytes")
-    println(s"RLP hex (first 100 bytes): ${Hex.toHexString(rlpBytes.take(100))}")
-    println(s"RLP hex (full): ${Hex.toHexString(rlpBytes)}")
+    import com.chipprbots.ethereum.domain.{Block, BlockBody}
+    
+    val genesisBlock = Block(genesisHeader, BlockBody(Nil, Nil))
+    val blockRlpBytes = rlpEncode(genesisBlock.toRLPEncodable)
+    val headerRlpBytes = rlpEncode(genesisHeader.toRLPEncodable)
+    
+    println(s"Header RLP size: ${headerRlpBytes.length} bytes")
+    println(s"Block RLP size: ${blockRlpBytes.length} bytes (0x${blockRlpBytes.length.toHexString})")
+    println(s"Header RLP hex (first 100 bytes): ${Hex.toHexString(headerRlpBytes.take(100))}")
+    println(s"Block RLP hex (first 100 bytes): ${Hex.toHexString(blockRlpBytes.take(100))}")
+    println(s"Block RLP hex (full): ${Hex.toHexString(blockRlpBytes)}")
+    
+    // Expected sizes from issue:
+    // Fukuii: 0x1ff = 511 bytes
+    // Geth: 0x204 = 516 bytes
+    println(s"\nExpected Fukuii size: 0x1ff = 511 bytes")
+    println(s"Expected Geth size: 0x204 = 516 bytes")
+    println(s"Actual Fukuii size: ${blockRlpBytes.length} bytes")
     
     // The hash should match Geth
     actualHash shouldBe expectedGethHash
