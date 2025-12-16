@@ -146,8 +146,7 @@ class PoWMining private (
             pendingTransactionsManager = node.pendingTransactionsManager,
             getTransactionFromPoolTimeout = node.txPoolConfig.getTransactionFromPoolTimeout,
             mining = mining,
-            ommersPool = node.ommersPool,
-            coinbaseProvider = node.coinbaseProvider
+            ommersPool = node.ommersPool
           )
         case mining => wrongMiningArgument[PoWMining](mining)
       }

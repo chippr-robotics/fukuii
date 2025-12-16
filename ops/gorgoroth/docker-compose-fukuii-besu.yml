@@ -28,12 +28,13 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-gorgoroth-info.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node1-data:/app/data
       - fukuii-node1-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dlogging.logs-level=INFO"
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node2:
@@ -54,12 +55,13 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-gorgoroth-info.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dlogging.logs-level=INFO"
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node3:
@@ -80,12 +82,13 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-gorgoroth-info.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dlogging.logs-level=INFO"
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   # Besu Nodes

@@ -17,7 +17,6 @@ import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
-import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.RichMining
@@ -66,9 +65,6 @@ object EthMiningService {
       hashRate: BigInt,
       blocksMinedCount: Option[Long]
   )
-
-  case class SetEtherbaseRequest(address: Address)
-  case class SetEtherbaseResponse(success: Boolean)
 }
 
 class EthMiningService(
@@ -79,8 +75,7 @@ class EthMiningService(
     syncingController: ActorRef,
     val pendingTransactionsManager: ActorRef,
     val getTransactionFromPoolTimeout: FiniteDuration,
-    configBuilder: BlockchainConfigBuilder,
-    coinbaseProvider: CoinbaseProvider
+    configBuilder: BlockchainConfigBuilder
 ) extends TransactionPicker {
   import configBuilder._
   import EthMiningService._
@@ -112,7 +107,7 @@ class EthMiningService(
             val PendingBlockAndState(pb, _) = blockGenerator.generateBlock(
               block,
               pendingTxs.pendingTransactions.map(_.stx.tx),
-              coinbaseProvider.get(),
+              miningConfig.coinbase,
               ommers.headers,
               None
             )
@@ -152,7 +147,7 @@ class EthMiningService(
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   def getCoinbase(req: GetCoinbaseRequest): ServiceResponse[GetCoinbaseResponse] =
-    IO.pure(Right(GetCoinbaseResponse(coinbaseProvider.get())))
+    IO.pure(Right(GetCoinbaseResponse(miningConfig.coinbase)))
 
   def submitHashRate(req: SubmitHashRateRequest): ServiceResponse[SubmitHashRateResponse] =
     ifEthash(req) { req =>
@@ -213,17 +208,10 @@ class EthMiningService(
 
       GetMinerStatusResponse(
         isMining = isMining,
-        coinbase = coinbaseProvider.get(),
+        coinbase = miningConfig.coinbase,
         hashRate = currentHashRate,
         blocksMinedCount = None // Reserved for future implementation - would require tracking mined blocks
       )
-    }
-
-  def setEtherbase(req: SetEtherbaseRequest): ServiceResponse[SetEtherbaseResponse] =
-    ifEthash(req) { request =>
-      coinbaseProvider.update(request.address)
-      log.info("Updated miner coinbase via eth_setEtherbase to {}", request.address)
-      SetEtherbaseResponse(success = true)
     }
 
   // NOTE This is called from places that guarantee we are running Ethash consensus.
