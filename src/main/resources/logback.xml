@@ -21,43 +21,6 @@
         <defaultValue>fukuii</defaultValue>
     </define>
 
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${stdoutEncoderPattern}</pattern>
-        </encoder>
-    </appender>
-
-    <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-            <!-- Stable JSON fields for structured logging 
-                 Use FUKUII_NODE_ID to set a custom node identifier instead of hostname for production -->
-            <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
-            <fieldNames>
-                <timestamp>timestamp</timestamp>
-                <version>[ignore]</version>
-                <logger>logger</logger>
-                <thread>thread</thread>
-                <level>level</level>
-                <levelValue>level_value</levelValue>
-                <message>message</message>
-                <stackTrace>stack_trace</stackTrace>
-            </fieldNames>
-            <!-- Include MDC (Mapped Diagnostic Context) fields -->
-            <includeMdcKeyNames>
-                <includeMdcKeyName>peer</includeMdcKeyName>
-                <includeMdcKeyName>block</includeMdcKeyName>
-                <includeMdcKeyName>transaction</includeMdcKeyName>
-                <includeMdcKeyName>actor</includeMdcKeyName>
-            </includeMdcKeyNames>
-            <!-- Include caller info for debugging 
-                 Set to true via -Dlogback.includeCallerData=true for detailed debugging
-                 Disabled by default in production for performance -->
-            <includeCallerData>false</includeCallerData>
-            <!-- Include context name -->
-            <includeContext>true</includeContext>
-        </encoder>
-    </appender>
-
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOGSDIR}/${LOGSFILENAME}.log</file>
         <append>true</append>
@@ -76,10 +39,10 @@
 
     <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
 
-    <!-- Conditional console appender selection -->
-    <if condition='p("ASJSON").contains("true")'>
-        <then>
-            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <!-- Console appender - uses JSON output if ASJSON property is true, otherwise plain text -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <if condition='p("ASJSON").contains("true")'>
+            <then>
                 <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                     <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
                     <fieldNames>
@@ -101,16 +64,14 @@
                     <includeCallerData>false</includeCallerData>
                     <includeContext>true</includeContext>
                 </encoder>
-            </appender>
-        </then>
-        <else>
-            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            </then>
+            <else>
                 <encoder>
                     <pattern>${stdoutEncoderPattern}</pattern>
                 </encoder>
-            </appender>
-        </else>
-    </if>
+            </else>
+        </if>
+    </appender>
 
     <root level="${LOGSLEVEL}">
         <appender-ref ref="CONSOLE" />
