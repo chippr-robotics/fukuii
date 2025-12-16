@@ -59,17 +59,13 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
       "miner" -> block.miner.map(encodeAsHex).getOrElse(JNull),
       "difficulty" -> encodeAsHex(block.difficulty),
       "totalDifficulty" -> block.totalDifficulty.map(encodeAsHex).getOrElse(JNull),
-      "lastCheckpointNumber" -> block.lastCheckpointNumber.map(encodeAsHex).getOrElse(JNull),
       "extraData" -> encodeAsHex(block.extraData),
       "size" -> encodeAsHex(block.size),
       "gasLimit" -> encodeAsHex(block.gasLimit),
       "gasUsed" -> encodeAsHex(block.gasUsed),
       "timestamp" -> encodeAsHex(block.timestamp),
-      "checkpoint" -> block.checkpoint.map(encodeCheckpointResponse).getOrElse(JNull),
       "transactions" -> transactionsField,
-      "uncles" -> JArray(block.uncles.toList.map(encodeAsHex)),
-      "signature" -> JString(block.signature),
-      "signer" -> JString(block.signer)
+      "uncles" -> JArray(block.uncles.toList.map(encodeAsHex))
     )
   }
 
