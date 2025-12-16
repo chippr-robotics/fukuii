@@ -70,7 +70,10 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
       "uncles" -> JArray(block.uncles.toList.map(encodeAsHex))
     )
 
-    // Checkpoint-specific fields - only include when checkpoint is present
+    // Checkpoint-specific fields - only include when the block actually has a checkpoint
+    // This ensures that genesis blocks and pre-ECIP-1097 blocks do NOT include these fields
+    // Note: block.lastCheckpointNumber may be Some(0) from ChainWeight, but we only include
+    // checkpoint fields if block.checkpoint.isDefined (i.e., the block header has HefPostEcip1097)
     val checkpointFields = if (block.checkpoint.isDefined) {
       List(
         "lastCheckpointNumber" -> block.lastCheckpointNumber.map(encodeAsHex).getOrElse(JNull),

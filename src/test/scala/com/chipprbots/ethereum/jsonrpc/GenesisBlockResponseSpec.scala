@@ -11,6 +11,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits._
 
 /** Test to verify that genesis block (without ECIP-1097) is serialized correctly:
@@ -91,5 +92,50 @@ class GenesisBlockResponseSpec extends AnyFlatSpec with Matchers {
     // The hash should be calculated from RLP encoding without checkpoint fields
     // This verifies that the hash calculation is correct
     genesisHeader.hash.length shouldBe 32 // Hash should be 32 bytes
+  }
+
+  it should "not include checkpoint fields when ChainWeight is provided with lastCheckpointNumber=0" in {
+    // This test ensures that even when ChainWeight has lastCheckpointNumber=0,
+    // the checkpoint fields are NOT included in JSON response (since checkpoint itself is None)
+    val genesisHeader = BlockHeader(
+      parentHash = ByteString(Hex.decode("0000000000000000000000000000000000000000000000000000000000000000")),
+      ommersHash = ByteString(Hex.decode("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347")),
+      beneficiary = ByteString(Hex.decode("0000000000000000000000000000000000000000")),
+      stateRoot = ByteString(Hex.decode("c22374cb808edd849fae4ef966b459424a1e6ada8d3752eaae4c60b15689ddd0")),
+      transactionsRoot = ByteString(Hex.decode("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")),
+      receiptsRoot = ByteString(Hex.decode("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")),
+      logsBloom = ByteString(Hex.decode("0" * 512)),
+      difficulty = BigInt("131072"),
+      number = 0,
+      gasLimit = BigInt("8000000"),
+      gasUsed = 0,
+      unixTimestamp = 1701302272L,
+      extraData = ByteString(Hex.decode("00")),
+      mixHash = ByteString(Hex.decode("0000000000000000000000000000000000000000000000000000000000000000")),
+      nonce = ByteString(Hex.decode("0000000000000042"))
+    )
+
+    val genesisBlock = Block(genesisHeader, BlockBody(Nil, Nil))
+    // Use ChainWeight.totalDifficultyOnly which sets lastCheckpointNumber=0
+    val weight = Some(ChainWeight.totalDifficultyOnly(genesisHeader.difficulty))
+    val blockResponse = BlockResponse(genesisBlock, weight, fullTxs = false, pendingBlock = false)
+
+    // Encode the response to JSON
+    val jsonResponse = blockResponseEncoder.encodeJson(blockResponse)
+    val jsonString = compact(render(jsonResponse))
+
+    // Extract the JSON object
+    val jsonObj = parse(jsonString).asInstanceOf[JObject]
+    val fields = jsonObj.obj.map(_._1).toSet
+
+    // Verify mixHash field exists
+    fields should contain("mixHash")
+
+    // Verify checkpoint-related fields do NOT exist even though weight has lastCheckpointNumber=0
+    // This is correct because the block header itself has no checkpoint (extraFields=HefEmpty)
+    fields should not contain "lastCheckpointNumber"
+    fields should not contain "checkpoint"
+    fields should not contain "signature"
+    fields should not contain "signer"
   }
 }
