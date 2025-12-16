@@ -35,7 +35,7 @@ services:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
       - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.blockchains.custom-chains-dir=/app/fukuii/conf/chains -Dlogging.logs-level=INFO"
-    command: ["fukuii", "enterprise", "gorgoroth"]
+    command: ["fukuii", "gorgoroth"]
 
   fukuii-node2:
     image: ghcr.io/chippr-robotics/fukuii:latest
@@ -62,7 +62,7 @@ services:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
       - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.blockchains.custom-chains-dir=/app/fukuii/conf/chains -Dlogging.logs-level=INFO"
-    command: ["fukuii", "enterprise", "gorgoroth"]
+    command: ["fukuii", "gorgoroth"]
 
   fukuii-node3:
     image: ghcr.io/chippr-robotics/fukuii:latest
@@ -89,7 +89,7 @@ services:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
       - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.blockchains.custom-chains-dir=/app/fukuii/conf/chains -Dlogging.logs-level=INFO"
-    command: ["fukuii", "enterprise", "gorgoroth"]
+    command: ["fukuii", "gorgoroth"]
 
   # Core-Geth Nodes
   geth-node1:
