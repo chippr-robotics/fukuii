@@ -51,6 +51,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
       "hash" -> block.hash.map(encodeAsHex).getOrElse(JNull),
       "parentHash" -> encodeAsHex(block.parentHash),
       "nonce" -> block.nonce.map(encodeAsHex).getOrElse(JNull),
+      "mixHash" -> encodeAsHex(block.mixHash),
       "sha3Uncles" -> encodeAsHex(block.sha3Uncles),
       "logsBloom" -> encodeAsHex(block.logsBloom),
       "transactionsRoot" -> encodeAsHex(block.transactionsRoot),

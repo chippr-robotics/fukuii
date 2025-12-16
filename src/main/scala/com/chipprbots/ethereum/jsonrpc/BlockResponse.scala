@@ -23,6 +23,7 @@ trait BaseBlockResponse {
   def hash: Option[ByteString]
   def parentHash: ByteString
   def nonce: Option[ByteString]
+  def mixHash: ByteString
   def sha3Uncles: ByteString
   def logsBloom: ByteString
   def transactionsRoot: ByteString
@@ -46,6 +47,7 @@ case class BlockResponse(
     hash: Option[ByteString],
     parentHash: ByteString,
     nonce: Option[ByteString],
+    mixHash: ByteString,
     sha3Uncles: ByteString,
     logsBloom: ByteString,
     transactionsRoot: ByteString,
@@ -115,6 +117,7 @@ object BlockResponse {
       hash = if (pendingBlock) None else Some(block.header.hash),
       parentHash = block.header.parentHash,
       nonce = if (pendingBlock) None else Some(block.header.nonce),
+      mixHash = block.header.mixHash,
       sha3Uncles = block.header.ommersHash,
       logsBloom = block.header.logsBloom,
       transactionsRoot = block.header.transactionsRoot,
