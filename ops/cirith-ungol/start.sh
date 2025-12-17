@@ -5,7 +5,7 @@
 set -euo pipefail
 
 echo "==================================================================="
-echo "  Fukuii Testbed - ETC Mainnet SNAP Sync Testing"
+echo "  Fukuii + Core-Geth Testbed - ETC Mainnet SNAP Sync Testing"
 echo "==================================================================="
 echo ""
 
@@ -68,6 +68,7 @@ collect_logs() {
     # Capture logs from both containers
     echo "Collecting logs..."
     capture_container_logs "fukuii-cirith-ungol" "$LOG_DIR/fukuii_${TIMESTAMP}.log"
+    capture_container_logs "coregeth-cirith-ungol" "$LOG_DIR/coregeth_${TIMESTAMP}.log"
     echo ""
     
     # Get SNAP-specific information from fukuii
@@ -83,13 +84,18 @@ collect_logs() {
     echo ""
     
     # Get peer count from fukuii node
-    echo "Peer Count:"
-    echo "-----------"
-    echo -n "  Fukuii: "
+        echo "Peer Count:"
+        echo "-----------"
+        echo -n "  Fukuii: "
     docker exec fukuii-cirith-ungol curl -s -X POST \
       -H "Content-Type: application/json" \
       --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
       http://localhost:8546 2>/dev/null | grep -o '"result":"[^"]*"' || echo "Unable to get peer count"
+        echo -n "  Core-Geth: "
+        docker exec coregeth-cirith-ungol curl -s -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+            http://localhost:8545 2>/dev/null | grep -o '"result":"[^"]*"' || echo "Unable to get peer count"
     echo ""
     
     # Display recent SNAP-related errors from fukuii
@@ -124,8 +130,9 @@ case "$ACTION" in
         echo "✓ Fukuii Testbed started successfully!"
         echo ""
         echo "Monitoring commands:"
-        echo "  - View fukuii logs:   $COMPOSE_CMD logs -f fukuii"
-        echo "  - View all logs:      $COMPOSE_CMD logs -f"
+    echo "  - View fukuii logs:   $COMPOSE_CMD logs -f fukuii"
+    echo "  - View core-geth logs:$COMPOSE_CMD logs -f coregeth"
+    echo "  - View all logs:      $COMPOSE_CMD logs -f"
         echo "  - Collect logs:       $0 collect-logs"
         echo "  - Check health:       curl http://localhost:8546/health"
         echo "  - Stop nodes:         $0 stop"
@@ -133,15 +140,15 @@ case "$ACTION" in
         ;;
     
     down|stop)
-        echo "Stopping Fukuii Testbed (both nodes)..."
+        echo "Stopping Fukuii/Core-Geth Testbed..."
         $COMPOSE_CMD down
-        echo "✓ Fukuii Testbed stopped."
+        echo "✓ Testbed stopped."
         ;;
     
     restart)
-        echo "Restarting Fukuii Testbed (both nodes)..."
+        echo "Restarting Fukuii/Core-Geth Testbed..."
         $COMPOSE_CMD restart
-        echo "✓ Fukuii Testbed restarted."
+        echo "✓ Testbed restarted."
         ;;
     
     logs)

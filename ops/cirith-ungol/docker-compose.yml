@@ -8,12 +8,51 @@ networks:
     driver: bridge
 
 services:
+  coregeth:
+    image: etclabscore/core-geth:latest
+    container_name: coregeth-cirith-ungol
+    restart: unless-stopped
+    networks:
+      - fukuii-cirith-ungol
+    ports:
+      - "18545:8545"
+      - "18546:8546"
+      - "30304:30303/tcp"
+      - "30304:30303/udp"
+    volumes:
+      - coregeth-cirith-ungol-data:/root/.ethereum
+    command:
+      - geth
+      - --classic
+      - --syncmode
+      - snap
+      - --http
+      - --http.addr
+      - 0.0.0.0
+      - --http.vhosts
+      - "*"
+      - --http.api
+      - eth,net,web3,admin,debug,txpool
+      - --ws
+      - --ws.addr
+      - 0.0.0.0
+      - --ws.api
+      - eth,net,web3
+      - --port
+      - "30303"
+      - --metrics
+      - --metrics.addr
+      - 0.0.0.0
+      - --ipcdisable
+
   fukuii:
     image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: fukuii-cirith-ungol
     restart: unless-stopped
     networks:
       - fukuii-cirith-ungol
+    depends_on:
+      - coregeth
     ports:
       # JSON-RPC HTTP
       - "8545:8545"
@@ -26,6 +65,7 @@ services:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
+      - ./conf/static-nodes.json:/home/fukuii/.fukuii/etc/static-nodes.json
       # Data directory (persistent)
       - fukuii-cirith-ungol-data:/app/data
       # Logs directory
@@ -47,4 +87,6 @@ volumes:
   fukuii-cirith-ungol-data:
     driver: local
   fukuii-cirith-ungol-logs:
+    driver: local
+  coregeth-cirith-ungol-data:
     driver: local
