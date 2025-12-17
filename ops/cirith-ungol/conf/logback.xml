@@ -205,18 +205,18 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="INFO" />
     
     <!-- =================================================================== -->
-    <!-- SNAP SYNC - Set to INFO for run 12 (not under test)                -->
+    <!-- SNAP SYNC - Elevated to DEBUG to troubleshoot stalled sync         -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="DEBUG" />
     
-    <!-- SNAP request tracking - INFO for run 12 -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="INFO" />
+    <!-- SNAP request tracking - DEBUG to capture timeout lifecycle -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="DEBUG" />
     
     <!-- =================================================================== -->
     <!-- LEDGER - Block execution and state management                       -->

@@ -61,6 +61,7 @@ class AccountRangeCoordinator(
 
   // Worker pool
   private val workers = mutable.ArrayBuffer[ActorRef]()
+  private val busyWorkers = mutable.Set[ActorRef]()
 
   // Statistics
   private var accountsDownloaded: Long = 0
@@ -118,18 +119,29 @@ class AccountRangeCoordinator(
       // Tasks already initialized in constructor
 
     case PeerAvailable(peer) =>
-      if (pendingTasks.nonEmpty && workers.size < concurrency) {
-        // Create worker and assign task
-        val worker = createWorker()
-        val task = pendingTasks.dequeue()
-        worker ! FetchAccountRange(task, peer)
-      } else if (pendingTasks.nonEmpty && workers.nonEmpty) {
-        // Reuse existing idle worker
-        val worker = workers.head
-        val task = pendingTasks.dequeue()
-        worker ! FetchAccountRange(task, peer)
+      if (pendingTasks.isEmpty) {
+        log.debug("No pending account range tasks available for peer {}", peer.id)
       } else {
-        log.debug("No pending tasks or max workers reached")
+        val workerOpt = getIdleWorker.orElse {
+          if (workers.size < concurrency) Some(createWorker()) else None
+        }
+
+        workerOpt match {
+          case Some(worker) =>
+            assignTaskToWorker(worker, peer)
+          case None =>
+            log.debug(
+              s"No idle account range workers available (active=${busyWorkers.size}, max=$concurrency)"
+            )
+        }
+      }
+
+    case responseMsg: AccountRangeResponseMsg =>
+      activeTasks.get(responseMsg.response.requestId) match {
+        case Some((_, worker)) =>
+          worker ! responseMsg
+        case None =>
+          log.debug(s"Received AccountRange response for unknown request ${responseMsg.response.requestId}")
       }
 
     case TaskComplete(requestId, result) =>
@@ -141,6 +153,9 @@ class AccountRangeCoordinator(
     case GetProgress =>
       val progress = calculateProgress()
       sender() ! progress
+      if (sender() != snapSyncController) {
+        snapSyncController ! progress
+      }
 
     case GetContractAccounts =>
       sender() ! ContractAccountsResponse(contractAccounts.toSeq)
@@ -173,8 +188,32 @@ class AccountRangeCoordinator(
     worker
   }
 
+  private def getIdleWorker: Option[ActorRef] = {
+    workers.find(worker => !busyWorkers.contains(worker))
+  }
+
+  private def assignTaskToWorker(worker: ActorRef, peer: Peer): Unit = {
+    if (pendingTasks.isEmpty) {
+      log.debug("No pending tasks to assign")
+      return
+    }
+
+    val task = pendingTasks.dequeue()
+    val requestId = requestTracker.generateRequestId()
+    task.pending = true
+    activeTasks.put(requestId, (task, worker))
+    busyWorkers += worker
+
+    log.debug(
+      s"Assigning account range ${task.rangeString} to worker ${worker.path.name} for peer ${peer.id} (requestId=$requestId)"
+    )
+
+    worker ! FetchAccountRange(task, peer, requestId)
+  }
+
   private def handleTaskComplete(requestId: BigInt, result: Either[String, (Int, Seq[(ByteString, Account)])]): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker) =>
+      busyWorkers -= worker
       result match {
         case Right((accountCount, accounts)) =>
           log.info(s"Task completed successfully: $accountCount accounts")
@@ -216,6 +255,7 @@ class AccountRangeCoordinator(
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker) =>
+      busyWorkers -= worker
       log.warning(s"Task failed: $reason")
       task.pending = false
       pendingTasks.enqueue(task)
