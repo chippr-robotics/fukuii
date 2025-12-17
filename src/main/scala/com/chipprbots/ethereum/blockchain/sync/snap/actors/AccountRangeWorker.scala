@@ -1,13 +1,13 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
-import org.apache.pekko.util.ByteString
-
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.{NetworkPeerManagerActor, Peer}
+import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
 
 /** AccountRangeWorker fetches a single account range from a peer.
   *
@@ -51,11 +51,8 @@ class AccountRangeWorker(
   override def receive: Receive = idle
 
   def idle: Receive = {
-    case FetchAccountRange(task, peer) =>
-      log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id}")
-      
-      // Send request directly via network peer manager
-      val requestId = requestTracker.generateRequestId()
+    case FetchAccountRange(task, peer, requestId) =>
+      log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id} with requestId=$requestId")
       
       // Create GetAccountRange message
       val request = GetAccountRange(
@@ -67,7 +64,6 @@ class AccountRangeWorker(
       )
       
       // Track the request with timeout
-      import context.dispatcher
       requestTracker.trackRequest(
         requestId,
         peer,
@@ -78,12 +74,9 @@ class AccountRangeWorker(
       }
       
       // Send message to peer
-      import com.chipprbots.ethereum.network.NetworkPeerManagerActor
-      import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
-      import com.chipprbots.ethereum.network.p2p.MessageSerializable
       val messageSerializable: MessageSerializable = new GetAccountRangeEnc(request)
       networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
-      
+
       currentTask = Some((task, peer, requestId))
       context.become(working)
   }
@@ -126,7 +119,7 @@ class AccountRangeWorker(
           log.debug(s"Timeout for old or unknown request $reqId")
       }
 
-    case FetchAccountRange(task, peer) =>
+    case FetchAccountRange(task, peer, _) =>
       log.warning("Worker is busy, cannot accept new task")
       coordinator ! TaskFailed(0, "Worker busy")
   }

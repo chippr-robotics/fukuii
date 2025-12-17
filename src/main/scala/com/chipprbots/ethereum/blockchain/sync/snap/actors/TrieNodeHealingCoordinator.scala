@@ -121,6 +121,9 @@ class TrieNodeHealingCoordinator(
         progress = calculateProgress()
       )
       sender() ! stats
+      if (sender() != snapSyncController) {
+        snapSyncController ! stats
+      }
   }
 
   private def createWorker(): ActorRef = {
