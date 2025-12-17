@@ -333,22 +333,41 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
       def expectMsgAllOfEq[T1: Eq, T2: Eq](max: FiniteDuration, msg1: T1, msg2: T2): (T1, T2) = {
         val received = probe.receiveN(2, max)
-        (
-          received.find(m => Eq[T1].eqv(msg1, m.asInstanceOf[T1])).get.asInstanceOf[T1],
-          received.find(m => Eq[T2].eqv(msg2, m.asInstanceOf[T2])).get.asInstanceOf[T2]
-        )
+        val found1 = received.find(m => Eq[T1].eqv(msg1, m.asInstanceOf[T1]))
+        val found2 = received.find(m => Eq[T2].eqv(msg2, m.asInstanceOf[T2]))
+        
+        (found1, found2) match {
+          case (Some(r1), Some(r2)) => (r1.asInstanceOf[T1], r2.asInstanceOf[T2])
+          case (None, _) => 
+            fail(s"Expected message $msg1 not found in received messages: $received")
+          case (_, None) =>
+            fail(s"Expected message $msg2 not found in received messages: $received")
+        }
       }
     }
 
     // Helper to compare ETH66 messages ignoring requestId (which is dynamically generated
-    // for core-geth compatibility). Only handles GetBlockHeaders and GetBlockBodies as those
-    // are the ETH66 message types used in these tests. Other ETH66 request types like
-    // GetPooledTransactions, GetNodeData, and GetReceipts are not used in RegularSync tests.
+    // for core-geth compatibility). Also handles comparison between ETH65 and ETH66 message
+    // versions. Only handles GetBlockHeaders and GetBlockBodies as those are the ETH66 
+    // message types used in these tests. Other ETH66 request types like GetPooledTransactions,
+    // GetNodeData, and GetReceipts are not used in RegularSync tests.
     private def messagesEqualIgnoringRequestId(x: Message, y: Message): Boolean = (x, y) match {
+      // ETH66 to ETH66 comparison
       case (h1: ETH66GetBlockHeaders, h2: ETH66GetBlockHeaders) =>
         h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
       case (b1: ETH66GetBlockBodies, b2: ETH66GetBlockBodies) =>
         b1.hashes == b2.hashes
+        
+      // ETH65 to ETH66 comparison (and vice versa)
+      case (b1: GetBlockBodies, b2: ETH66GetBlockBodies) =>
+        b1.hashes.toSeq == b2.hashes.toSeq
+      case (b1: ETH66GetBlockBodies, b2: GetBlockBodies) =>
+        b1.hashes.toSeq == b2.hashes.toSeq
+      case (h1: GetBlockHeaders, h2: ETH66GetBlockHeaders) =>
+        h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
+      case (h1: ETH66GetBlockHeaders, h2: GetBlockHeaders) =>
+        h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
+        
       case _ => x == y
     }
 
