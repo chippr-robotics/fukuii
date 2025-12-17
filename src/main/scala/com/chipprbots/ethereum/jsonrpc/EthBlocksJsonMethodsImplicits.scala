@@ -46,7 +46,8 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
         JArray(txs.toList.map(tx => JsonEncoder.encode(tx)))
     }
 
-    JObject(
+    // Base fields that are always present
+    val baseFields = List(
       "number" -> encodeAsHex(block.number),
       "hash" -> block.hash.map(encodeAsHex).getOrElse(JNull),
       "parentHash" -> encodeAsHex(block.parentHash),
@@ -68,6 +69,20 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
       "transactions" -> transactionsField,
       "uncles" -> JArray(block.uncles.toList.map(encodeAsHex))
     )
+
+    // Checkpoint-specific fields - only include when checkpoint is present
+    val checkpointFields = if (block.checkpoint.isDefined) {
+      List(
+        "lastCheckpointNumber" -> block.lastCheckpointNumber.map(encodeAsHex).getOrElse(JNull),
+        "checkpoint" -> block.checkpoint.map(encodeCheckpointResponse).getOrElse(JNull),
+        "signature" -> JString(block.signature),
+        "signer" -> JString(block.signer)
+      )
+    } else {
+      List.empty
+    }
+
+    JObject(baseFields ++ checkpointFields)
   }
 
   // Encoder for BaseBlockResponse (which is typically BlockResponse)

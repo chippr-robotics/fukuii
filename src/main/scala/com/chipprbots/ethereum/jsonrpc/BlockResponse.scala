@@ -37,6 +37,7 @@ trait BaseBlockResponse {
   def gasLimit: BigInt
   def gasUsed: BigInt
   def timestamp: BigInt
+  def mixHash: ByteString
   def transactions: Either[Seq[ByteString], Seq[BaseTransactionResponse]]
   def uncles: Seq[ByteString]
 }
@@ -62,6 +63,7 @@ case class BlockResponse(
     gasLimit: BigInt,
     gasUsed: BigInt,
     timestamp: BigInt,
+    mixHash: ByteString,
     checkpoint: Option[CheckpointResponse],
     transactions: Either[Seq[ByteString], Seq[TransactionResponse]],
     uncles: Seq[ByteString],
@@ -132,6 +134,7 @@ object BlockResponse {
       gasLimit = block.header.gasLimit,
       gasUsed = block.header.gasUsed,
       timestamp = block.header.unixTimestamp,
+      mixHash = block.header.mixHash,
       checkpoint = checkpoint,
       transactions = transactions,
       uncles = block.body.uncleNodesList.map(_.hash),
