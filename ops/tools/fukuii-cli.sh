@@ -163,95 +163,272 @@ clean_network() {
 # Node Configuration Commands
 # ============================================================================
 
+sanitize_enode() {
+    local enode="$1"
+    enode="${enode%%\?*}"
+    enode=$(printf "%s" "$enode" | tr -d '\r\n')
+    echo "$enode"
+}
+
+normalize_enode_host() {
+    local container_name="$1"
+    local enode="$2"
+
+    if [[ "$enode" != *"@"* ]]; then
+        echo "$enode"
+        return
+    fi
+
+    local suffix=${enode#*@}
+    if [[ "$suffix" == "$enode" || "$suffix" != *":"* ]]; then
+        echo "$enode"
+        return
+    fi
+
+    local port=${suffix##*:}
+    local host=${suffix%:$port}
+    local replacement="$container_name"
+
+    if [[ -z "$replacement" ]]; then
+        echo "$enode"
+        return
+    fi
+
+    if [[ "$host" == "127.0.0.1" || "$host" == "localhost" || "$host" == "0.0.0.0" ]]; then
+        echo "${enode%%@*}@$replacement:$port"
+        return
+    fi
+
+    echo "$enode"
+}
+
+build_static_nodes_json() {
+    local self="$1"
+    local entries=()
+
+    for peer_container in $CONTAINERS; do
+        if [ "$peer_container" == "$self" ]; then
+            continue
+        fi
+
+        local peer_enode="${ENODES_MAP[$peer_container]}"
+        if [ -n "$peer_enode" ]; then
+            entries+=("$peer_enode")
+        fi
+    done
+
+    if [ ${#entries[@]} -eq 0 ]; then
+        echo "[]"
+        return
+    fi
+
+    local json="[\n"
+    local idx=0
+    local total=${#entries[@]}
+    for entry in "${entries[@]}"; do
+        idx=$((idx + 1))
+        local suffix=",";
+        if [ $idx -eq $total ]; then
+            suffix=""
+        fi
+        json+="  \"$entry\"$suffix\n"
+    done
+    json+="]\n"
+    printf "%b" "$json"
+}
+
+write_geth_static_nodes() {
+    local container="$1"
+    local payload="$2"
+    local target="/root/.ethereum/static-nodes.json"
+    local trusted="/root/.ethereum/trusted-nodes.json"
+
+    if ! docker exec "$container" /bin/sh -c "cat <<'EOF' > $target
+$payload
+EOF" >/dev/null 2>&1; then
+        echo -e "${RED}✗ failed to update $target${NC}"
+        return 1
+    fi
+
+    docker exec "$container" /bin/sh -c "cat <<'EOF' > $trusted
+$payload
+EOF" >/dev/null 2>&1 || true
+
+    echo -e "${GREEN}✓ updated${NC}"
+    return 0
+}
+
+write_besu_static_nodes() {
+    local container="$1"
+    local payload="$2"
+    local target="/opt/besu/data/static-nodes.json"
+
+    if ! docker exec "$container" /bin/sh -c "cat <<'EOF' > $target
+$payload
+EOF" >/dev/null 2>&1; then
+        echo -e "${RED}✗ failed to update $target${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✓ updated${NC}"
+    return 0
+}
+
+write_fukuii_static_nodes() {
+    local container="$1"
+    local payload="$2"
+    local target="/app/data/static-nodes.json"
+
+    docker exec "$container" /bin/sh -c "cat <<'EOF' > $target
+$payload
+EOF" >/dev/null 2>&1
+}
+
 sync_static_nodes() {
-    echo -e "${BLUE}=== Fukuii Static Nodes Synchronization ===${NC}"
+    echo -e "${BLUE}=== Multi-client Static Nodes Synchronization ===${NC}"
     echo ""
-    
-    # Find all running Fukuii containers
-    CONTAINERS=$(docker ps --filter "name=gorgoroth-fukuii-" --format "{{.Names}}" | sort)
-    
+
+    local fukuii_containers
+    local geth_containers
+    local besu_containers
+
+    fukuii_containers=$(docker ps --filter "name=gorgoroth-fukuii-" --format "{{.Names}}" | sort)
+    geth_containers=$(docker ps --filter "name=gorgoroth-geth-" --format "{{.Names}}" | sort)
+    besu_containers=$(docker ps --filter "name=gorgoroth-besu-" --format "{{.Names}}" | sort)
+
+    CONTAINERS=$(printf "%s\n%s\n%s\n" "$fukuii_containers" "$geth_containers" "$besu_containers" | sed '/^$/d')
+
     if [ -z "$CONTAINERS" ]; then
-        echo -e "${RED}Error: No running Gorgoroth Fukuii containers found${NC}"
+        echo -e "${RED}Error: No running Fukuii, Core-Geth, or Besu containers detected${NC}"
         echo "Start the network first with: fukuii-cli start [config]"
         exit 1
     fi
-    
-    echo -e "${GREEN}Found running containers:${NC}"
-    echo "$CONTAINERS" | sed 's/^/  - /'
-    echo ""
-    
-    # Collect enodes from all containers
+
+    if [ -n "$fukuii_containers" ]; then
+        echo -e "${GREEN}Fukuii containers:${NC}"
+        echo "$fukuii_containers" | sed 's/^/  - /'
+        echo ""
+    fi
+
+    if [ -n "$geth_containers" ]; then
+        echo -e "${GREEN}Core-Geth containers:${NC}"
+        echo "$geth_containers" | sed 's/^/  - /'
+        echo ""
+    fi
+
+    if [ -n "$besu_containers" ]; then
+        echo -e "${GREEN}Besu containers:${NC}"
+        echo "$besu_containers" | sed 's/^/  - /'
+        echo ""
+    fi
+
     echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
-    declare -A ENODES_MAP  # Associate container name with its enode
+    declare -A ENODES_MAP
+    local missing_enodes=0
+
     for container in $CONTAINERS; do
         echo -n "  $container: "
         if enode=$(get_enode_from_container "$container"); then
             if [ -z "$enode" ]; then
                 echo -e "${YELLOW}⚠ extracted empty enode${NC}"
+                missing_enodes=1
                 continue
             fi
             ENODES_MAP["$container"]="$enode"
             echo -e "${GREEN}✓${NC}"
         else
             echo -e "${RED}✗ (skipped)${NC}"
+            missing_enodes=1
         fi
     done
-    
+
     if [ ${#ENODES_MAP[@]} -eq 0 ]; then
         echo -e "${RED}Error: No enodes could be collected${NC}"
         exit 1
     fi
-    
+
+    if [ $missing_enodes -ne 0 ]; then
+        echo -e "${YELLOW}Warning: Some enodes could not be collected; static peer lists may be incomplete${NC}"
+    fi
+
     echo ""
     echo -e "${GREEN}Collected ${#ENODES_MAP[@]} enode(s)${NC}"
-    
-    local validator_container=${FUKUII_VALIDATOR_CONTAINER:-gorgoroth-fukuii-node1}
-    if [[ -n "$FUKUII_VALIDATOR_NODE" ]]; then
-        validator_container="gorgoroth-fukuii-${FUKUII_VALIDATOR_NODE}"
-    fi
 
-    if [[ -n "$FUKUII_VALIDATOR_CONTAINER" && -n "$FUKUII_VALIDATOR_NODE" ]]; then
-        echo -e "${YELLOW}Warning: both FUKUII_VALIDATOR_CONTAINER and FUKUII_VALIDATOR_NODE set; using container override${NC}"
-    fi
-
-    if [[ -z "${ENODES_MAP[$validator_container]}" ]]; then
-        echo -e "${YELLOW}Warning: validator container '$validator_container' not detected or missing enode.${NC}"
-        # Fall back to the first container alphabetically if validator missing
-        validator_container=$(printf "%s\n" "${!ENODES_MAP[@]}" | sort | head -n1)
-        echo -e "${YELLOW}Falling back to '$validator_container' as validator reference.${NC}"
-    fi
-
-    local validator_enode="${ENODES_MAP[$validator_container]}"
-    if [[ -z "$validator_enode" ]]; then
-        echo -e "${RED}Error: unable to determine validator enode${NC}"
-        exit 1
-    fi
-
-    echo -e "${BLUE}Validator container:${NC} $validator_container"
-    echo -e "${BLUE}Validator enode:${NC} $validator_enode"
-
-    # Update static-nodes.json for each container
-    # Followers should include only the validator; validator should have none
-    echo ""
-    echo -e "${BLUE}Updating static-nodes.json in config directories...${NC}"
-    for container in $CONTAINERS; do
-        node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
-        config_file="$GORGOROTH_DIR/conf/node${node_num}/static-nodes.json"
-        
-        echo -n "  node${node_num}: "
-        if [ -f "$config_file" ]; then
-            if [ "$container" == "$validator_container" ]; then
-                echo "[]" > "$config_file"
-                echo -e "${GREEN}✓ validator: no static peers${NC}"
-            else
-                printf '[\n  "%s"\n]\n' "$validator_enode" > "$config_file"
-                echo -e "${GREEN}✓ follower -> validator${NC}"
-            fi
-        else
-            echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
+    local validator_container=""
+    if [ -n "$fukuii_containers" ]; then
+        validator_container=${FUKUII_VALIDATOR_CONTAINER:-gorgoroth-fukuii-node1}
+        if [[ -n "$FUKUII_VALIDATOR_NODE" ]]; then
+            validator_container="gorgoroth-fukuii-${FUKUII_VALIDATOR_NODE}"
         fi
-    done
-    
+
+        if [[ -n "$FUKUII_VALIDATOR_CONTAINER" && -n "$FUKUII_VALIDATOR_NODE" ]]; then
+            echo -e "${YELLOW}Warning: both FUKUII_VALIDATOR_CONTAINER and FUKUII_VALIDATOR_NODE set; using container override${NC}"
+        fi
+
+        if [[ -z "${ENODES_MAP[$validator_container]}" ]]; then
+            echo -e "${YELLOW}Warning: validator container '$validator_container' not detected or missing enode.${NC}"
+            validator_container=$(printf "%s\n" "${!ENODES_MAP[@]}" | sort | head -n1)
+            echo -e "${YELLOW}Falling back to '$validator_container' as validator reference.${NC}"
+        fi
+
+        echo -e "${BLUE}Validator container:${NC} $validator_container"
+        echo -e "${BLUE}Validator enode:${NC} ${ENODES_MAP[$validator_container]}"
+    fi
+
+    if [ -n "$fukuii_containers" ]; then
+        echo ""
+        echo -e "${BLUE}Updating Fukuii static-nodes.json files...${NC}"
+        for container in $fukuii_containers; do
+            node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
+            config_file="$GORGOROTH_DIR/conf/node${node_num}/static-nodes.json"
+            echo -n "  node${node_num}: "
+
+            if [ ! -f "$config_file" ]; then
+                echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
+                continue
+            fi
+
+            if [ -n "$validator_container" ] && [ "$container" == "$validator_container" ]; then
+                peers_json="[]"
+                echo "$peers_json" > "$config_file"
+                if write_fukuii_static_nodes "$container" "$peers_json"; then
+                    echo -e "${GREEN}✓ validator remains inbound-only${NC}"
+                else
+                    echo -e "${RED}✗ failed to update container static nodes${NC}"
+                fi
+                continue
+            fi
+
+            peers_json=$(build_static_nodes_json "$container")
+            echo "$peers_json" > "$config_file"
+            if write_fukuii_static_nodes "$container" "$peers_json"; then
+                echo -e "${GREEN}✓ updated${NC}"
+            else
+                echo -e "${RED}✗ failed to update container static nodes${NC}"
+            fi
+        done
+    fi
+
+    if [ -n "$geth_containers" ]; then
+        echo ""
+        echo -e "${BLUE}Updating Core-Geth static peers...${NC}"
+        for container in $geth_containers; do
+            echo -n "  $container: "
+            peers_json=$(build_static_nodes_json "$container")
+            write_geth_static_nodes "$container" "$peers_json"
+        done
+    fi
+
+    if [ -n "$besu_containers" ]; then
+        echo ""
+        echo -e "${BLUE}Updating Besu static peers...${NC}"
+        for container in $besu_containers; do
+            echo -n "  $container: "
+            peers_json=$(build_static_nodes_json "$container")
+            write_besu_static_nodes "$container" "$peers_json"
+        done
+    fi
+
     echo ""
     echo -e "${YELLOW}Restarting containers to apply static peers configuration...${NC}"
     for container in $CONTAINERS; do
@@ -262,61 +439,91 @@ sync_static_nodes() {
             echo -e "${RED}✗ (failed to restart)${NC}"
         fi
     done
-    
+
     echo ""
     echo -e "${GREEN}=== Static nodes synchronization complete ===${NC}"
     echo ""
     echo -e "Next steps:"
     echo -e "  1. Wait for containers to start: ${BLUE}docker ps${NC}"
     echo -e "  2. Check logs: ${BLUE}fukuii-cli logs${NC}"
-    echo -e "  3. Verify peer connections:"
-    echo -e "     ${BLUE}curl -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}' http://localhost:8546${NC}"
+    echo -e "  3. Verify peer connections with the smoke-test command:"
+    echo -e "     ${BLUE}fukuii-cli smoke-test fukuii-geth${NC}"
 }
 
 get_enode_from_logs() {
     local container_name=$1
-    # Extract enode from container logs
-    # Expected log format: "Node address: enode://<64-hex-chars>@[0:0:0:0:0:0:0:0]:<port>"
-    # Example: "INFO [ServerActor] - Node address: enode://abc123...@[0:0:0:0:0:0:0:0]:30303"
     local log_tail="${FUKUII_LOG_TAIL:-500}"
     local enode=""
 
     enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-        grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
-        tail -1 | \
-        sed 's/Node address: //' || true)
+        grep -o 'enode://[^[:space:]]*' | \
+        tail -1 || true)
 
     if [ -z "$enode" ]; then
         enode=$(docker logs "$container_name" 2>&1 | \
-            grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
-            tail -1 | \
-            sed 's/Node address: //' || true)
+            grep -o 'enode://[^[:space:]]*' | \
+            tail -1 || true)
     fi
 
-    if [ -n "$enode" ]; then
-        # Validate enode format (should start with "enode://" and contain @)
-        if [[ ! "$enode" =~ ^enode://[0-9a-f]+@\[0:0:0:0:0:0:0:0\]:[0-9]+$ ]]; then
-            echo "" >&2
-            echo -e "${YELLOW}Warning: Extracted enode has unexpected format: $enode${NC}" >&2
-            return 1
-        fi
-        
-        # Convert [0:0:0:0:0:0:0:0] to container hostname
-        # Extract node number from container name (e.g., gorgoroth-fukuii-node1 -> 1)
+    if [ -z "$enode" ]; then
+        return 1
+    fi
+
+    if [[ "$enode" =~ \[0:0:0:0:0:0:0:0\] ]]; then
         local node_num=$(echo "$container_name" | grep -o "node[0-9]*" | grep -o "[0-9]*")
         if [ -z "$node_num" ]; then
             echo -e "${YELLOW}Warning: Could not extract node number from container name: $container_name${NC}" >&2
             return 1
         fi
-        
-        local hostname="fukuii-node${node_num}"
-        
-        # Replace [0:0:0:0:0:0:0:0] with hostname
+        local hostname="gorgoroth-fukuii-node${node_num}"
         enode=$(echo "$enode" | sed "s/\[0:0:0:0:0:0:0:0\]/$hostname/")
-        echo "$enode"
-        return 0
     fi
-    
+
+    enode=$(sanitize_enode "$enode")
+    enode=$(normalize_enode_host "$container_name" "$enode")
+
+    if [[ "$enode" != enode://*@* ]]; then
+        echo -e "${YELLOW}Warning: Extracted enode has unexpected format: $enode${NC}" >&2
+        return 1
+    fi
+
+    echo "$enode"
+    return 0
+}
+
+perform_rpc_request() {
+    local container_name=$1
+    local method=$2
+    local params=${3:-"[]"}
+    local payload
+    payload=$(printf '{"jsonrpc":"2.0","method":"%s","params":%s,"id":1}' "$method" "$params")
+    local ports=(8546 8545)
+
+    # Prefer host-accessible ports first
+    for candidate in 8545/tcp 8546/tcp; do
+        local binding
+        binding=$(docker port "$container_name" "$candidate" 2>/dev/null | head -n1)
+        if [ -n "$binding" ]; then
+            local host_port=${binding##*:}
+            local response
+            response=$(curl -s -X POST -H "Content-Type: application/json" --data "$payload" "http://127.0.0.1:$host_port" 2>/dev/null || true)
+            if echo "$response" | grep -q '"result"'; then
+                echo "$response"
+                return 0
+            fi
+        fi
+    done
+
+    # Fallback to in-container RPC (for unpublished ports)
+    for port in "${ports[@]}"; do
+        local response
+        response=$(docker exec "$container_name" curl -s -X POST -H "Content-Type: application/json" --data "$payload" http://localhost:$port 2>/dev/null || true)
+        if echo "$response" | grep -q '"result"'; then
+            echo "$response"
+            return 0
+        fi
+    done
+
     return 1
 }
 
@@ -324,34 +531,212 @@ get_enode_from_container() {
     local container_name=$1
     local max_retries=5
     local retry=0
-    
-    # First, try to get enode from logs (works even without admin RPC enabled)
+
     local enode=$(get_enode_from_logs "$container_name")
     if [ -n "$enode" ]; then
         echo "$enode"
         return 0
     fi
-    
-    # Fallback to RPC method (requires admin namespace to be enabled)
+
     while [ $retry -lt $max_retries ]; do
-        # Try to get enode via RPC
-        # Note: Using grep/cut instead of jq for portability (jq may not be in all containers)
-        enode=$(docker exec "$container_name" sh -c \
-            'curl -s -X POST --data "{\"jsonrpc\":\"2.0\",\"method\":\"admin_nodeInfo\",\"params\":[],\"id\":1}" http://localhost:8546 | grep -o "\"enode\":\"[^\"]*\"" | cut -d"\"" -f4' \
-            2>/dev/null || echo "")
-        
-        if [ -n "$enode" ]; then
-            echo "$enode"
-            return 0
+        local response
+        if response=$(perform_rpc_request "$container_name" "admin_nodeInfo"); then
+            enode=$(echo "$response" | grep -o '"enode":"[^"]*"' | head -n1 | cut -d'"' -f4)
+            if [ -n "$enode" ]; then
+                enode=$(sanitize_enode "$enode")
+                enode=$(normalize_enode_host "$container_name" "$enode")
+                echo "$enode"
+                return 0
+            fi
         fi
-        
+
         retry=$((retry + 1))
         if [ $retry -lt $max_retries ]; then
             sleep 2
         fi
     done
-    
+
     return 1
+}
+
+extract_string_result() {
+    local response=$1
+    echo "$response" | grep -o '"result":"[^"]*"' | head -n1 | cut -d'"' -f4
+}
+
+hex_to_dec() {
+    local value=$1
+    value=${value#0x}
+    if [ -z "$value" ]; then
+        echo 0
+        return
+    fi
+    printf "%d" "0x$value"
+}
+
+smoke_test() {
+    local config="${1:-fukuii-geth}"
+    local compose_file
+    compose_file=$(get_compose_file "$config") || exit 1
+
+    local fukuii_containers
+    local geth_containers
+    local besu_containers
+    fukuii_containers=$(docker ps --filter "name=gorgoroth-fukuii-" --format "{{.Names}}" | sort)
+    geth_containers=$(docker ps --filter "name=gorgoroth-geth-" --format "{{.Names}}" | sort)
+    besu_containers=$(docker ps --filter "name=gorgoroth-besu-" --format "{{.Names}}" | sort)
+
+    local container_list
+    container_list=$(printf "%s\n%s\n%s\n" "$fukuii_containers" "$geth_containers" "$besu_containers" | sed '/^$/d')
+
+    if [ -z "$container_list" ]; then
+        echo -e "${RED}Error: No running containers found for configuration '$config'${NC}"
+        exit 1
+    fi
+
+    echo -e "${BLUE}=== Running Fukuii/Core-Geth smoke test for $config ===${NC}"
+    echo -e "${BLUE}Compose file:${NC} $compose_file"
+
+    declare -A BLOCKS
+    declare -A PEERS
+    declare -A STATUSES
+    local failures=0
+
+    for container in $container_list; do
+        echo -e "\n${BLUE}Probing $container...${NC}"
+        local block_resp
+        local block_hex
+        local peer_resp
+        local peer_hex
+
+        if block_resp=$(perform_rpc_request "$container" "eth_blockNumber"); then
+            block_hex=$(extract_string_result "$block_resp")
+            if [ -n "$block_hex" ]; then
+                BLOCKS["$container"]=$(hex_to_dec "$block_hex")
+                echo "  eth_blockNumber: $block_hex"
+            else
+                echo -e "  ${RED}eth_blockNumber: malformed response${NC}"
+                STATUSES["$container"]="rpc"
+                failures=1
+                continue
+            fi
+        else
+            echo -e "  ${RED}eth_blockNumber: request failed${NC}"
+            STATUSES["$container"]="rpc"
+            failures=1
+            continue
+        fi
+
+        if peer_resp=$(perform_rpc_request "$container" "net_peerCount"); then
+            peer_hex=$(extract_string_result "$peer_resp")
+            if [ -n "$peer_hex" ]; then
+                PEERS["$container"]=$(hex_to_dec "$peer_hex")
+                echo "  net_peerCount: $peer_hex"
+            else
+                echo -e "  ${RED}net_peerCount: malformed response${NC}"
+                STATUSES["$container"]="peers"
+                failures=1
+                continue
+            fi
+        else
+            echo -e "  ${RED}net_peerCount: request failed${NC}"
+            STATUSES["$container"]="peers"
+            failures=1
+            continue
+        fi
+
+        STATUSES["$container"]="ok"
+    done
+
+    local header="\n%-28s %-10s %-12s %-7s %-10s\n"
+    printf "$header" "CONTAINER" "CLIENT" "BLOCK" "PEERS" "STATUS"
+    printf '%0.s-' {1..70}
+    echo ""
+
+    local min_block=""
+    local max_block=""
+
+    for container in $container_list; do
+        local client="Fukuii"
+        if [[ "$container" == gorgoroth-geth-* ]]; then
+            client="Core-Geth"
+        elif [[ "$container" == gorgoroth-besu-* ]]; then
+            client="Besu"
+        fi
+        local block_val="${BLOCKS[$container]}"
+        local peer_val="${PEERS[$container]}"
+        local status="${STATUSES[$container]:-missed}"
+
+        if [ -n "$block_val" ]; then
+            if [ -z "$min_block" ] || [ "$block_val" -lt "$min_block" ]; then
+                min_block=$block_val
+            fi
+            if [ -z "$max_block" ] || [ "$block_val" -gt "$max_block" ]; then
+                max_block=$block_val
+            fi
+        fi
+
+        printf "%-28s %-10s %-12s %-7s %-10s\n" "$container" "$client" "${block_val:-N/A}" "${peer_val:-N/A}" "$status"
+    done
+
+    local block_gap=0
+    if [ -n "$min_block" ] && [ -n "$max_block" ]; then
+        block_gap=$((max_block - min_block))
+    fi
+
+    if [ $block_gap -gt 2 ]; then
+        echo -e "\n${RED}Block height gap detected (max-min = $block_gap).${NC}"
+        failures=1
+    fi
+
+    local fukuii_peer_seen=0
+    if [ -n "$fukuii_containers" ]; then
+        for container in $fukuii_containers; do
+            if [ "${PEERS[$container]:-0}" -gt 0 ]; then
+                fukuii_peer_seen=1
+                break
+            fi
+        done
+        if [ $fukuii_peer_seen -eq 0 ]; then
+            echo -e "${RED}No Fukuii node reports connected peers.${NC}"
+            failures=1
+        fi
+    fi
+
+    local geth_peer_seen=0
+    if [ -n "$geth_containers" ]; then
+        for container in $geth_containers; do
+            if [ "${PEERS[$container]:-0}" -gt 0 ]; then
+                geth_peer_seen=1
+                break
+            fi
+        done
+        if [ $geth_peer_seen -eq 0 ]; then
+            echo -e "${RED}No Core-Geth node reports connected peers.${NC}"
+            failures=1
+        fi
+    fi
+
+    local besu_peer_seen=0
+    if [ -n "$besu_containers" ]; then
+        for container in $besu_containers; do
+            if [ "${PEERS[$container]:-0}" -gt 0 ]; then
+                besu_peer_seen=1
+                break
+            fi
+        done
+        if [ $besu_peer_seen -eq 0 ]; then
+            echo -e "${RED}No Besu node reports connected peers.${NC}"
+            failures=1
+        fi
+    fi
+
+    if [ $failures -eq 0 ]; then
+        echo -e "\n${GREEN}Smoke test passed: cross-client peers are exchanging blocks.${NC}"
+    else
+        echo -e "\n${RED}Smoke test failed. Resolve the issues above before running long-range scenarios.${NC}"
+        exit 1
+    fi
 }
 
 collect_logs_cmd() {
@@ -562,6 +947,9 @@ case $COMMAND in
         ;;
     sync-static-nodes)
         sync_static_nodes
+        ;;
+    smoke-test)
+        smoke_test "$@"
         ;;
     collect-logs)
         collect_logs_cmd "$@"
