@@ -5,33 +5,56 @@
     "eip150Block": 0,
     "eip155Block": 0,
     "eip158Block": 0,
-    "byzantiumBlock": 1000000000,
-    "constantinopleBlock": 1000000000,
-    "petersburgBlock": 1000000000,
-    "istanbulBlock": 1000000000,
-    "berlinBlock": 1000000000,
-    "londonBlock": 1000000000,
+    "eip160Block": 0,
     "ecip1017EraRounds": 5000000,
+    "eip161Block": 0,
+    "eip170Block": 0,
+    "eip100Block": 0,
+    "eip140Block": 0,
+    "eip198Block": 0,
+    "eip211Block": 0,
+    "eip212Block": 0,
+    "eip213Block": 0,
+    "eip214Block": 0,
+    "eip658Block": 0,
+    "eip145Block": 0,
+    "eip1014Block": 0,
+    "eip1052Block": 0,
+    "eip152Block": 0,
+    "eip1108Block": 0,
+    "eip1344Block": 0,
+    "eip1884Block": 0,
+    "eip2028Block": 0,
+    "eip2200Block": 0,
+    "eip2565Block": 0,
+    "eip2718Block": 0,
+    "eip2929Block": 0,
+    "eip2930Block": 0,
+    "eip3529Block": 0,
+    "eip3541Block": 0,
+    "eip3651Block": 0,
+    "eip3855Block": 0,
+    "eip3860Block": 0,
+    "eip6049Block": 0,
     "ethash": {}
   },
   "nonce": "0x0000000000000042",
   "timestamp": "0x6751A000",
-  "extraData": "0x00",
+  "extraData": "0x476f72676f726f7468204554432054657374204e6574776f726b",
   "gasLimit": "0x7A1200",
-  "baseFeePerGas": "0x3b9aca00",
   "difficulty": "0x20000",
   "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "coinbase": "0x0000000000000000000000000000000000000000",
   "ommersHash": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
   "alloc": {
-    "1000000000000000000000000000000000000001": {
-      "balance": "1000000000000000000000000000"
+    "0x1000000000000000000000000000000000000001": {
+      "balance": "0x33b2e3c9fd0803ce8000000"
     },
-    "2000000000000000000000000000000000000002": {
-      "balance": "1000000000000000000000000000"
+    "0x2000000000000000000000000000000000000002": {
+      "balance": "0x33b2e3c9fd0803ce8000000"
     },
-    "3000000000000000000000000000000000000003": {
-      "balance": "1000000000000000000000000000"
+    "0x3000000000000000000000000000000000000003": {
+      "balance": "0x33b2e3c9fd0803ce8000000"
     }
   }
 }
