@@ -236,18 +236,19 @@ sync_static_nodes() {
     
     # Handle cirith-ungol differently
     if [[ "$config" == "cirith-ungol" ]]; then
-        sync_cirith_ungol_nodes "$CONTAINERS"
+        sync_cirith_ungol_nodes "$CONTAINERS" "$config"
         return $?
     fi
     
     # Original gorgoroth sync logic
-    sync_gorgoroth_nodes "$CONTAINERS"
+    sync_gorgoroth_nodes "$CONTAINERS" "$config"
 }
 
 sync_cirith_ungol_nodes() {
     local containers="$1"
+    local config="$2"
     local network_dir
-    network_dir=$(get_network_dir "cirith-ungol") || exit 1
+    network_dir=$(get_network_dir "$config") || exit 1
     
     # Collect enodes from containers
     echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
@@ -317,8 +318,9 @@ sync_cirith_ungol_nodes() {
 
 sync_gorgoroth_nodes() {
     local containers="$1"
+    local config="$2"
     local network_dir
-    network_dir=$(get_network_dir "6nodes") || network_dir="$GORGOROTH_DIR"
+    network_dir=$(get_network_dir "$config") || exit 1
     
     # Collect enodes from all containers
     echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
