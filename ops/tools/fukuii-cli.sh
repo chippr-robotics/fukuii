@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GORGOROTH_DIR="$SCRIPT_DIR/../gorgoroth"
+CIRITH_UNGOL_DIR="$SCRIPT_DIR/../cirith-ungol"
 
 # Color output
 RED='\033[0;31m'
@@ -14,13 +15,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Available configurations for Gorgoroth test network
+# Available configurations for Gorgoroth test network and Cirith-Ungol mainnet
 CONFIGS=(
-    "3nodes:docker-compose-3nodes.yml:3 Fukuii nodes"
-    "6nodes:docker-compose-6nodes.yml:6 Fukuii nodes"
-    "fukuii-geth:docker-compose-fukuii-geth.yml:3 Fukuii + 3 Core-Geth nodes"
-    "fukuii-besu:docker-compose-fukuii-besu.yml:3 Fukuii + 3 Besu nodes"
-    "mixed:docker-compose-mixed.yml:3 Fukuii + 3 Besu + 3 Core-Geth nodes"
+    "3nodes:docker-compose-3nodes.yml:gorgoroth:3 Fukuii nodes"
+    "6nodes:docker-compose-6nodes.yml:gorgoroth:6 Fukuii nodes"
+    "fukuii-geth:docker-compose-fukuii-geth.yml:gorgoroth:3 Fukuii + 3 Core-Geth nodes"
+    "fukuii-besu:docker-compose-fukuii-besu.yml:gorgoroth:3 Fukuii + 3 Besu nodes"
+    "mixed:docker-compose-mixed.yml:gorgoroth:3 Fukuii + 3 Besu + 3 Core-Geth nodes"
+    "cirith-ungol:docker-compose.yml:cirith-ungol:Fukuii + Core-Geth on ETC mainnet"
 )
 
 print_usage() {
@@ -31,7 +33,7 @@ Usage: fukuii-cli <command> [options]
 
 Commands:
   Network Deployment:
-    start [config]        - Start the Gorgoroth test network (default: 3nodes)
+    start [config]        - Start a network (default: 3nodes)
     stop [config]         - Stop the network
     restart [config]      - Restart the network
     status [config]       - Show status of all containers
@@ -39,9 +41,9 @@ Commands:
     clean [config]        - Stop and remove all containers and volumes
   
   Node Configuration:
-    sync-static-nodes     - Synchronize static-nodes.json across running containers
+    sync-static-nodes [config] - Synchronize static-nodes.json across running containers
     collect-logs [config] - Collect logs from all containers
-        pitya-lore [options]  - "Short nap" watcher that stops the net once a target block is reached
+    pitya-lore [options]  - "Short nap" watcher that stops the net once a target block is reached
 
   Help:
     help                  - Show this help message
@@ -50,16 +52,17 @@ Commands:
 Available configurations:
 EOF
     for config in "${CONFIGS[@]}"; do
-        IFS=: read -r name file desc <<< "$config"
+        IFS=: read -r name file network desc <<< "$config"
         printf "  %-15s - %s\n" "$name" "$desc"
     done
     cat << EOF
 
 Examples:
   fukuii-cli start 3nodes
-  fukuii-cli sync-static-nodes
+  fukuii-cli start cirith-ungol
+  fukuii-cli sync-static-nodes 6nodes
   fukuii-cli logs fukuii-geth
-  fukuii-cli status
+  fukuii-cli status cirith-ungol
   fukuii-cli stop mixed
 
 For more information, see: docs/runbooks/node-configuration.md
@@ -69,7 +72,7 @@ EOF
 get_compose_file() {
     local config_name="${1:-3nodes}"
     for config in "${CONFIGS[@]}"; do
-        IFS=: read -r name file desc <<< "$config"
+        IFS=: read -r name file network desc <<< "$config"
         if [[ "$name" == "$config_name" ]]; then
             echo "$file"
             return 0
@@ -80,6 +83,30 @@ get_compose_file() {
     return 1
 }
 
+get_network_dir() {
+    local config_name="${1:-3nodes}"
+    for config in "${CONFIGS[@]}"; do
+        IFS=: read -r name file network desc <<< "$config"
+        if [[ "$name" == "$config_name" ]]; then
+            case "$network" in
+                gorgoroth)
+                    echo "$GORGOROTH_DIR"
+                    ;;
+                cirith-ungol)
+                    echo "$CIRITH_UNGOL_DIR"
+                    ;;
+                *)
+                    echo -e "${RED}Error: Unknown network type '$network'${NC}" >&2
+                    return 1
+                    ;;
+            esac
+            return 0
+        fi
+    done
+    echo -e "${RED}Error: Unknown configuration '$config_name'${NC}" >&2
+    return 1
+}
+
 # ============================================================================
 # Network Deployment Commands
 # ============================================================================
@@ -87,12 +114,15 @@ get_compose_file() {
 start_network() {
     local config="${1:-3nodes}"
     local compose_file
+    local network_dir
     compose_file=$(get_compose_file "$config") || exit 1
+    network_dir=$(get_network_dir "$config") || exit 1
     
-    echo -e "${GREEN}Starting Gorgoroth test network with configuration: $config${NC}"
+    echo -e "${GREEN}Starting network with configuration: $config${NC}"
     echo "Using compose file: $compose_file"
+    echo "Network directory: $network_dir"
     
-    cd "$GORGOROTH_DIR"
+    cd "$network_dir"
     docker compose -f "$compose_file" up -d
     
     echo -e "${GREEN}Network started successfully!${NC}"
@@ -100,16 +130,20 @@ start_network() {
     echo "Next steps:"
     echo "  View logs:   fukuii-cli logs $config"
     echo "  Check status: fukuii-cli status $config"
-    echo "  Sync peers:   fukuii-cli sync-static-nodes"
+    if [[ "$config" != "cirith-ungol" ]]; then
+        echo "  Sync peers:   fukuii-cli sync-static-nodes $config"
+    fi
 }
 
 stop_network() {
     local config="${1:-3nodes}"
     local compose_file
+    local network_dir
     compose_file=$(get_compose_file "$config") || exit 1
+    network_dir=$(get_network_dir "$config") || exit 1
     
-    echo -e "${YELLOW}Stopping Gorgoroth test network: $config${NC}"
-    cd "$GORGOROTH_DIR"
+    echo -e "${YELLOW}Stopping network: $config${NC}"
+    cd "$network_dir"
     docker compose -f "$compose_file" down
     echo -e "${GREEN}Network stopped${NC}"
 }
@@ -124,34 +158,40 @@ restart_network() {
 show_status() {
     local config="${1:-3nodes}"
     local compose_file
+    local network_dir
     compose_file=$(get_compose_file "$config") || exit 1
+    network_dir=$(get_network_dir "$config") || exit 1
     
-    echo -e "${GREEN}Status of Gorgoroth network: $config${NC}"
-    cd "$GORGOROTH_DIR"
+    echo -e "${GREEN}Status of network: $config${NC}"
+    cd "$network_dir"
     docker compose -f "$compose_file" ps
 }
 
 show_logs() {
     local config="${1:-3nodes}"
     local compose_file
+    local network_dir
     compose_file=$(get_compose_file "$config") || exit 1
+    network_dir=$(get_network_dir "$config") || exit 1
     
     echo -e "${GREEN}Following logs for: $config${NC}"
     echo "Press Ctrl+C to stop following logs"
-    cd "$GORGOROTH_DIR"
+    cd "$network_dir"
     docker compose -f "$compose_file" logs -f
 }
 
 clean_network() {
     local config="${1:-3nodes}"
     local compose_file
+    local network_dir
     compose_file=$(get_compose_file "$config") || exit 1
+    network_dir=$(get_network_dir "$config") || exit 1
     
     echo -e "${RED}WARNING: This will remove all containers and volumes for: $config${NC}"
     read -p "Are you sure? (yes/no): " -r
     if [[ $REPLY =~ ^[Yy]es$ ]]; then
         echo -e "${YELLOW}Cleaning network...${NC}"
-        cd "$GORGOROTH_DIR"
+        cd "$network_dir"
         docker compose -f "$compose_file" down -v
         echo -e "${GREEN}Network cleaned${NC}"
     else
@@ -164,15 +204,29 @@ clean_network() {
 # ============================================================================
 
 sync_static_nodes() {
+    local config="${1:-3nodes}"
+    
     echo -e "${BLUE}=== Fukuii Static Nodes Synchronization ===${NC}"
+    echo -e "${BLUE}Configuration: $config${NC}"
     echo ""
     
+    # Determine container name pattern based on configuration
+    local container_pattern
+    if [[ "$config" == "cirith-ungol" ]]; then
+        container_pattern="cirith-ungol"
+        echo -e "${YELLOW}Note: Cirith-Ungol uses static peer configuration in conf/static-nodes.json${NC}"
+        echo -e "${YELLOW}This command will sync the fukuii node's enode to the static-nodes.json file${NC}"
+        echo ""
+    else
+        container_pattern="gorgoroth-fukuii-"
+    fi
+    
     # Find all running Fukuii containers
-    CONTAINERS=$(docker ps --filter "name=gorgoroth-fukuii-" --format "{{.Names}}" | sort)
+    CONTAINERS=$(docker ps --filter "name=${container_pattern}" --format "{{.Names}}" | sort)
     
     if [ -z "$CONTAINERS" ]; then
-        echo -e "${RED}Error: No running Gorgoroth Fukuii containers found${NC}"
-        echo "Start the network first with: fukuii-cli start [config]"
+        echo -e "${RED}Error: No running containers found for pattern: $container_pattern${NC}"
+        echo "Start the network first with: fukuii-cli start $config"
         exit 1
     fi
     
@@ -180,10 +234,96 @@ sync_static_nodes() {
     echo "$CONTAINERS" | sed 's/^/  - /'
     echo ""
     
+    # Handle cirith-ungol differently
+    if [[ "$config" == "cirith-ungol" ]]; then
+        sync_cirith_ungol_nodes "$CONTAINERS"
+        return $?
+    fi
+    
+    # Original gorgoroth sync logic
+    sync_gorgoroth_nodes "$CONTAINERS"
+}
+
+sync_cirith_ungol_nodes() {
+    local containers="$1"
+    local network_dir
+    network_dir=$(get_network_dir "cirith-ungol") || exit 1
+    
+    # Collect enodes from containers
+    echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
+    declare -A ENODES_MAP
+    for container in $containers; do
+        echo -n "  $container: "
+        if enode=$(get_enode_from_container "$container"); then
+            if [ -z "$enode" ]; then
+                echo -e "${YELLOW}⚠ extracted empty enode${NC}"
+                continue
+            fi
+            ENODES_MAP["$container"]="$enode"
+            echo -e "${GREEN}✓${NC}"
+        else
+            echo -e "${RED}✗ (skipped)${NC}"
+        fi
+    done
+    
+    if [ ${#ENODES_MAP[@]} -eq 0 ]; then
+        echo -e "${RED}Error: No enodes could be collected${NC}"
+        exit 1
+    fi
+    
+    echo ""
+    echo -e "${GREEN}Collected ${#ENODES_MAP[@]} enode(s)${NC}"
+    
+    # Build static-nodes.json with all collected enodes
+    local static_nodes_file="$network_dir/conf/static-nodes.json"
+    echo -e "${BLUE}Updating static-nodes.json at: $static_nodes_file${NC}"
+    
+    # Create JSON array of enodes
+    local json_content="["
+    local first=true
+    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
+        if [ "$first" = true ]; then
+            first=false
+        else
+            json_content+=","
+        fi
+        json_content+=$'\n  '
+        json_content+="\"${ENODES_MAP[$container]}\""
+    done
+    json_content+=$'\n]\n'
+    
+    echo "$json_content" > "$static_nodes_file"
+    echo -e "${GREEN}✓ Static nodes file updated${NC}"
+    
+    echo ""
+    echo -e "${YELLOW}Restarting containers to apply static peers configuration...${NC}"
+    for container in $containers; do
+        echo -n "  $container: "
+        if docker restart "$container" >/dev/null 2>&1; then
+            echo -e "${GREEN}✓${NC}"
+        else
+            echo -e "${RED}✗ (failed to restart)${NC}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${GREEN}=== Static nodes synchronization complete ===${NC}"
+    echo ""
+    echo -e "Next steps:"
+    echo -e "  1. Wait for containers to start: ${BLUE}docker ps${NC}"
+    echo -e "  2. Check logs: ${BLUE}fukuii-cli logs cirith-ungol${NC}"
+    echo -e "  3. Verify peer connections via RPC"
+}
+
+sync_gorgoroth_nodes() {
+    local containers="$1"
+    local network_dir
+    network_dir=$(get_network_dir "6nodes") || network_dir="$GORGOROTH_DIR"
+    
     # Collect enodes from all containers
     echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
     declare -A ENODES_MAP  # Associate container name with its enode
-    for container in $CONTAINERS; do
+    for container in $containers; do
         echo -n "  $container: "
         if enode=$(get_enode_from_container "$container"); then
             if [ -z "$enode" ]; then
@@ -234,9 +374,9 @@ sync_static_nodes() {
     # Followers should include only the validator; validator should have none
     echo ""
     echo -e "${BLUE}Updating static-nodes.json in config directories...${NC}"
-    for container in $CONTAINERS; do
+    for container in $containers; do
         node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
-        config_file="$GORGOROTH_DIR/conf/node${node_num}/static-nodes.json"
+        config_file="$network_dir/conf/node${node_num}/static-nodes.json"
         
         echo -n "  node${node_num}: "
         if [ -f "$config_file" ]; then
@@ -254,7 +394,7 @@ sync_static_nodes() {
     
     echo ""
     echo -e "${YELLOW}Restarting containers to apply static peers configuration...${NC}"
-    for container in $CONTAINERS; do
+    for container in $containers; do
         echo -n "  $container: "
         if docker restart "$container" >/dev/null 2>&1; then
             echo -e "${GREEN}✓${NC}"
@@ -358,12 +498,23 @@ collect_logs_cmd() {
     local config="${1:-3nodes}"
     local timestamp=$(date +%Y%m%d-%H%M%S)
     local output_dir="${2:-./logs-$timestamp}"
+    local network_dir
+    network_dir=$(get_network_dir "$config") || exit 1
     
-    echo -e "${GREEN}Collecting logs from Gorgoroth network: $config${NC}"
+    echo -e "${GREEN}Collecting logs from network: $config${NC}"
     echo "Output directory: $output_dir"
     
-    cd "$GORGOROTH_DIR"
-    ./collect-logs.sh "$config" "$output_dir"
+    cd "$network_dir"
+    if [ -f "./collect-logs.sh" ]; then
+        ./collect-logs.sh "$config" "$output_dir"
+    else
+        # Fallback to basic log collection if collect-logs.sh doesn't exist
+        mkdir -p "$output_dir"
+        local compose_file
+        compose_file=$(get_compose_file "$config") || exit 1
+        docker compose -f "$compose_file" logs > "$output_dir/all-logs.txt"
+        echo -e "${GREEN}Logs saved to: $output_dir/all-logs.txt${NC}"
+    fi
 }
 
 show_version() {
@@ -449,8 +600,16 @@ EOF
 
     local compose_file
     compose_file=$(get_compose_file "$config") || return 1
+    
+    local network_dir
+    network_dir=$(get_network_dir "$config") || return 1
 
     local container_name="gorgoroth-fukuii-$miner_node"
+    # Adjust container name for cirith-ungol
+    if [[ "$config" == "cirith-ungol" ]]; then
+        container_name="fukuii-cirith-ungol"
+    fi
+    
     mkdir -p "$snapshot_dir"
 
     echo -e "${GREEN}Pitya-lórë watcher engaged — monitoring $rpc_url until block >= $target_block${NC}"
@@ -519,7 +678,7 @@ EOF
 
     echo -e "${BLUE}Snapshot saved to $snapshot_file${NC}"
 
-    cd "$GORGOROTH_DIR"
+    cd "$network_dir"
     echo -e "${YELLOW}Target met — issuing docker compose $stop_mode to let the network take its short nap${NC}"
     if ! docker compose -f "$compose_file" "$stop_mode"; then
         echo -e "${RED}Warning: docker compose $stop_mode failed${NC}"
@@ -561,7 +720,7 @@ case $COMMAND in
         clean_network "$@"
         ;;
     sync-static-nodes)
-        sync_static_nodes
+        sync_static_nodes "$@"
         ;;
     collect-logs)
         collect_logs_cmd "$@"
