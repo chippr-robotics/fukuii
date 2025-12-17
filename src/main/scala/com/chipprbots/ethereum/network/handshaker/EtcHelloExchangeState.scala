@@ -33,7 +33,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     val peerCapabilities = hello.capabilities.toList
 
     // Enhanced logging for peer capabilities and protocol version
-    log.info(
+    log.debug(
       "PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}]",
       hello.clientId,
       hello.p2pVersion,
@@ -41,19 +41,19 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     )
     
     // Log our advertised capabilities for comparison
-    log.info(
+    log.debug(
       "OUR_CAPABILITIES: capabilities=[{}]",
       Config.supportedCapabilities.mkString(", ")
     )
 
     // Check if peer supports SNAP/1 protocol
     val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
-    log.info("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
+    log.debug("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
 
     // Log compression decision based on p2p version
     val compressionPolicy =
       CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
-    log.info(
+    log.debug(
       "COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
       hello.p2pVersion,
       EtcHelloExchangeState.P2pVersion,
@@ -63,7 +63,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
 
     // Negotiate protocol capability
     val negotiationResult = Capability.negotiate(peerCapabilities, Config.supportedCapabilities)
-    log.info(
+    log.debug(
       "CAPABILITY_NEGOTIATION: peerCaps=[{}], ourCaps=[{}], negotiated={}",
       peerCapabilities.mkString(", "),
       Config.supportedCapabilities.mkString(", "),
@@ -72,12 +72,12 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
 
     negotiationResult match {
       case Some(Capability.ETH63) =>
-        log.info("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
+        log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
         EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
           ) =>
-        log.info(
+        log.debug(
           "PROTOCOL_NEGOTIATED: clientId={}, protocol={}, usesRequestId={}",
           hello.clientId,
           negotiated,
