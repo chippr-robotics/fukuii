@@ -76,6 +76,23 @@ do-fast-sync = false   # Disabled to isolate SNAP behavior
 
 ### Quick Start
 
+You can manage Cirith-Ungol nodes using either the unified CLI or the local start.sh script:
+
+#### Option 1: Unified CLI (Recommended)
+
+```bash
+# From repository root
+./fukuii.sh start cirith-ungol
+./fukuii.sh logs cirith-ungol
+./fukuii.sh status cirith-ungol
+./fukuii.sh stop cirith-ungol
+
+# Sync static nodes (updates conf/static-nodes.json with all running node enodes)
+./fukuii.sh sync-static-nodes cirith-ungol
+```
+
+#### Option 2: Local Script
+
 ```bash
 cd ops/cirith-ungol
 
@@ -326,9 +343,27 @@ docker compose logs fukuii | grep -i "progress\|downloaded"
 | **GetReceipts** | ✅ Works | ✅ Works |
 | **State Download** | ❌ Cannot start | ✅ Should work |
 
-## Usage
+## Lifecycle Management with Unified CLI
+
+The Fukuii unified CLI provides consistent commands for managing Cirith-Ungol alongside other networks:
 
 ### Quick Start
+
+```bash
+# From repository root
+./fukuii.sh start cirith-ungol
+
+# View logs (live)
+./fukuii.sh logs cirith-ungol
+
+# Monitor FastSync progress
+docker compose -f ops/cirith-ungol/docker-compose.yml logs fukuii | grep -i "fast\|pivot\|progress"
+
+# Stop the node
+./fukuii.sh stop cirith-ungol
+```
+
+Or use the local script:
 
 ```bash
 cd ops/cirith-ungol
