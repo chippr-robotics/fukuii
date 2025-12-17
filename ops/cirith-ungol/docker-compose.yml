@@ -22,28 +22,25 @@ services:
     volumes:
       - coregeth-cirith-ungol-data:/root/.ethereum
     command:
-      - geth
-      - --classic
-      - --syncmode
-      - snap
-      - --http
-      - --http.addr
-      - 0.0.0.0
-      - --http.vhosts
-      - "*"
-      - --http.api
-      - eth,net,web3,admin,debug,txpool
-      - --ws
-      - --ws.addr
-      - 0.0.0.0
-      - --ws.api
-      - eth,net,web3
-      - --port
-      - "30303"
-      - --metrics
-      - --metrics.addr
-      - 0.0.0.0
-      - --ipcdisable
+      - "--networkid=61"
+      - "--classic"
+      - "--datadir=/root/.ethereum"
+      - "--http"
+      - "--http.addr=0.0.0.0"
+      - "--http.port=8545"
+      - "--http.api=eth,net,web3,personal,admin,debug"
+      - "--http.corsdomain=*"
+      - "--ws"
+      - "--ws.addr=0.0.0.0"
+      - "--ws.port=8546"
+      - "--ws.api=eth,net,web3"
+      - "--ws.origins=*"
+      - "--port=30303"
+      - "--nodiscover"
+      - "--maxpeers=25"
+      - "--mine"
+      - "--miner.etherbase=0x4000000000000000000000000000000000000004"
+    entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
     image: ghcr.io/chippr-robotics/fukuii:latest
@@ -65,7 +62,7 @@ services:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
-      - ./conf/static-nodes.json:/home/fukuii/.fukuii/etc/static-nodes.json
+      - ./conf/static-nodes.json:/app/data/static-nodes.json
       # Data directory (persistent)
       - fukuii-cirith-ungol-data:/app/data
       # Logs directory
