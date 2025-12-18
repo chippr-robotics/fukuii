@@ -26,6 +26,9 @@ object AuthInitiateMessageV4 extends AuthInitiateEcdsaCodec {
     def toAuthInitiateMessageV4: AuthInitiateMessageV4 = rawDecode(bytes) match {
       // EIP-8: Accept messages with additional list elements beyond the required 4
       // Per EIP-8 spec, implementations MUST ignore unknown trailing elements
+      // This matches go-ethereum's approach where authMsgV4 has a `Rest []rlp.RawValue` field
+      // with `rlp:"tail"` tag to capture and ignore extra fields for forward-compatibility.
+      // See: https://github.com/ethereum/go-ethereum/blob/master/p2p/rlpx/rlpx.go#L388-397
       case list: RLPList if list.items.length >= 4 =>
         list.items.take(4).toList match {
           case RLPValue(signatureBytesArr) :: RLPValue(publicKeyBytesArr) :: RLPValue(nonceArr) :: RLPValue(versionArr) :: Nil =>
