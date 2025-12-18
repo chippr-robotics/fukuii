@@ -63,7 +63,7 @@ class AppSpec extends AnyFlatSpec with Matchers {
   it should "recognize network names" taggedAs (UnitTest) in {
     getIsNetworkMethod.invoke(App, "etc").asInstanceOf[Boolean] shouldBe true
     getIsNetworkMethod.invoke(App, "mordor").asInstanceOf[Boolean] shouldBe true
-    getIsNetworkMethod.invoke(App, "pottery").asInstanceOf[Boolean] shouldBe true
+    getIsNetworkMethod.invoke(App, "gorgoroth").asInstanceOf[Boolean] shouldBe true
     getIsNetworkMethod.invoke(App, "public").asInstanceOf[Boolean] shouldBe false
     getIsNetworkMethod.invoke(App, "unknown").asInstanceOf[Boolean] shouldBe false
   }
@@ -166,9 +166,9 @@ class AppSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "handle 'enterprise' in any position" taggedAs (UnitTest) in {
-    val args1 = Array("enterprise", "pottery")
-    val args2 = Array("pottery", "enterprise")
-    val args3 = Array("enterprise", "--tui", "pottery")
+    val args1 = Array("enterprise", "gorgoroth")
+    val args2 = Array("gorgoroth", "enterprise")
+    val args3 = Array("enterprise", "--tui", "gorgoroth")
 
     args1.filter(isModifier).toSet shouldBe Set("enterprise")
     args2.filter(isModifier).toSet shouldBe Set("enterprise")
