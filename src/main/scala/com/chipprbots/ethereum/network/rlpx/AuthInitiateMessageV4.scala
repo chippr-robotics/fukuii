@@ -24,19 +24,19 @@ object AuthInitiateMessageV4 extends AuthInitiateEcdsaCodec {
 
   implicit class AuthInitiateMessageV4Dec(val bytes: Array[Byte]) extends AnyVal {
     def toAuthInitiateMessageV4: AuthInitiateMessageV4 = rawDecode(bytes) match {
-      case RLPList(
-            RLPValue(signatureBytesArr),
-            RLPValue(publicKeyBytesArr),
-            RLPValue(nonceArr),
-            RLPValue(versionArr),
-            _*
-          ) =>
-        val signature = decodeECDSA(signatureBytesArr)
-        val publicKey =
-          curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKeyBytesArr)
-        val version = BigInt(versionArr).toInt
-        AuthInitiateMessageV4(signature, publicKey, ByteString(nonceArr), version)
-      case _ => throw new RuntimeException("Cannot decode auth initiate message")
+      // EIP-8: Accept messages with additional list elements beyond the required 4
+      // Per EIP-8 spec, implementations MUST ignore unknown trailing elements
+      case list: RLPList if list.items.length >= 4 =>
+        list.items.take(4).toList match {
+          case RLPValue(signatureBytesArr) :: RLPValue(publicKeyBytesArr) :: RLPValue(nonceArr) :: RLPValue(versionArr) :: Nil =>
+            val signature = decodeECDSA(signatureBytesArr)
+            val publicKey =
+              curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKeyBytesArr)
+            val version = BigInt(versionArr).toInt
+            AuthInitiateMessageV4(signature, publicKey, ByteString(nonceArr), version)
+          case _ => throw new RuntimeException("Cannot decode auth initiate message: invalid field types")
+        }
+      case _ => throw new RuntimeException("Cannot decode auth initiate message: expected RLPList with at least 4 elements")
     }
   }
 }

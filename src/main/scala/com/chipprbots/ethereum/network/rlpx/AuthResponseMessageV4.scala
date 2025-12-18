@@ -25,12 +25,18 @@ object AuthResponseMessageV4 {
       }
 
       override def decode(rlp: RLPEncodeable): AuthResponseMessageV4 = rlp match {
-        case RLPList(RLPValue(ephemeralPublicKeyBytesArr), RLPValue(nonceArr), RLPValue(versionArr), _*) =>
-          val ephemeralPublicKey =
-            curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: ephemeralPublicKeyBytesArr)
-          val version = BigInt(versionArr).toInt
-          AuthResponseMessageV4(ephemeralPublicKey, ByteString(nonceArr), version)
-        case _ => throw new RuntimeException("Cannot decode auth response message")
+        // EIP-8: Accept messages with additional list elements beyond the required 3
+        // Per EIP-8 spec, implementations MUST ignore unknown trailing elements
+        case list: RLPList if list.items.length >= 3 =>
+          list.items.take(3).toList match {
+            case RLPValue(ephemeralPublicKeyBytesArr) :: RLPValue(nonceArr) :: RLPValue(versionArr) :: Nil =>
+              val ephemeralPublicKey =
+                curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: ephemeralPublicKeyBytesArr)
+              val version = BigInt(versionArr).toInt
+              AuthResponseMessageV4(ephemeralPublicKey, ByteString(nonceArr), version)
+            case _ => throw new RuntimeException("Cannot decode auth response message: invalid field types")
+          }
+        case _ => throw new RuntimeException("Cannot decode auth response message: expected RLPList with at least 3 elements")
       }
     }
 }
