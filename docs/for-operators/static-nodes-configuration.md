@@ -75,18 +75,32 @@ systemctl restart fukuii
 
 ### Gorgoroth Test Network
 
-For the Gorgoroth test network, use the `fukuii-cli` tool to automatically collect and synchronize static nodes:
+For the Gorgoroth test network, use the `fukuii-cli` tool to automatically collect and synchronize static nodes across all client types (Fukuii, Core-Geth, and Besu):
 
 ```bash
-# Start the 3-node network
+# Start a 3-node Fukuii network
 fukuii-cli start 3nodes
 
+# Or start a mixed-client network
+fukuii-cli start fukuii-geth    # 3 Fukuii + 3 Core-Geth
+fukuii-cli start fukuii-besu    # 3 Fukuii + 3 Besu
+fukuii-cli start mixed          # 3 Fukuii + 3 Core-Geth + 3 Besu
+
 # Collect enode IDs and update static-nodes.json on all nodes
-fukuii-cli sync-static-nodes
+# Works with all client types - enodes are extracted from logs or RPC
+fukuii-cli sync-static-nodes fukuii-geth
 
 # Verify nodes are connected
-fukuii-cli logs 3nodes
+fukuii-cli logs fukuii-geth
 ```
+
+**Multi-Client Support:**
+- The CLI automatically detects container types (Fukuii, Geth, Besu)
+- Extracts enodes from logs (primary) or via admin_nodeInfo RPC (fallback)
+- Updates static-nodes.json in the appropriate location for each client:
+  - **Fukuii**: `conf/nodeN/static-nodes.json` (host-mounted config)
+  - **Core-Geth**: `/root/.ethereum/static-nodes.json` (container volume)
+  - **Besu**: `/opt/besu/data/static-nodes.json` (container volume)
 
 ### Automated Deployments
 

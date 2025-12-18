@@ -203,29 +203,61 @@ clean_network() {
 # Node Configuration Commands
 # ============================================================================
 
+# Constants for enode validation
+readonly ENODE_ID_LENGTH=128  # Enode IDs are 128 hex characters (512 bits)
+
+# Helper function to generate static-nodes.json content from array of enodes
+generate_static_nodes_json() {
+    local -n enodes_ref=$1  # Use nameref to pass array by reference
+    local json_content='['
+    
+    for i in "${!enodes_ref[@]}"; do
+        json_content+="\"${enodes_ref[$i]}\""
+        if [ $i -lt $((${#enodes_ref[@]} - 1)) ]; then
+            json_content+=","
+        fi
+    done
+    json_content+=']'
+    
+    echo "$json_content"
+}
+
 sync_static_nodes() {
     local config="${1:-3nodes}"
     
-    echo -e "${BLUE}=== Fukuii Static Nodes Synchronization ===${NC}"
+    echo -e "${BLUE}=== Multi-Client Static Nodes Synchronization ===${NC}"
     echo -e "${BLUE}Configuration: $config${NC}"
     echo ""
     
-    # Determine container name pattern based on configuration
-    local container_pattern
+    # Determine container name patterns based on configuration
+    local container_patterns=()
     if [[ "$config" == "cirith-ungol" ]]; then
-        container_pattern="cirith-ungol"
-        echo -e "${YELLOW}Note: Cirith-Ungol uses static peer configuration in conf/static-nodes.json${NC}"
-        echo -e "${YELLOW}This command will sync the fukuii node's enode to the static-nodes.json file${NC}"
+        container_patterns+=("fukuii-cirith-ungol" "coregeth-cirith-ungol")
+        echo -e "${YELLOW}Note: Cirith-Ungol uses static peer configuration${NC}"
         echo ""
+    elif [[ "$config" == "fukuii-geth" ]]; then
+        container_patterns+=("gorgoroth-fukuii-" "gorgoroth-geth-")
+    elif [[ "$config" == "fukuii-besu" ]]; then
+        container_patterns+=("gorgoroth-fukuii-" "gorgoroth-besu-")
+    elif [[ "$config" == "mixed" ]]; then
+        container_patterns+=("gorgoroth-fukuii-" "gorgoroth-geth-" "gorgoroth-besu-")
     else
-        container_pattern="gorgoroth-fukuii-"
+        # Default: only Fukuii nodes (3nodes, 6nodes)
+        container_patterns+=("gorgoroth-fukuii-")
     fi
     
-    # Find all running Fukuii containers
-    CONTAINERS=$(docker ps --filter "name=${container_pattern}" --format "{{.Names}}" | sort)
+    # Find all running containers matching the patterns
+    local CONTAINERS=""
+    for pattern in "${container_patterns[@]}"; do
+        local found_containers=$(docker ps --filter "name=${pattern}" --format "{{.Names}}" | sort)
+        if [ -n "$found_containers" ]; then
+            CONTAINERS="${CONTAINERS}${found_containers}"$'\n'
+        fi
+    done
+    CONTAINERS=$(echo "$CONTAINERS" | grep -v '^$' | sort)
     
     if [ -z "$CONTAINERS" ]; then
-        echo -e "${RED}Error: No running containers found for pattern: $container_pattern${NC}"
+        echo -e "${RED}Error: No running containers found for patterns: ${container_patterns[*]}${NC}"
         echo "Start the network first with: fukuii-cli start $config"
         exit 1
     fi
@@ -240,7 +272,7 @@ sync_static_nodes() {
         return $?
     fi
     
-    # Original gorgoroth sync logic
+    # Multi-client gorgoroth sync logic
     sync_gorgoroth_nodes "$CONTAINERS" "$config"
 }
 
@@ -251,10 +283,15 @@ sync_cirith_ungol_nodes() {
     network_dir=$(get_network_dir "$config") || exit 1
     
     # Collect enodes from containers
-    echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
+    echo -e "${BLUE}Collecting enode URLs from all containers...${NC}"
     declare -A ENODES_MAP
+    declare -A CONTAINER_TYPES
+    
     for container in $containers; do
-        echo -n "  $container: "
+        local container_type=$(get_container_type "$container")
+        CONTAINER_TYPES["$container"]="$container_type"
+        
+        echo -n "  $container ($container_type): "
         if enode=$(get_enode_from_container "$container"); then
             if [ -z "$enode" ]; then
                 echo -e "${YELLOW}⚠ extracted empty enode${NC}"
@@ -296,6 +333,21 @@ sync_cirith_ungol_nodes() {
     echo "$json_content" > "$static_nodes_file"
     echo -e "${GREEN}✓ Static nodes file updated${NC}"
     
+    # Also update CoreGeth container's internal static-nodes.json
+    echo ""
+    echo -e "${BLUE}Updating static-nodes.json in CoreGeth container volume...${NC}"
+    for container in $containers; do
+        local container_type="${CONTAINER_TYPES[$container]}"
+        if [ "$container_type" == "geth" ]; then
+            echo -n "  $container: "
+            if docker exec "$container" sh -c "echo '$json_content' > /root/.ethereum/static-nodes.json" 2>/dev/null; then
+                echo -e "${GREEN}✓ updated container volume${NC}"
+            else
+                echo -e "${YELLOW}⚠ failed to update (container may not support it)${NC}"
+            fi
+        fi
+    done
+    
     echo ""
     echo -e "${YELLOW}Restarting containers to apply static peers configuration...${NC}"
     for container in $containers; do
@@ -323,10 +375,15 @@ sync_gorgoroth_nodes() {
     network_dir=$(get_network_dir "$config") || exit 1
     
     # Collect enodes from all containers
-    echo -e "${BLUE}Collecting enode URLs from containers...${NC}"
+    echo -e "${BLUE}Collecting enode URLs from all containers...${NC}"
     declare -A ENODES_MAP  # Associate container name with its enode
+    declare -A CONTAINER_TYPES  # Track container type for each container
+    
     for container in $containers; do
-        echo -n "  $container: "
+        local container_type=$(get_container_type "$container")
+        CONTAINER_TYPES["$container"]="$container_type"
+        
+        echo -n "  $container ($container_type): "
         if enode=$(get_enode_from_container "$container"); then
             if [ -z "$enode" ]; then
                 echo -e "${YELLOW}⚠ extracted empty enode${NC}"
@@ -347,51 +404,84 @@ sync_gorgoroth_nodes() {
     echo ""
     echo -e "${GREEN}Collected ${#ENODES_MAP[@]} enode(s)${NC}"
     
-    local validator_container=${FUKUII_VALIDATOR_CONTAINER:-gorgoroth-fukuii-node1}
-    if [[ -n "$FUKUII_VALIDATOR_NODE" ]]; then
-        validator_container="gorgoroth-fukuii-${FUKUII_VALIDATOR_NODE}"
-    fi
-
-    if [[ -n "$FUKUII_VALIDATOR_CONTAINER" && -n "$FUKUII_VALIDATOR_NODE" ]]; then
-        echo -e "${YELLOW}Warning: both FUKUII_VALIDATOR_CONTAINER and FUKUII_VALIDATOR_NODE set; using container override${NC}"
-    fi
-
-    if [[ -z "${ENODES_MAP[$validator_container]}" ]]; then
-        echo -e "${YELLOW}Warning: validator container '$validator_container' not detected or missing enode.${NC}"
-        # Fall back to the first container alphabetically if validator missing
-        validator_container=$(printf "%s\n" "${!ENODES_MAP[@]}" | sort | head -n1)
-        echo -e "${YELLOW}Falling back to '$validator_container' as validator reference.${NC}"
-    fi
-
-    local validator_enode="${ENODES_MAP[$validator_container]}"
-    if [[ -z "$validator_enode" ]]; then
-        echo -e "${RED}Error: unable to determine validator enode${NC}"
-        exit 1
-    fi
-
-    echo -e "${BLUE}Validator container:${NC} $validator_container"
-    echo -e "${BLUE}Validator enode:${NC} $validator_enode"
-
-    # Update static-nodes.json for each container
-    # Followers should include only the validator; validator should have none
+    # Build list of all enodes for full mesh connectivity
+    local all_enodes=()
+    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
+        all_enodes+=("${ENODES_MAP[$container]}")
+    done
+    
+    # Update static-nodes.json for each container based on client type
     echo ""
-    echo -e "${BLUE}Updating static-nodes.json in config directories...${NC}"
+    echo -e "${BLUE}Updating static-nodes.json for all containers...${NC}"
     for container in $containers; do
-        node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
-        config_file="$network_dir/conf/node${node_num}/static-nodes.json"
+        local container_type="${CONTAINER_TYPES[$container]}"
+        local container_enode="${ENODES_MAP[$container]}"
         
-        echo -n "  node${node_num}: "
-        if [ -f "$config_file" ]; then
-            if [ "$container" == "$validator_container" ]; then
-                echo "[]" > "$config_file"
-                echo -e "${GREEN}✓ validator: no static peers${NC}"
-            else
-                printf '[\n  "%s"\n]\n' "$validator_enode" > "$config_file"
-                echo -e "${GREEN}✓ follower -> validator${NC}"
-            fi
-        else
-            echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
+        # Skip containers without enodes
+        if [ -z "$container_enode" ]; then
+            continue
         fi
+        
+        echo -n "  $container ($container_type): "
+        
+        # Build peer list (all enodes except this container's own enode)
+        local peer_enodes=()
+        for enode in "${all_enodes[@]}"; do
+            if [ "$enode" != "$container_enode" ]; then
+                peer_enodes+=("$enode")
+            fi
+        done
+        
+        # Update static-nodes.json based on container type
+        case "$container_type" in
+            fukuii)
+                # Update Fukuii node config file
+                local node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
+                local config_file="$network_dir/conf/node${node_num}/static-nodes.json"
+                
+                if [ -f "$config_file" ]; then
+                    # Write all peer enodes
+                    printf '[\n' > "$config_file"
+                    for i in "${!peer_enodes[@]}"; do
+                        printf '  "%s"' "${peer_enodes[$i]}" >> "$config_file"
+                        if [ $i -lt $((${#peer_enodes[@]} - 1)) ]; then
+                            printf ',\n' >> "$config_file"
+                        else
+                            printf '\n' >> "$config_file"
+                        fi
+                    done
+                    printf ']\n' >> "$config_file"
+                    echo -e "${GREEN}✓ updated host config${NC}"
+                else
+                    echo -e "${YELLOW}⚠ config file not found: $config_file${NC}"
+                fi
+                ;;
+            geth)
+                # Update Geth node's static-nodes.json in container volume
+                local static_nodes_content=$(generate_static_nodes_json peer_enodes)
+                
+                # Write to /root/.ethereum/static-nodes.json inside the container
+                if docker exec "$container" sh -c "echo '$static_nodes_content' > /root/.ethereum/static-nodes.json" 2>/dev/null; then
+                    echo -e "${GREEN}✓ updated container volume${NC}"
+                else
+                    echo -e "${RED}✗ failed to update${NC}"
+                fi
+                ;;
+            besu)
+                # Update Besu node's static-nodes.json in container volume
+                local static_nodes_content=$(generate_static_nodes_json peer_enodes)
+                
+                # Write to /opt/besu/data/static-nodes.json inside the container
+                if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
+                    echo -e "${GREEN}✓ updated container volume${NC}"
+                else
+                    echo -e "${RED}✗ failed to update${NC}"
+                fi
+                ;;
+            *)
+                echo -e "${YELLOW}⚠ unknown type${NC}"
+                ;;
+        esac
     done
     
     echo ""
@@ -410,7 +500,7 @@ sync_gorgoroth_nodes() {
     echo ""
     echo -e "Next steps:"
     echo -e "  1. Wait for containers to start: ${BLUE}docker ps${NC}"
-    echo -e "  2. Check logs: ${BLUE}fukuii-cli logs${NC}"
+    echo -e "  2. Check logs: ${BLUE}fukuii-cli logs $config${NC}"
     echo -e "  3. Verify peer connections:"
     echo -e "     ${BLUE}curl -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}' http://localhost:8546${NC}"
 }
@@ -444,39 +534,93 @@ format_enode_hostname() {
         return 0
     fi
 
-    if [[ "$enode" != *"@\[0:0:0:0:0:0:0:0\]:"* ]]; then
-        echo "$enode"
+    # Handle IPv6 format: enode://...@[0:0:0:0:0:0:0:0]:port
+    if [[ "$enode" == *"@[0:0:0:0:0:0:0:0]:"* ]]; then
+        local escaped_hostname
+        escaped_hostname=$(printf '%s\n' "$hostname" | sed 's/[\/&]/\\&/g')
+        echo "$enode" | sed "s/@\[0:0:0:0:0:0:0:0\]:/@${escaped_hostname}:/"
         return 0
     fi
+    
+    # Handle IPv4 format: enode://...@0.0.0.0:port or enode://...@127.0.0.1:port
+    if [[ "$enode" =~ @(0\.0\.0\.0|127\.0\.0\.1): ]]; then
+        local escaped_hostname
+        escaped_hostname=$(printf '%s\n' "$hostname" | sed 's/[\/&]/\\&/g')
+        echo "$enode" | sed "s/@\(0\.0\.0\.0\|127\.0\.0\.1\):/@${escaped_hostname}:/"
+        return 0
+    fi
+    
+    # If hostname already present or unknown format, return as-is
+    echo "$enode"
+    return 0
+}
 
-    local escaped_hostname
-    escaped_hostname=$(printf '%s\n' "$hostname" | sed 's/[\/&]/\\&/g')
-    echo "$enode" | sed "s/@\[0:0:0:0:0:0:0:0\]:/@${escaped_hostname}:/"
+get_container_type() {
+    local container_name=$1
+    
+    if [[ "$container_name" == *"fukuii"* ]]; then
+        echo "fukuii"
+    elif [[ "$container_name" == *"geth"* ]] || [[ "$container_name" == *"coregeth"* ]]; then
+        echo "geth"
+    elif [[ "$container_name" == *"besu"* ]]; then
+        echo "besu"
+    else
+        echo "unknown"
+    fi
 }
 
 get_enode_from_logs() {
     local container_name=$1
-    # Extract enode from container logs
-    # Expected log format: "Node address: enode://<64-hex-chars>@[0:0:0:0:0:0:0:0]:<port>"
-    # Example: "INFO [ServerActor] - Node address: enode://abc123...@[0:0:0:0:0:0:0:0]:30303"
+    local container_type=$(get_container_type "$container_name")
     local log_tail="${FUKUII_LOG_TAIL:-500}"
     local enode=""
 
-    enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-        grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
-        tail -1 | \
-        sed 's/Node address: //' || true)
+    case "$container_type" in
+        fukuii)
+            # Fukuii log format: "Node address: enode://<64-hex-chars>@[0:0:0:0:0:0:0:0]:<port>"
+            enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
+                tail -1 | \
+                sed 's/Node address: //' || true)
 
-    if [ -z "$enode" ]; then
-        enode=$(docker logs "$container_name" 2>&1 | \
-            grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
-            tail -1 | \
-            sed 's/Node address: //' || true)
-    fi
+            if [ -z "$enode" ]; then
+                enode=$(docker logs "$container_name" 2>&1 | \
+                    grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
+                    tail -1 | \
+                    sed 's/Node address: //' || true)
+            fi
+            ;;
+        geth)
+            # Geth log format: "self=enode://<node-id>@<ip>:<port>"
+            # Also try: "enode://<node-id>@<ip>:<port>"
+            enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                grep -o "self=enode://[^[:space:]]*" | \
+                tail -1 | \
+                sed 's/self=//' || true)
+            
+            if [ -z "$enode" ]; then
+                # Try alternative format
+                enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                    grep -o "enode://[0-9a-f]\{$ENODE_ID_LENGTH\}@[0-9.:[:alnum:]]*" | \
+                    tail -1 || true)
+            fi
+            ;;
+        besu)
+            # Besu log format: "Node address enode://<node-id>@<ip>:<port>"
+            # Also try: "Enode URL enode://<node-id>@<ip>:<port>"
+            enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                grep -o "enode://[0-9a-f]\{$ENODE_ID_LENGTH\}@[0-9.:[:alnum:]]*" | \
+                tail -1 || true)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 
     if [ -n "$enode" ]; then
-        # Validate enode format (should start with "enode://" and contain @)
-        if [[ ! "$enode" =~ ^enode://[0-9a-f]+@\[0:0:0:0:0:0:0:0\]:[0-9]+$ ]]; then
+        # Validate basic enode format (should start with "enode://" and contain @ with proper structure)
+        # Hostname/IP can be IPv4, IPv6 (with brackets), or hostname
+        if [[ ! "$enode" =~ ^enode://[0-9a-f]+@[0-9a-zA-Z.:[\]-]+:[0-9]+$ ]]; then
             echo "" >&2
             echo -e "${YELLOW}Warning: Extracted enode has unexpected format: $enode${NC}" >&2
             return 1
@@ -494,6 +638,7 @@ get_enode_from_logs() {
 
 get_enode_from_container() {
     local container_name=$1
+    local container_type=$(get_container_type "$container_name")
     local max_retries=5
     local retry=0
     
@@ -508,11 +653,20 @@ get_enode_from_container() {
     while [ $retry -lt $max_retries ]; do
         # Try to get enode via RPC
         # Note: Using grep/cut instead of jq for portability (jq may not be in all containers)
+        # Different clients may use different RPC ports (8545 or 8546)
+        local rpc_port="8545"
+        if [[ "$container_type" == "fukuii" ]]; then
+            rpc_port="8546"
+        fi
+        
         enode=$(docker exec "$container_name" sh -c \
-            'curl -s -X POST --data "{\"jsonrpc\":\"2.0\",\"method\":\"admin_nodeInfo\",\"params\":[],\"id\":1}" http://localhost:8546 | grep -o "\"enode\":\"[^\"]*\"" | cut -d"\"" -f4' \
+            "curl -s -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"admin_nodeInfo\",\"params\":[],\"id\":1}' http://localhost:${rpc_port} | grep -o '\"enode\":\"[^\"]*\"' | cut -d'\"' -f4" \
             2>/dev/null || echo "")
         
         if [ -n "$enode" ]; then
+            local hostname
+            hostname=$(get_container_service_hostname "$container_name")
+            enode=$(format_enode_hostname "$enode" "$hostname")
             echo "$enode"
             return 0
         fi
