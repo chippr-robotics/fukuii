@@ -19,11 +19,6 @@ Discovery v5 is the next generation node discovery protocol for Ethereum, provid
 - Comprehensive unit tests
 - Integration tests
 
-⚠️ **Partial Implementation:**
-- Network layer (basic structure in place, needs full packet encoding/decoding integration)
-- Topic-based discovery (structure defined but not fully implemented)
-- Handshake flow (skeleton in place, needs ECDH implementation)
-
 ## File Structure
 
 ### Core Implementation (`src/`)
