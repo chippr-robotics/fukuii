@@ -84,7 +84,7 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
       RLPValue(publicKey.getEncoded(false).drop(1)),
       RLPValue(nonce.toArray),
       RLPValue(Array(version.toByte)),
-      RLPValue(Array[Byte](0xFF)) // One extra field - mimics CoreGeth's behavior
+      RLPValue(Array[Byte](0xFF.toByte)) // One extra field - mimics CoreGeth's behavior
     )
     val encoded = encode(rlpWithOneExtraField)
 
@@ -103,7 +103,7 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
 
     // Standard message
     val standardMsg = AuthResponseMessageV4(ephemeralPublicKey, nonce, version)
-    val standardEncoded = encode(standardMsg.toRLPEncodable)
+    val standardEncoded = encode(standardMsg)
 
     // Decode standard - should work
     val decodedStandard = decode[AuthResponseMessageV4](standardEncoded)
