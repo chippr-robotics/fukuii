@@ -17,11 +17,13 @@ services:
     ports:
       - "18545:8545"
       - "18546:8546"
-      - "30304:30303/tcp"
-      - "30304:30303/udp"
+      - "30304:30304/tcp"
+      - "30304:30304/udp"
     volumes:
       - coregeth-cirith-ungol-data:/root/.ethereum
+      - ./conf/coregeth-config.toml:/root/.ethereum/config.toml:ro
     command:
+      - "--config=/root/.ethereum/config.toml"
       - "--networkid=61"
       - "--classic"
       - "--datadir=/root/.ethereum"
@@ -35,12 +37,12 @@ services:
       - "--ws.port=8546"
       - "--ws.api=eth,net,web3"
       - "--ws.origins=*"
-      - "--port=30303"
+      - "--port=30304"
       - "--maxpeers=25"
     entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ghcr.io/chippr-robotics/fukuii:0.1.191
     container_name: fukuii-cirith-ungol
     restart: unless-stopped
     networks:
@@ -55,6 +57,7 @@ services:
       # P2P networking
       - "30303:30303/tcp"
       - "30303:30303/udp"
+      - "9076:9076"
     volumes:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
