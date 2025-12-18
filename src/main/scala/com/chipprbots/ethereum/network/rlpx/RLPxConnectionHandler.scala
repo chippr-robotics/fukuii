@@ -183,7 +183,7 @@ class RLPxConnectionHandler(
           }
           lazy val maybePostEIP8Result = Try {
             val (packetData, remainingData) = decodeV4Packet(data)
-            val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData)
+            val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData, peerId.toString)
             (responsePacket, result, remainingData)
           }
 
@@ -221,7 +221,7 @@ class RLPxConnectionHandler(
           }
           val maybePostEIP8Result = Try {
             val (packetData, remainingData) = decodeV4Packet(data)
-            val result = handshaker.handleResponseMessageV4(packetData)
+            val result = handshaker.handleResponseMessageV4(packetData, peerId.toString)
             (result, remainingData)
           }
           maybePreEIP8Result.orElse(maybePostEIP8Result) match {
