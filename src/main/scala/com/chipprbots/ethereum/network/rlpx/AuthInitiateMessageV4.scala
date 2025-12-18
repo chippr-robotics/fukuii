@@ -30,8 +30,9 @@ object AuthInitiateMessageV4 extends AuthInitiateEcdsaCodec {
       // with `rlp:"tail"` tag to capture and ignore extra fields for forward-compatibility.
       // See: https://github.com/ethereum/go-ethereum/blob/master/p2p/rlpx/rlpx.go#L388-397
       case list: RLPList if list.items.length >= 4 =>
-        list.items.take(4).toList match {
-          case RLPValue(signatureBytesArr) :: RLPValue(publicKeyBytesArr) :: RLPValue(nonceArr) :: RLPValue(versionArr) :: Nil =>
+        // Extract only the first 4 required fields, ignoring any trailing fields
+        (list.items(0), list.items(1), list.items(2), list.items(3)) match {
+          case (RLPValue(signatureBytesArr), RLPValue(publicKeyBytesArr), RLPValue(nonceArr), RLPValue(versionArr)) =>
             val signature = decodeECDSA(signatureBytesArr)
             val publicKey =
               curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKeyBytesArr)

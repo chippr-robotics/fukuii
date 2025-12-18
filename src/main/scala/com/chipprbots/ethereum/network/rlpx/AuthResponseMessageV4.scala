@@ -31,8 +31,9 @@ object AuthResponseMessageV4 {
         // with `rlp:"tail"` tag to capture and ignore extra fields for forward-compatibility.
         // See: https://github.com/ethereum/go-ethereum/blob/master/p2p/rlpx/rlpx.go#L400-408
         case list: RLPList if list.items.length >= 3 =>
-          list.items.take(3).toList match {
-            case RLPValue(ephemeralPublicKeyBytesArr) :: RLPValue(nonceArr) :: RLPValue(versionArr) :: Nil =>
+          // Extract only the first 3 required fields, ignoring any trailing fields
+          (list.items(0), list.items(1), list.items(2)) match {
+            case (RLPValue(ephemeralPublicKeyBytesArr), RLPValue(nonceArr), RLPValue(versionArr)) =>
               val ephemeralPublicKey =
                 curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: ephemeralPublicKeyBytesArr)
               val version = BigInt(versionArr).toInt

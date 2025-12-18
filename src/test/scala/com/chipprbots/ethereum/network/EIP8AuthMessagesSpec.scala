@@ -115,7 +115,7 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
     val rlpWithExtraFields = RLPList(
       RLPValue(ephemeralPublicKey.getEncoded(false).drop(1)),
       RLPValue(nonce.toArray),
-      RLPValue(BigInt(version).toByteArray),
+      RLPValue(Array(version.toByte)), // Use consistent encoding with other tests
       RLPValue(Array[Byte](7, 8, 9)), // Extra field - should be ignored
       RLPList(RLPValue(Array[Byte](10))) // Extra nested field - should be ignored
     )
