@@ -2987,6 +2987,45 @@
       "isPrivate": false,
       "metaSortKey": 1733612601296,
       "_type": "environment"
+    },
+    {
+      "_id": "env_cirith_ungol_mainnet",
+      "parentId": "env_ee4c8118750744559d3b1020845fe5d4",
+      "modified": 1766275200000,
+      "created": 1766275200000,
+      "name": "Cirith-Ungol ETC Mainnet",
+      "data": {
+        "fukuii_http": "http://localhost:8545",
+        "fukuii_ws": "ws://localhost:8546",
+        "coregeth_http": "http://localhost:18545",
+        "coregeth_ws": "ws://localhost:18546",
+        "node_url": "http://localhost:8545",
+        "observer_url": "http://localhost:18545",
+        "address": "0x1000000000000000000000000000000000000001",
+        "recipient": "0x2000000000000000000000000000000000000002",
+        "contract": "0x3000000000000000000000000000000000000003",
+        "tx_hash": "0x...",
+        "filter_id": "0x1"
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "fukuii_http",
+          "fukuii_ws",
+          "coregeth_http",
+          "coregeth_ws",
+          "node_url",
+          "observer_url",
+          "address",
+          "recipient",
+          "contract",
+          "tx_hash",
+          "filter_id"
+        ]
+      },
+      "color": "#4F9D69",
+      "isPrivate": false,
+      "metaSortKey": 1733612601297,
+      "_type": "environment"
     }
   ]
 }

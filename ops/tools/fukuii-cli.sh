@@ -415,6 +415,45 @@ sync_gorgoroth_nodes() {
     echo -e "     ${BLUE}curl -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"net_peerCount\",\"params\":[],\"id\":1}' http://localhost:8546${NC}"
 }
 
+get_container_service_hostname() {
+    local container_name=$1
+    local service_name
+
+    service_name=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$container_name" 2>/dev/null || true)
+    if [ -n "$service_name" ]; then
+        echo "$service_name"
+        return 0
+    fi
+
+    local alias
+    alias=$({ docker inspect -f '{{range $netName, $net := .NetworkSettings.Networks}}{{range $alias := $net.Aliases}}{{printf "%s\n" $alias}}{{end}}{{end}}' "$container_name" 2>/dev/null || true; } | grep -v '_' | head -n1)
+    if [ -n "$alias" ]; then
+        echo "$alias"
+        return 0
+    fi
+
+    echo "$container_name"
+}
+
+format_enode_hostname() {
+    local enode=$1
+    local hostname=$2
+
+    if [[ -z "$hostname" ]]; then
+        echo "$enode"
+        return 0
+    fi
+
+    if [[ "$enode" != *"@\[0:0:0:0:0:0:0:0\]:"* ]]; then
+        echo "$enode"
+        return 0
+    fi
+
+    local escaped_hostname
+    escaped_hostname=$(printf '%s\n' "$hostname" | sed 's/[\/&]/\\&/g')
+    echo "$enode" | sed "s/@\[0:0:0:0:0:0:0:0\]:/@${escaped_hostname}:/"
+}
+
 get_enode_from_logs() {
     local container_name=$1
     # Extract enode from container logs
@@ -443,18 +482,9 @@ get_enode_from_logs() {
             return 1
         fi
         
-        # Convert [0:0:0:0:0:0:0:0] to container hostname
-        # Extract node number from container name (e.g., gorgoroth-fukuii-node1 -> 1)
-        local node_num=$(echo "$container_name" | grep -o "node[0-9]*" | grep -o "[0-9]*")
-        if [ -z "$node_num" ]; then
-            echo -e "${YELLOW}Warning: Could not extract node number from container name: $container_name${NC}" >&2
-            return 1
-        fi
-        
-        local hostname="fukuii-node${node_num}"
-        
-        # Replace [0:0:0:0:0:0:0:0] with hostname
-        enode=$(echo "$enode" | sed "s/\[0:0:0:0:0:0:0:0\]/$hostname/")
+        local hostname
+        hostname=$(get_container_service_hostname "$container_name")
+        enode=$(format_enode_hostname "$enode" "$hostname")
         echo "$enode"
         return 0
     fi
