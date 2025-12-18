@@ -203,6 +203,25 @@ clean_network() {
 # Node Configuration Commands
 # ============================================================================
 
+# Constants for enode validation
+readonly ENODE_ID_LENGTH=128  # Enode IDs are 128 hex characters (512 bits)
+
+# Helper function to generate static-nodes.json content from array of enodes
+generate_static_nodes_json() {
+    local -n enodes_ref=$1  # Use nameref to pass array by reference
+    local json_content='['
+    
+    for i in "${!enodes_ref[@]}"; do
+        json_content+="\"${enodes_ref[$i]}\""
+        if [ $i -lt $((${#enodes_ref[@]} - 1)) ]; then
+            json_content+=","
+        fi
+    done
+    json_content+=']'
+    
+    echo "$json_content"
+}
+
 sync_static_nodes() {
     local config="${1:-3nodes}"
     
@@ -439,14 +458,7 @@ sync_gorgoroth_nodes() {
                 ;;
             geth)
                 # Update Geth node's static-nodes.json in container volume
-                local static_nodes_content='['
-                for i in "${!peer_enodes[@]}"; do
-                    static_nodes_content+="\"${peer_enodes[$i]}\""
-                    if [ $i -lt $((${#peer_enodes[@]} - 1)) ]; then
-                        static_nodes_content+=","
-                    fi
-                done
-                static_nodes_content+=']'
+                local static_nodes_content=$(generate_static_nodes_json peer_enodes)
                 
                 # Write to /root/.ethereum/static-nodes.json inside the container
                 if docker exec "$container" sh -c "echo '$static_nodes_content' > /root/.ethereum/static-nodes.json" 2>/dev/null; then
@@ -457,14 +469,7 @@ sync_gorgoroth_nodes() {
                 ;;
             besu)
                 # Update Besu node's static-nodes.json in container volume
-                local static_nodes_content='['
-                for i in "${!peer_enodes[@]}"; do
-                    static_nodes_content+="\"${peer_enodes[$i]}\""
-                    if [ $i -lt $((${#peer_enodes[@]} - 1)) ]; then
-                        static_nodes_content+=","
-                    fi
-                done
-                static_nodes_content+=']'
+                local static_nodes_content=$(generate_static_nodes_json peer_enodes)
                 
                 # Write to /opt/besu/data/static-nodes.json inside the container
                 if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
@@ -596,7 +601,7 @@ get_enode_from_logs() {
             if [ -z "$enode" ]; then
                 # Try alternative format
                 enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-                    grep -o "enode://[0-9a-f]\{128\}@[0-9.:[:alnum:]]*" | \
+                    grep -o "enode://[0-9a-f]\{$ENODE_ID_LENGTH\}@[0-9.:[:alnum:]]*" | \
                     tail -1 || true)
             fi
             ;;
@@ -604,7 +609,7 @@ get_enode_from_logs() {
             # Besu log format: "Node address enode://<node-id>@<ip>:<port>"
             # Also try: "Enode URL enode://<node-id>@<ip>:<port>"
             enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-                grep -o "enode://[0-9a-f]\{128\}@[0-9.:[:alnum:]]*" | \
+                grep -o "enode://[0-9a-f]\{$ENODE_ID_LENGTH\}@[0-9.:[:alnum:]]*" | \
                 tail -1 || true)
             ;;
         *)
@@ -613,8 +618,9 @@ get_enode_from_logs() {
     esac
 
     if [ -n "$enode" ]; then
-        # Validate basic enode format (should start with "enode://" and contain @)
-        if [[ ! "$enode" =~ ^enode://[0-9a-f]+@.+:[0-9]+$ ]]; then
+        # Validate basic enode format (should start with "enode://" and contain @ with proper structure)
+        # Hostname/IP can be IPv4, IPv6 (with brackets), or hostname
+        if [[ ! "$enode" =~ ^enode://[0-9a-f]+@[0-9a-zA-Z.:[\]-]+:[0-9]+$ ]]; then
             echo "" >&2
             echo -e "${YELLOW}Warning: Extracted enode has unexpected format: $enode${NC}" >&2
             return 1
