@@ -255,7 +255,7 @@ class FastSyncBranchResolverActorSpec
         log.debug(s"*** peers: ${handshakedPeers.map(p => (p._1.id, p._2.maxBlockNumber))}")
         (for {
           _ <- IO(sender.send(fastSyncBranchResolver, StartBranchResolver))
-          response <- IO(sender.expectMsg(BranchResolutionFailed(NoCommonBlockFound)))
+          response <- IO(sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(NoCommonBlockFound)))
           _ <- IO(stopController(fastSyncBranchResolver))
         } yield response).unsafeRunSync()
       }
