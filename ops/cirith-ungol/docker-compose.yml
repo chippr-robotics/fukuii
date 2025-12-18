@@ -36,10 +36,7 @@ services:
       - "--ws.api=eth,net,web3"
       - "--ws.origins=*"
       - "--port=30303"
-      - "--nodiscover"
       - "--maxpeers=25"
-      - "--mine"
-      - "--miner.etherbase=0x4000000000000000000000000000000000000004"
     entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
