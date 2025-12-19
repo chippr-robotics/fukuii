@@ -42,15 +42,13 @@ fetch_bootnodes_from_sources() {
     log_info "Fetching from ${ETCNODES_API}..."
     
     # Fetch full JSON and process it
-    # Extract enode, replace port with 30303, and include last seen timestamp for sorting
+    # Extract enode and include last seen timestamp for sorting
     curl -s "${ETCNODES_API}" 2>/dev/null | \
         jq -r '.[] | "\(.contact.last.unix)|\(.enode)"' | \
         while IFS='|' read -r timestamp enode; do
-            # Replace the port in the enode with 30303
-            # Handle both formats: @ip:port and @ip:port?discport=X
-            if [[ "$enode" =~ ^(enode://[a-fA-F0-9]{128}@[^:]+):[0-9]+(.*)$ ]]; then
-                normalized_enode="${BASH_REMATCH[1]}:30303${BASH_REMATCH[2]}"
-                echo "${timestamp}|${normalized_enode}"
+            # Keep the original port and IP from the API
+            if [[ "$enode" =~ ^enode://[a-fA-F0-9]{128}@[^:]+:[0-9]+.*$ ]]; then
+                echo "${timestamp}|${enode}"
             fi
         done | sort -t'|' -k1,1nr > "${TEMP_DIR}/etcnodes_bootnodes_with_timestamps.txt"
     
@@ -92,16 +90,6 @@ validate_enode() {
     if [[ "$enode" =~ ^enode://[a-fA-F0-9]{128}@[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+ ]]; then
         return 0
     elif [[ "$enode" =~ ^enode://[a-fA-F0-9]{128}@[^:]+:[0-9]+(\?discport=[0-9]+)?$ ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Function to check if bootnode uses standard port (30303)
-has_standard_port() {
-    local enode="$1"
-    if [[ "$enode" =~ :30303(\?|$) ]]; then
         return 0
     else
         return 1

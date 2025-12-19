@@ -263,15 +263,15 @@ jobs:
             
             ### Changes
             - Updated `src/main/resources/conf/base/chains/etc-chain.conf`
-            - Validated bootnodes against core-geth and Hyperledger Besu sources
-            - Maintained 20 active bootnodes with proper port configuration
+            - Validated bootnodes against etcnodes API
+            - Maintained 30 active bootnodes with original ports preserved
             
             ### Details
             The bootnode list is automatically updated by the `scripts/update-bootnodes.sh` script, which:
-            1. Fetches active bootnodes from core-geth and Besu repositories
+            1. Fetches active bootnodes from etcnodes API
             2. Validates current bootnodes are in authoritative lists
             3. Removes inactive or unauthorized bootnodes
-            4. Ensures exactly 20 active bootnodes with standard port (30303)
+            4. Preserves original IP addresses and ports from the API
             
             **Generated**: ${{ steps.date.outputs.datetime }}
             **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

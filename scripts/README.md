@@ -11,7 +11,7 @@ The script ensures that Fukuii maintains a healthy list of 30 active bootnodes b
 - Validating current bootnodes against the live node list
 - Removing bootnodes that are no longer active (not in API = dead)
 - Maintaining exactly 30 active bootnodes (1.5x the default max outgoing connections of 20)
-- Normalizing all bootnodes to use standard port 30303
+- Preserving original IP addresses and ports from the API
 - Prioritizing nodes by last seen timestamp (most recently active first)
 
 ### Usage
@@ -23,11 +23,10 @@ bash scripts/update-bootnodes.sh
 # The script will:
 # 1. Extract current bootnodes from src/main/resources/conf/base/chains/etc-chain.conf
 # 2. Fetch live bootnodes from etcnodes API with timestamps
-# 3. Normalize all ports to 30303 (standard ETC port)
-# 4. Sort by last seen timestamp (most recent first)
-# 5. Validate and select 30 bootnodes
-# 6. Update the configuration file
-# 7. Create a timestamped backup
+# 3. Sort by last seen timestamp (most recent first)
+# 4. Validate and select 30 bootnodes
+# 5. Update the configuration file
+# 6. Create a timestamped backup
 ```
 
 ### Automated Execution
@@ -49,7 +48,7 @@ When changes are detected, the workflow automatically creates a pull request wit
 - Maintained by the ETC community
 - Provides up-to-date list of active nodes with connection information and timestamps
 - GitHub: https://github.com/etclabscore/nodes-interface
-- All ports are normalized to 30303 (standard ETC port)
+- Original IP addresses and ports are preserved from the API
 - Nodes are sorted by last seen timestamp (contact.last.unix)
 
 ### Selection Logic
@@ -64,7 +63,7 @@ This ensures:
 - Freshness: New live bootnodes from the network are added based on activity
 - Liveness: Only nodes actively connected to the ETC network are used
 - Quality: Nodes are prioritized by most recent activity (last seen timestamp)
-- Consistency: All nodes use standard port 30303
+- Authenticity: Original IP addresses and ports are preserved as provided by the API
 
 ### Validation
 
