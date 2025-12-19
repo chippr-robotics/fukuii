@@ -61,6 +61,33 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
     netService.version(VersionRequest()).unsafeRunSync() shouldBe Right(VersionResponse("42"))
   }
 
+  it should "return node info with enode when listening" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val response = netService.nodeInfo(NodeInfoRequest()).unsafeRunSync()
+    response.isRight shouldBe true
+    val info = response.toOption.get
+  val expectedId = nodeStatusRef.get().nodeId.map("%02x".format(_)).mkString
+  info.id shouldBe expectedId
+    info.listening shouldBe true
+  info.enode shouldBe defined
+  info.enode.get should include (expectedId)
+  info.listenAddr shouldBe defined
+  info.listenAddr.get should include (":9000")
+  }
+
+  it should "report not listening when server is offline" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val current = nodeStatusRef.get()
+    nodeStatusRef.set(current.copy(serverStatus = ServerStatus.NotListening))
+
+    val response = netService.nodeInfo(NodeInfoRequest()).unsafeRunSync()
+    val expectedId = current.nodeId.map("%02x".format(_)).mkString
+    response shouldBe Right(NodeInfoResponse(
+      id = expectedId,
+      enode = None,
+      listenAddr = None,
+      listening = false
+    ))
+  }
+
   // Enhanced peer management tests
   it should "list all peers with detailed information" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val resF: Future[Either[JsonRpcError, ListPeersResponse]] = netService
@@ -193,14 +220,19 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
 
     val blacklist = CacheBasedBlacklist.empty(100)
 
-    val nodeStatus: NodeStatus = NodeStatus(
-      crypto.generateKeyPair(secureRandom),
-      ServerStatus.Listening(new InetSocketAddress(9000)),
-      discoveryStatus = ServerStatus.NotListening
+    private val nodeKey = crypto.generateKeyPair(secureRandom)
+    val nodeStatusRef: AtomicReference[NodeStatus] = new AtomicReference[
+      NodeStatus
+    ](
+      NodeStatus(
+        nodeKey,
+        ServerStatus.Listening(new InetSocketAddress(9000)),
+        discoveryStatus = ServerStatus.NotListening
+      )
     )
     val netService =
       new NetService(
-        new AtomicReference[NodeStatus](nodeStatus),
+        nodeStatusRef,
         peerManager.ref,
         blacklist,
         NetServiceConfig(5.seconds)
