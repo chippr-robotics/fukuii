@@ -96,7 +96,9 @@ fukuii-cli logs fukuii-geth
 
 **Multi-Client Support:**
 - The CLI automatically detects container types (Fukuii, Geth, Besu)
-- Extracts enodes from logs (primary) or via admin_nodeInfo RPC (fallback)
+- Extracts enodes from logs (primary) or via JSON-RPC fallback:
+  - **Fukuii** nodes expose `net_nodeInfo`, which mirrors the enode payload from geth's `admin_nodeInfo` without requiring the admin namespace.
+  - **Core-Geth** and **Besu** continue to serve `admin_nodeInfo` via their admin APIs.
 - Updates static-nodes.json in the appropriate location for each client:
   - **Fukuii**: `conf/nodeN/static-nodes.json` (host-mounted config)
   - **Core-Geth**: `/root/.ethereum/static-nodes.json` (container volume)

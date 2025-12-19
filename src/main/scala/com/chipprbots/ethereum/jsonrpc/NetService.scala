@@ -11,13 +11,13 @@ import cats.effect.IO
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
-import com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus.Listening
 import com.chipprbots.ethereum.utils.ServerStatus.NotListening
+import org.bouncycastle.util.encoders.Hex
 
 object NetService {
   case class VersionRequest()
@@ -28,6 +28,14 @@ object NetService {
 
   case class PeerCountRequest()
   case class PeerCountResponse(value: Int)
+
+  case class NodeInfoRequest()
+  case class NodeInfoResponse(
+      id: String,
+      enode: Option[String],
+      listenAddr: Option[String],
+      listening: Boolean
+  )
 
   // Enhanced peer management requests/responses
   case class PeerInfo(
@@ -83,6 +91,7 @@ trait NetServiceAPI {
   def version(req: VersionRequest): ServiceResponse[VersionResponse]
   def listening(req: ListeningRequest): ServiceResponse[ListeningResponse]
   def peerCount(req: PeerCountRequest): ServiceResponse[PeerCountResponse]
+  def nodeInfo(req: NodeInfoRequest): ServiceResponse[NodeInfoResponse]
 
   // Enhanced peer management API
   def listPeers(req: ListPeersRequest): ServiceResponse[ListPeersResponse]
@@ -99,7 +108,7 @@ class NetService(
     nodeStatusHolder: AtomicReference[NodeStatus],
     peerManager: ActorRef,
     blacklist: Blacklist,
-    config: NetServiceConfig
+  config: NetService.NetServiceConfig
 ) extends NetServiceAPI {
   import NetService._
   import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
@@ -122,6 +131,22 @@ class NetService(
     peerManager
       .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
       .map(peers => Right(PeerCountResponse(peers.handshaked.size)))
+  }
+
+  def nodeInfo(req: NodeInfoRequest): ServiceResponse[NodeInfoResponse] = IO.pure {
+    val status = nodeStatusHolder.get()
+    val nodeId = Hex.toHexString(status.nodeId)
+
+    status.serverStatus match {
+      case Listening(address) if address != null =>
+        val host = Option(address.getAddress).flatMap(addr => Option(addr.getHostAddress)).getOrElse(address.getHostString)
+        val port = address.getPort
+        val listenAddr = s"$host:$port"
+        val enode = s"enode://$nodeId@$listenAddr"
+        Right(NodeInfoResponse(nodeId, Some(enode), Some(listenAddr), listening = true))
+      case _ =>
+        Right(NodeInfoResponse(nodeId, None, None, listening = false))
+    }
   }
 
   def listPeers(req: ListPeersRequest): ServiceResponse[ListPeersResponse] = {
