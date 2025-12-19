@@ -11,9 +11,10 @@ Welcome to the Fukuii troubleshooting guides! This directory contains step-by-st
 - **[Gas Calculation Guide](GAS_CALCULATION_ISSUES.md)** — Gas calculation reference and solutions (✅ Resolved)
 
 ### Test Failures and CI
+- **[Visual Summary](VISUAL_SUMMARY.md)** — 📊 Visual overview with charts and diagrams (start here!)
+- **[Quick Reference](QUICK_REFERENCE_FAILURES.md)** — Quick lookup for nightly test failure investigation
 - **[Nightly Run Analysis (2025-12-19)](NIGHTLY_RUN_ANALYSIS_2025-12-19.md)** — Comprehensive analysis of 37 test failures
 - **[Failure Tracking](FAILURE_TRACKING.md)** — Current status and progress on fixing test failures
-- **[Quick Reference](QUICK_REFERENCE_FAILURES.md)** — Quick lookup for nightly test failure investigation
 
 ## Quick Links
 
