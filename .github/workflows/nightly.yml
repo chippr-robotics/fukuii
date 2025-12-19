@@ -241,7 +241,7 @@ jobs:
       - name: Check for changes
         id: check_changes
         run: |
-          if git diff --quiet src/main/resources/conf/chains/etc-chain.conf; then
+          if git diff --quiet src/main/resources/conf/base/chains/etc-chain.conf; then
             echo "No bootnode changes detected"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
@@ -262,7 +262,7 @@ jobs:
             This PR updates the ETC bootnode configuration based on the nightly check against authoritative sources.
             
             ### Changes
-            - Updated `src/main/resources/conf/chains/etc-chain.conf`
+            - Updated `src/main/resources/conf/base/chains/etc-chain.conf`
             - Validated bootnodes against core-geth and Hyperledger Besu sources
             - Maintained 20 active bootnodes with proper port configuration
             
@@ -288,8 +288,8 @@ jobs:
         with:
           name: bootnode-update-report-${{ github.run_number }}
           path: |
-            src/main/resources/conf/chains/etc-chain.conf
-            src/main/resources/conf/chains/etc-chain.conf.backup.*
+            src/main/resources/conf/base/chains/etc-chain.conf
+            src/main/resources/conf/base/chains/etc-chain.conf.backup.*
           retention-days: 30
           if-no-files-found: warn
 
