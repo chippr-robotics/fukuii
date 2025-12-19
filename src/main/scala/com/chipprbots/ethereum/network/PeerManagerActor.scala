@@ -182,7 +182,7 @@ class PeerManagerActor(
     NetworkMetrics.PendingPeersSize.set(connectedPeers.pendingPeersCount)
     NetworkMetrics.TriedPeersSize.set(triedNodes.size)
 
-    log.info(
+    log.debug(
       s"Total number of discovered nodes ${nodes.size}. " +
         s"Total number of connection attempts ${triedNodes.size}, blacklisted ${blacklist.keys.size} nodes. " +
         s"Handshaked ${connectedPeers.handshakedPeersCount}/${peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers}, " +
@@ -365,12 +365,9 @@ class PeerManagerActor(
         context.become(listening(connectedPeers))
 
       } else if (handshakedPeer.nodeId.exists(connectedPeers.hasHandshakedWith)) {
-        // FIXME: peers received after handshake should always have their nodeId defined, we could maybe later distinguish
-        //        it into PendingPeer/HandshakedPeer classes
-
         // Even though we do already validations for this, we might have missed it someone tried connecting to us at the
         // same time as we do
-        log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to him")
+        log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
         // Keep the current connectedPeers state; the Terminated message will clean up the peer
         context.become(listening(connectedPeers))

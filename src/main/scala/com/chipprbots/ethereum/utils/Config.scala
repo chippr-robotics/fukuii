@@ -273,6 +273,7 @@ object AsyncConfig {
     AsyncConfig(fukuiiConfig.getConfig("async").getDuration("ask-timeout").toMillis.millis)
 }
 
+//user keystore
 trait KeyStoreConfig {
   val keyStoreDir: String
   val minimalPassphraseLength: Int
@@ -297,6 +298,7 @@ object KeyStoreConfig {
       val allowNoPassphrase: Boolean = true
     }
 }
+
 
 trait FilterConfig {
   val filterTimeout: FiniteDuration

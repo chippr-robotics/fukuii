@@ -182,6 +182,17 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: PeerCountResponse): JValue = encodeAsHex(t.value)
     }
 
+  implicit val net_nodeInfo: NoParamsMethodDecoder[NodeInfoRequest] with JsonEncoder[NodeInfoResponse] =
+    new NoParamsMethodDecoder(NodeInfoRequest()) with JsonEncoder[NodeInfoResponse] {
+      override def encodeJson(t: NodeInfoResponse): JValue =
+        JObject(
+          "id" -> JString(t.id),
+          "enode" -> t.enode.map(JString.apply).getOrElse(JNull),
+          "listenAddr" -> t.listenAddr.map(JString.apply).getOrElse(JNull),
+          "listening" -> JBool(t.listening)
+        )
+    }
+
   // Enhanced peer management codecs
   implicit val net_listPeers: NoParamsMethodDecoder[ListPeersRequest] with JsonEncoder[ListPeersResponse] =
     new NoParamsMethodDecoder(ListPeersRequest()) with JsonEncoder[ListPeersResponse] {

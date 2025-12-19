@@ -260,6 +260,46 @@ Examples:
 ```
 
 For detailed CLI documentation, see the [Node Configuration Runbook](docs/runbooks/node-configuration.md#cli-subcommands).
+
+### Network Management
+
+Fukuii provides a unified CLI tool for managing test networks and mainnet deployments:
+
+```bash
+# Show available commands and networks
+./fukuii.sh help
+
+# Start a test network (3-node, 6-node, or mixed client configurations)
+./fukuii.sh start 6nodes
+
+# Start Cirith-Ungol (ETC mainnet testing environment)
+./fukuii.sh start cirith-ungol
+
+# View logs
+./fukuii.sh logs cirith-ungol
+
+# Synchronize static nodes across running containers
+./fukuii.sh sync-static-nodes 6nodes
+
+# Check status
+./fukuii.sh status cirith-ungol
+
+# Stop network
+./fukuii.sh stop cirith-ungol
+```
+
+**Available Configurations:**
+- `3nodes` - 3 Fukuii nodes (private test network)
+- `6nodes` - 6 Fukuii nodes (private test network)
+- `fukuii-geth` - 3 Fukuii + 3 Core-Geth nodes
+- `fukuii-besu` - 3 Fukuii + 3 Besu nodes
+- `mixed` - 3 Fukuii + 3 Besu + 3 Core-Geth nodes
+- `cirith-ungol` - Fukuii + Core-Geth on ETC mainnet
+
+For detailed network management documentation, see:
+- [Gorgoroth Test Network](ops/gorgoroth/README.md) - Private test network
+- [Cirith-Ungol Mainnet Testing](ops/cirith-ungol/README.md) - ETC mainnet environment
+
 Configuration and Environment
 
 Many configuration properties begin with the prefix fukuii instead of mantis. For example, the RPC settings are controlled by keys like fukuii.network.rpc.http.mode. Similarly, the environment variable FUKUII_DEV=true enables developer‑friendly settings during the build.

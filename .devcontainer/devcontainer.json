@@ -9,6 +9,9 @@
     },
     "ghcr.io/devcontainers/features/git:1": {
       "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2.13.0": {
+      "version": "latest"
     }
   },
   
@@ -40,6 +43,8 @@
   
   "mounts": [
     "source=fukuii-ivy2-cache,target=/home/vscode/.ivy2,type=volume",
-    "source=fukuii-sbt-cache,target=/home/vscode/.sbt,type=volume"
-  ]
+    "source=fukuii-sbt-cache,target=/home/vscode/.sbt,type=volume",
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+  ],
+  "runArgs": ["--privileged"]
 }

@@ -15,13 +15,18 @@ Cirith Ungol serves as a general-purpose testing environment for:
 
 ## Architecture
 
-Cirith Ungol deploys a single Fukuii node:
+Cirith Ungol now runs a two-node mini harness so we can control both sides of a SNAP exchange:
 
 ### Fukuii Node
-- ETC mainnet node for testing
+- ETC mainnet node under test
 - Configurable sync modes (SNAP, Fast, Full)
-- Focus: Testing and validation
 - Ports: 8545 (HTTP), 8546 (WS), 30303 (P2P)
+
+### Core-Geth Reference Node
+- Runs [`etclabscore/core-geth:latest`](https://github.com/etclabscore/core-geth)
+- Mirrors the command-line used in ad-hoc runs (HTTP/WS enabled, SNAP sync, metrics)
+- Ports: 18545 (HTTP), 18546 (WS) from host ➜ 8545/8546 inside container, P2P on 30304 ➜ 30303
+- Acts as a managed static peer for Fukuii via `conf/static-nodes.json`
 
 ## Configuration Changes from Run 005
 
@@ -71,6 +76,23 @@ do-fast-sync = false   # Disabled to isolate SNAP behavior
 
 ### Quick Start
 
+You can manage Cirith-Ungol nodes using either the unified CLI or the local start.sh script:
+
+#### Option 1: Unified CLI (Recommended)
+
+```bash
+# From repository root
+./fukuii.sh start cirith-ungol
+./fukuii.sh logs cirith-ungol
+./fukuii.sh status cirith-ungol
+./fukuii.sh stop cirith-ungol
+
+# Sync static nodes (updates conf/static-nodes.json with all running node enodes)
+./fukuii.sh sync-static-nodes cirith-ungol
+```
+
+#### Option 2: Local Script
+
 ```bash
 cd ops/cirith-ungol
 
@@ -93,6 +115,9 @@ curl http://localhost:8545/eth_syncing
 
 # Container status
 docker compose ps
+
+# Core-Geth status
+curl http://localhost:18545/eth_syncing
 ```
 
 #### View Sync Progress
@@ -102,6 +127,9 @@ docker compose logs fukuii | grep "SNAP Sync Progress"
 
 # General sync status
 docker compose logs fukuii | grep -i "sync"
+
+# Core-Geth state sync
+docker compose logs coregeth | grep "Syncing"
 ```
 
 ### Key Monitoring Commands
@@ -315,9 +343,27 @@ docker compose logs fukuii | grep -i "progress\|downloaded"
 | **GetReceipts** | ✅ Works | ✅ Works |
 | **State Download** | ❌ Cannot start | ✅ Should work |
 
-## Usage
+## Lifecycle Management with Unified CLI
+
+The Fukuii unified CLI provides consistent commands for managing Cirith-Ungol alongside other networks:
 
 ### Quick Start
+
+```bash
+# From repository root
+./fukuii.sh start cirith-ungol
+
+# View logs (live)
+./fukuii.sh logs cirith-ungol
+
+# Monitor FastSync progress
+docker compose -f ops/cirith-ungol/docker-compose.yml logs fukuii | grep -i "fast\|pivot\|progress"
+
+# Stop the node
+./fukuii.sh stop cirith-ungol
+```
+
+Or use the local script:
 
 ```bash
 cd ops/cirith-ungol

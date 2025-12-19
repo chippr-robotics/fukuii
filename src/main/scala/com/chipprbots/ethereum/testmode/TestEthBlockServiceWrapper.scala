@@ -8,7 +8,6 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.SignedTransaction
-import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.jsonrpc.BaseBlockResponse
 import com.chipprbots.ethereum.jsonrpc.BaseTransactionResponse
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService
@@ -94,7 +93,6 @@ class TestEthBlockServiceWrapper(
   private def toEthResponse(block: Block, response: BaseBlockResponse) = EthBlockResponse(
     response.number,
     response.hash,
-    if (block.header.mixHash.isEmpty) Some(UInt256.Zero.bytes) else Some(block.header.mixHash),
     response.parentHash,
     if (block.header.nonce.isEmpty) None else Some(block.header.nonce),
     response.sha3Uncles,
@@ -110,6 +108,7 @@ class TestEthBlockServiceWrapper(
     response.gasLimit,
     response.gasUsed,
     response.timestamp,
+    response.mixHash,
     toEthTransaction(block, response.transactions),
     response.uncles
   )
@@ -127,7 +126,6 @@ class TestEthBlockServiceWrapper(
 case class EthBlockResponse(
     number: BigInt,
     hash: Option[ByteString],
-    mixHash: Option[ByteString],
     parentHash: ByteString,
     nonce: Option[ByteString],
     sha3Uncles: ByteString,
@@ -143,6 +141,7 @@ case class EthBlockResponse(
     gasLimit: BigInt,
     gasUsed: BigInt,
     timestamp: BigInt,
+    mixHash: ByteString,
     transactions: Either[Seq[ByteString], Seq[BaseTransactionResponse]],
     uncles: Seq[ByteString]
 ) extends BaseBlockResponse
