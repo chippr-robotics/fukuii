@@ -74,7 +74,11 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     extends SecureRandomBuilder
     with TestSyncConfig
     with BlockchainConfigBuilder {
-  implicit val akkaTimeout: Timeout = Timeout(5.second)
+  // Use longer timeout in CI environment to accommodate slower I/O and network operations
+  // CI environments (GitHub Actions, etc.) often have higher latency due to shared resources
+  private val baseTimeout = 5.seconds
+  private val ciMultiplier = sys.env.get("CI").map(_ => 6).getOrElse(1) // 30 seconds in CI, 5 seconds locally
+  implicit val akkaTimeout: Timeout = Timeout(baseTimeout * ciMultiplier)
 
   val config = Config.config
 
