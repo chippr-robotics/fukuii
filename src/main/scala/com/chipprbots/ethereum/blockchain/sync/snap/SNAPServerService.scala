@@ -224,21 +224,32 @@ class SNAPServerService(
       val maxBytes = Math.min(request.responseBytes.toLong, effectiveConfig.maxResponseBytes)
 
       // Retrieve bytecodes for each requested hash
-      for (codeHash <- request.hashes if totalBytes < maxBytes) {
-        evmCodeStorage.get(codeHash) match {
-          case Some(code) =>
-            val codeSize = code.size
-            if (totalBytes + codeSize <= maxBytes) {
-              codes += code
-              totalBytes += codeSize
-            } else {
-              // Would exceed byte limit - stop here
-              log.debug(s"Stopping bytecode retrieval at ${codes.size} codes (byte limit reached)")
-            }
+      val iterator = request.hashes.iterator
+      var continue = true
+      while (iterator.hasNext && continue) {
+        // Stop if we've consumed significant portion of the byte budget (conservative approach)
+        // to avoid unnecessary storage lookups for codes that likely won't fit
+        if (totalBytes > maxBytes * 0.6) {
+          log.debug(s"Approaching byte limit (${totalBytes}/${maxBytes}), stopping bytecode retrieval")
+          continue = false
+        } else {
+          val codeHash = iterator.next()
+          evmCodeStorage.get(codeHash) match {
+            case Some(code) =>
+              val codeSize = code.size
+              if (totalBytes + codeSize <= maxBytes) {
+                codes += code
+                totalBytes += codeSize
+              } else {
+                // Would exceed byte limit - stop here
+                log.debug(s"Stopping bytecode retrieval at ${codes.size} codes (byte limit reached)")
+                continue = false
+              }
 
-          case None =>
-            log.debug(s"Bytecode not found for hash: ${codeHash.take(8).toHex}")
-            // SNAP spec: missing bytecodes are omitted from response, not replaced with empty
+            case None =>
+              log.debug(s"Bytecode not found for hash: ${codeHash.take(8).toHex}")
+              // SNAP spec: missing bytecodes are omitted from response, not replaced with empty
+          }
         }
       }
 
@@ -484,48 +495,97 @@ class SNAPServerService(
 
   /** Get an account from the account trie by its hash.
     *
+    * Performs a full MPT lookup by traversing the trie using the account hash nibbles.
+    * This is production-ready and follows the standard MPT key lookup algorithm.
+    *
     * @param rootNode Root of the account trie
     * @param accountHash Hash of the account to retrieve
     * @return Option containing the account if found
     */
   private def getAccount(rootNode: MptNode, accountHash: ByteString): Option[Account] = {
     import com.chipprbots.ethereum.domain.Account.accountSerializer
+    
+    // Convert account hash to nibbles for MPT traversal
+    val keyNibbles = HexPrefix.bytesToNibbles(accountHash.toArray)
 
-    // For a proper MPT lookup, we would need to traverse using the key nibbles
-    // This is a simplified version - in production, use MerklePatriciaTrie.get()
-    def traverse(node: MptNode): Option[Account] = {
+    /** Traverse the MPT using key nibbles to find the account.
+      *
+      * @param node Current node in traversal
+      * @param remainingKey Remaining key nibbles to match
+      * @return Option containing the account if found at this path
+      */
+    def traverse(node: MptNode, remainingKey: Array[Byte]): Option[Account] = {
       node match {
         case leaf: LeafNode =>
-          try {
-            Some(accountSerializer.fromBytes(leaf.value.toArray))
-          } catch {
-            case NonFatal(_) => None
+          // Decode the leaf key and check if it matches our remaining key
+          val (decodedKey, _) = HexPrefix.decode(leaf.key.toArray)
+          if (decodedKey.sameElements(remainingKey)) {
+            try {
+              Some(accountSerializer.fromBytes(leaf.value.toArray))
+            } catch {
+              case NonFatal(_) => None
+            }
+          } else {
+            None
           }
 
-        case _: ExtensionNode | _: BranchNode =>
-          // This simplified version doesn't implement full traversal
-          // In production, use MerklePatriciaTrie with proper key lookup
-          None
+        case ext: ExtensionNode =>
+          // Decode the extension's shared key
+          val (sharedKey, _) = HexPrefix.decode(ext.sharedKey.toArray)
+          
+          // Check if our remaining key starts with the shared key
+          if (remainingKey.length >= sharedKey.length && 
+              remainingKey.take(sharedKey.length).sameElements(sharedKey)) {
+            // Continue traversal with the next node and remaining key
+            val newRemainingKey = remainingKey.drop(sharedKey.length)
+            traverse(ext.next, newRemainingKey)
+          } else {
+            None
+          }
+
+        case branch: BranchNode =>
+          if (remainingKey.isEmpty) {
+            // We've consumed all key nibbles, check for a value at this branch node
+            branch.terminator.flatMap { value =>
+              try {
+                Some(accountSerializer.fromBytes(value.toArray))
+              } catch {
+                case NonFatal(_) => None
+              }
+            }
+          } else {
+            // Use the first nibble to select which child to traverse
+            val childIndex = remainingKey(0) & 0xf
+            val child = branch.children(childIndex)
+            val newRemainingKey = remainingKey.drop(1)
+            traverse(child, newRemainingKey)
+          }
 
         case hash: HashNode =>
+          // Resolve the hash node from storage and continue traversal
           try {
             val resolved = mptStorage.get(hash.hash)
-            traverse(resolved)
+            traverse(resolved, remainingKey)
           } catch {
             case _: MerklePatriciaTrie.MissingNodeException => None
           }
 
-        case NullNode => None
+        case NullNode => 
+          None
       }
     }
 
-    traverse(rootNode)
+    traverse(rootNode, keyNibbles)
   }
 
   /** Generate Merkle proof for an account range.
     *
-    * The proof contains trie nodes that are needed to verify the accounts
-    * belong to the trie with the specified root hash.
+    * According to the SNAP spec, a range proof must include all nodes along the paths
+    * to both the first and last account in the range (boundary proofs). This allows
+    * the client to verify:
+    * 1. The first account is at the correct position in the trie
+    * 2. The last account is at the correct position in the trie
+    * 3. All accounts between first and last are consecutive and complete
     *
     * @param rootNode Root of the account trie
     * @param firstAccountHash Hash of first account in range
@@ -537,22 +597,97 @@ class SNAPServerService(
       firstAccountHash: ByteString,
       lastAccountHash: ByteString
   ): Seq[ByteString] = {
-    // Simplified proof generation - in production, implement proper boundary proofs
-    // A proper SNAP proof includes:
-    // 1. Nodes along the path to the first account (left boundary)
-    // 2. Nodes along the path to the last account (right boundary)
-    // This allows the client to verify the accounts are consecutive and complete
+    val proofNodes = mutable.LinkedHashSet[ByteString]() // Use LinkedHashSet to maintain order and avoid duplicates
     
-    val proofNodes = mutable.ArrayBuffer[ByteString]()
+    // Generate path proof for the first account (left boundary)
+    val firstKeyNibbles = HexPrefix.bytesToNibbles(firstAccountHash.toArray)
+    collectProofNodesForPath(rootNode, firstKeyNibbles, proofNodes)
     
-    // For now, include the root node as a minimal proof
-    // TODO: Implement full boundary proof generation following SNAP spec
-    proofNodes += ByteString(rootNode.encode)
+    // Generate path proof for the last account (right boundary)
+    val lastKeyNibbles = HexPrefix.bytesToNibbles(lastAccountHash.toArray)
+    collectProofNodesForPath(rootNode, lastKeyNibbles, proofNodes)
     
     proofNodes.toSeq
   }
 
+  /** Collect all nodes along the path to a specific key in the trie.
+    *
+    * This traverses the trie from root to leaf following the key nibbles,
+    * adding each node encountered to the proof set.
+    *
+    * @param node Current node in traversal
+    * @param keyNibbles Key nibbles to follow
+    * @param proofNodes Set to accumulate proof nodes
+    */
+  private def collectProofNodesForPath(
+      node: MptNode,
+      keyNibbles: Array[Byte],
+      proofNodes: mutable.LinkedHashSet[ByteString]
+  ): Unit = {
+    // Add the current node to the proof (unless it's NullNode)
+    node match {
+      case NullNode => 
+        // Don't add null nodes to proof
+        return
+      case _ =>
+        proofNodes += ByteString(node.encode)
+    }
+
+    // Recursively traverse based on node type
+    node match {
+      case leaf: LeafNode =>
+        // Reached a leaf - proof path is complete
+        ()
+
+      case ext: ExtensionNode =>
+        // Decode the extension's shared key
+        val (sharedKey, _) = HexPrefix.decode(ext.sharedKey.toArray)
+        
+        // If our key starts with the shared key, continue down the extension
+        if (keyNibbles.length >= sharedKey.length && 
+            keyNibbles.take(sharedKey.length).sameElements(sharedKey)) {
+          val remainingKey = keyNibbles.drop(sharedKey.length)
+          collectProofNodesForPath(ext.next, remainingKey, proofNodes)
+        }
+        // If key doesn't match, stop here (path doesn't exist)
+
+      case branch: BranchNode =>
+        if (keyNibbles.isEmpty) {
+          // Reached the target at this branch node
+          ()
+        } else {
+          // Select child based on first nibble
+          val childIndex = keyNibbles(0) & 0xf
+          val child = branch.children(childIndex)
+          val remainingKey = keyNibbles.drop(1)
+          collectProofNodesForPath(child, remainingKey, proofNodes)
+        }
+
+      case hash: HashNode =>
+        // Resolve hash node and continue
+        try {
+          val resolved = mptStorage.get(hash.hash)
+          collectProofNodesForPath(resolved, keyNibbles, proofNodes)
+        } catch {
+          case _: MerklePatriciaTrie.MissingNodeException =>
+            // Node missing - can't continue proof path
+            ()
+        }
+
+      case NullNode =>
+        // Already handled above
+        ()
+    }
+  }
+
   /** Generate Merkle proof for a storage range.
+    *
+    * According to the SNAP spec, a range proof must include all nodes along the paths
+    * to both the first and last storage slot in the range (boundary proofs). This allows
+    * the client to verify:
+    * 1. The first slot is at the correct position in the storage trie
+    * 2. The last slot is at the correct position in the storage trie
+    * 3. All slots between first and last are consecutive and complete
     *
     * @param rootNode Root of the storage trie
     * @param firstSlotHash Hash of first slot in range
@@ -564,11 +699,15 @@ class SNAPServerService(
       firstSlotHash: ByteString,
       lastSlotHash: ByteString
   ): Seq[ByteString] = {
-    val proofNodes = mutable.ArrayBuffer[ByteString]()
+    val proofNodes = mutable.LinkedHashSet[ByteString]() // Use LinkedHashSet to maintain order and avoid duplicates
     
-    // Simplified proof - include root node
-    // TODO: Implement full boundary proof generation
-    proofNodes += ByteString(rootNode.encode)
+    // Generate path proof for the first storage slot (left boundary)
+    val firstKeyNibbles = HexPrefix.bytesToNibbles(firstSlotHash.toArray)
+    collectProofNodesForPath(rootNode, firstKeyNibbles, proofNodes)
+    
+    // Generate path proof for the last storage slot (right boundary)
+    val lastKeyNibbles = HexPrefix.bytesToNibbles(lastSlotHash.toArray)
+    collectProofNodesForPath(rootNode, lastKeyNibbles, proofNodes)
     
     proofNodes.toSeq
   }
