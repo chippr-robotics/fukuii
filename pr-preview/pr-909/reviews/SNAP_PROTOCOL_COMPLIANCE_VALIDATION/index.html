@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="en" class="no-js" data-fukuii-version="0.1.193">
+<html lang="en" class="no-js" data-fukuii-version="0.1.194">
   <head>
     
       <meta charset="utf-8">
@@ -75,7 +75,7 @@
 
     
     
-  <script>window.__FUKUII_VERSION__ = "0.1.193";</script>
+  <script>window.__FUKUII_VERSION__ = "0.1.194";</script>
 </head>
   
   
@@ -6352,7 +6352,7 @@
 <h3 id="2-protocol-requirements">2. Protocol Requirements<a class="headerlink" href="#2-protocol-requirements" title="Permanent link">&para;</a></h3>
 <h4 id="21-capability-advertisement">2.1 Capability Advertisement<a class="headerlink" href="#21-capability-advertisement" title="Permanent link">&para;</a></h4>
 <p><strong>Spec Requirement:</strong> SNAP/1 must be advertised during handshake</p>
-<p><strong>Implementation:</strong> <code>src/main/resources/conf/chains/etc-chain.conf:9</code>
+<p><strong>Implementation:</strong> <code>src/main/resources/conf/base/chains/etc-chain.conf:9</code>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>capabilities = [&quot;eth/63&quot;, &quot;eth/64&quot;, &quot;eth/65&quot;, &quot;eth/66&quot;, &quot;eth/67&quot;, &quot;eth/68&quot;, &quot;snap/1&quot;]
 </span></code></pre></div></p>
 <p><strong>Handshake Detection:</strong> <code>src/main/scala/com/chipprbots/ethereum/network/handshaker/EtcHelloExchangeState.scala:36</code>
