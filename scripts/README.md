@@ -21,7 +21,7 @@ The script ensures that Fukuii maintains a healthy list of 30 active bootnodes b
 bash scripts/update-bootnodes.sh
 
 # The script will:
-# 1. Extract current bootnodes from src/main/resources/conf/chains/etc-chain.conf
+# 1. Extract current bootnodes from src/main/resources/conf/base/chains/etc-chain.conf
 # 2. Fetch live bootnodes from etcnodes API with timestamps
 # 3. Normalize all ports to 30303 (standard ETC port)
 # 4. Sort by last seen timestamp (most recent first)
@@ -78,7 +78,7 @@ Each bootnode is validated to ensure:
 
 ### Configuration File
 
-Target file: `src/main/resources/conf/chains/etc-chain.conf`
+Target file: `src/main/resources/conf/base/chains/etc-chain.conf`
 
 The script updates the `bootstrap-nodes` array in the ETC chain configuration, maintaining:
 - Header comments indicating automated management
@@ -90,7 +90,7 @@ The script updates the `bootstrap-nodes` array in the ETC chain configuration, m
 
 Before each update, the script creates a timestamped backup:
 ```
-src/main/resources/conf/chains/etc-chain.conf.backup.YYYYMMDD_HHMMSS
+src/main/resources/conf/base/chains/etc-chain.conf.backup.YYYYMMDD_HHMMSS
 ```
 
 Backups are retained locally but are not committed to version control (excluded via .gitignore).
@@ -98,7 +98,7 @@ Backups are retained locally but are not committed to version control (excluded 
 ### Manual Intervention
 
 If manual bootnode management is required:
-1. Update `src/main/resources/conf/chains/etc-chain.conf` directly
+1. Update `src/main/resources/conf/base/chains/etc-chain.conf` directly
 2. Commit your changes
 3. The script will respect your changes on the next run if they match authoritative sources
 
@@ -126,5 +126,5 @@ To disable automated updates:
 ### Related Files
 
 - `.github/workflows/nightly.yml` - GitHub Actions workflow
-- `src/main/resources/conf/chains/etc-chain.conf` - Target configuration file
+- `src/main/resources/conf/base/chains/etc-chain.conf` - Target configuration file
 - `ops/cirith-ungol/conf/static-nodes.json` - Additional static nodes configuration

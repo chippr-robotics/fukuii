@@ -166,7 +166,7 @@ RLPList(
 
 **Spec Requirement:** SNAP/1 must be advertised during handshake
 
-**Implementation:** `src/main/resources/conf/chains/etc-chain.conf:9`
+**Implementation:** `src/main/resources/conf/base/chains/etc-chain.conf:9`
 ```
 capabilities = ["eth/63", "eth/64", "eth/65", "eth/66", "eth/67", "eth/68", "snap/1"]
 ```
