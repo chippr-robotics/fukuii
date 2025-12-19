@@ -32,7 +32,6 @@ import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -354,21 +353,8 @@ class PeerManagerActor(
       context.unwatch(ref)
       context.become(listening(newConnectedPeers))
 
-    case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, peerInfo: PeerInfo) =>
-      // Check if peer advertises listenPort=0 and we initiated the connection
+    case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, _) =>
       if (
-        peerConfiguration.respectPeerListenPort &&
-        !handshakedPeer.incomingConnection &&
-        peerInfo.remoteStatus.listenPort == 0
-      ) {
-        log.info(
-          "LISTENPORT_FILTER: Disconnecting outbound connection to peer {} ({}): peer advertises listenPort=0",
-          handshakedPeer.id,
-          handshakedPeer.remoteAddress
-        )
-        handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
-        context.become(listening(connectedPeers))
-      } else if (
         handshakedPeer.incomingConnection && connectedPeers.incomingHandshakedPeersCount >= peerConfiguration.maxIncomingPeers
       ) {
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.TooManyPeers)
@@ -599,7 +585,6 @@ object PeerManagerActor {
     val longBlacklistDuration: FiniteDuration
     val statSlotDuration: FiniteDuration
     val statSlotCount: Int
-    val respectPeerListenPort: Boolean
   }
   object PeerConfiguration {
     trait ConnectionLimits {

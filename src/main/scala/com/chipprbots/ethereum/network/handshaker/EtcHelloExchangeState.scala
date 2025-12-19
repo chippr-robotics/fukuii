@@ -31,15 +31,13 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     log.debug("Protocol handshake finished with peer ({})", hello)
     // Store full capability list from peer
     val peerCapabilities = hello.capabilities.toList
-    val peerListenPort = hello.listenPort
 
     // Enhanced logging for peer capabilities and protocol version
     log.info(
-      "PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}], listenPort={}",
+      "PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}]",
       hello.clientId,
       hello.p2pVersion,
-      peerCapabilities.mkString(", "),
-      peerListenPort
+      peerCapabilities.mkString(", ")
     )
     
     // Log our advertised capabilities for comparison
@@ -75,7 +73,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     negotiationResult match {
       case Some(Capability.ETH63) =>
         log.info("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
-        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities, peerListenPort)
+        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
           ) =>
@@ -85,7 +83,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
           negotiated,
           Capability.usesRequestId(negotiated)
         )
-        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities, peerListenPort)
+        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities)
       case _ =>
         log.warn(
           "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",

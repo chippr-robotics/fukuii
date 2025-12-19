@@ -340,7 +340,6 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       override val longBlacklistDuration: FiniteDuration = 3.minutes
       override val statSlotDuration: FiniteDuration = 1.minute
       override val statSlotCount: Int = 30
-      override val respectPeerListenPort: Boolean = true
     }
 
     val baseBlockHeader = Fixtures.Blocks.Block3125369.header

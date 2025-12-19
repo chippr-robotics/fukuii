@@ -585,8 +585,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       remoteStatusMsg,
       Capability.ETH63,
       false,
-      Seq(Capability.ETH63).toList,
-      remotePort
+      Seq(Capability.ETH63).toList
     )
   }
 
@@ -609,68 +608,5 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     )
 
     val remoteStatus: RemoteStatus = RemoteStatus(remoteStatusMsg)
-  }
-
-  it should "store listenPort from peer's Hello message" taggedAs (UnitTest, NetworkTest) in new LocalPeerETH64Setup
-    with RemotePeerETH64Setup {
-    // Create a remote Hello with listenPort=0
-    val remoteHelloWithZeroPort = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
-      clientId = "remote-peer-outbound-only",
-      capabilities = Seq(Capability.ETH64, Capability.ETH68),
-      listenPort = 0, // Peer advertises as outbound-only
-      nodeId = ByteString(remoteNodeStatus.nodeId)
-    )
-
-    // Complete Hello exchange
-    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] =
-      initHandshakerWithoutResolver.applyMessage(remoteHelloWithZeroPort)
-    assert(handshakerAfterHelloOpt.isDefined)
-
-    // Complete Status exchange
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
-    assert(handshakerAfterStatusOpt.isDefined)
-
-    // Verify the handshake succeeds and listenPort is stored
-    handshakerAfterStatusOpt.get.nextMessage match {
-      case Left(HandshakeSuccess(peerInfo)) =>
-        peerInfo.remoteStatus.listenPort shouldBe 0
-        peerInfo.remoteStatus.capability shouldBe Capability.ETH68
-
-      case other =>
-        fail(s"Expected HandshakeSuccess with listenPort=0 but got: $other")
-    }
-  }
-
-  it should "store non-zero listenPort from peer's Hello message" taggedAs (UnitTest, NetworkTest) in new LocalPeerETH64Setup
-    with RemotePeerETH64Setup {
-    // Create a remote Hello with non-zero listenPort
-    val remoteHelloWithPort = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
-      clientId = "remote-peer-with-port",
-      capabilities = Seq(Capability.ETH64),
-      listenPort = 30303, // Peer listening on standard port
-      nodeId = ByteString(remoteNodeStatus.nodeId)
-    )
-
-    // Complete Hello exchange
-    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] =
-      initHandshakerWithoutResolver.applyMessage(remoteHelloWithPort)
-    assert(handshakerAfterHelloOpt.isDefined)
-
-    // Complete Status exchange
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
-    assert(handshakerAfterStatusOpt.isDefined)
-
-    // Verify the handshake succeeds and listenPort is stored
-    handshakerAfterStatusOpt.get.nextMessage match {
-      case Left(HandshakeSuccess(peerInfo)) =>
-        peerInfo.remoteStatus.listenPort shouldBe 30303
-
-      case other =>
-        fail(s"Expected HandshakeSuccess with listenPort=30303 but got: $other")
-    }
   }
 }
