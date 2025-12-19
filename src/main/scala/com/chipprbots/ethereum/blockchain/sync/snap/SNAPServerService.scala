@@ -229,7 +229,7 @@ class SNAPServerService(
       while (iterator.hasNext && continue) {
         // Stop if we've consumed significant portion of the byte budget (conservative approach)
         // to avoid unnecessary storage lookups for codes that likely won't fit
-        if (totalBytes > maxBytes * 0.6) {
+        if (totalBytes > maxBytes * SNAPServerService.BytecodeBudgetThreshold) {
           log.debug(s"Approaching byte limit (${totalBytes}/${maxBytes}), stopping bytecode retrieval")
           continue = false
         } else {
@@ -555,7 +555,7 @@ class SNAPServerService(
             }
           } else {
             // Use the first nibble to select which child to traverse
-            val childIndex = remainingKey(0) & 0xf
+            val childIndex = remainingKey(0) & SNAPServerService.NibbleMask
             val child = branch.children(childIndex)
             val newRemainingKey = remainingKey.drop(1)
             traverse(child, newRemainingKey)
@@ -657,7 +657,7 @@ class SNAPServerService(
           ()
         } else {
           // Select child based on first nibble
-          val childIndex = keyNibbles(0) & 0xf
+          val childIndex = keyNibbles(0) & SNAPServerService.NibbleMask
           val child = branch.children(childIndex)
           val remainingKey = keyNibbles.drop(1)
           collectProofNodesForPath(child, remainingKey, proofNodes)
@@ -714,6 +714,16 @@ class SNAPServerService(
 }
 
 object SNAPServerService {
+  /** MPT nibble mask - used to extract 4-bit nibble values (0-15) */
+  private[snap] val NibbleMask: Int = 0xf
+  
+  /** Conservative byte budget threshold for bytecode retrieval.
+    * When we've consumed this fraction of the byte budget, we stop
+    * attempting additional bytecode retrievals to avoid unnecessary
+    * storage lookups that likely won't fit.
+    */
+  private[snap] val BytecodeBudgetThreshold: Double = 0.6
+  
   /** Configuration for SNAP server behavior */
   case class SNAPServerConfig(
       maxResponseBytes: Long = 2 * 1024 * 1024, // 2MB max response size
