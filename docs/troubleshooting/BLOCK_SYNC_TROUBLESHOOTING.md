@@ -30,7 +30,7 @@ After comparing with the [core-geth reference implementation](https://github.com
 
 ✅ **Genesis Hash**: Correct (`d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3`)
 
-✅ **Fork Blocks Configured** (from `src/main/resources/conf/chains/etc-chain.conf`):
+✅ **Fork Blocks Configured** (from `src/main/resources/conf/base/chains/etc-chain.conf`):
 - Homestead: 1,150,000
 - EIP-150: 2,500,000
 - EIP-155/160: 3,000,000
