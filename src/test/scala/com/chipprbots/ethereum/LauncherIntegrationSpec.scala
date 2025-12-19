@@ -136,28 +136,8 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
     isNetwork("mordor") shouldBe true
   }
 
-  it should "validate Pottery network launch" taggedAs (UnitTest) in {
-    val args = Array("pottery")
-    val modifiers = args.filter(isModifier).toSet
-    val networks = args.filter(isNetwork)
-
-    modifiers shouldBe empty
-    networks should contain only "pottery"
-    isNetwork("pottery") shouldBe true
-  }
-
-  it should "validate Sagano network launch" taggedAs (UnitTest) in {
-    val args = Array("sagano")
-    val modifiers = args.filter(isModifier).toSet
-    val networks = args.filter(isNetwork)
-
-    modifiers shouldBe empty
-    networks should contain only "sagano"
-    isNetwork("sagano") shouldBe true
-  }
-
   it should "validate all known networks are recognized" taggedAs (UnitTest) in {
-    val knownNetworks = Seq("etc", "eth", "mordor", "pottery", "sagano", "bootnode", "testnet-internal-nomad")
+    val knownNetworks = Seq("etc", "eth", "mordor", "bootnode", "gorgoroth")
 
     knownNetworks.foreach { network =>
       withClue(s"Network '$network' should be recognized: ") {
@@ -285,23 +265,6 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
     clearModifierProperties()
   }
 
-  it should "validate enterprise mode with Pottery network" taggedAs (UnitTest) in {
-    clearModifierProperties()
-
-    val args = Array("enterprise", "pottery")
-    val modifiers = args.filter(isModifier).toSet
-    val networks = args.filter(isNetwork)
-
-    modifiers should contain only "enterprise"
-    networks should contain only "pottery"
-
-    applyModifiers(modifiers)
-    System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
-    System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
-
-    clearModifierProperties()
-  }
-
   behavior.of("Combined modifiers and options")
 
   it should "validate public modifier with ETC and TUI option" taggedAs (UnitTest) in {
@@ -312,17 +275,6 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
 
     modifiers should contain only "public"
     networks should contain only "etc"
-    options should contain only "--tui"
-  }
-
-  it should "validate enterprise mode with pottery and TUI option" taggedAs (UnitTest) in {
-    val args = Array("enterprise", "pottery", "--tui")
-    val modifiers = args.filter(isModifier).toSet
-    val networks = args.filter(isNetwork)
-    val options = args.filter(isOptionFlag)
-
-    modifiers should contain only "enterprise"
-    networks should contain only "pottery"
     options should contain only "--tui"
   }
 
@@ -542,25 +494,6 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
 
     applyModifiers(modifiers)
     System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "true"
-
-    clearModifierProperties()
-  }
-
-  it should "validate enterprise mode on pottery with custom config" taggedAs (UnitTest) in {
-    clearModifierProperties()
-
-    val args = Array("enterprise", "pottery", "-Dconfig.file=/custom.conf")
-    val modifiers = args.filter(isModifier).toSet
-    val networks = args.filter(isNetwork)
-    val options = args.filter(isOptionFlag)
-
-    modifiers should contain only "enterprise"
-    networks should contain only "pottery"
-    options should contain only "-Dconfig.file=/custom.conf"
-
-    applyModifiers(modifiers)
-    System.getProperty("fukuii.network.discovery.discovery-enabled") shouldBe "false"
-    System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
 
     clearModifierProperties()
   }

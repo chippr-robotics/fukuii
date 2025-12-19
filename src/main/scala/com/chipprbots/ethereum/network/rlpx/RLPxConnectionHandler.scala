@@ -183,7 +183,7 @@ class RLPxConnectionHandler(
           }
           lazy val maybePostEIP8Result = Try {
             val (packetData, remainingData) = decodeV4Packet(data)
-            val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData)
+            val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData, peerId.toString)
             (responsePacket, result, remainingData)
           }
 
@@ -221,7 +221,7 @@ class RLPxConnectionHandler(
           }
           val maybePostEIP8Result = Try {
             val (packetData, remainingData) = decodeV4Packet(data)
-            val result = handshaker.handleResponseMessageV4(packetData)
+            val result = handshaker.handleResponseMessageV4(packetData, peerId.toString)
             (result, remainingData)
           }
           maybePreEIP8Result.orElse(maybePostEIP8Result) match {
@@ -396,6 +396,7 @@ class RLPxConnectionHandler(
       case Left(ex) =>
         // Use type-safe error checking instead of string matching
         val isDecompressionFailure = MessageDecoder.isDecompressionFailure(ex)
+        val isUnknownMessageType = ex.isInstanceOf[UnknownMessageTypeError]
 
         if (isDecompressionFailure) {
           // Log detailed debugging information for decompression failures
@@ -411,8 +412,25 @@ class RLPxConnectionHandler(
           // messages with compression issues. The message will be skipped, but the peer
           // can continue sending other messages. If this becomes a pattern (multiple failures),
           // the peer will eventually be blacklisted through other mechanisms (timeouts, etc.)
+        } else if (isUnknownMessageType) {
+          // Handle unknown message types gracefully - log warning and skip message
+          // This prevents connection closure when peers send non-standard or future protocol messages
+          val msgCode = ex.asInstanceOf[UnknownMessageTypeError].messageType
+          log.warning(
+            "DECODE_ERROR: Peer {} sent unknown message type: 0x{} ({}). " +
+              "This may be a protocol extension or malformed message. " +
+              "Skipping this message but keeping connection alive. Error: {}",
+            peerId,
+            msgCode.toHexString,
+            msgCode,
+            ex.getMessage
+          )
+          // Note: We do NOT close the connection for unknown message types.
+          // Some peers may implement protocol extensions or send messages from protocols
+          // we don't fully support. Closing the connection would be too aggressive and
+          // reduce our ability to maintain connections with diverse peer implementations.
         } else {
-          // For other decoding errors (truly malformed RLP, unknown message types, etc.),
+          // For other decoding errors (truly malformed RLP, structure mismatches, etc.),
           // close the connection to protect against attacks
           log.error(
             "DECODE_ERROR: Cannot decode message from {} - connection will be closed. Error: {}",

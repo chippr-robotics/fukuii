@@ -225,3 +225,81 @@ Contains:
 4. Test against core-geth peers for interoperability
 
 ---
+
+## UPDATE 2025-12-19: Unknown Message Type Handling
+
+### Issue Discovered
+Nightly build logs showed "Unknown snap/1 message type: 29 – DECODE_ERROR" causing peer connections to close. Message code 29 (0x1D) is outside valid protocol ranges:
+- Wire protocol: 0x00-0x0f (0-15)
+- ETH protocol: 0x10-0x20 (16-32)  
+- SNAP protocol: 0x21-0x28 (33-40)
+
+Message 29 is in the gap, suggesting malformed/non-standard message from peer.
+
+### Root Cause
+When `UnknownMessageTypeError` was encountered, `processMessage()` in RLPxConnectionHandler closed the connection immediately (line 417-424). This was too aggressive - unknown message types should be tolerated to maintain peer diversity.
+
+### The Fix
+
+**Before:**
+```scala
+case Left(ex) =>
+  val isDecompressionFailure = MessageDecoder.isDecompressionFailure(ex)
+  
+  if (isDecompressionFailure) {
+    // Log warning, skip message, keep connection
+  } else {
+    // Close connection for ANY other decoding error
+    connection ! Close
+  }
+```
+
+**After:**
+```scala
+case Left(ex) =>
+  val isDecompressionFailure = MessageDecoder.isDecompressionFailure(ex)
+  val isUnknownMessageType = ex.isInstanceOf[UnknownMessageTypeError]
+  
+  if (isDecompressionFailure) {
+    // Log warning, skip message, keep connection
+  } else if (isUnknownMessageType) {
+    // Log warning with message code details, skip message, keep connection
+    val msgCode = ex.asInstanceOf[UnknownMessageTypeError].messageType
+    log.warning("Peer {} sent unknown message type 0x{} ({})", peerId, msgCode.toHexString, msgCode)
+  } else {
+    // Close connection only for truly malformed RLP
+    connection ! Close
+  }
+```
+
+### Impact
+- ✅ Maintains connections with peers implementing protocol extensions
+- ✅ Increases network resilience against diverse peer implementations
+- ✅ Prevents premature disconnection from future protocol versions
+- ✅ Logs detailed message code information for debugging
+- ✅ Maintains strict handling of truly malformed RLP data
+
+### Behavior Changes
+- **Unknown message types**: Log warning, skip message, keep connection alive
+- **Decompression failures**: Log warning, skip message, keep connection alive (existing)
+- **Malformed RLP/structure**: Log error, close connection (existing)
+
+### Files Modified
+- `src/main/scala/com/chipprbots/ethereum/network/rlpx/RLPxConnectionHandler.scala` - Enhanced `processMessage()` error handling
+
+### Testing
+After deployment, monitor logs for:
+```bash
+# Should see warnings instead of connection closures
+grep "unknown message type" /var/log/fukuii/fukuii.log
+
+# Verify peer count remains stable
+grep "PEER_HANDSHAKE_SUCCESS" /var/log/fukuii/fukuii.log | wc -l
+```
+
+### Related Issues
+- Fixes nightly build "snap/1 message type 29" errors
+- Aligns with Herald agent philosophy: robust protocol deviation handling
+- Complements existing decompression failure tolerance
+
+---

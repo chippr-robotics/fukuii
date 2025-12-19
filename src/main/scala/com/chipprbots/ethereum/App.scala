@@ -16,14 +16,12 @@ object App extends Logger {
     "etc",
     "eth",
     "mordor",
-    "pottery",
-    "sagano",
     "bootnode",
-    "testnet-internal-nomad",
     "gorgoroth"
   )
 
   // Known modifiers that affect launcher behavior
+  // public is for nodes with discovery on and connecting to any peer
   private val knownModifiers = Set("public", "enterprise")
 
   // Launcher commands
@@ -158,10 +156,8 @@ object App extends Logger {
         |  etc                    Ethereum Classic mainnet (default)
         |  eth                    Ethereum mainnet
         |  mordor                 Mordor testnet
-        |  pottery                Pottery testnet
-        |  sagano                 Sagano testnet
+        |  gorgoroth              Fukuii battlenet
         |  bootnode               Bootnode configuration (advanced)
-        |  testnet-internal-nomad Internal Nomad testnet (advanced)
         |
         |Commands:
         |  cli [subcommand]       Command-line utilities
@@ -205,7 +201,7 @@ object App extends Logger {
         |  fukuii public mordor                  # Start Mordor with public discovery enabled
         |  fukuii public --tui                   # Start ETC with public discovery and TUI
         |  fukuii enterprise                     # Start in enterprise mode (private network)
-        |  fukuii enterprise pottery             # Start private pottery network
+        |  fukuii enterprise gorgoroth           # Start private gorgoroth network
         |  fukuii cli --help                     # Show CLI utilities help
         |  fukuii cli generate-private-key       # Generate a new private key
         |  fukuii cli generate-key-pairs         # Generate node key pair (for node.key)

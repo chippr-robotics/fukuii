@@ -332,14 +332,24 @@ class RLPxConnectionHandlerSpec
       override def handleInitialMessage(data: ByteString): (ByteString, AuthHandshakeResult) =
         handleInitialMessageHandler.map(_(data)).getOrElse(super.handleInitialMessage(data))
 
-      override def handleInitialMessageV4(data: ByteString): (ByteString, AuthHandshakeResult) =
-        handleInitialMessageV4Handler.map(_(data)).getOrElse(super.handleInitialMessageV4(data))
+      override def handleInitialMessageV4(
+          data: ByteString,
+          peerLabel: => String = "unknown"
+      ): (ByteString, AuthHandshakeResult) =
+        handleInitialMessageV4Handler
+          .map(_(data))
+          .getOrElse(super.handleInitialMessageV4(data, peerLabel))
 
       override def handleResponseMessage(data: ByteString): AuthHandshakeResult =
         handleResponseMessageHandler.map(_(data)).getOrElse(super.handleResponseMessage(data))
 
-      override def handleResponseMessageV4(data: ByteString): AuthHandshakeResult =
-        handleResponseMessageV4Handler.map(_(data)).getOrElse(super.handleResponseMessageV4(data))
+      override def handleResponseMessageV4(
+          data: ByteString,
+          peerLabel: => String = "unknown"
+      ): AuthHandshakeResult =
+        handleResponseMessageV4Handler
+          .map(_(data))
+          .getOrElse(super.handleResponseMessageV4(data, peerLabel))
     }
 
     object ConfigurableAuthHandshaker {

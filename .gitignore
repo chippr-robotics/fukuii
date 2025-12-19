@@ -7,6 +7,7 @@ project/plugins/project/
 .bloop
 out/
 .bsp/
+static-nodes.json
 
 # IDE folders
 .idea/
