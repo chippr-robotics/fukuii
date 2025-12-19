@@ -25,6 +25,31 @@ CONFIGS=(
     "cirith-ungol:docker-compose.yml:cirith-ungol:Fukuii + Core-Geth on ETC mainnet"
 )
 
+# ============================================================================
+# Utility helpers
+# ============================================================================
+
+sanitize_enode_url() {
+    local raw="$1"
+
+    if [[ -z "$raw" ]]; then
+        return 1
+    fi
+
+    raw=${raw//[$'\r\n']/}
+    raw=${raw#"${raw%%[![:space:]]*}"}
+    raw=${raw%"${raw##*[![:space:]]}"}
+    raw=${raw%%\?*}
+
+    local pattern="^enode://[0-9a-fA-F]{${ENODE_ID_LENGTH}}@.+:[0-9]+$"
+    if [[ "$raw" =~ $pattern ]]; then
+        echo "$raw"
+        return 0
+    fi
+
+    return 1
+}
+
 print_usage() {
     cat << EOF
 Fukuii CLI - Unified command-line tool for Fukuii node management
@@ -534,23 +559,23 @@ format_enode_hostname() {
         return 0
     fi
 
-    # Handle IPv6 format: enode://...@[0:0:0:0:0:0:0:0]:port
-    if [[ "$enode" == *"@[0:0:0:0:0:0:0:0]:"* ]]; then
-        local escaped_hostname
-        escaped_hostname=$(printf '%s\n' "$hostname" | sed 's/[\/&]/\\&/g')
-        echo "$enode" | sed "s/@\[0:0:0:0:0:0:0:0\]:/@${escaped_hostname}:/"
-        return 0
+    local pattern="^enode://([0-9a-fA-F]{${ENODE_ID_LENGTH}})@(.+):([0-9]+)$"
+    if [[ "$enode" =~ $pattern ]]; then
+        local node_id="${BASH_REMATCH[1]}"
+        local host_part="${BASH_REMATCH[2]}"
+        local port="${BASH_REMATCH[3]}"
+
+        local normalized_host="$host_part"
+        normalized_host="${normalized_host#[}"
+        normalized_host="${normalized_host%]}"
+
+        if [[ "$normalized_host" =~ ^(0\.0\.0\.0|127\.0\.0\.1|localhost|::|0:0:0:0:0:0:0:0)$ ]] ||
+           [[ "$normalized_host" =~ ^0(:0)*$ ]]; then
+            echo "enode://$node_id@$hostname:$port"
+            return 0
+        fi
     fi
-    
-    # Handle IPv4 format: enode://...@0.0.0.0:port or enode://...@127.0.0.1:port
-    if [[ "$enode" =~ @(0\.0\.0\.0|127\.0\.0\.1): ]]; then
-        local escaped_hostname
-        escaped_hostname=$(printf '%s\n' "$hostname" | sed 's/[\/&]/\\&/g')
-        echo "$enode" | sed "s/@\(0\.0\.0\.0\|127\.0\.0\.1\):/@${escaped_hostname}:/"
-        return 0
-    fi
-    
-    # If hostname already present or unknown format, return as-is
+
     echo "$enode"
     return 0
 }
@@ -572,68 +597,68 @@ get_container_type() {
 get_enode_from_logs() {
     local container_name=$1
     local container_type=$(get_container_type "$container_name")
-    local log_tail="${FUKUII_LOG_TAIL:-500}"
-    local enode=""
+    local log_tail="${FUKUII_LOG_TAIL:-1000}"
+    local enode_raw=""
 
     case "$container_type" in
         fukuii)
-            # Fukuii log format: "Node address: enode://<64-hex-chars>@[0:0:0:0:0:0:0:0]:<port>"
-            enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-                grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
-                tail -1 | \
-                sed 's/Node address: //' || true)
+            enode_raw=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                sed -n "s/.*Node address: \(enode:\/\/[^[:space:]]*\).*/\1/p" | \
+                tail -1 || true)
 
-            if [ -z "$enode" ]; then
-                enode=$(docker logs "$container_name" 2>&1 | \
-                    grep -o "Node address: enode://[^@]*@\[0:0:0:0:0:0:0:0\]:[0-9]*" | \
-                    tail -1 | \
-                    sed 's/Node address: //' || true)
+            if [ -z "$enode_raw" ]; then
+                enode_raw=$(docker logs "$container_name" 2>&1 | \
+                    sed -n "s/.*Node address: \(enode:\/\/[^[:space:]]*\).*/\1/p" | \
+                    tail -1 || true)
             fi
             ;;
         geth)
-            # Geth log format: "self=enode://<node-id>@<ip>:<port>"
-            # Also try: "enode://<node-id>@<ip>:<port>"
-            enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-                grep -o "self=enode://[^[:space:]]*" | \
-                tail -1 | \
-                sed 's/self=//' || true)
-            
-            if [ -z "$enode" ]; then
-                # Try alternative format
-                enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-                    grep -o "enode://[0-9a-f]\{$ENODE_ID_LENGTH\}@[0-9.:[:alnum:]]*" | \
+            enode_raw=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                sed -n "s/.*self=\(enode:\/\/[^[:space:]]*\).*/\1/p" | \
+                tail -1 || true)
+
+            if [ -z "$enode_raw" ]; then
+                enode_raw=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                    sed -n "s/.*\(enode:\/\/[0-9a-fA-F]\{$ENODE_ID_LENGTH\}[^[:space:]]*\).*/\1/p" | \
                     tail -1 || true)
             fi
             ;;
         besu)
-            # Besu log format: "Node address enode://<node-id>@<ip>:<port>"
-            # Also try: "Enode URL enode://<node-id>@<ip>:<port>"
-            enode=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
-                grep -o "enode://[0-9a-f]\{$ENODE_ID_LENGTH\}@[0-9.:[:alnum:]]*" | \
+            enode_raw=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                sed -n "s/.*Node address[[:space:]]*\(enode:\/\/[^[:space:]]*\).*/\1/p" | \
                 tail -1 || true)
+
+            if [ -z "$enode_raw" ]; then
+                enode_raw=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                    sed -n "s/.*Enode URL[[:space:]]*\(enode:\/\/[^[:space:]]*\).*/\1/p" | \
+                    tail -1 || true)
+            fi
+
+            if [ -z "$enode_raw" ]; then
+                enode_raw=$(docker logs --tail "$log_tail" "$container_name" 2>&1 | \
+                    sed -n "s/.*\(enode:\/\/[0-9a-fA-F]\{$ENODE_ID_LENGTH\}[^[:space:]]*\).*/\1/p" | \
+                    tail -1 || true)
+            fi
             ;;
         *)
             return 1
             ;;
     esac
 
-    if [ -n "$enode" ]; then
-        # Validate basic enode format (should start with "enode://" and contain @ with proper structure)
-        # Hostname/IP can be IPv4, IPv6 (with brackets), or hostname
-        if [[ ! "$enode" =~ ^enode://[0-9a-f]+@[0-9a-zA-Z.:[\]-]+:[0-9]+$ ]]; then
-            echo "" >&2
-            echo -e "${YELLOW}Warning: Extracted enode has unexpected format: $enode${NC}" >&2
-            return 1
-        fi
-        
-        local hostname
-        hostname=$(get_container_service_hostname "$container_name")
-        enode=$(format_enode_hostname "$enode" "$hostname")
-        echo "$enode"
-        return 0
+    if [ -z "$enode_raw" ]; then
+        return 1
     fi
-    
-    return 1
+
+    local sanitized
+    if ! sanitized=$(sanitize_enode_url "$enode_raw"); then
+        echo -e "${YELLOW}Warning: Unable to parse enode from logs for $container_name${NC}" >&2
+        return 1
+    fi
+    local hostname
+    hostname=$(get_container_service_hostname "$container_name")
+    sanitized=$(format_enode_hostname "$sanitized" "$hostname")
+    echo "$sanitized"
+    return 0
 }
 
 get_enode_from_container() {
@@ -659,10 +684,19 @@ get_enode_from_container() {
             rpc_port="8546"
         fi
         
+        local rpc_method="admin_nodeInfo"
+        if [[ "$container_type" == "fukuii" ]]; then
+            rpc_method="net_nodeInfo"
+        fi
+
         enode=$(docker exec "$container_name" sh -c \
-            "curl -s -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"admin_nodeInfo\",\"params\":[],\"id\":1}' http://localhost:${rpc_port} | grep -o '\"enode\":\"[^\"]*\"' | cut -d'\"' -f4" \
+            "curl -s -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"${rpc_method}\",\"params\":[],\"id\":1}' http://localhost:${rpc_port} | grep -o '\"enode\":\"[^\"]*\"' | cut -d'\"' -f4" \
             2>/dev/null || echo "")
-        
+
+        if [ -n "$enode" ]; then
+            enode=$(sanitize_enode_url "$enode") || enode=""
+        fi
+
         if [ -n "$enode" ]; then
             local hostname
             hostname=$(get_container_service_hostname "$container_name")

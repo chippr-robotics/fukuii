@@ -100,6 +100,8 @@ case class JsonRpcController(
       handle[ListeningRequest, ListeningResponse](netService.listening, req)
     case req @ JsonRpcRequest(_, "net_peerCount", _, _) =>
       handle[PeerCountRequest, PeerCountResponse](netService.peerCount, req)
+    case req @ JsonRpcRequest(_, "net_nodeInfo", _, _) =>
+      handle[NodeInfoRequest, NodeInfoResponse](netService.nodeInfo, req)
     // Enhanced peer management endpoints
     case req @ JsonRpcRequest(_, "net_listPeers", _, _) =>
       handle[ListPeersRequest, ListPeersResponse](netService.listPeers, req)
