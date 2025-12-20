@@ -133,7 +133,9 @@ case class AuthHandshaker(
       try AuthInitiateMessage.decode(plaintext)
       catch {
         case ex: Throwable =>
-          AuthHandshaker.log.warn(
+          // Log at ERROR to ensure the diagnostic is visible even in environments where WARNs
+          // from this logger are not reliably surfaced in docker compose output.
+          AuthHandshaker.log.error(
             "[RLPx] AUTH_INIT_PRE_EIP8_DECODE_FAILED peer={} cipherLen={} plaintextLen={} plaintextHex={}",
             "unknown",
             data.length,
@@ -178,7 +180,8 @@ case class AuthHandshaker(
       try plaintext.toAuthInitiateMessageV4
       catch {
         case ex: Throwable =>
-          AuthHandshaker.log.warn(
+          // Log at ERROR to ensure the plaintextHex diagnostic is visible in docker compose logs.
+          AuthHandshaker.log.error(
             "[RLPx] AUTH_INIT_DECODE_FAILED peer={} sizePrefix={} cipherLen={} plaintextLen={} plaintextHex={}",
             peerLabel,
             Hex.toHexString(sizeBytes.toArray[Byte]),

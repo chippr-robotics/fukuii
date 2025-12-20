@@ -27,6 +27,14 @@ services:
       - "--networkid=61"
       - "--classic"
       - "--datadir=/root/.ethereum"
+      # Increase logging to capture detailed RLPx/devp2p handshake behavior.
+      # verbosity: 0=silent, 1=error, 2=warn, 3=info, 4=debug, 5=detail
+      - "--verbosity=5"
+      # Per-module verbosity overrides; patterns are path-like (see geth --help).
+      # Focus on p2p (rlpx/handshake) and discovery logging.
+      - "--log.vmodule=p2p=5,discover=5,net=5"
+      # Include debug-level details from the logger.
+      - "--log.debug"
       - "--http"
       - "--http.addr=0.0.0.0"
       - "--http.port=8545"
