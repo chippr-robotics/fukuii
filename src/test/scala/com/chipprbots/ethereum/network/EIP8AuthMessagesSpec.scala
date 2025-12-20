@@ -96,6 +96,32 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
     decoded.version shouldBe version
   }
 
+  it should "decode message with trailing padding bytes after the RLP payload (EIP-8)" taggedAs (UnitTest, NetworkTest) in {
+    // EIP-8 allows random padding after the RLP list inside the ECIES envelope.
+    // Our decoder should parse only the first RLP item and ignore any trailing bytes.
+    val signature = ECDSASignature(BigInt(42), BigInt(43), BigInt(0))
+    val publicKey = testKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ
+    val nonce = testNonce
+    val version = 4
+
+    val rlpList = RLPList(
+      RLPValue(encodeECDSA(signature).toArray),
+      RLPValue(publicKey.getEncoded(false).drop(1)),
+      RLPValue(nonce.toArray),
+      RLPValue(Array(version.toByte))
+    )
+    val encoded = encode(rlpList)
+
+    // Append random-looking padding bytes that are not valid RLP continuation.
+    val padded = encoded ++ Array[Byte](0x00, 0x01, 0x02, 0x03, 0x7F.toByte, 0x55)
+
+    val decoded = padded.toAuthInitiateMessageV4
+    decoded.signature shouldBe signature
+    decoded.publicKey shouldBe publicKey
+    decoded.nonce shouldBe nonce
+    decoded.version shouldBe version
+  }
+
   "AuthResponseMessageV4" should "decode message with extra fields (EIP-8)" taggedAs (UnitTest, NetworkTest) in {
     val ephemeralPublicKey = testKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ
     val nonce = testNonce

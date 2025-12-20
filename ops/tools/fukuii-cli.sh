@@ -247,6 +247,71 @@ generate_static_nodes_json() {
     echo "$json_content"
 }
 
+ensure_python3() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo -e "${RED}Error: python3 is required for this operation${NC}" >&2
+        return 1
+    fi
+}
+
+update_toml_array() {
+    local file_path="$1"
+    local key="$2"
+    shift 2
+    local values=("$@")
+
+    ensure_python3 || return 1
+
+    python3 - "$file_path" "$key" "${values[@]}" <<'PY'
+import sys
+from pathlib import Path
+import re
+
+file_path = Path(sys.argv[1])
+key = sys.argv[2]
+values = sys.argv[3:]
+
+content = file_path.read_text()
+
+def build_array(vals):
+    if not vals:
+        return f"{key} = []"
+    body = ",\n".join(f'  "{v}"' for v in vals)
+    return f"{key} = [\n{body}\n]"
+
+pattern = re.compile(rf'({re.escape(key)}\s*=\s*\[)(.*?)(\])', re.DOTALL)
+replacement = build_array(values)
+
+if pattern.search(content):
+    content = pattern.sub(replacement, content, count=1)
+else:
+    section_pattern = re.compile(r'(\[Node\.P2P\][^\[]*)', re.DOTALL)
+    match = section_pattern.search(content)
+    if not match:
+        sys.stderr.write(f"Could not locate [Node.P2P] section to insert {key} in {file_path}\n")
+        sys.exit(1)
+    start, end = match.span()
+    updated = match.group(1).rstrip() + "\n" + replacement + "\n"
+    content = content[:start] + updated + content[end:]
+
+file_path.write_text(content)
+PY
+}
+
+update_geth_config_peers() {
+    local config_file="$1"
+    local -n peers_ref=$2
+
+    if [ ! -f "$config_file" ]; then
+        echo -e "${YELLOW}⚠ geth config not found: $config_file${NC}" >&2
+        return 1
+    fi
+
+    update_toml_array "$config_file" "StaticNodes" "${peers_ref[@]}" || return 1
+    update_toml_array "$config_file" "TrustedNodes" "${peers_ref[@]}" || return 1
+    return 0
+}
+
 sync_static_nodes() {
     local config="${1:-3nodes}"
     
@@ -484,13 +549,25 @@ sync_gorgoroth_nodes() {
             geth)
                 # Update Geth node's static-nodes.json in container volume
                 local static_nodes_content=$(generate_static_nodes_json peer_enodes)
-                
-                # Write to /root/.ethereum/static-nodes.json inside the container
-                if docker exec "$container" sh -c "echo '$static_nodes_content' > /root/.ethereum/static-nodes.json" 2>/dev/null; then
-                    echo -e "${GREEN}✓ updated container volume${NC}"
+                local node_num=$(echo "$container" | grep -o "node[0-9]*" | grep -o "[0-9]*")
+                local toml_file="$network_dir/conf/geth/node${node_num}.toml"
+                local msg_parts=()
+
+                if update_geth_config_peers "$toml_file" peer_enodes; then
+                    msg_parts+=("${GREEN}host-config${NC}")
                 else
-                    echo -e "${RED}✗ failed to update${NC}"
+                    msg_parts+=("${YELLOW}host-config⚠${NC}")
                 fi
+
+                if docker exec "$container" sh -c "echo '$static_nodes_content' > /root/.ethereum/static-nodes.json" 2>/dev/null; then
+                    msg_parts+=("${GREEN}container-volume${NC}")
+                else
+                    msg_parts+=("${RED}container-volume✗${NC}")
+                fi
+
+                local msg
+                msg=$(IFS=$', '; echo "${msg_parts[*]}")
+                echo -e "$msg"
                 ;;
             besu)
                 # Update Besu node's static-nodes.json in container volume

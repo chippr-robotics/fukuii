@@ -110,28 +110,34 @@ services:
       - "30306:30303/udp"
     volumes:
       - ./conf/geth/genesis.json:/genesis.json:ro
-      - ./conf/geth/static-nodes.json:/static-nodes.json:ro
+      - ./conf/geth:/config/geth:ro
       - geth-node1-data:/root/.ethereum
+    environment:
+      NODE_CONFIG_FILE: /config/geth/node1.toml
     command:
-      - "--networkid=1337"
-      - "--datadir=/root/.ethereum"
-      - "--http"
-      - "--http.addr=0.0.0.0"
-      - "--http.port=8545"
-      - "--http.api=eth,net,web3,personal,admin,debug"
-      - "--http.corsdomain=*"
-      - "--ws"
-      - "--ws.addr=0.0.0.0"
-      - "--ws.port=8546"
-      - "--ws.api=eth,net,web3"
-      - "--ws.origins=*"
-      - "--port=30303"
-      - "--nodiscover"
-      - "--bootnodes=enode://97a3ef0dd89d2e94c2e45beb861fc0941aafe7aee309641b169db0327809f0be69cfa537e4d0a5cb1299b01e61bef83f042e082429df30e421cf205d9e598887@fukuii-node1:30303,enode://ad8d5051ffcb5aece9aedfd894c9b9bebb3ff9fab14363dc8ffca9f534c5349b72cc4685aa17abff61863b66477478757e3f7b76da9b40b2e86ca37f0b128b84@fukuii-node2:30303,enode://16e5a55055f90687d80ac650addb58f6e1ad27a6bed6d44e9fa18b2b99ea600128e56da0dc593dcde7eb05bbf70556faa84811b8a43da19776de485700624fb8@fukuii-node3:30303,enode://da506e68ba4c2d81b9f335b7b3f8973975cc929f2c7c21a137038f959c02f4b92115ce2fc14d4cc39d323738006d62cfc4c593ef66d0980c44b03a431c13346a@geth-node1:30303,enode://9eeb057afd3d002943c84d06fcb5f5d12dd5f6fc39c6a2e4a7714d921345b9b29c5de89187841e6fc2f67efe56a56dd20d2a95ef1a6ba47354cd860954620802@geth-node2:30303,enode://441c6b9b876826e599de6227cc5c9f22dff9fcc83d342b1c827b4bfa15c5808d5a5fa8975923724b3d4056b3970118926ef5779248e7d18d7a45be3ca3cd02ac@geth-node3:30303"
-      - "--maxpeers=25"
       - "--mine"
-      - "--miner.etherbase=0x4000000000000000000000000000000000000004"
-    entrypoint: ["/bin/sh", "-c", "if [ ! -d /root/.ethereum/geth ]; then geth init --datadir /root/.ethereum /genesis.json; fi && cp /static-nodes.json /root/.ethereum/static-nodes.json && exec geth $$@", "--"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |-
+          CONFIG_DIR="/config/geth"
+          BASE_CONFIG="$$CONFIG_DIR/base.toml"
+          NODE_CONFIG="$$NODE_CONFIG_FILE"
+          MERGED_CONFIG="/tmp/geth-config-$$HOSTNAME.toml"
+          if [ ! -f "$$BASE_CONFIG" ]; then
+            echo "Missing base config $$BASE_CONFIG" >&2
+            exit 1
+          fi
+          if [ -z "$$NODE_CONFIG" ] || [ ! -f "$$NODE_CONFIG" ]; then
+            echo "Missing node config $$NODE_CONFIG" >&2
+            exit 1
+          fi
+          cat "$$BASE_CONFIG" "$$NODE_CONFIG" > "$$MERGED_CONFIG"
+          echo "Merged config written to $$MERGED_CONFIG"
+          if [ ! -d /root/.ethereum/geth ]; then
+            geth init --datadir /root/.ethereum /genesis.json
+          fi
+          exec geth --config="$$MERGED_CONFIG" "$$@"
 
   geth-node2:
     image: etclabscore/core-geth:latest
@@ -148,28 +154,34 @@ services:
       - "30307:30303/udp"
     volumes:
       - ./conf/geth/genesis.json:/genesis.json:ro
-      - ./conf/geth/static-nodes.json:/static-nodes.json:ro
+      - ./conf/geth:/config/geth:ro
       - geth-node2-data:/root/.ethereum
+    environment:
+      NODE_CONFIG_FILE: /config/geth/node2.toml
     command:
-      - "--networkid=1337"
-      - "--datadir=/root/.ethereum"
-      - "--http"
-      - "--http.addr=0.0.0.0"
-      - "--http.port=8545"
-      - "--http.api=eth,net,web3,personal,admin,debug"
-      - "--http.corsdomain=*"
-      - "--ws"
-      - "--ws.addr=0.0.0.0"
-      - "--ws.port=8546"
-      - "--ws.api=eth,net,web3"
-      - "--ws.origins=*"
-      - "--port=30303"
-      - "--nodiscover"
-      - "--bootnodes=enode://97a3ef0dd89d2e94c2e45beb861fc0941aafe7aee309641b169db0327809f0be69cfa537e4d0a5cb1299b01e61bef83f042e082429df30e421cf205d9e598887@fukuii-node1:30303,enode://ad8d5051ffcb5aece9aedfd894c9b9bebb3ff9fab14363dc8ffca9f534c5349b72cc4685aa17abff61863b66477478757e3f7b76da9b40b2e86ca37f0b128b84@fukuii-node2:30303,enode://16e5a55055f90687d80ac650addb58f6e1ad27a6bed6d44e9fa18b2b99ea600128e56da0dc593dcde7eb05bbf70556faa84811b8a43da19776de485700624fb8@fukuii-node3:30303,enode://da506e68ba4c2d81b9f335b7b3f8973975cc929f2c7c21a137038f959c02f4b92115ce2fc14d4cc39d323738006d62cfc4c593ef66d0980c44b03a431c13346a@geth-node1:30303,enode://9eeb057afd3d002943c84d06fcb5f5d12dd5f6fc39c6a2e4a7714d921345b9b29c5de89187841e6fc2f67efe56a56dd20d2a95ef1a6ba47354cd860954620802@geth-node2:30303,enode://441c6b9b876826e599de6227cc5c9f22dff9fcc83d342b1c827b4bfa15c5808d5a5fa8975923724b3d4056b3970118926ef5779248e7d18d7a45be3ca3cd02ac@geth-node3:30303"
-      - "--maxpeers=25"
       - "--mine"
-      - "--miner.etherbase=0x5000000000000000000000000000000000000005"
-    entrypoint: ["/bin/sh", "-c", "if [ ! -d /root/.ethereum/geth ]; then geth init --datadir /root/.ethereum /genesis.json; fi && cp /static-nodes.json /root/.ethereum/static-nodes.json && exec geth $$@", "--"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |-
+          CONFIG_DIR="/config/geth"
+          BASE_CONFIG="$$CONFIG_DIR/base.toml"
+          NODE_CONFIG="$$NODE_CONFIG_FILE"
+          MERGED_CONFIG="/tmp/geth-config-$$HOSTNAME.toml"
+          if [ ! -f "$$BASE_CONFIG" ]; then
+            echo "Missing base config $$BASE_CONFIG" >&2
+            exit 1
+          fi
+          if [ -z "$$NODE_CONFIG" ] || [ ! -f "$$NODE_CONFIG" ]; then
+            echo "Missing node config $$NODE_CONFIG" >&2
+            exit 1
+          fi
+          cat "$$BASE_CONFIG" "$$NODE_CONFIG" > "$$MERGED_CONFIG"
+          echo "Merged config written to $$MERGED_CONFIG"
+          if [ ! -d /root/.ethereum/geth ]; then
+            geth init --datadir /root/.ethereum /genesis.json
+          fi
+          exec geth --config="$$MERGED_CONFIG" "$$@"
 
   geth-node3:
     image: etclabscore/core-geth:latest
@@ -186,28 +198,34 @@ services:
       - "30308:30303/udp"
     volumes:
       - ./conf/geth/genesis.json:/genesis.json:ro
-      - ./conf/geth/static-nodes.json:/static-nodes.json:ro
+      - ./conf/geth:/config/geth:ro
       - geth-node3-data:/root/.ethereum
+    environment:
+      NODE_CONFIG_FILE: /config/geth/node3.toml
     command:
-      - "--networkid=1337"
-      - "--datadir=/root/.ethereum"
-      - "--http"
-      - "--http.addr=0.0.0.0"
-      - "--http.port=8545"
-      - "--http.api=eth,net,web3,personal,admin,debug"
-      - "--http.corsdomain=*"
-      - "--ws"
-      - "--ws.addr=0.0.0.0"
-      - "--ws.port=8546"
-      - "--ws.api=eth,net,web3"
-      - "--ws.origins=*"
-      - "--port=30303"
-      - "--nodiscover"
-      - "--bootnodes=enode://97a3ef0dd89d2e94c2e45beb861fc0941aafe7aee309641b169db0327809f0be69cfa537e4d0a5cb1299b01e61bef83f042e082429df30e421cf205d9e598887@fukuii-node1:30303,enode://ad8d5051ffcb5aece9aedfd894c9b9bebb3ff9fab14363dc8ffca9f534c5349b72cc4685aa17abff61863b66477478757e3f7b76da9b40b2e86ca37f0b128b84@fukuii-node2:30303,enode://16e5a55055f90687d80ac650addb58f6e1ad27a6bed6d44e9fa18b2b99ea600128e56da0dc593dcde7eb05bbf70556faa84811b8a43da19776de485700624fb8@fukuii-node3:30303,enode://da506e68ba4c2d81b9f335b7b3f8973975cc929f2c7c21a137038f959c02f4b92115ce2fc14d4cc39d323738006d62cfc4c593ef66d0980c44b03a431c13346a@geth-node1:30303,enode://9eeb057afd3d002943c84d06fcb5f5d12dd5f6fc39c6a2e4a7714d921345b9b29c5de89187841e6fc2f67efe56a56dd20d2a95ef1a6ba47354cd860954620802@geth-node2:30303,enode://441c6b9b876826e599de6227cc5c9f22dff9fcc83d342b1c827b4bfa15c5808d5a5fa8975923724b3d4056b3970118926ef5779248e7d18d7a45be3ca3cd02ac@geth-node3:30303"
-      - "--maxpeers=25"
       - "--mine"
-      - "--miner.etherbase=0x6000000000000000000000000000000000000006"
-    entrypoint: ["/bin/sh", "-c", "if [ ! -d /root/.ethereum/geth ]; then geth init --datadir /root/.ethereum /genesis.json; fi && cp /static-nodes.json /root/.ethereum/static-nodes.json && exec geth $$@", "--"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |-
+          CONFIG_DIR="/config/geth"
+          BASE_CONFIG="$$CONFIG_DIR/base.toml"
+          NODE_CONFIG="$$NODE_CONFIG_FILE"
+          MERGED_CONFIG="/tmp/geth-config-$$HOSTNAME.toml"
+          if [ ! -f "$$BASE_CONFIG" ]; then
+            echo "Missing base config $$BASE_CONFIG" >&2
+            exit 1
+          fi
+          if [ -z "$$NODE_CONFIG" ] || [ ! -f "$$NODE_CONFIG" ]; then
+            echo "Missing node config $$NODE_CONFIG" >&2
+            exit 1
+          fi
+          cat "$$BASE_CONFIG" "$$NODE_CONFIG" > "$$MERGED_CONFIG"
+          echo "Merged config written to $$MERGED_CONFIG"
+          if [ ! -d /root/.ethereum/geth ]; then
+            geth init --datadir /root/.ethereum /genesis.json
+          fi
+          exec geth --config="$$MERGED_CONFIG" "$$@"
 
 volumes:
   fukuii-node1-data:
