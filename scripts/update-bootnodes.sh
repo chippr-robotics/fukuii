@@ -180,7 +180,7 @@ update_config_file() {
     # Create new bootnode section
     cat > "${TEMP_DIR}/new_bootnodes.conf" <<EOF
   # Set of initial nodes
-  # Updated automatically by scripts/update-bootnodes.sh on nightly schedule
+  # Updated automatically by scripts/update-bootnodes.sh on weekly schedule
   # Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
   # Combined from core-geth and other authoritative sources
   bootstrap-nodes = [
