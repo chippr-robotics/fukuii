@@ -206,6 +206,7 @@ class FastSyncSpec
 
         (for {
           _ <- saveGenesis
+          _ <- saveTestBlocksWithWeights
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
           _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
