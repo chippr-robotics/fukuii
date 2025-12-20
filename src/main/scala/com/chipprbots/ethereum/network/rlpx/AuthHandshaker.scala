@@ -108,8 +108,14 @@ case class AuthHandshaker(
     )
 
     val message =
-      try rlp.decode[AuthResponseMessageV4](plaintext)
-      catch {
+      try {
+        // EIP-8: Strip random padding bytes that may appear after the RLP structure.
+        // The EIP-8 spec allows for random padding after the auth response RLP list.
+        // We must slice the input to only include the RLP structure itself before decoding.
+        val rlpEnd = rlp.nextElementIndex(plaintext, 0)
+        val rlpBytes = plaintext.slice(0, rlpEnd)
+        rlp.decode[AuthResponseMessageV4](rlpBytes)
+      } catch {
         case ex: Throwable =>
           AuthHandshaker.log.warn(
             "[RLPx] AUTH_RESPONSE_DECODE_FAILED peer={} sizePrefix={} cipherLen={} plaintextLen={} plaintextHex={}",

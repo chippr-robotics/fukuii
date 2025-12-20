@@ -96,6 +96,30 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
     decoded.version shouldBe version
   }
 
+  it should "decode message with random padding bytes after RLP structure (EIP-8)" taggedAs (UnitTest, NetworkTest) in {
+    // This test validates the actual EIP-8 issue: padding bytes OUTSIDE the RLP list
+    // Core Geth and go-ethereum add random padding after the RLP structure for security
+    val signature = ECDSASignature(BigInt(123), BigInt(456), BigInt(0))
+    val publicKey = testKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ
+    val nonce = testNonce
+    val version = 4
+
+    val standardMsg = AuthInitiateMessageV4(signature, publicKey, nonce, version)
+    val standardEncoded = encode(standardMsg.toRLPEncodable)
+
+    // Add random padding bytes AFTER the complete RLP structure
+    // This is what EIP-8 allows and what was causing "arguments left" errors
+    val paddingBytes = Array[Byte](0x99.toByte, 0xAA.toByte, 0xBB.toByte, 0xCC.toByte)
+    val encodedWithPadding = standardEncoded ++ paddingBytes
+
+    // Should decode successfully and ignore the padding bytes
+    val decoded = encodedWithPadding.toAuthInitiateMessageV4
+    decoded.signature shouldBe signature
+    decoded.publicKey shouldBe publicKey
+    decoded.nonce shouldBe nonce
+    decoded.version shouldBe version
+  }
+
   "AuthResponseMessageV4" should "decode message with extra fields (EIP-8)" taggedAs (UnitTest, NetworkTest) in {
     val ephemeralPublicKey = testKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ
     val nonce = testNonce
@@ -126,6 +150,28 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
     decodedWithExtra.ephemeralPublicKey shouldBe ephemeralPublicKey
     decodedWithExtra.nonce shouldBe nonce
     decodedWithExtra.version shouldBe version
+  }
+
+  it should "decode message with random padding bytes after RLP structure (EIP-8)" taggedAs (UnitTest, NetworkTest) in {
+    // This test validates the actual EIP-8 issue: padding bytes OUTSIDE the RLP list
+    // Core Geth and go-ethereum add random padding after the RLP structure for security
+    val ephemeralPublicKey = testKeyPair.getPublic.asInstanceOf[ECPublicKeyParameters].getQ
+    val nonce = testNonce
+    val version = 4
+
+    val standardMsg = AuthResponseMessageV4(ephemeralPublicKey, nonce, version)
+    val standardEncoded = encode(standardMsg)
+
+    // Add random padding bytes AFTER the complete RLP structure
+    // This is what EIP-8 allows and what was causing decode errors
+    val paddingBytes = Array[Byte](0xDE.toByte, 0xAD.toByte, 0xBE.toByte, 0xEF.toByte)
+    val encodedWithPadding = standardEncoded ++ paddingBytes
+
+    // Should decode successfully and ignore the padding bytes
+    val decoded = decode[AuthResponseMessageV4](encodedWithPadding)
+    decoded.ephemeralPublicKey shouldBe ephemeralPublicKey
+    decoded.nonce shouldBe nonce
+    decoded.version shouldBe version
   }
 
   it should "fail to decode message with too few fields" taggedAs (UnitTest, NetworkTest) in {
