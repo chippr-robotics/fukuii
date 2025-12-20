@@ -261,8 +261,24 @@ class RLPxConnectionHandler(
       *   data of the packet and the remaining data
       */
     private def decodeV4Packet(data: ByteString): (ByteString, ByteString) = {
+      // EIP-8 auth messages are framed as: uint16be sizePrefix || encryptedPayload
+      // NOTE: TCP can split packets; 'Received(data)' is not guaranteed to contain the full frame.
+      // These logs are intentionally lightweight but should be enough to diagnose size-prefix issues.
+      if (data.length < 2) {
+        val headHex = Hex.toHexString(data.toArray)
+        throw new RuntimeException(s"EIP-8 packet too short for size prefix: len=${data.length} headHex=${headHex}")
+      }
+
       val encryptedPayloadSize = ByteUtils.bigEndianToShort(data.take(2).toArray)
-      val (packetData, remainingData) = data.splitAt(encryptedPayloadSize + 2)
+      val totalFrameSize = encryptedPayloadSize + 2
+      if (encryptedPayloadSize <= 0 || totalFrameSize > data.length) {
+        val headHex = Hex.toHexString(data.take(Math.min(32, data.length)).toArray)
+        throw new RuntimeException(
+          s"EIP-8 frame size mismatch: sizePrefix=${encryptedPayloadSize} totalFrameSize=${totalFrameSize} bufferLen=${data.length} headHex=${headHex}"
+        )
+      }
+
+      val (packetData, remainingData) = data.splitAt(totalFrameSize)
       packetData -> remainingData
     }
 
