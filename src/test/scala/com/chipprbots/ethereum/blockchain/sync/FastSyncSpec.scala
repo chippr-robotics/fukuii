@@ -230,14 +230,12 @@ class FastSyncSpec
             .compile
             .lastOrError
         } yield {
-          // Assert that we got state nodes progress
-          status match {
-            case Status.Syncing(_, _, Some(progress)) =>
-              assert(progress.target >= 1, "State nodes target should be at least 1")
-              assert(progress.current >= 0, "State nodes current should be non-negative")
-              succeed
-            case _ => fail("Expected Syncing status with state nodes progress")
-          }
+          // Validate state nodes progress is reported correctly
+          val Status.Syncing(_, _, maybeStateProgress) = status
+          val stateProgress = maybeStateProgress.getOrElse(fail("State nodes progress should be defined"))
+          assert(stateProgress.target >= 1, "State nodes target should be at least 1")
+          assert(stateProgress.current >= 0, "State nodes current should be non-negative")
+          succeed
         }).timeout(timeout.duration)
       }
     }
