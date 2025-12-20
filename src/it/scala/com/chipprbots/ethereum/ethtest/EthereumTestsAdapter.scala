@@ -85,7 +85,8 @@ object BlockchainTest {
   implicit val decoder: Decoder[BlockchainTest] = Decoder.instance { cursor =>
     for {
       pre <- cursor.downField("pre").as[Map[String, AccountState]]
-      blocks <- cursor.downField("blocks").as[Seq[TestBlock]]
+      // Make blocks optional - some VM tests may not have blocks field
+      blocks <- cursor.downField("blocks").as[Option[Seq[TestBlock]]].map(_.getOrElse(Seq.empty))
       postState <- cursor.downField("postState").as[Map[String, AccountState]]
       network <- cursor.downField("network").as[String]
       genesisBlockHeader <- cursor.downField("genesisBlockHeader").as[Option[TestBlockHeader]]
