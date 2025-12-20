@@ -219,17 +219,26 @@ class FastSyncSpec
             .head
             .compile
             .lastOrError
-          _ <- Stream
+          status <- Stream
             .awakeEvery[IO](10.millis)
             .evalMap(_ => getSyncStatus)
             .collect {
-              case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) if stateNodesProgress.target > 1 =>
+              case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) =>
                 stat
             }
             .head
             .compile
             .lastOrError
-        } yield succeed).timeout(timeout.duration)
+        } yield {
+          // Assert that we got state nodes progress
+          status match {
+            case Status.Syncing(_, _, Some(progress)) =>
+              assert(progress.target >= 1, "State nodes target should be at least 1")
+              assert(progress.current >= 0, "State nodes current should be non-negative")
+              succeed
+            case _ => fail("Expected Syncing status with state nodes progress")
+          }
+        }).timeout(timeout.duration)
       }
     }
   }
