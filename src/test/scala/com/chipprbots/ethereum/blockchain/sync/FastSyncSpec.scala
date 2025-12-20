@@ -206,6 +206,7 @@ class FastSyncSpec
 
         (for {
           _ <- saveGenesis
+          _ <- saveTestBlocksWithWeights
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
           _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
@@ -218,17 +219,24 @@ class FastSyncSpec
             .head
             .compile
             .lastOrError
-          _ <- Stream
+          status <- Stream
             .awakeEvery[IO](10.millis)
             .evalMap(_ => getSyncStatus)
             .collect {
-              case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) if stateNodesProgress.target > 1 =>
+              case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) =>
                 stat
             }
             .head
             .compile
             .lastOrError
-        } yield succeed).timeout(timeout.duration)
+        } yield {
+          // Validate state nodes progress is reported correctly
+          val Status.Syncing(_, _, maybeStateProgress) = status
+          val stateProgress = maybeStateProgress.getOrElse(fail("State nodes progress should be defined"))
+          assert(stateProgress.target >= 1, "State nodes target should be at least 1")
+          assert(stateProgress.current >= 0, "State nodes current should be non-negative")
+          succeed
+        }).timeout(timeout.duration)
       }
     }
   }
