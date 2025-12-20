@@ -128,7 +128,21 @@ case class AuthHandshaker(
 
   def handleInitialMessage(data: ByteString): (ByteString, AuthHandshakeResult) = {
     val plaintext = ECIESCoder.decrypt(nodeKey.getPrivate.asInstanceOf[ECPrivateKeyParameters].getD, data.toArray)
-    val message = AuthInitiateMessage.decode(plaintext)
+
+    val message =
+      try AuthInitiateMessage.decode(plaintext)
+      catch {
+        case ex: Throwable =>
+          AuthHandshaker.log.warn(
+            "[RLPx] AUTH_INIT_PRE_EIP8_DECODE_FAILED peer={} cipherLen={} plaintextLen={} plaintextHex={}",
+            "unknown",
+            data.length,
+            plaintext.length,
+            AuthHandshaker.toLoggableHex(ByteString(plaintext)),
+            ex
+          )
+          throw ex
+      }
 
     val response = AuthResponseMessage(
       ephemeralPublicKey = ephemeralKey.getPublic.asInstanceOf[ECPublicKeyParameters].getQ,

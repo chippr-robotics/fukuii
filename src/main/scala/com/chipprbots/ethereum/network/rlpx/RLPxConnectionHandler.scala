@@ -176,15 +176,28 @@ class RLPxConnectionHandler(
           log.debug("[RLPx] Received auth handshake init message for peer {} ({} bytes)", peerId, data.length)
           timeout.cancel()
           // FIXME EIP8 is 6 years old, time to drop it
+          log.debug(
+            "[RLPx] Attempting pre-EIP8 auth-init decode for peer {} (taking {} bytes from {} total)",
+            peerId,
+            InitiatePacketLength,
+            data.length
+          )
           val maybePreEIP8Result = Try {
             val (responsePacket, result) = handshaker.handleInitialMessage(data.take(InitiatePacketLength))
             val remainingData = data.drop(InitiatePacketLength)
             (responsePacket, result, remainingData)
           }
+          maybePreEIP8Result.failed.foreach { ex =>
+            log.debug("[RLPx] pre-EIP8 auth-init decode failed for peer {}", peerId, ex)
+          }
           lazy val maybePostEIP8Result = Try {
+            log.debug("[RLPx] Attempting EIP-8 (v4) auth-init decode for peer {}", peerId)
             val (packetData, remainingData) = decodeV4Packet(data)
             val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData, peerId.toString)
             (responsePacket, result, remainingData)
+          }
+          maybePostEIP8Result.failed.foreach { ex =>
+            log.debug("[RLPx] EIP-8 (v4) auth-init decode failed for peer {}", peerId, ex)
           }
 
           maybePreEIP8Result.orElse(maybePostEIP8Result) match {
