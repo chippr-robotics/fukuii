@@ -958,17 +958,13 @@ resolve_container_rpc_port() {
 }
 
 json_result_value() {
-    python3 - <<'PY'
-import json
-import sys
-
+    python3 -c 'import json,sys
 data = sys.stdin.read()
 try:
     obj = json.loads(data)
 except Exception:
     print("")
     sys.exit(0)
-
 res = obj.get("result")
 if isinstance(res, (dict, list)):
     print(json.dumps(res))
@@ -979,22 +975,17 @@ elif res is False:
 elif res is None:
     print("")
 else:
-    print(res)
-PY
+    print(res)'
 }
 
 json_error_message() {
-    python3 - <<'PY'
-import json
-import sys
-
+    python3 -c 'import json,sys
 data = sys.stdin.read()
 try:
     obj = json.loads(data)
 except Exception:
     print("")
     sys.exit(0)
-
 err = obj.get("error")
 if isinstance(err, dict):
     msg = err.get("message")
@@ -1005,8 +996,7 @@ if isinstance(err, dict):
 elif err:
     print(str(err))
 else:
-    print("")
-PY
+    print("")'
 }
 
 rpc_response_ok() {
@@ -1029,17 +1019,13 @@ rpc_response_ok() {
 }
 
 parse_sync_status() {
-    python3 - <<'PY'
-import json
-import sys
-
+    python3 -c 'import json,sys
 data = sys.stdin.read()
 try:
     obj = json.loads(data)
 except Exception:
     print("")
     sys.exit(0)
-
 res = obj.get("result")
 if res is False:
     print("false")
@@ -1047,27 +1033,26 @@ if res is False:
 if res is True:
     print("true")
     sys.exit(0)
-    if isinstance(res, dict):
-        def to_int(value):
-            if isinstance(value, bool) or value is None:
-                return ""
-            if isinstance(value, int):
-                return str(value)
-            if isinstance(value, str):
-                if value.startswith("0x"):
-                    try:
-                        return str(int(value, 16))
-                    except Exception:
-                        return value
-                if value.isdigit():
-                    return value
-                if any(c in "abcdefABCDEF" for c in value):
-                    try:
-                        return str(int(value, 16))
-                    except Exception:
-                        return value
+if isinstance(res, dict):
+    def to_int(value):
+        if isinstance(value, bool) or value is None:
             return ""
-
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            if value.startswith("0x"):
+                try:
+                    return str(int(value, 16))
+                except Exception:
+                    return value
+            if value.isdigit():
+                return value
+            if any(c in "abcdefABCDEF" for c in value):
+                try:
+                    return str(int(value, 16))
+                except Exception:
+                    return value
+        return ""
     parts = []
     current = to_int(res.get("currentBlock"))
     highest = to_int(res.get("highestBlock"))
@@ -1083,9 +1068,7 @@ if res is True:
     else:
         print("true")
     sys.exit(0)
-
-print("")
-PY
+print("")'
 }
 
 hex_to_dec() {
