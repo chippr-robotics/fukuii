@@ -79,6 +79,8 @@ services:
       # Set node identifier for logging
       - FUKUII_NODE_ID=cirith-ungol
       - FUKUII_ENV=cirith-ungol-mainnet
+      # Reduce Pekko (actor system) log noise; logback is configured via logging.logs-level.
+      - PEKKO_LOGLEVEL=INFO
     # Configuration files are loaded from /app/conf/
     command: ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
     healthcheck:
