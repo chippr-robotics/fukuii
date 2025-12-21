@@ -114,8 +114,6 @@ services:
       - geth-node1-data:/root/.ethereum
     environment:
       NODE_CONFIG_FILE: /config/geth/node1.toml
-    command:
-      - "--mine"
     entrypoint:
       - /bin/sh
       - -c
@@ -158,8 +156,6 @@ services:
       - geth-node2-data:/root/.ethereum
     environment:
       NODE_CONFIG_FILE: /config/geth/node2.toml
-    command:
-      - "--mine"
     entrypoint:
       - /bin/sh
       - -c
@@ -202,8 +198,6 @@ services:
       - geth-node3-data:/root/.ethereum
     environment:
       NODE_CONFIG_FILE: /config/geth/node3.toml
-    command:
-      - "--mine"
     entrypoint:
       - /bin/sh
       - -c

@@ -24,7 +24,7 @@ services:
       - ./conf/coregeth-config.toml:/root/.ethereum/config.toml:ro
     command:
       - "--config=/root/.ethereum/config.toml"
-      - "--networkid=61"
+      - "--networkid=1"
       - "--classic"
       - "--datadir=/root/.ethereum"
       # Increase logging to capture detailed RLPx/devp2p handshake behavior.
