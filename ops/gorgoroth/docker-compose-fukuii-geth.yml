@@ -59,13 +59,20 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
-      - FUKUII_NODE_ID=node2
-      - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      FUKUII_NODE_ID: node2
+      FUKUII_ENV: gorgoroth
+      JAVA_OPTS: >-
+        -Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+        -Dlogging.logs-level=DEBUG
+        -Dpekko.loglevel=DEBUG
+        -Dpekko.log-dead-letters=off
+        -Dpekko.log-dead-letters-during-shutdown=off
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node3:
@@ -85,13 +92,20 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:
-      - FUKUII_NODE_ID=node3
-      - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      FUKUII_NODE_ID: node3
+      FUKUII_ENV: gorgoroth
+      JAVA_OPTS: >-
+        -Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+        -Dlogging.logs-level=DEBUG
+        -Dpekko.loglevel=DEBUG
+        -Dpekko.log-dead-letters=off
+        -Dpekko.log-dead-letters-during-shutdown=off
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   # Core-Geth Nodes

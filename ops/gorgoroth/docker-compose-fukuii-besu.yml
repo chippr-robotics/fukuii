@@ -28,12 +28,19 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-rlpx-debug.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node1-data:/app/data
       - fukuii-node1-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - >-
+        JAVA_OPTS=-Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=true
+        -Dlogging.logs-level=DEBUG
+        -Dpekko.loglevel=DEBUG
+        -Dpekko.log-dead-letters=off
+        -Dpekko.log-dead-letters-during-shutdown=off
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node2:
@@ -54,12 +61,19 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - >-
+        JAVA_OPTS=-Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+        -Dlogging.logs-level=DEBUG
+        -Dpekko.loglevel=DEBUG
+        -Dpekko.log-dead-letters=off
+        -Dpekko.log-dead-letters-during-shutdown=off
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node3:
@@ -80,12 +94,19 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
+      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
-      - JAVA_OPTS=-Dfukuii.datadir=/app/data
+      - >-
+        JAVA_OPTS=-Dfukuii.datadir=/app/data
+        -Dfukuii.mining.mining-enabled=false
+        -Dlogging.logs-level=DEBUG
+        -Dpekko.loglevel=DEBUG
+        -Dpekko.log-dead-letters=off
+        -Dpekko.log-dead-letters-during-shutdown=off
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   # Besu Nodes
@@ -109,6 +130,8 @@ services:
       - "--genesis-file=/genesis.json"
       - "--network-id=1337"
       - "--data-path=/opt/besu/data"
+      - "--logging=DEBUG"
+      - "--host-allowlist=*"
       - "--rpc-http-enabled"
       - "--rpc-http-host=0.0.0.0"
       - "--rpc-http-port=8545"
@@ -121,8 +144,6 @@ services:
       - "--p2p-port=30303"
       - "--discovery-enabled=false"
       - "--max-peers=25"
-      - "--miner-enabled"
-      - "--miner-coinbase=0x4000000000000000000000000000000000000004"
 
   besu-node2:
     image: hyperledger/besu:latest
@@ -144,6 +165,8 @@ services:
       - "--genesis-file=/genesis.json"
       - "--network-id=1337"
       - "--data-path=/opt/besu/data"
+      - "--logging=DEBUG"
+      - "--host-allowlist=*"
       - "--rpc-http-enabled"
       - "--rpc-http-host=0.0.0.0"
       - "--rpc-http-port=8545"
@@ -156,8 +179,6 @@ services:
       - "--p2p-port=30303"
       - "--discovery-enabled=false"
       - "--max-peers=25"
-      - "--miner-enabled"
-      - "--miner-coinbase=0x5000000000000000000000000000000000000005"
 
   besu-node3:
     image: hyperledger/besu:latest
@@ -179,6 +200,8 @@ services:
       - "--genesis-file=/genesis.json"
       - "--network-id=1337"
       - "--data-path=/opt/besu/data"
+      - "--logging=DEBUG"
+      - "--host-allowlist=*"
       - "--rpc-http-enabled"
       - "--rpc-http-host=0.0.0.0"
       - "--rpc-http-port=8545"
@@ -191,8 +214,6 @@ services:
       - "--p2p-port=30303"
       - "--discovery-enabled=false"
       - "--max-peers=25"
-      - "--miner-enabled"
-      - "--miner-coinbase=0x6000000000000000000000000000000000000006"
 
 volumes:
   fukuii-node1-data:

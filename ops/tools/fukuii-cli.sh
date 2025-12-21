@@ -692,9 +692,33 @@ sync_gorgoroth_nodes() {
                 echo -e "$msg"
                 ;;
             besu)
-                # Update Besu node's static-nodes.json in container volume
-                local static_nodes_content=$(generate_static_nodes_json peer_enodes)
-                
+                # Update Besu node's static-nodes.json in container volume.
+                # Besu requires IP addresses (not hostnames) in enode URLs.
+                local besu_peer_enodes=()
+                local other
+                for other in $containers; do
+                    if [ "$other" = "$container" ]; then
+                        continue
+                    fi
+
+                    local other_enode="${ENODES_MAP[$other]}"
+                    if [ -z "$other_enode" ]; then
+                        continue
+                    fi
+
+                    local other_ip
+                    other_ip=$(get_container_network_ip "$other")
+                    if [ -z "$other_ip" ]; then
+                        echo -e "${YELLOW}⚠ missing container IP for $other; skipping for Besu peers${NC}"
+                        continue
+                    fi
+
+                    besu_peer_enodes+=("$(force_enode_host "$other_enode" "$other_ip")")
+                done
+
+                local static_nodes_content
+                static_nodes_content=$(generate_static_nodes_json besu_peer_enodes)
+
                 # Write to /opt/besu/data/static-nodes.json inside the container
                 if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
                     echo -e "${GREEN}✓ updated container volume${NC}"
@@ -747,6 +771,36 @@ get_container_service_hostname() {
     fi
 
     echo "$container_name"
+}
+
+get_container_network_ip() {
+    local container_name=$1
+
+    # Return the first non-empty IPv4 address from any attached docker network.
+    # Compose attaches these stacks to a single bridge network, so this is stable.
+    docker inspect -f '{{range $netName, $net := .NetworkSettings.Networks}}{{if $net.IPAddress}}{{println $net.IPAddress}}{{end}}{{end}}' \
+        "$container_name" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1
+}
+
+force_enode_host() {
+    local enode=$1
+    local host=$2
+
+    if [[ -z "$host" ]]; then
+        echo "$enode"
+        return 0
+    fi
+
+    local pattern="^enode://([0-9a-fA-F]{${ENODE_ID_LENGTH}})@(.+):([0-9]+)$"
+    if [[ "$enode" =~ $pattern ]]; then
+        local node_id="${BASH_REMATCH[1]}"
+        local port="${BASH_REMATCH[3]}"
+        echo "enode://$node_id@$host:$port"
+        return 0
+    fi
+
+    echo "$enode"
+    return 0
 }
 
 format_enode_hostname() {
@@ -807,8 +861,8 @@ resolve_rpc_url() {
     esac
 
     local port
-    local host_port
     for port in "${ports[@]}"; do
+        local host_port
         host_port=$(get_container_host_port "$container_name" "$port")
         if [ -z "$host_port" ]; then
             continue
@@ -878,15 +932,38 @@ rpc_call_container() {
                 return 1
                 ;;
         esac
+                # Update Besu node's static-nodes.json in container volume.
+                # Besu requires IP addresses (not hostnames) in enode URLs.
+                local besu_peer_enodes=()
+                local other
+                for other in $containers; do
+                    if [ "$other" = "$container" ]; then
+                        continue
+                    fi
+                    local other_enode="${ENODES_MAP[$other]}"
+                    if [ -z "$other_enode" ]; then
+                        continue
+                    fi
 
-        local attach_out
-        attach_out=$(docker exec "$container_name" sh -c \
-            "geth attach --exec '${expr}' /root/.ethereum/geth.ipc 2>/dev/null || geth attach --exec '${expr}' http://localhost:8545 2>/dev/null" \
-            2>/dev/null | tr -d '\\r' | tr -d '\\n' || true)
+                    local other_ip
+                    other_ip=$(get_container_network_ip "$other")
+                    if [ -z "$other_ip" ]; then
+                        echo -e "${YELLOW}⚠ missing container IP for $other; skipping for Besu peers${NC}"
+                        continue
+                    fi
 
-        if [ -z "$attach_out" ] || [ "$attach_out" = "undefined" ]; then
-            return 1
-        fi
+                    besu_peer_enodes+=("$(force_enode_host "$other_enode" "$other_ip")")
+                done
+
+                local static_nodes_content
+                static_nodes_content=$(generate_static_nodes_json besu_peer_enodes)
+
+                # Write to /opt/besu/data/static-nodes.json inside the container
+                if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
+                    echo -e "${GREEN}✓ updated container volume${NC}"
+                else
+                    echo -e "${RED}✗ failed to update${NC}"
+                fi
 
         printf '%s' "$attach_out" | python3 - <<'PY'
 import json
