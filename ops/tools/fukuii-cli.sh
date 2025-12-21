@@ -382,15 +382,60 @@ sync_cirith_ungol_nodes() {
         CONTAINER_TYPES["$container"]="$container_type"
         
         echo -n "  $container ($container_type): "
-        if enode=$(get_enode_from_container "$container"); then
-            if [ -z "$enode" ]; then
-                echo -e "${YELLOW}⚠ extracted empty enode${NC}"
-                continue
+        if [ "$container_type" == "geth" ]; then
+            local enode_raw=""
+
+            # Prefer the host-mapped RPC endpoint for cirith-ungol coregeth.
+            # This avoids depending on curl inside the container and avoids flaky attach parsing.
+            if [[ "$container" == "coregeth-cirith-ungol" ]]; then
+                enode_raw=$(curl -s -H 'Content-Type: application/json' -X POST \
+                    --data '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
+                    http://localhost:18545 2>/dev/null | \
+                    grep -o '"enode":"[^"]*"' | head -n1 | cut -d'"' -f4 || true)
             fi
-            ENODES_MAP["$container"]="$enode"
-            echo -e "${GREEN}✓${NC}"
-        else
+
+            # Fallback to container attach (IPC then HTTP)
+            if [ -z "$enode_raw" ]; then
+                for _ in $(seq 1 15); do
+                    enode_raw=$(docker exec "$container" sh -c \
+                        "geth attach --exec 'admin.nodeInfo.enode' /root/.ethereum/geth.ipc 2>/dev/null || geth attach --exec 'admin.nodeInfo.enode' http://localhost:8545 2>/dev/null" \
+                        2>/dev/null | tr -d '\\r' | tr -d '\\n' | sed 's/^[[:space:]]*\"//; s/\"[[:space:]]*$//' || true)
+                    if [ -n "$enode_raw" ]; then
+                        break
+                    fi
+                    sleep 2
+                done
+            fi
+
+            if [ -n "$enode_raw" ]; then
+                if enode=$(sanitize_enode_url "$enode_raw"); then
+                    local hostname
+                    hostname=$(get_container_service_hostname "$container")
+
+                    # Force hostname to the docker-compose service name so peers dial inside the bridge network.
+                    local pattern="^enode://([0-9a-fA-F]{${ENODE_ID_LENGTH}})@(.+):([0-9]+)$"
+                    if [[ "$enode" =~ $pattern ]]; then
+                        enode="enode://${BASH_REMATCH[1]}@$hostname:${BASH_REMATCH[3]}"
+                    fi
+
+                    ENODES_MAP["$container"]="$enode"
+                    echo -e "${GREEN}✓${NC}"
+                    continue
+                fi
+            fi
+
             echo -e "${RED}✗ (skipped)${NC}"
+        else
+            if enode=$(get_enode_from_container "$container"); then
+                if [ -z "$enode" ]; then
+                    echo -e "${YELLOW}⚠ extracted empty enode${NC}"
+                    continue
+                fi
+                ENODES_MAP["$container"]="$enode"
+                echo -e "${GREEN}✓${NC}"
+            else
+                echo -e "${RED}✗ (skipped)${NC}"
+            fi
         fi
     done
     
@@ -401,27 +446,100 @@ sync_cirith_ungol_nodes() {
     
     echo ""
     echo -e "${GREEN}Collected ${#ENODES_MAP[@]} enode(s)${NC}"
+
+    # For cirith-ungol we expect at least one enode for each client type.
+    # If we can't collect both, don't clobber existing peer configuration.
+    local have_geth=false
+    local have_fukuii=false
+    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
+        local t="${CONTAINER_TYPES[$container]}"
+        if [ "$t" == "geth" ]; then
+            have_geth=true
+        elif [ "$t" == "fukuii" ]; then
+            have_fukuii=true
+        fi
+    done
+    if [ "$have_geth" != "true" ] || [ "$have_fukuii" != "true" ]; then
+        echo -e "${YELLOW}⚠ Not all enodes collected (geth=$have_geth, fukuii=$have_fukuii).${NC}" >&2
+        echo -e "${YELLOW}⚠ Refusing to overwrite static peer config files; try again once containers are fully started.${NC}" >&2
+        return 1
+    fi
     
-    # Build static-nodes.json with all collected enodes
+    # Build static-nodes.json with client-specific peer sets
+    # - Host file is mounted into Fukuii, so it should list Core-Geth peers only.
+    # - Core-Geth's internal static-nodes.json should list Fukuii peers only.
     local static_nodes_file="$network_dir/conf/static-nodes.json"
     echo -e "${BLUE}Updating static-nodes.json at: $static_nodes_file${NC}"
-    
-    # Create JSON array of enodes
-    local json_content="["
-    local first=true
+
+    local fukuii_peers=()
+    local geth_peers=()
     for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
-        if [ "$first" = true ]; then
-            first=false
+        local container_type="${CONTAINER_TYPES[$container]}"
+        if [ "$container_type" == "geth" ]; then
+            fukuii_peers+=("${ENODES_MAP[$container]}")
         else
-            json_content+=","
+            geth_peers+=("${ENODES_MAP[$container]}")
         fi
-        json_content+=$'\n  '
-        json_content+="\"${ENODES_MAP[$container]}\""
     done
-    json_content+=$'\n]\n'
-    
-    echo "$json_content" > "$static_nodes_file"
+
+    # Pretty JSON writer
+    build_pretty_json() {
+        local -n _arr=$1
+        local _json="["
+        for i in "${!_arr[@]}"; do
+            if [ "$i" -gt 0 ]; then
+                _json+=","
+            fi
+            _json+=$'\n  '
+            _json+="\"${_arr[$i]}\""
+        done
+        _json+=$'\n]\n'
+        echo "$_json"
+    }
+
+    local fukuii_json_content
+    fukuii_json_content=$(build_pretty_json fukuii_peers)
+    echo "$fukuii_json_content" > "$static_nodes_file"
     echo -e "${GREEN}✓ Static nodes file updated${NC}"
+
+    # Keep CoreGeth's startup config consistent with static-nodes.json.
+    # CoreGeth in cirith-ungol is launched with --config=/root/.ethereum/config.toml,
+    # so if that file contains a stale StaticNodes entry it can keep dialing with the
+    # wrong pubkey and cause RLPx auth-init decode failures on the remote.
+    local coregeth_config_file="$network_dir/conf/coregeth-config.toml"
+    local peer_enodes=()
+    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
+        local container_type="${CONTAINER_TYPES[$container]}"
+        if [ "$container_type" != "geth" ]; then
+            peer_enodes+=("${ENODES_MAP[$container]}")
+        fi
+    done
+
+    echo -e "${BLUE}Updating CoreGeth config peers at: $coregeth_config_file${NC}"
+    {
+        echo "[Node.P2P]"
+        echo "StaticNodes = ["
+        for i in "${!peer_enodes[@]}"; do
+            printf '  "%s"' "${peer_enodes[$i]}"
+            if [ "$i" -lt $((${#peer_enodes[@]} - 1)) ]; then
+                printf ',\n'
+            else
+                printf '\n'
+            fi
+        done
+        echo "]"
+        echo "TrustedNodes = ["
+        for i in "${!peer_enodes[@]}"; do
+            printf '  "%s"' "${peer_enodes[$i]}"
+            if [ "$i" -lt $((${#peer_enodes[@]} - 1)) ]; then
+                printf ',\n'
+            else
+                printf '\n'
+            fi
+        done
+        echo "]"
+    } > "$coregeth_config_file"
+    echo -e "${GREEN}✓ CoreGeth config updated${NC}"
     
     # Also update CoreGeth container's internal static-nodes.json
     echo ""
@@ -430,7 +548,9 @@ sync_cirith_ungol_nodes() {
         local container_type="${CONTAINER_TYPES[$container]}"
         if [ "$container_type" == "geth" ]; then
             echo -n "  $container: "
-            if docker exec "$container" sh -c "echo '$json_content' > /root/.ethereum/static-nodes.json" 2>/dev/null; then
+            local geth_json_content
+            geth_json_content=$(build_pretty_json geth_peers)
+            if docker exec "$container" sh -c "echo '$geth_json_content' > /root/.ethereum/static-nodes.json" 2>/dev/null; then
                 echo -e "${GREEN}✓ updated container volume${NC}"
             else
                 echo -e "${YELLOW}⚠ failed to update (container may not support it)${NC}"
@@ -742,7 +862,30 @@ get_enode_from_container() {
     local container_name=$1
     local container_type=$(get_container_type "$container_name")
     local max_retries=5
+    if [[ "$container_type" == "geth" ]]; then
+        max_retries=15
+    fi
     local retry=0
+
+    # Deterministic path for geth/coregeth: prefer `geth attach` (doesn't require curl).
+    if [[ "$container_type" == "geth" ]]; then
+        local attach_enode
+        attach_enode=$(docker exec "$container_name" sh -c \
+            "geth attach --exec 'admin.nodeInfo.enode' /root/.ethereum/geth.ipc 2>/dev/null || geth attach --exec 'admin.nodeInfo.enode' http://localhost:8545 2>/dev/null" \
+            2>/dev/null | tr -d '\\r' | tr -d '\\n' | sed 's/^[[:space:]]*\"//; s/\"[[:space:]]*$//' || true)
+
+        if [ -n "$attach_enode" ]; then
+            attach_enode=$(sanitize_enode_url "$attach_enode") || attach_enode=""
+        fi
+
+        if [ -n "$attach_enode" ]; then
+            local hostname
+            hostname=$(get_container_service_hostname "$container_name")
+            attach_enode=$(format_enode_hostname "$attach_enode" "$hostname")
+            echo "$attach_enode"
+            return 0
+        fi
+    fi
     
     # First, try to get enode from logs (works even without admin RPC enabled)
     local enode=$(get_enode_from_logs "$container_name")
@@ -766,9 +909,21 @@ get_enode_from_container() {
             rpc_method="net_nodeInfo"
         fi
 
-        enode=$(docker exec "$container_name" sh -c \
-            "curl -s -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"${rpc_method}\",\"params\":[],\"id\":1}' http://localhost:${rpc_port} | grep -o '\"enode\":\"[^\"]*\"' | cut -d'\"' -f4" \
-            2>/dev/null || echo "")
+        if docker exec "$container_name" sh -c "command -v curl >/dev/null 2>&1" 2>/dev/null; then
+            enode=$(docker exec "$container_name" sh -c \
+                "curl -s -X POST --data '{\"jsonrpc\":\"2.0\",\"method\":\"${rpc_method}\",\"params\":[],\"id\":1}' http://localhost:${rpc_port} | grep -o '\"enode\":\"[^\"]*\"' | cut -d'\"' -f4" \
+                2>/dev/null || echo "")
+        else
+            enode=""
+        fi
+
+        # CoreGeth images often don't ship with curl; fall back to geth's own attach.
+        # Note: `geth attach` expects the endpoint after flags (not before).
+        if [ -z "$enode" ] && [[ "$container_type" == "geth" ]]; then
+            enode=$(docker exec "$container_name" sh -c \
+                "geth attach --exec 'admin.nodeInfo.enode' /root/.ethereum/geth.ipc 2>/dev/null || geth attach --exec 'admin.nodeInfo.enode' http://localhost:${rpc_port} 2>/dev/null" \
+                2>/dev/null | tr -d '\\r' | tr -d '\\n' | sed 's/^[[:space:]]*\"//; s/\"[[:space:]]*$//' || echo "")
+        fi
 
         if [ -n "$enode" ]; then
             enode=$(sanitize_enode_url "$enode") || enode=""

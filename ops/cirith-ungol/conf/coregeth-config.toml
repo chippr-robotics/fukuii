@@ -1,4 +1,7 @@
 [Node.P2P]
 StaticNodes = [
-  "enode://93c14a10a54497a84afa1def2981afe5fdf23ce15daaf81b172caaf5075aa22b6792938153c2be14976941e060ecbcca2f0a34f4aa9b2b71302e7d501dad0d6c@fukuii-cirith-ungol:9076"
+  "enode://19aea906b39b0e822b5970bea0a9e12c9ee114dc11024ed39226230cd2ea928a18f005f8b8386b6911e2f71a9dc6d3d99c3a6ff5abaa6c30b01bc26c4a1c0b77@fukuii:9076"
+]
+TrustedNodes = [
+  "enode://19aea906b39b0e822b5970bea0a9e12c9ee114dc11024ed39226230cd2ea928a18f005f8b8386b6911e2f71a9dc6d3d99c3a6ff5abaa6c30b01bc26c4a1c0b77@fukuii:9076"
 ]
