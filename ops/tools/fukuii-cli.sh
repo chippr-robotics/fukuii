@@ -636,12 +636,28 @@ sync_gorgoroth_nodes() {
         
         echo -n "  $container ($container_type): "
         
-        # Build peer list (all enodes except this container's own enode)
+        # Build peer list (all other containers), forcing the enode host to the
+        # target container's network IP for maximum cross-client robustness.
         local peer_enodes=()
-        for enode in "${all_enodes[@]}"; do
-            if [ "$enode" != "$container_enode" ]; then
-                peer_enodes+=("$enode")
+        local other
+        for other in $containers; do
+            if [ "$other" = "$container" ]; then
+                continue
             fi
+
+            local other_enode="${ENODES_MAP[$other]}"
+            if [ -z "$other_enode" ]; then
+                continue
+            fi
+
+            local other_ip
+            other_ip=$(get_container_network_ip "$other")
+            if [ -z "$other_ip" ]; then
+                peer_enodes+=("$other_enode")
+                continue
+            fi
+
+            peer_enodes+=("$(force_enode_host "$other_enode" "$other_ip")")
         done
         
         # Update static-nodes.json based on container type
@@ -694,30 +710,8 @@ sync_gorgoroth_nodes() {
             besu)
                 # Update Besu node's static-nodes.json in container volume.
                 # Besu requires IP addresses (not hostnames) in enode URLs.
-                local besu_peer_enodes=()
-                local other
-                for other in $containers; do
-                    if [ "$other" = "$container" ]; then
-                        continue
-                    fi
-
-                    local other_enode="${ENODES_MAP[$other]}"
-                    if [ -z "$other_enode" ]; then
-                        continue
-                    fi
-
-                    local other_ip
-                    other_ip=$(get_container_network_ip "$other")
-                    if [ -z "$other_ip" ]; then
-                        echo -e "${YELLOW}⚠ missing container IP for $other; skipping for Besu peers${NC}"
-                        continue
-                    fi
-
-                    besu_peer_enodes+=("$(force_enode_host "$other_enode" "$other_ip")")
-                done
-
                 local static_nodes_content
-                static_nodes_content=$(generate_static_nodes_json besu_peer_enodes)
+                static_nodes_content=$(generate_static_nodes_json peer_enodes)
 
                 # Write to /opt/besu/data/static-nodes.json inside the container
                 if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
@@ -868,7 +862,7 @@ resolve_rpc_url() {
             continue
         fi
 
-        local candidate="http://localhost:${host_port}"
+        local candidate="http://127.0.0.1:${host_port}"
         if [ -z "$fallback_url" ]; then
             fallback_url="$candidate"
         fi
@@ -877,12 +871,18 @@ resolve_rpc_url() {
             return 0
         fi
 
-        local probe_response
-        probe_response=$(rpc_call "$candidate" "$probe_method")
-        if rpc_response_ok "$probe_response"; then
-            echo "$candidate"
-            return 0
-        fi
+        # Nodes may take a few seconds to bring up JSON-RPC after container start.
+        local attempt=0
+        while [ $attempt -lt 5 ]; do
+            local probe_response
+            probe_response=$(rpc_call "$candidate" "$probe_method")
+            if rpc_response_ok "$probe_response"; then
+                echo "$candidate"
+                return 0
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+        done
     done
 
     if [ -n "$fallback_url" ]; then

@@ -1,5 +1,5 @@
 [Eth]
-NetworkId = 1337
+NetworkId = 7
 SyncMode = "snap"
 TxLookupLimit = 0
 RPCGasCap = 50000000

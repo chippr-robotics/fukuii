@@ -28,6 +28,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node1/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/logback-rlpx-debug.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - ./conf/node1/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node1-data:/app/data
       - fukuii-node1-logs:/app/logs
@@ -60,6 +61,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
@@ -93,6 +95,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
@@ -123,9 +126,12 @@ services:
       - "30306:30303/tcp"
       - "30306:30303/udp"
     volumes:
-      - ./conf/geth/genesis.json:/genesis.json:ro
       - ./conf/geth:/config/geth:ro
-      - geth-node1-data:/root/.ethereum
+      - type: volume
+        source: geth-node1-data
+        target: /root/.ethereum
+        volume:
+          nocopy: true
     environment:
       NODE_CONFIG_FILE: /config/geth/node1.toml
     entrypoint:
@@ -146,10 +152,7 @@ services:
           fi
           cat "$$BASE_CONFIG" "$$NODE_CONFIG" > "$$MERGED_CONFIG"
           echo "Merged config written to $$MERGED_CONFIG"
-          if [ ! -d /root/.ethereum/geth ]; then
-            geth init --datadir /root/.ethereum /genesis.json
-          fi
-          exec geth --config="$$MERGED_CONFIG" "$$@"
+          exec geth --mordor --config="$$MERGED_CONFIG" --verbosity=5 --log.vmodule=p2p=5,discover=5,net=5 "$$@"
 
   geth-node2:
     image: etclabscore/core-geth:latest
@@ -165,9 +168,12 @@ services:
       - "30307:30303/tcp"
       - "30307:30303/udp"
     volumes:
-      - ./conf/geth/genesis.json:/genesis.json:ro
       - ./conf/geth:/config/geth:ro
-      - geth-node2-data:/root/.ethereum
+      - type: volume
+        source: geth-node2-data
+        target: /root/.ethereum
+        volume:
+          nocopy: true
     environment:
       NODE_CONFIG_FILE: /config/geth/node2.toml
     entrypoint:
@@ -188,10 +194,7 @@ services:
           fi
           cat "$$BASE_CONFIG" "$$NODE_CONFIG" > "$$MERGED_CONFIG"
           echo "Merged config written to $$MERGED_CONFIG"
-          if [ ! -d /root/.ethereum/geth ]; then
-            geth init --datadir /root/.ethereum /genesis.json
-          fi
-          exec geth --config="$$MERGED_CONFIG" "$$@"
+          exec geth --mordor --config="$$MERGED_CONFIG" --verbosity=5 --log.vmodule=p2p=5,discover=5,net=5 "$$@"
 
   geth-node3:
     image: etclabscore/core-geth:latest
@@ -207,9 +210,12 @@ services:
       - "30308:30303/tcp"
       - "30308:30303/udp"
     volumes:
-      - ./conf/geth/genesis.json:/genesis.json:ro
       - ./conf/geth:/config/geth:ro
-      - geth-node3-data:/root/.ethereum
+      - type: volume
+        source: geth-node3-data
+        target: /root/.ethereum
+        volume:
+          nocopy: true
     environment:
       NODE_CONFIG_FILE: /config/geth/node3.toml
     entrypoint:
@@ -230,10 +236,7 @@ services:
           fi
           cat "$$BASE_CONFIG" "$$NODE_CONFIG" > "$$MERGED_CONFIG"
           echo "Merged config written to $$MERGED_CONFIG"
-          if [ ! -d /root/.ethereum/geth ]; then
-            geth init --datadir /root/.ethereum /genesis.json
-          fi
-          exec geth --config="$$MERGED_CONFIG" "$$@"
+          exec geth --mordor --config="$$MERGED_CONFIG" --verbosity=5 --log.vmodule=p2p=5,discover=5,net=5 "$$@"
 
 volumes:
   fukuii-node1-data:
