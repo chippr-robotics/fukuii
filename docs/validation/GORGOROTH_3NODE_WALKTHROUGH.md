@@ -40,12 +40,12 @@ This walkthrough validates the following:
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │ Fukuii Node1│────▶│ Fukuii Node2│────▶│ Fukuii Node3│
-│  (Miner)    │◀────│  (Miner)    │◀────│  (Miner)    │
+│  (Miner)    │◀────│ (Follower)  │◀────│ (Follower)  │
 └─────────────┘     └─────────────┘     └─────────────┘
        │                   │                   │
        └───────────────────┴───────────────────┘
-     All Fukuii nodes mine and sync together
-         (self-consistency validation)
+   Node1 mines; followers sync and validate
+      (deterministic single-miner setup)
 ```
 
 ---
@@ -140,6 +140,8 @@ done
 
 Make sure each of the files above is a **regular file** (not a directory or symlink) so Docker can mount it.
 
+> ℹ️ **Network model (updated):** Gorgoroth runs as a *private, no-discovery* cluster. There are no public bootnodes, and peers are established by static peering via `fukuii-cli sync-static-nodes`.
+
 ---
 
 ## Phase 1: Network Formation
@@ -188,8 +190,8 @@ fukuii-cli logs 3nodes
 # Look for successful startup messages:
 # - "Starting Fukuii node"
 # - "Ethereum node ready"
-# - "JSON RPC HTTP server listening on ...:8546"
-#   (Mining logs only appear after you re-enable mining per the note below)
+# - "JSON RPC HTTP server listening on ..."
+# - RLPx / enode debug logs (if enabled)
 ```
 
 ### Step 1.5: Sync Static Nodes (Establish Peer Connections)
@@ -227,7 +229,12 @@ sleep 30
 
 ### Step 1.7: Verify Peer Connectivity
 
-> ℹ️ RPC quick reference: JSON-RPC HTTP endpoints run on ports **8546 (node1)**, **8548 (node2)**, and **8550 (node3)**. The matching WebSocket endpoints stay on 8545/8547/8549. All examples below use the HTTP ports.
+> ℹ️ RPC quick reference (host ports):
+> - Node1: HTTP `http://localhost:8546` (WS on `ws://localhost:8545`)
+> - Node2: HTTP `http://localhost:8547` (WS on `ws://localhost:8548`)
+> - Node3: HTTP `http://localhost:8549` (WS on `ws://localhost:8550`)
+>
+> This mapping matches `ops/gorgoroth/docker-compose-3nodes.yml` and the per-node configs under `ops/gorgoroth/conf/node*/gorgoroth.conf`.
 
 ```bash
 # Query node1 peer count
@@ -253,7 +260,11 @@ curl -X POST http://localhost:8546 \
 - Peer connections established
 - Network formed successfully
 
-> ℹ️ **Mining is enabled by default:** The current `docker-compose-3nodes.yml` configuration sets `-Dfukuii.mining.mining-enabled=true` for all three nodes. No manual changes are required—mining will begin automatically during this walkthrough.
+> ℹ️ **Mining model (updated):** the default 3-node topology uses a single miner.
+> - Node1 mines (`mining-enabled=true`)
+> - Node2/Node3 are followers (`mining-enabled=false`)
+>
+> This keeps the chain deterministic and makes “follower accepts miner headers” issues easier to detect.
 
 ---
 

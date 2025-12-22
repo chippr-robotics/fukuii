@@ -99,7 +99,7 @@ The `gorgoroth/` directory contains configurations for an internal private test 
 **Purpose**: Private network testing for multi-client interoperability and Fukuii validation.
 
 **Features**:
-- Network: Private test network (Chain ID: 1337)
+- Network: Private test network (Mordor-aligned; Chain ID: 0x3f / 63; Network ID: 7)
 - Discovery disabled (static peer connections)
 - Multiple deployment configurations:
   - 3 Fukuii nodes

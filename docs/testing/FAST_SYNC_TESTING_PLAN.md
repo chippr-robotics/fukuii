@@ -42,11 +42,10 @@ This document outlines a comprehensive testing plan for validating fast sync fun
 | Property | Value |
 |----------|-------|
 | Network Name | Gorgoroth |
-| Network ID | 1337 |
-| Chain ID | 0x539 (1337) |
-| Consensus | Ethash (Proof of Work) |
-| Block Time | ~15 seconds |
-| Genesis Configuration | Custom with pre-funded accounts |
+| Network ID | 7 |
+| Chain ID | 0x3f (63) |
+| Consensus | Proof of Work (Ethash-compatible) |
+| Genesis Configuration | Mordor-aligned (see `ops/gorgoroth/conf/app-gorgoroth-override.conf`) |
 
 ### Test Phases
 
@@ -88,12 +87,10 @@ done
 
 #### 1.3 Generate Blockchain History
 ```bash
-# Enable mining on all seed nodes
-for port in 8545 8547 8549; do
-  curl -X POST -H "Content-Type: application/json" \
-    --data '{"jsonrpc":"2.0","method":"miner_start","params":[],"id":1}' \
-    http://localhost:$port
-done
+# Ensure mining is enabled on the seed miner (default: node1 only)
+curl -s -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_mining","params":[],"id":1}' \
+  http://localhost:8545 | jq
 
 # Wait for substantial block history (target: 1000+ blocks)
 # Monitor block height

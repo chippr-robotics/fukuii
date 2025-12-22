@@ -19,11 +19,12 @@ The Gorgoroth test network provides:
 | Property | Value |
 |----------|-------|
 | **Network Name** | Gorgoroth |
-| **Network ID** | 1337 |
-| **Chain ID** | 0x539 (1337) |
-| **Consensus** | Ethash (Proof of Work) |
-| **Block Time** | ~15 seconds |
-| **Genesis Block** | Custom genesis with pre-funded accounts |
+| **Network ID** | 7 |
+| **Chain ID** | 0x3f (63) |
+| **Consensus** | Proof of Work (Ethash-compatible) |
+| **Genesis Block** | Mordor-aligned genesis (`mordor-genesis.json`) |
+
+> ℹ️ Gorgoroth is an isolated harness. Even though it is Mordor-aligned, it does **not** connect to public Mordor infrastructure (discovery disabled; bootnodes cleared; static peers only).
 
 ## Available Configurations
 
@@ -36,8 +37,10 @@ fukuii-cli start 3nodes
 
 **Nodes:**
 - `fukuii-node1` - HTTP: 8546, WS: 8545, P2P: 30303
-- `fukuii-node2` - HTTP: 8548, WS: 8547, P2P: 30304
-- `fukuii-node3` - HTTP: 8550, WS: 8549, P2P: 30305
+- `fukuii-node2` - HTTP: 8547, WS: 8548, P2P: 30304
+- `fukuii-node3` - HTTP: 8549, WS: 8550, P2P: 30305
+
+**Mining model (default):** node1 mines, node2/node3 follow.
 
 ### 2. Six Fukuii Nodes (`6nodes`)
 Larger Fukuii-only network for scalability testing.
@@ -51,6 +54,8 @@ fukuii-cli start 6nodes
 - Ports range from 8545-8556 (HTTP/WS)
 - P2P ports: 30303-30308
 
+**Mining model (default):** node1 mines, all others follow.
+
 ### 3. Fukuii + Core-Geth (`fukuii-geth`)
 Mixed network with 3 Fukuii and 3 Core-Geth nodes.
 
@@ -59,7 +64,7 @@ fukuii-cli start fukuii-geth
 ```
 
 **Fukuii Nodes:**
-- HTTP: 8546/8548/8550, WS: 8545/8547/8549
+- HTTP: 8546/8547/8549, WS: 8545/8548/8550
 
 **Core-Geth Nodes:**
 - Ports: 8551-8556
@@ -73,7 +78,7 @@ fukuii-cli start fukuii-besu
 ```
 
 **Fukuii Nodes:**
-- HTTP: 8546/8548/8550, WS: 8545/8547/8549
+- HTTP: 8546/8547/8549, WS: 8545/8548/8550
 
 **Besu Nodes:**
 - Ports: 8551-8556
@@ -87,7 +92,7 @@ fukuii-cli start mixed
 ```
 
 **Fukuii Nodes:**
-- 3 nodes, HTTP ports: 8546/8548/8550, WS ports: 8545/8547/8549
+- 3 nodes, HTTP ports: 8546/8547/8549, WS ports: 8545/8548/8550
 
 **Core-Geth Nodes:**
 - 3 nodes, ports: 8551-8556
@@ -286,22 +291,21 @@ fukuii-cli collect-logs fukuii-geth ./debug-logs
 
 ### Genesis Configuration
 
-The network uses a custom genesis block with:
+Gorgoroth uses a **Mordor-aligned genesis** and chain parameters while keeping the chain name `gorgoroth`.
 
-- **Low difficulty** (0x20000) for fast block production
-- **Pre-funded accounts** for testing
-- **All ETC forks enabled** at block 0 (Homestead, Atlantis, Agharta, Phoenix)
-- **Future forks disabled** for stability
+- Fukuii’s chain definition lives in `ops/gorgoroth/conf/app-gorgoroth-override.conf`.
+- The genesis is provided as `mordor-genesis.json` (mounted explicitly in the multi-client compose files; the image may also provide it).
+- Bootnodes are intentionally empty and discovery is disabled so the harness stays private and deterministic.
 
 ### Node Configuration
 
 Each Fukuii node is configured with:
 
-- **Mining enabled** with unique coinbase addresses (enabled as of version 0.1.147 for validation testing)
+- **Single-miner topology** by default (node1 mines; followers validate and sync)
 - **Discovery disabled** (static peer connections only)
 - **Fast sync disabled** (full sync for test network)
 - **SNAP sync disabled** (not needed for small network)
-- **JSON-RPC enabled** on all nodes (HTTP on even ports: 8546/8548/8550, WebSocket on odd ports: 8545/8547/8549)
+- **JSON-RPC enabled** on all nodes (see the port tables below; do not assume even/odd patterns across all configs)
 
 ### Genesis Accounts
 
@@ -358,7 +362,7 @@ fukuii-cli start 3nodes
 
 ### Nodes Not Connecting
 
-The network uses discovery disabled mode. Nodes should connect automatically via Docker networking (using service names as hostnames). If nodes are not connecting:
+The network uses discovery disabled mode and relies on **static peering**. If nodes are not connecting:
 
 1. **Check if admin API is available** (use HTTP RPC port 8546):
    ```bash
@@ -369,10 +373,11 @@ The network uses discovery disabled mode. Nodes should connect automatically via
 
 2. **Manually add peers** using the admin API with the enode URL from step 1
 
-3. **For 3-node configuration**: The static-nodes.json files contain placeholder enode IDs. You'll need to either:
-   - Generate proper node keys and update static-nodes.json
-   - Remove the static-nodes.json volume mounts and use manual peering
-   - Use the 6-node or mixed configurations which rely on Docker networking
+3. **Re-run static node sync** (recommended):
+  ```bash
+  fukuii-cli sync-static-nodes
+  ```
+  This regenerates `static-nodes.json` from the running containers’ actual enodes and restarts the containers.
 
 4. **Check Docker networking**:
    ```bash
@@ -407,30 +412,55 @@ ls -lh ./debug-logs/
 | Node | HTTP RPC | WebSocket | P2P |
 |------|----------|-----------|-----|
 | fukuii-node1 | 8546 | 8545 | 30303 |
-| fukuii-node2 | 8548 | 8547 | 30304 |
-| fukuii-node3 | 8550 | 8549 | 30305 |
+| fukuii-node2 | 8547 | 8548 | 30304 |
+| fukuii-node3 | 8549 | 8550 | 30305 |
 
 ### 6-Node Configuration
 
 | Node | HTTP RPC | WebSocket | P2P |
 |------|----------|-----------|-----|
-| fukuii-node1 | 8546 | 8545 | 30303 |
-| fukuii-node2 | 8548 | 8547 | 30304 |
-| fukuii-node3 | 8550 | 8549 | 30305 |
-| fukuii-node4 | 8552 | 8551 | 30306 |
-| fukuii-node5 | 8554 | 8553 | 30307 |
-| fukuii-node6 | 8556 | 8555 | 30308 |
+| fukuii-node1 | 8545 | 8546 | 30303 |
+| fukuii-node2 | 8547 | 8548 | 30304 |
+| fukuii-node3 | 8549 | 8550 | 30305 |
+| fukuii-node4 | 8551 | 8552 | 30306 |
+| fukuii-node5 | 8553 | 8554 | 30307 |
+| fukuii-node6 | 8555 | 8556 | 30308 |
 
 ### Mixed Configuration (fukuii-geth)
 
 | Node | HTTP RPC | WebSocket | P2P |
 |------|----------|-----------|-----|
 | fukuii-node1 | 8546 | 8545 | 30303 |
-| fukuii-node2 | 8548 | 8547 | 30304 |
-| fukuii-node3 | 8550 | 8549 | 30305 |
+| fukuii-node2 | 8547 | 8548 | 30304 |
+| fukuii-node3 | 8549 | 8550 | 30305 |
 | geth-node1 | 8551 | 8552 | 30306 |
 | geth-node2 | 8553 | 8554 | 30307 |
 | geth-node3 | 8555 | 8556 | 30308 |
+
+### Mixed Configuration (fukuii-besu)
+
+| Node | HTTP RPC | WebSocket | P2P |
+|------|----------|-----------|-----|
+| fukuii-node1 | 8546 | 8545 | 30303 |
+| fukuii-node2 | 8547 | 8548 | 30304 |
+| fukuii-node3 | 8549 | 8550 | 30305 |
+| besu-node1 | 8551 | 8552 | 30306 |
+| besu-node2 | 8553 | 8554 | 30307 |
+| besu-node3 | 8555 | 8556 | 30308 |
+
+### Full Mixed Configuration (mixed)
+
+| Node | HTTP RPC | WebSocket | P2P |
+|------|----------|-----------|-----|
+| fukuii-node1 | 8546 | 8545 | 30303 |
+| fukuii-node2 | 8547 | 8548 | 30304 |
+| fukuii-node3 | 8549 | 8550 | 30305 |
+| geth-node1 | 8551 | 8552 | 30306 |
+| geth-node2 | 8553 | 8554 | 30307 |
+| geth-node3 | 8555 | 8556 | 30308 |
+| besu-node1 | 8557 | 8558 | 30309 |
+| besu-node2 | 8559 | 8560 | 30310 |
+| besu-node3 | 8561 | 8562 | 30311 |
 
 ## Use Cases
 
