@@ -332,7 +332,7 @@ val sources = Seq(
     priority = 1
   ),
   CheckpointSource(
-    name = "Secondary Archive Node", 
+    name = "Secondary Archive Node",
     url = "https://archive2.internal.example.com/api/checkpoints.json",
     priority = 1
   ),
