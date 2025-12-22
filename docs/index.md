@@ -58,7 +58,7 @@ Fukuii is a high-performance Ethereum Classic (ETC) client built with Scala 3. I
 | Understand the architecture | [Architecture Overview](architecture/architecture-overview.md) |
 | Use the JSON-RPC API | [API Reference](api/JSON_RPC_API_REFERENCE.md) |
 | Contribute code | [Contributing Guide](development/contributing.md) |
-| Test compatibility | [Gorgoroth Network Testing](validation/GORGOROTH_COMPATIBILITY.md) |
+| Test compatibility | [Gorgoroth Network Testing](testing/GORGOROTH_COMPATIBILITY_TESTING.md) |
 
 ## Supported Networks
 

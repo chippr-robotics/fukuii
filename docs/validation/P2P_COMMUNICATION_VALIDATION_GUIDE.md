@@ -337,7 +337,7 @@ echo "======================================"
 ```
 [INFO] PEER_CAPABILITIES: clientId=fukuii, p2pVersion=5, capabilities=[eth/64, eth/65, eth/66, snap/1]
 [INFO] Negotiated protocol version with client fukuii is eth/64
-[INFO] STATUS_EXCHANGE: Sending status - protocolVersion=64, networkId=1337, forkId=ForkId(...)
+[INFO] STATUS_EXCHANGE: Sending status - protocolVersion=64, networkId=7, forkId=ForkId(...)
 [INFO] STATUS_EXCHANGE: Received status from peer - protocolVersion=64, forkId=ForkId(...)
 [INFO] STATUS_EXCHANGE: ForkId validation passed
 ```
@@ -346,8 +346,10 @@ echo "======================================"
 ```
 [INFO] PEER_CAPABILITIES: clientId=geth, p2pVersion=5, capabilities=[eth/63, eth/64]
 [INFO] Negotiated protocol version with client geth is eth/63
-[DEBUG] sending status Status { protocolVersion: 63, networkId: 1337, ... }
+[DEBUG] sending status Status { protocolVersion: 63, networkId: 7, ... }
 ```
+
+> ℹ️ The exact `networkId` value depends on the chain you are running. For Gorgoroth, it should match the configured network ID (currently `7`).
 
 ### ❌ FAILURE - Should NOT see:
 ```

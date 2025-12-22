@@ -6,7 +6,7 @@ This directory contains documentation related to validating Fukuii's compatibili
 
 The Gorgoroth Network (see `ops/gorgoroth/` in repository) is a private test network for validating Fukuii compatibility with other Ethereum Classic clients.
 
-**Main Documentation**: [GORGOROTH_COMPATIBILITY.md](GORGOROTH_COMPATIBILITY.md)
+**Main Documentation**: [GORGOROTH_COMPATIBILITY_TESTING.md](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 
 ### What's Validated
 

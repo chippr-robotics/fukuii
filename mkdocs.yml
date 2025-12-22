@@ -239,18 +239,13 @@ nav:
     - validation/README.md
     - Executive Summary: validation/EXECUTIVE_SUMMARY.md
     - Gorgoroth Network:
-      - Compatibility: validation/GORGOROTH_COMPATIBILITY.md
-      - Implementation Summary: validation/GORGOROTH_IMPLEMENTATION_SUMMARY.md
       - Validation Status: validation/GORGOROTH_VALIDATION_STATUS.md
       - Status: validation/GORGOROTH_STATUS.md
       - 3-Node Walkthrough: validation/GORGOROTH_3NODE_WALKTHROUGH.md
       - 6-Node Walkthrough: validation/GORGOROTH_6NODE_WALKTHROUGH.md
-      - Phase 2 Field Report: validation/GORGOROTH_PHASE2_FIELD_REPORT.md
     - Protocol Validation:
       - P2P Communication Guide: validation/P2P_COMMUNICATION_VALIDATION_GUIDE.md
       - Cirith Ungol Walkthrough: validation/CIRITH_UNGOL_WALKTHROUGH.md
-      - EIP-155 BigInt Validation: validation/EIP155_BIGINT_VALIDATION.md
-      - ETC64 Removal Validation: validation/ETC64_REMOVAL_VALIDATION.md
   
   - Background:
     - Historical:

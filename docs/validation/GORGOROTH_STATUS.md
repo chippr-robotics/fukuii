@@ -1,6 +1,6 @@
 # Gorgoroth Battlenet - Complete Testing Status & Validation Checklist
 
-**Last Updated**: December 11, 2025  
+**Last Updated**: December 21, 2025  
 **Status**: 🟡 **IN PROGRESS - INFRASTRUCTURE COMPLETE, VALIDATION NEEDED**
 
 ## Overview
@@ -23,15 +23,15 @@ This document provides a comprehensive status tracker for all Gorgoroth battlene
 
 ### Configuration
 - **3 Fukuii nodes** in Docker environment
-- Each node mining blocks
+- **Single miner** (node1 mines; node2/node3 follow)
 - Shared genesis configuration
-- Static peer discovery
+- Static peering (no discovery)
 - **Goal**: Validate Fukuii is functional and self-consistent
 
 ### Test Checklist
 
 #### Network Communication
-- [x] Peer discovery working
+- [x] RLPx handshakes working
 - [x] Handshake protocol (eth/68, snap/1)
 - [x] Static node configuration
 - [x] Protocol version compatibility
@@ -39,7 +39,7 @@ This document provides a comprehensive status tracker for all Gorgoroth battlene
 - [ ] Multi-client peer discovery (Fukuii ↔ Besu)
 
 #### Block Production & Propagation
-- [x] Mining enabled on all nodes
+- [x] Mining enabled on node1 only
 - [x] Blocks produced consistently
 - [x] Block propagation across nodes
 - [x] PoW consensus maintained
@@ -78,7 +78,7 @@ cd test-scripts
 ### Configuration
 - **Mixed network**: 3 Fukuii + 3 Core-Geth (or 3 Fukuii + 3 Besu)
 - Multi-client environment
-- Cross-client peer discovery
+- Cross-client static peering (no discovery; bootnodes cleared)
 - Max 5 peers per node (private battlenet limit)
 - **Goal**: Validate Fukuii interoperability with Core-Geth and Besu
 
@@ -87,7 +87,7 @@ cd test-scripts
 #### Network Topology
 - [x] Mixed network formation (3 Fukuii + 3 Core-Geth)
 - [x] Cross-client connectivity (max 5 peers per node)
-- [ ] Dynamic peer discovery across clients
+- [x] Discovery disabled; peers managed via `sync-static-nodes`
 - [ ] Peer churn handling (nodes joining/leaving)
 
 #### Mining & Consensus
@@ -327,8 +327,7 @@ cd ops/cirith-ungol
 
 ### Core Validation Documents
 - [Gorgoroth Validation Status](GORGOROTH_VALIDATION_STATUS.md) - Detailed validation tracking
-- [Gorgoroth Compatibility](GORGOROTH_COMPATIBILITY.md) - Protocol compatibility details
-- [Implementation Summary](GORGOROTH_IMPLEMENTATION_SUMMARY.md) - Technical implementation
+- [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Protocol compatibility and test procedures
 
 ### Testing Guides
 - [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Detailed test procedures

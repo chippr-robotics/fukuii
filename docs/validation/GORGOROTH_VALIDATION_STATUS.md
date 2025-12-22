@@ -1,6 +1,6 @@
 # Gorgoroth Network - Validation Status
 
-**Last Updated**: December 11, 2025  
+**Last Updated**: December 21, 2025  
 **Status**: ⚠️ **CORE FUNCTIONALITY VALIDATED - CRITICAL FIX PENDING DEPLOYMENT**
 
 ## Executive Summary
@@ -8,6 +8,12 @@
 The Gorgoroth test network infrastructure has been successfully established and initial core functionality has been validated. A critical block header encoding issue related to ECIP-1097 was discovered during Phase 2 validation on December 11, 2025, which prevented node synchronization. This issue has been identified, fixed in code, and configuration has been updated to disable ECIP-1097 (aligning with production ETC where it was withdrawn). The fix is pending deployment and re-validation.
 
 **Current Focus**: Deploy fixes and complete Phase 2 mining validation.
+
+**Session Updates (Dec 2025)**
+- Gorgoroth now keeps its *custom network name* (`network = "gorgoroth"`) while aligning chain parameters/genesis with **Mordor** to avoid private-genesis edge cases.
+- The harness runs as a *private, no-discovery* environment: discovery disabled and bootnodes cleared; peering is managed via static nodes (`fukuii-cli sync-static-nodes`).
+- The default topology uses a **single miner** (node1 mines; other nodes follow) for deterministic mining/sync validation.
+- JSON-RPC HTTP is enabled and bound for Docker use (`0.0.0.0`), with `cors-allowed-origins = "*"`.
 
 **Bonus**: For advanced real-world sync testing, see [Cirith Ungol Testing Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md).
 
@@ -30,7 +36,7 @@ The following areas need to be validated for Fukuii compatibility with core-geth
 **Evidence**: See `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal validation report)
 
 **What was tested**:
-- ✅ Peer discovery and handshakes
+- ✅ RLPx handshakes and protocol negotiation
 - ✅ Protocol compatibility (ETH68, SNAP1)
 - ⚠️ Block propagation across Fukuii nodes
 - ✅ Network connectivity in Docker environment
@@ -76,8 +82,6 @@ A critical block header encoding issue was discovered during Phase 2 validation 
 - Disabling aligns test networks with production configuration
 - Prevents false positives from testing features that won't be deployed
 - Maintains test clarity and relevance
-
-**Evidence**: See detailed analysis in [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md)
 
 **What was tested**:
 - ⚠️ Mining enabled on node1 only
@@ -509,8 +513,6 @@ When ECIP-1097 checkpointing is enabled (even with empty checkpoints), the block
 4. Confirm no "unrequested headers" warnings
 5. Execute full Phase 2 test suite
 
-**Reference**: See [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md) for detailed analysis
-
 ### Open Issues
 
 **None currently blocking validation** (pending deployment of ECIP-1097 fix)
@@ -541,7 +543,6 @@ The validation will be considered complete when:
 ## References
 
 - [Main README](README.md)
-- [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md) - **NEW: Detailed session analysis and findings**
 - [Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 - Quick Start Guide: `ops/gorgoroth/QUICKSTART.md` (internal)
 - Verification Complete Report: `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal)

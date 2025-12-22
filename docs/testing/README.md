@@ -14,7 +14,7 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 
 ### Validation Status
 - See **[GORGOROTH_VALIDATION_STATUS.md](../validation/GORGOROTH_VALIDATION_STATUS.md)** for current progress and roadmap
-- See **[GORGOROTH_COMPATIBILITY.md](../validation/GORGOROTH_COMPATIBILITY.md)** for validation overview
+- See **[GORGOROTH_COMPATIBILITY_TESTING.md](GORGOROTH_COMPATIBILITY_TESTING.md)** for testing procedures
 
 ## Test Strategy and KPIs
 
