@@ -83,8 +83,6 @@ A critical block header encoding issue was discovered during Phase 2 validation 
 - Prevents false positives from testing features that won't be deployed
 - Maintains test clarity and relevance
 
-**Evidence**: See detailed analysis in [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md)
-
 **What was tested**:
 - ⚠️ Mining enabled on node1 only
 - ⚠️ PoW consensus mechanism  
@@ -515,8 +513,6 @@ When ECIP-1097 checkpointing is enabled (even with empty checkpoints), the block
 4. Confirm no "unrequested headers" warnings
 5. Execute full Phase 2 test suite
 
-**Reference**: See [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md) for detailed analysis
-
 ### Open Issues
 
 **None currently blocking validation** (pending deployment of ECIP-1097 fix)
@@ -547,7 +543,6 @@ The validation will be considered complete when:
 ## References
 
 - [Main README](README.md)
-- [Phase 2 Field Report](GORGOROTH_PHASE2_FIELD_REPORT.md) - **NEW: Detailed session analysis and findings**
 - [Compatibility Testing Guide](../testing/GORGOROTH_COMPATIBILITY_TESTING.md)
 - Quick Start Guide: `ops/gorgoroth/QUICKSTART.md` (internal)
 - Verification Complete Report: `ops/gorgoroth/VERIFICATION_COMPLETE.md` (internal)

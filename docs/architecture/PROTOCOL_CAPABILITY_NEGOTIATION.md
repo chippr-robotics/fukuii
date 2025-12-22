@@ -225,6 +225,5 @@ grep "PROTOCOL_NEGOTIATION_FAILED\|IncompatibleP2pProtocolVersion" fukuii.log
 
 ## Related Documents
 
-- [ETC64 Removal Validation](../validation/ETC64_REMOVAL_VALIDATION.md) - Historical context on protocol cleanup
 - [RLPX Handshake and Message Encoding](../analysis/RLPX_HANDSHAKE_AND_MESSAGE_ENCODING_ANALYSIS.md) - Low-level protocol details
 - [ETH66 Protocol-Aware Message Formatting](../adr/consensus/CON-005-eth66-protocol-aware-message-formatting.md) - RequestId implementation

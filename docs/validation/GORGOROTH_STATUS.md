@@ -327,8 +327,7 @@ cd ops/cirith-ungol
 
 ### Core Validation Documents
 - [Gorgoroth Validation Status](GORGOROTH_VALIDATION_STATUS.md) - Detailed validation tracking
-- [Gorgoroth Compatibility](GORGOROTH_COMPATIBILITY.md) - Protocol compatibility details
-- [Implementation Summary](GORGOROTH_IMPLEMENTATION_SUMMARY.md) - Technical implementation
+- [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Protocol compatibility and test procedures
 
 ### Testing Guides
 - [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Detailed test procedures
