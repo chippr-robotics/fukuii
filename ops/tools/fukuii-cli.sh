@@ -67,6 +67,7 @@ Commands:
   
   Node Configuration:
     sync-static-nodes [config] - Synchronize static-nodes.json across running containers
+    smoke-test [config] - Quick smoketest (sync status, block, peers)
     collect-logs [config] - Collect logs from all containers
     pitya-lore [options]  - "Short nap" watcher that stops the net once a target block is reached
 
@@ -86,6 +87,7 @@ Examples:
   fukuii-cli start 3nodes
   fukuii-cli start cirith-ungol
   fukuii-cli sync-static-nodes 6nodes
+  fukuii-cli smoke-test fukuii-geth
   fukuii-cli logs fukuii-geth
   fukuii-cli status cirith-ungol
   fukuii-cli stop mixed
@@ -634,12 +636,28 @@ sync_gorgoroth_nodes() {
         
         echo -n "  $container ($container_type): "
         
-        # Build peer list (all enodes except this container's own enode)
+        # Build peer list (all other containers), forcing the enode host to the
+        # target container's network IP for maximum cross-client robustness.
         local peer_enodes=()
-        for enode in "${all_enodes[@]}"; do
-            if [ "$enode" != "$container_enode" ]; then
-                peer_enodes+=("$enode")
+        local other
+        for other in $containers; do
+            if [ "$other" = "$container" ]; then
+                continue
             fi
+
+            local other_enode="${ENODES_MAP[$other]}"
+            if [ -z "$other_enode" ]; then
+                continue
+            fi
+
+            local other_ip
+            other_ip=$(get_container_network_ip "$other")
+            if [ -z "$other_ip" ]; then
+                peer_enodes+=("$other_enode")
+                continue
+            fi
+
+            peer_enodes+=("$(force_enode_host "$other_enode" "$other_ip")")
         done
         
         # Update static-nodes.json based on container type
@@ -690,9 +708,11 @@ sync_gorgoroth_nodes() {
                 echo -e "$msg"
                 ;;
             besu)
-                # Update Besu node's static-nodes.json in container volume
-                local static_nodes_content=$(generate_static_nodes_json peer_enodes)
-                
+                # Update Besu node's static-nodes.json in container volume.
+                # Besu requires IP addresses (not hostnames) in enode URLs.
+                local static_nodes_content
+                static_nodes_content=$(generate_static_nodes_json peer_enodes)
+
                 # Write to /opt/besu/data/static-nodes.json inside the container
                 if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
                     echo -e "${GREEN}✓ updated container volume${NC}"
@@ -747,6 +767,36 @@ get_container_service_hostname() {
     echo "$container_name"
 }
 
+get_container_network_ip() {
+    local container_name=$1
+
+    # Return the first non-empty IPv4 address from any attached docker network.
+    # Compose attaches these stacks to a single bridge network, so this is stable.
+    docker inspect -f '{{range $netName, $net := .NetworkSettings.Networks}}{{if $net.IPAddress}}{{println $net.IPAddress}}{{end}}{{end}}' \
+        "$container_name" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1
+}
+
+force_enode_host() {
+    local enode=$1
+    local host=$2
+
+    if [[ -z "$host" ]]; then
+        echo "$enode"
+        return 0
+    fi
+
+    local pattern="^enode://([0-9a-fA-F]{${ENODE_ID_LENGTH}})@(.+):([0-9]+)$"
+    if [[ "$enode" =~ $pattern ]]; then
+        local node_id="${BASH_REMATCH[1]}"
+        local port="${BASH_REMATCH[3]}"
+        echo "enode://$node_id@$host:$port"
+        return 0
+    fi
+
+    echo "$enode"
+    return 0
+}
+
 format_enode_hostname() {
     local enode=$1
     local hostname=$2
@@ -775,6 +825,359 @@ format_enode_hostname() {
 
     echo "$enode"
     return 0
+}
+
+get_container_host_port() {
+    local container_name=$1
+    local container_port=$2
+
+    docker inspect -f "{{with (index .NetworkSettings.Ports \"${container_port}/tcp\")}}{{(index . 0).HostPort}}{{end}}" \
+        "$container_name" 2>/dev/null || true
+}
+
+resolve_rpc_url() {
+    local container_name=$1
+    local container_type=$2
+    local probe_method=${3:-}
+    local ports=()
+    local fallback_url=""
+
+    case "$container_type" in
+        fukuii)
+            ports=(8546 8545)
+            ;;
+        geth|besu)
+            ports=(8545 8546)
+            ;;
+        *)
+            ports=(8545 8546)
+            ;;
+    esac
+
+    local port
+    for port in "${ports[@]}"; do
+        local host_port
+        host_port=$(get_container_host_port "$container_name" "$port")
+        if [ -z "$host_port" ]; then
+            continue
+        fi
+
+        local candidate="http://127.0.0.1:${host_port}"
+        if [ -z "$fallback_url" ]; then
+            fallback_url="$candidate"
+        fi
+        if [ -z "$probe_method" ]; then
+            echo "$candidate"
+            return 0
+        fi
+
+        # Nodes may take a few seconds to bring up JSON-RPC after container start.
+        local attempt=0
+        while [ $attempt -lt 5 ]; do
+            local probe_response
+            probe_response=$(rpc_call "$candidate" "$probe_method")
+            if rpc_response_ok "$probe_response"; then
+                echo "$candidate"
+                return 0
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+        done
+    done
+
+    if [ -n "$fallback_url" ]; then
+        echo "$fallback_url"
+        return 0
+    fi
+
+    return 1
+}
+
+rpc_call() {
+    local rpc_url=$1
+    local method=$2
+
+    curl -s --max-time 5 -X POST -H 'Content-Type: application/json' \
+        --data "{\"jsonrpc\":\"2.0\",\"method\":\"${method}\",\"params\":[],\"id\":1}" \
+        "$rpc_url" 2>/dev/null || true
+}
+
+rpc_call_container() {
+    local container_name=$1
+    local container_type=$2
+    local port=$3
+    local method=$4
+
+    if [ -n "$port" ] && docker exec "$container_name" sh -c "command -v curl >/dev/null 2>&1" 2>/dev/null; then
+        docker exec "$container_name" sh -c \
+            "curl -s --max-time 5 -X POST -H 'Content-Type: application/json' \
+            --data '{\"jsonrpc\":\"2.0\",\"method\":\"${method}\",\"params\":[],\"id\":1}' \
+            http://localhost:${port}" 2>/dev/null || true
+        return 0
+    fi
+
+    if [[ "$container_type" == "geth" ]]; then
+        local expr=""
+        case "$method" in
+            eth_syncing)
+                expr="JSON.stringify(eth.syncing)"
+                ;;
+            eth_blockNumber)
+                expr="eth.blockNumber"
+                ;;
+            net_peerCount)
+                expr="net.peerCount"
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+                # Update Besu node's static-nodes.json in container volume.
+                # Besu requires IP addresses (not hostnames) in enode URLs.
+                local besu_peer_enodes=()
+                local other
+                for other in $containers; do
+                    if [ "$other" = "$container" ]; then
+                        continue
+                    fi
+                    local other_enode="${ENODES_MAP[$other]}"
+                    if [ -z "$other_enode" ]; then
+                        continue
+                    fi
+
+                    local other_ip
+                    other_ip=$(get_container_network_ip "$other")
+                    if [ -z "$other_ip" ]; then
+                        echo -e "${YELLOW}⚠ missing container IP for $other; skipping for Besu peers${NC}"
+                        continue
+                    fi
+
+                    besu_peer_enodes+=("$(force_enode_host "$other_enode" "$other_ip")")
+                done
+
+                local static_nodes_content
+                static_nodes_content=$(generate_static_nodes_json besu_peer_enodes)
+
+                # Write to /opt/besu/data/static-nodes.json inside the container
+                if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
+                    echo -e "${GREEN}✓ updated container volume${NC}"
+                else
+                    echo -e "${RED}✗ failed to update${NC}"
+                fi
+
+        printf '%s' "$attach_out" | python3 - <<'PY'
+import json
+import sys
+
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(1)
+
+try:
+    value = json.loads(raw)
+except Exception:
+    value = raw
+
+if isinstance(value, str):
+    try:
+        value = json.loads(value)
+    except Exception:
+        pass
+
+print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": value}))
+PY
+        return 0
+    fi
+
+    return 1
+}
+
+resolve_container_rpc_port() {
+    local container_name=$1
+    local container_type=$2
+    local probe_method=${3:-}
+    local ports=()
+
+    case "$container_type" in
+        fukuii)
+            ports=(8546 8545)
+            ;;
+        geth|besu)
+            ports=(8545 8546)
+            ;;
+        *)
+            ports=(8545 8546)
+            ;;
+    esac
+
+    if docker exec "$container_name" sh -c "command -v curl >/dev/null 2>&1" 2>/dev/null; then
+        local port
+        for port in "${ports[@]}"; do
+            local probe_response
+            probe_response=$(rpc_call_container "$container_name" "$container_type" "$port" "$probe_method")
+            if rpc_response_ok "$probe_response"; then
+                echo "$port"
+                return 0
+            fi
+        done
+    fi
+
+    if [[ "$container_type" == "geth" ]]; then
+        local probe_response
+        probe_response=$(rpc_call_container "$container_name" "$container_type" "" "$probe_method")
+        if rpc_response_ok "$probe_response"; then
+            echo "ipc"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+json_result_value() {
+    python3 -c 'import json,sys
+data = sys.stdin.read()
+try:
+    obj = json.loads(data)
+except Exception:
+    print("")
+    sys.exit(0)
+res = obj.get("result")
+if isinstance(res, (dict, list)):
+    print(json.dumps(res))
+elif res is True:
+    print("true")
+elif res is False:
+    print("false")
+elif res is None:
+    print("")
+else:
+    print(res)'
+}
+
+json_error_message() {
+    python3 -c 'import json,sys
+data = sys.stdin.read()
+try:
+    obj = json.loads(data)
+except Exception:
+    print("")
+    sys.exit(0)
+err = obj.get("error")
+if isinstance(err, dict):
+    msg = err.get("message")
+    if msg:
+        print(msg)
+    else:
+        print(json.dumps(err))
+elif err:
+    print(str(err))
+else:
+    print("")'
+}
+
+rpc_response_ok() {
+    local response=$1
+
+    if [ -z "$response" ]; then
+        return 1
+    fi
+
+    local result
+    result=$(json_result_value <<< "$response")
+    local err
+    err=$(json_error_message <<< "$response")
+
+    if [ -n "$result" ] || [ -n "$err" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+parse_sync_status() {
+    python3 -c 'import json,sys
+data = sys.stdin.read()
+try:
+    obj = json.loads(data)
+except Exception:
+    print("")
+    sys.exit(0)
+res = obj.get("result")
+if res is False:
+    print("false")
+    sys.exit(0)
+if res is True:
+    print("true")
+    sys.exit(0)
+if isinstance(res, dict):
+    def to_int(value):
+        if isinstance(value, bool) or value is None:
+            return ""
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            if value.startswith("0x"):
+                try:
+                    return str(int(value, 16))
+                except Exception:
+                    return value
+            if value.isdigit():
+                return value
+            if any(c in "abcdefABCDEF" for c in value):
+                try:
+                    return str(int(value, 16))
+                except Exception:
+                    return value
+        return ""
+    parts = []
+    current = to_int(res.get("currentBlock"))
+    highest = to_int(res.get("highestBlock"))
+    starting = to_int(res.get("startingBlock"))
+    if current:
+        parts.append(f"current={current}")
+    if highest:
+        parts.append(f"highest={highest}")
+    if starting:
+        parts.append(f"starting={starting}")
+    if parts:
+        print("true (" + " ".join(parts) + ")")
+    else:
+        print("true")
+    sys.exit(0)
+print("")'
+}
+
+hex_to_dec() {
+    local hex_value=$1
+
+    if [ -z "$hex_value" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [[ ! "$hex_value" =~ ^0x[0-9a-fA-F]+$ && ! "$hex_value" =~ ^[0-9a-fA-F]+$ ]]; then
+        echo ""
+        return 0
+    fi
+
+    if [[ "$hex_value" == 0x* ]]; then
+        hex_value=${hex_value#0x}
+    else
+        if [[ ! "$hex_value" =~ [a-fA-F] ]]; then
+            if [[ "$hex_value" =~ ^[0-9]+$ ]]; then
+                echo "$hex_value"
+                return 0
+            fi
+        fi
+    fi
+
+    if [ -z "$hex_value" ]; then
+        echo "0"
+        return 0
+    fi
+
+    printf "%d" "$((16#$hex_value))"
 }
 
 get_container_type() {
@@ -944,6 +1347,159 @@ get_enode_from_container() {
     done
     
     return 1
+}
+
+smoke_test() {
+    local config="${1:-3nodes}"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo -e "${RED}Error: curl is required for smoke-test${NC}" >&2
+        return 1
+    fi
+
+    ensure_python3 || return 1
+
+    echo -e "${BLUE}=== Smoke Test ===${NC}"
+    echo -e "${BLUE}Configuration: $config${NC}"
+    echo ""
+
+    # Determine container name patterns based on configuration
+    local container_patterns=()
+    if [[ "$config" == "cirith-ungol" ]]; then
+        container_patterns+=("fukuii-cirith-ungol" "coregeth-cirith-ungol")
+    elif [[ "$config" == "fukuii-geth" ]]; then
+        container_patterns+=("gorgoroth-fukuii-" "gorgoroth-geth-")
+    elif [[ "$config" == "fukuii-besu" ]]; then
+        container_patterns+=("gorgoroth-fukuii-" "gorgoroth-besu-")
+    elif [[ "$config" == "mixed" ]]; then
+        container_patterns+=("gorgoroth-fukuii-" "gorgoroth-geth-" "gorgoroth-besu-")
+    else
+        # Default: only Fukuii nodes (3nodes, 6nodes)
+        container_patterns+=("gorgoroth-fukuii-")
+    fi
+
+    local CONTAINERS=""
+    for pattern in "${container_patterns[@]}"; do
+        local found_containers
+        found_containers=$(docker ps --filter "name=${pattern}" --format "{{.Names}}" | sort || true)
+        if [ -n "$found_containers" ]; then
+            CONTAINERS="${CONTAINERS}${found_containers}"$'\n'
+        fi
+    done
+    CONTAINERS=$(echo "$CONTAINERS" | grep -v '^$' | sort || true)
+
+    if [ -z "$CONTAINERS" ]; then
+        echo -e "${RED}Error: No running containers found for patterns: ${container_patterns[*]}${NC}"
+        echo "Start the network first with: fukuii-cli start $config"
+        return 1
+    fi
+
+    echo -e "${GREEN}Found running containers:${NC}"
+    echo "$CONTAINERS" | sed 's/^/  - /'
+    echo ""
+
+    for container in $CONTAINERS; do
+        local container_type
+        container_type=$(get_container_type "$container")
+
+        local rpc_url
+        local rpc_source="host"
+        local rpc_port=""
+        local rpc_label=""
+        local block_response=""
+        local probe_method="eth_blockNumber"
+        rpc_url=$(resolve_rpc_url "$container" "$container_type" "$probe_method") || rpc_url=""
+
+        echo -e "${BLUE}${container}${NC} (${container_type})"
+        if [ -n "$rpc_url" ]; then
+            block_response=$(rpc_call "$rpc_url" "$probe_method")
+            if ! rpc_response_ok "$block_response"; then
+                rpc_url=""
+            else
+                rpc_label="$rpc_url"
+            fi
+        fi
+
+        if [ -z "$rpc_url" ]; then
+            rpc_port=$(resolve_container_rpc_port "$container" "$container_type" "$probe_method") || rpc_port=""
+            if [ -n "$rpc_port" ]; then
+                rpc_source="container"
+                if [ "$rpc_port" = "ipc" ]; then
+                    rpc_label="container://$container (geth attach)"
+                    rpc_port=""
+                else
+                    rpc_label="container://$container:$rpc_port"
+                fi
+                block_response=$(rpc_call_container "$container" "$container_type" "$rpc_port" "$probe_method")
+            fi
+        fi
+
+        if [ -z "$rpc_label" ]; then
+            echo -e "  ${YELLOW}RPC unavailable (no host response or container access)${NC}"
+            echo ""
+            continue
+        fi
+
+        local sync_response
+        local peer_response
+        if [ "$rpc_source" = "container" ]; then
+            sync_response=$(rpc_call_container "$container" "$container_type" "$rpc_port" "eth_syncing")
+            peer_response=$(rpc_call_container "$container" "$container_type" "$rpc_port" "net_peerCount")
+        else
+            sync_response=$(rpc_call "$rpc_url" "eth_syncing")
+            peer_response=$(rpc_call "$rpc_url" "net_peerCount")
+        fi
+
+        if [ -z "$block_response" ]; then
+            if [ "$rpc_source" = "container" ]; then
+                block_response=$(rpc_call_container "$container" "$container_type" "$rpc_port" "eth_blockNumber")
+            else
+                block_response=$(rpc_call "$rpc_url" "eth_blockNumber")
+            fi
+        fi
+
+        local sync_status
+        sync_status=$(parse_sync_status <<< "$sync_response")
+        if [ -z "$sync_status" ]; then
+            local err_msg
+            err_msg=$(json_error_message <<< "$sync_response")
+            if [ -n "$err_msg" ]; then
+                sync_status="error: $err_msg"
+            else
+                sync_status="error"
+            fi
+        fi
+
+        local block_hex
+        block_hex=$(json_result_value <<< "$block_response")
+        local block_dec
+        block_dec=$(hex_to_dec "$block_hex")
+        if [ -z "$block_hex" ]; then
+            block_hex="unknown"
+        fi
+        if [ -z "$block_dec" ]; then
+            block_dec="unknown"
+        fi
+
+        local peer_hex
+        peer_hex=$(json_result_value <<< "$peer_response")
+        local peer_dec
+        peer_dec=$(hex_to_dec "$peer_hex")
+        if [ -z "$peer_hex" ]; then
+            peer_hex="unknown"
+        fi
+        if [ -z "$peer_dec" ]; then
+            peer_dec="unknown"
+        fi
+
+        echo "  rpc:   $rpc_label"
+        echo "  sync:  $sync_status"
+        echo "  block: $block_dec ($block_hex)"
+        echo "  peers: $peer_dec ($peer_hex)"
+        echo ""
+    done
+
+    echo -e "${GREEN}Smoke test complete${NC}"
 }
 
 collect_logs_cmd() {
@@ -1176,6 +1732,9 @@ case $COMMAND in
         ;;
     collect-logs)
         collect_logs_cmd "$@"
+        ;;
+    smoke-test)
+        smoke_test "$@"
         ;;
     pitya-lore)
         pitya_lore_short_nap "$@"
