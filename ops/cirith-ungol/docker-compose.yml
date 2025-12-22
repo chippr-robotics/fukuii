@@ -24,8 +24,7 @@ services:
       - ./conf/coregeth-config.toml:/root/.ethereum/config.toml:ro
     command:
       - "--config=/root/.ethereum/config.toml"
-      - "--networkid=1"
-      - "--classic"
+      - "--mordor"
       - "--datadir=/root/.ethereum"
       # Increase logging to capture detailed RLPx/devp2p handshake behavior.
       # verbosity: 0=silent, 1=error, 2=warn, 3=info, 4=debug, 5=detail
@@ -78,7 +77,7 @@ services:
     environment:
       # Set node identifier for logging
       - FUKUII_NODE_ID=cirith-ungol
-      - FUKUII_ENV=cirith-ungol-mainnet
+      - FUKUII_ENV=cirith-ungol-mordor
       # Reduce Pekko (actor system) log noise; logback is configured via logging.logs-level.
       - PEKKO_LOGLEVEL=INFO
     # Configuration files are loaded from /app/conf/
