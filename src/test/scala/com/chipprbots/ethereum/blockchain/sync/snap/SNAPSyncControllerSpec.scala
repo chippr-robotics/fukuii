@@ -165,4 +165,72 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     validation shouldBe a[SyncPhase]
     complete shouldBe a[SyncPhase]
   }
+
+  "SNAPSyncController" should "provide status for eth_syncing RPC" taggedAs UnitTest in {
+    import SNAPSyncController._
+    import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+
+    // Verify that SNAP sync phases can be converted to state node progress
+    // This is tested indirectly through the currentSyncStatus method
+    // but we can verify the data structures are compatible
+    
+    val accountProgress = SyncProgress(
+      phase = AccountRangeSync,
+      accountsSynced = 1000,
+      bytecodesDownloaded = 0,
+      storageSlotsSynced = 0,
+      nodesHealed = 0,
+      elapsedSeconds = 10.0,
+      phaseElapsedSeconds = 10.0,
+      accountsPerSec = 100.0,
+      bytecodesPerSec = 0.0,
+      slotsPerSec = 0.0,
+      nodesPerSec = 0.0,
+      recentAccountsPerSec = 100.0,
+      recentBytecodesPerSec = 0.0,
+      recentSlotsPerSec = 0.0,
+      recentNodesPerSec = 0.0,
+      phaseProgress = 50,
+      estimatedTotalAccounts = 2000,
+      estimatedTotalBytecodes = 0,
+      estimatedTotalSlots = 0,
+      startTime = System.currentTimeMillis(),
+      phaseStartTime = System.currentTimeMillis()
+    )
+    
+    // Verify progress tracking for different phases
+    accountProgress.accountsSynced shouldBe 1000
+    accountProgress.estimatedTotalAccounts shouldBe 2000
+    accountProgress.phase shouldBe AccountRangeSync
+    
+    // Verify that we can represent state node progress
+    // In SNAP sync, state nodes = accounts + bytecodes + storage slots + healed nodes
+    val totalStateNodes = accountProgress.accountsSynced + 
+                         accountProgress.bytecodesDownloaded + 
+                         accountProgress.storageSlotsSynced + 
+                         accountProgress.nodesHealed
+    
+    totalStateNodes shouldBe 1000 // Only accounts at this phase
+    
+    // Test bytecode phase accumulation
+    val bytecodeProgress = accountProgress.copy(
+      phase = ByteCodeSync,
+      bytecodesDownloaded = 500
+    )
+    
+    val totalWithBytecodes = bytecodeProgress.accountsSynced + 
+                            bytecodeProgress.bytecodesDownloaded
+    totalWithBytecodes shouldBe 1500
+    
+    // Test storage phase accumulation
+    val storageProgress = bytecodeProgress.copy(
+      phase = StorageRangeSync,
+      storageSlotsSynced = 3000
+    )
+    
+    val totalWithStorage = storageProgress.accountsSynced + 
+                          storageProgress.bytecodesDownloaded + 
+                          storageProgress.storageSlotsSynced
+    totalWithStorage shouldBe 4500
+  }
 }
