@@ -112,9 +112,13 @@ class SNAPSyncController(
 
   override def receive: Receive = idle
 
-  def idle: Receive = { case Start =>
-    log.info("Starting SNAP sync...")
-    startSnapSync()
+  def idle: Receive = {
+    case Start =>
+      log.info("Starting SNAP sync...")
+      startSnapSync()
+
+    case SyncProtocol.GetStatus =>
+      sender() ! SyncProtocol.Status.NotSyncing
   }
 
   def syncing: Receive = handlePeerListMessages.orElse {
@@ -207,6 +211,9 @@ class SNAPSyncController(
     case StateValidationComplete =>
       log.info("State validation complete. SNAP sync finished!")
       completeSnapSync()
+
+    case SyncProtocol.GetStatus =>
+      sender() ! currentSyncStatus
 
     case GetProgress =>
       sender() ! progressMonitor.currentProgress
@@ -321,12 +328,28 @@ class SNAPSyncController(
         startTime = System.currentTimeMillis(),
         phaseStartTime = System.currentTimeMillis()
       )
+
+    case SyncProtocol.GetStatus =>
+      // During bootstrap, we're syncing via regular sync
+      // Return syncing status based on bootstrap progress
+      val currentBlock = appStateStorage.getBestBlockNumber()
+      val targetBlock = appStateStorage.getSnapSyncBootstrapTarget().getOrElse(BigInt(0))
+      val startingBlock = appStateStorage.getSyncStartingBlock()
+      
+      sender() ! SyncProtocol.Status.Syncing(
+        startingBlockNumber = startingBlock,
+        blocksProgress = SyncProtocol.Status.Progress(currentBlock, targetBlock),
+        stateNodesProgress = None
+      )
     
     case msg =>
       log.debug(s"Unhandled message in bootstrapping state: $msg")
   }
 
   def completed: Receive = {
+    case SyncProtocol.GetStatus =>
+      sender() ! SyncProtocol.Status.SyncDone
+
     case GetProgress =>
       sender() ! progressMonitor.currentProgress
 
@@ -970,6 +993,65 @@ class SNAPSyncController(
           }
         }(ec)
     }
+  }
+
+  /** Convert SNAP sync progress to SyncProtocol.Status for eth_syncing RPC endpoint.
+    * 
+    * Returns syncing status with:
+    * - startingBlock: The block number we started syncing from
+    * - currentBlock: The pivot block we're syncing state for
+    * - highestBlock: The pivot block (same as current for SNAP sync)
+    * - knownStates: Estimated total state nodes based on current phase
+    * - pulledStates: Number of state nodes synced so far
+    */
+  private def currentSyncStatus: SyncProtocol.Status = {
+    val progress = progressMonitor.currentProgress
+    val startingBlock = appStateStorage.getSyncStartingBlock()
+    val currentBlock = pivotBlock.getOrElse(startingBlock)
+    
+    // Calculate state progress based on current phase
+    // SNAP sync involves multiple phases: accounts, bytecode, storage, healing
+    val (pulledStates, knownStates) = currentPhase match {
+      case AccountRangeSync =>
+        // In account range sync, we track accounts synced
+        (progress.accountsSynced, progress.estimatedTotalAccounts.max(progress.accountsSynced))
+      
+      case ByteCodeSync =>
+        // In bytecode sync, we add accounts + bytecodes
+        val pulled = progress.accountsSynced + progress.bytecodesDownloaded
+        val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes.max(progress.bytecodesDownloaded)
+        (pulled, known)
+      
+      case StorageRangeSync =>
+        // In storage sync, we add accounts + bytecodes + storage slots
+        val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
+        val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes + 
+                   progress.estimatedTotalSlots.max(progress.storageSlotsSynced)
+        (pulled, known)
+      
+      case StateHealing =>
+        // In healing, we add nodes healed to the total
+        val pulled = progress.accountsSynced + progress.bytecodesDownloaded + 
+                    progress.storageSlotsSynced + progress.nodesHealed
+        val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes + 
+                   progress.estimatedTotalSlots + progress.nodesHealed
+        (pulled, known)
+      
+      case StateValidation =>
+        // During validation, show total state synced
+        val total = progress.accountsSynced + progress.bytecodesDownloaded + 
+                   progress.storageSlotsSynced + progress.nodesHealed
+        (total, total)
+      
+      case Idle | Completed =>
+        (0L, 0L)
+    }
+    
+    SyncProtocol.Status.Syncing(
+      startingBlockNumber = startingBlock,
+      blocksProgress = SyncProtocol.Status.Progress(currentBlock, currentBlock),
+      stateNodesProgress = Some(SyncProtocol.Status.Progress(BigInt(pulledStates), BigInt(knownStates)))
+    )
   }
 
   private def completeSnapSync(): Unit =
