@@ -1009,27 +1009,29 @@ class SNAPSyncController(
     val startingBlock = appStateStorage.getSyncStartingBlock()
     val currentBlock = pivotBlock.getOrElse(startingBlock)
     
+    /** Helper to get estimate or actual count, whichever is larger.
+      * Used as a defensive fallback when estimates are not yet available (0).
+      */
+    def estimateOrActual(estimate: Long, actual: Long): Long = estimate.max(actual)
+    
     // Calculate state progress based on current phase
     // SNAP sync involves multiple phases: accounts, bytecode, storage, healing
     val (pulledStates, knownStates) = currentPhase match {
       case AccountRangeSync =>
         // In account range sync, we track accounts synced
-        // Use max() as a fallback when estimates are not yet available (0)
-        (progress.accountsSynced, progress.estimatedTotalAccounts.max(progress.accountsSynced))
+        (progress.accountsSynced, estimateOrActual(progress.estimatedTotalAccounts, progress.accountsSynced))
       
       case ByteCodeSync =>
         // In bytecode sync, we add accounts + bytecodes
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded
-        // Use max() as a fallback when estimates are not yet available (0)
-        val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes.max(progress.bytecodesDownloaded)
+        val known = progress.estimatedTotalAccounts + estimateOrActual(progress.estimatedTotalBytecodes, progress.bytecodesDownloaded)
         (pulled, known)
       
       case StorageRangeSync =>
         // In storage sync, we add accounts + bytecodes + storage slots
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
-        // Use max() as a fallback when estimates are not yet available (0)
         val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes + 
-                   progress.estimatedTotalSlots.max(progress.storageSlotsSynced)
+                   estimateOrActual(progress.estimatedTotalSlots, progress.storageSlotsSynced)
         (pulled, known)
       
       case StateHealing =>
@@ -1041,8 +1043,8 @@ class SNAPSyncController(
         // Known is the sum of estimates from previous phases (healing adds no new estimate)
         val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes + 
                    progress.estimatedTotalSlots
-        // If we're healing, ensure known is at least as much as pulled
-        (pulled, known.max(pulled))
+        // Ensure known is at least as much as pulled (consistent with defensive fallback pattern)
+        (pulled, estimateOrActual(known, pulled))
       
       case StateValidation =>
         // During validation, show total state synced
