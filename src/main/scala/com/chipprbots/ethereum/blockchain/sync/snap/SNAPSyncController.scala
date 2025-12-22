@@ -1014,28 +1014,35 @@ class SNAPSyncController(
     val (pulledStates, knownStates) = currentPhase match {
       case AccountRangeSync =>
         // In account range sync, we track accounts synced
+        // Use max() as a fallback when estimates are not yet available (0)
         (progress.accountsSynced, progress.estimatedTotalAccounts.max(progress.accountsSynced))
       
       case ByteCodeSync =>
         // In bytecode sync, we add accounts + bytecodes
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded
+        // Use max() as a fallback when estimates are not yet available (0)
         val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes.max(progress.bytecodesDownloaded)
         (pulled, known)
       
       case StorageRangeSync =>
         // In storage sync, we add accounts + bytecodes + storage slots
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
+        // Use max() as a fallback when estimates are not yet available (0)
         val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes + 
                    progress.estimatedTotalSlots.max(progress.storageSlotsSynced)
         (pulled, known)
       
       case StateHealing =>
-        // In healing, we add nodes healed to the total
+        // In healing, we add nodes healed to the pulled count
+        // For the known total, use the sum of all previous phases since we don't know
+        // how many nodes need healing until validation discovers them
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded + 
                     progress.storageSlotsSynced + progress.nodesHealed
+        // Known is the sum of estimates from previous phases (healing adds no new estimate)
         val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes + 
-                   progress.estimatedTotalSlots + progress.nodesHealed
-        (pulled, known)
+                   progress.estimatedTotalSlots
+        // If we're healing, ensure known is at least as much as pulled
+        (pulled, known.max(pulled))
       
       case StateValidation =>
         // During validation, show total state synced
