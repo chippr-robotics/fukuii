@@ -105,7 +105,7 @@ object BlockHeader {
   import com.chipprbots.ethereum.rlp.RLPImplicits._
 
   /** Empty MPT root hash. Data type is irrelevant */
-  val EmptyMpt: ByteString = ByteString(crypto.kec256(rlp.encode(Array.emptyByteArray)))
+  val EmptyMpt: ByteString = ByteString(crypto.kec256(rlp.encode(Array.empty[Byte])))
 
   val EmptyBeneficiary: ByteString = Address(0).bytes
 

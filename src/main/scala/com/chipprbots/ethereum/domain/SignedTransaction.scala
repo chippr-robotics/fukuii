@@ -297,7 +297,7 @@ object SignedTransaction {
     *   the transaction payload for Legacy transaction
     */
   private def generalTransactionBytes(tx: Transaction): Array[Byte] = {
-    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.emptyByteArray)
+    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
     crypto.kec256(
       rlpEncode(
         RLPList(
@@ -322,7 +322,7 @@ object SignedTransaction {
     *   the transaction payload for Legacy transaction
     */
   private def chainSpecificTransactionBytes(tx: Transaction, chainId: BigInt): Array[Byte] = {
-    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.emptyByteArray)
+    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
     crypto.kec256(
       rlpEncode(
         RLPList(
@@ -422,7 +422,7 @@ object SignedTransaction {
     */
   private def getTWALBytesToSign(tx: TransactionWithAccessList): Array[Byte] = {
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
-    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.emptyByteArray)
+    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
     crypto.kec256(
       rlpEncode(
         PrefixedRLPEncodable(

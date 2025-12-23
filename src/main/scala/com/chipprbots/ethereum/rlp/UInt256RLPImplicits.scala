@@ -9,7 +9,7 @@ object UInt256RLPImplicits {
 
   implicit class UInt256Enc(obj: UInt256) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable =
-      RLPValue(if (obj.equals(UInt256.Zero)) byteToByteArray(0: Byte) else obj.bytes.dropWhile(_ == 0).toArray[Byte])
+      RLPValue(if (obj.equals(UInt256.Zero)) Array.empty[Byte] else obj.bytes.dropWhile(_ == 0).toArray[Byte])
   }
 
   implicit class UInt256Dec(val bytes: ByteString) extends AnyVal {

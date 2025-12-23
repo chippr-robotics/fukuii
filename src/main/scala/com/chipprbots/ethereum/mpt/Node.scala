@@ -126,7 +126,7 @@ case object NullNode extends MptNode {
   def withCachedRlpEncoded(cachedEncode: Array[Byte]): MptNode = this
 
   override def isNull: Boolean = true
-  val parsedRlp: Option[RLPEncodeable] = Some(RLPValue(Array.emptyByteArray))
+  val parsedRlp: Option[RLPEncodeable] = Some(RLPValue(Array.empty[Byte]))
 }
 
 object ExtensionNode {

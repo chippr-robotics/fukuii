@@ -62,9 +62,9 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
 
   val encodedBranchNode: RLPList = {
     val encodeableList: Array[RLPEncodeable] =
-      (Array.fill[RLPValue](3)(RLPValue(Array.emptyByteArray)) :+ RLPValue(exampleHash.toArray[Byte])) ++
-        (Array.fill[RLPValue](6)(RLPValue(Array.emptyByteArray)) :+ RLPValue(exampleHash.toArray[Byte])) ++
-        (Array.fill[RLPValue](5)(RLPValue(Array.emptyByteArray)) :+ (Array.emptyByteArray: RLPEncodeable))
+      (Array.fill[RLPValue](3)(RLPValue(Array.empty[Byte])) :+ RLPValue(exampleHash.toArray[Byte])) ++
+        (Array.fill[RLPValue](6)(RLPValue(Array.empty[Byte])) :+ RLPValue(exampleHash.toArray[Byte])) ++
+        (Array.fill[RLPValue](5)(RLPValue(Array.empty[Byte])) :+ (Array.empty[Byte]: RLPEncodeable))
     RLPList(ArraySeq.unsafeWrapArray(encodeableList): _*)
   }
 
