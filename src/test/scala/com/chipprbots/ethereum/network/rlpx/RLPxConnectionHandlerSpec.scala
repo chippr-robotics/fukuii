@@ -414,9 +414,9 @@ class RLPxConnectionHandlerSpec
           response,
           AuthHandshakeSuccess(
             new Secrets(
-              Array.emptyByteArray,
-              Array.emptyByteArray,
-              Array.emptyByteArray,
+              Array.empty[Byte],
+              Array.empty[Byte],
+              Array.empty[Byte],
               new org.bouncycastle.crypto.digests.KeccakDigest(256),
               new org.bouncycastle.crypto.digests.KeccakDigest(256)
             ),

@@ -34,7 +34,7 @@ object MerklePatriciaTrie {
   class MissingRootNodeException(hash: ByteString)
       extends MissingNodeException(hash, s"Root node not found ${Hex.toHexString(hash.toArray)}")
 
-  val EmptyEncoded: Array[Byte] = encodeRLP(Array.emptyByteArray)
+  val EmptyEncoded: Array[Byte] = encodeRLP(Array.empty[Byte])
   val EmptyRootHash: Array[Byte] = Node.hashFn(EmptyEncoded)
 
   private case class NodeInsertResult(newNode: MptNode, toDeleteFromStorage: List[MptNode] = Nil)

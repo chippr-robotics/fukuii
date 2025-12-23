@@ -215,7 +215,7 @@ object BaseETH6XMessages {
       override def toRLPEncodable: RLPEncodeable = {
         val receivingAddressBytes = signedTx.tx.receivingAddress
           .map(_.toArray)
-          .getOrElse(Array.emptyByteArray)
+          .getOrElse(Array.empty[Byte])
         signedTx.tx match {
           case TransactionWithAccessList(chainId, nonce, gasPrice, gasLimit, _, value, payload, accessList) =>
             PrefixedRLPEncodable(
