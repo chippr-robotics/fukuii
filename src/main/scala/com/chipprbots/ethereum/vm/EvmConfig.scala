@@ -38,16 +38,18 @@ object EvmConfig {
       (blockchainConfig.eip160BlockNumber, 4, PostEIP160ConfigBuilder),
       (blockchainConfig.eip161BlockNumber, 5, PostEIP161ConfigBuilder),
       (blockchainConfig.byzantiumBlockNumber, 6, ByzantiumConfigBuilder),
-      (blockchainConfig.atlantisBlockNumber, 6, AtlantisConfigBuilder),
-      (blockchainConfig.constantinopleBlockNumber, 7, ConstantinopleConfigBuilder),
-      (blockchainConfig.aghartaBlockNumber, 7, AghartaConfigBuilder),
-      (blockchainConfig.petersburgBlockNumber, 8, PetersburgConfigBuilder),
-      (blockchainConfig.istanbulBlockNumber, 9, IstanbulConfigBuilder),
-      (blockchainConfig.phoenixBlockNumber, 9, PhoenixConfigBuilder),
-      (blockchainConfig.magnetoBlockNumber, 10, MagnetoConfigBuilder),
-      (blockchainConfig.berlinBlockNumber, 10, BerlinConfigBuilder),
-      (blockchainConfig.mystiqueBlockNumber, 11, MystiqueConfigBuilder),
-      (blockchainConfig.spiralBlockNumber, 12, SpiralConfigBuilder)
+      // ETC forks may intentionally share the same activation height as their ETH counterparts.
+      // In that case we must prefer the ETC config, otherwise gas accounting/opcodes can diverge.
+      (blockchainConfig.atlantisBlockNumber, 7, AtlantisConfigBuilder),
+      (blockchainConfig.constantinopleBlockNumber, 8, ConstantinopleConfigBuilder),
+      (blockchainConfig.aghartaBlockNumber, 9, AghartaConfigBuilder),
+      (blockchainConfig.petersburgBlockNumber, 10, PetersburgConfigBuilder),
+      (blockchainConfig.istanbulBlockNumber, 11, IstanbulConfigBuilder),
+      (blockchainConfig.phoenixBlockNumber, 12, PhoenixConfigBuilder),
+      (blockchainConfig.magnetoBlockNumber, 13, MagnetoConfigBuilder),
+      (blockchainConfig.berlinBlockNumber, 14, BerlinConfigBuilder),
+      (blockchainConfig.mystiqueBlockNumber, 15, MystiqueConfigBuilder),
+      (blockchainConfig.spiralBlockNumber, 16, SpiralConfigBuilder)
     )
 
     // highest transition block that is less/equal to `blockNumber`

@@ -42,13 +42,6 @@
                 <message>message</message>
                 <stackTrace>stack_trace</stackTrace>
             </fieldNames>
-            <!-- Include MDC (Mapped Diagnostic Context) fields -->
-            <includeMdcKeyNames>
-                <includeMdcKeyName>peer</includeMdcKeyName>
-                <includeMdcKeyName>block</includeMdcKeyName>
-                <includeMdcKeyName>transaction</includeMdcKeyName>
-                <includeMdcKeyName>actor</includeMdcKeyName>
-            </includeMdcKeyNames>
             <!-- Include caller info for debugging 
                  Set to true via -Dlogback.includeCallerData=true for detailed debugging
                  Disabled by default in production for performance -->
@@ -198,6 +191,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="INFO" />
+
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor" level="INFO" />
     
