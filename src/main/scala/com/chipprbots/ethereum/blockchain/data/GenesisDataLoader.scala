@@ -48,7 +48,7 @@ class GenesisDataLoader(
 
   import Account._
 
-  private val emptyTrieRootHash = ByteString(crypto.kec256(rlp.encode(Array.emptyByteArray)))
+  private val emptyTrieRootHash = ByteString(crypto.kec256(rlp.encode(Array.empty[Byte])))
 
   def loadGenesisData()(implicit blockchainConfig: BlockchainConfig): Unit = {
     log.debug("Loading genesis data")

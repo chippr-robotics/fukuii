@@ -19,12 +19,12 @@ import com.chipprbots.ethereum.testing.Tags._
 class RLPSuite extends AnyFunSuite with ScalaCheckPropertyChecks with ScalaCheckDrivenPropertyChecks {
 
   test("nextElementIndex of empty data", UnitTest, RLPTest) {
-    val maybeIndex = Try(nextElementIndex(Array.emptyByteArray, 0))
+    val maybeIndex = Try(nextElementIndex(Array.empty[Byte], 0))
     assert(maybeIndex.isFailure)
   }
 
   test("Decoding of empty data", UnitTest, RLPTest) {
-    val maybeDecoded = Try(decode[Array[Byte]](Array.emptyByteArray))
+    val maybeDecoded = Try(decode[Array[Byte]](Array.empty[Byte]))
     assert(maybeDecoded.isFailure)
   }
 

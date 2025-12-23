@@ -25,7 +25,7 @@ class UInt256RlpEncodingSpec extends AnyFunSuite {
 
   test("CREATE address for nonce=0 matches Core-Geth") {
     val sender = Address("0xf7f04e1052c6a30f651b07bb8f6bedf4844137f5")
-    val encoded = encode(RLPList(sender.bytes, UInt256.Zero.toRLPEncodable))
+    val encoded = encode(RLPList(RLPValue(sender.bytes.toArray), UInt256.Zero.toRLPEncodable))
     val created = Address(ByteString(kec256(encoded)))
 
     assert(created == Address("0x2fae8af94cdc68452042ccfc2abf25a9120fdb2e"))
