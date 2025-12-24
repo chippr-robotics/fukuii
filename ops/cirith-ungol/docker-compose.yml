@@ -89,7 +89,7 @@ services:
       # Reduce Pekko (actor system) log noise; logback is configured via logging.logs-level.
       - PEKKO_LOGLEVEL=INFO
       # Debug tracing flags - set FUKUII_TRACE_BLOCK to enable detailed transaction/CREATE logging
-      # Example: FUKUII_TRACE_BLOCK=35554 FUKUII_TRACE_TX=0xdeadbeef... docker compose up
+      # Example: FUKUII_TRACE_BLOCK=35554 FUKUII_TRACE_TX=0xdeadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678 docker compose up
       - FUKUII_TRACE_BLOCK=${FUKUII_TRACE_BLOCK:-}
       - FUKUII_TRACE_TX=${FUKUII_TRACE_TX:-}
     # Configuration files are loaded from /app/conf/

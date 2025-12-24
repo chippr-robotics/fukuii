@@ -119,7 +119,7 @@ To enable detailed TRACE_TX and TRACE_CREATE logs for a specific block:
 FUKUII_TRACE_BLOCK=35554 docker compose up
 
 # Trace a specific transaction in a specific block
-FUKUII_TRACE_BLOCK=35554 FUKUII_TRACE_TX=0xdeadbeef123... docker compose up
+FUKUII_TRACE_BLOCK=35554 FUKUII_TRACE_TX=0xdeadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678 docker compose up
 ```
 
 #### What Gets Logged
@@ -157,7 +157,7 @@ docker compose logs fukuii | grep "TRACE_TX"
 docker compose logs fukuii | grep "TRACE_CREATE"
 
 # View traces for a specific transaction
-docker compose logs fukuii | grep "TRACE_TX.*0xdeadbeef"
+docker compose logs fukuii | grep "TRACE_TX.*0xdeadbeef1234567890abcdef"
 ```
 
 #### Use Cases
