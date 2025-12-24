@@ -106,6 +106,67 @@ cd ops/cirith-ungol
 ./start.sh stop
 ```
 
+### Debug Tracing
+
+The test harness supports detailed debug tracing for specific blocks and transactions to help diagnose state root mismatches and EVM execution issues. This is enabled via environment variables that map to JVM system properties.
+
+#### Enable Block/Transaction Tracing
+
+To enable detailed TRACE_TX and TRACE_CREATE logs for a specific block:
+
+```bash
+# Trace all transactions in a specific block
+FUKUII_TRACE_BLOCK=35554 docker compose up
+
+# Trace a specific transaction in a specific block
+FUKUII_TRACE_BLOCK=35554 FUKUII_TRACE_TX=0xdeadbeef123... docker compose up
+```
+
+#### What Gets Logged
+
+When tracing is enabled, you'll see detailed logs for:
+
+**Transaction Execution (TRACE_TX):**
+- Block number and hash
+- Transaction hash, from/to addresses
+- Gas limit, intrinsic gas, and actual gas used
+- VM errors (if any)
+- Number of logs generated
+- Return data size
+- Code deposit costs (for contract creation)
+- Max code size checks
+- Final state root after transaction
+
+**Contract Creation (TRACE_CREATE):**
+- Block number and caller address
+- New contract address
+- Initcode size and runtime code size
+- Gas before and after code deposit
+- Code deposit cost
+- Max code size exceeded checks
+- Out of gas conditions
+- Errors before and after code storage
+
+#### Viewing Trace Logs
+
+```bash
+# View all TRACE_TX logs
+docker compose logs fukuii | grep "TRACE_TX"
+
+# View all TRACE_CREATE logs
+docker compose logs fukuii | grep "TRACE_CREATE"
+
+# View traces for a specific transaction
+docker compose logs fukuii | grep "TRACE_TX.*0xdeadbeef"
+```
+
+#### Use Cases
+
+1. **Debugging State Root Mismatches**: Compare gas usage, state roots, and error conditions between Fukuii and reference implementations
+2. **Investigating CREATE/Initcode Issues**: Track contract creation gas costs and code deposit behavior
+3. **EVM Opcode Analysis**: Identify discrepancies in opcode semantics or gas calculations
+4. **Transaction Validation Errors**: Understand why `ValidationAfterExecError` occurs
+
 ### Monitoring
 
 #### Check Node Status

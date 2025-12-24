@@ -88,8 +88,16 @@ services:
       - FUKUII_ENV=cirith-ungol-mordor
       # Reduce Pekko (actor system) log noise; logback is configured via logging.logs-level.
       - PEKKO_LOGLEVEL=INFO
+      # Debug tracing flags - set FUKUII_TRACE_BLOCK to enable detailed transaction/CREATE logging
+      # Example: FUKUII_TRACE_BLOCK=35554 FUKUII_TRACE_TX=0xdeadbeef... docker compose up
+      - FUKUII_TRACE_BLOCK=${FUKUII_TRACE_BLOCK:-}
+      - FUKUII_TRACE_TX=${FUKUII_TRACE_TX:-}
     # Configuration files are loaded from /app/conf/
-    command: ["-Dconfig.file=/app/conf/etc.conf", "-Dlogback.configurationFile=/app/conf/logback.xml"]
+    command: 
+      - "-Dconfig.file=/app/conf/etc.conf"
+      - "-Dlogback.configurationFile=/app/conf/logback.xml"
+      - "-Dfukuii.trace.block=${FUKUII_TRACE_BLOCK:-}"
+      - "-Dfukuii.trace.tx=${FUKUII_TRACE_TX:-}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
       interval: 30s
