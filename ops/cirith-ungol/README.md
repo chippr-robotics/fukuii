@@ -157,7 +157,7 @@ docker compose logs fukuii | grep "TRACE_TX"
 docker compose logs fukuii | grep "TRACE_CREATE"
 
 # View traces for a specific transaction
-docker compose logs fukuii | grep "TRACE_TX.*0xdeadbeef1234567890abcdef"
+docker compose logs fukuii | grep "TRACE_TX.*0xdeadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678"
 ```
 
 #### Use Cases
