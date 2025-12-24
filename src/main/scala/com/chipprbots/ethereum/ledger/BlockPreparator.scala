@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.TxsExecutionError
 import com.chipprbots.ethereum.ledger.BlockPreparator._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.DebugTrace
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.{PC => _, _}
 
@@ -257,6 +258,29 @@ class BlockPreparator(
     val persistStateFn = InMemoryWorldStateProxy.persistState _
 
     val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterPayments)
+
+    if (DebugTrace.enabledForTx(blockHeader.number, stx.hash.toHex)) {
+      val tx = stx.tx
+      val accessList = Transaction.accessList(tx)
+      val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
+      val intrinsicGas = evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList)
+
+      val toOrCreate = tx.receivingAddress.map(_.toString).getOrElse("CREATE")
+      val isCreate = tx.isContractInit
+      val returnDataSize = result.returnData.size
+      val codeDepositCost = if (isCreate) evmConfig.calcCodeDepositCost(result.returnData) else 0
+      val maxCodeSize = evmConfig.blockchainConfig.maxCodeSize
+      val codeSizeExceeded = isCreate && maxCodeSize.exists(limit => returnDataSize.toLong > limit.toLong)
+
+      log.info(
+        s"TRACE_TX block=${blockHeader.number} blockHash=${blockHeader.hashAsHexString} " +
+          s"tx=${stx.hash.toHex} from=$senderAddress to=$toOrCreate create=$isCreate " +
+          s"gasLimit=${tx.gasLimit} intrinsicGas=$intrinsicGas gasUsed=$executionGasToPayToMiner " +
+          s"vmError=${result.error.map(_.toString)} logs=${resultWithErrorHandling.logs.size} " +
+          s"returnDataSize=$returnDataSize codeDepositCost=$codeDepositCost maxCodeSize=$maxCodeSize " +
+          s"maxCodeSizeExceeded=$codeSizeExceeded stateRoot=${world2.stateRootHash.toHex}"
+      )
+    }
 
     log.debug(s"""Transaction ${stx.hash.toHex} execution end. Summary:
          | - Error: ${result.error}.

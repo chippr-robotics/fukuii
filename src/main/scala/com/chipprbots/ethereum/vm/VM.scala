@@ -6,6 +6,7 @@ import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.utils.DebugTrace
 import com.chipprbots.ethereum.utils.Logger
 
 class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
@@ -175,33 +176,54 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
     maxCodeSizeExceeded
   }
 
-  private def saveNewContract(context: PC, address: Address, result: PR, config: EvmConfig): PR =
-    if (result.error.isDefined) {
-      if (result.error.contains(RevertOccurs)) result else result.copy(gasRemaining = 0)
-    } else {
-      val contractCode = result.returnData
-      val codeDepositCost = config.calcCodeDepositCost(contractCode)
+  private def saveNewContract(context: PC, address: Address, result: PR, config: EvmConfig): PR = {
+    val tracing = DebugTrace.enabledForBlock(context.blockHeader.number)
 
-      val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
-      val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
-      // EIP-3541: Reject new contracts starting with 0xEF byte
-      val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
-
-      if (startsWithEF) {
-        // EIP-3541: Code starting with 0xEF byte causes exceptional abort
-        result.copy(error = Some(InvalidCode), gasRemaining = 0)
-      } else if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
-        // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
-        result.copy(error = Some(OutOfGas), gasRemaining = 0)
-      } else if (codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit) {
-        // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled
-        result
+    val out: PR =
+      if (result.error.isDefined) {
+        if (result.error.contains(RevertOccurs)) result else result.copy(gasRemaining = 0)
       } else {
-        // Code storage succeeded
-        result.copy(
-          gasRemaining = result.gasRemaining - codeDepositCost,
-          world = result.world.saveCode(address, result.returnData)
-        )
+        val contractCode = result.returnData
+        val codeDepositCost = config.calcCodeDepositCost(contractCode)
+
+        val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
+        val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+        // EIP-3541: Reject new contracts starting with 0xEF byte
+        val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
+
+        if (startsWithEF) {
+          // EIP-3541: Code starting with 0xEF byte causes exceptional abort
+          result.copy(error = Some(InvalidCode), gasRemaining = 0)
+        } else if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
+          // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
+          result.copy(error = Some(OutOfGas), gasRemaining = 0)
+        } else if (codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit) {
+          // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled
+          result
+        } else {
+          // Code storage succeeded
+          result.copy(
+            gasRemaining = result.gasRemaining - codeDepositCost,
+            world = result.world.saveCode(address, result.returnData)
+          )
+        }
       }
+
+    if (tracing) {
+      val contractCodeSize = result.returnData.size
+      val codeDepositCost = config.calcCodeDepositCost(result.returnData)
+      val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, result.returnData)
+      val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+      log.info(
+        s"TRACE_CREATE block=${context.blockHeader.number} caller=${context.callerAddr} " +
+          s"newAddress=$address initcodeSize=${context.inputData.size} runtimeCodeSize=$contractCodeSize " +
+          s"gasBeforeDeposit=${result.gasRemaining} codeDepositCost=$codeDepositCost " +
+          s"gasAfter=${out.gasRemaining} maxCodeSizeExceeded=$maxCodeSizeExceeded " +
+          s"codeStoreOutOfGas=$codeStoreOutOfGas exceptionalFailedCodeDeposit=${config.exceptionalFailedCodeDeposit} " +
+          s"errorBefore=${result.error.map(_.toString)} errorAfter=${out.error.map(_.toString)}"
+      )
     }
+
+    out
+  }
 }
