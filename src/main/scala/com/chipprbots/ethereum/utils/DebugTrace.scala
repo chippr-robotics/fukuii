@@ -11,10 +11,18 @@ import scala.util.Try
 object DebugTrace {
 
   private def optBigInt(key: String): Option[BigInt] =
-    sys.props.get(key).flatMap(s => Try(BigInt(s)).toOption)
+    sys.props
+      .get(key)
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .flatMap(s => Try(BigInt(s)).toOption)
 
   private def optHexLower(key: String): Option[String] =
-    sys.props.get(key).map(_.stripPrefix("0x").toLowerCase)
+    sys.props
+      .get(key)
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map(_.stripPrefix("0x").toLowerCase)
 
   // Accept both long-form and short-form property names.
   lazy val traceBlockNumber: Option[BigInt] =

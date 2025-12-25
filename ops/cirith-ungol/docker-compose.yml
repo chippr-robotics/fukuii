@@ -21,12 +21,13 @@ services:
       - "30304:30304/udp"
     volumes:
       # Persist Core-Geth data on the host (larger disk / prior ops convention)
-      - /chipprbots/blockchain/chain-data/etc/core-geth/mordor:/root/.ethereum
+      # Use the long-term base dir; Mordor lives under /root/.ethereum/mordor.
+      - /chipprbots/blockchain/chain-data/etc/core-geth:/root/.ethereum
       - ./conf/coregeth-config.toml:/root/.ethereum/config.toml:ro
     command:
       - "--config=/root/.ethereum/config.toml"
       - "--mordor"
-      - "--datadir=/root/.ethereum"
+      - "--datadir=/root/.ethereum/mordor"
       # Keep historical state so debug tracing and old-block state queries work.
       # Note: switching an existing datadir from pruned->archive requires a resync.
       - "--gcmode=archive"
@@ -54,7 +55,7 @@ services:
     entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-ghcr.io/chippr-robotics/fukuii:latest}
     container_name: fukuii-cirith-ungol
     restart: unless-stopped
     networks:

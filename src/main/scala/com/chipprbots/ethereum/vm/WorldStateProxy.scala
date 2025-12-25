@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
 
 /** This is a single entry point to all VM interactions with the persisted state. Implementations are meant to be
@@ -118,7 +119,9 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     */
   def createAddress(creatorAddr: Address): Address = {
     val creatorAccount = getGuaranteedAccount(creatorAddr)
-    val hash = kec256(rlp.encode(RLPList(creatorAddr.bytes, (creatorAccount.nonce - 1).toRLPEncodable)))
+    // Important: Address must be encoded as a single RLP string (20 bytes).
+    // If it is treated as a Seq[Byte], it will be encoded as a list of 20 items and produce a different address.
+    val hash = kec256(rlp.encode(RLPList(RLPValue(creatorAddr.bytes.toArray), (creatorAccount.nonce - 1).toRLPEncodable)))
     Address(hash)
   }
 
