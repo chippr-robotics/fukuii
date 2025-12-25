@@ -4,8 +4,17 @@ import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 
+import org.bouncycastle.util.encoders.Hex
+
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
 import com.chipprbots.ethereum.utils.DebugTrace
 import com.chipprbots.ethereum.utils.Logger
 
@@ -86,6 +95,22 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
           invalidCallResult(context, Set.empty, Set.empty).copy(error = Some(InitCodeSizeLimit), gasRemaining = 0),
           Address(0)
         )
+      }
+
+      if (DebugTrace.enabledForBlock(context.blockHeader.number)) {
+        val callerAccountNonce = context.world.getAccount(context.callerAddr).map(_.nonce)
+        callerAccountNonce.foreach { n =>
+          val nonceForCreate = n - 1
+          // Address must be encoded as a single RLP string (20 bytes), not as a Seq[Byte].
+          val rlpPreimage = rlp.encode(RLPList(RLPValue(context.callerAddr.bytes.toArray), nonceForCreate.toRLPEncodable))
+          val hash = kec256(rlpPreimage)
+          val derived = Address(hash)
+          log.info(
+            s"TRACE_CREATE_ADDR block=${context.blockHeader.number} caller=${context.callerAddr} " +
+              s"callerNonce=$n nonceForCreate=$nonceForCreate rlp=${Hex.toHexString(rlpPreimage.toArray)} " +
+              s"hash=${Hex.toHexString(hash.toArray)} derived=$derived"
+          )
+        }
       }
 
       val newAddress = salt

@@ -51,22 +51,6 @@
         </encoder>
     </appender>
 
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOGSDIR}/${LOGSFILENAME}.log</file>
-        <append>true</append>
-        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
-            <fileNamePattern>${LOGSDIR}/${LOGSFILENAME}.%i.log.zip</fileNamePattern>
-            <minIndex>1</minIndex>
-            <maxIndex>50</maxIndex>
-        </rollingPolicy>
-        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
-            <maxFileSize>10MB</maxFileSize>
-        </triggeringPolicy>
-        <encoder>
-            <pattern>${fileEncoderPattern}</pattern>
-        </encoder>
-    </appender>
-
     <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
 
     <root level="${LOGSLEVEL}">
@@ -78,7 +62,6 @@
                 <appender-ref ref="STDOUT" />
             </else>
         </if>
-        <appender-ref ref="FILE" />
         <appender-ref ref="METRICS" />
     </root>
 
@@ -244,7 +227,8 @@
     <!-- =================================================================== -->
     <!-- VM execution is OFF by default for performance -->
     <logger name="com.chipprbots.ethereum.vm" level="OFF" />
-    <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
+    <!-- Allow TRACE_CREATE emitted by VM when DebugTrace matches the target block -->
+    <logger name="com.chipprbots.ethereum.vm.VM" level="INFO" />
     
     <!-- External VM interface -->
     <logger name="com.chipprbots.ethereum.extvm" level="INFO" />

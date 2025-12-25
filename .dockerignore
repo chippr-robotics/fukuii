@@ -68,3 +68,11 @@ src/rpcTest/
 
 # Integration test resources
 src/it/
+
+# Ops harness / local node data (very large; never needed in image)
+ops/
+
+# Common local chain data dirs (safety net)
+chain-data/
+**/chaindata/
+**/ancient/
