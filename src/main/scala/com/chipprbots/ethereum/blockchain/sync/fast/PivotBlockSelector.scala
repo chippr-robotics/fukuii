@@ -52,18 +52,18 @@ class PivotBlockSelector(
 
   private var pivotBlockRetryCount = 0
   private var totalSelectionAttempts = 0
-  // Maximum total attempts to prevent infinite loops (e.g., when no peers are available)
-  // This is separate from pivotBlockRetryCount which resets after each scheduleRetry call
-  // Set to 20 to allow reasonable retries but prevent indefinite loops (20 * 0.5s = 10s in tests)
-  private val MaxTotalSelectionAttempts = 20
+  // Maximum total attempts to prevent infinite loops (e.g., when no peers are available).
+  // This is separate from pivotBlockRetryCount which resets after each scheduleRetry call.
+  // Configurable via sync.pivot-block-max-total-selection-attempts.
+  private val maxTotalSelectionAttempts = syncConfig.pivotBlockMaxTotalSelectionAttempts
 
   override def receive: Receive = idle
 
   private def idle: Receive = handlePeerListMessages.orElse { case SelectPivotBlock =>
-    if (totalSelectionAttempts >= MaxTotalSelectionAttempts) {
+    if (totalSelectionAttempts >= maxTotalSelectionAttempts) {
       log.error(
         "Pivot block selection failed after {} total attempts. Stopping pivot block selector.",
-        MaxTotalSelectionAttempts
+        maxTotalSelectionAttempts
       )
       fastSync ! SelectionFailed
       peerEventBus ! Unsubscribe()

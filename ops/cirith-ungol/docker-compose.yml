@@ -109,5 +109,7 @@ services:
 volumes:
   fukuii-cirith-ungol-data:
     driver: local
+     - /chipprbots/blockchain/chain-data/etc/fukuii/.ethereum
+     
   fukuii-cirith-ungol-logs:
     driver: local

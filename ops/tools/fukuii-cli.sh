@@ -69,6 +69,7 @@ Commands:
     sync-static-nodes [config] - Synchronize static-nodes.json across running containers
     smoke-test [config] - Quick smoketest (sync status, block, peers)
     collect-logs [config] - Collect logs from all containers
+        reset-fast-sync [config] - Soft-reset fast sync state and restart fukuii
     pitya-lore [options]  - "Short nap" watcher that stops the net once a target block is reached
 
   Help:
@@ -1696,6 +1697,43 @@ EOF
     echo -e "${GREEN}Pitya-lórë complete. Network is resting.${NC}"
 }
 
+reset_fast_sync_cmd() {
+    local config="${1:-3nodes}"
+    local compose_file
+    local network_dir
+
+    compose_file=$(get_compose_file "$config") || exit 1
+    network_dir=$(get_network_dir "$config") || exit 1
+
+    cd "$network_dir"
+
+    local container_id
+    container_id=$(docker compose -f "$compose_file" ps -q fukuii 2>/dev/null || true)
+    if [ -z "$container_id" ]; then
+        echo -e "${RED}Error: fukuii container not found for config '$config'${NC}" >&2
+        return 1
+    fi
+
+    local rpc_url
+    rpc_url=$(resolve_rpc_url "$container_id" "fukuii" "net_peerCount" 2>/dev/null || true)
+    if [ -z "$rpc_url" ]; then
+        echo -e "${RED}Error: unable to resolve fukuii RPC URL for config '$config'${NC}" >&2
+        return 1
+    fi
+
+    echo -e "${YELLOW}Requesting in-process fast sync restart via RPC (${rpc_url})...${NC}"
+    local resp
+    resp=$(rpc_call "$rpc_url" "fukuii_restartFastSync")
+    if ! rpc_response_ok "$resp"; then
+        echo -e "${RED}Error: fukuii_restartFastSync RPC failed${NC}" >&2
+        echo "$resp" >&2
+        return 1
+    fi
+
+    echo -e "${GREEN}✓ restart requested${NC}"
+    echo "$resp"
+}
+
 # ============================================================================
 # Main Command Dispatcher
 # ============================================================================
@@ -1735,6 +1773,9 @@ case $COMMAND in
         ;;
     smoke-test)
         smoke_test "$@"
+        ;;
+    reset-fast-sync)
+        reset_fast_sync_cmd "$@"
         ;;
     pitya-lore)
         pitya_lore_short_nap "$@"

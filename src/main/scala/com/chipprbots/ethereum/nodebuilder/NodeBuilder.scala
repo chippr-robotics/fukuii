@@ -580,9 +580,9 @@ trait CheckpointingServiceBuilder {
 }
 
 trait FukuiiServiceBuilder {
-  self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder =>
+  self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder with SyncControllerBuilder =>
 
-  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig)
+  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig, syncController)
 }
 
 trait McpServiceBuilder {

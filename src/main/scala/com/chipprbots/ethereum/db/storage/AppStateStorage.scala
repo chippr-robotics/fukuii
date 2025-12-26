@@ -48,6 +48,18 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def fastSyncDone(): DataSourceBatchUpdate =
     put(Keys.FastSyncDone, true.toString)
 
+  def clearFastSyncDone(): DataSourceBatchUpdate =
+    remove(Keys.FastSyncDone)
+
+  def getFastSyncCooldownUntilMillis(): Long =
+    get(Keys.FastSyncCooldownUntilMillis).flatMap(v => scala.util.Try(v.toLong).toOption).getOrElse(0L)
+
+  def putFastSyncCooldownUntilMillis(untilMillis: Long): DataSourceBatchUpdate =
+    put(Keys.FastSyncCooldownUntilMillis, untilMillis.toString)
+
+  def isFastSyncCoolingOff(nowMillis: Long): Boolean =
+    getFastSyncCooldownUntilMillis() > nowMillis
+
   def getEstimatedHighestBlock(): BigInt =
     getBigInt(Keys.EstimatedHighestBlock)
 
@@ -225,6 +237,7 @@ object AppStateStorage {
     val BestBlockNumber = "BestBlockNumber"
     val BestBlockHash = "BestBlockHash"
     val FastSyncDone = "FastSyncDone"
+    val FastSyncCooldownUntilMillis = "FastSyncCooldownUntilMillis"
     val EstimatedHighestBlock = "EstimatedHighestBlock"
     val SyncStartingBlock = "SyncStartingBlock"
     val LatestCheckpointBlockNumber = "LatestCheckpointBlockNumber"

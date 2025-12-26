@@ -7,10 +7,15 @@ import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionResp
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder.Ops._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
+import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 
 import JsonEncoder.OptionToNull._
@@ -52,4 +57,19 @@ object FukuiiJsonMethodImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: GetAccountTransactionsResponse): JValue =
         JObject("transactions" -> t.transactions.jsonEncoded)
     }
+
+  implicit val fukuii_resetFastSync_decoder: JsonMethodDecoder[ResetFastSyncRequest] =
+    new NoParamsMethodDecoder(ResetFastSyncRequest())
+
+  implicit val fukuii_resetFastSync_encoder: JsonEncoder[ResetFastSyncResponse] = t =>
+    JObject("reset" -> t.reset.jsonEncoded)
+
+  implicit val fukuii_restartFastSync_decoder: JsonMethodDecoder[RestartFastSyncRequest] =
+    new NoParamsMethodDecoder(RestartFastSyncRequest())
+
+  implicit val fukuii_restartFastSync_encoder: JsonEncoder[RestartFastSyncResponse] = t =>
+    JObject(
+      "started" -> t.started.jsonEncoded,
+      "cooldownUntilMillis" -> t.cooldownUntilMillis.jsonEncoded
+    )
 }
