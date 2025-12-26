@@ -579,8 +579,12 @@ trait CheckpointingServiceBuilder {
     )
 }
 
+trait SyncControllerRefBuilder {
+  def syncController: ActorRef
+}
+
 trait FukuiiServiceBuilder {
-  self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder with SyncControllerBuilder =>
+  self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder with SyncControllerRefBuilder =>
 
   lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig, syncController)
 }
@@ -740,7 +744,7 @@ trait CheckpointBlockGeneratorBuilder {
   lazy val checkpointBlockGenerator = new CheckpointBlockGenerator()
 }
 
-trait SyncControllerBuilder {
+trait SyncControllerBuilder extends SyncControllerRefBuilder {
 
   self: ActorSystemBuilder
     with ServerActorBuilder

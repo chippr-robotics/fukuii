@@ -70,6 +70,7 @@ Commands:
     smoke-test [config] - Quick smoketest (sync status, block, peers)
     collect-logs [config] - Collect logs from all containers
         reset-fast-sync [config] - Soft-reset fast sync state and restart fukuii
+        inject-peers [config] [script-args...] - Inject peers from a core-geth/geth node into fukuii via RPC
     pitya-lore [options]  - "Short nap" watcher that stops the net once a target block is reached
 
   Help:
@@ -1734,6 +1735,69 @@ reset_fast_sync_cmd() {
     echo "$resp"
 }
 
+inject_peers_cmd() {
+    local config="${1:-cirith-ungol}"
+    shift || true
+
+    ensure_python3 || return 1
+
+    local geth_pattern=""
+    local fukuii_pattern=""
+    if [[ "$config" == "cirith-ungol" ]]; then
+        geth_pattern="coregeth-cirith-ungol"
+        fukuii_pattern="fukuii-cirith-ungol"
+    elif [[ "$config" == "fukuii-geth" || "$config" == "mixed" ]]; then
+        geth_pattern="gorgoroth-geth-"
+        fukuii_pattern="gorgoroth-fukuii-"
+    else
+        echo -e "${RED}Error: inject-peers is supported for configs with a geth/core-geth node (cirith-ungol, fukuii-geth, mixed)${NC}" >&2
+        return 1
+    fi
+
+    local geth_container
+    geth_container=$(docker ps --filter "name=${geth_pattern}" --format "{{.Names}}" | sort | head -n 1 || true)
+    if [ -z "$geth_container" ]; then
+        echo -e "${RED}Error: no running geth/core-geth container found (pattern: ${geth_pattern})${NC}" >&2
+        return 1
+    fi
+
+    local fukuii_containers
+    fukuii_containers=$(docker ps --filter "name=${fukuii_pattern}" --format "{{.Names}}" | sort || true)
+    if [ -z "$fukuii_containers" ]; then
+        echo -e "${RED}Error: no running fukuii container(s) found (pattern: ${fukuii_pattern})${NC}" >&2
+        return 1
+    fi
+
+    local coregeth_url
+    coregeth_url=$(resolve_rpc_url "$geth_container" "geth" "net_peerCount" 2>/dev/null || true)
+    if [ -z "$coregeth_url" ]; then
+        echo -e "${RED}Error: unable to resolve geth/core-geth RPC URL for ${geth_container}${NC}" >&2
+        return 1
+    fi
+
+    local project_root
+    project_root=$(cd "$SCRIPT_DIR/../.." && pwd)
+    local inject_script="$project_root/scripts/inject_peers_from_coregeth.py"
+    if [ ! -f "$inject_script" ]; then
+        echo -e "${RED}Error: inject script not found at $inject_script${NC}" >&2
+        return 1
+    fi
+
+    local fukuii_container
+    for fukuii_container in $fukuii_containers; do
+        local fukuii_url
+        fukuii_url=$(resolve_rpc_url "$fukuii_container" "fukuii" "net_peerCount" 2>/dev/null || true)
+        if [ -z "$fukuii_url" ]; then
+            echo -e "${YELLOW}Warning: unable to resolve fukuii RPC URL for ${fukuii_container}; skipping${NC}" >&2
+            continue
+        fi
+
+        echo -e "${GREEN}Injecting peers: ${geth_container} -> ${fukuii_container}${NC}"
+        python3 "$inject_script" --coregeth-url "$coregeth_url" --fukuii-url "$fukuii_url" "$@"
+        echo ""
+    done
+}
+
 # ============================================================================
 # Main Command Dispatcher
 # ============================================================================
@@ -1776,6 +1840,9 @@ case $COMMAND in
         ;;
     reset-fast-sync)
         reset_fast_sync_cmd "$@"
+        ;;
+    inject-peers)
+        inject_peers_cmd "$@"
         ;;
     pitya-lore)
         pitya_lore_short_nap "$@"

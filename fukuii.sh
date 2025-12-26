@@ -18,5 +18,15 @@ if [ ! -f "$CLI_SCRIPT" ]; then
     exit 1
 fi
 
-# Forward all arguments to fukuii-cli
+inject_peers() {
+    "$CLI_SCRIPT" inject-peers "$@"
+}
+
+if [[ "${1:-}" == "inject-peers" ]]; then
+    shift
+    inject_peers "$@"
+    exit $?
+fi
+
+# Forward all other arguments to fukuii-cli
 exec "$CLI_SCRIPT" "$@"

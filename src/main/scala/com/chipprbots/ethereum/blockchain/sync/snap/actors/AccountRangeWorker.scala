@@ -51,12 +51,10 @@ class AccountRangeWorker(
   override def receive: Receive = idle
 
   def idle: Receive = {
-    case FetchAccountRange(task, peer) =>
+    case FetchAccountRange(task, peer, requestId) =>
       log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id}")
-      
+
       // Send request directly via network peer manager
-      val requestId = requestTracker.generateRequestId()
-      
       // Create GetAccountRange message
       val request = GetAccountRange(
         requestId = requestId,
@@ -126,7 +124,7 @@ class AccountRangeWorker(
           log.debug(s"Timeout for old or unknown request $reqId")
       }
 
-    case FetchAccountRange(task, peer) =>
+    case FetchAccountRange(task, peer, _) =>
       log.warning("Worker is busy, cannot accept new task")
       coordinator ! TaskFailed(0, "Worker busy")
   }
