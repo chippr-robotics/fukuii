@@ -109,5 +109,6 @@ services:
 volumes:
   fukuii-cirith-ungol-data:
     driver: local
+     
   fukuii-cirith-ungol-logs:
     driver: local

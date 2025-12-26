@@ -56,7 +56,7 @@ class AccountRangeCoordinator(
 
   // Task management
   private val pendingTasks = mutable.Queue[AccountTask](AccountTask.createInitialTasks(stateRoot, concurrency): _*)
-  private val activeTasks = mutable.Map[BigInt, (AccountTask, ActorRef)]() // requestId -> (task, worker)
+  private val activeTasks = mutable.Map[BigInt, (AccountTask, ActorRef, Peer)]() // requestId -> (task, worker, peer)
   private val completedTasks = mutable.ArrayBuffer[AccountTask]()
 
   // Worker pool
@@ -118,18 +118,20 @@ class AccountRangeCoordinator(
       // Tasks already initialized in constructor
 
     case PeerAvailable(peer) =>
-      if (pendingTasks.nonEmpty && workers.size < concurrency) {
-        // Create worker and assign task
-        val worker = createWorker()
-        val task = pendingTasks.dequeue()
-        worker ! FetchAccountRange(task, peer)
-      } else if (pendingTasks.nonEmpty && workers.nonEmpty) {
-        // Reuse existing idle worker
-        val worker = workers.head
-        val task = pendingTasks.dequeue()
-        worker ! FetchAccountRange(task, peer)
+      if (pendingTasks.nonEmpty) {
+        val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
+        val worker = maybeIdleWorker.orElse {
+          if (workers.size < concurrency) Some(createWorker()) else None
+        }
+
+        worker match {
+          case Some(w) =>
+            dispatchNextTaskToWorker(w, peer)
+          case None =>
+            log.debug("No idle workers available")
+        }
       } else {
-        log.debug("No pending tasks or max workers reached")
+        log.debug("No pending tasks")
       }
 
     case TaskComplete(requestId, result) =>
@@ -173,8 +175,22 @@ class AccountRangeCoordinator(
     worker
   }
 
+  private def dispatchNextTaskToWorker(worker: ActorRef, peer: Peer): Unit = {
+    if (pendingTasks.isEmpty) {
+      return
+    }
+
+    val task = pendingTasks.dequeue()
+    task.pending = true
+
+    val requestId = requestTracker.generateRequestId()
+    activeTasks.put(requestId, (task, worker, peer))
+
+    worker ! FetchAccountRange(task, peer, requestId)
+  }
+
   private def handleTaskComplete(requestId: BigInt, result: Either[String, (Int, Seq[(ByteString, Account)])]): Unit = {
-    activeTasks.remove(requestId).foreach { case (task, worker) =>
+    activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       result match {
         case Right((accountCount, accounts)) =>
           log.info(s"Task completed successfully: $accountCount accounts")
@@ -205,20 +221,29 @@ class AccountRangeCoordinator(
           // Check if complete
           self ! CheckCompletion
 
+          // Keep pipeline moving without relying on new PeerAvailable events
+          dispatchNextTaskToWorker(worker, peer)
+
         case Left(error) =>
           log.warning(s"Task completed with error: $error")
           // Re-queue task for retry
           task.pending = false
           pendingTasks.enqueue(task)
+
+          // Keep pipeline moving
+          dispatchNextTaskToWorker(worker, peer)
       }
     }
   }
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
-    activeTasks.remove(requestId).foreach { case (task, worker) =>
+    activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       log.warning(s"Task failed: $reason")
       task.pending = false
       pendingTasks.enqueue(task)
+
+      // Keep pipeline moving
+      dispatchNextTaskToWorker(worker, peer)
     }
   }
 

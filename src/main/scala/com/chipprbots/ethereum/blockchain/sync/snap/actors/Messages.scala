@@ -24,7 +24,7 @@ object Messages {
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   sealed trait AccountRangeWorkerMessage
-  case class FetchAccountRange(task: AccountTask, peer: Peer) extends AccountRangeWorkerMessage
+  case class FetchAccountRange(task: AccountTask, peer: Peer, requestId: BigInt) extends AccountRangeWorkerMessage
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage
   case class RequestTimeout(requestId: BigInt) extends AccountRangeWorkerMessage
 

@@ -135,6 +135,7 @@ object Config {
   case class SyncConfig(
       doFastSync: Boolean,
       doSnapSync: Boolean,
+      fastSyncRestartCooloff: FiniteDuration,
       peersScanInterval: FiniteDuration,
       blacklistDuration: FiniteDuration,
       criticalBlacklistDuration: FiniteDuration,
@@ -152,6 +153,7 @@ object Config {
       peersToChoosePivotBlockMargin: Int,
       peersToFetchFrom: Int,
       pivotBlockOffset: Int,
+      pivotBlockMaxTotalSelectionAttempts: Int,
       persistStateSnapshotInterval: FiniteDuration,
       blocksBatchSize: Int,
       maxFetcherQueueSize: Int,
@@ -178,11 +180,18 @@ object Config {
   )
 
   object SyncConfig {
+    private val DefaultPivotBlockMaxTotalSelectionAttempts = 20
+    private val DefaultFastSyncRestartCooloff = 10.minutes
+
     def apply(etcClientConfig: TypesafeConfig): SyncConfig = {
       val syncConfig = etcClientConfig.getConfig("sync")
       SyncConfig(
         doFastSync = syncConfig.getBoolean("do-fast-sync"),
         doSnapSync = syncConfig.getBoolean("do-snap-sync"),
+        fastSyncRestartCooloff =
+          if (syncConfig.hasPath("fast-sync-restart-cooloff"))
+            syncConfig.getDuration("fast-sync-restart-cooloff").toMillis.millis
+          else DefaultFastSyncRestartCooloff,
         peersScanInterval = syncConfig.getDuration("peers-scan-interval").toMillis.millis,
         blacklistDuration = syncConfig.getDuration("blacklist-duration").toMillis.millis,
         criticalBlacklistDuration = syncConfig.getDuration("critical-blacklist-duration").toMillis.millis,
@@ -200,6 +209,10 @@ object Config {
         peersToChoosePivotBlockMargin = syncConfig.getInt("peers-to-choose-pivot-block-margin"),
         peersToFetchFrom = syncConfig.getInt("peers-to-fetch-from"),
         pivotBlockOffset = syncConfig.getInt("pivot-block-offset"),
+        pivotBlockMaxTotalSelectionAttempts =
+          if (syncConfig.hasPath("pivot-block-max-total-selection-attempts"))
+            syncConfig.getInt("pivot-block-max-total-selection-attempts")
+          else DefaultPivotBlockMaxTotalSelectionAttempts,
         persistStateSnapshotInterval = syncConfig.getDuration("persist-state-snapshot-interval").toMillis.millis,
         blocksBatchSize = syncConfig.getInt("blocks-batch-size"),
         maxFetcherQueueSize = syncConfig.getInt("max-fetcher-queue-size"),

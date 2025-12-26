@@ -8,6 +8,7 @@ import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
@@ -52,6 +53,66 @@ class SyncController(
 ) extends Actor
     with ActorLogging {
 
+  private case object RestartFastSyncNow
+
+  private def stopSyncChildren(): Unit = {
+    val names = Seq(
+      "fast-sync",
+      "regular-sync",
+      "peers-client",
+      "snap-sync",
+      "regular-sync-bootstrap",
+      "peers-client-bootstrap"
+    )
+    names.flatMap(context.child).foreach(_ ! PoisonPill)
+
+    // Ensure snap-sync routing is not left pointing at a dead actor.
+    networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+      context.system.deadLetters
+    )
+  }
+
+  private def handleResetFastSync(): Unit = {
+    log.warning("ResetFastSync requested: clearing persisted fast-sync markers")
+    appStateStorage.clearFastSyncDone().commit()
+    fastSyncStateStorage.purge()
+    sender() ! SyncProtocol.ResetFastSyncResponse(reset = true)
+  }
+
+  private def handleRestartFastSync(): Unit = {
+    val nowMillis = System.currentTimeMillis()
+    val cooldownUntil = appStateStorage.getFastSyncCooldownUntilMillis()
+
+    if (cooldownUntil > nowMillis) {
+      val delay = (cooldownUntil - nowMillis).millis
+      log.warning(
+        "RestartFastSync requested but circuit-breaker is open (cool-off {} remaining); scheduling restart",
+        delay
+      )
+      scheduler.scheduleOnce(delay, self, RestartFastSyncNow)
+      sender() ! SyncProtocol.RestartFastSyncResponse(started = false, cooldownUntilMillis = cooldownUntil)
+    } else {
+      self ! RestartFastSyncNow
+      sender() ! SyncProtocol.RestartFastSyncResponse(started = true, cooldownUntilMillis = nowMillis)
+    }
+  }
+
+  private def doRestartFastSyncNow(): Unit = {
+    val nowMillis = System.currentTimeMillis()
+    val cooldownUntil = nowMillis + syncConfig.fastSyncRestartCooloff.toMillis
+
+    log.warning(
+      "Restarting fast sync now (cool-off {}); stopping current sync actors and clearing fast-sync markers",
+      syncConfig.fastSyncRestartCooloff
+    )
+
+    stopSyncChildren()
+    appStateStorage.clearFastSyncDone().and(appStateStorage.putFastSyncCooldownUntilMillis(cooldownUntil)).commit()
+    fastSyncStateStorage.purge()
+
+    startFastSync()
+  }
+
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(context.system.scheduler)
 
   /** Load SNAP sync configuration with fallback to defaults */
@@ -68,17 +129,40 @@ class SyncController(
 
   def idle: Receive = { case SyncProtocol.Start =>
     start()
+  case SyncProtocol.ResetFastSync =>
+    handleResetFastSync()
+  case SyncProtocol.RestartFastSync =>
+    handleRestartFastSync()
+  case RestartFastSyncNow =>
+    doRestartFastSyncNow()
   }
 
   def runningFastSync(fastSync: ActorRef): Receive = {
+    case SyncProtocol.ResetFastSync =>
+      handleResetFastSync()
+    case SyncProtocol.RestartFastSync =>
+      handleRestartFastSync()
+    case RestartFastSyncNow =>
+      doRestartFastSyncNow()
     case FastSync.Done =>
       fastSync ! PoisonPill
+
+      // Open circuit-breaker for a cool-off period before allowing another fast-sync restart.
+      val cooldownUntil = System.currentTimeMillis() + syncConfig.fastSyncRestartCooloff.toMillis
+      appStateStorage.putFastSyncCooldownUntilMillis(cooldownUntil).commit()
+
       startRegularSync()
 
     case other => fastSync.forward(other)
   }
 
   def runningSnapSync(snapSync: ActorRef): Receive = {
+    case SyncProtocol.ResetFastSync =>
+      handleResetFastSync()
+    case SyncProtocol.RestartFastSync =>
+      handleRestartFastSync()
+    case RestartFastSyncNow =>
+      doRestartFastSyncNow()
     case StartRegularSyncBootstrap(targetBlock) =>
       log.info(s"SNAP sync requested bootstrap via regular sync to block ${targetBlock}")
       
@@ -106,10 +190,25 @@ class SyncController(
   }
 
   def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
-    regularSync.forward(other)
+    other match {
+      case SyncProtocol.ResetFastSync =>
+        handleResetFastSync()
+      case SyncProtocol.RestartFastSync =>
+        handleRestartFastSync()
+      case RestartFastSyncNow =>
+        doRestartFastSyncNow()
+      case msg =>
+        regularSync.forward(msg)
+    }
   }
 
   def runningRegularSyncBootstrap(regularSync: ActorRef, targetBlock: BigInt, originalSnapSyncRef: ActorRef): Receive = {
+    case SyncProtocol.ResetFastSync =>
+      handleResetFastSync()
+    case SyncProtocol.RestartFastSync =>
+      handleRestartFastSync()
+    case RestartFastSyncNow =>
+      doRestartFastSyncNow()
     case RegularSync.ProgressProtocol.ImportedBlock(blockNumber, _) =>
       log.debug(s"Bootstrap progress: block $blockNumber / $targetBlock")
       
@@ -137,7 +236,24 @@ class SyncController(
   def start(): Unit = {
     import syncConfig.{doFastSync, doSnapSync}
 
+    val nowMillis = System.currentTimeMillis()
+
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
+
+    // If fast sync is desired but the circuit-breaker is open, start regular sync for now and
+    // schedule an in-process restart of fast sync once the cool-off expires.
+    if (doFastSync && appStateStorage.isFastSyncCoolingOff(nowMillis)) {
+      val until = appStateStorage.getFastSyncCooldownUntilMillis()
+      val delay = (until - nowMillis).millis
+      log.warning(
+        "Fast sync requested but in cool-off until {} ({} remaining); starting regular sync and scheduling fast-sync restart",
+        until,
+        delay
+      )
+      startRegularSync()
+      scheduler.scheduleOnce(delay, self, RestartFastSyncNow)
+      return
+    }
 
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
       case (false, _, true, _) =>

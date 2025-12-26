@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.JSONRpcConfigBuilder
 import com.chipprbots.ethereum.nodebuilder.FukuiiServiceBuilder
 import com.chipprbots.ethereum.nodebuilder.PendingTransactionsManagerBuilder
+import com.chipprbots.ethereum.nodebuilder.SyncControllerRefBuilder
 import com.chipprbots.ethereum.nodebuilder.TransactionHistoryServiceBuilder
 import com.chipprbots.ethereum.nodebuilder.TxPoolConfigBuilder
 import com.chipprbots.ethereum.transactions.TransactionHistoryService
@@ -47,9 +48,12 @@ class FukuiiServiceSpec
       with TxPoolConfigBuilder
       with FukuiiServiceBuilder
       with JSONRpcConfigBuilder
-      with ApisBuilder {
+      with ApisBuilder
+      with SyncControllerRefBuilder {
     lazy val pendingTransactionsManagerProbe: TestProbe = TestProbe()
     override lazy val pendingTransactionsManager: ActorRef = pendingTransactionsManagerProbe.ref
+
+    override lazy val syncController: ActorRef = TestProbe().ref
   }
   def createFixture() = new Fixture
 

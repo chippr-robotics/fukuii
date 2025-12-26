@@ -9,6 +9,7 @@ trait TestSyncConfig extends SyncConfigBuilder {
   def defaultSyncConfig: SyncConfig = SyncConfig(
     doFastSync = false,
     doSnapSync = false,
+    fastSyncRestartCooloff = 10.minutes,
     peersScanInterval = 1.hour,
     blacklistDuration = 5.seconds,
     criticalBlacklistDuration = 10.seconds,
@@ -26,6 +27,7 @@ trait TestSyncConfig extends SyncConfigBuilder {
     peersToChoosePivotBlockMargin = 0,
     peersToFetchFrom = 5,
     pivotBlockOffset = 500,
+    pivotBlockMaxTotalSelectionAttempts = 20,
     persistStateSnapshotInterval = 2.seconds,
     blocksBatchSize = 5,
     maxFetcherQueueSize = 100,
