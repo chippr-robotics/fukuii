@@ -291,9 +291,40 @@ object ETH63 {
       import ReceiptImplicits._
       import BaseETH6XMessages.TypedTransaction._
 
+      /** Helper to expand typed receipts that come as RLPValue(typeByte || rlp(payload)) into the format expected by
+        * toTypedRLPEncodables: Seq(RLPValue(typeByte), RLPList(payload))
+        */
+      private def expandTypedReceipts(items: Seq[RLPEncodeable]): Seq[RLPEncodeable] =
+        items.flatMap {
+          case v: RLPValue =>
+            val receiptBytes = v.bytes
+            if (receiptBytes.isEmpty) {
+              throw new RuntimeException("Cannot decode Receipt: empty RLPValue")
+            }
+            val first = receiptBytes(0)
+            // Check if this is a typed receipt (transaction type byte < 0x7f)
+            if ((first & 0xff) < 0x7f && (first & 0xff) >= 0 && receiptBytes.length > 1) {
+              // Typed receipt in wire format: RLPValue(typeByte || rlp(payload))
+              // Expand it to Seq(RLPValue(typeByte), RLPList) for toTypedRLPEncodables
+              try {
+                Seq(RLPValue(Array(first)), rawDecode(receiptBytes.tail))
+              } catch {
+                case e: Exception =>
+                  // If expansion fails, keep as-is (might be legacy receipt)
+                  Seq(v)
+              }
+            } else {
+              // Legacy receipt or invalid - keep as-is
+              Seq(v)
+            }
+          case other => Seq(other)
+        }
+
       def toReceipts: Receipts = rawDecode(bytes) match {
         case rlpList: RLPList =>
-          Receipts(rlpList.items.collect { case r: RLPList => r.items.toTypedRLPEncodables.map(_.toReceipt) })
+          Receipts(rlpList.items.collect { case r: RLPList =>
+            expandTypedReceipts(r.items).toTypedRLPEncodables.map(_.toReceipt)
+          })
         case other =>
           throw new RuntimeException(s"Cannot decode Receipts: expected RLPList, got ${other.getClass.getSimpleName}")
       }

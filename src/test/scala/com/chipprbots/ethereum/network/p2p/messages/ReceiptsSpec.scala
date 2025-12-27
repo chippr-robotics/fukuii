@@ -117,4 +117,28 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
       .fromBytes(Codes.ReceiptsCode, type01Receipts.toBytes) shouldBe Right(type01Receipts)
   }
 
+  it should "decode type 01 receipts from wire format (as RLPValue)" taggedAs (UnitTest, NetworkTest) in {
+    // Simulate the wire format where a typed receipt comes as RLPValue(typeByte || rlp(payload))
+    // This is what peers send over the network for EIP-2718 typed receipts
+    val legacyReceiptRLP = RLPList(
+      RLPValue(exampleHash.toArray[Byte]),
+      cumulativeGas,
+      RLPValue(exampleLogsBloom.toArray[Byte]),
+      RLPList(encodedLogEntry)
+    )
+    val typedReceiptBytes = Transaction.Type01 +: encode(legacyReceiptRLP)
+    val encodedType01ReceiptsAsRLPValue = RLPList(
+      RLPList(
+        RLPValue(typedReceiptBytes)
+      )
+    )
+    
+    // This should decode successfully to Type01Receipt
+    val decoded = EthereumMessageDecoder
+      .ethMessageDecoder(Capability.ETH64)
+      .fromBytes(Codes.ReceiptsCode, encode(encodedType01ReceiptsAsRLPValue))
+    
+    decoded shouldBe Right(type01Receipts)
+  }
+
 }
