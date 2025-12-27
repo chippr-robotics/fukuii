@@ -302,14 +302,14 @@ object ETH63 {
               throw new RuntimeException("Cannot decode Receipt: empty RLPValue")
             }
             val first = receiptBytes(0)
-            // Check if this is a typed receipt (transaction type byte < 0x7f)
-            if ((first & 0xff) < 0x7f && (first & 0xff) >= 0 && receiptBytes.length > 1) {
+            // Check if this is a typed receipt (transaction type byte < 0x7f per EIP-2718)
+            if ((first & 0xff) < 0x7f && receiptBytes.length > 1) {
               // Typed receipt in wire format: RLPValue(typeByte || rlp(payload))
               // Expand it to Seq(RLPValue(typeByte), RLPList) for toTypedRLPEncodables
               try {
                 Seq(RLPValue(Array(first)), rawDecode(receiptBytes.tail))
               } catch {
-                case e: Exception =>
+                case _: RuntimeException | _: RLPException =>
                   // If expansion fails, keep as-is (might be legacy receipt)
                   Seq(v)
               }
