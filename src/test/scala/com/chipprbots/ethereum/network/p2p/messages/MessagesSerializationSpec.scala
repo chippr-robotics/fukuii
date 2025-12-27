@@ -7,6 +7,9 @@ import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.crypto.ECDSASignature
+import com.chipprbots.ethereum.domain.TransactionWithAccessList
+import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
@@ -59,6 +62,22 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
     "encoding and decoding SignedTransactions" should {
       "return same result" in {
         val msg = SignedTransactions(Fixtures.Blocks.Block3125369.body.transactionList)
+        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
+      }
+
+      "return same result for typed transaction wire encoding" in {
+        val typedTx = TransactionWithAccessList(
+          chainId = 1,
+          nonce = 1,
+          gasPrice = 1,
+          gasLimit = 21000,
+          receivingAddress = None,
+          value = 0,
+          payload = ByteString.empty,
+          accessList = Nil
+        )
+        val signedTypedTx = SignedTransaction(typedTx, ECDSASignature(r = 1, s = 2, v = 1))
+        val msg = SignedTransactions(Seq(signedTypedTx))
         verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
       }
     }

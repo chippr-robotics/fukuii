@@ -180,6 +180,7 @@ object BaseETH6XMessages {
     implicit class TypedTransactionsRLPAggregator(val encodables: Seq[RLPEncodeable]) extends AnyVal {
 
       import Transaction.ByteArrayTransactionTypeValidator
+      import Transaction.TransactionTypeValidator
 
       /** Convert a Seq of RLPEncodable containing TypedTransaction informations into a Seq of Prefixed RLPEncodable.
         *
@@ -203,6 +204,19 @@ object BaseETH6XMessages {
           case Seq() => Seq()
           case Seq(RLPValue(v), rlpList: RLPList, tail @ _*) if v.isValidTransactionType =>
             PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
+          case Seq(RLPValue(v), tail @ _*) if v.length > 1 && v.head.isValidTransactionType =>
+            // Typed envelopes (EIP-2718) are encoded on the wire as: typeByte || rlp(payload).
+            // When such bytes appear as an element inside an outer RLP list, the decoder yields an RLPValue(bytes)
+            // rather than a split (RLPValue(typeByte), RLPList(payload)). Normalize it here so all callers that use
+            // toTypedRLPEncodables (BlockBody, SignedTransactions, PooledTransactions, etc.) can decode typed txs.
+            try {
+              rawDecode(v.tail) match {
+                case rlpList: RLPList => PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
+                case _                => RLPValue(v) +: tail.toTypedRLPEncodables
+              }
+            } catch {
+              case _: Throwable => RLPValue(v) +: tail.toTypedRLPEncodables
+            }
           case Seq(head, tail @ _*) => head +: tail.toTypedRLPEncodables
         }
     }
