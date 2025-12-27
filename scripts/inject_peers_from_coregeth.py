@@ -44,6 +44,11 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=30, help="maximum enodes to attempt")
     p.add_argument("--sleep", type=float, default=0.0, help="seconds to sleep before showing final status")
     p.add_argument("--dry-run", action="store_true", help="print selected enodes, do not call net_connectToPeer")
+    p.add_argument(
+        "--snap-only",
+        action="store_true",
+        help="only select peers that advertise SNAP capability (caps includes 'snap/1')",
+    )
     args = p.parse_args()
 
     before = rpc(args.fukuii_url, "net_peerCount")
@@ -58,22 +63,40 @@ def main() -> int:
         pass
 
     peers = rpc(args.coregeth_url, "admin_peers")
-    enodes: list[str] = []
+    snap_enodes: list[str] = []
+    other_enodes: list[str] = []
     for peer in peers:
         enode = peer.get("enode")
         if not (isinstance(enode, str) and enode.startswith("enode://")):
             continue
         if fukuii_host and f"@{fukuii_host}:" in enode:
             continue
-        enodes.append(enode)
 
-    # Dedup while preserving order
+        caps = peer.get("caps")
+        caps_list: list[str] = caps if isinstance(caps, list) else []
+        has_snap = any(isinstance(c, str) and c == "snap/1" for c in caps_list)
+        has_eth = any(isinstance(c, str) and c.startswith("eth/") for c in caps_list)
+
+        # Focus on peers that are likely to serve SNAP range requests.
+        # We prioritize SNAP-capable peers first; optionally restrict to them.
+        if has_snap and has_eth:
+            snap_enodes.append(enode)
+        else:
+            other_enodes.append(enode)
+
+    # Dedup while preserving order (also keeps SNAP-first priority)
     seen: set[str] = set()
-    enodes = [e for e in enodes if not (e in seen or seen.add(e))]
+    if args.snap_only:
+        selected = snap_enodes
+    else:
+        selected = snap_enodes + other_enodes
+    enodes = [e for e in selected if not (e in seen or seen.add(e))]
     enodes = enodes[: max(args.limit, 0)]
 
     print(f"Fukuii net_peerCount before: {before}")
-    print(f"Core-geth peers: {len(peers)}; candidate enodes: {len(enodes)}")
+    print(
+        f"Core-geth peers: {len(peers)}; snap-capable enodes: {len(snap_enodes)}; other enodes: {len(other_enodes)}; selected: {len(enodes)}"
+    )
 
     if args.dry_run:
         for en in enodes:
