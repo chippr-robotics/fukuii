@@ -6,8 +6,9 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPServerService
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
+import com.chipprbots.ethereum.domain.{BlockchainReader, ChainWeight}
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
 import com.chipprbots.ethereum.network.PeerActor.SendMessage
@@ -46,7 +47,10 @@ class NetworkPeerManagerActor(
     peerEventBusActor: ActorRef,
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
-    initialSnapSyncControllerOpt: Option[ActorRef] = None
+    initialSnapSyncControllerOpt: Option[ActorRef] = None,
+    blockchainReaderOpt: Option[BlockchainReader] = None,
+    mptStorageOpt: Option[MptStorage] = None,
+    evmCodeStorageOpt: Option[EvmCodeStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -57,6 +61,27 @@ class NetworkPeerManagerActor(
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
+
+  // SNAP server service for handling incoming SNAP requests (server-side)
+  private val snapServerServiceOpt: Option[SNAPServerService] =
+    for {
+      blockchainReader <- blockchainReaderOpt
+      mptStorage <- mptStorageOpt
+      evmCodeStorage <- evmCodeStorageOpt
+    } yield new SNAPServerService(
+      blockchainReader,
+      appStateStorage,
+      mptStorage,
+      evmCodeStorage
+    )
+
+  // Log SNAP server status on initialization
+  snapServerServiceOpt match {
+    case Some(_) =>
+      log.info("SNAP server service enabled - node will serve SNAP data to peers")
+    case None =>
+      log.info("SNAP server service disabled - node will only request SNAP data (client-only mode)")
+  }
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -396,26 +421,28 @@ class NetworkPeerManagerActor(
       peerId: PeerId,
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
-    // Note: This is an optional server-side implementation
-    // Fukuii primarily acts as a client, so we log and ignore for now
     log.debug(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side account range retrieval
-    // 1. Verify we have the requested state root
-    // 2. Retrieve accounts from startingHash to limitHash (up to responseBytes)
-    // 3. Generate Merkle proofs for the range
-    // 4. Send AccountRange response
-
-    // For now, send an empty response to indicate we don't serve SNAP data
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = AccountRange(
-        requestId = msg.requestId,
-        accounts = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      snapServerServiceOpt match {
+        case Some(service) =>
+          // Use SNAPServerService to generate response
+          val response = service.handleGetAccountRange(msg)
+          pwi.peer.ref ! PeerActor.SendMessage(response)
+          log.debug(s"Sent AccountRange response to peer $peerId: ${response.accounts.size} accounts")
+
+        case None =>
+          // SNAP server not available - send empty response
+          log.debug(s"SNAP server service not available, sending empty response to peer $peerId")
+          val emptyResponse = AccountRange(
+            requestId = msg.requestId,
+            accounts = Seq.empty,
+            proof = Seq.empty
+          )
+          pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      }
     }
   }
 
@@ -437,20 +464,22 @@ class NetworkPeerManagerActor(
       s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side storage range retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each account, retrieve storage slots from startingHash to limitHash
-    // 3. Generate Merkle proofs for each account's storage
-    // 4. Send StorageRanges response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = StorageRanges(
-        requestId = msg.requestId,
-        slots = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      snapServerServiceOpt match {
+        case Some(service) =>
+          val response = service.handleGetStorageRanges(msg)
+          pwi.peer.ref ! PeerActor.SendMessage(response)
+          log.debug(s"Sent StorageRanges response to peer $peerId: ${response.slots.map(_.size).sum} total slots")
+
+        case None =>
+          log.debug(s"SNAP server service not available, sending empty response to peer $peerId")
+          val emptyResponse = StorageRanges(
+            requestId = msg.requestId,
+            slots = Seq.empty,
+            proof = Seq.empty
+          )
+          pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      }
     }
   }
 
@@ -472,18 +501,21 @@ class NetworkPeerManagerActor(
       s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side trie node retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each path, retrieve the trie node
-    // 3. Send TrieNodes response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = TrieNodes(
-        requestId = msg.requestId,
-        nodes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      snapServerServiceOpt match {
+        case Some(service) =>
+          val response = service.handleGetTrieNodes(msg)
+          pwi.peer.ref ! PeerActor.SendMessage(response)
+          log.debug(s"Sent TrieNodes response to peer $peerId: ${response.nodes.size} nodes")
+
+        case None =>
+          log.debug(s"SNAP server service not available, sending empty response to peer $peerId")
+          val emptyResponse = TrieNodes(
+            requestId = msg.requestId,
+            nodes = Seq.empty
+          )
+          pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      }
     }
   }
 
@@ -505,17 +537,21 @@ class NetworkPeerManagerActor(
       s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side bytecode retrieval
-    // 1. For each code hash, retrieve the bytecode from EvmCodeStorage
-    // 2. Send ByteCodes response (up to responseBytes limit)
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = ByteCodes(
-        requestId = msg.requestId,
-        codes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      snapServerServiceOpt match {
+        case Some(service) =>
+          val response = service.handleGetByteCodes(msg)
+          pwi.peer.ref ! PeerActor.SendMessage(response)
+          log.debug(s"Sent ByteCodes response to peer $peerId: ${response.codes.size} codes")
+
+        case None =>
+          log.debug(s"SNAP server service not available, sending empty response to peer $peerId")
+          val emptyResponse = ByteCodes(
+            requestId = msg.requestId,
+            codes = Seq.empty
+          )
+          pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      }
     }
   }
 
@@ -527,11 +563,16 @@ object NetworkPeerManagerActor {
     Codes.BlockHeadersCode,
     Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
-    // SNAP protocol response codes (responses we receive from peers)
+    // SNAP protocol response codes (responses we receive from peers as clients)
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
     SNAP.Codes.TrieNodesCode,
-    SNAP.Codes.ByteCodesCode
+    SNAP.Codes.ByteCodesCode,
+    // SNAP protocol request codes (requests we receive from peers as servers)
+    SNAP.Codes.GetAccountRangeCode,
+    SNAP.Codes.GetStorageRangesCode,
+    SNAP.Codes.GetTrieNodesCode,
+    SNAP.Codes.GetByteCodesCode
   )
 
   /** RemoteStatus was created to decouple status information from protocol status messages (they are different versions
@@ -682,7 +723,10 @@ object NetworkPeerManagerActor {
       peerEventBusActor: ActorRef,
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
-      snapSyncControllerOpt: Option[ActorRef] = None
+      snapSyncControllerOpt: Option[ActorRef] = None,
+      blockchainReaderOpt: Option[BlockchainReader] = None,
+      mptStorageOpt: Option[MptStorage] = None,
+      evmCodeStorageOpt: Option[EvmCodeStorage] = None
   ): Props =
     Props(
       new NetworkPeerManagerActor(
@@ -690,7 +734,10 @@ object NetworkPeerManagerActor {
         peerEventBusActor,
         appStateStorage,
         forkResolverOpt,
-        snapSyncControllerOpt
+        snapSyncControllerOpt,
+        blockchainReaderOpt,
+        mptStorageOpt,
+        evmCodeStorageOpt
       )
     )
 }
