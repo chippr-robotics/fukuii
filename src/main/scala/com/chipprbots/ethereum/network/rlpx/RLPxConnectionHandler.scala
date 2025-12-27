@@ -115,6 +115,72 @@ class RLPxConnectionHandler(
 
   class ConnectedHandler(connection: ActorRef) {
 
+    // Canonical bases used by this codebase's message models/decoders.
+    // ETH messages: 0x10..0x20 (17 codes: 0x00..0x10 relative)
+    // SNAP messages (canonical): 0x21..0x28 (8 codes: 0x00..0x07 relative)
+    private val CanonicalEthBase = 0x10
+    private val CanonicalEthSize = 0x11
+    private val CanonicalSnapBase = 0x21
+    private val CanonicalSnapSize = 0x08
+
+    private case class InboundTranslator(peerEthBase: Int, peerSnapBase: Option[Int], snapFirst: Boolean) {
+      def translateType(messageType: Int): Int = {
+        if (messageType < CanonicalEthBase) {
+          messageType
+        } else {
+          peerSnapBase match {
+            case Some(snapBase) if messageType >= snapBase && messageType < snapBase + CanonicalSnapSize =>
+              val rel = messageType - snapBase
+              CanonicalSnapBase + rel
+            case _ =>
+              if (messageType >= peerEthBase && messageType < peerEthBase + CanonicalEthSize) {
+                val rel = messageType - peerEthBase
+                CanonicalEthBase + rel
+              } else {
+                messageType
+              }
+          }
+        }
+      }
+
+      def translateFrames(frames: Seq[Frame]): Seq[Frame] =
+        frames.map { frame =>
+          val translatedType = translateType(frame.`type`)
+          if (translatedType == frame.`type`) frame else frame.copy(`type` = translatedType)
+        }
+    }
+
+    private def computeInboundTranslator(hello: Hello, negotiatedEth: Capability, supportsSnap: Boolean): InboundTranslator = {
+      val peerCaps = hello.capabilities.toList
+      val snapIndex = peerCaps.indexWhere(_ == Capability.SNAP1)
+      val ethIndex = peerCaps.indexWhere(_ == negotiatedEth) match {
+        case -1 =>
+          peerCaps.indexWhere {
+            case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 |
+                Capability.ETH68 =>
+              true
+            case _ => false
+          }
+        case idx => idx
+      }
+
+      val snapFirst = supportsSnap && snapIndex >= 0 && ethIndex >= 0 && snapIndex < ethIndex
+      val peerSnapBase =
+        if (!supportsSnap) None
+        else if (snapFirst) Some(CanonicalEthBase)
+        else Some(CanonicalEthBase + CanonicalEthSize)
+
+      val peerEthBase = if (snapFirst) CanonicalEthBase + CanonicalSnapSize else CanonicalEthBase
+
+      val snapBaseStr = peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
+      log.info(
+        s"INBOUND_CAP_OFFSETS: peer=$peerId clientId=${hello.clientId} snapFirst=$snapFirst " +
+          s"peerEthBase=0x${peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
+      )
+
+      InboundTranslator(peerEthBase = peerEthBase, peerSnapBase = peerSnapBase, snapFirst = snapFirst)
+    }
+
     private var helloAckPending: Boolean = false
     private var helloWriteAcknowledged: Boolean = false
     private var activeMessageCodec: Option[MessageCodec] = None
@@ -364,18 +430,19 @@ class RLPxConnectionHandler(
           )
           val messageCodecOpt = for {
             opt <- negotiateCodec(hello, extractor)
-            (messageCodec, negotiated) = opt
+            (messageCodec, negotiated, inboundTranslator) = opt
             _ = log.debug("[RLPx] Protocol negotiated with peer {}: {}", peerId, negotiated)
             _ = context.parent ! InitialHelloReceived(hello, negotiated)
-            _ = processFrames(restFrames, messageCodec)
-          } yield messageCodec
+            _ = processFrames(restFrames, messageCodec, inboundTranslator)
+          } yield (messageCodec, inboundTranslator)
           messageCodecOpt match {
-            case Some(messageCodec) =>
+            case Some((messageCodec, inboundTranslator)) =>
               registerMessageCodec(messageCodec)
               log.info("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
               context.become(
                 handshaked(
                   messageCodec,
+                  inboundTranslator,
                   cancellableAckTimeout = cancellableAckTimeout,
                   seqNumber = seqNumber
                 )
@@ -390,7 +457,7 @@ class RLPxConnectionHandler(
           context.become(awaitInitialHello(extractor, cancellableAckTimeout, seqNumber))
       }
 
-    private def negotiateCodec(hello: Hello, extractor: HelloCodec): Option[(MessageCodec, Capability)] =
+    private def negotiateCodec(hello: Hello, extractor: HelloCodec): Option[(MessageCodec, Capability, InboundTranslator)] =
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
           CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
@@ -399,6 +466,7 @@ class RLPxConnectionHandler(
         if (supportsSnap) {
           log.info("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
         }
+        val inboundTranslator = computeInboundTranslator(hello, negotiated, supportsSnap)
         (
           messageCodecFactory(
             extractor.frameCodec,
@@ -408,13 +476,15 @@ class RLPxConnectionHandler(
             compressionPolicy,
             supportsSnap
           ),
-          negotiated
+          negotiated,
+          inboundTranslator
         )
       }
 
-    private def processFrames(frames: Seq[Frame], messageCodec: MessageCodec): Unit =
+    private def processFrames(frames: Seq[Frame], messageCodec: MessageCodec, inboundTranslator: InboundTranslator): Unit =
       if (frames.nonEmpty) {
-        val messagesSoFar = messageCodec.readFrames(frames) // omit hello
+        val translatedFrames = inboundTranslator.translateFrames(frames)
+        val messagesSoFar = messageCodec.readFrames(translatedFrames) // omit hello
         messagesSoFar.foreach(processMessage)
       }
 
@@ -484,8 +554,9 @@ class RLPxConnectionHandler(
       * @param seqNumber
       *   , sequence number for the next message to be sent
       */
-    def handshaked(
-        messageCodec: MessageCodec,
+    private def handshaked(
+      messageCodec: MessageCodec,
+      inboundTranslator: InboundTranslator,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
         cancellableAckTimeout: Option[CancellableAckTimeout] = None,
         seqNumber: Int = 0
@@ -508,6 +579,7 @@ class RLPxConnectionHandler(
           context.become(
             handshaked(
               messageCodec = messageCodec,
+              inboundTranslator = inboundTranslator,
               messagesNotSent = messagesNotSent,
               cancellableAckTimeout = Some(CancellableAckTimeout(seqNumber, timeout)),
               seqNumber = increaseSeqNumber(seqNumber)
@@ -516,11 +588,12 @@ class RLPxConnectionHandler(
 
         case sm: SendMessage =>
           if (cancellableAckTimeout.isEmpty)
-            sendMessage(messageCodec, sm.serializable, seqNumber, messagesNotSent)
+            sendMessage(messageCodec, inboundTranslator, sm.serializable, seqNumber, messagesNotSent)
           else
             context.become(
               handshaked(
                 messageCodec,
+                inboundTranslator,
                 messagesNotSent :+ sm.serializable,
                 cancellableAckTimeout,
                 seqNumber
@@ -534,7 +607,9 @@ class RLPxConnectionHandler(
             data.length,
             cancellableAckTimeout.isDefined
           )
-          val messages = messageCodec.readMessages(data)
+          val frames = messageCodec.frameCodec.readFrames(data)
+          val translatedFrames = inboundTranslator.translateFrames(frames)
+          val messages = messageCodec.readFrames(translatedFrames)
           log.debug("RECV_MSG: peer={}, decoded {} message(s)", peerId, messages.size)
           messages.zipWithIndex.foreach { case (msgResult, idx) =>
             msgResult match {
@@ -565,9 +640,9 @@ class RLPxConnectionHandler(
 
           // Send next message if there is one
           if (messagesNotSent.nonEmpty)
-            sendMessage(messageCodec, messagesNotSent.head, seqNumber, messagesNotSent.tail)
+            sendMessage(messageCodec, inboundTranslator, messagesNotSent.head, seqNumber, messagesNotSent.tail)
           else
-            context.become(handshaked(messageCodec, Queue.empty, None, seqNumber))
+            context.become(handshaked(messageCodec, inboundTranslator, Queue.empty, None, seqNumber))
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
@@ -588,7 +663,8 @@ class RLPxConnectionHandler(
       *   , messages not yet sent
       */
     private def sendMessage(
-        messageCodec: MessageCodec,
+      messageCodec: MessageCodec,
+      inboundTranslator: InboundTranslator,
         messageToSend: MessageSerializable,
         seqNumber: Int,
         remainingMsgsToSend: Queue[MessageSerializable]
@@ -621,6 +697,7 @@ class RLPxConnectionHandler(
       context.become(
         handshaked(
           messageCodec = messageCodec,
+          inboundTranslator = inboundTranslator,
           messagesNotSent = remainingMsgsToSend,
           cancellableAckTimeout = Some(CancellableAckTimeout(seqNumber, timeout)),
           seqNumber = increaseSeqNumber(seqNumber)
