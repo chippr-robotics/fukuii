@@ -111,7 +111,7 @@ autolabeler:
       - '*.md'
       - 'docs/**/*'
     branch:
-      - '/docs{0,1}\/.+/'
+      - '/docs?\/.+/'
   - label: 'bug'
     branch:
       - '/fix\/.+/'
@@ -129,7 +129,7 @@ autolabeler:
       - '**/test/**/*'
       - '**/*Spec.scala'
       - '**/*Test.scala'
-  - label: 'ci/cd'
+  - label: 'ci'
     files:
       - '.github/**/*'
   - label: 'security'
