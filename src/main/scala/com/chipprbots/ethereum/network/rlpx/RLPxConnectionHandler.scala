@@ -608,8 +608,7 @@ class RLPxConnectionHandler(
             cancellableAckTimeout.isDefined
           )
           val frames = messageCodec.frameCodec.readFrames(data)
-          // Protect against null frames from mocked/stubbed FrameCodec in tests
-          val translatedFrames = if (frames == null) Seq.empty else inboundTranslator.translateFrames(frames)
+          val translatedFrames = inboundTranslator.translateFrames(frames)
           val messages = messageCodec.readFrames(translatedFrames)
           log.debug("RECV_MSG: peer={}, decoded {} message(s)", peerId, messages.size)
           messages.zipWithIndex.foreach { case (msgResult, idx) =>

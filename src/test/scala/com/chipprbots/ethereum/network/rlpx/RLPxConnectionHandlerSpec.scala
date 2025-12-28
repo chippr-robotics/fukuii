@@ -403,6 +403,10 @@ class RLPxConnectionHandlerSpec
       rlpxConnection ! RLPxConnectionHandler.HandleConnection(connection.ref)
       connection.expectMsgClass(classOf[Tcp.Register])
 
+      // Configure stubFrameCodec to return empty Seq instead of null
+      (stubFrameCodec.readFrames _).when(*).returns(Seq.empty)
+      (stubFrameCodec.writeFrames _).when(*).returns(ByteString.empty)
+
       // AuthHandshaker handles initial message
       val data = ByteString((0 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
       val hello = ByteString((1 until AuthHandshaker.InitiatePacketLength).map(_.toByte).toArray)
