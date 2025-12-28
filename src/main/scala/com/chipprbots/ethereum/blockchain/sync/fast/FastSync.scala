@@ -297,13 +297,40 @@ class FastSync(
         removeRequestHandler(sender())
         handleReceipts(peer, requestedHashes, receipts)
       case ResponseReceived(peer, eth66Receipts: ETH66Receipts, timeTaken) =>
-        // Convert ETH66 RLPList format to Seq[Seq[Receipt]] expected by handleReceipts
-        // Local imports provide implicit conversions: toTypedRLPEncodables and toReceipt
+        // Convert ETH66 RLPList format to Seq[Seq[Receipt]] expected by handleReceipts.
+        // NOTE: Typed receipts (EIP-2718-style) can arrive on the wire as
+        //   RLPValue(typeByte || rlp(payload))
+        // so we must expand them before calling toTypedRLPEncodables/toReceipt.
         val receipts: Seq[Seq[Receipt]] = {
           import ETH63.ReceiptImplicits._
           import BaseETH6XMessages.TypedTransaction._
+          import com.chipprbots.ethereum.rlp.{RLPEncodeable, RLPException, RLPValue, rawDecode}
+
+          def expandTypedReceipts(items: Seq[RLPEncodeable]): Seq[RLPEncodeable] =
+            items.flatMap {
+              case v: RLPValue =>
+                val receiptBytes = v.bytes
+                if (receiptBytes.isEmpty) {
+                  throw new RuntimeException("Cannot decode Receipt: empty RLPValue")
+                }
+                val first = receiptBytes(0)
+                // Typed receipt in wire format: RLPValue(typeByte || rlp(payload))
+                // Expand it to Seq(RLPValue(typeByte), RLPList(payload)) for toTypedRLPEncodables.
+                if ((first & 0xff) < 0x7f && receiptBytes.length > 1) {
+                  try {
+                    Seq(RLPValue(Array(first)), rawDecode(receiptBytes.tail))
+                  } catch {
+                    case _: RuntimeException | _: RLPException => Seq(v)
+                  }
+                } else {
+                  Seq(v)
+                }
+              case other => Seq(other)
+            }
+
           eth66Receipts.receiptsForBlocks.items.flatMap {
-            case r: RLPList => Some(r.items.toTypedRLPEncodables.map(_.toReceipt))
+            case r: RLPList =>
+              Some(expandTypedReceipts(r.items).toTypedRLPEncodables.map(_.toReceipt))
             case other =>
               log.warning(
                 "Unexpected RLP item type in ETH66Receipts from peer [{}]: {}",
@@ -611,12 +638,19 @@ class FastSync(
       } else {
         validateReceipts(requestedHashes, receipts) match {
           case ReceiptsValidationResult.Valid(blockHashesWithReceipts) =>
-            blockHashesWithReceipts
-              .map { case (hash, receiptsForBlock) =>
-                blockchainWriter.storeReceipts(hash, receiptsForBlock)
-              }
-              .reduce(_.and(_))
-              .commit()
+            if (blockHashesWithReceipts.isEmpty) {
+              log.warning(
+                "Received receipts from peer [{}] but have no matching requested hashes (unsolicited or late response)",
+                peer.id
+              )
+            } else {
+              blockHashesWithReceipts
+                .map { case (hash, receiptsForBlock) =>
+                  blockchainWriter.storeReceipts(hash, receiptsForBlock)
+                }
+                .reduce(_.and(_))
+                .commit()
+            }
 
             val receivedHashes = blockHashesWithReceipts.map(_._1)
             updateBestBlockIfNeeded(receivedHashes)
@@ -695,8 +729,15 @@ class FastSync(
     }
 
     private def insertBlocks(requestedHashes: Seq[ByteString], blockBodies: Seq[BlockBody]): Unit = {
-      requestedHashes
-        .zip(blockBodies)
+      val blockHashesWithBodies = requestedHashes.zip(blockBodies)
+      if (blockHashesWithBodies.isEmpty) {
+        log.warning(
+          "Received block bodies but have no matching requested hashes (unsolicited or late response)"
+        )
+        return
+      }
+
+      blockHashesWithBodies
         .map { case (hash, body) =>
           blockchainWriter.storeBlockBody(hash, body)
         }
