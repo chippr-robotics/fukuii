@@ -405,41 +405,68 @@ class SNAPSyncController(
     
     val pivotBlockNumber = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
 
-    // Core-geth behavior: If chain height <= pivot offset, use genesis as pivot
-    // This allows SNAP sync to start immediately from any height
+    // Core-geth behavior: If chain height <= pivot offset, use genesis as pivot.
+    // IMPORTANT: only do this when we actually know the network height (i.e. we have peers).
+    // If we have no peers yet, treating the height as 0 causes a bad behavior on public chains:
+    // we start SNAP against the genesis state root, which peers typically cannot serve (pruned state),
+    // leading to endless GetAccountRange timeouts.
     if (baseBlockForPivot <= snapSyncConfig.pivotBlockOffset) {
-      log.info("=" * 80)
-      log.info("🚀 SNAP Sync Starting from Genesis")
-      log.info("=" * 80)
-      log.info(s"Network height: $baseBlockForPivot blocks")
-      log.info(s"Height below minimum threshold (${snapSyncConfig.pivotBlockOffset} blocks)")
-      log.info(s"Using genesis (block 0) as pivot for early chain bootstrap")
-      log.info("SNAP sync will effectively perform full sync for initial blocks")
-      log.info("=" * 80)
-      
-      // Use genesis block as pivot (like core-geth does)
-      blockchainReader.getBlockHeaderByNumber(0) match {
-        case Some(genesisHeader) =>
-          pivotBlock = Some(BigInt(0))
-          stateRoot = Some(genesisHeader.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(0).commit()
-          appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot).commit()
-          
-          SNAPSyncMetrics.setPivotBlockNumber(0)
-          
-          // Reset bootstrap retry counter
-          bootstrapRetryCount = 0
-          
-          // Start account range sync with genesis state root
-          currentPhase = AccountRangeSync
-          startAccountRangeSync(genesisHeader.stateRoot)
-          context.become(syncing)
-          
-        case None =>
-          log.error("Genesis block header not available - cannot start SNAP sync")
-          context.parent ! FallbackToFastSync
+      pivotSelectionSource match {
+        case NetworkPivot =>
+          log.info("=" * 80)
+          log.info("🚀 SNAP Sync Starting from Genesis")
+          log.info("=" * 80)
+          log.info(s"Network height: $baseBlockForPivot blocks")
+          log.info(s"Height below minimum threshold (${snapSyncConfig.pivotBlockOffset} blocks)")
+          log.info(s"Using genesis (block 0) as pivot for early chain bootstrap")
+          log.info("SNAP sync will effectively perform full sync for initial blocks")
+          log.info("=" * 80)
+
+          // Use genesis block as pivot (like core-geth does)
+          blockchainReader.getBlockHeaderByNumber(0) match {
+            case Some(genesisHeader) =>
+              pivotBlock = Some(BigInt(0))
+              stateRoot = Some(genesisHeader.stateRoot)
+              appStateStorage.putSnapSyncPivotBlock(0).commit()
+              appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot).commit()
+
+              SNAPSyncMetrics.setPivotBlockNumber(0)
+
+              // Reset bootstrap retry counter
+              bootstrapRetryCount = 0
+
+              // Start account range sync with genesis state root
+              currentPhase = AccountRangeSync
+              startAccountRangeSync(genesisHeader.stateRoot)
+              context.become(syncing)
+
+            case None =>
+              log.error("Genesis block header not available - cannot start SNAP sync")
+              context.parent ! FallbackToFastSync
+          }
+          return
+
+        case LocalPivot =>
+          // No peers available yet (network height unknown). Wait for peers instead of starting at genesis.
+          if (bootstrapRetryCount < MaxBootstrapRetries) {
+            bootstrapRetryCount += 1
+            log.warning(
+              s"No peers available for pivot selection (local best=$localBestBlock). " +
+                s"Not starting SNAP from genesis; retrying in $BootstrapRetryDelay... (attempt $bootstrapRetryCount/$MaxBootstrapRetries)"
+            )
+            bootstrapCheckTask = Some(
+              scheduler.scheduleOnce(BootstrapRetryDelay) {
+                self ! RetrySnapSyncStart
+              }(ec)
+            )
+            context.become(bootstrapping)
+          } else {
+            log.error("Max retries exceeded waiting for peers. Falling back to fast sync.")
+            bootstrapRetryCount = 0
+            context.parent ! FallbackToFastSync
+          }
+          return
       }
-      return
     }
 
     // With network-based pivot and 64-block offset, pivotBlockNumber should always be > 0
