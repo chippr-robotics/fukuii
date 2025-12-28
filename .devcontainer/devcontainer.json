@@ -32,7 +32,7 @@
     }
   },
   
-  "postCreateCommand": "bash -c 'sudo chown -R vscode:vscode $HOME/.sbt $HOME/.ivy2 || true && git submodule update --init --recursive && source /usr/local/sdkman/bin/sdkman-init.sh && sdk install sbt && echo \"source /usr/local/sdkman/bin/sdkman-init.sh\" >> $HOME/.bashrc && echo \"source /usr/local/sdkman/bin/sdkman-init.sh\" >> $HOME/.zshrc && sdk version && sbt sbtVersion'",
+  "postCreateCommand": "bash .devcontainer/setup.sh",
   
   "containerEnv": {
     "FUKUII_DEV": "true",
