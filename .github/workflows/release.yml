@@ -199,6 +199,14 @@ jobs:
           echo "Release artifacts:"
           ls -lh release-artifacts/
       
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fukuii-distribution-${{ steps.extract-version.outputs.version }}
+          path: release-artifacts/*
+          retention-days: 90
+          if-no-files-found: error
+      
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
