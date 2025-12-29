@@ -103,7 +103,33 @@ See [MCP Documentation](docs/MCP.md) for detailed integration instructions with 
 
 Getting started
 
-## Option 1: Docker (Recommended for Production)
+## Option 1: Pre-built Distributions (Quick Start)
+
+Pre-built distribution archives are available for each release, allowing you to download and run Fukuii without building from source.
+
+### Download from GitHub Releases
+
+Visit the [Releases page](https://github.com/chippr-robotics/fukuii/releases) to download the latest version:
+
+1. Navigate to the latest release
+2. Under "Assets", download `fukuii-<version>.zip`
+3. Extract the archive:
+   ```bash
+   unzip fukuii-<version>.zip
+   cd fukuii-<version>
+   ```
+4. Run Fukuii:
+   ```bash
+   ./bin/fukuii etc
+   ```
+
+**Available artifacts in each release:**
+- `fukuii-<version>.zip` - Complete distribution with launcher scripts and configuration
+- `fukuii-assembly-<version>.jar` - Standalone executable JAR (requires Java 21+)
+- `fukuii-sbom-<version>.json` - Software Bill of Materials in CycloneDX format
+- `CHANGELOG.md` - Release notes and changelog
+
+## Option 2: Docker (Recommended for Production)
 
 The easiest way to run Fukuii is using Docker. Images are available on both GitHub Container Registry and Docker Hub:
 
@@ -166,7 +192,7 @@ See [Docker Documentation](docs/deployment/docker.md) for detailed Docker docume
 - Security considerations and signature verification
 - Docker Compose examples
 
-## Option 2: GitHub Codespaces (Recommended for Development)
+## Option 3: GitHub Codespaces (Recommended for Development)
 
 The fastest way to start developing is using GitHub Codespaces, which provides a pre-configured development environment:
 
@@ -176,7 +202,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
-## Option 3: Local Development
+## Option 4: Build from Source (For Development)
 
 To build Fukuii from source locally you will need:
 
