@@ -81,12 +81,16 @@ object StorageTask {
     *   Storage task covering full storage space
     */
   def createStorageTask(accountHash: ByteString, storageRoot: ByteString): StorageTask =
-    StorageTask(
-      accountHash = accountHash,
-      storageRoot = storageRoot,
-      next = ByteString.empty, // 0x00... (start)
-      last = ByteString.empty // 0xFF... (end, exclusive)
-    )
+    {
+      val min = ByteString(Array.fill(32)(0.toByte))
+      val max = ByteString(Array.fill(32)(0xff.toByte))
+      StorageTask(
+        accountHash = accountHash,
+        storageRoot = storageRoot,
+        next = min, // 0x00... (start)
+        last = max // 0xFF... (end, exclusive)
+      )
+    }
 
   /** Create storage tasks for multiple accounts
     *

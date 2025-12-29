@@ -51,7 +51,7 @@ services:
       - "--ws.api=eth,net,web3"
       - "--ws.origins=*"
       - "--port=30304"
-      - "--maxpeers=25"
+      - "--maxpeers=75"
     entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
