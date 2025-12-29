@@ -408,6 +408,35 @@ class SNAPSyncController(
     // Core-geth behavior: If chain height <= pivot offset, use genesis as pivot
     // This allows SNAP sync to start immediately from any height
     if (baseBlockForPivot <= snapSyncConfig.pivotBlockOffset) {
+      // IMPORTANT: Only apply the "start from genesis" behavior when we actually know
+      // the network height (i.e., we have peers). If we have no peers, the network height
+      // is unknown and treating it as 0 will cause us to request SNAP data for the genesis
+      // state root, which most peers won't serve.
+      pivotSelectionSource match {
+        case LocalPivot =>
+          if (bootstrapRetryCount < MaxBootstrapRetries) {
+            bootstrapRetryCount += 1
+            log.warning("No peers available yet; network height is unknown. Deferring SNAP start until peers are available")
+            log.warning(s"Retrying SNAP start in $BootstrapRetryDelay... (attempt ${bootstrapRetryCount}/$MaxBootstrapRetries)")
+
+            bootstrapCheckTask = Some(
+              scheduler.scheduleOnce(BootstrapRetryDelay) {
+                self ! RetrySnapSyncStart
+              }(ec)
+            )
+            context.become(bootstrapping)
+            return
+          } else {
+            log.error("Max retries exceeded waiting for peers. Falling back to fast sync.")
+            bootstrapRetryCount = 0
+            context.parent ! FallbackToFastSync
+            return
+          }
+
+        case NetworkPivot =>
+          // proceed with genesis pivot handling below
+      }
+
       log.info("=" * 80)
       log.info("🚀 SNAP Sync Starting from Genesis")
       log.info("=" * 80)
