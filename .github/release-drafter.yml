@@ -9,33 +9,46 @@ categories:
     labels:
       - 'feature'
       - 'enhancement'
-  - title: '🐞 Bug Fixes'
+  - title: '🐛 Bug Fixes'
     labels:
-      - 'bug'
       - 'fix'
-  - title: '🔒 Security'
+      - 'bugfix'
+      - 'bug'
+  - title: '🧪 Tests'
     labels:
-      - 'security'
+      - 'test'
+      - 'testing'
+      - 'tests'
   - title: '📚 Documentation'
     labels:
       - 'documentation'
-  - title: '🏗️ Build & CI/CD'
+      - 'docs'
+  - title: '🔒 Security'
     labels:
-      - 'ci/cd'
-      - 'build'
-      - 'dependencies'
-  - title: '🔧 Maintenance'
-    labels:
-      - 'chore'
-      - 'refactor'
+      - 'security'
+      - 'vulnerability'
   - title: '⚡ Performance'
     labels:
       - 'performance'
-  - title: '🧪 Testing'
+      - 'perf'
+  - title: '🏗️ Infrastructure'
     labels:
-      - 'tests'
+      - 'infrastructure'
+      - 'ci'
+      - 'ci/cd'
+      - 'build'
+      - 'deployment'
+  - title: '♻️ Refactoring'
+    labels:
+      - 'refactor'
+      - 'refactoring'
+  - title: '🧹 Maintenance'
+    labels:
+      - 'chore'
+      - 'dependencies'
+      - 'maintenance'
 
-change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
 change-title-escapes: '\<*_&' # You can add # and @ to disable mentions
 
 version-resolver:
@@ -47,7 +60,17 @@ version-resolver:
     labels:
       - 'minor'
       - 'feature'
-      - 'milestone'
+      - 'enhancement'
+  patch:
+    labels:
+      - 'patch'
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+      - 'documentation'
+      - 'docs'
+      - 'chore'
+      - 'dependencies'
   default: patch
 
 template: |
@@ -76,6 +99,62 @@ template: |
     ghcr.io/chippr-robotics/chordodes_fukuii:v$RESOLVED_VERSION
   ```
 
-  ## 📝 Contributors
+  ## Contributors
+
+  Thank you to all our contributors! 🎉
 
   $CONTRIBUTORS
+
+autolabeler:
+  - label: 'documentation'
+    files:
+      - '*.md'
+      - 'docs/**/*'
+    branch:
+      - '/docs?\/.+/'
+  - label: 'bug'
+    branch:
+      - '/fix\/.+/'
+    title:
+      - '/fix/i'
+  - label: 'enhancement'
+    branch:
+      - '/feature\/.+/'
+      - '/feat\/.+/'
+    title:
+      - '/feat/i'
+      - '/feature/i'
+  - label: 'test'
+    files:
+      - '**/test/**/*'
+      - '**/*Spec.scala'
+      - '**/*Test.scala'
+  - label: 'ci'
+    files:
+      - '.github/**/*'
+  - label: 'security'
+    title:
+      - '/security/i'
+      - '/vulnerability/i'
+      - '/cve/i'
+  - label: 'crypto'
+    files:
+      - 'crypto/**/*'
+  - label: 'core'
+    files:
+      - 'src/**/*'
+  - label: 'docker'
+    files:
+      - 'docker/**/*'
+      - 'Dockerfile*'
+      - '.dockerignore'
+  - label: 'dependencies'
+    files:
+      - '**/Dependencies.scala'
+      - 'project/plugins.sbt'
+      - 'build.sbt'
+      - '**/build.properties'
+  - label: 'build'
+    files:
+      - 'build.sbt'
+      - 'project/**/*'
