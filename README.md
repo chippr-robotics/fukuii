@@ -118,16 +118,18 @@ Visit the [Releases page](https://github.com/chippr-robotics/fukuii/releases) to
    unzip fukuii-<version>.zip
    cd fukuii-<version>
    ```
-4. Run Fukuii:
+4. Run Fukuii (connects to Ethereum Classic mainnet):
    ```bash
    ./bin/fukuii etc
    ```
 
 **Available artifacts in each release:**
 - `fukuii-<version>.zip` - Complete distribution with launcher scripts and configuration
-- `fukuii-assembly-<version>.jar` - Standalone executable JAR (requires Java 21+)
+- `fukuii-assembly-<version>.jar` - Standalone executable JAR (requires Java 21+, run with: `java -jar fukuii-assembly-<version>.jar etc`)
 - `fukuii-sbom-<version>.json` - Software Bill of Materials in CycloneDX format
 - `CHANGELOG.md` - Release notes and changelog
+
+**Supported Networks:** `etc` (Ethereum Classic mainnet), `mordor` (ETC testnet), `testnet-internal` (private network)
 
 ## Option 2: Docker (Recommended for Production)
 
