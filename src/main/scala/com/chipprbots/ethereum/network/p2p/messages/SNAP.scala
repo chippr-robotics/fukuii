@@ -98,11 +98,11 @@ object SNAP {
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPValue(rootHash.toArray[Byte]),
           RLPValue(startingHash.toArray[Byte]),
           RLPValue(limitHash.toArray[Byte]),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -178,7 +178,7 @@ object SNAP {
         val proofList = proof.map(p => RLPValue(p.toArray[Byte]))
 
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(accountsList*),
           RLPList(proofList*)
         )
@@ -266,12 +266,12 @@ object SNAP {
         import msg._
         val accountHashesList = accountHashes.map(h => RLPValue(h.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPValue(rootHash.toArray[Byte]),
           RLPList(accountHashesList*),
           RLPValue(startingHash.toArray[Byte]),
           RLPValue(limitHash.toArray[Byte]),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -357,7 +357,7 @@ object SNAP {
         val proofList = proof.map(p => RLPValue(p.toArray[Byte]))
 
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(slotsList*),
           RLPList(proofList*)
         )
@@ -441,9 +441,9 @@ object SNAP {
         import msg._
         val hashesList = hashes.map(h => RLPValue(h.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(hashesList*),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -507,7 +507,7 @@ object SNAP {
         import msg._
         val codesList = codes.map(c => RLPValue(c.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(codesList*)
         )
       }
@@ -580,10 +580,10 @@ object SNAP {
           RLPList(nodeHashes*)
         }
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPValue(rootHash.toArray[Byte]),
           RLPList(pathsList*),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -656,7 +656,7 @@ object SNAP {
         import msg._
         val nodesList = nodes.map(n => RLPValue(n.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(nodesList*)
         )
       }
