@@ -74,10 +74,12 @@ object AccountTask {
 
     if (concurrency == 1) {
       // Single task covers entire range
+      val min = bigIntTo32ByteString(BigInt(0))
+      val max = bigIntTo32ByteString(BigInt(2).pow(256) - 1)
       return Seq(
         AccountTask(
-          next = ByteString.empty, // 0x00...
-          last = ByteString.empty, // 0xFF... (exclusive)
+          next = min, // 0x00...
+          last = max, // 0xFF... (exclusive)
           rootHash = rootHash
         )
       )

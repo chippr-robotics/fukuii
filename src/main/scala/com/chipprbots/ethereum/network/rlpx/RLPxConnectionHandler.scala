@@ -143,6 +143,39 @@ class RLPxConnectionHandler(
         }
       }
 
+      /** Translate a canonical (this codebase) message type to the peer's negotiated wire message space.
+        *
+        * Canonical space assumptions in this codebase:
+        *   - P2P/WireProtocol: < 0x10 (unchanged)
+        *   - ETH: 0x10..0x20
+        *   - SNAP: 0x21..0x28
+        *
+        * On the wire, ETH/SNAP bases depend on the peer's capability ordering.
+        */
+      def toPeerWireType(canonicalType: Int): Int = {
+        if (canonicalType < CanonicalEthBase) {
+          canonicalType
+        } else if (canonicalType >= CanonicalSnapBase && canonicalType < CanonicalSnapBase + CanonicalSnapSize) {
+          peerSnapBase match {
+            case Some(snapBase) =>
+              val rel = canonicalType - CanonicalSnapBase
+              snapBase + rel
+            case None =>
+              log.warning(
+                "[RLPx] Attempting to send SNAP message to peer {} without SNAP capability: canonType=0x{}",
+                peerId,
+                canonicalType.toHexString
+              )
+              canonicalType
+          }
+        } else if (canonicalType >= CanonicalEthBase && canonicalType < CanonicalEthBase + CanonicalEthSize) {
+          val rel = canonicalType - CanonicalEthBase
+          peerEthBase + rel
+        } else {
+          canonicalType
+        }
+      }
+
       def translateFrames(frames: Seq[Frame]): Seq[Frame] =
         frames.map { frame =>
           val translatedType = translateType(frame.`type`)
@@ -669,15 +702,28 @@ class RLPxConnectionHandler(
         seqNumber: Int,
         remainingMsgsToSend: Queue[MessageSerializable]
     ): Unit = {
-      val out = messageCodec.encodeMessage(messageToSend)
+      val canonicalCode = messageToSend.code
+      val wireCode = inboundTranslator.toPeerWireType(canonicalCode)
+
+      val serializableToEncode: MessageSerializable =
+        if (wireCode == canonicalCode) messageToSend
+        else
+          new MessageSerializable {
+            override def code: Int = wireCode
+            override def toBytes: Array[Byte] = messageToSend.toBytes
+            override def underlyingMsg: Message = messageToSend.underlyingMsg
+            override def toShortString: String = messageToSend.toShortString
+          }
+
+      val out = messageCodec.encodeMessage(serializableToEncode)
 
       // Enhanced logging for GetBlockHeaders debugging
       val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
       log.info(
-        "SEND_MSG: peer={}, type={}, code=0x{}, seqNum={}",
+        "SEND_MSG: peer={}, type={}, codes={}, seqNum={}",
         peerId,
         msgType,
-        messageToSend.code.toHexString,
+        s"canon=0x${canonicalCode.toHexString} wire=0x${wireCode.toHexString}",
         seqNumber
       )
       // Convert to array only once for hex logging
