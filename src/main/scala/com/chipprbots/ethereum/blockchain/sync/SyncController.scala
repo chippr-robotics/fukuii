@@ -164,13 +164,22 @@ class SyncController(
     case RestartFastSyncNow =>
       doRestartFastSyncNow()
     case StartRegularSyncBootstrap(targetBlock) =>
-      log.info(s"SNAP sync requested bootstrap via regular sync to block ${targetBlock}")
-      
-      // Don't kill SNAP sync actor - just start regular sync
-      // SNAP sync is in bootstrapping state waiting for BootstrapComplete
-      
-      val regularSync = startRegularSyncForBootstrap()
-      context.become(runningRegularSyncBootstrap(regularSync, targetBlock, snapSync))
+      log.info(s"SNAP sync requested bootstrap to pivot ${targetBlock}")
+
+      // Prefer a header-only bootstrap: SNAP only needs the pivot header (stateRoot).
+      // Falling back to full regular sync bootstrap if we can't fetch/store the header.
+      val peersClient =
+        context.actorOf(
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          "peers-client-bootstrap"
+        )
+      val headerBootstrap =
+        context.actorOf(
+          PivotHeaderBootstrap.props(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler),
+          "pivot-header-bootstrap"
+        )
+
+      context.become(runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock, snapSync))
     
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       snapSync ! PoisonPill
@@ -231,6 +240,46 @@ class SyncController(
     
     case other => 
       regularSync.forward(other)
+  }
+
+  def runningPivotHeaderBootstrap(
+      peersClient: ActorRef,
+      headerBootstrap: ActorRef,
+      targetBlock: BigInt,
+      originalSnapSyncRef: ActorRef
+  ): Receive = {
+    case SyncProtocol.ResetFastSync =>
+      handleResetFastSync()
+    case SyncProtocol.RestartFastSync =>
+      handleRestartFastSync()
+    case RestartFastSyncNow =>
+      doRestartFastSyncNow()
+
+    case PivotHeaderBootstrap.Completed(block) if block == targetBlock =>
+      log.info(s"Pivot header bootstrap complete for block $targetBlock - notifying SNAP sync")
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      originalSnapSyncRef ! BootstrapComplete
+      context.become(runningSnapSync(originalSnapSyncRef))
+
+    case PivotHeaderBootstrap.Failed(reason) =>
+      log.warning(s"Pivot header bootstrap failed (reason: $reason). Falling back to regular sync bootstrap")
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      val regularSync = startRegularSyncForBootstrap()
+      context.become(runningRegularSyncBootstrap(regularSync, targetBlock, originalSnapSyncRef))
+
+    case SyncProtocol.GetStatus =>
+      // Expose progress as a generic syncing state.
+      sender() ! SyncProtocol.Status.Syncing(
+        startingBlockNumber = appStateStorage.getSyncStartingBlock(),
+        blocksProgress = SyncProtocol.Status.Progress(appStateStorage.getBestBlockNumber(), targetBlock),
+        stateNodesProgress = None
+      )
+
+    case other =>
+      // Ignore unrelated messages while we bootstrap the pivot header.
+      log.debug("Ignoring message during pivot header bootstrap: {}", other.getClass.getSimpleName)
   }
 
   def start(): Unit = {
