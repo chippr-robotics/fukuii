@@ -10,6 +10,7 @@ import scala.collection.mutable
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
@@ -139,35 +140,27 @@ class SNAPSyncController(
     case msg: AccountRange =>
       log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
 
-      // Actor-based: forward message to all account range workers
-      // The workers will check if the requestId matches their current task
-      context.children.foreach { child =>
-        child ! actors.Messages.AccountRangeResponseMsg(msg)
-      }
+      // Forward to the account range coordinator (it owns the workers).
+      // Forwarding only to this actor's direct children is insufficient because workers are children of coordinators.
+      accountRangeCoordinator.foreach(_ ! actors.Messages.AccountRangeResponseMsg(msg))
 
     case msg: ByteCodes =>
       log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
 
-      // Forward message to all bytecode workers
-      context.children.foreach { child =>
-        child ! actors.Messages.ByteCodesResponseMsg(msg)
-      }
+      // Forward to the bytecode coordinator (it owns the workers).
+      bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodesResponseMsg(msg))
 
     case msg: StorageRanges =>
       log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
 
-      // Actor-based: forward message to all storage workers
-      context.children.foreach { child =>
-        child ! actors.Messages.StorageRangesResponseMsg(msg)
-      }
+      // Forward to the storage range coordinator (it owns the workers).
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StorageRangesResponseMsg(msg))
 
     case msg: TrieNodes =>
       log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
 
-      // Forward message to all healing workers
-      context.children.foreach { child =>
-        child ! actors.Messages.TrieNodesResponseMsg(msg)
-      }
+      // Forward to the trie node healing coordinator (it owns the workers).
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.TrieNodesResponseMsg(msg))
 
     case AccountRangeSyncComplete =>
       log.info("Account range sync complete. Starting bytecode sync...")
@@ -223,7 +216,7 @@ class SNAPSyncController(
   }
 
   def bootstrapping: Receive = handlePeerListMessages.orElse {
-    case BootstrapComplete =>
+    case BootstrapComplete(pivotHeaderOpt) =>
       log.info("=" * 80)
       log.info("✅ Bootstrap phase complete - transitioning to SNAP sync")
       log.info("=" * 80)
@@ -240,49 +233,64 @@ class SNAPSyncController(
       // Reset retry counter
       bootstrapRetryCount = 0
       
-      // If we have a bootstrap target and we've reached it, use that as our pivot
-      // This ensures we use the pivot we bootstrapped to, not a recalculated one
-      bootstrapTarget match {
-        case Some(targetPivot) =>
-          // Header-only bootstrap may complete without importing blocks; treat pivot as ready if header exists.
-          if (localBestBlock >= targetPivot)
-            log.info(s"Using bootstrap target $targetPivot as pivot (blocks imported up to target)")
-          else
-            log.info(s"Using bootstrap target $targetPivot as pivot (header-only bootstrap)")
+      pivotHeaderOpt match {
+        case Some(header) =>
+          val targetPivot = header.number
+          pivotBlock = Some(targetPivot)
+          stateRoot = Some(header.stateRoot)
+          appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
+          appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
-          blockchainReader.getBlockHeaderByNumber(targetPivot) match {
-            case Some(header) =>
-              pivotBlock = Some(targetPivot)
-              stateRoot = Some(header.stateRoot)
-              appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-              appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+          SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
-              SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+          log.info("=" * 80)
+          log.info("🎯 SNAP Sync Ready (from bootstrap)")
+          log.info("=" * 80)
+          log.info(s"Local best block: $localBestBlock")
+          log.info(s"Using bootstrapped pivot block: $targetPivot")
+          log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+          log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+          log.info("=" * 80)
 
-              log.info("=" * 80)
-              log.info("🎯 SNAP Sync Ready (from bootstrap)")
-              log.info("=" * 80)
-              log.info(s"Local best block: $localBestBlock")
-              log.info(s"Using bootstrapped pivot block: $targetPivot")
-              log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-              log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
-              log.info("=" * 80)
+          currentPhase = AccountRangeSync
+          startAccountRangeSync(header.stateRoot)
+          context.become(syncing)
 
-              // Start account range sync
-              currentPhase = AccountRangeSync
-              startAccountRangeSync(header.stateRoot)
-              context.become(syncing)
+        case None =>
+          // Backward-compat / fallback: use the stored bootstrap target and local header.
+          bootstrapTarget match {
+            case Some(targetPivot) =>
+              blockchainReader.getBlockHeaderByNumber(targetPivot) match {
+                case Some(header) =>
+                  pivotBlock = Some(targetPivot)
+                  stateRoot = Some(header.stateRoot)
+                  appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
+                  appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
+                  SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+
+                  log.info("=" * 80)
+                  log.info("🎯 SNAP Sync Ready (from bootstrap, local header)")
+                  log.info("=" * 80)
+                  log.info(s"Local best block: $localBestBlock")
+                  log.info(s"Using bootstrapped pivot block: $targetPivot")
+                  log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+                  log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+                  log.info("=" * 80)
+
+                  currentPhase = AccountRangeSync
+                  startAccountRangeSync(header.stateRoot)
+                  context.become(syncing)
+
+                case None =>
+                  log.warning(s"Bootstrap complete but pivot header $targetPivot not available yet")
+                  log.warning("Falling back to recalculating pivot from current network state")
+                  startSnapSync()
+              }
             case None =>
-              log.warning(s"Bootstrap complete but pivot header $targetPivot not available yet")
-              log.warning("Falling back to recalculating pivot from current network state")
+              log.info("No bootstrap target stored - calculating pivot from network state")
               startSnapSync()
           }
-          
-        case None =>
-          // No bootstrap target stored - fall back to normal pivot selection
-          log.info("No bootstrap target stored - calculating pivot from network state")
-          startSnapSync()
       }
     
     case RetrySnapSyncStart =>
@@ -379,8 +387,12 @@ class SNAPSyncController(
     // Get local and network state for pivot selection
     val localBestBlock = appStateStorage.getBestBlockNumber()
     
-    // Query peers to find the highest block in the network
-    val networkBestBlockOpt = getPeerWithHighestBlock.map(_.peerInfo.maxBlockNumber)
+    // Query peers to find the highest block in the network.
+    // For SNAP, prefer SNAP-capable peers so the chosen pivot corresponds to state we can actually request.
+    val networkBestBlockOpt =
+      getSnapPeerWithHighestBlock
+        .orElse(getPeerWithHighestBlock)
+        .map(_.peerInfo.maxBlockNumber)
 
     // Diagnostics: show what heights we can actually see from connected peers.
     // If this list tops out near the Core-Geth "start height", it means we simply don't have any peer
@@ -530,6 +542,20 @@ class SNAPSyncController(
       }
     } else {
       // Pivot is valid and ahead of local state
+
+      // Even if we have a local header for this block number, fetch the pivot header from the network
+      // to avoid starting SNAP from a stale/reorged or otherwise non-canonical header.
+      // This is a header-only bootstrap.
+      pivotSelectionSource match {
+        case NetworkPivot =>
+          log.info(s"Fetching pivot header from network for block $pivotBlockNumber before starting SNAP")
+          appStateStorage.putSnapSyncBootstrapTarget(pivotBlockNumber).commit()
+          context.parent ! StartRegularSyncBootstrap(pivotBlockNumber)
+          context.become(bootstrapping)
+          return
+        case LocalPivot =>
+          // Fall through to local-header availability checks below
+      }
       
       // Check if we have the pivot block header locally
       blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
@@ -1147,7 +1173,7 @@ object SNAPSyncController {
   case object Done
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
-  case object BootstrapComplete // Signal from SyncController that bootstrap is done
+  final case class BootstrapComplete(pivotHeader: Option[BlockHeader] = None) // Signal from SyncController that bootstrap is done
   private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete

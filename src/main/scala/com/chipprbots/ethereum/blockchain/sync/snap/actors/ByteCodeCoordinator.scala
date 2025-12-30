@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
+import com.chipprbots.ethereum.domain.Account
 
 /** ByteCodeCoordinator manages bytecode download workers.
   *
@@ -83,7 +84,9 @@ class ByteCodeCoordinator(
   override def receive: Receive = {
     case StartByteCodeSync(contractAccounts) =>
       log.info(s"Starting bytecode sync for ${contractAccounts.size} contracts")
-      val newTasks = ByteCodeTask.createBytecodeTasksFromAccounts(contractAccounts, batchSize)
+
+      val filteredAccounts = filterAndDedupeContractAccounts(contractAccounts)
+      val newTasks = ByteCodeTask.createBytecodeTasksFromAccounts(filteredAccounts, batchSize)
       pendingTasks.enqueueAll(newTasks)
       log.info(s"Queued ${newTasks.size} bytecode tasks")
 
@@ -164,8 +167,8 @@ class ByteCodeCoordinator(
       case Some((task, worker)) =>
         log.debug(s"Processing ByteCodes response: ${response.codes.size} codes for request ${response.requestId}")
 
-        // Verify bytecode hashes
-        verifyBytecodes(task.codeHashes, response.codes) match {
+        val expected = task.codeHashes.toSet
+        extractAndVerifyReturnedCodeHashes(expected, response.codes) match {
           case Left(error) =>
             log.warning(s"Bytecode verification failed: $error")
             activeTasks.remove(response.requestId)
@@ -173,7 +176,7 @@ class ByteCodeCoordinator(
             pendingTasks.enqueue(task)
             checkCompletion()
 
-          case Right(_) =>
+          case Right(returnedHashes) =>
             // Store bytecodes
             storeBytecodes(response.codes) match {
               case Left(error) =>
@@ -184,7 +187,19 @@ class ByteCodeCoordinator(
                 checkCompletion()
 
               case Right(_) =>
-                // Success
+                // Mark current task complete for the received codes, and enqueue remaining hashes if any.
+                val remainingHashes = task.codeHashes.filterNot(returnedHashes.contains)
+
+                if (remainingHashes.nonEmpty) {
+                  val accountByCodeHash = task.codeHashes.zip(task.accountHashes).toMap
+                  val remainingAccounts = remainingHashes.flatMap(accountByCodeHash.get)
+                  log.info(
+                    s"ByteCodes response contained ${returnedHashes.size}/${task.codeHashes.size} requested codes; " +
+                      s"re-queuing remaining ${remainingHashes.size} hashes"
+                  )
+                  pendingTasks.enqueue(ByteCodeTask(remainingHashes, remainingAccounts))
+                }
+
                 val bytecodeCount = response.codes.size
                 bytecodesDownloaded += bytecodeCount
                 val totalBytes = response.codes.map(_.size).sum
@@ -203,37 +218,35 @@ class ByteCodeCoordinator(
     }
   }
 
-  private def verifyBytecodes(
-      expectedHashes: Seq[ByteString],
+  private def extractAndVerifyReturnedCodeHashes(
+      expectedHashes: Set[ByteString],
       bytecodes: Seq[ByteString]
-  ): Either[String, Unit] = {
+  ): Either[String, Set[ByteString]] = {
     if (bytecodes.isEmpty) {
-      return Left(s"Empty response: received 0 bytecodes, expected ${expectedHashes.size}")
+      return Left("Empty response: received 0 bytecodes")
     }
 
-    if (bytecodes.size > expectedHashes.size) {
-      return Left(s"Received ${bytecodes.size} bytecodes but expected at most ${expectedHashes.size}")
+    val returned = mutable.Set.empty[ByteString]
+    val unexpected = mutable.ArrayBuffer.empty[String]
+    val duplicates = mutable.ArrayBuffer.empty[String]
+
+    bytecodes.foreach { code =>
+      val actualHash = kec256(code)
+      if (!expectedHashes.contains(actualHash)) {
+        unexpected += actualHash.take(4).toArray.map("%02x".format(_)).mkString
+      } else if (returned.contains(actualHash)) {
+        duplicates += actualHash.take(4).toArray.map("%02x".format(_)).mkString
+      } else {
+        returned += actualHash
+      }
     }
 
-    // Verify each bytecode hash
-    val mismatches = bytecodes.zipWithIndex.collect {
-      case (code, idx) if idx < expectedHashes.size =>
-        val expectedHash = expectedHashes(idx)
-        val actualHash = kec256(code)
-        if (actualHash != expectedHash) {
-          Some(
-            s"Index $idx: expected ${expectedHash.take(4).toArray.map("%02x".format(_)).mkString}, " +
-              s"got ${actualHash.take(4).toArray.map("%02x".format(_)).mkString}"
-          )
-        } else {
-          None
-        }
-    }.flatten
-
-    if (mismatches.nonEmpty) {
-      Left(s"Hash mismatches: ${mismatches.mkString(", ")}")
+    if (unexpected.nonEmpty) {
+      Left(s"Received bytecode(s) not in requested hash set. Sample unexpected hashes: ${unexpected.take(10).mkString(", ")}")
+    } else if (duplicates.nonEmpty) {
+      Left(s"Received duplicate bytecode(s) for same hash. Sample hashes: ${duplicates.take(10).mkString(", ")}")
     } else {
-      Right(())
+      Right(returned.toSet)
     }
   }
 
@@ -274,6 +287,39 @@ class ByteCodeCoordinator(
     workers += worker
     log.debug(s"Created bytecode worker, total: ${workers.size}")
     worker
+  }
+
+  private def filterAndDedupeContractAccounts(
+      contractAccounts: Seq[(ByteString, ByteString)]
+  ): Seq[(ByteString, ByteString)] = {
+    // Filter invalid hashes strictly; do not fabricate/pad/truncate.
+    // Dedupe by codeHash (storage is keyed by codeHash; requesting duplicates is redundant).
+    val seen = mutable.HashSet.empty[ByteString]
+    val invalidSamples = mutable.ArrayBuffer.empty[String]
+
+    val filtered = contractAccounts.flatMap { case (accountHash, codeHash) =>
+      if (codeHash.length != 32) {
+        invalidSamples += s"len=${codeHash.length} (account=${accountHash.take(4).toArray.map("%02x".format(_)).mkString})"
+        None
+      } else if (codeHash == Account.EmptyCodeHash) {
+        // Defensive: caller should already have filtered these out.
+        None
+      } else if (seen.contains(codeHash)) {
+        None
+      } else {
+        seen += codeHash
+        Some((accountHash, codeHash))
+      }
+    }
+
+    if (invalidSamples.nonEmpty) {
+      log.warning(
+        s"Dropping ${invalidSamples.size} contract accounts with non-32-byte codeHash. " +
+          s"Sample: ${invalidSamples.take(10).mkString(", ")}" 
+      )
+    }
+
+    filtered
   }
 }
 

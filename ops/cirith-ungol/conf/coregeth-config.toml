@@ -1,7 +1,3 @@
 [Node.P2P]
-StaticNodes = [
-  "enode://6eaf507803f0b19b52140a8183c40f36111011eb6c3163ad292cf2f3d1e3e12d34b3180654c7cfe6a8e9da7ff7caa05766ca7e18a6566e88ed944b66112eb64d@fukuii:9076"
-]
-TrustedNodes = [
-  "enode://6eaf507803f0b19b52140a8183c40f36111011eb6c3163ad292cf2f3d1e3e12d34b3180654c7cfe6a8e9da7ff7caa05766ca7e18a6566e88ed944b66112eb64d@fukuii:9076"
-]
+StaticNodes = []
+TrustedNodes = []

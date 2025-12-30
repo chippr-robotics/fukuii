@@ -73,27 +73,12 @@ class AccountRangeCoordinator(
   // Merkle proof verifier
   private val proofVerifier = MerkleProofVerifier(stateRoot)
 
-  // State trie for storing accounts - initialized with existing state root or new trie
+  // State trie for storing accounts.
+  // In SNAP, we typically start with an empty local DB and rebuild the state trie from downloaded ranges.
+  // Attempting to "load" the pivot stateRoot will fail because the root node isn't present locally yet.
   private var stateTrie: MerklePatriciaTrie[ByteString, Account] = {
-    import com.chipprbots.ethereum.mpt.{byteStringSerializer, MerklePatriciaTrie}
-    import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
-
-    // Initialize trie with the state root if it exists, otherwise create empty trie
-    if (stateRoot.isEmpty || stateRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
-      log.info("Initializing new empty state trie")
-      MerklePatriciaTrie[ByteString, Account](mptStorage)
-    } else {
-      try {
-        log.info(
-          s"Loading existing state trie with root ${stateRoot.take(8).toArray.map("%02x".format(_)).mkString}..."
-        )
-        MerklePatriciaTrie[ByteString, Account](stateRoot.toArray, mptStorage)
-      } catch {
-        case e: MissingRootNodeException =>
-          log.warning(s"State root not found in storage, creating new trie")
-          MerklePatriciaTrie[ByteString, Account](mptStorage)
-      }
-    }
+    import com.chipprbots.ethereum.mpt.byteStringSerializer
+    MerklePatriciaTrie[ByteString, Account](mptStorage)
   }
 
   override def preStart(): Unit = {
@@ -116,6 +101,16 @@ class AccountRangeCoordinator(
     case StartAccountRangeSync(root) =>
       log.info(s"Starting account range sync for state root ${root.take(8).toHex}")
       // Tasks already initialized in constructor
+
+    case AccountRangeResponseMsg(response) =>
+      activeTasks.get(response.requestId) match {
+        case None =>
+          log.debug(s"Received AccountRange response for unknown or completed request ${response.requestId}")
+
+        case Some((_, worker, _)) =>
+          // Forward to the specific worker that owns this requestId so it can validate/complete the request.
+          worker ! AccountRangeResponseMsg(response)
+      }
 
     case PeerAvailable(peer) =>
       if (pendingTasks.nonEmpty) {
@@ -205,17 +200,27 @@ class AccountRangeCoordinator(
               // Re-queue task for retry
               task.pending = false
               pendingTasks.enqueue(task)
+
             case Right(_) =>
               accountsDownloaded += accountCount
-              task.done = true
-              task.pending = false
-              completedTasks += task
-              
+
               // Update statistics
-              val accountBytes = accounts.map { case (hash, account) =>
+              val accountBytes = accounts.map { case (hash, _) =>
                 hash.size + 32 // Rough estimate
               }.sum
               bytesDownloaded += accountBytes
+
+              // Advance the task through its range.
+              val isTaskComplete = updateTaskProgress(task, accounts)
+              task.pending = false
+
+              if (isTaskComplete) {
+                task.done = true
+                completedTasks += task
+              } else {
+                // Need more requests for the same interval; re-queue with updated `next`.
+                pendingTasks.enqueue(task)
+              }
           }
 
           // Check if complete
@@ -235,6 +240,64 @@ class AccountRangeCoordinator(
       }
     }
   }
+
+  private def updateTaskProgress(task: AccountTask, accounts: Seq[(ByteString, Account)]): Boolean = {
+    // If the peer returns no accounts for this segment, we assume the remainder of the interval is empty.
+    if (accounts.isEmpty) {
+      return true
+    }
+
+    val lastHash = accounts.last._1
+    if (isMaxHash(lastHash)) {
+      // Cannot advance beyond 0xFF..; this must be the end.
+      return true
+    }
+
+    val nextStart = incrementHash32(lastHash)
+    task.next = nextStart
+
+    // If this task has no upper bound, keep going until peer returns empty.
+    if (task.last.isEmpty) {
+      false
+    } else {
+      // Treat `last` as an exclusive upper bound.
+      compareUnsigned32(nextStart, task.last) >= 0
+    }
+  }
+
+  private def compareUnsigned32(a: ByteString, b: ByteString): Int = {
+    // Empty is treated as unbounded; callers should handle this before comparing.
+    val aa = a.toArray
+    val bb = b.toArray
+    val maxLen = math.max(aa.length, bb.length)
+    val ap = if (aa.length == maxLen) aa else Array.fill(maxLen - aa.length)(0.toByte) ++ aa
+    val bp = if (bb.length == maxLen) bb else Array.fill(maxLen - bb.length)(0.toByte) ++ bb
+    var i = 0
+    while (i < maxLen) {
+      val ai = ap(i) & 0xff
+      val bi = bp(i) & 0xff
+      if (ai != bi) return ai - bi
+      i += 1
+    }
+    0
+  }
+
+  private def incrementHash32(hash: ByteString): ByteString = {
+    require(hash.length == 32, s"Expected 32-byte hash, got ${hash.length}")
+    val bytes = hash.toArray
+    var i = bytes.length - 1
+    var carry = 1
+    while (i >= 0 && carry != 0) {
+      val sum = (bytes(i) & 0xff) + carry
+      bytes(i) = (sum & 0xff).toByte
+      carry = if (sum > 0xff) 1 else 0
+      i -= 1
+    }
+    ByteString(bytes)
+  }
+
+  private def isMaxHash(hash: ByteString): Boolean =
+    hash.length == 32 && hash.forall(b => (b & 0xff) == 0xff)
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
@@ -284,7 +347,7 @@ class AccountRangeCoordinator(
       Right(())
     } catch {
       case e: Exception =>
-        log.error(s"Failed to store accounts: ${e.getMessage}", e)
+        log.error(e, s"Failed to store accounts: ${e.getMessage}")
         Left(s"Storage error: ${e.getMessage}")
     }
 
@@ -317,6 +380,13 @@ class AccountRangeCoordinator(
       // Get the current root hash for logging
       val currentRootHash = ByteString(stateTrie.getRootHash)
       log.info(s"Current state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
+
+      // Validate that the reconstructed root matches the expected pivot stateRoot.
+      if (stateRoot.nonEmpty && stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash) && currentRootHash != stateRoot) {
+        val expected = stateRoot.take(8).toArray.map("%02x".format(_)).mkString
+        val actual = currentRootHash.take(8).toArray.map("%02x".format(_)).mkString
+        throw new RuntimeException(s"Reconstructed state root does not match expected pivot root (expected=$expected..., actual=$actual...)")
+      }
       
       // Check if we have a non-empty trie
       if (currentRootHash.isEmpty || currentRootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
@@ -357,7 +427,7 @@ class AccountRangeCoordinator(
       Right(())
     } catch {
       case e: Exception =>
-        log.error(s"Failed to finalize trie: ${e.getMessage}", e)
+        log.error(e, s"Failed to finalize trie: ${e.getMessage}")
         Left(s"Trie finalization error: ${e.getMessage}")
     }
 

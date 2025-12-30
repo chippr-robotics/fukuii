@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.domain.Account
   *   State root hash for verification
   */
 case class AccountTask(
-    next: ByteString,
+  var next: ByteString,
     last: ByteString,
     rootHash: ByteString,
     // Runtime fields
@@ -36,7 +36,7 @@ case class AccountTask(
   /** Get the range as a human-readable string */
   def rangeString: String = {
     val nextStr = if (next.isEmpty) "0x00..." else next.take(4).toArray.map("%02x".format(_)).mkString
-    val lastStr = if (last.isEmpty) "0xFF..." else last.take(4).toArray.map("%02x".format(_)).mkString
+    val lastStr = if (last == AccountTask.MaxHash32) "0xFF..." else last.take(4).toArray.map("%02x".format(_)).mkString
     s"[$nextStr...$lastStr]"
   }
 
@@ -52,6 +52,9 @@ case class AccountTask(
 }
 
 object AccountTask {
+
+  /** Maximum 32-byte hash value (0xFF..FF). */
+  val MaxHash32: ByteString = ByteString(Array.fill(32)(0xff.toByte))
 
   /** Estimated number of accounts that represents "almost complete" (90% progress). This is a rough heuristic based on
     * typical account range sizes in SNAP sync. Actual ranges can vary significantly based on state distribution.
@@ -75,11 +78,12 @@ object AccountTask {
     if (concurrency == 1) {
       // Single task covers entire range
       val min = bigIntTo32ByteString(BigInt(0))
-      val max = bigIntTo32ByteString(BigInt(2).pow(256) - 1)
       return Seq(
         AccountTask(
           next = min, // 0x00...
-          last = max, // 0xFF... (exclusive)
+          // Core-Geth expects a 32-byte hash here (RLP-decoded into common.Hash).
+          // Use 0xFF..FF as the practical upper bound.
+          last = MaxHash32,
           rootHash = rootHash
         )
       )
@@ -90,11 +94,12 @@ object AccountTask {
 
     (0 until concurrency).map { i =>
       val start = if (i == 0) BigInt(0) else chunkSize * i
-      val end = if (i == concurrency - 1) BigInt(2).pow(256) - 1 else chunkSize * (i + 1)
+      // For the last chunk, use the maximum possible hash as the upper bound.
+      val endOpt = if (i == concurrency - 1) None else Some(chunkSize * (i + 1))
 
       AccountTask(
         next = bigIntTo32ByteString(start),
-        last = bigIntTo32ByteString(end),
+        last = endOpt.map(bigIntTo32ByteString).getOrElse(MaxHash32),
         rootHash = rootHash
       )
     }

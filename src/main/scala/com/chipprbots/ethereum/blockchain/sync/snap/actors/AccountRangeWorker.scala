@@ -8,6 +8,7 @@ import scala.concurrent.duration._
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** AccountRangeWorker fetches a single account range from a peer.
   *
@@ -90,7 +91,11 @@ class AccountRangeWorker(
     case AccountRangeResponseMsg(response) =>
       currentTask match {
         case Some((task, peer, reqId)) if response.requestId == reqId =>
-          log.debug(s"Received account range response for request $reqId")
+          log.info(
+            s"Received AccountRange: reqId=$reqId range=${task.rangeString} " +
+              s"start=${task.next.take(4).toHex} limit=${task.last.take(4).toHex} " +
+              s"accounts=${response.accounts.size} proofNodes=${response.proof.size}"
+          )
           
           // Process response - extract accounts and report to coordinator
           val accountCount = response.accounts.size
