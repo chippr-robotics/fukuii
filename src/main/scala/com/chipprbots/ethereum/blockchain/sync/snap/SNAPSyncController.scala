@@ -162,6 +162,18 @@ class SNAPSyncController(
       // Forward to the trie node healing coordinator (it owns the workers).
       trieNodeHealingCoordinator.foreach(_ ! actors.Messages.TrieNodesResponseMsg(msg))
 
+    case ProgressAccountsSynced(count) =>
+      progressMonitor.incrementAccountsSynced(count)
+
+    case ProgressBytecodesDownloaded(count) =>
+      progressMonitor.incrementBytecodesDownloaded(count)
+
+    case ProgressStorageSlotsSynced(count) =>
+      progressMonitor.incrementStorageSlotsSynced(count)
+
+    case ProgressNodesHealed(count) =>
+      progressMonitor.incrementNodesHealed(count)
+
     case AccountRangeSyncComplete =>
       log.info("Account range sync complete. Starting bytecode sync...")
       
@@ -1185,6 +1197,15 @@ object SNAPSyncController {
   case object StateValidationComplete
   case object GetProgress
 
+  /** Progress updates emitted by worker coordinators.
+    *
+    * These are deltas (increments), not absolute totals.
+    */
+  final case class ProgressAccountsSynced(count: Long)
+  final case class ProgressBytecodesDownloaded(count: Long)
+  final case class ProgressStorageSlotsSynced(count: Long)
+  final case class ProgressNodesHealed(count: Long)
+
   def props(
       blockchainReader: BlockchainReader,
       appStateStorage: AppStateStorage,
@@ -1721,6 +1742,40 @@ case class SyncProgress(
     startTime: Long,
     phaseStartTime: Long
 ) {
+
+  private def wormChasesBrainBar: String = {
+    import SNAPSyncController._
+
+    // Global “stage” progress across phases; within-stage progress uses `phaseProgress` when available.
+    val stages = Vector[SyncPhase](
+      AccountRangeSync,
+      ByteCodeSync,
+      StorageRangeSync,
+      StateHealing,
+      StateValidation,
+      Completed
+    )
+
+    val stageIndex = stages.indexOf(phase) match {
+      case -1 => 0
+      case i  => i
+    }
+
+    val stageSize = if (stages.size <= 1) 1.0 else 1.0 / (stages.size - 1)
+    val withinStage =
+      if (phaseProgress > 0 && phaseProgress <= 100) (phaseProgress / 100.0) * stageSize else 0.0
+
+    val globalProgress = math.max(0.0, math.min(1.0, stageIndex * stageSize + withinStage))
+
+    val trackLen = 18
+    val wormPos = math.max(0, math.min(trackLen, math.round(globalProgress * trackLen).toInt))
+    val remaining = trackLen - wormPos
+
+    val headroom = " " * wormPos
+    val distance = "-" * remaining
+    s"[$headroom🪱$distance🧠]"
+  }
+
   override def toString: String =
     s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
       s"bytecodes=$bytecodesDownloaded (${bytecodesPerSec.toInt}/s), " +
@@ -1731,23 +1786,23 @@ case class SyncProgress(
     phase match {
       case SNAPSyncController.AccountRangeSync =>
         val progressStr = if (estimatedTotalAccounts > 0) s" (${phaseProgress}%)" else ""
-        s"phase=AccountRange$progressStr, accounts=$accountsSynced@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=AccountRange$progressStr, accounts=$accountsSynced@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.ByteCodeSync =>
         val progressStr = if (estimatedTotalBytecodes > 0) s" (${phaseProgress}%)" else ""
-        s"phase=ByteCode$progressStr, codes=$bytecodesDownloaded@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=ByteCode$progressStr, codes=$bytecodesDownloaded@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StorageRangeSync =>
         val progressStr = if (estimatedTotalSlots > 0) s" (${phaseProgress}%)" else ""
-        s"phase=Storage$progressStr, slots=$storageSlotsSynced@${recentSlotsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=Storage$progressStr, slots=$storageSlotsSynced@${recentSlotsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StateHealing =>
-        s"phase=Healing, nodes=$nodesHealed@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=Healing, nodes=$nodesHealed@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StateValidation =>
-        s"phase=Validation, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=Validation, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case _ =>
-        s"phase=$phase, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=$phase, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
     }
 }

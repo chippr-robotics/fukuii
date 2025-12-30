@@ -287,6 +287,9 @@ class StorageRangeCoordinator(
               log.debug(s"Successfully stored ${accountSlots.size} storage slots")
 
               slotsDownloaded += accountSlots.size
+              if (accountSlots.nonEmpty) {
+                snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(accountSlots.size.toLong)
+              }
               val slotBytes = accountSlots.map { case (hash, value) => hash.size + value.size }.sum
               bytesDownloaded += slotBytes
 

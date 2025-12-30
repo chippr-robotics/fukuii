@@ -206,6 +206,7 @@ class AccountRangeCoordinator(
 
             case Right(_) =>
               accountsDownloaded += accountCount
+              snapSyncController ! SNAPSyncController.ProgressAccountsSynced(accountCount.toLong)
 
               // Update statistics
               val accountBytes = accounts.map { case (hash, _) =>

@@ -244,6 +244,10 @@ class TrieNodeHealingCoordinator(
       s"Healed $healedCount/${nodes.size} trie nodes " +
         s"(total: $totalNodesHealed, pending: ${pendingTasks.size}, active: ${activeTasks.size})"
     )
+
+    if (healedCount > 0) {
+      snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
+    }
   }
 
   private def validateAndStoreNode(nodeData: ByteString, task: HealingTask): Either[String, Unit] =

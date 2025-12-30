@@ -209,6 +209,7 @@ class ByteCodeCoordinator(
 
                 val bytecodeCount = response.codes.size
                 bytecodesDownloaded += bytecodeCount
+                snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(bytecodeCount.toLong)
                 val totalBytes = response.codes.map(_.size).sum
                 bytesDownloaded += totalBytes
 
