@@ -1,51 +1,57 @@
-# ECIP-1120 Impact Analysis and Integration with EIP-1559
+# ECIP-1120 Impact Analysis: Basefee Market with Miner Rewards
 
 **Document Type:** Research Analysis  
 **Status:** Draft  
 **Date:** 2025-12-30  
-**Related ECIPs:** ECIP-1120, ECIP-1097, ECIP-1098  
+**Related ECIPs:** ECIP-1120  
 **Related EIPs:** EIP-1559  
 
 ## Executive Summary
 
-This document analyzes the technical and design implications of supporting ECIP-1120 in fukuii, with particular focus on its interaction with EIP-1559-style base fee mechanisms. ECIP-1120 proposes redirecting EIP-1559 base fees to a treasury address instead of burning them, fundamentally altering Ethereum Classic's fee distribution while preserving its non-deflationary monetary policy.
+This document analyzes the technical and design implications of supporting ECIP-1120 "Basefee Market with Miner Rewards" in fukuii. ECIP-1120 adapts Ethereum's EIP-1559 fee mechanism for Ethereum Classic by implementing a dynamic basefee market where the basefee is paid to miners (not burned), preserving PoW miner incentives and ETC's monetary policy.
 
 **Key Findings:**
-- ECIP-1120 is part of the broader Olympia Upgrade suite (ECIPs 1111-1115)
+- ECIP-1120 implements EIP-1559 basefee mechanism with basefee going to miners
 - Implementation requires adding EIP-1559 base fee fields to block headers
-- Treasury address must be enforced at consensus level for block validity
-- Existing ECIP-1097/1098 treasury implementation provides architectural precedent
-- Configuration system must support optional and configurable treasury activation
+- No treasury component - all fees go to miners
+- Simpler than treasury-based alternatives (no governance layer needed)
+- Configuration system must support optional basefee activation
 
 ## Background
 
 ### Current State in Fukuii
 
-Fukuii currently implements a treasury system via ECIP-1097 and ECIP-1098:
-- **ECIP-1098**: Defines a proto-treasury system with 80/20 split of block rewards (80% miner, 20% treasury)
-- **ECIP-1097**: Adds checkpointing mechanism and treasury validation
-- Configuration: Treasury address and activation block numbers are defined in chain configs
-- Implementation: `BlockPreparator.payBlockReward()` handles treasury distribution
-
-**Note:** While ECIP-1097/1098 were withdrawn from ETC mainnet adoption in 2021, fukuii retains the implementation with treasury disabled by default (activation block set to infinity).
+Fukuii currently uses traditional Ethereum gas pricing:
+- Transactions specify a `gasPrice`
+- Total transaction cost = `gasUsed * gasPrice`
+- All transaction fees go to the block miner
+- No dynamic fee adjustment mechanism
 
 ### ECIP-1120 Overview
 
-ECIP-1120 is part of the Olympia Upgrade, which adapts EIP-1559 for Ethereum Classic:
+ECIP-1120 "Basefee Market with Miner Rewards" adapts EIP-1559 for Ethereum Classic:
 
 **Core Differences from Ethereum's EIP-1559:**
 - **Ethereum**: Base fee is burned (deflationary)
-- **ETC (ECIP-1120)**: Base fee is redirected to treasury (non-deflationary, sustainable funding)
+- **ETC (ECIP-1120)**: Base fee goes to miner (preserves PoW incentives)
 
 **Transaction Fee Structure:**
 ```
 Total User Fee = Base Fee + Priority Fee (Tip)
+Total Miner Reward = Block Reward + Base Fee + Priority Fee
 ```
 
 **Distribution:**
-- Base Fee → Treasury Address (via consensus enforcement)
-- Priority Fee → Miner (immediate incentive)
+- Base Fee → Miner (predictable component)
+- Priority Fee → Miner (tip for faster inclusion)
 - Block Reward → Miner (unchanged)
+
+**Key Benefits:**
+- Predictable transaction fees for users
+- Dynamic adjustment based on network congestion
+- Full miner compensation (no burning)
+- No treasury governance complexity
+- Preserves ETC monetary policy
 
 ### EIP-1559 Mechanics
 
@@ -152,87 +158,106 @@ Constants:
 - New module: `com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator`
 - Integration point: `BlockPreparator` and `BlockValidator`
 
-### 3. Treasury Payout Logic
+### 3. Miner Reward Distribution Logic
 
-**Current Implementation (ECIP-1098):**
+**Current Implementation:**
 Location: `BlockPreparator.payBlockReward()`
 
 ```scala
-if (!treasuryEnabled(blockNumber) || !existsTreasuryContract) {
-  // Pay 100% block reward to miner
+protected[ledger] def payBlockReward(
+    block: Block,
+    worldStateProxy: InMemoryWorldStateProxy
+)(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+  val blockNumber = block.header.number
+  val minerRewardForBlock = blockRewardCalculator.calculateMiningRewardForBlock(blockNumber)
+  val minerRewardForOmmers = blockRewardCalculator.calculateMiningRewardForOmmers(...)
+  val minerAddress = Address(block.header.beneficiary)
+  
+  // Current: Pay block reward + ommer rewards
   val minerReward = minerRewardForOmmers + minerRewardForBlock
-  increaseAccountBalance(minerAddress, UInt256(minerReward))
-} else {
-  // Pay 80% to miner, 20% to treasury
-  val minerReward = minerRewardForOmmers + 
-      minerRewardForBlock * MinerRewardPercentageAfterECIP1098 / 100
-  val treasuryReward = minerRewardForBlock * TreasuryRewardPercentageAfterECIP1098 / 100
-  // ... distribute rewards ...
+  increaseAccountBalance(minerAddress, UInt256(minerReward))(worldStateProxy)
 }
 ```
 
 **Required Changes for ECIP-1120:**
 
-The base fee must be calculated and redirected to treasury:
+The base fee and priority fees must be calculated and paid to miner:
 
 ```scala
 protected[ledger] def payBlockReward(
     block: Block,
-    worldStateProxy: InMemoryWorldStateProxy,
-    baseFeeAmount: BigInt  // NEW: Total base fee from all transactions
+    worldStateProxy: InMemoryWorldStateProxy
 )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
   
   val blockNumber = block.header.number
   val minerRewardForBlock = blockRewardCalculator.calculateMiningRewardForBlock(blockNumber)
   val minerRewardForOmmers = blockRewardCalculator.calculateMiningRewardForOmmers(...)
   val minerAddress = Address(block.header.beneficiary)
-  val treasuryAddress = blockchainConfig.treasuryAddress
   
-  // Calculate priority fees (tips) - goes to miner
-  val priorityFees = calculateTotalPriorityFees(block.body.transactionList)
+  val (totalBaseFee, totalPriorityFee) = if (ecip1120Enabled(blockNumber)) {
+    // ECIP-1120: Calculate base fees and priority fees from transactions
+    calculateTransactionFees(block.body.transactionList, block.header.baseFeePerGas)
+  } else {
+    // Pre-ECIP-1120: All fees are "priority fees" (no basefee concept)
+    (BigInt(0), calculateTotalLegacyFees(block.body.transactionList))
+  }
   
-  val worldAfterPayingRewards = 
-    if (!ecip1120Enabled(blockNumber)) {
-      // Pre-ECIP-1120: Traditional reward distribution
-      // or ECIP-1098 style (80/20 split of block reward only)
-      payTraditionalRewards(...)
-    } else {
-      // ECIP-1120: Base fee to treasury, tips + block reward to miner
-      
-      // 1. Pay base fee to treasury
-      val worldAfterTreasury = increaseAccountBalance(
-          treasuryAddress, 
-          UInt256(baseFeeAmount)
-      )(worldStateProxy)
-      
-      // 2. Pay miner: block reward + ommer rewards + priority fees
-      val totalMinerReward = minerRewardForBlock + minerRewardForOmmers + priorityFees
-      val worldAfterMiner = increaseAccountBalance(
-          minerAddress,
-          UInt256(totalMinerReward)
-      )(worldAfterTreasury)
-      
-      log.debug(
-        "ECIP-1120: Paying base fee {} to treasury {}, " +
-        "paying miner reward {} (block: {}, ommers: {}, tips: {}) to miner {}",
-        baseFeeAmount, treasuryAddress,
-        totalMinerReward, minerRewardForBlock, minerRewardForOmmers, priorityFees,
-        minerAddress
-      )
-      
-      worldAfterMiner
-    }
+  // Pay miner: block reward + ommer rewards + all transaction fees
+  val totalMinerReward = minerRewardForBlock + minerRewardForOmmers + totalBaseFee + totalPriorityFee
+  
+  val worldAfterMinerReward = increaseAccountBalance(
+      minerAddress,
+      UInt256(totalMinerReward)
+  )(worldStateProxy)
+  
+  log.debug(
+    "ECIP-1120: Paying total miner reward {} (block: {}, ommers: {}, basefee: {}, priority: {}) to miner {}",
+    totalMinerReward, minerRewardForBlock, minerRewardForOmmers, totalBaseFee, totalPriorityFee,
+    minerAddress
+  )
   
   // Pay ommer rewards
-  block.body.uncleNodesList.foldLeft(worldAfterPayingRewards) { ... }
+  block.body.uncleNodesList.foldLeft(worldAfterMinerReward) { (ws, ommer) =>
+    val ommerAddress = Address(ommer.beneficiary)
+    val ommerReward = blockRewardCalculator.calculateOmmerRewardForInclusion(blockNumber, ommer.number)
+    increaseAccountBalance(ommerAddress, UInt256(ommerReward))(ws)
+  }
+}
+
+private def calculateTransactionFees(
+    transactions: Seq[SignedTransaction],
+    baseFeePerGas: Option[BigInt]
+): (BigInt, BigInt) = {
+  baseFeePerGas match {
+    case Some(baseFee) =>
+      // Type 2 transactions: separate base fee and priority fee
+      val fees = transactions.map { tx =>
+        val effectiveGasPrice = calculateEffectiveGasPrice(tx, baseFee)
+        val baseFeeAmount = tx.tx.gasLimit * baseFee
+        val priorityFeeAmount = tx.tx.gasLimit * (effectiveGasPrice - baseFee)
+        (baseFeeAmount, priorityFeeAmount)
+      }
+      fees.foldLeft((BigInt(0), BigInt(0))) { case ((accBase, accPriority), (base, priority)) =>
+        (accBase + base, accPriority + priority)
+      }
+    case None =>
+      // Legacy transactions: no basefee
+      (BigInt(0), calculateTotalLegacyFees(transactions))
+  }
 }
 ```
+
+**Key Changes:**
+- Miner receives **all** transaction fees (basefee + priority fee)
+- No treasury component
+- Simpler than treasury-based models
+- Preserves total miner compensation
 
 ### 4. Block Validation Changes
 
 **Consensus Rule Enforcement:**
 
-Block validity must require that base fee is correctly handled. This involves:
+Block validity must require that base fee is correctly calculated. This involves:
 
 1. **Base Fee Calculation Validation:**
    - Verify base fee in block header matches calculated value from parent block
@@ -242,13 +267,13 @@ Block validity must require that base fee is correctly handled. This involves:
    - EIP-1559 transactions must have `maxFeePerGas >= baseFeePerGas`
    - Transaction's priority fee correctly calculated as `min(maxPriorityFeePerGas, maxFeePerGas - baseFeePerGas)`
 
-3. **Treasury Payout Validation:**
-   - State transition must show treasury address balance increased by exact base fee amount
-   - This is a **critical consensus rule** that makes treasury inclusion mandatory
+3. **Fee Distribution Validation:**
+   - All transaction fees (basefee + priority fee) go to miner
+   - No separate validation needed - standard balance increase validation applies
 
 **Implementation Location:**
 - `BlockHeaderValidator`: Add base fee validation
-- `BlockValidator`: Add treasury payout validation
+- `BlockValidator`: Verify miner receives all fees
 - `SignedTransactionValidator`: Add EIP-1559 transaction validation
 
 **Validation Pseudocode:**
@@ -272,28 +297,31 @@ def validateBaseFee(
   }
 }
 
-def validateTreasuryPayout(
+def validateMinerReward(
     block: Block,
     parentWorldState: WorldState,
     resultWorldState: WorldState
 )(implicit config: BlockchainConfig): Either[BlockError, Unit] = {
-  if (!ecip1120Enabled(block.header.number)) {
-    Right(())
-  } else {
-    val totalBaseFee = calculateTotalBaseFee(block)
-    val treasuryAddress = config.treasuryAddress
-    
-    val parentBalance = parentWorldState.getBalance(treasuryAddress)
-    val resultBalance = resultWorldState.getBalance(treasuryAddress)
-    val actualIncrease = resultBalance - parentBalance
-    
-    if (actualIncrease == totalBaseFee) Right(())
-    else Left(BlockError(
-      s"Treasury balance increase mismatch: expected $totalBaseFee, got $actualIncrease"
-    ))
-  }
+  // Standard validation - ensure miner balance increased correctly
+  // This works for both pre and post ECIP-1120 blocks
+  val minerAddress = Address(block.header.beneficiary)
+  val expectedReward = calculateTotalMinerReward(block)
+  
+  val parentBalance = parentWorldState.getBalance(minerAddress)
+  val resultBalance = resultWorldState.getBalance(minerAddress)
+  val actualIncrease = resultBalance - parentBalance
+  
+  if (actualIncrease >= expectedReward) Right(())
+  else Left(BlockError(
+    s"Miner reward mismatch: expected at least $expectedReward, got $actualIncrease"
+  ))
 }
 ```
+
+**Note:** ECIP-1120 validation is simpler than treasury-based models because:
+- No separate treasury address to validate
+- No split validation needed
+- Standard miner balance validation applies
 
 ### 5. Transaction Type Support
 
@@ -339,16 +367,11 @@ TransactionPayload = RLP([
   # Existing config
   chain-id = "0x3d"
   
-  # Treasury configuration (existing)
-  treasury-address = "0011223344556677889900112233445566778899"
-  ecip1098-block-number = "1000000000000000000"  # Disabled
-  ecip1097-block-number = "1000000000000000000"  # Disabled
-  
   # New: ECIP-1120 / EIP-1559 configuration
   ecip1120-block-number = "1000000000000000000"  # Activation block
   
   eip1559 {
-    # Enable EIP-1559 transaction type support
+    # Enable EIP-1559 transaction type support and basefee mechanism
     enabled = false
     
     # Fork block where EIP-1559 becomes active
@@ -364,20 +387,6 @@ TransactionPayload = RLP([
     # Gas target and limit
     # target = limit / elasticity-multiplier
   }
-  
-  # Treasury behavior with ECIP-1120
-  treasury {
-    # Treasury address for base fee redirection
-    # Must match treasury-address for consistency
-    ecip1120-address = ${treasury-address}
-    
-    # Require treasury address to exist as contract
-    # If false, base fees may be sent to non-existent address (edge case)
-    require-contract-exists = true
-    
-    # Treasury mode selection
-    mode = "ecip1120"  # Options: "disabled", "ecip1098", "ecip1120"
-  }
 }
 ```
 
@@ -385,6 +394,11 @@ TransactionPayload = RLP([
 - Extend `BlockchainConfig` class with EIP-1559/ECIP-1120 settings
 - Add `Eip1559Config` case class for encapsulation
 - Update fork block number tracking in `ForkBlockNumbers`
+
+**Simpler Configuration:**
+- No treasury address needed
+- No governance configuration needed
+- Standard miner reward distribution
 
 ## Implementation Requirements
 
@@ -438,42 +452,40 @@ TransactionPayload = RLP([
    - Implement `validateBaseFee()` in `BlockHeaderValidator`
    - Validate base fee calculation against parent block
    - Validate all transactions comply with current base fee
-   - Add treasury payout validation in `BlockValidator`
+   - Add miner reward validation in `BlockValidator`
 
 8. **Block Preparation**
    - Update `BlockPreparator.payBlockReward()` for ECIP-1120 mode
    - Calculate total base fee from block transactions
-   - Redirect base fee to treasury address
-   - Pay priority fees + block rewards to miner
+   - Pay all fees (basefee + priority fee) to miner
    - Update state transition logic
 
 9. **Mining/Block Creation**
    - Update `PoWBlockCreator` to:
      - Calculate and include base fee in block header
      - Prioritize transactions by effective priority fee
-     - Ensure total base fee correctly redirected
+     - Ensure miner receives all transaction fees
    - Update block reward calculation for mining
 
 ### Phase 4: Edge Cases and Safety
 
 **Priority: High**
 
-10. **Treasury Address Validation**
-    - Validate treasury address exists (if configured)
-    - Handle case where treasury address is not a contract
-    - Consider treasury address self-destruct scenario
-    - Log warnings for treasury configuration issues
-
-11. **Fork Transition Logic**
+10. **Fork Transition Logic**
     - Handle transition from pre-EIP-1559 to post-EIP-1559 blocks
     - Initialize base fee at fork block
     - Ensure first EIP-1559 block has correct initial base fee
     - Validate backward compatibility
 
-12. **Error Handling**
+11. **Error Handling**
     - Define comprehensive error types for EIP-1559 failures
     - Add detailed logging for debugging
     - Ensure graceful degradation on configuration errors
+
+12. **Gas Price Calculation**
+    - Handle legacy transactions in ECIP-1120 blocks
+    - Ensure correct effective gas price for mixed transaction types
+    - Validate refund calculations
 
 ### Phase 5: Testing and Documentation
 
@@ -489,7 +501,7 @@ TransactionPayload = RLP([
     - Full block execution with ECIP-1120 active
     - Fork transition tests
     - Mixed transaction type blocks
-    - Treasury balance verification
+    - Miner balance verification
 
 15. **Documentation**
     - ADR for ECIP-1120 implementation
@@ -499,40 +511,24 @@ TransactionPayload = RLP([
 
 ## Interaction with Existing Features
 
-### ECIP-1097/1098 Treasury (Current Implementation)
+### Current Reward Distribution
 
 **Current Behavior:**
-- Block rewards split 80/20 between miner and treasury
-- Treasury funded from newly minted coins (inflation-based)
-- Activation controlled by `ecip1098-block-number`
+- Transaction fees calculated as `gasUsed * gasPrice`
+- All fees go to block miner
+- Block reward calculated based on era (ECIP-1017)
+- Ommer rewards paid separately
 
 **ECIP-1120 Behavior:**
-- Base fees redirected to treasury (fee-based, not inflation-based)
-- Block rewards go 100% to miners (no split)
-- Tips (priority fees) go 100% to miners
+- Transaction fees split into basefee and priority fee
+- **All fees go to miner** (basefee + priority fee)
+- Block reward calculation unchanged
+- Total miner compensation = block reward + all transaction fees
 
-**Compatibility Modes:**
-
-1. **Mode: Disabled** (Default for ETC mainnet)
-   - No treasury
-   - All rewards to miners
-   - No base fee mechanism
-
-2. **Mode: ECIP-1098** (Inflation-based treasury)
-   - 80% block reward to miner
-   - 20% block reward to treasury
-   - No base fee mechanism
-
-3. **Mode: ECIP-1120** (Fee-based treasury)
-   - 100% block reward to miner
-   - 100% priority fees to miner
-   - 100% base fees to treasury
-   - Requires EIP-1559 enabled
-
-**Configuration Conflicts:**
-- Cannot enable both ECIP-1098 and ECIP-1120 simultaneously
-- Configuration validation must enforce mutual exclusivity
-- Migration path from ECIP-1098 to ECIP-1120 requires hard fork
+**Key Difference:**
+- Fee calculation method changes (dynamic basefee)
+- Fee destination unchanged (all to miner)
+- No treasury component
 
 ### Block Reward Calculation
 
@@ -544,8 +540,8 @@ TransactionPayload = RLP([
 
 **ECIP-1120 Impact:**
 - Block reward calculation unchanged
-- Distribution mechanism changed (separate from base fees)
-- Treasury receives base fees instead of percentage of block rewards
+- Transaction fee calculation changed (basefee mechanism)
+- All fees still go to miner
 
 **Code Location:**
 - `BlockRewardCalculator.scala`: No changes needed
@@ -556,16 +552,19 @@ TransactionPayload = RLP([
 **Current Gas Calculation:**
 ```
 Transaction Cost = gasUsed * gasPrice
+All Fees → Miner
 ```
 
-**EIP-1559 Gas Calculation:**
+**ECIP-1120 Gas Calculation:**
 ```
 Effective Gas Price = min(maxFeePerGas, baseFeePerGas + maxPriorityFeePerGas)
 Transaction Cost = gasUsed * effectiveGasPrice
 
 Distribution:
-  Base Fee Portion = gasUsed * baseFeePerGas → Treasury
+  Base Fee Portion = gasUsed * baseFeePerGas → Miner
   Priority Fee Portion = gasUsed * (effectiveGasPrice - baseFeePerGas) → Miner
+  
+Total to Miner = gasUsed * effectiveGasPrice
 ```
 
 **Backward Compatibility:**
@@ -585,7 +584,7 @@ Distribution:
   - Testnet validation before mainnet deployment
   - Coordination with other ETC clients
 
-**Risk 2: Treasury Payout Validation Failure**
+**Risk 2: Transaction Validation Failure**
 - **Description:** Blocks may be rejected if treasury payout validation is too strict or has bugs
 - **Impact:** High - Block propagation failures
 - **Mitigation:**
@@ -604,16 +603,7 @@ Distribution:
 
 ### Economic Risks
 
-**Risk 4: Treasury Address Configuration Error**
-- **Description:** Incorrect treasury address could send base fees to wrong recipient
-- **Impact:** Critical - Loss of funds
-- **Mitigation:**
-  - Configuration validation on startup
-  - Checksum verification for addresses
-  - Require explicit operator confirmation for treasury changes
-  - Document correct treasury address for each network
-
-**Risk 5: Base Fee Manipulation Attempts**
+**Risk 3: Base Fee Manipulation Attempts**
 - **Description:** Miners might attempt to manipulate base fee through strategic block construction
 - **Impact:** Low-Medium - Fee market inefficiency
 - **Mitigation:**
@@ -621,9 +611,17 @@ Distribution:
   - Monitor base fee behavior on testnet
   - Document expected base fee dynamics
 
+**Risk 4: Miner Revenue Impact**
+- **Description:** Change in fee structure could affect miner profitability
+- **Impact:** Low - All fees still go to miners
+- **Mitigation:**
+  - ECIP-1120 preserves all miner revenue (no burning, no treasury)
+  - Actually increases fee predictability for miners
+  - Clear communication about revenue preservation
+
 ### Implementation Risks
 
-**Risk 6: RLP Encoding Incompatibility**
+**Risk 5: RLP Encoding Incompatibility**
 - **Description:** Block header RLP changes could break P2P communication
 - **Impact:** Critical - Network connectivity loss
 - **Mitigation:**
@@ -631,7 +629,7 @@ Distribution:
   - Test with other clients (Core-Geth, Besu)
   - Phased rollout with compatibility checks
 
-**Risk 7: Performance Degradation**
+**Risk 6: Performance Degradation**
 - **Description:** Base fee calculation adds computational overhead
 - **Impact:** Low - Marginal performance impact
 - **Mitigation:**
@@ -639,9 +637,9 @@ Distribution:
   - Profile performance impact
   - Optimize if needed
 
-**Risk 8: State Transition Bugs**
-- **Description:** Errors in treasury payout could corrupt world state
-- **Impact:** Critical - Chain halt or invalid state
+**Risk 7: State Transition Bugs**
+- **Description:** Errors in miner payout could corrupt world state
+- **Impact:** High - Invalid state transitions
 - **Mitigation:**
   - Extensive integration testing
   - Property-based testing for state transitions
@@ -651,26 +649,17 @@ Distribution:
 
 ### Technical Questions
 
-**Q1: Treasury Address Contract Requirements**
-- Should the treasury address be required to be a smart contract?
-- What happens if the treasury address is an EOA?
-- What if treasury contract self-destructs?
-
-**Recommendation:** 
-- Allow both contract and EOA addresses for flexibility
-- Log warnings if treasury address doesn't exist
-- Document best practices for treasury contract design
-
-**Q2: Orphaned Block Handling**
+**Q1: Orphaned Block Handling**
 - How should base fees be handled in uncle/ommer blocks?
-- Are ommer base fees redirected to treasury?
+- Do ommers have basefee fields?
 
 **Recommendation:**
-- Ommers don't contain transactions, so no base fees to redirect
-- Only canonical block base fees go to treasury
+- Ommers don't contain transactions, so no base fees to calculate
+- Ommer headers should still have basefee field for consistency
+- Only canonical block transactions generate fees
 - Document this behavior clearly
 
-**Q3: Transaction Pool Validation**
+**Q2: Transaction Pool Validation**
 - How should the transaction pool validate Type 2 transactions before a block is created?
 - What base fee should be used for validation?
 
@@ -679,32 +668,33 @@ Distribution:
 - Allow configurable margin for safety
 - Document transaction pool behavior
 
-**Q4: Configuration Migration Path**
-- How should operators migrate from ECIP-1098 to ECIP-1120?
-- Can both be active in different eras?
+**Q3: Legacy Transaction Handling**
+- How should legacy (Type 0) transactions be handled in ECIP-1120 blocks?
+- What is the effective priority fee for legacy transactions?
 
 **Recommendation:**
-- Mutual exclusivity enforcement in configuration
-- Clear documentation of migration procedure
-- Require hard fork for switching modes
+- Legacy transaction `gasPrice` treated as both max fee and max priority fee
+- Effective priority fee = gasPrice - baseFeePerGas
+- If gasPrice < baseFeePerGas, transaction is invalid
+- Clear documentation for wallet developers
 
 ### Governance Questions
 
-**Q5: Community Consensus**
+**Q4: Community Consensus**
 - What is the current community stance on ECIP-1120?
 - Is there consensus among ETC stakeholders?
 
 **Current Status (as of research):**
-- ECIP-1120 is part of proposed Olympia Upgrade
+- ECIP-1120 "Basefee Market with Miner Rewards" under development
 - Requires community consensus before activation
-- Previous treasury proposals (ECIP-1097/1098) were withdrawn
+- Simpler than alternative treasury-based proposals
 
 **Recommendation:**
-- Implement with treasury disabled by default
+- Implement with basefee mechanism disabled by default
 - Allow testnet/private network activation for testing
 - Defer mainnet activation to community governance
 
-**Q6: Interoperability with Other Clients**
+**Q5: Interoperability with Other Clients**
 - Have other ETC clients (Core-Geth, Besu) implemented ECIP-1120?
 - Is there a coordinated activation plan?
 
@@ -715,7 +705,7 @@ Distribution:
 
 ### Edge Cases
 
-**Q7: Genesis Block Base Fee**
+**Q6: Genesis Block Base Fee**
 - What base fee should the first post-fork block have?
 
 **Recommendation:**
@@ -723,7 +713,7 @@ Distribution:
 - Document rationale for initial value
 - Allow network-specific tuning
 
-**Q8: Zero Base Fee Blocks**
+**Q7: Zero Base Fee Blocks**
 - Can base fee ever reach zero?
 - What happens if base fee becomes zero?
 
@@ -732,7 +722,7 @@ Distribution:
 - Ensure implementation enforces minimum > 0
 - Document minimum base fee behavior
 
-**Q9: Maximum Base Fee**
+**Q8: Maximum Base Fee**
 - Is there a maximum base fee?
 - Could base fee grow unbounded?
 
@@ -750,7 +740,7 @@ Distribution:
 - ✅ Identify risks and open questions
 - ⏳ Create ADR for implementation approach
 
-**Duration:** 2 weeks  
+**Duration:** 1-2 weeks  
 **Deliverables:** This document, ADR draft
 
 ### Stage 2: Foundation (Estimated: 4-6 weeks)
@@ -775,18 +765,18 @@ Distribution:
 - Transaction pool accepts valid Type 2 transactions
 - Fee calculation is correct
 
-### Stage 4: Consensus Integration (Estimated: 4-6 weeks)
+### Stage 4: Consensus Integration (Estimated: 3-4 weeks)
 - Implement block validation for base fee
-- Update block preparation for treasury payouts
+- Update block preparation for miner payouts
 - Integrate with mining logic
 - Integration tests for full block execution
 
 **Key Milestones:**
 - Blocks with ECIP-1120 can be validated
 - Mining produces valid ECIP-1120 blocks
-- Treasury receives base fees correctly
+- Miners receive all transaction fees correctly
 
-### Stage 5: Testing and Hardening (Estimated: 3-4 weeks)
+### Stage 5: Testing and Hardening (Estimated: 2-3 weeks)
 - Comprehensive test suite
 - Edge case testing
 - Performance testing
@@ -797,7 +787,7 @@ Distribution:
 - Performance acceptable
 - Compatible with other clients
 
-### Stage 6: Documentation and Release (Estimated: 2 weeks)
+### Stage 6: Documentation and Release (Estimated: 1-2 weeks)
 - Operator documentation
 - API documentation
 - Migration guide
@@ -808,16 +798,16 @@ Distribution:
 - Configuration examples provided
 - Release candidate ready
 
-**Total Estimated Duration:** 18-24 weeks (4-6 months)
+**Total Estimated Duration:** 15-21 weeks (4-5 months)
 
 ## Recommendations
 
 ### For Implementation
 
 1. **Adopt Modular Design**
-   - Separate EIP-1559 base fee logic from ECIP-1120 treasury logic
-   - Allow EIP-1559 to be enabled without ECIP-1120 (base fee burning)
-   - Make treasury redirection a separate, optional feature
+   - Separate EIP-1559 base fee logic as independent component
+   - ECIP-1120 is simpler: just directs all fees to miner
+   - No separate treasury logic needed
 
 2. **Prioritize Testing**
    - Invest heavily in unit and integration tests
@@ -829,14 +819,14 @@ Distribution:
    - Don't deviate from specification without strong justification
    - Document any ETC-specific modifications
 
-4. **Configuration Flexibility**
-   - Support multiple treasury modes (disabled, ECIP-1098, ECIP-1120)
+4. **Configuration Simplicity**
+   - Simple enable/disable for ECIP-1120
    - Make all parameters configurable for testnet experimentation
    - Provide sensible defaults for mainnet
 
 5. **Comprehensive Validation**
    - Validate base fee calculation at consensus level
-   - Validate treasury payout in state transition
+   - Validate miner receives all fees correctly
    - Reject invalid blocks early with clear error messages
 
 ### For Deployment
@@ -848,13 +838,13 @@ Distribution:
 
 2. **Monitoring and Metrics**
    - Add Prometheus metrics for base fee tracking
-   - Monitor treasury balance changes
+   - Monitor miner fee revenue
    - Track Type 2 transaction adoption
 
 3. **Operator Communication**
    - Provide clear upgrade instructions
    - Document breaking changes
-   - Offer configuration migration tools
+   - Explain benefits to miners (revenue preservation)
 
 4. **Coordination with Ecosystem**
    - Work with other ETC client teams
@@ -863,48 +853,38 @@ Distribution:
 
 ### For Future Considerations
 
-1. **Treasury Governance**
-   - ECIP-1120 only handles accumulation
-   - Treasury spending requires ECIP-1113/1114 (governance layer)
-   - Consider if fukuii should support governance smart contracts
+1. **Miner Communication**
+   - ECIP-1120 preserves all miner revenue
+   - Actually improves fee predictability
+   - No burning, no treasury split
 
 2. **Fee Market Analysis**
    - Monitor base fee dynamics after deployment
-   - Compare with Ethereum's behavior
+   - Compare with Ethereum's behavior (noting miner vs burning difference)
    - Adjust parameters if needed (requires fork)
 
-3. **Alternative Treasury Models**
-   - Consider hybrid models (partial burning, partial treasury)
-   - Evaluate economic impacts
-   - Document tradeoffs
+3. **Alternative Approaches**
+   - ECIP-1120 is simpler than treasury-based alternatives
+   - Preserves PoW miner incentives
+   - No governance complexity
 
 ## References
 
 ### ECIPs (Ethereum Classic Improvement Proposals)
 
-- **ECIP-1097**: Checkpointing and Treasury System
-- **ECIP-1098**: Proto-Treasury System (Withdrawn)
-- **ECIP-1120**: EIP-1559 adaptation for ETC (Olympia Upgrade)
+- **ECIP-1120**: "Basefee Market with Miner Rewards"
   - Official Site: https://ecip1120.dev/
-  - Specification: https://ecips.ethereumclassic.org/ECIPs/ecip-1111
+  - EIP-1559 adaptation for ETC with basefee going to miners
 
 ### EIPs (Ethereum Improvement Proposals)
 
 - **EIP-1559**: Fee market change for ETH 1.0 chain
   - Specification: https://eips.ethereum.org/EIPS/eip-1559
-  - Base fee burning mechanism
+  - Base fee burning mechanism (ETC differs: pays miners)
   - Dynamic fee adjustment algorithm
 
 - **EIP-2930**: Access Lists (Transaction Type 1)
 - **EIP-658**: Embedding transaction status code in receipts
-
-### Olympia Upgrade Suite
-
-- **ECIP-1111**: Olympia EVM and Protocol Upgrades
-- **ECIP-1112**: Olympia Treasury
-- **ECIP-1113**: Treasury Governance
-- **ECIP-1114**: Treasury Withdrawal Mechanism
-- **ECIP-1115**: Miner Payout Smoothing
 
 ### Code References
 
@@ -921,22 +901,30 @@ Distribution:
 
 ## Conclusion
 
-ECIP-1120 represents a significant architectural change to Ethereum Classic's fee mechanism, redirecting EIP-1559 base fees to a treasury instead of burning them. This aligns with ETC's non-deflationary monetary policy while providing sustainable ecosystem funding.
+ECIP-1120 "Basefee Market with Miner Rewards" adapts Ethereum's EIP-1559 fee mechanism for Ethereum Classic by directing the basefee to miners instead of burning it. This preserves PoW miner incentives and ETC's monetary policy while providing the benefits of predictable transaction fees.
 
 **Key Takeaways:**
 
 1. **Feasibility**: Implementation is technically feasible with fukuii's current architecture
 2. **Complexity**: Moderate complexity - requires changes to block headers, validation, and reward distribution
-3. **Precedent**: ECIP-1097/1098 provide architectural patterns for treasury handling
-4. **Risk**: Main risks are consensus-level - require thorough testing and coordination
-5. **Timeline**: Estimated 4-6 months for complete implementation and testing
+3. **Simplicity**: Simpler than treasury-based alternatives (no governance layer needed)
+4. **Miner-Friendly**: All fees go to miners (no burning, no treasury split)
+5. **Timeline**: Estimated 4-5 months for complete implementation and testing
 
 **Critical Success Factors:**
 
-- Exact alignment with EIP-1559 specification
+- Exact alignment with EIP-1559 specification (except basefee destination)
 - Comprehensive testing, especially fork transition
 - Coordination with other ETC clients
 - Community consensus on activation
+
+**Advantages of ECIP-1120 Approach:**
+
+- Preserves 100% of fees for miners
+- No treasury governance complexity
+- Simpler implementation and validation
+- Maintains PoW incentive structure
+- Predictable fees for users
 
 **Next Steps:**
 
@@ -949,5 +937,5 @@ ECIP-1120 represents a significant architectural change to Ethereum Classic's fe
 ---
 
 **Document Prepared By:** Fukuii Research Team  
-**Review Status:** Pending Review  
+**Review Status:** Revised per ECIP-1120 Specification  
 **Last Updated:** 2025-12-30

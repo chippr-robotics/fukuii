@@ -4,13 +4,13 @@
 
 ## Overview
 
-ECIP-1120 adapts EIP-1559 for Ethereum Classic by redirecting base fees to a treasury instead of burning them.
+ECIP-1120 "Basefee Market with Miner Rewards" adapts EIP-1559 for Ethereum Classic with all basefees going to miners.
 
 ## Key Differences: Ethereum vs. ETC
 
 | Aspect | Ethereum (EIP-1559) | ETC (ECIP-1120) |
 |--------|-------------------|----------------|
-| Base Fee Destination | Burned (deflationary) | Treasury (non-deflationary) |
+| Base Fee Destination | Burned (deflationary) | **Miners** (non-deflationary) |
 | Priority Fee | To validators | To miners |
 | Block Reward | To validators | To miners (unchanged) |
 | Consensus Model | Proof of Stake | Proof of Work |
@@ -44,25 +44,30 @@ Fields: chainId, nonce, maxPriorityFeePerGas, maxFeePerGas,
 ```
 effectiveGasPrice = min(maxFeePerGas, baseFeePerGas + maxPriorityFeePerGas)
 totalCost = gasUsed * effectiveGasPrice
-baseFeeAmount = gasUsed * baseFeePerGas → Treasury
-priorityFeeAmount = gasUsed * (effectiveGasPrice - baseFeePerGas) → Miner
+
+ALL FEES → Miner:
+  baseFeeAmount = gasUsed * baseFeePerGas
+  priorityFeeAmount = gasUsed * (effectiveGasPrice - baseFeePerGas)
+  Total Miner Revenue = baseFeeAmount + priorityFeeAmount
 ```
 
 ### 4. Block Validation
 **New Consensus Rules:**
 1. Base fee must match calculated value from parent block
 2. All transactions must satisfy `maxFeePerGas >= baseFeePerGas`
-3. Treasury balance must increase by exact total base fee amount
+3. Miner receives all transaction fees (standard validation)
 
-**Critical:** Block invalid if treasury payout incorrect
+**Simpler than treasury model:** No separate payout validation needed
 
 ### 5. Reward Distribution
-**Current (ECIP-1098):** 80% miner, 20% treasury from block reward
+**Current:** All fees to miner via `gasUsed * gasPrice`
 
 **ECIP-1120:**
 - 100% block reward → Miner
 - 100% priority fees → Miner
-- 100% base fees → Treasury
+- 100% base fees → Miner
+
+**No treasury component**
 
 ### 6. Configuration
 ```hocon
@@ -75,13 +80,12 @@ eip1559 {
   base-fee-max-change-denominator = 8
   elasticity-multiplier = 2
 }
-
-treasury {
-  ecip1120-address = "0x..."
-  require-contract-exists = true
-  mode = "ecip1120"  # "disabled" | "ecip1098" | "ecip1120"
-}
 ```
+
+**Simpler Configuration:**
+- No treasury address needed
+- No governance configuration
+- Standard miner reward distribution
 
 ## Implementation Phases
 
@@ -95,46 +99,44 @@ treasury {
 - Fee calculation logic
 - Transaction validation
 
-### Phase 3: Consensus (4-6 weeks)
+### Phase 3: Consensus (3-4 weeks)
 - Block validation
-- Treasury payout enforcement
+- Miner payout (all fees)
 - Mining integration
 
-### Phase 4: Safety (3-4 weeks)
+### Phase 4: Safety (2-3 weeks)
 - Edge case handling
 - Fork transition logic
 - Error handling
 
-### Phase 5: Testing (3-4 weeks)
+### Phase 5: Testing (2-3 weeks)
 - Unit tests
 - Integration tests
 - Cross-client compatibility
 
-### Phase 6: Documentation (2 weeks)
+### Phase 6: Documentation (1-2 weeks)
 - Operator guides
 - API documentation
 - Migration guides
 
-**Total: 18-24 weeks (4-6 months)**
+**Total: 15-21 weeks (4-5 months)**
 
 ## Risk Summary
 
 ### Critical Risks
 1. **Chain Split** - Base fee calculation mismatch between nodes
-2. **Treasury Config Error** - Incorrect address sends funds to wrong recipient
-3. **RLP Incompatibility** - Block header changes break P2P
+2. **RLP Incompatibility** - Block header changes break P2P
 
 ### High Risks
-4. **Treasury Validation Failure** - Blocks rejected incorrectly
-5. **State Corruption** - Treasury payout errors corrupt world state
+3. **State Corruption** - Miner payout errors corrupt world state
 
 ### Medium Risks
-6. **Transaction Type Confusion** - Type 2 transaction failures
-7. **Base Fee Manipulation** - Strategic block construction by miners
+4. **Transaction Type Confusion** - Type 2 transaction failures
+5. **Base Fee Manipulation** - Strategic block construction by miners
 
 ### Mitigations
 - Comprehensive testing (unit, integration, property-based)
-- Reference implementation alignment
+- Reference implementation alignment (EIP-1559 with miner destination)
 - Testnet validation
 - Cross-client coordination
 - Phased rollout with monitoring
@@ -143,8 +145,8 @@ treasury {
 
 ### Files to Modify
 - `BlockHeader.scala` - Add base fee field
-- `BlockPreparator.scala` - Update reward distribution
-- `BlockValidator.scala` - Add base fee/treasury validation
+- `BlockPreparator.scala` - Update reward distribution (pay all fees to miner)
+- `BlockValidator.scala` - Add base fee validation
 - `BlockHeaderValidator.scala` - Validate base fee calculation
 - `SignedTransactionValidator.scala` - Type 2 validation
 
@@ -158,59 +160,33 @@ treasury {
 - `mordor-chain.conf` - Testnet configuration
 - `BlockchainConfig.scala` - Load EIP-1559 config
 
-## Configuration Modes
+## Configuration Mode
 
-### Mode 1: Disabled (Default)
+### ECIP-1120 Mode
 ```hocon
-treasury.mode = "disabled"
-ecip1120-block-number = "1000000000000000000"  # Never activates
-```
-- No treasury
-- Traditional reward distribution
-- All rewards to miners
-
-### Mode 2: ECIP-1098 (Inflation-based)
-```hocon
-treasury.mode = "ecip1098"
-ecip1098-block-number = "12345678"
-```
-- 80/20 split of block rewards
-- Treasury from newly minted coins
-- No base fee mechanism
-
-### Mode 3: ECIP-1120 (Fee-based)
-```hocon
-treasury.mode = "ecip1120"
-ecip1120-block-number = "12345678"
+ecip1120-block-number = "12345678"  # Activation block
 eip1559.enabled = true
 ```
-- Base fees to treasury
-- Block rewards + tips to miner
+- All fees to miners (base fee + priority fee)
+- Block rewards to miners
 - Requires EIP-1559 enabled
-
-**Note:** Modes are mutually exclusive
+- **No treasury component**
 
 ## Key Decision Points
 
-### Q1: Treasury Address Type
-**Decision:** Allow both EOA and contract addresses
-- Configuration validates address format
-- Log warnings if address doesn't exist
-- Document best practices
-
-### Q2: Base Fee at Fork Block
+### Q1: Base Fee at Fork Block
 **Decision:** Use configurable `initial-base-fee`
 - Default: 1 Gwei
 - Network-specific tuning allowed
 - Document rationale
 
-### Q3: Ommer (Uncle) Handling
+### Q2: Ommer (Uncle) Handling
 **Decision:** Ommers don't have base fees
 - Ommers contain no transactions
-- Only canonical block base fees redirected
+- Only canonical block base fees apply
 - Ommer rewards unchanged
 
-### Q4: Transaction Pool Validation
+### Q3: Transaction Pool Validation
 **Decision:** Use parent base fee + 12.5% margin
 - Configurable safety margin
 - Prevents immediate rejection
@@ -231,16 +207,17 @@ eip1559.enabled = true
 ## Testing Strategy
 
 ### Unit Tests
+### Unit Tests
 - Base fee calculation edge cases
 - Transaction Type 2 encoding/decoding
 - Block header serialization
-- Treasury payout calculation
+- Miner payout calculation
 
 ### Integration Tests
 - Full block execution with ECIP-1120
 - Fork transition scenarios
 - Mixed transaction type blocks
-- Treasury balance verification
+- Miner balance verification
 
 ### Cross-Client Tests
 - RLP encoding compatibility
@@ -252,9 +229,9 @@ eip1559.enabled = true
 
 **Prometheus Metrics to Add:**
 - `fukuii_base_fee_per_gas` - Current base fee
-- `fukuii_treasury_balance` - Treasury account balance
+- `fukuii_miner_fee_revenue` - Total miner fee revenue (basefee + priority)
 - `fukuii_type2_transaction_count` - EIP-1559 transaction adoption
-- `fukuii_base_fee_total` - Total base fees collected
+- `fukuii_base_fee_total` - Total base fees paid to miners
 - `fukuii_priority_fee_total` - Total priority fees paid to miners
 
 ## Open Questions
@@ -262,15 +239,14 @@ eip1559.enabled = true
 1. **Community Consensus**: Is ETC community ready to adopt ECIP-1120?
 2. **Client Coordination**: Are other clients implementing this?
 3. **Activation Timeline**: When should mainnet activation occur?
-4. **Treasury Governance**: Who controls treasury spending (ECIP-1113/1114)?
-5. **Parameter Tuning**: Are default EIP-1559 parameters appropriate for ETC?
+4. **Parameter Tuning**: Are default EIP-1559 parameters appropriate for ETC?
+5. **Miner Adoption**: Will miners support EIP-1559 style transactions?
 
 ## References
 
 - **Full Analysis**: [ECIP-1120-IMPACT-ANALYSIS.md](ECIP-1120-IMPACT-ANALYSIS.md)
 - **ECIP-1120 Spec**: https://ecip1120.dev/
 - **EIP-1559 Spec**: https://eips.ethereum.org/EIPS/eip-1559
-- **Olympia Upgrade**: https://olympiadao.org/
 
 ## Next Steps
 
@@ -282,6 +258,7 @@ eip1559.enabled = true
 
 ---
 
-**Status:** Research Complete  
+**Status:** Research Complete - Revised per ECIP-1120 Specification  
 **Implementation Status:** Not Started  
+**Key Finding:** ECIP-1120 gives basefee to miners (not treasury)  
 **Mainnet Activation:** Pending Community Consensus

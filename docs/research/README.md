@@ -39,24 +39,24 @@ Evaluation of potential features or integrations:
 ### ECIP and EIP Analysis
 
 #### [ECIP-1120 Impact Analysis](ECIP-1120-IMPACT-ANALYSIS.md) | [Quick Summary](ECIP-1120-SUMMARY.md)
-**Status:** Draft  
+**Status:** Draft - Revised  
 **Date:** 2025-12-30  
-**Topic:** ECIP-1120 (EIP-1559 for ETC) - Treasury-based base fee redirection
+**Topic:** ECIP-1120 "Basefee Market with Miner Rewards" - EIP-1559 with basefee to miners
 
 **Summary:** Comprehensive technical analysis of implementing ECIP-1120 in fukuii, covering:
 - EIP-1559 base fee mechanism adaptation for ETC
-- Treasury address enforcement at consensus level
+- **All fees go to miners** (basefee + priority fee)
 - Block header modifications and validation changes
 - Transaction Type 2 support requirements
-- Integration with existing ECIP-1097/1098 treasury implementation
+- **No treasury component** - simpler than alternatives
 - Implementation roadmap and risk analysis
 
 **Key Findings:**
 - Implementation feasible with moderate complexity
 - Requires block header extensions for base fee field
-- Treasury payout must be consensus-enforced
-- Estimated 4-6 months for full implementation
-- Configuration must support multiple treasury modes
+- Miner receives all transaction fees (no treasury split)
+- Estimated 4-5 months for full implementation
+- Simpler than treasury-based alternatives
 
 ---
 
