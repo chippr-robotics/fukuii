@@ -243,21 +243,22 @@ class SNAPSyncController(
       // If we have a bootstrap target and we've reached it, use that as our pivot
       // This ensures we use the pivot we bootstrapped to, not a recalculated one
       bootstrapTarget match {
-        case Some(targetPivot) if localBestBlock >= targetPivot =>
-          // We successfully reached the bootstrap target - use it as our pivot
-          log.info(s"Using bootstrap target $targetPivot as pivot (we synced to it)")
-          
-          // Try to get the header for this pivot block
+        case Some(targetPivot) =>
+          // Header-only bootstrap may complete without importing blocks; treat pivot as ready if header exists.
+          if (localBestBlock >= targetPivot)
+            log.info(s"Using bootstrap target $targetPivot as pivot (blocks imported up to target)")
+          else
+            log.info(s"Using bootstrap target $targetPivot as pivot (header-only bootstrap)")
+
           blockchainReader.getBlockHeaderByNumber(targetPivot) match {
             case Some(header) =>
-              // Perfect! We have the header for our target pivot
               pivotBlock = Some(targetPivot)
               stateRoot = Some(header.stateRoot)
               appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
               appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
-              
+
               SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
-              
+
               log.info("=" * 80)
               log.info("🎯 SNAP Sync Ready (from bootstrap)")
               log.info("=" * 80)
@@ -266,24 +267,17 @@ class SNAPSyncController(
               log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
               log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
               log.info("=" * 80)
-              
+
               // Start account range sync
               currentPhase = AccountRangeSync
               startAccountRangeSync(header.stateRoot)
               context.become(syncing)
-              
+
             case None =>
-              // Header not available yet - this shouldn't happen but handle it gracefully
-              log.warning(s"Bootstrap target $targetPivot reached but header not available yet")
+              log.warning(s"Bootstrap complete but pivot header $targetPivot not available yet")
               log.warning("Falling back to recalculating pivot from current network state")
               startSnapSync()
           }
-          
-        case Some(targetPivot) =>
-          // We have a target but haven't reached it yet - this shouldn't happen
-          log.warning(s"Bootstrap incomplete: target=$targetPivot, current=$localBestBlock")
-          log.warning("Falling back to recalculating pivot from current network state")
-          startSnapSync()
           
         case None =>
           // No bootstrap target stored - fall back to normal pivot selection
@@ -362,8 +356,11 @@ class SNAPSyncController(
     appStateStorage.getSnapSyncBootstrapTarget() match {
       case Some(bootstrapTarget) =>
         val bestBlockNumber = appStateStorage.getBestBlockNumber()
-        
-        if (bestBlockNumber >= bootstrapTarget) {
+
+        // Header-only bootstrap may not advance bestBlockNumber; allow resume if pivot header exists.
+        val hasPivotHeader = blockchainReader.getBlockHeaderByNumber(bootstrapTarget).isDefined
+
+        if (bestBlockNumber >= bootstrapTarget || hasPivotHeader) {
           // Bootstrap already complete - clear the target and proceed with SNAP sync
           log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
           appStateStorage.clearSnapSyncBootstrapTarget().commit()
@@ -384,6 +381,17 @@ class SNAPSyncController(
     
     // Query peers to find the highest block in the network
     val networkBestBlockOpt = getPeerWithHighestBlock.map(_.peerInfo.maxBlockNumber)
+
+    // Diagnostics: show what heights we can actually see from connected peers.
+    // If this list tops out near the Core-Geth "start height", it means we simply don't have any peer
+    // advertising the real network head yet (or those peers are excluded/blacklisted/disconnected).
+    val topPeerHeights =
+      peersToDownloadFrom.values.toList
+        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .take(5)
+        .map(p => s"${p.peer.remoteAddress}=${p.peerInfo.maxBlockNumber}")
+        .mkString(", ")
+    log.info(s"SNAP pivot selection: visible peer heights (top 5) = [$topPeerHeights]")
     
     // Core-geth approach: Calculate pivot from network height
     // pivot = networkHeight - pivotBlockOffset (e.g., 23M - 64 = ~23M)
@@ -404,6 +412,12 @@ class SNAPSyncController(
     }
     
     val pivotBlockNumber = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
+
+    log.info(
+      s"SNAP pivot selection: localBest=$localBestBlock, networkBest=${networkBestBlockOpt.getOrElse("none")}, " +
+        s"base=$baseBlockForPivot (source=${pivotSelectionSource.name}), offset=${snapSyncConfig.pivotBlockOffset}, " +
+        s"pivot=$pivotBlockNumber"
+    )
 
     // Core-geth behavior: If chain height <= pivot offset, use genesis as pivot
     // This allows SNAP sync to start immediately from any height
