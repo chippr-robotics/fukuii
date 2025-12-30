@@ -146,7 +146,8 @@
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network.rlpx" level="WARN" />
     <!-- Outbound dial failures to random discovered peers are extremely noisy on public networks -->
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
+    <!-- Enable wire-level send/recv visibility (frame decode + message types/codes) -->
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="WARN" />

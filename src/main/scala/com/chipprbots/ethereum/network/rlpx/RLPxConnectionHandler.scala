@@ -177,9 +177,30 @@ class RLPxConnectionHandler(
       }
 
       def translateFrames(frames: Seq[Frame]): Seq[Frame] =
-        frames.map { frame =>
-          val translatedType = translateType(frame.`type`)
-          if (translatedType == frame.`type`) frame else frame.copy(`type` = translatedType)
+        if (frames.isEmpty) frames
+        else {
+          // Debug-only: this is the most direct way to validate ETH/SNAP base-offset negotiation.
+          // If peer capability ordering is misunderstood, we'll see unexpected mappings here.
+          if (log.isDebugEnabled) {
+            val translations = frames.flatMap { frame =>
+              val translatedType = translateType(frame.`type`)
+              if (translatedType == frame.`type`) None
+              else Some(s"0x${frame.`type`.toHexString}->0x${translatedType.toHexString}")
+            }
+            if (translations.nonEmpty) {
+              log.debug(
+                "INBOUND_WIRE_TRANSLATE: peer={}, count={}, mappings={}",
+                peerId,
+                translations.size,
+                translations.mkString(",")
+              )
+            }
+          }
+
+          frames.map { frame =>
+            val translatedType = translateType(frame.`type`)
+            if (translatedType == frame.`type`) frame else frame.copy(`type` = translatedType)
+          }
         }
     }
 
@@ -654,6 +675,18 @@ class RLPxConnectionHandler(
                   msg.getClass.getSimpleName,
                   msg.code.toHexString
                 )
+
+                // High-signal receive logging for SNAP traffic (request/response visibility).
+                // This stays INFO so it shows up even when other receive logs are DEBUG.
+                if (msg.code >= CanonicalSnapBase && msg.code < CanonicalSnapBase + CanonicalSnapSize) {
+                  log.info(
+                    "RECV_SNAP_MSG: peer={}, msg[{}] type={}, code=0x{}",
+                    peerId,
+                    idx,
+                    msg.getClass.getSimpleName,
+                    msg.code.toHexString
+                  )
+                }
               case Left(err) =>
                 log.error(
                   "RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}",
