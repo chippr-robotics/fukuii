@@ -10,6 +10,17 @@ This directory contains technical specifications and protocol documentation for 
 ### EVM Compatibility
 - **[Ethereum Mainnet EVM Compatibility](ETHEREUM_MAINNET_EVM_COMPATIBILITY.md)** - Comprehensive analysis of EIPs, VM opcodes, and protocol features required for full Ethereum mainnet execution client compatibility
 
+### Protocol Upgrades
+
+#### ECIP-1111: Olympia Hardfork (In Research)
+- **[ECIP-1121 Olympia Analysis](ECIP-1121-OLYMPIA-ANALYSIS.md)** - Comprehensive technical analysis of Olympia hardfork requirements, including EIP-1559 and EIP-3198 implementation with BASEFEE treasury redirection
+- **[ECIP-1121 Implementation Checklist](ECIP-1121-IMPLEMENTATION-CHECKLIST.md)** - Detailed tracking checklist with 245+ work items for Olympia implementation
+
+**Status:** Research phase complete  
+**Key Features:** EIP-1559 (dynamic basefee), EIP-3198 (BASEFEE opcode), Treasury integration  
+**Estimated Effort:** 12-14 weeks  
+**Blockers:** Treasury address publication, activation blocks TBD
+
 ## Related Documentation
 
 - [ADRs](../adr/README.md) - Architecture Decision Records
