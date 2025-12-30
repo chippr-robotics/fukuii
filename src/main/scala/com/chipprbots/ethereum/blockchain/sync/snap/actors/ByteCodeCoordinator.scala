@@ -57,6 +57,7 @@ class ByteCodeCoordinator(
   // Worker pool
   private val workers = mutable.ArrayBuffer[ActorRef]()
   private val maxWorkers = 8
+  private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
 
   // Statistics
   private var bytecodesDownloaded: Long = 0
@@ -92,33 +93,19 @@ class ByteCodeCoordinator(
 
     case PeerAvailable(peer) =>
       // Dispatch tasks to available peer
-      if (pendingTasks.nonEmpty && workers.size < maxWorkers) {
-        val worker = createWorker()
-        assignTaskToWorker(worker, peer)
-      } else if (pendingTasks.nonEmpty) {
-        // Find an idle worker
-        workers.headOption.foreach { worker =>
-          assignTaskToWorker(worker, peer)
-        }
-      }
+      dispatchIfPossible(peer)
 
     case ByteCodePeerAvailable(peer) =>
       // Same as PeerAvailable - dispatch tasks to available peer
-      if (pendingTasks.nonEmpty && workers.size < maxWorkers) {
-        val worker = createWorker()
-        assignTaskToWorker(worker, peer)
-      } else if (pendingTasks.nonEmpty) {
-        // Find an idle worker
-        workers.headOption.foreach { worker =>
-          assignTaskToWorker(worker, peer)
-        }
-      }
+      dispatchIfPossible(peer)
 
     case ByteCodesResponseMsg(response) =>
       handleByteCodesResponse(response)
 
     case ByteCodeTaskComplete(requestId, result) =>
-      activeTasks.remove(requestId)
+      activeTasks.remove(requestId).foreach { case (_, worker) =>
+        markWorkerIdle(worker)
+      }
       result match {
         case Right(count) =>
           bytecodesDownloaded += count
@@ -131,11 +118,13 @@ class ByteCodeCoordinator(
 
     case ByteCodeTaskFailed(requestId, error) =>
       // Re-queue the task
-      activeTasks.remove(requestId).foreach { case (task, _) =>
+      activeTasks.remove(requestId).foreach { case (task, worker) =>
         log.warning(s"Re-queuing bytecode task after failure: $error")
         task.pending = false
         pendingTasks.enqueue(task)
+        markWorkerIdle(worker)
       }
+      checkCompletion()
 
     case ByteCodeCheckCompletion =>
       checkCompletion()
@@ -149,6 +138,9 @@ class ByteCodeCoordinator(
   private def assignTaskToWorker(worker: ActorRef, peer: Peer): Unit = {
     if (pendingTasks.isEmpty) return
 
+    // Mark worker busy.
+    idleWorkers -= worker
+
     val task = pendingTasks.dequeue()
     val requestId = requestTracker.generateRequestId()
 
@@ -157,6 +149,19 @@ class ByteCodeCoordinator(
 
     log.debug(s"Assigning bytecode task (${task.codeHashes.size} hashes) to worker for peer ${peer.id}")
     worker ! ByteCodeWorkerFetchTask(task, peer, requestId, maxResponseSize)
+  }
+
+  private def dispatchIfPossible(peer: Peer): Unit = {
+    if (pendingTasks.isEmpty) return
+
+    val workerOpt: Option[ActorRef] =
+      idleWorkers.headOption.orElse {
+        if (workers.size < maxWorkers) Some(createWorker()) else None
+      }
+
+    workerOpt.foreach { worker =>
+      assignTaskToWorker(worker, peer)
+    }
   }
 
   private def handleByteCodesResponse(response: ByteCodes): Unit = {
@@ -174,6 +179,7 @@ class ByteCodeCoordinator(
             activeTasks.remove(response.requestId)
             task.pending = false
             pendingTasks.enqueue(task)
+            markWorkerIdle(worker)
             checkCompletion()
 
           case Right(returnedHashes) =>
@@ -184,6 +190,7 @@ class ByteCodeCoordinator(
                 activeTasks.remove(response.requestId)
                 task.pending = false
                 pendingTasks.enqueue(task)
+                markWorkerIdle(worker)
                 checkCompletion()
 
               case Right(_) =>
@@ -210,6 +217,8 @@ class ByteCodeCoordinator(
                 task.bytecodes = response.codes
                 completedTasks += task
                 activeTasks.remove(response.requestId)
+
+                markWorkerIdle(worker)
 
                 log.info(s"Successfully processed $bytecodeCount bytecodes")
                 checkCompletion()
@@ -285,8 +294,16 @@ class ByteCodeCoordinator(
       )
     )
     workers += worker
+    idleWorkers += worker
     log.debug(s"Created bytecode worker, total: ${workers.size}")
     worker
+  }
+
+  private def markWorkerIdle(worker: ActorRef): Unit = {
+    // Only track workers we created.
+    if (workers.contains(worker)) {
+      idleWorkers += worker
+    }
   }
 
   private def filterAndDedupeContractAccounts(
