@@ -1,336 +1,377 @@
-# ECIP-1111 (Olympia) Implementation Tracking Checklist
+# ECIP-1121 Execution Client Implementation Checklist
 
 **Status:** Planning Phase  
-**Target Version:** TBD  
+**Target:** Execution Client Specification Alignment  
 **Last Updated:** 2025-12-30
 
-This checklist tracks all work items required to implement the Olympia hardfork (ECIP-1111) in Fukuii. Items are categorized by component and marked with priority and estimated effort.
+This checklist tracks all work items required to implement ECIP-1121 "Execution Client Specification Alignment" in Fukuii. ECIP-1121 covers 13 EIPs from Ethereum's Fusaka, Pectra, and Dencun forks that are applicable to ETC's execution layer.
+
+**Note:** This is SEPARATE from ECIP-1111 (which handles EIP-1559/EIP-3198/Treasury). ECIP-1121 focuses exclusively on execution-layer specifications.
 
 **Legend:**
-- 🔴 Critical Path / Consensus-Critical
-- 🟡 High Priority / Required for Launch
-- 🟢 Medium Priority / Important but not blocking
-- ⚪ Low Priority / Nice to Have
-- ⏱️ Effort: XS (< 1 day), S (1-2 days), M (3-5 days), L (1-2 weeks), XL (2+ weeks)
+- 🔴 Critical / Consensus-Critical
+- 🟡 High Priority
+- 🟢 Medium Priority  
+- ⚪ Low Priority
+- ⏱️ Effort: XS (<1d), S (1-2d), M (3-5d), L (1-2w), XL (2+w)
 
 ---
 
 ## 📋 Pre-Implementation Phase
 
 ### Research & Specification Analysis
-- [x] 🟢 Review ECIP-1111 specification (⏱️ S)
-- [x] 🟢 Review ECIP-1112 specification (⏱️ S)
-- [x] 🟢 Review ECIP-1113 specification (⏱️ XS)
-- [x] 🟢 Review ECIP-1114 specification (⏱️ XS)
-- [x] 🟢 Review EIP-1559 specification (⏱️ M)
-- [x] 🟢 Review EIP-3198 specification (⏱️ XS)
-- [ ] 🟢 Study Core-Geth implementation (⏱️ M)
-- [ ] 🟢 Study Hyperledger Besu implementation (⏱️ M)
-- [ ] 🟢 Analyze Ethereum London fork implementation (⏱️ M)
-- [ ] 🟢 Review EIP-1559 test vectors (⏱️ S)
+- [x] 🟢 Fetch and review ECIP-1121 specification from PR #554 (⏱️ S)
+- [x] 🟢 Review all 13 included EIPs (⏱️ L)
+- [x] 🟢 Analyze current Fukuii state vs ECIP-1121 requirements (⏱️ M)
+- [x] 🟢 Create comprehensive analysis document (⏱️ L)
+- [x] 🟢 Create implementation checklist (⏱️ S)
+- [ ] 🟡 Review Core-Geth ECIP-1121 implementation status (⏱️ M)
+- [ ] 🟡 Review Hyperledger Besu plans (⏱️ M)
+- [ ] 🟡 Obtain Ethereum test vectors for each EIP (⏱️ M)
 
 ### Architecture & Design
-- [x] 🟡 Create comprehensive analysis document (⏱️ L)
-- [x] 🟡 Create implementation tracking checklist (⏱️ S)
-- [ ] 🟡 Design basefee calculation module (⏱️ M)
-- [ ] 🟡 Design transaction type framework (⏱️ M)
-- [ ] 🟡 Design block finalization changes (⏱️ M)
-- [ ] 🟡 Design RPC API changes (⏱️ M)
-- [ ] 🟢 Create ADR for consensus changes (⏱️ S)
-- [ ] 🟢 Create ADR for transaction type design (⏱️ S)
-- [ ] 🟢 Create ADR for treasury integration (⏱️ S)
+- [ ] 🟡 Design phased implementation approach (⏱️ M)
+- [ ] 🟡 Create ADR for ECIP-1121 implementation strategy (⏱️ M)
+- [ ] 🟡 Design EIP-7702 (EOA code) architecture (⏱️ L)
+- [ ] 🟡 Design EIP-2935 (block hashes) system contract (⏱️ L)
+- [ ] 🟡 Design EIP-7642 (eth/69) protocol changes (⏱️ L)
+- [ ] 🟡 Design EIP-1153 (transient storage) architecture (⏱️ M)
+- [ ] 🟢 Plan testing strategy for each EIP (⏱️ M)
 
 ### External Dependencies
-- [ ] 🔴 Obtain official Treasury contract address from ECIP-1112 (⏱️ N/A - External)
+- [ ] 🔴 Wait for ECIP-1121 PR #554 to merge (⏱️ N/A - External)
 - [ ] 🟡 Obtain Mordor testnet activation block number (⏱️ N/A - External)
 - [ ] 🟡 Obtain mainnet activation block number (⏱️ N/A - External)
+- [ ] 🟡 Identify BLS12-381 cryptography library for Scala/JVM (⏱️ M)
+- [ ] 🟡 Identify secp256r1 library for Scala/JVM (⏱️ M)
 - [ ] 🟢 Coordinate with Core-Geth team (⏱️ N/A - External)
 - [ ] 🟢 Coordinate with Besu team (⏱️ N/A - External)
 
 ---
 
-## 🔧 Core Implementation Phase
+## 🔧 Phase 1: Quick Wins (Low Complexity EIPs)
 
-### 1. Consensus Layer (CRITICAL)
+### EIP-7825: Transaction Gas Limit Cap
+**Effort:** 1-2 days | **Priority:** 🟡 High
 
-#### 1.1 Block Header Changes
-- [ ] 🔴 Add `baseFeePerGas: Option[BigInt]` to BlockHeader case class (⏱️ XS)
-- [ ] 🔴 Update BlockHeader RLP encoding to include baseFeePerGas (⏱️ S)
-- [ ] 🔴 Update BlockHeader RLP decoding to handle baseFeePerGas (⏱️ S)
-- [ ] 🔴 Add validation for baseFeePerGas presence post-Olympia (⏱️ S)
-- [ ] 🔴 Ensure backward compatibility for pre-Olympia headers (⏱️ M)
-- [ ] 🔴 Add BlockHeader unit tests for new format (⏱️ M)
-- [ ] 🔴 Test RLP round-trip encoding/decoding (⏱️ S)
-
-**Files:** `src/main/scala/com/chipprbots/ethereum/domain/BlockHeader.scala`
-
-#### 1.2 Basefee Calculation
-- [ ] 🔴 Create BaseFeeCalculator object (⏱️ M)
-- [ ] 🔴 Implement basefee adjustment formula per EIP-1559 (⏱️ M)
-- [ ] 🔴 Define constants (INITIAL_BASE_FEE, BASE_FEE_MAX_CHANGE_DENOMINATOR, etc.) (⏱️ XS)
-- [ ] 🔴 Handle genesis/first Olympia block basefee initialization (⏱️ S)
-- [ ] 🔴 Add comprehensive unit tests for basefee calculation (⏱️ M)
-- [ ] 🔴 Test edge cases (empty blocks, full blocks, target usage) (⏱️ M)
-- [ ] 🔴 Validate against EIP-1559 test vectors (⏱️ M)
-
-**New File:** `src/main/scala/com/chipprbots/ethereum/consensus/BaseFeeCalculator.scala`
-
-#### 1.3 Block Finalization & Treasury Transfer
-- [ ] 🔴 Add treasury transfer logic to block finalization (⏱️ M)
-- [ ] 🔴 Calculate total BASEFEE from all transactions in block (⏱️ S)
-- [ ] 🔴 Transfer BASEFEE to Treasury address at consensus layer (⏱️ M)
-- [ ] 🔴 Ensure transfer occurs BEFORE miner rewards (⏱️ S)
-- [ ] 🔴 Add state change for Treasury balance increase (⏱️ M)
-- [ ] 🔴 Separate miner tips from basefee in reward calculation (⏱️ M)
-- [ ] 🔴 Add comprehensive tests for treasury transfer (⏱️ L)
-- [ ] 🔴 Test treasury accumulation across multiple blocks (⏱️ M)
-- [ ] 🔴 Test interaction with block rewards and uncle rewards (⏱️ M)
-
-**Files:** 
-- `src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala`
-- `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala`
-- `src/main/scala/com/chipprbots/ethereum/ledger/BlockRewardCalculator.scala`
-
-#### 1.4 Block Validation
-- [ ] 🔴 Update block header validator for baseFeePerGas validation (⏱️ M)
-- [ ] 🔴 Validate basefee calculation in received blocks (⏱️ M)
-- [ ] 🔴 Add fork-aware validation (pre-Olympia vs post-Olympia) (⏱️ M)
-- [ ] 🔴 Add tests for block validation with baseFeePerGas (⏱️ M)
-
-**Files:** `src/main/scala/com/chipprbots/ethereum/consensus/validators/BlockHeaderValidator.scala`
-
-### 2. Transaction Layer (CRITICAL)
-
-#### 2.1 Transaction Types
-- [ ] 🔴 Define EIP1559Transaction case class (Type-2) (⏱️ M)
-- [ ] 🔴 Add fields: maxFeePerGas, maxPriorityFeePerGas, accessList (⏱️ XS)
-- [ ] 🔴 Implement transaction type discriminator (⏱️ S)
-- [ ] 🔴 Update SignedTransaction trait/sealed trait hierarchy (⏱️ M)
-- [ ] 🔴 Implement RLP encoding for Type-2 transactions (⏱️ M)
-- [ ] 🔴 Implement RLP decoding for Type-2 transactions (⏱️ M)
-- [ ] 🔴 Maintain support for Type-0 (legacy) transactions (⏱️ S)
-- [ ] 🔴 Maintain support for Type-1 (access list) transactions (⏱️ S)
-- [ ] 🔴 Add unit tests for all transaction types (⏱️ L)
-
-**Files:** `src/main/scala/com/chipprbots/ethereum/domain/SignedTransaction.scala`
-
-#### 2.2 Transaction Validation
-- [ ] 🔴 Validate maxFeePerGas >= maxPriorityFeePerGas (⏱️ XS)
-- [ ] 🔴 Validate maxFeePerGas >= block.baseFeePerGas (⏱️ S)
-- [ ] 🔴 Validate sender balance sufficient for max gas cost (⏱️ S)
-- [ ] 🔴 Add fork-aware validation (reject Type-2 pre-Olympia) (⏱️ M)
-- [ ] 🔴 Update transaction validator with Type-2 logic (⏱️ M)
-- [ ] 🔴 Add comprehensive validation tests (⏱️ M)
-- [ ] 🔴 Test validation edge cases and attack vectors (⏱️ M)
+- [ ] 🔴 Define MAX_TX_GAS constant (2^24 = 16,777,216) (⏱️ XS)
+- [ ] 🔴 Add validation in transaction validator (⏱️ XS)
+- [ ] 🔴 Reject transactions with gasLimit > MAX_TX_GAS (⏱️ XS)
+- [ ] 🟡 Add unit tests for gas limit validation (⏱️ S)
+- [ ] 🟡 Add edge case tests (exactly at limit, above limit) (⏱️ S)
 
 **Files:** `src/main/scala/com/chipprbots/ethereum/consensus/validators/std/StdSignedTransactionValidator.scala`
 
-#### 2.3 Gas Payment Calculation
-- [ ] 🔴 Implement effective gas price calculation (⏱️ M)
-- [ ] 🔴 Calculate priority fee correctly (⏱️ S)
-- [ ] 🔴 Separate basefee and miner tip in gas payment (⏱️ M)
-- [ ] 🔴 Update transaction execution to use effective gas price (⏱️ M)
-- [ ] 🔴 Add tests for gas payment calculation (⏱️ M)
-- [ ] 🔴 Test various fee combinations and edge cases (⏱️ M)
+### EIP-7935: Set Default Gas Limit to 60 Million
+**Effort:** < 1 day | **Priority:** ⚪ Low
 
-**Files:** Transaction execution logic in ledger package
+- [ ] ⚪ Update default gas limit in etc-chain.conf to 60M (⏱️ XS)
+- [ ] ⚪ Update default gas limit in mordor-chain.conf to 60M (⏱️ XS)
+- [ ] ⚪ Update default gas limit in gorgoroth-chain.conf to 60M (⏱️ XS)
+- [ ] ⚪ Update documentation on gas limit recommendation (⏱️ XS)
 
-#### 2.4 Transaction Signing & Creation
-- [ ] 🟡 Update transaction signing for Type-2 transactions (⏱️ M)
-- [ ] 🟡 Support EIP-2718 transaction envelope (⏱️ M)
-- [ ] 🟡 Add transaction builder for Type-2 (⏱️ M)
-- [ ] 🟡 Add tests for transaction signing and recovery (⏱️ M)
+**Files:** `src/main/resources/conf/base/chains/*.conf`
 
-### 3. EVM Layer
+### EIP-7883: MODEXP Gas Cost Increase
+**Effort:** 2-3 days | **Priority:** 🟢 Medium
 
-#### 3.1 BASEFEE Opcode (0x48)
-- [ ] 🔴 Define BASEFEE case object extending ConstOp(0x48) (⏱️ XS)
-- [ ] 🔴 Implement opcode to return block's baseFeePerGas (⏱️ S)
-- [ ] 🔴 Handle pre-Olympia blocks (return 0 or error) (⏱️ S)
-- [ ] 🔴 Set gas cost to 2 (G_base) (⏱️ XS)
-- [ ] 🔴 Add BASEFEE to OlympiaOpCodes list (⏱️ XS)
-- [ ] 🔴 Add unit tests for BASEFEE opcode (⏱️ M)
-- [ ] 🔴 Test opcode in various contract scenarios (⏱️ M)
+- [ ] 🔴 Review new MODEXP gas cost formula (⏱️ S)
+- [ ] 🔴 Update ModExp precompile gas calculation (⏱️ S)
+- [ ] 🔴 Add fork-aware activation (⏱️ S)
+- [ ] 🟡 Add unit tests for new gas costs (⏱️ M)
+- [ ] 🟡 Compare with reference implementation (⏱️ S)
+- [ ] 🟡 Test edge cases (large exponents, etc.) (⏱️ M)
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala`
+**Files:** `src/main/scala/com/chipprbots/ethereum/vm/PrecompiledContracts.scala`
 
-#### 3.2 EVM Configuration
-- [ ] 🔴 Create OlympiaConfigBuilder (⏱️ S)
-- [ ] 🔴 Define OlympiaOpCodes list (⏱️ XS)
-- [ ] 🔴 Add eip1559Enabled flag to EvmConfig (⏱️ XS)
-- [ ] 🔴 Add eip3198Enabled flag to EvmConfig (⏱️ XS)
-- [ ] 🔴 Add Olympia to fork selection in forBlock method (⏱️ S)
-- [ ] 🔴 Set correct priority for Olympia fork (⏱️ XS)
-- [ ] 🔴 Add tests for EVM config fork selection (⏱️ M)
+### EIP-7910: eth_config JSON-RPC Method
+**Effort:** 2-3 days | **Priority:** ⚪ Low
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala`
-
-#### 3.3 Fee Schedule
-- [ ] 🟡 Create OlympiaFeeSchedule class (⏱️ S)
-- [ ] 🟡 Verify gas costs match Spiral (no changes expected) (⏱️ S)
-- [ ] 🟡 Add BASEFEE opcode cost (G_base = 2) (⏱️ XS)
-- [ ] 🟡 Add tests for fee schedule (⏱️ S)
-
-**Files:** `src/main/scala/com/chipprbots/ethereum/vm/FeeSchedule.scala`
-
-### 4. Configuration
-
-#### 4.1 Blockchain Configuration
-- [ ] 🔴 Add olympiaBlockNumber to ForkBlockNumbers (⏱️ XS)
-- [ ] 🔴 Add olympiaTreasuryAddress to BlockchainConfig (⏱️ XS)
-- [ ] 🔴 Update ForkBlockNumbers.Empty with olympiaBlockNumber (⏱️ XS)
-- [ ] 🔴 Add configuration parsing for olympia fields (⏱️ S)
-- [ ] 🟡 Add configuration validation (⏱️ M)
-- [ ] 🟡 Add tests for configuration loading (⏱️ M)
-
-**Files:** `src/main/scala/com/chipprbots/ethereum/utils/BlockchainConfig.scala`
-
-#### 4.2 Chain Configuration Files
-- [ ] 🔴 Add olympia-block-number to etc-chain.conf (⏱️ XS)
-- [ ] 🔴 Add olympia-treasury-address to etc-chain.conf (⏱️ XS)
-- [ ] 🔴 Add olympia-block-number to mordor-chain.conf (⏱️ XS)
-- [ ] 🔴 Add olympia-treasury-address to mordor-chain.conf (⏱️ XS)
-- [ ] 🟡 Add olympia-block-number to gorgoroth-chain.conf (⏱️ XS)
-- [ ] 🟡 Add olympia-treasury-address to gorgoroth-chain.conf (⏱️ XS)
-- [ ] 🟡 Add olympia-block-number to test-chain.conf (⏱️ XS)
-- [ ] 🟡 Add olympia-treasury-address to test-chain.conf (⏱️ XS)
-- [ ] 🟢 Add comments/documentation for Olympia in configs (⏱️ S)
-- [ ] 🟢 Update bootstrap checkpoints with Olympia fork block (⏱️ S)
+- [ ] 🟡 Design eth_config response format (⏱️ S)
+- [ ] 🟡 Implement eth_config RPC method (⏱️ M)
+- [ ] 🟡 Return current fork configuration (⏱️ S)
+- [ ] 🟡 Return next scheduled fork (⏱️ S)
+- [ ] 🟡 Add JSON serialization for fork data (⏱️ S)
+- [ ] 🟢 Add RPC tests (⏱️ M)
+- [ ] 🟢 Update API documentation (⏱️ S)
 
 **Files:** 
-- `src/main/resources/conf/base/chains/etc-chain.conf`
-- `src/main/resources/conf/base/chains/mordor-chain.conf`
-- `src/main/resources/conf/base/chains/gorgoroth-chain.conf`
-- `src/main/resources/conf/base/chains/test-chain.conf`
+- `src/main/scala/com/chipprbots/ethereum/jsonrpc/` (new EthConfigService)
+- `src/main/scala/com/chipprbots/ethereum/jsonrpc/JsonRpcController.scala`
 
-### 5. Network Layer
+### EIP-7623: Increase Calldata Cost
+**Effort:** 1 week | **Priority:** 🟢 Medium
 
-#### 5.1 Transaction Propagation
-- [ ] 🟡 Update transaction message encoders for Type-2 (⏱️ M)
-- [ ] 🟡 Update transaction message decoders for Type-2 (⏱️ M)
-- [ ] 🟡 Ensure backward compatibility with other transaction types (⏱️ M)
-- [ ] 🟡 Add tests for transaction message encoding/decoding (⏱️ M)
+- [ ] 🔴 Implement two-tier calldata pricing (⏱️ M)
+- [ ] 🔴 Add standard calldata cost calculation (⏱️ M)
+- [ ] 🔴 Add floor calldata cost calculation (⏱️ M)
+- [ ] 🔴 Update transaction gas calculation (⏱️ M)
+- [ ] 🟡 Add tests for both pricing tiers (⏱️ M)
+- [ ] 🟡 Validate against test vectors (⏱️ M)
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/network/p2p/messages/ETH67.scala`
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/vm/FeeSchedule.scala`
+- Transaction execution logic
 
-#### 5.2 Block Propagation
-- [ ] 🟡 Update block message encoders for new header format (⏱️ M)
-- [ ] 🟡 Update block message decoders for new header format (⏱️ M)
-- [ ] 🟡 Test block propagation with baseFeePerGas (⏱️ M)
+### EIP-7934: RLP Execution Block Size Limit
+**Effort:** 1 week | **Priority:** 🟡 High
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/network/p2p/messages/BaseETH6XMessages.scala`
+- [ ] 🔴 Define MAX_BLOCK_RLP_SIZE constant (10 MiB) (⏱️ XS)
+- [ ] 🔴 Implement RLP size calculation for blocks (⏱️ M)
+- [ ] 🔴 Add block size validation (⏱️ M)
+- [ ] 🔴 Reject blocks exceeding limit (⏱️ S)
+- [ ] 🟡 Add unit tests for size calculation (⏱️ M)
+- [ ] 🟡 Test edge cases (near limit, at limit, over limit) (⏱️ M)
+- [ ] 🟡 Performance test for size calculation (⏱️ M)
 
-#### 5.3 Fork ID Updates
-- [ ] 🟡 Add Olympia fork to fork ID calculation (⏱️ S)
-- [ ] 🟡 Update fork ID validation for Olympia (⏱️ S)
-- [ ] 🟡 Add tests for fork ID with Olympia (⏱️ M)
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/consensus/validators/BlockValidator.scala`
+- `src/main/scala/com/chipprbots/ethereum/domain/Block.scala`
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/forkid/ForkId.scala`
+---
 
-### 6. Storage & Database
+## 🔧 Phase 2: Core EVM Changes
 
-#### 6.1 Block Storage
-- [ ] 🟡 Update block header storage serialization (⏱️ M)
-- [ ] 🟡 Ensure migration path for existing blocks (⏱️ M)
-- [ ] 🟡 Test backward compatibility for pre-Olympia blocks (⏱️ M)
-- [ ] 🟡 Add tests for storage with new header format (⏱️ M)
+### EIP-5656: MCOPY - Memory Copying Instruction
+**Effort:** 1 week | **Priority:** 🟢 Medium
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/db/storage/BlockHeaderStorage.scala`
+- [ ] 🔴 Define MCOPY opcode (0x5E) (⏱️ S)
+- [ ] 🔴 Implement memory copy logic (⏱️ M)
+- [ ] 🔴 Implement gas cost calculation (3 + 3*words + expansion) (⏱️ M)
+- [ ] 🔴 Add MCOPY to appropriate opcode list (⏱️ XS)
+- [ ] 🔴 Update EvmConfig for fork activation (⏱️ S)
+- [ ] 🟡 Add unit tests for MCOPY (⏱️ M)
+- [ ] 🟡 Test memory expansion scenarios (⏱️ M)
+- [ ] 🟡 Test edge cases (zero length, overlap, etc.) (⏱️ M)
 
-#### 6.2 Transaction Storage
-- [ ] 🟡 Update transaction storage for Type-2 (⏱️ M)
-- [ ] 🟡 Store maxFeePerGas and maxPriorityFeePerGas (⏱️ S)
-- [ ] 🟡 Store effectiveGasPrice in receipts (⏱️ S)
-- [ ] 🟡 Add tests for transaction storage (⏱️ M)
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala`
+- `src/main/scala/com/chipprbots/ethereum/vm/EvmConfig.scala`
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/db/storage/TransactionStorage.scala`
+### EIP-1153: Transient Storage Opcodes
+**Effort:** 2 weeks | **Priority:** 🟡 High
 
-#### 6.3 Receipt Storage
-- [ ] 🟡 Update receipt storage for effectiveGasPrice (⏱️ M)
-- [ ] 🟡 Store transaction type in receipts (⏱️ S)
-- [ ] 🟡 Add tests for receipt storage (⏱️ M)
+- [ ] 🔴 Add transient storage map to ProgramState (⏱️ M)
+- [ ] 🔴 Implement TLOAD opcode (0x5C) (⏱️ M)
+- [ ] 🔴 Implement TSTORE opcode (0x5D) (⏱️ M)
+- [ ] 🔴 Set gas costs (100 gas for warm access) (⏱️ S)
+- [ ] 🔴 Clear transient storage after transaction (⏱️ M)
+- [ ] 🔴 Add opcodes to opcode list (⏱️ XS)
+- [ ] 🔴 Update EvmConfig (⏱️ S)
+- [ ] 🟡 Add comprehensive unit tests (⏱️ L)
+- [ ] 🟡 Test transient storage isolation (⏱️ M)
+- [ ] 🟡 Test reentrancy scenarios (⏱️ M)
+- [ ] 🟡 Validate against test vectors (⏱️ M)
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/db/storage/ReceiptStorage.scala`
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/vm/ProgramState.scala`
+- `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala`
+- `src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala`
 
-### 7. JSON-RPC API
+### EIP-6780: SELFDESTRUCT Only in Same Transaction
+**Effort:** 2 weeks | **Priority:** 🔴 Critical
 
-#### 7.1 New RPC Methods
-- [ ] 🟡 Implement eth_feeHistory (⏱️ L)
-  - [ ] Return array of baseFeePerGas for requested block range (⏱️ M)
-  - [ ] Return gas used ratios (⏱️ M)
-  - [ ] Return priority fee percentiles if requested (⏱️ M)
-  - [ ] Add caching for efficiency (⏱️ M)
-  - [ ] Add tests for eth_feeHistory (⏱️ M)
+- [ ] 🔴 Track contract creation in transaction context (⏱️ M)
+- [ ] 🔴 Modify SELFDESTRUCT opcode behavior (⏱️ L)
+- [ ] 🔴 Implement: full deletion only if created in same tx (⏱️ M)
+- [ ] 🔴 Implement: transfer balance + keep account otherwise (⏱️ M)
+- [ ] 🔴 Update all SELFDESTRUCT handling logic (⏱️ L)
+- [ ] 🔴 Update state change tracking (⏱️ M)
+- [ ] 🟡 Add extensive unit tests (⏱️ L)
+- [ ] 🟡 Test same-transaction destruction (⏱️ M)
+- [ ] 🟡 Test cross-transaction behavior (⏱️ M)
+- [ ] 🟡 Test edge cases (nested calls, etc.) (⏱️ M)
+- [ ] 🟡 Validate against test vectors (⏱️ M)
 
-- [ ] 🟡 Implement eth_maxPriorityFeePerGas (⏱️ M)
-  - [ ] Calculate suggested priority fee from recent blocks (⏱️ M)
-  - [ ] Add reasonable defaults (⏱️ S)
-  - [ ] Add tests for eth_maxPriorityFeePerGas (⏱️ S)
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala`
+- `src/main/scala/com/chipprbots/ethereum/vm/ProgramState.scala`
+- `src/main/scala/com/chipprbots/ethereum/ledger/`
 
-**New Files:** Add to `src/main/scala/com/chipprbots/ethereum/jsonrpc/EthTxService.scala`
+### EIP-2935: Save Historical Block Hashes in State
+**Effort:** 3-4 weeks | **Priority:** 🟡 High
 
-#### 7.2 Updated RPC Methods
-- [ ] 🟡 Update eth_gasPrice to return max fee suggestion (⏱️ M)
-- [ ] 🟡 Update eth_getBlockByNumber to include baseFeePerGas (⏱️ S)
-- [ ] 🟡 Update eth_getBlockByHash to include baseFeePerGas (⏱️ S)
-- [ ] 🟡 Update eth_sendRawTransaction for Type-2 support (⏱️ M)
-- [ ] 🟡 Update eth_getTransactionByHash with Type-2 fields (⏱️ M)
-- [ ] 🟡 Update eth_getTransactionByBlockHashAndIndex (⏱️ S)
-- [ ] 🟡 Update eth_getTransactionByBlockNumberAndIndex (⏱️ S)
-- [ ] 🟡 Update eth_getTransactionReceipt with effectiveGasPrice (⏱️ M)
-- [ ] 🟡 Update eth_estimateGas for Type-2 transactions (⏱️ M)
-- [ ] 🟡 Update eth_call to accept Type-2 format (⏱️ M)
+#### System Contract Design
+- [ ] 🔴 Design system contract for block hash storage (⏱️ L)
+- [ ] 🔴 Define contract address (deterministic or hardcoded) (⏱️ S)
+- [ ] 🔴 Design ring buffer for 8191 hashes (⏱️ M)
+- [ ] 🔴 Create system contract bytecode (⏱️ L)
 
-**Files:** 
-- `src/main/scala/com/chipprbots/ethereum/jsonrpc/EthTxService.scala`
-- `src/main/scala/com/chipprbots/ethereum/jsonrpc/BlockResponse.scala`
-- `src/main/scala/com/chipprbots/ethereum/jsonrpc/TransactionReceiptResponse.scala`
+#### Implementation
+- [ ] 🔴 Implement contract deployment at fork activation (⏱️ L)
+- [ ] 🔴 Update block finalization to write to contract (⏱️ L)
+- [ ] 🔴 Modify BLOCKHASH opcode to read from contract (⏱️ M)
+- [ ] 🔴 Handle transition from old to new system (⏱️ L)
+- [ ] 🔴 Implement ring buffer indexing logic (⏱️ M)
 
-#### 7.3 JSON Serialization
-- [ ] 🟡 Add JSON serializers for Type-2 transactions (⏱️ M)
-- [ ] 🟡 Add JSON deserializers for Type-2 transactions (⏱️ M)
-- [ ] 🟡 Update block JSON to include baseFeePerGas (⏱️ S)
-- [ ] 🟡 Update receipt JSON with effectiveGasPrice (⏱️ S)
-- [ ] 🟡 Add tests for JSON serialization (⏱️ M)
+#### Testing
+- [ ] 🟡 Unit tests for system contract (⏱️ L)
+- [ ] 🟡 Unit tests for ring buffer (⏱️ M)
+- [ ] 🟡 Integration tests for BLOCKHASH opcode (⏱️ M)
+- [ ] 🟡 Test transition at fork boundary (⏱️ M)
+- [ ] 🟡 Test 8191+ block scenarios (⏱️ M)
+- [ ] 🟡 Validate against test vectors (⏱️ M)
 
-**Files:** `src/main/scala/com/chipprbots/ethereum/jsonrpc/serialization/JsonSerializers.scala`
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/ledger/BlockPreparator.scala`
+- `src/main/scala/com/chipprbots/ethereum/vm/OpCode.scala` (BLOCKHASH)
+- System contract deployment logic
+- Genesis/fork initialization
+
+---
+
+## 🔧 Phase 3: Advanced Features
+
+### EIP-7702: Set EOA Account Code
+**Effort:** 2-3 weeks | **Priority:** 🟡 High
+
+#### Transaction Type
+- [ ] 🔴 Define Type-4 transaction structure (⏱️ M)
+- [ ] 🔴 Add authorization tuple fields (⏱️ M)
+- [ ] 🔴 Implement RLP encoding for Type-4 (⏱️ M)
+- [ ] 🔴 Implement RLP decoding for Type-4 (⏱️ M)
+- [ ] 🔴 Add transaction type discriminator (⏱️ S)
+
+#### Account Code Delegation
+- [ ] 🔴 Update Account to support delegated code (⏱️ M)
+- [ ] 🔴 Implement authorization signature validation (⏱️ L)
+- [ ] 🔴 Implement code delegation in transaction processing (⏱️ L)
+- [ ] 🔴 Update account state storage (⏱️ M)
+
+#### Validation & Execution
+- [ ] 🔴 Add transaction validation for Type-4 (⏱️ M)
+- [ ] 🔴 Validate authorization signatures (⏱️ M)
+- [ ] 🔴 Implement execution with delegated code (⏱️ L)
+- [ ] 🔴 Handle edge cases (invalid auth, etc.) (⏱️ M)
+
+#### Testing
+- [ ] 🟡 Unit tests for Type-4 transactions (⏱️ L)
+- [ ] 🟡 Unit tests for authorization (⏱️ M)
+- [ ] 🟡 Integration tests for code delegation (⏱️ L)
+- [ ] 🟡 Test security scenarios (⏱️ L)
+- [ ] 🟡 Validate against test vectors (⏱️ M)
+
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/domain/SignedTransaction.scala`
+- `src/main/scala/com/chipprbots/ethereum/domain/Account.scala`
+- `src/main/scala/com/chipprbots/ethereum/consensus/validators/`
+- `src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala`
+
+### EIP-7642: eth/69 - History Expiry and Simpler Receipts
+**Effort:** 3-4 weeks | **Priority:** 🟡 High
+
+#### Network Protocol
+- [ ] 🔴 Create ETH69 protocol messages (⏱️ L)
+- [ ] 🔴 Implement eth/69 handshake (⏱️ M)
+- [ ] 🔴 Maintain backward compatibility with eth/68 (⏱️ M)
+- [ ] 🔴 Update capability negotiation (⏱️ M)
+
+#### Receipt Format Changes
+- [ ] 🔴 Update Receipt to remove bloom filter (⏱️ M)
+- [ ] 🔴 Update receipt RLP encoding (⏱️ M)
+- [ ] 🔴 Update receipt RLP decoding (⏱️ M)
+- [ ] 🔴 Update receipt storage format (⏱️ M)
+
+#### History Expiry
+- [ ] 🔴 Implement history serving window (⏱️ L)
+- [ ] 🔴 Add configuration for history window (⏱️ S)
+- [ ] 🔴 Update sync logic for history limits (⏱️ L)
+
+#### Testing
+- [ ] 🟡 Unit tests for eth/69 messages (⏱️ L)
+- [ ] 🟡 Unit tests for new receipt format (⏱️ M)
+- [ ] 🟡 Integration tests for protocol upgrade (⏱️ L)
+- [ ] 🟡 Test backward compatibility (⏱️ L)
+- [ ] 🟡 Test history window behavior (⏱️ M)
+
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/network/p2p/messages/` (new ETH69.scala)
+- `src/main/scala/com/chipprbots/ethereum/domain/Receipt.scala`
+- `src/main/scala/com/chipprbots/ethereum/db/storage/ReceiptStorage.scala`
+- Network handshake logic
+
+### EIP-2537: Precompile for BLS12-381 Curve Operations
+**Effort:** 4-6 weeks | **Priority:** 🟡 High | **Requires:** Crypto Expert
+
+#### Library Integration
+- [ ] 🔴 Select and integrate BLS12-381 library (⏱️ XL)
+- [ ] 🔴 Verify library security and correctness (⏱️ L)
+- [ ] 🔴 Add library dependency to build (⏱️ S)
+
+#### Precompile Implementation (9 precompiles)
+- [ ] 🔴 Implement BLS12_G1ADD (0x0a) (⏱️ M)
+- [ ] 🔴 Implement BLS12_G1MUL (0x0b) (⏱️ M)
+- [ ] 🔴 Implement BLS12_G1MULTIEXP (0x0c) (⏱️ L)
+- [ ] 🔴 Implement BLS12_G2ADD (0x0d) (⏱️ M)
+- [ ] 🔴 Implement BLS12_G2MUL (0x0e) (⏱️ M)
+- [ ] 🔴 Implement BLS12_G2MULTIEXP (0x0f) (⏱️ L)
+- [ ] 🔴 Implement BLS12_PAIRING (0x10) (⏱️ XL)
+- [ ] 🔴 Implement BLS12_MAP_FP_TO_G1 (0x11) (⏱️ M)
+- [ ] 🔴 Implement BLS12_MAP_FP2_TO_G2 (0x12) (⏱️ M)
+
+#### Gas Costs & Validation
+- [ ] 🔴 Implement gas cost calculations for each operation (⏱️ L)
+- [ ] 🔴 Add input validation for all precompiles (⏱️ L)
+- [ ] 🔴 Add error handling (⏱️ M)
+
+#### Testing
+- [ ] 🔴 Comprehensive unit tests for each precompile (⏱️ XL)
+- [ ] 🔴 Test with official EIP test vectors (⏱️ L)
+- [ ] 🔴 Test gas cost accuracy (⏱️ M)
+- [ ] 🔴 Test error handling (⏱️ M)
+- [ ] 🔴 Security testing (⏱️ XL)
+- [ ] 🟡 Performance benchmarking (⏱️ L)
+
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/vm/PrecompiledContracts.scala`
+- New crypto library integration
+- `build.sbt` (dependencies)
+
+### EIP-7951: Precompile for secp256r1 Curve Support
+**Effort:** 2-3 weeks | **Priority:** 🟢 Medium
+
+#### Library Integration
+- [ ] 🔴 Select and integrate secp256r1 library (⏱️ L)
+- [ ] 🔴 Verify library security (⏱️ M)
+- [ ] 🔴 Add library dependency (⏱️ S)
+
+#### Precompile Implementation
+- [ ] 🔴 Implement secp256r1 signature verification (⏱️ L)
+- [ ] 🔴 Add malleability checks (⏱️ M)
+- [ ] 🔴 Implement gas cost calculation (⏱️ M)
+- [ ] 🔴 Add input validation (⏱️ M)
+- [ ] 🔴 Add error handling (⏱️ M)
+
+#### Testing
+- [ ] 🟡 Unit tests for precompile (⏱️ M)
+- [ ] 🟡 Test with EIP test vectors (⏱️ M)
+- [ ] 🟡 Test security scenarios (⏱️ M)
+- [ ] 🟡 Test malleability protection (⏱️ M)
+
+**Files:**
+- `src/main/scala/com/chipprbots/ethereum/vm/PrecompiledContracts.scala`
+- Crypto library integration
 
 ---
 
 ## 🧪 Testing Phase
 
-### Unit Tests
-- [ ] 🔴 Basefee calculation tests (comprehensive) (⏱️ M)
-- [ ] 🔴 Block header encoding/decoding tests (⏱️ M)
-- [ ] 🔴 Treasury transfer logic tests (⏱️ M)
-- [ ] 🔴 Transaction type validation tests (⏱️ M)
-- [ ] 🔴 Effective gas price calculation tests (⏱️ M)
-- [ ] 🔴 BASEFEE opcode execution tests (⏱️ M)
-- [ ] 🟡 Fork selection tests (⏱️ M)
-- [ ] 🟡 RPC method tests (⏱️ L)
-- [ ] 🟡 Storage tests (⏱️ M)
-- [ ] 🟡 Network message tests (⏱️ M)
+### Unit Testing
+- [ ] 🔴 Unit tests for all 13 EIPs (⏱️ XL)
+- [ ] 🔴 Achieve >90% code coverage for new code (⏱️ Ongoing)
+- [ ] 🟡 Edge case testing for each EIP (⏱️ L)
+- [ ] 🟡 Error handling tests (⏱️ M)
 
-**Target:** >90% code coverage for new code
+### Integration Testing
+- [ ] 🔴 Full block processing with new EIPs (⏱️ L)
+- [ ] 🔴 Cross-fork boundary tests (⏱️ L)
+- [ ] 🟡 Transaction lifecycle tests (⏱️ M)
+- [ ] 🟡 Network integration tests (⏱️ M)
 
-### Integration Tests
-- [ ] 🔴 Full block processing with mixed transaction types (⏱️ L)
-- [ ] 🔴 Treasury accumulation across multiple blocks (⏱️ M)
-- [ ] 🔴 Cross-fork boundary tests (Spiral → Olympia) (⏱️ L)
-- [ ] 🟡 Network propagation tests (⏱️ M)
-- [ ] 🟡 RPC API end-to-end tests (⏱️ L)
-- [ ] 🟡 Storage migration tests (⏱️ M)
-
-### EIP-1559 Conformance Tests
-- [ ] 🔴 Run EIP-1559 reference test vectors (⏱️ L)
-- [ ] 🔴 Validate basefee calculations match spec (⏱️ M)
-- [ ] 🔴 Validate transaction processing matches spec (⏱️ M)
-
-### Performance Tests
-- [ ] 🟢 Block processing performance benchmarks (⏱️ M)
-- [ ] 🟢 Basefee calculation overhead measurement (⏱️ S)
-- [ ] 🟢 Network propagation performance (⏱️ M)
-- [ ] 🟢 RPC method performance tests (⏱️ M)
+### Ethereum Test Suite
+- [ ] 🔴 Run official test vectors for each EIP (⏱️ XL)
+- [ ] 🔴 Validate all tests pass (⏱️ Ongoing)
+- [ ] 🟡 Compare results with reference implementations (⏱️ L)
 
 ### Testnet Validation
 - [ ] 🔴 Deploy to Gorgoroth private testnet (⏱️ M)
@@ -338,66 +379,67 @@ This checklist tracks all work items required to implement the Olympia hardfork 
 - [ ] 🔴 Coordinate Mordor testnet deployment (⏱️ M)
 - [ ] 🔴 Deploy to Mordor testnet (⏱️ M)
 - [ ] 🔴 Run multi-client consensus tests on Mordor (⏱️ XL)
-- [ ] 🔴 Validate Treasury accumulation on testnet (⏱️ L)
-- [ ] 🔴 Test transaction lifecycle for all types (⏱️ L)
-- [ ] 🔴 Test fee market behavior under load (⏱️ L)
-- [ ] 🔴 Verify cross-client compatibility (⏱️ L)
+- [ ] 🔴 Test all 13 EIPs on testnet (⏱️ XL)
+- [ ] 🟡 Test network protocol upgrade (eth/69) (⏱️ L)
+- [ ] 🟡 Performance testing on testnet (⏱️ L)
+
+### Performance Testing
+- [ ] 🟡 Block processing benchmarks (⏱️ M)
+- [ ] 🟡 Precompile performance tests (⏱️ M)
+- [ ] 🟡 Network protocol performance (⏱️ M)
+- [ ] 🟡 Memory/storage overhead analysis (⏱️ M)
 
 ---
 
 ## 📚 Documentation Phase
 
 ### User Documentation
-- [ ] 🟡 Write Olympia upgrade guide for node operators (⏱️ M)
-- [ ] 🟡 Document new RPC methods (eth_feeHistory, etc.) (⏱️ M)
-- [ ] 🟡 Create transaction type migration guide (⏱️ M)
-- [ ] 🟡 Document fee estimation best practices (⏱️ S)
-- [ ] 🟡 Update FAQ with Olympia information (⏱️ M)
+- [ ] 🟡 Write ECIP-1121 upgrade guide for operators (⏱️ L)
+- [ ] 🟡 Document new eth_config RPC method (⏱️ S)
+- [ ] 🟡 Document EIP-7702 transaction type (⏱️ M)
+- [ ] 🟡 Update FAQ with ECIP-1121 information (⏱️ M)
 - [ ] 🟢 Create troubleshooting guide (⏱️ M)
 
 ### Developer Documentation
-- [ ] 🟡 Document consensus layer changes (⏱️ M)
-- [ ] 🟡 Document EVM changes (BASEFEE opcode) (⏱️ S)
-- [ ] 🟡 Document transaction type implementation (⏱️ M)
-- [ ] 🟡 Document RPC API changes (⏱️ M)
+- [ ] 🟡 Document each EIP implementation (⏱️ L)
+- [ ] 🟡 Document system contract (EIP-2935) (⏱️ M)
+- [ ] 🟡 Document transient storage (EIP-1153) (⏱️ M)
+- [ ] 🟡 Document eth/69 protocol (⏱️ M)
 - [ ] 🟢 Create architecture diagrams (⏱️ M)
-- [ ] 🟢 Document testing approach (⏱️ M)
-
-### Specification Documents
-- [x] 🟡 Create comprehensive analysis document (⏱️ L)
-- [x] 🟡 Create implementation checklist (⏱️ S)
-- [ ] 🟡 Create ADR for consensus changes (⏱️ M)
-- [ ] 🟡 Create ADR for transaction design (⏱️ M)
-- [ ] 🟢 Document design decisions and rationale (⏱️ M)
 
 ### API Documentation
 - [ ] 🟡 Update JSON-RPC API reference (⏱️ M)
-- [ ] 🟡 Add examples for Type-2 transactions (⏱️ M)
-- [ ] 🟡 Document fee history API usage (⏱️ M)
-- [ ] 🟢 Update Insomnia workspace with new methods (⏱️ S)
+- [ ] 🟡 Document eth_config method (⏱️ S)
+- [ ] 🟡 Document Type-4 transaction format (⏱️ M)
+- [ ] 🟢 Add usage examples (⏱️ M)
+
+### Specification Documents
+- [x] 🟡 Create comprehensive analysis document (⏱️ L)
+- [x] 🟡 Create implementation checklist (⏱️ M)
+- [ ] 🟡 Create ADR for implementation strategy (⏱️ M)
+- [ ] 🟢 Document design decisions (⏱️ M)
 
 ---
 
 ## 🔒 Security & Review Phase
 
 ### Code Review
-- [ ] 🔴 Internal review of consensus changes (⏱️ L)
-- [ ] 🔴 Internal review of transaction handling (⏱️ L)
-- [ ] 🔴 Internal review of treasury integration (⏱️ M)
-- [ ] 🟡 Internal review of RPC changes (⏱️ M)
-- [ ] 🟡 Internal review of network layer (⏱️ M)
+- [ ] 🔴 Internal review of all EIP implementations (⏱️ XL)
+- [ ] 🔴 Focus review on cryptography (EIP-2537, 7951) (⏱️ L)
+- [ ] 🔴 Focus review on consensus changes (EIP-6780, 2935) (⏱️ L)
+- [ ] 🟡 Review network protocol (EIP-7642) (⏱️ M)
+- [ ] 🟡 Review transaction handling (EIP-7702) (⏱️ M)
 
 ### Security Analysis
-- [ ] 🔴 Security audit of consensus changes (⏱️ XL - External)
-- [ ] 🔴 Analyze attack vectors for Type-2 transactions (⏱️ L)
-- [ ] 🔴 Analyze treasury transfer security (⏱️ M)
-- [ ] 🟡 Review access control in RPC methods (⏱️ M)
+- [ ] 🔴 Security audit of cryptographic implementations (⏱️ XL - External)
+- [ ] 🔴 Analyze attack vectors for EIP-7702 (⏱️ L)
+- [ ] 🔴 Analyze EIP-6780 SELFDESTRUCT security (⏱️ M)
+- [ ] 🔴 Analyze EIP-2935 system contract security (⏱️ M)
 - [ ] 🟡 Test for DoS vulnerabilities (⏱️ L)
 
 ### Formal Verification (Optional)
-- [ ] 🟢 Formally verify basefee calculation (⏱️ XL)
-- [ ] 🟢 Formally verify treasury transfer logic (⏱️ XL)
-- [ ] 🟢 Formally verify transaction validation (⏱️ XL)
+- [ ] 🟢 Formally verify critical algorithms (⏱️ XL)
+- [ ] 🟢 Formally verify cryptographic operations (⏱️ XL)
 
 ---
 
@@ -405,7 +447,7 @@ This checklist tracks all work items required to implement the Olympia hardfork 
 
 ### Release Engineering
 - [ ] 🟡 Create release branch (⏱️ XS)
-- [ ] 🟡 Prepare release notes (⏱️ M)
+- [ ] 🟡 Prepare release notes (⏱️ L)
 - [ ] 🟡 Update CHANGELOG.md (⏱️ M)
 - [ ] 🟡 Tag release candidate (⏱️ XS)
 - [ ] 🟡 Build release artifacts (⏱️ M)
@@ -415,10 +457,10 @@ This checklist tracks all work items required to implement the Olympia hardfork 
 
 ### Communication
 - [ ] 🟡 Announce testnet deployment (⏱️ S)
-- [ ] 🟡 Notify node operators of upcoming upgrade (⏱️ S)
+- [ ] 🟡 Notify node operators of upcoming upgrade (⏱️ M)
 - [ ] 🟡 Notify exchanges and service providers (⏱️ M)
 - [ ] 🟡 Coordinate with other client teams (⏱️ M)
-- [ ] 🟡 Publish blog post about Olympia (⏱️ M)
+- [ ] 🟡 Publish blog post about ECIP-1121 (⏱️ M)
 - [ ] 🟡 Update documentation site (⏱️ M)
 
 ### Deployment
@@ -441,41 +483,17 @@ This checklist tracks all work items required to implement the Olympia hardfork 
 ### Activation Day
 - [ ] 🔴 Monitor mainnet activation (⏱️ Ongoing)
 - [ ] 🔴 Monitor for consensus issues (⏱️ Ongoing)
-- [ ] 🔴 Track Treasury balance changes (⏱️ Ongoing)
+- [ ] 🔴 Monitor new feature usage (⏱️ Ongoing)
 - [ ] 🔴 Monitor network health (⏱️ Ongoing)
 - [ ] 🟡 Provide real-time support (⏱️ Ongoing)
 
 ### Post-Activation
-- [ ] 🔴 Verify Treasury accumulation (⏱️ M)
-- [ ] 🔴 Verify transaction processing (⏱️ M)
-- [ ] 🔴 Verify basefee adjustments (⏱️ M)
+- [ ] 🔴 Verify all EIPs working correctly (⏱️ L)
+- [ ] 🔴 Verify eth/69 protocol adoption (⏱️ M)
+- [ ] 🔴 Verify system contract functioning (⏱️ M)
 - [ ] 🟡 Monitor for any issues or bugs (⏱️ Ongoing)
 - [ ] 🟡 Gather community feedback (⏱️ Ongoing)
 - [ ] 🟡 Publish post-activation report (⏱️ M)
-
----
-
-## 🔮 Future Work (Post-Olympia)
-
-### Governance Layer (Separate from Consensus)
-- [ ] ⚪ Study ECIP-1113 governance implementation (⏱️ M)
-- [ ] ⚪ Study ECIP-1114 funding proposal process (⏱️ M)
-- [ ] ⚪ Consider governance tool integration (⏱️ TBD)
-
-### Fee Market Enhancements (ECIP-1115)
-- [ ] ⚪ Research miner alignment mechanisms (⏱️ L)
-- [ ] ⚪ Research revenue smoothing options (⏱️ L)
-- [ ] ⚪ Evaluate community proposals (⏱️ TBD)
-
-### Monitoring & Analytics
-- [ ] 🟢 Build Treasury tracking dashboard (⏱️ L)
-- [ ] 🟢 Build fee market analytics dashboard (⏱️ L)
-- [ ] 🟢 Add Olympia metrics to monitoring (⏱️ M)
-
-### Further EVM Upgrades
-- [ ] ⚪ Review EIPs listed in ECIP-1111 Appendix (⏱️ L)
-- [ ] ⚪ Community discussion on next upgrades (⏱️ TBD)
-- [ ] ⚪ Prepare proposals for future ECIPs (⏱️ TBD)
 
 ---
 
@@ -485,49 +503,83 @@ This checklist tracks all work items required to implement the Olympia hardfork 
 
 | Category | Progress | Items Complete | Items Total |
 |----------|----------|----------------|-------------|
-| Pre-Implementation | 30% | 6 | 20 |
-| Core Implementation | 0% | 0 | 120+ |
-| Testing | 0% | 0 | 30 |
-| Documentation | 5% | 2 | 25 |
-| Security & Review | 0% | 0 | 15 |
+| Pre-Implementation | 30% | 5 | 17 |
+| Phase 1: Quick Wins | 0% | 0 | 30 |
+| Phase 2: Core EVM | 0% | 0 | 45 |
+| Phase 3: Advanced | 0% | 0 | 85 |
+| Testing | 0% | 0 | 25 |
+| Documentation | 5% | 2 | 20 |
+| Security & Review | 0% | 0 | 10 |
 | Release Preparation | 0% | 0 | 20 |
 | Mainnet Activation | 0% | 0 | 15 |
-| **TOTAL** | **2%** | **8** | **245+** |
+| **TOTAL** | **2%** | **7** | **267** |
 
-### Critical Path Items: 0 of 65 Complete
+### By EIP Progress: 0 of 13 Complete
 
-### High Priority Items: 0 of 95 Complete
+| EIP | Description | Status | Effort |
+|-----|-------------|--------|--------|
+| EIP-7825 | Transaction gas limit cap | ⏳ Not Started | 1-2 days |
+| EIP-7935 | Default gas limit 60M | ⏳ Not Started | < 1 day |
+| EIP-7883 | MODEXP gas cost increase | ⏳ Not Started | 2-3 days |
+| EIP-7910 | eth_config RPC method | ⏳ Not Started | 2-3 days |
+| EIP-7623 | Increase calldata cost | ⏳ Not Started | 1 week |
+| EIP-7934 | RLP block size limit | ⏳ Not Started | 1 week |
+| EIP-5656 | MCOPY opcode | ⏳ Not Started | 1 week |
+| EIP-1153 | Transient storage | ⏳ Not Started | 2 weeks |
+| EIP-6780 | SELFDESTRUCT changes | ⏳ Not Started | 2 weeks |
+| EIP-2935 | Historical block hashes | ⏳ Not Started | 3-4 weeks |
+| EIP-7702 | Set EOA account code | ⏳ Not Started | 2-3 weeks |
+| EIP-7642 | eth/69 protocol | ⏳ Not Started | 3-4 weeks |
+| EIP-2537 | BLS12-381 precompiles | ⏳ Not Started | 4-6 weeks |
+| EIP-7951 | secp256r1 precompile | ⏳ Not Started | 2-3 weeks |
 
 ---
 
 ## 🎯 Current Sprint Focus
 
-**Sprint Goal:** Complete research phase and begin architectural design
+**Sprint Goal:** Complete research and await ECIP-1121 finalization
 
 **This Week:**
-1. ✅ Complete specification analysis
+1. ✅ Complete ECIP-1121 specification analysis
 2. ✅ Create comprehensive documentation
-3. ⏳ Await Treasury address publication
-4. ⏳ Design basefee calculation module
-5. ⏳ Design transaction type framework
+3. ⏳ Await ECIP-1121 PR #554 merge
+4. ⏳ Research cryptography libraries
+5. ⏳ Coordinate with other client teams
 
-**Next Week:**
-1. Begin consensus layer implementation
-2. Implement BlockHeader changes
-3. Implement BaseFeeCalculator
-4. Set up testing infrastructure
+**Next Week (when ECIP-1121 finalizes):**
+1. Begin Phase 1 implementation (quick wins)
+2. Set up testing infrastructure
+3. Integrate cryptography libraries
+4. Start EIP-7825, 7935, 7883, 7910
 
 ---
 
 ## 📝 Notes
 
-- Treasury address is a hard dependency - implementation cannot proceed without it
-- Activation block numbers are required for final release
-- Cross-client coordination is essential for testnet and mainnet success
-- This is a consensus-critical upgrade - extensive testing is mandatory
-- Estimated timeline: 12-14 weeks from start of core implementation
+### Critical Dependencies
+- **ECIP-1121 PR #554 must merge** - Implementation cannot start until specification is final
+- **Cryptography expertise required** - EIP-2537 (BLS12-381) needs crypto expert
+- **Activation blocks TBD** - Cannot do final release until blocks are set
+- **Cross-client coordination essential** - Must work with Core-Geth and Besu
+
+### Implementation Approach
+- **Phased rollout recommended** - Start with Phase 1 quick wins
+- **Parallel work possible** - Some EIPs can be developed in parallel
+- **Testing is critical** - Each EIP must pass Ethereum test vectors
+- **Testnet validation mandatory** - Minimum 8 weeks on Mordor before mainnet
+
+### Key Differences from ECIP-1111
+- **ECIP-1121:** Execution-layer specifications (13 EIPs, no fee market)
+- **ECIP-1111:** Fee market (EIP-1559, EIP-3198, Treasury)
+- **These are SEPARATE** - Can be implemented independently
+- **ECIP-1121 does NOT include EIP-1559/3198**
+
+### Timeline Estimate
+- **Sequential:** 25-38 weeks (6-9 months)
+- **With Parallelization:** 18-28 weeks (4.5-7 months)
+- **Recommended:** Phased approach with 3 releases
 
 ---
 
 **Last Updated:** 2025-12-30  
-**Next Review:** TBD after Treasury address publication
+**Next Review:** Upon ECIP-1121 PR #554 merge
