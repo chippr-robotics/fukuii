@@ -38,7 +38,7 @@ Evaluation of potential features or integrations:
 
 ### ECIP and EIP Analysis
 
-#### [ECIP-1120 Impact Analysis](ECIP-1120-IMPACT-ANALYSIS.md)
+#### [ECIP-1120 Impact Analysis](ECIP-1120-IMPACT-ANALYSIS.md) | [Quick Summary](ECIP-1120-SUMMARY.md)
 **Status:** Draft  
 **Date:** 2025-12-30  
 **Topic:** ECIP-1120 (EIP-1559 for ETC) - Treasury-based base fee redirection
