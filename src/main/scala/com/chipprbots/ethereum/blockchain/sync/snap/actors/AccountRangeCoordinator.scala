@@ -184,10 +184,13 @@ class AccountRangeCoordinator(
     worker ! FetchAccountRange(task, peer, requestId)
   }
 
-  private def handleTaskComplete(requestId: BigInt, result: Either[String, (Int, Seq[(ByteString, Account)])]): Unit = {
+  private def handleTaskComplete(
+      requestId: BigInt,
+      result: Either[String, (Int, Seq[(ByteString, Account)], Seq[ByteString])]
+  ): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       result match {
-        case Right((accountCount, accounts)) =>
+        case Right((accountCount, accounts, _)) =>
           log.info(s"Task completed successfully: $accountCount accounts")
           
           // Identify contract accounts

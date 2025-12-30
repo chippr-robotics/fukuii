@@ -97,15 +97,35 @@ class AccountRangeWorker(
               s"accounts=${response.accounts.size} proofNodes=${response.proof.size}"
           )
           
-          // Process response - extract accounts and report to coordinator
           val accountCount = response.accounts.size
-          log.info(s"Successfully received $accountCount accounts")
-          
-          // Report result to coordinator with accounts
-          coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts)))
-          
-          // Complete the request in tracker
+
+          // Validate basic response invariants (monotonic ordering, correct tracked type)
+          // while the request is still pending in the tracker.
+          val validated = requestTracker.validateAccountRange(response)
+
+          // Complete the request in tracker (cancel timeout) regardless of validation outcome.
           requestTracker.completeRequest(reqId)
+
+          // Verify Merkle proof against the expected pivot state root for this task.
+          val proofVerifier = MerkleProofVerifier(task.rootHash)
+          val proofOk = validated.flatMap { validResponse =>
+            proofVerifier.verifyAccountRange(
+              accounts = validResponse.accounts,
+              proof = validResponse.proof,
+              startHash = task.next,
+              endHash = task.last
+            )
+          }
+
+          proofOk match {
+            case Left(error) =>
+              log.warning(s"AccountRange validation/proof failed for reqId=$reqId range=${task.rangeString}: $error")
+              coordinator ! TaskFailed(reqId, error)
+
+            case Right(_) =>
+              log.info(s"Successfully received $accountCount accounts")
+              coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts, response.proof)))
+          }
           
           // Return to idle state for potential reuse
           currentTask = None

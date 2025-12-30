@@ -30,6 +30,18 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
   /** Pending requests tracked by request ID */
   private val pendingRequests = mutable.Map[BigInt, PendingRequest]()
 
+  private def compareUnsignedLexicographically(a: ByteString, b: ByteString): Int = {
+    val minLen = math.min(a.length, b.length)
+    var i = 0
+    while (i < minLen) {
+      val av = java.lang.Byte.toUnsignedInt(a(i))
+      val bv = java.lang.Byte.toUnsignedInt(b(i))
+      if (av != bv) return av - bv
+      i += 1
+    }
+    a.length - b.length
+  }
+
   /** Request ID counter */
   private var nextRequestId: BigInt = 1
 
@@ -152,8 +164,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
         val violation = (1 until response.accounts.size).find { i =>
           val prevHash = response.accounts(i - 1)._1
           val currHash = response.accounts(i)._1
-          // Compare ByteStrings using lexicographical ordering
-          prevHash.toSeq.compare(currHash.toSeq) >= 0
+          compareUnsignedLexicographically(prevHash, currHash) >= 0
         }
         violation match {
           case Some(i) => Left(s"Accounts not monotonically increasing at index $i")
@@ -183,8 +194,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
             .find { i =>
               val prevHash = accountSlots(i - 1)._1
               val currHash = accountSlots(i)._1
-              // Compare ByteStrings using lexicographical ordering
-              prevHash.toSeq.compare(currHash.toSeq) >= 0
+              compareUnsignedLexicographically(prevHash, currHash) >= 0
             }
             .map(i => (accountIdx, i))
         }.flatten

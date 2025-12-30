@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -50,9 +51,11 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       endHash: ByteString
   ): Either[String, Unit] = {
 
-    // Empty proof is valid if there are no accounts
+    // For non-empty tries, even an empty account range must come with a proof proving non-existence.
+    // The only case where empty proof + empty accounts is valid is an empty trie.
     if (proof.isEmpty && accounts.isEmpty) {
-      return Right(())
+      if (rootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) return Right(())
+      return Left("Missing proof for empty account range")
     }
 
     // If we have accounts, we need a proof
@@ -286,17 +289,13 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     val firstNode = proofNodes.head
     val firstNodeHash = ByteString(firstNode.hash)
 
-    // Check if first node hash matches expected root
-    if (firstNodeHash == rootHash) {
-      Right(())
-    } else {
-      // In a partial proof, we might not have the full root
-      // This is acceptable as long as the proof is internally consistent
-      log.debug(
-        s"Proof root ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString} doesn't match expected root ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}"
+    // For AccountRange proofs we expect the first node to be the root (core-geth behavior).
+    if (firstNodeHash != rootHash) {
+      Left(
+        s"Proof root mismatch: got ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString}..., " +
+          s"expected ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}..."
       )
-      Right(())
-    }
+    } else Right(())
   }
 
   /** Convert hash to nibbles (hex digits) for trie path

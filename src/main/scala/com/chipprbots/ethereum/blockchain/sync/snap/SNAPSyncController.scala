@@ -752,8 +752,11 @@ class SNAPSyncController(
   private def requestAccountRanges(): Unit = {
     // Notify coordinator of available peers
     accountRangeCoordinator.foreach { coordinator =>
+      val pivot = pivotBlock.getOrElse(BigInt(0))
+
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
