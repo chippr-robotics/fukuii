@@ -55,7 +55,7 @@ services:
     entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
-    image: ${FUKUII_IMAGE:-ghcr.io/chippr-robotics/fukuii:latest}
+    image: ${FUKUII_IMAGE:-fukuii:latest}
     container_name: fukuii-cirith-ungol
     restart: unless-stopped
     networks:

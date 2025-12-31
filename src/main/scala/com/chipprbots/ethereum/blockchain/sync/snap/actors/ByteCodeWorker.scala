@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Stash}
 
 import scala.concurrent.duration._
 
@@ -27,7 +27,8 @@ class ByteCodeWorker(
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker
 ) extends Actor
-    with ActorLogging {
+  with ActorLogging
+  with Stash {
 
   import Messages._
 
@@ -75,6 +76,7 @@ class ByteCodeWorker(
 
           currentTask = None
           context.become(idle)
+          unstashAll()
 
         case _ =>
           log.debug("Received response for wrong or old request")
@@ -89,11 +91,13 @@ class ByteCodeWorker(
           coordinator ! ByteCodeTaskFailed(requestId, "Timeout")
           currentTask = None
           context.become(idle)
+          unstashAll()
         case _ =>
       }
 
     case _: ByteCodeWorkerFetchTask =>
-      log.warning("ByteCodeWorker is busy, rejecting new task")
+      // Important: never drop tasks. Coordinator may already have recorded this request as active.
+      stash()
   }
 }
 
