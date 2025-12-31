@@ -54,6 +54,33 @@ class AccountRangeCoordinator(
 
   import Messages._
 
+  private val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  private val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
+  private val maxPeerCooldown: FiniteDuration = 10.minutes
+  private val basePeerCooldown: FiniteDuration = 2.seconds
+
+  private def nowMillis: Long = System.currentTimeMillis()
+
+  private def isPeerCoolingDown(peer: Peer): Boolean =
+    peerCooldownUntilMillis.get(peer.id).exists(_ > nowMillis)
+
+  private def recordPeerCooldown(peer: Peer, reason: String): Option[FiniteDuration] = {
+    // Only penalize the specific protocol violation that causes tight retry loops.
+    // This avoids overreacting to transient issues like timeouts.
+    if (!reason.contains("Missing proof for empty account range")) {
+      return None
+    }
+
+    val failures = peerFailureCounts.getOrElse(peer.id, 0) + 1
+    peerFailureCounts.update(peer.id, failures)
+
+    // Exponential backoff: 2s, 4s, 8s, ... (capped)
+    val exponent = math.min(failures - 1, 12)
+    val cooldown = (basePeerCooldown * (1L << exponent)).min(maxPeerCooldown)
+    peerCooldownUntilMillis.update(peer.id, nowMillis + cooldown.toMillis)
+    Some(cooldown)
+  }
+
   // Task management
   private val pendingTasks = mutable.Queue[AccountTask](AccountTask.createInitialTasks(stateRoot, concurrency): _*)
   private val activeTasks = mutable.Map[BigInt, (AccountTask, ActorRef, Peer)]() // requestId -> (task, worker, peer)
@@ -113,20 +140,27 @@ class AccountRangeCoordinator(
       }
 
     case PeerAvailable(peer) =>
-      if (pendingTasks.nonEmpty) {
-        val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
-        val worker = maybeIdleWorker.orElse {
-          if (workers.size < concurrency) Some(createWorker()) else None
-        }
-
-        worker match {
-          case Some(w) =>
-            dispatchNextTaskToWorker(w, peer)
-          case None =>
-            log.debug("No idle workers available")
-        }
-      } else {
+      if (isPeerCoolingDown(peer)) {
+        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
+      } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
+      } else {
+        // Fill as many idle workers as possible for this peer.
+        var keepDispatching = true
+        while (keepDispatching && pendingTasks.nonEmpty) {
+          val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
+          val worker = maybeIdleWorker.orElse {
+            if (workers.size < concurrency) Some(createWorker()) else None
+          }
+
+          worker match {
+            case Some(w) =>
+              dispatchNextTaskToWorker(w, peer)
+            case None =>
+              keepDispatching = false
+              log.debug("No idle workers available")
+          }
+        }
       }
 
     case TaskComplete(requestId, result) =>
@@ -230,17 +264,11 @@ class AccountRangeCoordinator(
           // Check if complete
           self ! CheckCompletion
 
-          // Keep pipeline moving without relying on new PeerAvailable events
-          dispatchNextTaskToWorker(worker, peer)
-
         case Left(error) =>
           log.warning(s"Task completed with error: $error")
           // Re-queue task for retry
           task.pending = false
           pendingTasks.enqueue(task)
-
-          // Keep pipeline moving
-          dispatchNextTaskToWorker(worker, peer)
       }
     }
   }
@@ -305,12 +333,15 @@ class AccountRangeCoordinator(
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
-      log.warning(s"Task failed: $reason")
+      val cooldownOpt = recordPeerCooldown(peer, reason)
+      cooldownOpt match {
+        case Some(cooldown) =>
+          log.warning(s"Task failed: $reason (cooling down peer ${peer.id.value} for $cooldown)")
+        case None =>
+          log.warning(s"Task failed: $reason")
+      }
       task.pending = false
       pendingTasks.enqueue(task)
-
-      // Keep pipeline moving
-      dispatchNextTaskToWorker(worker, peer)
     }
   }
 

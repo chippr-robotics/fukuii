@@ -398,12 +398,25 @@ class SNAPSyncController(
     
     // Get local and network state for pivot selection
     val localBestBlock = appStateStorage.getBestBlockNumber()
+
+    // If bootstrap checkpoints are configured, we should not start SNAP from a peer that is behind
+    // the highest trusted checkpoint. SNAP servers only guarantee serving very recent state; picking
+    // an ancient pivot (e.g. millions of blocks behind the network head) will cause peers to return
+    // empty/no-proof AccountRange responses.
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     
-    // Query peers to find the highest block in the network.
-    // For SNAP, prefer SNAP-capable peers so the chosen pivot corresponds to state we can actually request.
+    // Query SNAP-capable peers to find the highest block in the network.
+    // SNAP must NOT start until we have a SNAP-capable peer that is at/above the bootstrap pivot
+    // (when configured). Falling back to non-SNAP peers here would select an unreachable state root.
+    val snapPeersForPivot =
+      peersToDownloadFrom.values.toList
+        .filter(_.peerInfo.remoteStatus.supportsSnap)
+        .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
+
     val networkBestBlockOpt =
-      getSnapPeerWithHighestBlock
-        .orElse(getPeerWithHighestBlock)
+      snapPeersForPivot
+        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .headOption
         .map(_.peerInfo.maxBlockNumber)
 
     // Diagnostics: show what heights we can actually see from connected peers.
@@ -415,7 +428,7 @@ class SNAPSyncController(
         .take(5)
         .map(p => s"${p.peer.remoteAddress}=${p.peerInfo.maxBlockNumber}")
         .mkString(", ")
-    log.info(s"SNAP pivot selection: visible peer heights (top 5) = [$topPeerHeights]")
+    log.info(s"SNAP pivot selection: bootstrapPivot=$bootstrapPivotBlock, visible peer heights (top 5) = [$topPeerHeights]")
     
     // Core-geth approach: Calculate pivot from network height
     // pivot = networkHeight - pivotBlockOffset (e.g., 23M - 64 = ~23M)
