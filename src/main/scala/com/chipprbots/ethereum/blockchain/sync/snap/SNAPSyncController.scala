@@ -1529,10 +1529,15 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
 
   def startPhase(phase: SyncPhase): Unit = {
     val previousPhase = currentPhaseState
-    currentPhaseState = phase
-    phaseStartTime = System.currentTimeMillis()
 
-    log.info(s"📊 SNAP Sync phase transition: $previousPhase → $phase")
+    // Idempotency: callers may invoke startPhase(phase) more than once.
+    // Only treat it as a transition when the phase actually changes.
+    if (previousPhase != phase) {
+      currentPhaseState = phase
+      phaseStartTime = System.currentTimeMillis()
+      log.info(s"📊 SNAP Sync phase transition: $previousPhase → $phase")
+    }
+
     logProgress()
   }
 
