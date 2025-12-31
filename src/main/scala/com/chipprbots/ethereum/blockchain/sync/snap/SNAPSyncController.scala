@@ -59,8 +59,15 @@ class SNAPSyncController(
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[ByteString] = None
 
+  // Guards to prevent duplicate phase-starts when upstream coordinators emit duplicate completion signals.
+  private var bytecodeSyncStarting: Boolean = false
+  private var storageRangeSyncStarting: Boolean = false
+
   // Contract accounts collected for bytecode download
   private var contractAccounts = Seq.empty[(ByteString, ByteString)]
+
+  // Internal message used to deliver contract-account query results back through the actor mailbox.
+  private case class ContractAccountsReady(accounts: Seq[(ByteString, ByteString)])
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -174,31 +181,53 @@ class SNAPSyncController(
       progressMonitor.incrementNodesHealed(count)
 
     case AccountRangeSyncComplete =>
-      log.info("Account range sync complete. Starting bytecode sync...")
-      
-      // Query the coordinator for contract accounts
-      import org.apache.pekko.pattern.ask
-      import org.apache.pekko.util.Timeout
-      import scala.concurrent.duration._
-      implicit val timeout: Timeout = Timeout(5.seconds)
-      
-      accountRangeCoordinator.foreach { coordinator =>
-        import context.dispatcher
-        (coordinator ? actors.Messages.GetContractAccounts).mapTo[actors.Messages.ContractAccountsResponse].foreach { response =>
-          contractAccounts = response.accounts
-          log.info(s"Collected ${contractAccounts.size} contract accounts for bytecode sync from coordinator")
-          // Proceed with bytecode sync
-          progressMonitor.startPhase(ByteCodeSync)
-          currentPhase = ByteCodeSync
-          startBytecodeSync()
+      if (bytecodeSyncStarting || currentPhase != AccountRangeSync) {
+        log.info(s"Ignoring AccountRangeSyncComplete in phase=$currentPhase (bytecodeSyncStarting=$bytecodeSyncStarting)")
+      } else {
+        bytecodeSyncStarting = true
+        log.info("Account range sync complete. Starting bytecode sync...")
+
+        import org.apache.pekko.pattern.{ ask, pipe }
+        import org.apache.pekko.util.Timeout
+        import scala.concurrent.duration._
+        implicit val timeout: Timeout = Timeout(5.seconds)
+
+        accountRangeCoordinator match {
+          case Some(coordinator) =>
+            (coordinator ? actors.Messages.GetContractAccounts)
+              .mapTo[actors.Messages.ContractAccountsResponse]
+              .map(r => ContractAccountsReady(r.accounts))
+              .recover { case ex =>
+                log.warning(s"Failed to query contract accounts for bytecode sync: ${ex.getMessage}")
+                ContractAccountsReady(Seq.empty)
+              }
+              .pipeTo(self)
+          case None =>
+            self ! ContractAccountsReady(Seq.empty)
         }
       }
 
+    case ContractAccountsReady(accounts) =>
+      if (currentPhase != AccountRangeSync) {
+        log.info(s"Ignoring ContractAccountsReady in phase=$currentPhase")
+      } else {
+        contractAccounts = accounts
+        log.info(s"Collected ${contractAccounts.size} contract accounts for bytecode sync from coordinator")
+        progressMonitor.startPhase(ByteCodeSync)
+        currentPhase = ByteCodeSync
+        startBytecodeSync()
+      }
+
     case ByteCodeSyncComplete =>
-      log.info("ByteCode sync complete. Starting storage range sync...")
-      progressMonitor.startPhase(StorageRangeSync)
-      currentPhase = StorageRangeSync
-      startStorageRangeSync()
+      if (storageRangeSyncStarting || currentPhase != ByteCodeSync) {
+        log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase (storageRangeSyncStarting=$storageRangeSyncStarting)")
+      } else {
+        storageRangeSyncStarting = true
+        log.info("ByteCode sync complete. Starting storage range sync...")
+        progressMonitor.startPhase(StorageRangeSync)
+        currentPhase = StorageRangeSync
+        startStorageRangeSync()
+      }
 
     case StorageRangeSyncComplete =>
       log.info("Storage range sync complete. Starting state healing...")
@@ -771,6 +800,11 @@ class SNAPSyncController(
   private def startBytecodeSync(): Unit = {
     log.info(s"Starting bytecode sync with batch size ${ByteCodeTask.DEFAULT_BATCH_SIZE}")
 
+    if (bytecodeCoordinator.nonEmpty) {
+      log.warning("Bytecode sync already started (bytecodeCoordinator is defined); skipping duplicate start")
+      return
+    }
+
     if (contractAccounts.isEmpty) {
       log.info("No contract accounts found, skipping bytecode sync")
       self ! ByteCodeSyncComplete
@@ -832,6 +866,11 @@ class SNAPSyncController(
 
   private def startStorageRangeSync(): Unit = {
     log.info(s"Starting storage range sync with concurrency ${snapSyncConfig.storageConcurrency}")
+
+    if (storageRangeCoordinator.nonEmpty) {
+      log.warning("Storage range sync already started (storageRangeCoordinator is defined); skipping duplicate start")
+      return
+    }
 
     stateRoot.foreach { root =>
       log.info("Using actor-based concurrency for storage range sync")
