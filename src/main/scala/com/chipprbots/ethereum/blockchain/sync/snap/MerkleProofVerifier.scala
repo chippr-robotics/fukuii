@@ -211,7 +211,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
       case Some(extensionNode: ExtensionNode) =>
         // Extension node - match the shared key
-        val sharedNibbles = bytesToNibbles(extensionNode.sharedKey)
+        // NOTE: MptTraversals.decodeNode already HexPrefix-decodes the compact path encoding,
+        // so `sharedKey` here is already a sequence of nibbles (0-15), one nibble per byte.
+        val sharedNibbles = extensionNode.sharedKey.map(_.toInt)
         if (path.startsWith(sharedNibbles)) {
           extensionNode.next match {
             case hashNode: HashNode =>
@@ -492,7 +494,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
       case Some(extensionNode: ExtensionNode) =>
         // Extension node - match the shared key
-        val sharedNibbles = bytesToNibbles(extensionNode.sharedKey)
+        // NOTE: MptTraversals.decodeNode already HexPrefix-decodes the compact path encoding,
+        // so `sharedKey` here is already a sequence of nibbles (0-15), one nibble per byte.
+        val sharedNibbles = extensionNode.sharedKey.map(_.toInt)
         if (path.startsWith(sharedNibbles)) {
           extensionNode.next match {
             case hashNode: HashNode =>
