@@ -23,12 +23,13 @@ import scodec.bits.BitVector
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.network.discovery.codecs.RLPCodecs
+import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
 import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord.Content
 
-trait DiscoveryServiceBuilder {
+trait DiscoveryServiceBuilder extends Logger {
 
   def discoveryServiceResource(
       discoveryConfig: DiscoveryConfig,
