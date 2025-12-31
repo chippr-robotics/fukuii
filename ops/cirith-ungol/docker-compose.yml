@@ -75,12 +75,13 @@ services:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
-      - ./conf/static-nodes.json:/app/data/static-nodes.json
       # Override built-in chain configs with workspace versions (keeps ops harness in sync with repo changes)
       - ../../src/main/resources/conf/base/chains/mordor-chain.conf:/app/conf/base/chains/mordor-chain.conf:ro
       - ../../src/main/resources/conf/base/chains/gorgoroth-chain.conf:/app/conf/base/chains/gorgoroth-chain.conf:ro
       # Data directory (persistent)
       - fukuii-cirith-ungol-data:/app/data
+      # Seed peers deterministically; must come *after* /app/data volume so it isn't masked.
+      - ./conf/static-nodes.json:/app/data/static-nodes.json:ro
       # Logs directory
       - fukuii-cirith-ungol-logs:/app/logs
     environment:
