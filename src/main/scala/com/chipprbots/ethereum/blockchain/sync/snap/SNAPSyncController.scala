@@ -65,9 +65,13 @@ class SNAPSyncController(
 
   // Contract accounts collected for bytecode download
   private var contractAccounts = Seq.empty[(ByteString, ByteString)]
+  private var contractStorageAccounts = Seq.empty[(ByteString, ByteString)]
 
   // Internal message used to deliver contract-account query results back through the actor mailbox.
-  private case class ContractAccountsReady(accounts: Seq[(ByteString, ByteString)])
+  private case class ContractAccountsReady(
+      bytecodeAccounts: Seq[(ByteString, ByteString)],
+      storageAccounts: Seq[(ByteString, ByteString)]
+  )
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -194,25 +198,37 @@ class SNAPSyncController(
 
         accountRangeCoordinator match {
           case Some(coordinator) =>
-            (coordinator ? actors.Messages.GetContractAccounts)
+            val bytecodeAccountsF = (coordinator ? actors.Messages.GetContractAccounts)
               .mapTo[actors.Messages.ContractAccountsResponse]
-              .map(r => ContractAccountsReady(r.accounts))
+              .map(_.accounts)
+
+            val storageAccountsF = (coordinator ? actors.Messages.GetContractStorageAccounts)
+              .mapTo[actors.Messages.ContractStorageAccountsResponse]
+              .map(_.accounts)
+
+            (for {
+              bytecodeAccounts <- bytecodeAccountsF
+              storageAccounts <- storageAccountsF
+            } yield ContractAccountsReady(bytecodeAccounts, storageAccounts))
               .recover { case ex =>
-                log.warning(s"Failed to query contract accounts for bytecode sync: ${ex.getMessage}")
-                ContractAccountsReady(Seq.empty)
+                log.warning(s"Failed to query contract accounts for bytecode/storage sync: ${ex.getMessage}")
+                ContractAccountsReady(Seq.empty, Seq.empty)
               }
               .pipeTo(self)
           case None =>
-            self ! ContractAccountsReady(Seq.empty)
+            self ! ContractAccountsReady(Seq.empty, Seq.empty)
         }
       }
 
-    case ContractAccountsReady(accounts) =>
+    case ContractAccountsReady(bytecodeAccounts, storageAccounts) =>
       if (currentPhase != AccountRangeSync) {
         log.info(s"Ignoring ContractAccountsReady in phase=$currentPhase")
       } else {
-        contractAccounts = accounts
-        log.info(s"Collected ${contractAccounts.size} contract accounts for bytecode sync from coordinator")
+        contractAccounts = bytecodeAccounts
+        contractStorageAccounts = storageAccounts
+        log.info(
+          s"Collected ${contractAccounts.size} contract accounts for bytecode sync and ${contractStorageAccounts.size} for storage sync from coordinator"
+        )
         progressMonitor.startPhase(ByteCodeSync)
         currentPhase = ByteCodeSync
         startBytecodeSync()
@@ -891,6 +907,16 @@ class SNAPSyncController(
       
       // Start the coordinator
       storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(root))
+
+      // Enqueue initial storage tasks derived from contract accounts found during AccountRangeSync.
+      val storageTasks = StorageTask.createStorageTasks(contractStorageAccounts)
+      if (storageTasks.isEmpty) {
+        log.warning("No contract storage tasks to sync; completing StorageRangeSync immediately")
+        self ! StorageRangeSyncComplete
+      } else {
+        log.info(s"Enqueuing ${storageTasks.size} storage tasks")
+        storageRangeCoordinator.foreach(_ ! actors.Messages.AddStorageTasks(storageTasks))
+      }
       
       // Periodically send peer availability notifications
       storageRangeRequestTask = Some(

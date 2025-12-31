@@ -24,6 +24,8 @@ object Messages {
   case object GetProgress extends AccountRangeCoordinatorMessage
   case object GetContractAccounts extends AccountRangeCoordinatorMessage
   case class ContractAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
+  case object GetContractStorageAccounts extends AccountRangeCoordinatorMessage
+  case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   sealed trait AccountRangeWorkerMessage

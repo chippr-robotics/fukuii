@@ -97,6 +97,9 @@ class AccountRangeCoordinator(
   // Contract accounts collected for bytecode download
   private val contractAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
 
+  // Contract accounts collected for storage download (accountHash -> storageRoot)
+  private val contractStorageAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
+
   // Merkle proof verifier
   private val proofVerifier = MerkleProofVerifier(stateRoot)
 
@@ -175,6 +178,9 @@ class AccountRangeCoordinator(
 
     case GetContractAccounts =>
       sender() ! ContractAccountsResponse(contractAccounts.toSeq)
+
+    case GetContractStorageAccounts =>
+      sender() ! ContractStorageAccountsResponse(contractStorageAccounts.toSeq)
 
     case CheckCompletion =>
       if (isComplete) {
@@ -397,8 +403,14 @@ class AccountRangeCoordinator(
         (accountHash, account.codeHash)
     }
 
+    val storageContracts = accounts.collect {
+      case (accountHash, account) if account.codeHash != Account.EmptyCodeHash =>
+        (accountHash, account.storageRoot)
+    }
+
     if (contracts.nonEmpty) {
       contractAccounts.appendAll(contracts)
+      contractStorageAccounts.appendAll(storageContracts)
       log.info(s"Identified ${contracts.size} contract accounts (total: ${contractAccounts.size})")
     }
   }
