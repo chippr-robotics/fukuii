@@ -336,7 +336,7 @@ class StorageRangeCoordinator(
         case Right(_) =>
           log.debug(s"Storage proof verified successfully for ${accountSlots.size} slots")
 
-          storeStorageSlots(task.accountHash, accountSlots) match {
+          storeStorageSlots(task, accountSlots) match {
             case Left(error) =>
               log.warning(s"Failed to store storage slots for account ${task.accountString}: $error")
               task.pending = false
@@ -376,7 +376,7 @@ class StorageRangeCoordinator(
   }
 
   private def storeStorageSlots(
-      accountHash: ByteString,
+      task: StorageTask,
       slots: Seq[(ByteString, ByteString)]
   ): Either[String, Unit] =
     try {
@@ -384,66 +384,56 @@ class StorageRangeCoordinator(
       import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 
       if (slots.nonEmpty) {
-        val storageTaskOpt = tasks
-          .find(_.accountHash == accountHash)
-          .orElse(activeTasks.values.iterator.flatMap(_._2).find(_.accountHash == accountHash))
-          .orElse(completedTasks.find(_.accountHash == accountHash))
+        val accountHash = task.accountHash
 
-        storageTaskOpt match {
-          case None =>
-            log.warning(s"No storage task found for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-            Left(s"No storage task found for account")
-            
-          case Some(storageTask) =>
-            val storageTrie = storageTrieCache.getOrElseUpdate(
-              accountHash, {
-                val storageRoot = storageTask.storageRoot
-                if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
-                  log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+        val storageTrie = storageTrieCache.getOrElseUpdate(
+          accountHash, {
+            val storageRoot = task.storageRoot
+            if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+              log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+              MerklePatriciaTrie[ByteString, ByteString](mptStorage)
+            } else {
+              try {
+                log.debug(s"Loading storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+                MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
+              } catch {
+                case _: MissingRootNodeException =>
+                  log.warning(s"Storage root not found for account, creating new trie")
                   MerklePatriciaTrie[ByteString, ByteString](mptStorage)
-                } else {
-                  try {
-                    log.debug(s"Loading storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-                    MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
-                  } catch {
-                    case e: MissingRootNodeException =>
-                      log.warning(s"Storage root not found for account, creating new trie")
-                      MerklePatriciaTrie[ByteString, ByteString](mptStorage)
-                  }
-                }
               }
-            )
-
-            var currentTrie = storageTrie
-            slots.foreach { case (slotHash, slotValue) =>
-              log.debug(
-                s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
-                  s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
-              )
-              currentTrie = currentTrie.put(slotHash, slotValue)
             }
+          }
+        )
 
-            storageTrieCache.put(accountHash, currentTrie)
-
-            log.info(
-              s"Inserted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} (cache size: ${storageTrieCache.size})"
-            )
-
-            val computedRoot = ByteString(currentTrie.getRootHash)
-            val expectedRoot = storageTask.storageRoot
-            if (computedRoot != expectedRoot) {
-              log.warning(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-            }
-
-            mptStorage.synchronized {
-              mptStorage.persist()
-            }
-
-            log.info(
-              s"Successfully persisted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
-            )
-            Right(())
+        var currentTrie = storageTrie
+        slots.foreach { case (slotHash, slotValue) =>
+          log.debug(
+            s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
+              s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
+          )
+          currentTrie = currentTrie.put(slotHash, slotValue)
         }
+
+        storageTrieCache.put(accountHash, currentTrie)
+
+        log.info(
+          s"Inserted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} (cache size: ${storageTrieCache.size})"
+        )
+
+        val computedRoot = ByteString(currentTrie.getRootHash)
+        val expectedRoot = task.storageRoot
+        if (computedRoot != expectedRoot) {
+          log.warning(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+        }
+
+        mptStorage.synchronized {
+          mptStorage.persist()
+        }
+
+        log.info(
+          s"Successfully persisted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
+        )
+        Right(())
       } else {
         Right(())
       }
