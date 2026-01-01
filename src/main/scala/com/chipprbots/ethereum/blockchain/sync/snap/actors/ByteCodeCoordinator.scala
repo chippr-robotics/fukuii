@@ -92,6 +92,9 @@ class ByteCodeCoordinator(
   // Maximum response size in bytes (2 MB - bytecode can be large)
   private val maxResponseSize: BigInt = 2 * 1024 * 1024
 
+  private def inFlightForPeer(peer: Peer): Int =
+    activeTasks.values.count { case (_, _, p) => p.id == peer.id }
+
   override def preStart(): Unit = {
     log.info("ByteCodeCoordinator starting")
   }
@@ -190,13 +193,23 @@ class ByteCodeCoordinator(
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pendingTasks.isEmpty) return
 
-    val workerOpt: Option[ActorRef] =
-      idleWorkers.headOption.orElse {
-        if (workers.size < maxWorkers) Some(createWorker()) else None
-      }
+    // Keep a small bounded number of inflight requests per peer to maximize throughput
+    // without overloading any single neighbor.
+    var inflight = inFlightForPeer(peer)
+    while (pendingTasks.nonEmpty && inflight < cooldownConfig.maxInFlightPerPeer) {
+      val workerOpt: Option[ActorRef] =
+        idleWorkers.headOption.orElse {
+          if (workers.size < maxWorkers) Some(createWorker()) else None
+        }
 
-    workerOpt.foreach { worker =>
-      assignTaskToWorker(worker, peer)
+      workerOpt match {
+        case Some(worker) =>
+          assignTaskToWorker(worker, peer)
+          inflight += 1
+        case None =>
+          // No worker capacity available right now.
+          return
+      }
     }
   }
 
@@ -210,7 +223,7 @@ class ByteCodeCoordinator(
 
         // SNAP spec: returned codes are in request order, may have gaps (unavailable codes skipped)
         // and may omit a suffix due to response byte limits.
-        matchReturnedCodesToRequested(task.codeHashes, response.codes) match {
+        validateReturnedCodes(task.codeHashes, response.codes) match {
           case Left(error) =>
             log.warning(s"Bytecode verification failed: $error")
             activeTasks.remove(response.requestId)
@@ -222,9 +235,9 @@ class ByteCodeCoordinator(
             markWorkerIdle(worker)
             checkCompletion()
 
-          case Right(matchedHashes) =>
+          case Right(validated) =>
             // Store only the returned codes
-            storeBytecodes(response.codes) match {
+            storeBytecodesWithHashes(validated.codesByHashInOrder) match {
               case Left(error) =>
                 log.warning(s"Failed to store bytecodes: $error")
                 activeTasks.remove(response.requestId)
@@ -238,12 +251,12 @@ class ByteCodeCoordinator(
                 checkCompletion()
 
               case Right(_) =>
-                val remainingHashes = task.codeHashes.filterNot(matchedHashes.contains)
+                val remainingHashes = task.codeHashes.filterNot(validated.matchedHashes.contains)
 
                 // Backoff behavior:
                 // - empty response: peer had none of the requested codes; cool down briefly
                 // - non-empty response: peer is useful; clear failures
-                if (matchedHashes.isEmpty) {
+                if (validated.matchedHashes.isEmpty) {
                   recordPeerCooldown(peer, cooldownConfig.baseEmpty, "empty ByteCodes response")
                 } else {
                   clearPeerFailures(peer)
@@ -253,7 +266,7 @@ class ByteCodeCoordinator(
                   val accountByCodeHash = task.codeHashes.zip(task.accountHashes).toMap
                   val remainingAccounts = remainingHashes.flatMap(accountByCodeHash.get)
                   log.info(
-                    s"ByteCodes response contained ${matchedHashes.size}/${task.codeHashes.size} requested codes; " +
+                    s"ByteCodes response contained ${validated.matchedHashes.size}/${task.codeHashes.size} requested codes; " +
                       s"re-queuing remaining ${remainingHashes.size} hashes"
                   )
                   pendingTasks.enqueue(ByteCodeTask(remainingHashes, remainingAccounts))
@@ -280,17 +293,21 @@ class ByteCodeCoordinator(
     }
   }
 
-  private def matchReturnedCodesToRequested(
+  private final case class ValidatedByteCodes(
+      matchedHashes: Set[ByteString],
+      codesByHashInOrder: Vector[(ByteString, ByteString)]
+  )
+
+  private def validateReturnedCodes(
       requestedHashes: Seq[ByteString],
       returnedCodes: Seq[ByteString]
-  ): Either[String, Set[ByteString]] = {
+  ): Either[String, ValidatedByteCodes] = {
     if (returnedCodes.isEmpty) {
-      // Per SNAP spec, an empty response is possible if none requested are available.
-      // Caller will re-queue the missing hashes and try other peers.
-      Right(Set.empty)
+      Right(ValidatedByteCodes(Set.empty, Vector.empty))
     } else {
       val matched = mutable.HashSet.empty[ByteString]
       val seenReturned = mutable.HashSet.empty[ByteString]
+      val pairs = Vector.newBuilder[(ByteString, ByteString)]
       var reqIdx = 0
 
       var error: String | Null = null
@@ -315,27 +332,25 @@ class ByteCodeCoordinator(
             error = s"Received bytecode hash not present in requested list or out of order (sample=$sample)"
           } else {
             matched += rh
+            pairs += ((rh, code))
             reqIdx += 1
           }
         }
       }
 
-      if (error != null) Left(error) else Right(matched.toSet)
+      if (error != null) Left(error)
+      else Right(ValidatedByteCodes(matched.toSet, pairs.result()))
     }
   }
 
-  private def storeBytecodes(bytecodes: Seq[ByteString]): Either[String, Unit] =
+  private def storeBytecodesWithHashes(codesByHash: Seq[(ByteString, ByteString)]): Either[String, Unit] =
     try {
-      // Build up batch updates
-      val updates = bytecodes.foldLeft(evmCodeStorage.emptyBatchUpdate) { (batchUpdate, code) =>
-        val codeHash = kec256(code)
+      val updates = codesByHash.foldLeft(evmCodeStorage.emptyBatchUpdate) { case (batchUpdate, (codeHash, code)) =>
         batchUpdate.and(evmCodeStorage.put(codeHash, code))
       }
 
-      // Commit all updates in one transaction
       updates.commit()
-
-      log.info(s"Successfully persisted ${bytecodes.size} bytecodes to storage")
+      log.info(s"Successfully persisted ${codesByHash.size} bytecodes to storage")
       Right(())
     } catch {
       case e: Exception =>
@@ -411,6 +426,7 @@ object ByteCodeCoordinator {
       baseEmpty: FiniteDuration,
       baseTimeout: FiniteDuration,
       baseInvalid: FiniteDuration,
+      maxInFlightPerPeer: Int,
       max: FiniteDuration,
       exponentCap: Int
   )
@@ -420,6 +436,7 @@ object ByteCodeCoordinator {
       baseEmpty = 2.seconds,
       baseTimeout = 10.seconds,
       baseInvalid = 15.seconds,
+      maxInFlightPerPeer = 2,
       max = 2.minutes,
       exponentCap = 10
     )
