@@ -62,7 +62,6 @@ class ByteCodeCoordinator(
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
-  private val startTime = System.currentTimeMillis()
 
   // Maximum response size in bytes (2 MB - bytecode can be large)
   private val maxResponseSize: BigInt = 2 * 1024 * 1024
@@ -172,8 +171,9 @@ class ByteCodeCoordinator(
       case Some((task, worker)) =>
         log.debug(s"Processing ByteCodes response: ${response.codes.size} codes for request ${response.requestId}")
 
-        val expected = task.codeHashes.toSet
-        extractAndVerifyReturnedCodeHashes(expected, response.codes) match {
+        // SNAP spec: returned codes are in request order, may have gaps (unavailable codes skipped)
+        // and may omit a suffix due to response byte limits.
+        matchReturnedCodesToRequested(task.codeHashes, response.codes) match {
           case Left(error) =>
             log.warning(s"Bytecode verification failed: $error")
             activeTasks.remove(response.requestId)
@@ -182,8 +182,8 @@ class ByteCodeCoordinator(
             markWorkerIdle(worker)
             checkCompletion()
 
-          case Right(returnedHashes) =>
-            // Store bytecodes
+          case Right(matchedHashes) =>
+            // Store only the returned codes
             storeBytecodes(response.codes) match {
               case Left(error) =>
                 log.warning(s"Failed to store bytecodes: $error")
@@ -194,14 +194,13 @@ class ByteCodeCoordinator(
                 checkCompletion()
 
               case Right(_) =>
-                // Mark current task complete for the received codes, and enqueue remaining hashes if any.
-                val remainingHashes = task.codeHashes.filterNot(returnedHashes.contains)
+                val remainingHashes = task.codeHashes.filterNot(matchedHashes.contains)
 
                 if (remainingHashes.nonEmpty) {
                   val accountByCodeHash = task.codeHashes.zip(task.accountHashes).toMap
                   val remainingAccounts = remainingHashes.flatMap(accountByCodeHash.get)
                   log.info(
-                    s"ByteCodes response contained ${returnedHashes.size}/${task.codeHashes.size} requested codes; " +
+                    s"ByteCodes response contained ${matchedHashes.size}/${task.codeHashes.size} requested codes; " +
                       s"re-queuing remaining ${remainingHashes.size} hashes"
                   )
                   pendingTasks.enqueue(ByteCodeTask(remainingHashes, remainingAccounts))
@@ -228,35 +227,47 @@ class ByteCodeCoordinator(
     }
   }
 
-  private def extractAndVerifyReturnedCodeHashes(
-      expectedHashes: Set[ByteString],
-      bytecodes: Seq[ByteString]
+  private def matchReturnedCodesToRequested(
+      requestedHashes: Seq[ByteString],
+      returnedCodes: Seq[ByteString]
   ): Either[String, Set[ByteString]] = {
-    if (bytecodes.isEmpty) {
-      return Left("Empty response: received 0 bytecodes")
-    }
-
-    val returned = mutable.Set.empty[ByteString]
-    val unexpected = mutable.ArrayBuffer.empty[String]
-    val duplicates = mutable.ArrayBuffer.empty[String]
-
-    bytecodes.foreach { code =>
-      val actualHash = kec256(code)
-      if (!expectedHashes.contains(actualHash)) {
-        unexpected += actualHash.take(4).toArray.map("%02x".format(_)).mkString
-      } else if (returned.contains(actualHash)) {
-        duplicates += actualHash.take(4).toArray.map("%02x".format(_)).mkString
-      } else {
-        returned += actualHash
-      }
-    }
-
-    if (unexpected.nonEmpty) {
-      Left(s"Received bytecode(s) not in requested hash set. Sample unexpected hashes: ${unexpected.take(10).mkString(", ")}")
-    } else if (duplicates.nonEmpty) {
-      Left(s"Received duplicate bytecode(s) for same hash. Sample hashes: ${duplicates.take(10).mkString(", ")}")
+    if (returnedCodes.isEmpty) {
+      // Per SNAP spec, an empty response is possible if none requested are available.
+      // Caller will re-queue the missing hashes and try other peers.
+      Right(Set.empty)
     } else {
-      Right(returned.toSet)
+      val matched = mutable.HashSet.empty[ByteString]
+      val seenReturned = mutable.HashSet.empty[ByteString]
+      var reqIdx = 0
+
+      var error: String | Null = null
+      val it = returnedCodes.iterator
+
+      while (it.hasNext && error == null) {
+        val code = it.next()
+        val rh = kec256(code)
+
+        if (seenReturned.contains(rh)) {
+          val sample = rh.take(4).toArray.map("%02x".format(_)).mkString
+          error = s"Received duplicate bytecode for hash sample=$sample"
+        } else {
+          seenReturned += rh
+
+          // Verify returned hashes form a subsequence of the requested hashes, preserving order.
+          while (reqIdx < requestedHashes.size && requestedHashes(reqIdx) != rh) {
+            reqIdx += 1
+          }
+          if (reqIdx >= requestedHashes.size) {
+            val sample = rh.take(4).toArray.map("%02x".format(_)).mkString
+            error = s"Received bytecode hash not present in requested list or out of order (sample=$sample)"
+          } else {
+            matched += rh
+            reqIdx += 1
+          }
+        }
+      }
+
+      if (error != null) Left(error) else Right(matched.toSet)
     }
   }
 

@@ -12,8 +12,11 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestEvmCodeStorage}
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
 
 class ByteCodeCoordinatorSpec
     extends TestKit(ActorSystem("ByteCodeCoordinatorSpec"))
@@ -170,5 +173,160 @@ class ByteCodeCoordinatorSpec
     // Coordinator should still be operational
     coordinator ! Messages.ByteCodeGetProgress
     expectMsgType[Any](3.seconds)
+  }
+
+  it should "accept ByteCodes as a subsequence and re-queue missing hashes" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val code1 = ByteString("code1")
+    val code2 = ByteString("code2")
+    val code3 = ByteString("code3")
+    val h1 = kec256(code1)
+    val h2 = kec256(code2)
+    val h3 = kec256(code3)
+
+    val contractAccounts = Seq(
+      (ByteString("account1"), h1),
+      (ByteString("account2"), h2),
+      (ByteString("account3"), h3)
+    )
+
+    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req1.hashes shouldEqual Seq(h1, h2, h3)
+
+    // Respond with a single middle element (gap allowed by snap/1 semantics)
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(ByteCodes(req1.requestId, Seq(code2)))
+
+    // Ensure the returned code got persisted
+    within(3.seconds) {
+      awaitAssert(evmCodeStorage.get(h2) shouldEqual Some(code2))
+    }
+
+    // Drive next dispatch and assert the missing hashes were re-queued
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req2 = send2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req2.hashes shouldEqual Seq(h1, h3)
+  }
+
+  it should "reject out-of-order ByteCodes responses and retry" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val code1 = ByteString("code1")
+    val code2 = ByteString("code2")
+    val h1 = kec256(code1)
+    val h2 = kec256(code2)
+
+    val contractAccounts = Seq(
+      (ByteString("account1"), h1),
+      (ByteString("account2"), h2)
+    )
+
+    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req1.hashes shouldEqual Seq(h1, h2)
+
+    // Respond out-of-order (violates snap/1 ordering requirement)
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(ByteCodes(req1.requestId, Seq(code2, code1)))
+
+    // Ensure nothing was persisted
+    within(3.seconds) {
+      awaitAssert {
+        evmCodeStorage.get(h1) shouldEqual None
+        evmCodeStorage.get(h2) shouldEqual None
+      }
+    }
+
+    // Drive retry
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req2 = send2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req2.hashes shouldEqual Seq(h1, h2)
+  }
+
+  it should "reject duplicate bytecodes in a ByteCodes response" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val code1 = ByteString("code1")
+    val h1 = kec256(code1)
+
+    val contractAccounts = Seq(
+      (ByteString("account1"), h1)
+    )
+
+    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req1.hashes shouldEqual Seq(h1)
+
+    // Duplicate code for the same hash should be rejected
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(ByteCodes(req1.requestId, Seq(code1, code1)))
+
+    within(3.seconds) {
+      awaitAssert(evmCodeStorage.get(h1) shouldEqual None)
+    }
+
+    // Drive retry (task should be re-queued)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req2 = send2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req2.hashes shouldEqual Seq(h1)
   }
 }
