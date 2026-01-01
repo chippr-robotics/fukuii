@@ -37,7 +37,7 @@ services:
       - "--verbosity=5"
       # Per-module verbosity overrides; patterns are path-like (see geth --help).
       # Focus on p2p (rlpx/handshake) and discovery logging.
-      - "--log.vmodule=p2p=5,discover=5,net=5"
+      - "--log.vmodule=p2p=5,discover=5,net=5,snap=5"
       # Include debug-level details from the logger.
       - "--log.debug"
       - "--http"

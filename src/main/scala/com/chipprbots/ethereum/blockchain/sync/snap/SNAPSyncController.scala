@@ -184,12 +184,17 @@ class SNAPSyncController(
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
 
+    // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
+    // to keep phase-start logging idempotent and centralized.
+
     case AccountRangeSyncComplete =>
-      if (bytecodeSyncStarting || currentPhase != AccountRangeSync) {
-        log.info(s"Ignoring AccountRangeSyncComplete in phase=$currentPhase (bytecodeSyncStarting=$bytecodeSyncStarting)")
+      if (storageRangeSyncStarting || currentPhase != AccountRangeSync) {
+        log.info(
+          s"Ignoring AccountRangeSyncComplete in phase=$currentPhase (storageRangeSyncStarting=$storageRangeSyncStarting)"
+        )
       } else {
-        bytecodeSyncStarting = true
-        log.info("Account range sync complete. Starting bytecode sync...")
+        storageRangeSyncStarting = true
+        log.info("Account range sync complete. Starting storage range sync...")
 
         import org.apache.pekko.pattern.{ ask, pipe }
         import org.apache.pekko.util.Timeout
@@ -229,27 +234,28 @@ class SNAPSyncController(
         log.info(
           s"Collected ${contractAccounts.size} contract accounts for bytecode sync and ${contractStorageAccounts.size} for storage sync from coordinator"
         )
-        progressMonitor.startPhase(ByteCodeSync)
-        currentPhase = ByteCodeSync
-        startBytecodeSync()
-      }
-
-    case ByteCodeSyncComplete =>
-      if (storageRangeSyncStarting || currentPhase != ByteCodeSync) {
-        log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase (storageRangeSyncStarting=$storageRangeSyncStarting)")
-      } else {
-        storageRangeSyncStarting = true
-        log.info("ByteCode sync complete. Starting storage range sync...")
-        progressMonitor.startPhase(StorageRangeSync)
         currentPhase = StorageRangeSync
         startStorageRangeSync()
       }
 
+    case ByteCodeSyncComplete =>
+      if (currentPhase != ByteCodeSync) {
+        log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase")
+      } else {
+        log.info("ByteCode sync complete. Starting state healing...")
+        currentPhase = StateHealing
+        startStateHealing()
+      }
+
     case StorageRangeSyncComplete =>
-      log.info("Storage range sync complete. Starting state healing...")
-      progressMonitor.startPhase(StateHealing)
-      currentPhase = StateHealing
-      startStateHealing()
+      if (bytecodeSyncStarting || currentPhase != StorageRangeSync) {
+        log.info(s"Ignoring StorageRangeSyncComplete in phase=$currentPhase (bytecodeSyncStarting=$bytecodeSyncStarting)")
+      } else {
+        bytecodeSyncStarting = true
+        log.info("Storage range sync complete. Starting bytecode sync...")
+        currentPhase = ByteCodeSync
+        startBytecodeSync()
+      }
 
     case StateHealingComplete =>
       log.info("State healing complete. Validating state...")

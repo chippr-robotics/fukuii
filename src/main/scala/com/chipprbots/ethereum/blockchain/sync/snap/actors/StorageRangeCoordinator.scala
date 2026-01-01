@@ -239,8 +239,15 @@ class StorageRangeCoordinator(
       handleTimeout(requestId)
     }
 
+    val rootPrefix = stateRoot.take(4).toHex
+    val startPrefix = firstTask.next.take(4).toHex
+    val limitPrefix = firstTask.last.take(4).toHex
+    val accountsPreview = accountHashes.take(3).map(_.take(4).toHex).mkString(",")
+
     log.debug(
-      s"Requesting storage ranges for ${batchTasks.size} accounts from peer ${peer.id} (request ID: $requestId)"
+      s"Requesting storage ranges from peer ${peer.id} " +
+        s"(requestId=$requestId, accounts=${batchTasks.size}, root=$rootPrefix, start=$startPrefix, limit=$limitPrefix, " +
+        s"bytes=$maxResponseSize, accountsPreview=$accountsPreview)"
     )
 
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
