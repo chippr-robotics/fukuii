@@ -86,8 +86,12 @@ class StorageRangeCoordinator(
 
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
-  private val activeTasks = mutable.Map[BigInt, Seq[StorageTask]]()
+  private val activeTasks = mutable.Map[BigInt, (Peer, Seq[StorageTask])]()
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
+
+  // Peer cooldown (best-effort): used to avoid hammering peers that likely can't serve the pivot state.
+  private val peerCooldownUntilMs = mutable.Map[String, Long]()
+  private val peerCooldownDefault = 30.seconds
 
   // Worker management
   private val workers = mutable.ArrayBuffer[ActorRef]()
@@ -127,7 +131,9 @@ class StorageRangeCoordinator(
       log.debug(s"Added storage task for account ${task.accountString} to queue")
 
     case StoragePeerAvailable(peer) =>
-      if (!isComplete && workers.size < maxWorkers) {
+      if (isPeerCoolingDown(peer)) {
+        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
+      } else if (!isComplete && workers.size < maxWorkers) {
         val worker = createWorker()
         worker ! FetchStorageRanges(null, peer)
       } else if (!isComplete && tasks.nonEmpty) {
@@ -159,7 +165,7 @@ class StorageRangeCoordinator(
         slotsDownloaded = slotsDownloaded,
         bytesDownloaded = bytesDownloaded,
         tasksCompleted = completedTasks.size,
-        tasksActive = activeTasks.values.flatten.size,
+        tasksActive = activeTasks.values.map(_._2.size).sum,
         tasksPending = tasks.size,
         elapsedTimeMs = System.currentTimeMillis() - startTime,
         progress = progress
@@ -186,9 +192,23 @@ class StorageRangeCoordinator(
       return None
     }
 
-    val batchTasks = (0 until maxAccountsPerBatch).flatMap { _ =>
-      if (tasks.nonEmpty) Some(tasks.dequeue()) else None
-    }
+    val min = ByteString(Array.fill(32)(0.toByte))
+    val max = ByteString(Array.fill(32)(0xff.toByte))
+    def isInitialRange(t: StorageTask): Boolean = t.next == min && t.last == max
+
+    // snap/1 origin/limit semantics apply to the first account only. To avoid incorrect continuation
+    // behavior, only batch tasks that request the initial full range.
+    val first = tasks.dequeue()
+    val batchTasks: Seq[StorageTask] =
+      if (!isInitialRange(first) || maxAccountsPerBatch <= 1) {
+        Seq(first)
+      } else {
+        val buf = mutable.ArrayBuffer[StorageTask](first)
+        while (buf.size < maxAccountsPerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
+          buf += tasks.dequeue()
+        }
+        buf.toSeq
+      }
 
     if (batchTasks.isEmpty) {
       return None
@@ -208,7 +228,7 @@ class StorageRangeCoordinator(
     )
 
     batchTasks.foreach(_.pending = true)
-    activeTasks.put(requestId, batchTasks)
+    activeTasks.put(requestId, (peer, batchTasks))
 
     requestTracker.trackRequest(
       requestId,
@@ -245,32 +265,64 @@ class StorageRangeCoordinator(
               case None =>
                 log.warning(s"No active tasks for request ID ${response.requestId}")
 
-              case Some(batchTasks) =>
-                processStorageRanges(batchTasks, validResponse)
+              case Some((peer, batchTasks)) =>
+                processStorageRanges(peer, batchTasks, validResponse)
             }
         }
     }
   }
 
-  private def processStorageRanges(tasks: Seq[StorageTask], response: StorageRanges): Unit = {
-    log.info(s"Processing storage ranges for ${tasks.size} accounts, received ${response.slots.size} slot sets")
+  private def processStorageRanges(peer: Peer, tasks: Seq[StorageTask], response: StorageRanges): Unit = {
+    // A response may legitimately return fewer slot-sets than requested accounts.
+    // Some clients may also return proofs with zero slot-sets to indicate proof-of-absence.
+    val servedCount: Int =
+      if (response.slots.nonEmpty) response.slots.size
+      else if (response.proof.nonEmpty) math.min(1, tasks.size)
+      else 0
 
-    if (response.slots.size > tasks.size) {
-      log.warning(s"Received more slot sets (${response.slots.size}) than requested accounts (${tasks.size})")
+    log.info(
+      s"Processing storage ranges for ${tasks.size} accounts from peer ${peer.id.value}, " +
+        s"received ${response.slots.size} slot sets (served=$servedCount, proofs=${response.proof.size})"
+    )
+
+    if (servedCount == 0) {
+      recordPeerCooldown(peer, "empty slots + empty proofs")
+      tasks.foreach { task =>
+        task.pending = false
+        this.tasks.enqueue(task)
+      }
+      return
     }
 
-    tasks.zipWithIndex.foreach { case (task, idx) =>
-      val accountSlots = if (idx < response.slots.size) response.slots(idx) else Seq.empty
+    val servedTasks = tasks.take(servedCount)
+    val unservedTasks = tasks.drop(servedCount)
+
+    if (unservedTasks.nonEmpty) {
+      log.debug(s"Re-queueing ${unservedTasks.size} unserved storage tasks")
+      unservedTasks.foreach { task =>
+        task.pending = false
+        this.tasks.enqueue(task)
+      }
+    }
+
+    servedTasks.zipWithIndex.foreach { case (task, idx) =>
+      val accountSlots =
+        if (response.slots.nonEmpty && idx < response.slots.size) response.slots(idx)
+        else Seq.empty
+
+      // Best-practice: apply proof nodes only to the last served slot-set.
+      val proofForThisTask = if (idx == servedCount - 1) response.proof else Seq.empty
 
       log.debug(s"Processing ${accountSlots.size} slots for account ${task.accountString}")
 
       task.slots = accountSlots
-      task.proof = response.proof
+      task.proof = proofForThisTask
 
       val verifier = getOrCreateVerifier(task.storageRoot)
-      verifier.verifyStorageRange(accountSlots, response.proof, task.next, task.last) match {
+      verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, task.last) match {
         case Left(error) =>
           log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
+          recordPeerCooldown(peer, s"verification failed: $error")
           task.pending = false
           this.tasks.enqueue(task)
 
@@ -327,7 +379,7 @@ class StorageRangeCoordinator(
       if (slots.nonEmpty) {
         val storageTaskOpt = tasks
           .find(_.accountHash == accountHash)
-          .orElse(activeTasks.values.flatten.find(_.accountHash == accountHash))
+          .orElse(activeTasks.values.iterator.flatMap(_._2).find(_.accountHash == accountHash))
           .orElse(completedTasks.find(_.accountHash == accountHash))
 
         storageTaskOpt match {
@@ -398,8 +450,9 @@ class StorageRangeCoordinator(
     proofVerifiers.getOrElseUpdate(storageRoot, MerkleProofVerifier(storageRoot))
 
   private def handleTimeout(requestId: BigInt): Unit = {
-    activeTasks.remove(requestId).foreach { batchTasks =>
+    activeTasks.remove(requestId).foreach { case (peer, batchTasks) =>
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts")
+      recordPeerCooldown(peer, "request timeout")
       batchTasks.foreach { task =>
         task.pending = false
         tasks.enqueue(task)
@@ -408,13 +461,23 @@ class StorageRangeCoordinator(
   }
 
   private def progress: Double = {
-    val total = completedTasks.size + activeTasks.values.flatten.size + tasks.size
+    val activeCount = activeTasks.values.map(_._2.size).sum
+    val total = completedTasks.size + activeCount + tasks.size
     if (total == 0) 1.0
     else completedTasks.size.toDouble / total
   }
 
   private def isComplete: Boolean = {
     tasks.isEmpty && activeTasks.isEmpty
+  }
+
+  private def isPeerCoolingDown(peer: Peer): Boolean =
+    peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
+
+  private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
+    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+    peerCooldownUntilMs.put(peer.id.value, until)
+    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
   }
 }
 

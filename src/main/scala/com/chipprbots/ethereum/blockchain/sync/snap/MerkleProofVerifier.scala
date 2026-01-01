@@ -358,18 +358,33 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       endHash: ByteString
   ): Either[String, Unit] = {
 
-    // An empty reply (no slots + no proof) is only valid if the expected storage root
-    // is the empty storage trie. For non-empty roots, an empty reply usually means the
-    // peer could not serve the requested state, and we must retry elsewhere.
-    if (proof.isEmpty && slots.isEmpty) {
-      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+    val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+
+    // snap/1 nuance:
+    // - Proofs are only sent when the server needs to prove a boundary (non-zero origin) or
+    //   the response was capped. Full responses commonly have empty proofs.
+    // - A reply with no slots and no proofs is only meaningful if the expected storageRoot is empty.
+    //   Otherwise it usually indicates the peer can't serve the requested state.
+    if (slots.isEmpty && proof.isEmpty) {
       return if (rootHash == emptyRoot) Right(())
-      else Left("Empty StorageRanges response for non-empty storageRoot")
+      else Left("Empty StorageRanges response (no slots, no proof) for non-empty storageRoot")
     }
 
-    // If we have slots, we need a proof
+    // Without proofs, we can still validate basic invariants (ordering + bounds) and accept.
     if (proof.isEmpty && slots.nonEmpty) {
-      return Left(s"Missing proof for ${slots.size} storage slots")
+      return validateStorageSlotsBasic(slots, startHash, endHash)
+    }
+
+    // If we have proofs but no slots, this can be a valid proof-of-absence for sparse tries.
+    if (slots.isEmpty && proof.nonEmpty) {
+      try {
+        val proofNodes = decodeProofNodes(proof)
+        return verifyProofRoot(proofNodes).left.map(err => s"Storage proof root verification failed: $err")
+      } catch {
+        case e: Exception =>
+          log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
+          return Left(s"Storage verification error: ${e.getMessage}")
+      }
     }
 
     try {
@@ -405,6 +420,50 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
         log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
         Left(s"Storage verification error: ${e.getMessage}")
     }
+  }
+
+  private def validateStorageSlotsBasic(
+      slots: Seq[(ByteString, ByteString)],
+      startHash: ByteString,
+      endHash: ByteString
+  ): Either[String, Unit] = {
+    def cmp(a: ByteString, b: ByteString): Int = {
+      val aa = a.toArray
+      val bb = b.toArray
+      var i = 0
+      while (i < math.min(aa.length, bb.length)) {
+        val ai = aa(i) & 0xff
+        val bi = bb(i) & 0xff
+        if (ai != bi) return ai - bi
+        i += 1
+      }
+      aa.length - bb.length
+    }
+
+    // Monotonic strictly increasing
+    var i = 1
+    while (i < slots.size) {
+      val prev = slots(i - 1)._1
+      val cur = slots(i)._1
+      if (cmp(prev, cur) >= 0) {
+        return Left("Storage slots not monotonically increasing")
+      }
+      i += 1
+    }
+
+    // Bounds (best-effort; endHash is treated as an exclusive upper bound when provided)
+    if (slots.nonEmpty) {
+      val first = slots.head._1
+      if (startHash.nonEmpty && cmp(first, startHash) < 0) {
+        return Left("First storage slot is before requested start")
+      }
+      val last = slots.last._1
+      if (endHash.nonEmpty && cmp(last, endHash) >= 0) {
+        return Left("Last storage slot is at/after requested limit")
+      }
+    }
+
+    Right(())
   }
 
   /** Verify a storage slot exists in the proof
