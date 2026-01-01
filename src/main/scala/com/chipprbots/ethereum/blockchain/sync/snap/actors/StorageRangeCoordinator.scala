@@ -310,6 +310,10 @@ class StorageRangeCoordinator(
           }
       }
     }
+
+    // The coordinator previously relied on StorageTaskComplete messages that are not emitted by
+    // the current actor-based storage pipeline. Explicitly check completion after each response.
+    self ! StorageCheckCompletion
   }
 
   private def storeStorageSlots(

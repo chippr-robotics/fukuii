@@ -358,9 +358,13 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       endHash: ByteString
   ): Either[String, Unit] = {
 
-    // Empty proof is valid if there are no storage slots
+    // An empty reply (no slots + no proof) is only valid if the expected storage root
+    // is the empty storage trie. For non-empty roots, an empty reply usually means the
+    // peer could not serve the requested state, and we must retry elsewhere.
     if (proof.isEmpty && slots.isEmpty) {
-      return Right(())
+      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+      return if (rootHash == emptyRoot) Right(())
+      else Left("Empty StorageRanges response for non-empty storageRoot")
     }
 
     // If we have slots, we need a proof

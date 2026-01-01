@@ -909,12 +909,22 @@ class SNAPSyncController(
       storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(root))
 
       // Enqueue initial storage tasks derived from contract accounts found during AccountRangeSync.
-      val storageTasks = StorageTask.createStorageTasks(contractStorageAccounts)
+      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+      val (nonEmptyStorage, emptyStorage) = contractStorageAccounts.partition { case (_, storageRoot) =>
+        storageRoot.nonEmpty && storageRoot != emptyRoot
+      }
+      if (emptyStorage.nonEmpty) {
+        log.info(s"Skipping ${emptyStorage.size} contract accounts with empty storageRoot")
+      }
+
+      val storageTasks = StorageTask.createStorageTasks(nonEmptyStorage)
       if (storageTasks.isEmpty) {
-        log.warning("No contract storage tasks to sync; completing StorageRangeSync immediately")
+        log.warning(
+          "No contract accounts with non-empty storageRoot; completing StorageRangeSync immediately"
+        )
         self ! StorageRangeSyncComplete
       } else {
-        log.info(s"Enqueuing ${storageTasks.size} storage tasks")
+        log.info(s"Enqueuing ${storageTasks.size} storage tasks (non-empty storageRoot only)")
         storageRangeCoordinator.foreach(_ ! actors.Messages.AddStorageTasks(storageTasks))
       }
       
