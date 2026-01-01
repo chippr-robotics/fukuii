@@ -343,6 +343,7 @@ class ByteCodeCoordinatorSpec
       baseEmpty = 50.millis,
       baseTimeout = 50.millis,
       baseInvalid = 50.millis,
+      maxInFlightPerPeer = 2,
       max = 200.millis,
       exponentCap = 3
     )

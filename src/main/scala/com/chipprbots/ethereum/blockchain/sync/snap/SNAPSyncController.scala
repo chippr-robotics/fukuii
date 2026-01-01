@@ -234,27 +234,26 @@ class SNAPSyncController(
         log.info(
           s"Collected ${contractAccounts.size} contract accounts for bytecode sync and ${contractStorageAccounts.size} for storage sync from coordinator"
         )
-        currentPhase = StorageRangeSync
-        startStorageRangeSync()
+        currentPhase = ByteCodeSync
+        startBytecodeSync()
       }
 
     case ByteCodeSyncComplete =>
       if (currentPhase != ByteCodeSync) {
         log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase")
       } else {
-        log.info("ByteCode sync complete. Starting state healing...")
-        currentPhase = StateHealing
-        startStateHealing()
+        log.info("ByteCode sync complete. Starting storage range sync...")
+        currentPhase = StorageRangeSync
+        startStorageRangeSync()
       }
 
     case StorageRangeSyncComplete =>
-      if (bytecodeSyncStarting || currentPhase != StorageRangeSync) {
-        log.info(s"Ignoring StorageRangeSyncComplete in phase=$currentPhase (bytecodeSyncStarting=$bytecodeSyncStarting)")
+      if (currentPhase != StorageRangeSync) {
+        log.info(s"Ignoring StorageRangeSyncComplete in phase=$currentPhase")
       } else {
-        bytecodeSyncStarting = true
-        log.info("Storage range sync complete. Starting bytecode sync...")
-        currentPhase = ByteCodeSync
-        startBytecodeSync()
+        log.info("Storage range sync complete. Starting state healing...")
+        currentPhase = StateHealing
+        startStateHealing()
       }
 
     case StateHealingComplete =>

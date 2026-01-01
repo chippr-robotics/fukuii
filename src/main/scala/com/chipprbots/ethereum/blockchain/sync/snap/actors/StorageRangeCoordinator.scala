@@ -381,27 +381,20 @@ class StorageRangeCoordinator(
   ): Either[String, Unit] =
     try {
       import com.chipprbots.ethereum.mpt.{byteStringSerializer, MerklePatriciaTrie}
-      import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 
       if (slots.nonEmpty) {
         val accountHash = task.accountHash
 
         val storageTrie = storageTrieCache.getOrElseUpdate(
           accountHash, {
-            val storageRoot = task.storageRoot
-            if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
-              log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-              MerklePatriciaTrie[ByteString, ByteString](mptStorage)
-            } else {
-              try {
-                log.debug(s"Loading storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-                MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
-              } catch {
-                case _: MissingRootNodeException =>
-                  log.warning(s"Storage root not found for account, creating new trie")
-                  MerklePatriciaTrie[ByteString, ByteString](mptStorage)
-              }
-            }
+            // Important: the storageRoot in account data refers to the *remote* (pivot) trie.
+            // We generally do not have its nodes locally yet, so constructing a trie at that
+            // root and then calling put() will immediately fail with MissingRootNodeException.
+            // Start from an empty trie and grow it as ranges arrive.
+            log.debug(
+              s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
+            )
+            MerklePatriciaTrie[ByteString, ByteString](mptStorage)
           }
         )
 
@@ -423,7 +416,7 @@ class StorageRangeCoordinator(
         val computedRoot = ByteString(currentTrie.getRootHash)
         val expectedRoot = task.storageRoot
         if (computedRoot != expectedRoot) {
-          log.warning(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+          log.debug(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
         }
 
         mptStorage.synchronized {
