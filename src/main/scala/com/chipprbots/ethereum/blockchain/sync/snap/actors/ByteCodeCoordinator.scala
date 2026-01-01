@@ -43,15 +43,41 @@ class ByteCodeCoordinator(
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker,
     batchSize: Int,
+  cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig,
     snapSyncController: ActorRef
 ) extends Actor
     with ActorLogging {
 
   import Messages._
 
+  private val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  private val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
+
+  private def nowMillis: Long = System.currentTimeMillis()
+
+  private def isPeerCoolingDown(peer: Peer): Boolean =
+    peerCooldownUntilMillis.get(peer.id).exists(_ > nowMillis)
+
+  private def clearPeerFailures(peer: Peer): Unit = {
+    peerFailureCounts.remove(peer.id)
+    peerCooldownUntilMillis.remove(peer.id)
+  }
+
+  private def recordPeerCooldown(peer: Peer, base: FiniteDuration, reason: String): FiniteDuration = {
+    val failures = peerFailureCounts.getOrElse(peer.id, 0) + 1
+    peerFailureCounts.update(peer.id, failures)
+
+    // Exponential backoff: base, 2*base, 4*base, ... (capped)
+    val exponent = math.min(failures - 1, cooldownConfig.exponentCap)
+    val cooldown = (base * (1L << exponent)).min(cooldownConfig.max)
+    peerCooldownUntilMillis.update(peer.id, nowMillis + cooldown.toMillis)
+    log.debug(s"Cooling down peer ${peer.id.value} for $cooldown ($reason, failures=$failures)")
+    cooldown
+  }
+
   // Task management
   private val pendingTasks = mutable.Queue[ByteCodeTask]()
-  private val activeTasks = mutable.Map[BigInt, (ByteCodeTask, ActorRef)]() // requestId -> (task, worker)
+  private val activeTasks = mutable.Map[BigInt, (ByteCodeTask, ActorRef, Peer)]() // requestId -> (task, worker, peer)
   private val completedTasks = mutable.ArrayBuffer[ByteCodeTask]()
 
   // Worker pool
@@ -91,19 +117,29 @@ class ByteCodeCoordinator(
       log.info(s"Queued ${newTasks.size} bytecode tasks")
 
     case PeerAvailable(peer) =>
-      // Dispatch tasks to available peer
-      dispatchIfPossible(peer)
+      if (isPeerCoolingDown(peer)) {
+        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
+      } else {
+        // Dispatch tasks to available peer
+        dispatchIfPossible(peer)
+      }
 
     case ByteCodePeerAvailable(peer) =>
-      // Same as PeerAvailable - dispatch tasks to available peer
-      dispatchIfPossible(peer)
+      if (isPeerCoolingDown(peer)) {
+        log.debug(s"Ignoring ByteCodePeerAvailable(${peer.id.value}) due to cooldown")
+      } else {
+        // Same as PeerAvailable - dispatch tasks to available peer
+        dispatchIfPossible(peer)
+      }
 
     case ByteCodesResponseMsg(response) =>
       handleByteCodesResponse(response)
 
     case ByteCodeTaskComplete(requestId, result) =>
-      activeTasks.remove(requestId).foreach { case (_, worker) =>
+      activeTasks.remove(requestId).foreach { case (_, worker, peer) =>
         markWorkerIdle(worker)
+        // A peer that successfully serves any portion of a task gets its failures cleared.
+        result.foreach(_ => clearPeerFailures(peer))
       }
       result match {
         case Right(count) =>
@@ -117,10 +153,11 @@ class ByteCodeCoordinator(
 
     case ByteCodeTaskFailed(requestId, error) =>
       // Re-queue the task
-      activeTasks.remove(requestId).foreach { case (task, worker) =>
+      activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
         log.warning(s"Re-queuing bytecode task after failure: $error")
         task.pending = false
         pendingTasks.enqueue(task)
+        recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
         markWorkerIdle(worker)
       }
       checkCompletion()
@@ -144,7 +181,7 @@ class ByteCodeCoordinator(
     val requestId = requestTracker.generateRequestId()
 
     task.pending = true
-    activeTasks.put(requestId, (task, worker))
+    activeTasks.put(requestId, (task, worker, peer))
 
     log.debug(s"Assigning bytecode task (${task.codeHashes.size} hashes) to worker for peer ${peer.id}")
     worker ! ByteCodeWorkerFetchTask(task, peer, requestId, maxResponseSize)
@@ -168,7 +205,7 @@ class ByteCodeCoordinator(
       case None =>
         log.debug(s"Received ByteCodes response for unknown or completed request ${response.requestId}")
 
-      case Some((task, worker)) =>
+      case Some((task, worker, peer)) =>
         log.debug(s"Processing ByteCodes response: ${response.codes.size} codes for request ${response.requestId}")
 
         // SNAP spec: returned codes are in request order, may have gaps (unavailable codes skipped)
@@ -179,6 +216,9 @@ class ByteCodeCoordinator(
             activeTasks.remove(response.requestId)
             task.pending = false
             pendingTasks.enqueue(task)
+
+            // Spec violation or malicious peer - back off harder than empty responses.
+            recordPeerCooldown(peer, cooldownConfig.baseInvalid, s"invalid ByteCodes: $error")
             markWorkerIdle(worker)
             checkCompletion()
 
@@ -190,11 +230,24 @@ class ByteCodeCoordinator(
                 activeTasks.remove(response.requestId)
                 task.pending = false
                 pendingTasks.enqueue(task)
+
+                // Storage failure isn't necessarily the peer's fault, but to be a good neighbor
+                // (and avoid tight loops), briefly cool down this peer.
+                recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"local store failed: $error")
                 markWorkerIdle(worker)
                 checkCompletion()
 
               case Right(_) =>
                 val remainingHashes = task.codeHashes.filterNot(matchedHashes.contains)
+
+                // Backoff behavior:
+                // - empty response: peer had none of the requested codes; cool down briefly
+                // - non-empty response: peer is useful; clear failures
+                if (matchedHashes.isEmpty) {
+                  recordPeerCooldown(peer, cooldownConfig.baseEmpty, "empty ByteCodes response")
+                } else {
+                  clearPeerFailures(peer)
+                }
 
                 if (remainingHashes.nonEmpty) {
                   val accountByCodeHash = task.codeHashes.zip(task.accountHashes).toMap
@@ -353,12 +406,32 @@ class ByteCodeCoordinator(
 }
 
 object ByteCodeCoordinator {
+
+  final case class ByteCodePeerCooldownConfig(
+      baseEmpty: FiniteDuration,
+      baseTimeout: FiniteDuration,
+      baseInvalid: FiniteDuration,
+      max: FiniteDuration,
+      exponentCap: Int
+  )
+
+  object ByteCodePeerCooldownConfig {
+    val default: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig(
+      baseEmpty = 2.seconds,
+      baseTimeout = 10.seconds,
+      baseInvalid = 15.seconds,
+      max = 2.minutes,
+      exponentCap = 10
+    )
+  }
+
   def props(
       evmCodeStorage: EvmCodeStorage,
       networkPeerManager: ActorRef,
       requestTracker: SNAPRequestTracker,
       batchSize: Int,
-      snapSyncController: ActorRef
+      snapSyncController: ActorRef,
+      cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default
   ): Props =
     Props(
       new ByteCodeCoordinator(
@@ -366,6 +439,7 @@ object ByteCodeCoordinator {
         networkPeerManager,
         requestTracker,
         batchSize,
+        cooldownConfig,
         snapSyncController
       )
     )

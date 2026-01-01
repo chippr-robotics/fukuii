@@ -329,4 +329,56 @@ class ByteCodeCoordinatorSpec
     val req2 = send2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
     req2.hashes shouldEqual Seq(h1)
   }
+
+  it should "cool down peers after empty ByteCodes responses" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
+
+    val cooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
+      baseEmpty = 50.millis,
+      baseTimeout = 50.millis,
+      baseInvalid = 50.millis,
+      max = 200.millis,
+      exponentCap = 3
+    )
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = cooldownConfig
+      )
+    )
+
+    val code1 = ByteString("code1")
+    val h1 = kec256(code1)
+    val contractAccounts = Seq((ByteString("account1"), h1))
+
+    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req1.hashes shouldEqual Seq(h1)
+
+    // Respond with empty ByteCodes (peer had none of the requested hashes)
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(ByteCodes(req1.requestId, Seq.empty))
+
+    // Immediately advertising the same peer should not trigger a re-request due to cooldown
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectNoMessage(80.millis)
+
+    // After cooldown elapses, the coordinator should be willing to send again
+    Thread.sleep(70)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+  }
 }
