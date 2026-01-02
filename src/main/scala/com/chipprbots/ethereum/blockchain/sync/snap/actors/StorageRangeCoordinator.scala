@@ -143,9 +143,9 @@ class StorageRangeCoordinator(
 
     case StoragePeerAvailable(peer) =>
       if (isGlobalBackoffActive) {
-        log.debug(s"Global storage backoff active; ignoring StoragePeerAvailable(${peer.id.value})")
+        log.info(s"Global storage backoff active; ignoring StoragePeerAvailable(${peer.id.value})")
       } else if (isPeerCoolingDown(peer)) {
-        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
+        log.info(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
       } else if (!isComplete && workers.size < maxWorkers) {
         val worker = createWorker()
         worker ! FetchStorageRanges(null, peer)
@@ -207,7 +207,7 @@ class StorageRangeCoordinator(
 
   private def requestNextRanges(peer: Peer): Option[BigInt] = {
     if (tasks.isEmpty) {
-      log.debug("No more storage tasks available")
+      log.info("No more storage tasks available")
       return None
     }
 
@@ -272,10 +272,11 @@ class StorageRangeCoordinator(
     val limitPrefix = firstTask.last.take(4).toHex
     val accountsPreview = accountHashes.take(3).map(_.take(4).toHex).mkString(",")
 
-    log.debug(
-      s"Requesting storage ranges from peer ${peer.id} " +
-        s"(requestId=$requestId, accounts=${batchTasks.size}, root=$rootPrefix, start=$startPrefix, limit=$limitPrefix, " +
-        s"bytes=$maxResponseSize, accountsPreview=$accountsPreview)"
+    // Increased visibility: log full request details at INFO to aid debugging malformed or unexpected replies
+    log.info(
+      s"Sending GetStorageRanges to peer ${peer.id.value}: requestId=$requestId accounts=${batchTasks.size} " +
+        s"root=${stateRoot.toHex} start=${firstTask.next.toHex} limit=${firstTask.last.toHex} " +
+        s"bytes=$maxResponseSize accountsPreview=${accountHashes.take(5).map(_.toHex).mkString(",")}" 
     )
 
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc

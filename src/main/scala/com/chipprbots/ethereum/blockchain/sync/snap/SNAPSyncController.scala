@@ -964,7 +964,7 @@ class SNAPSyncController(
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
       if (snapPeers.isEmpty) {
-        log.debug(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
+        log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.StoragePeerAvailable(peer)

@@ -6,7 +6,7 @@
     <!--read properties from application.conf using PropertyDefiner (logback 1.5.x compatible)-->
     <define name="LOGSLEVEL" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
         <key>logging.logs-level</key>
-        <defaultValue>INFO</defaultValue>
+        <defaultValue>DEBUG</defaultValue>
     </define>
     <define name="ASJSON" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
         <key>logging.json-output</key>
@@ -45,7 +45,7 @@
             <!-- Include caller info for debugging 
                  Set to true via -Dlogback.includeCallerData=true for detailed debugging
                  Disabled by default in production for performance -->
-            <includeCallerData>false</includeCallerData>
+            <includeCallerData>true</includeCallerData>
             <!-- Include context name -->
             <includeContext>true</includeContext>
         </encoder>
@@ -116,7 +116,7 @@
     <!-- NETWORK - Peer connections and communication (DEBUG FOR TESTBED)    -->
     <!-- Focus on peer handshake and capability exchange                      -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.network" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="INFO" />
@@ -191,15 +191,16 @@
     <!-- =================================================================== -->
     <!-- SNAP SYNC - Set to INFO for run 12 (not under test)                -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeCoordinator" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="INFO" />
     
     <!-- SNAP request tracking - INFO for run 12 -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="INFO" />
     
     <!-- =================================================================== -->
