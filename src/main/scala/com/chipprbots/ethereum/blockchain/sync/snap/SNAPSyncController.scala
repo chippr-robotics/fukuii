@@ -87,6 +87,10 @@ class SNAPSyncController(
   private var bootstrapRetryCount: Int = 0
   private val BootstrapRetryDelay = 2.seconds
 
+  // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
+  private var lastPivotRestartMs: Long = 0L
+  private val MinPivotRestartInterval: FiniteDuration = 30.seconds
+
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
@@ -294,59 +298,106 @@ class SNAPSyncController(
       // Reset retry counter
       bootstrapRetryCount = 0
       
+      // Helper: compute current best height from SNAP-capable peers (subject to bootstrapPivot floor).
+      def currentNetworkBestFromSnapPeers(bootstrapPivot: BigInt): Option[BigInt] = {
+        val snapPeersForPivot =
+          peersToDownloadFrom.values.toList
+            .filter(_.peerInfo.remoteStatus.supportsSnap)
+            .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
+
+        snapPeersForPivot
+          .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+          .headOption
+          .map(_.peerInfo.maxBlockNumber)
+      }
+
+      def pivotTooStaleAgainstNetworkHead(pivot: BigInt): Boolean = {
+        val bootstrapPivot = appStateStorage.getBootstrapPivotBlock()
+        currentNetworkBestFromSnapPeers(bootstrapPivot) match {
+          case Some(networkBest) if networkBest > 0 =>
+            val delta = networkBest - pivot
+            if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
+              log.warning(
+                s"Bootstrapped pivot $pivot is now $delta blocks behind current network best $networkBest; " +
+                  s"exceeds maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}. Re-selecting a fresher pivot."
+              )
+              true
+            } else {
+              log.info(
+                s"Bootstrapped pivot freshness: pivot=$pivot, networkBest=$networkBest, delta=$delta, " +
+                  s"maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}"
+              )
+              false
+            }
+          case _ =>
+            // If we can't see any suitable SNAP peers right now, don't block on freshness.
+            false
+        }
+      }
+
       pivotHeaderOpt match {
         case Some(header) =>
           val targetPivot = header.number
-          pivotBlock = Some(targetPivot)
-          stateRoot = Some(header.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-          appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
-          SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+          if (pivotTooStaleAgainstNetworkHead(targetPivot)) {
+            // Don't commit a pivot that peers are unlikely to serve.
+            startSnapSync()
+          } else {
+            pivotBlock = Some(targetPivot)
+            stateRoot = Some(header.stateRoot)
+            appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
+            appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
-          log.info("=" * 80)
-          log.info("🎯 SNAP Sync Ready (from bootstrap)")
-          log.info("=" * 80)
-          log.info(s"Local best block: $localBestBlock")
-          log.info(s"Using bootstrapped pivot block: $targetPivot")
-          log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-          log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
-          log.info("=" * 80)
+            SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
-          currentPhase = AccountRangeSync
-          startAccountRangeSync(header.stateRoot)
-          context.become(syncing)
+            log.info("=" * 80)
+            log.info("🎯 SNAP Sync Ready (from bootstrap)")
+            log.info("=" * 80)
+            log.info(s"Local best block: $localBestBlock")
+            log.info(s"Using bootstrapped pivot block: $targetPivot")
+            log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+            log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+            log.info("=" * 80)
+
+            currentPhase = AccountRangeSync
+            startAccountRangeSync(header.stateRoot)
+            context.become(syncing)
+          }
 
         case None =>
           // Backward-compat / fallback: use the stored bootstrap target and local header.
           bootstrapTarget match {
             case Some(targetPivot) =>
-              blockchainReader.getBlockHeaderByNumber(targetPivot) match {
-                case Some(header) =>
-                  pivotBlock = Some(targetPivot)
-                  stateRoot = Some(header.stateRoot)
-                  appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-                  appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+              if (pivotTooStaleAgainstNetworkHead(targetPivot)) {
+                startSnapSync()
+              } else {
+                blockchainReader.getBlockHeaderByNumber(targetPivot) match {
+                  case Some(header) =>
+                    pivotBlock = Some(targetPivot)
+                    stateRoot = Some(header.stateRoot)
+                    appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
+                    appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
-                  SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+                    SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
-                  log.info("=" * 80)
-                  log.info("🎯 SNAP Sync Ready (from bootstrap, local header)")
-                  log.info("=" * 80)
-                  log.info(s"Local best block: $localBestBlock")
-                  log.info(s"Using bootstrapped pivot block: $targetPivot")
-                  log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-                  log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
-                  log.info("=" * 80)
+                    log.info("=" * 80)
+                    log.info("🎯 SNAP Sync Ready (from bootstrap, local header)")
+                    log.info("=" * 80)
+                    log.info(s"Local best block: $localBestBlock")
+                    log.info(s"Using bootstrapped pivot block: $targetPivot")
+                    log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+                    log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+                    log.info("=" * 80)
 
-                  currentPhase = AccountRangeSync
-                  startAccountRangeSync(header.stateRoot)
-                  context.become(syncing)
+                    currentPhase = AccountRangeSync
+                    startAccountRangeSync(header.stateRoot)
+                    context.become(syncing)
 
-                case None =>
-                  log.warning(s"Bootstrap complete but pivot header $targetPivot not available yet")
-                  log.warning("Falling back to recalculating pivot from current network state")
-                  startSnapSync()
+                  case None =>
+                    log.warning(s"Bootstrap complete but pivot header $targetPivot not available yet")
+                    log.warning("Falling back to recalculating pivot from current network state")
+                    startSnapSync()
+                }
               }
             case None =>
               log.info("No bootstrap target stored - calculating pivot from network state")
@@ -796,6 +847,7 @@ class SNAPSyncController(
   private case object RequestAccountRanges
 
   private def requestAccountRanges(): Unit = {
+    if (maybeRestartIfPivotTooStale("AccountRangeSync")) return
     // Notify coordinator of available peers
     accountRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
@@ -868,6 +920,7 @@ class SNAPSyncController(
   private case object RequestByteCodes
 
   private def requestByteCodes(): Unit = {
+    if (maybeRestartIfPivotTooStale("ByteCodeSync")) return
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -951,6 +1004,7 @@ class SNAPSyncController(
   private case object RequestStorageRanges
 
   private def requestStorageRanges(): Unit = {
+    if (maybeRestartIfPivotTooStale("StorageRangeSync")) return
     // Notify coordinator of available peers
     storageRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
@@ -1014,6 +1068,7 @@ class SNAPSyncController(
   private case object RequestTrieNodeHealing
 
   private def requestTrieNodeHealing(): Unit = {
+    if (maybeRestartIfPivotTooStale("StateHealing")) return
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -1113,6 +1168,76 @@ class SNAPSyncController(
         log.error("Missing state root or pivot block for validation")
         log.error("Sync cannot complete - missing state root or pivot block")
     }
+  }
+
+  private def currentNetworkBestFromSnapPeers(): Option[BigInt] = {
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    peersToDownloadFrom.values.toList
+      .filter(_.peerInfo.remoteStatus.supportsSnap)
+      .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
+      .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+      .headOption
+      .map(_.peerInfo.maxBlockNumber)
+  }
+
+  private def maybeRestartIfPivotTooStale(contextLabel: String): Boolean = {
+    val now = System.currentTimeMillis()
+    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return false
+
+    (pivotBlock, currentNetworkBestFromSnapPeers()) match {
+      case (Some(pivot), Some(networkBest)) if networkBest > 0 && networkBest > pivot =>
+        val delta = networkBest - pivot
+        if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
+          lastPivotRestartMs = now
+          restartSnapSync(
+            s"pivot=$pivot is $delta blocks behind visible networkBest=$networkBest in $contextLabel " +
+              s"(maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks})"
+          )
+          true
+        } else {
+          false
+        }
+      case _ =>
+        false
+    }
+  }
+
+  private def restartSnapSync(reason: String): Unit = {
+    log.warning(s"Restarting SNAP sync with a fresher pivot: $reason")
+
+    // Cancel periodic phase request ticks
+    accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
+    bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
+    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    healingRequestTask.foreach(_.cancel()); healingRequestTask = None
+    bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
+
+    // Stop coordinators so we don't double-run phases
+    accountRangeCoordinator.foreach(context.stop); accountRangeCoordinator = None
+    bytecodeCoordinator.foreach(context.stop); bytecodeCoordinator = None
+    storageRangeCoordinator.foreach(context.stop); storageRangeCoordinator = None
+    trieNodeHealingCoordinator.foreach(context.stop); trieNodeHealingCoordinator = None
+
+    // Clear inflight request timeouts and internal phase state
+    requestTracker.clear()
+
+    // Clear phase start guards and cached contract accounts
+    bytecodeSyncStarting = false
+    storageRangeSyncStarting = false
+    contractAccounts = Seq.empty
+    contractStorageAccounts = Seq.empty
+
+    // Reset pivot/state root so a new selection is committed
+    pivotBlock = None
+    stateRoot = None
+    currentPhase = Idle
+
+    // Reset progress counters so logs/ETA reflect the new attempt
+    progressMonitor.reset()
+
+    // Re-run pivot selection/bootstrap with the latest visible peer set
+    context.become(idle)
+    startSnapSync()
   }
 
   /** Trigger healing for a list of missing node hashes */
@@ -1303,7 +1428,12 @@ object SNAPSyncController {
 
 case class SNAPSyncConfig(
     enabled: Boolean = true,
-    pivotBlockOffset: Long = 1024,
+  // How far behind the perceived head to place the pivot.
+  // SNAP servers generally only guarantee serving *very recent* state; keeping this small improves storage serving.
+  pivotBlockOffset: Long = 64,
+  // If bootstrap takes too long and the selected pivot drifts too far behind the current network head,
+  // abandon it and re-select a fresher pivot.
+  maxPivotStalenessBlocks: Long = 4096,
     accountConcurrency: Int = 16,
     storageConcurrency: Int = 8,
     storageBatchSize: Int = 8,
@@ -1321,6 +1451,10 @@ object SNAPSyncConfig {
     SNAPSyncConfig(
       enabled = snapConfig.getBoolean("enabled"),
       pivotBlockOffset = snapConfig.getLong("pivot-block-offset"),
+      maxPivotStalenessBlocks =
+        if (snapConfig.hasPath("max-pivot-staleness-blocks"))
+          snapConfig.getLong("max-pivot-staleness-blocks")
+        else 4096,
       accountConcurrency = snapConfig.getInt("account-concurrency"),
       storageConcurrency = snapConfig.getInt("storage-concurrency"),
       storageBatchSize = snapConfig.getInt("storage-batch-size"),
@@ -1610,6 +1744,27 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   def stopPeriodicLogging(): Unit = {
     periodicLogTask.foreach(_.cancel())
     periodicLogTask = None
+  }
+
+  /** Reset all counters/ETA state for a fresh SNAP attempt */
+  def reset(): Unit = synchronized {
+    currentPhaseState = Idle
+    accountsSynced = 0
+    bytecodesDownloaded = 0
+    storageSlotsSynced = 0
+    nodesHealed = 0
+
+    estimatedTotalAccounts = 0
+    estimatedTotalBytecodes = 0
+    estimatedTotalSlots = 0
+
+    phaseStartTime = System.currentTimeMillis()
+    lastLogTime = System.currentTimeMillis()
+
+    accountsHistory.clear()
+    bytecodesHistory.clear()
+    slotsHistory.clear()
+    nodesHistory.clear()
   }
 
   def startPhase(phase: SyncPhase): Unit = {
