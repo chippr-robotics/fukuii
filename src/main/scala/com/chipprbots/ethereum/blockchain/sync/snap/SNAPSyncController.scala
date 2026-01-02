@@ -95,8 +95,15 @@ class SNAPSyncController(
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
   private var storageRangeRequestTask: Option[Cancellable] = None
+  private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   private var bootstrapCheckTask: Option[Cancellable] = None
+
+  // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
+  // This addresses the common case where peers no longer serve the chosen pivot/state window.
+  private val StorageStagnationThreshold: FiniteDuration = 10.minutes
+  private val StorageStagnationCheckInterval: FiniteDuration = 30.seconds
+  private var lastStorageProgressMs: Long = System.currentTimeMillis()
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
@@ -108,6 +115,7 @@ class SNAPSyncController(
     accountRangeRequestTask.foreach(_.cancel())
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
+    storageStagnationCheckTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
@@ -184,6 +192,7 @@ class SNAPSyncController(
 
     case ProgressStorageSlotsSynced(count) =>
       progressMonitor.incrementStorageSlotsSynced(count)
+      lastStorageProgressMs = System.currentTimeMillis()
 
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
@@ -278,6 +287,44 @@ class SNAPSyncController(
 
     case msg =>
       log.debug(s"Unhandled message in syncing state: $msg")
+  }
+
+  // Internal message for periodic storage stagnation checks
+  private case object CheckStorageStagnation
+
+  private case class StorageCoordinatorProgress(stats: actors.StorageRangeCoordinator.SyncStatistics)
+
+  private def scheduleStorageStagnationChecks(): Unit = {
+    storageStagnationCheckTask.foreach(_.cancel())
+    storageStagnationCheckTask = Some(
+      scheduler.scheduleWithFixedDelay(
+        StorageStagnationCheckInterval,
+        StorageStagnationCheckInterval,
+        self,
+        CheckStorageStagnation
+      )(ec)
+    )
+  }
+
+  private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
+    if (currentPhase != StorageRangeSync) return
+
+    // Only consider it a stall if there is still work to do.
+    val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
+    if (!workRemaining) return
+
+    val now = System.currentTimeMillis()
+    val stalledForMs = now - lastStorageProgressMs
+    if (stalledForMs < StorageStagnationThreshold.toMillis) return
+
+    // Avoid noisy rapid restarts.
+    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
+    lastPivotRestartMs = now
+
+    restartSnapSync(
+      s"storage sync stalled: no storage slot progress for ${stalledForMs / 1000}s " +
+        s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, tasksActive=${stats.tasksActive}"
+    )
   }
 
   def bootstrapping: Receive = handlePeerListMessages.orElse {
@@ -996,6 +1043,10 @@ class SNAPSyncController(
         )(ec)
       )
 
+      // Start/refresh storage stagnation watchdog state.
+      lastStorageProgressMs = System.currentTimeMillis()
+      scheduleStorageStagnationChecks()
+
       progressMonitor.startPhase(StorageRangeSync)
     }
   }
@@ -1025,6 +1076,41 @@ class SNAPSyncController(
         }
       }
     }
+  }
+
+  // Handle storage stagnation checks in the actor mailbox so we can safely ask the coordinator.
+  override def aroundReceive(receive: Receive, msg: Any): Unit = msg match {
+    case CheckStorageStagnation if currentPhase == StorageRangeSync =>
+      storageRangeCoordinator match {
+        case Some(coordinator) =>
+          import org.apache.pekko.pattern.{ ask, pipe }
+          import org.apache.pekko.util.Timeout
+          implicit val timeout: Timeout = Timeout(2.seconds)
+
+          (coordinator ? actors.Messages.StorageGetProgress)
+            .mapTo[actors.StorageRangeCoordinator.SyncStatistics]
+            .map(StorageCoordinatorProgress.apply)
+            .recover { case ex =>
+              log.debug(s"Storage stagnation check failed to query coordinator: ${ex.getMessage}")
+              // No stats; do nothing.
+              StorageCoordinatorProgress(
+                actors.StorageRangeCoordinator.SyncStatistics(0, 0, 0, 0, 0, 0, 0.0)
+              )
+            }
+            .pipeTo(self)
+        case None =>
+          ()
+      }
+      super.aroundReceive(receive, msg)
+
+    case StorageCoordinatorProgress(stats) if currentPhase == StorageRangeSync =>
+      // Ignore the dummy stats used on recover.
+      if (stats.elapsedTimeMs > 0 || stats.tasksPending > 0 || stats.tasksActive > 0 || stats.tasksCompleted > 0)
+        maybeRestartIfStorageStagnant(stats)
+      super.aroundReceive(receive, msg)
+
+    case _ =>
+      super.aroundReceive(receive, msg)
   }
 
   private def startStateHealing(): Unit = {
@@ -1209,6 +1295,7 @@ class SNAPSyncController(
     accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
     bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
     storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
     healingRequestTask.foreach(_.cancel()); healingRequestTask = None
     bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
 
