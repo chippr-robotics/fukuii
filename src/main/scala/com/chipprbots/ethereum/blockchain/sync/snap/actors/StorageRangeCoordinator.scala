@@ -279,6 +279,10 @@ class StorageRangeCoordinator(
         s"bytes=$maxResponseSize accountsPreview=${accountHashes.take(5).map(_.toHex).mkString(",")}" 
     )
 
+    // Log per-account storageRoot mapping for this batch to help debug which accounts are requested
+    val perAccountInfo = batchTasks.map(task => s"account=${task.accountHash.toHex},storageRoot=${task.storageRoot.toHex}").mkString("; ")
+    log.info(s"GetStorageRanges batch details: requestId=$requestId ${perAccountInfo}")
+
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
     val messageSerializable: MessageSerializable = new GetStorageRangesEnc(request)
     networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
