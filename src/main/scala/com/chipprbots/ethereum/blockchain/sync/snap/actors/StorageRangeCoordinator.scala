@@ -97,6 +97,10 @@ class StorageRangeCoordinator(
   private val workers = mutable.ArrayBuffer[ActorRef]()
   private val maxWorkers = 8
 
+  // Some peers refuse/struggle with multi-account StorageRanges. If we observe empty responses for
+  // batched requests, fall back to single-account requests.
+  private var effectiveMaxAccountsPerBatch: Int = maxAccountsPerBatch
+
   // Statistics
   private var slotsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -200,11 +204,11 @@ class StorageRangeCoordinator(
     // behavior, only batch tasks that request the initial full range.
     val first = tasks.dequeue()
     val batchTasks: Seq[StorageTask] =
-      if (!isInitialRange(first) || maxAccountsPerBatch <= 1) {
+      if (!isInitialRange(first) || effectiveMaxAccountsPerBatch <= 1) {
         Seq(first)
       } else {
         val buf = mutable.ArrayBuffer[StorageTask](first)
-        while (buf.size < maxAccountsPerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
+        while (buf.size < effectiveMaxAccountsPerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
           buf += tasks.dequeue()
         }
         buf.toSeq
@@ -293,6 +297,12 @@ class StorageRangeCoordinator(
     )
 
     if (servedCount == 0) {
+      if (tasks.size > 1 && effectiveMaxAccountsPerBatch > 1) {
+        log.info(
+          s"Received empty StorageRanges for a batched request (accounts=${tasks.size}); falling back to single-account requests"
+        )
+        effectiveMaxAccountsPerBatch = 1
+      }
       recordPeerCooldown(peer, "empty slots + empty proofs")
       tasks.foreach { task =>
         task.pending = false
