@@ -77,23 +77,57 @@ class ByteCodeCoordinator(
 
   // Task management
   private val pendingTasks = mutable.Queue[ByteCodeTask]()
-  private val activeTasks = mutable.Map[BigInt, (ByteCodeTask, ActorRef, Peer)]() // requestId -> (task, worker, peer)
+  private final case class ActiveByteCodeRequest(
+      task: ByteCodeTask,
+      worker: ActorRef,
+      peer: Peer,
+      requestedBytes: BigInt,
+      startedAtMillis: Long
+  )
+
+  private val activeTasks = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
   private val completedTasks = mutable.ArrayBuffer[ByteCodeTask]()
 
   // Worker pool
   private val workers = mutable.ArrayBuffer[ActorRef]()
-  private val maxWorkers = 8
+  private val maxWorkers = 32
   private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
 
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
 
-  // Maximum response size in bytes (2 MB - bytecode can be large)
-  private val maxResponseSize: BigInt = 2 * 1024 * 1024
+  // ByteCodes request tuning (Nethermind-style): use a per-peer dynamic byte budget, clamped hard to 2 MiB.
+  // We send many hashes and rely on the peer-side `responseBytes` soft limit to bound work.
+  private val minResponseBytes: BigInt = 50 * 1024
+  private val maxResponseBytes: BigInt = 2 * 1024 * 1024
+  private val initialResponseBytes: BigInt = 512 * 1024
+  private val increaseFactor: Double = 1.25
+  private val decreaseFactor: Double = 0.5
+
+  private val peerResponseBytesTarget = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
+
+  private def responseBytesTargetFor(peer: Peer): BigInt =
+    peerResponseBytesTarget.getOrElseUpdate(peer.id, initialResponseBytes).max(minResponseBytes).min(maxResponseBytes)
+
+  private def adjustResponseBytesTargetOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit = {
+    // If we appear to be filling the current budget, try increasing (up to clamp).
+    // This mimics Nethermind's approach of probing larger budgets on responsive peers.
+    if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
+      val next = (requested.toDouble * increaseFactor).toLong
+      peerResponseBytesTarget.update(peer.id, BigInt(next).min(maxResponseBytes).max(minResponseBytes))
+    }
+  }
+
+  private def adjustResponseBytesTargetOnFailure(peer: Peer, reason: String): Unit = {
+    val cur = responseBytesTargetFor(peer)
+    val next = (cur.toDouble * decreaseFactor).toLong
+    peerResponseBytesTarget.update(peer.id, BigInt(next).max(minResponseBytes))
+    log.debug(s"Reducing ByteCodes responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id)} ($reason)")
+  }
 
   private def inFlightForPeer(peer: Peer): Int =
-    activeTasks.values.count { case (_, _, p) => p.id == peer.id }
+    activeTasks.values.count(_.peer.id == peer.id)
 
   override def preStart(): Unit = {
     log.info("ByteCodeCoordinator starting")
@@ -139,10 +173,10 @@ class ByteCodeCoordinator(
       handleByteCodesResponse(response)
 
     case ByteCodeTaskComplete(requestId, result) =>
-      activeTasks.remove(requestId).foreach { case (_, worker, peer) =>
-        markWorkerIdle(worker)
+      activeTasks.remove(requestId).foreach { active =>
+        markWorkerIdle(active.worker)
         // A peer that successfully serves any portion of a task gets its failures cleared.
-        result.foreach(_ => clearPeerFailures(peer))
+        result.foreach(_ => clearPeerFailures(active.peer))
       }
       result match {
         case Right(count) =>
@@ -156,11 +190,15 @@ class ByteCodeCoordinator(
 
     case ByteCodeTaskFailed(requestId, error) =>
       // Re-queue the task
-      activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
+      activeTasks.remove(requestId).foreach { active =>
+        val task = active.task
+        val worker = active.worker
+        val peer = active.peer
         log.warning(s"Re-queuing bytecode task after failure: $error")
         task.pending = false
         pendingTasks.enqueue(task)
         recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
+        adjustResponseBytesTargetOnFailure(peer, s"request failed: $error")
         markWorkerIdle(worker)
       }
       checkCompletion()
@@ -183,11 +221,16 @@ class ByteCodeCoordinator(
     val task = pendingTasks.dequeue()
     val requestId = requestTracker.generateRequestId()
 
+    val requestedBytes = responseBytesTargetFor(peer)
+
     task.pending = true
-    activeTasks.put(requestId, (task, worker, peer))
+    activeTasks.put(
+      requestId,
+      ActiveByteCodeRequest(task, worker, peer, requestedBytes = requestedBytes, startedAtMillis = nowMillis)
+    )
 
     log.debug(s"Assigning bytecode task (${task.codeHashes.size} hashes) to worker for peer ${peer.id}")
-    worker ! ByteCodeWorkerFetchTask(task, peer, requestId, maxResponseSize)
+    worker ! ByteCodeWorkerFetchTask(task, peer, requestId, requestedBytes)
   }
 
   private def dispatchIfPossible(peer: Peer): Unit = {
@@ -218,7 +261,12 @@ class ByteCodeCoordinator(
       case None =>
         log.debug(s"Received ByteCodes response for unknown or completed request ${response.requestId}")
 
-      case Some((task, worker, peer)) =>
+      case Some(active) =>
+        val task = active.task
+        val worker = active.worker
+        val peer = active.peer
+        val requestedBytes = active.requestedBytes
+        val elapsedMillis = (nowMillis - active.startedAtMillis).max(0L)
         log.debug(s"Processing ByteCodes response: ${response.codes.size} codes for request ${response.requestId}")
 
         // SNAP spec: returned codes are in request order, may have gaps (unavailable codes skipped)
@@ -232,6 +280,7 @@ class ByteCodeCoordinator(
 
             // Spec violation or malicious peer - back off harder than empty responses.
             recordPeerCooldown(peer, cooldownConfig.baseInvalid, s"invalid ByteCodes: $error")
+            adjustResponseBytesTargetOnFailure(peer, s"invalid response: $error")
             markWorkerIdle(worker)
             checkCompletion()
 
@@ -247,11 +296,20 @@ class ByteCodeCoordinator(
                 // Storage failure isn't necessarily the peer's fault, but to be a good neighbor
                 // (and avoid tight loops), briefly cool down this peer.
                 recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"local store failed: $error")
+                adjustResponseBytesTargetOnFailure(peer, s"local store failed: $error")
                 markWorkerIdle(worker)
                 checkCompletion()
 
               case Right(_) =>
                 val remainingHashes = task.codeHashes.filterNot(validated.matchedHashes.contains)
+
+                val receivedBytes: BigInt = BigInt(response.codes.map(_.size.toLong).sum)
+                // Update per-peer budget based on observed response size.
+                adjustResponseBytesTargetOnSuccess(peer, requested = requestedBytes, received = receivedBytes)
+                log.debug(
+                  s"ByteCodes tuning: peer=${peer.id.value} requestedBytes=$requestedBytes receivedBytes=$receivedBytes " +
+                    s"elapsedMs=$elapsedMillis newTarget=${responseBytesTargetFor(peer)}"
+                )
 
                 // Backoff behavior:
                 // - empty response: peer had none of the requested codes; cool down briefly
@@ -275,18 +333,22 @@ class ByteCodeCoordinator(
                 val bytecodeCount = response.codes.size
                 bytecodesDownloaded += bytecodeCount
                 snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(bytecodeCount.toLong)
-                val totalBytes = response.codes.map(_.size).sum
-                bytesDownloaded += totalBytes
+                bytesDownloaded += response.codes.map(_.size.toLong).sum
 
-                task.done = true
+                // Only mark the task completed if nothing remains; large batches may be partially served due to bytes.
                 task.pending = false
-                task.bytecodes = response.codes
-                completedTasks += task
-                activeTasks.remove(response.requestId)
+                if (remainingHashes.isEmpty) {
+                  task.done = true
+                  task.bytecodes = response.codes
+                  completedTasks += task
+                }
 
+                activeTasks.remove(response.requestId)
                 markWorkerIdle(worker)
 
-                log.info(s"Successfully processed $bytecodeCount bytecodes")
+                log.info(
+                  s"Successfully processed $bytecodeCount bytecodes (receivedBytes=$receivedBytes requestedBytes=$requestedBytes)"
+                )
                 checkCompletion()
             }
         }
@@ -436,7 +498,8 @@ object ByteCodeCoordinator {
       baseEmpty = 2.seconds,
       baseTimeout = 10.seconds,
       baseInvalid = 15.seconds,
-      maxInFlightPerPeer = 2,
+      // Increase per-peer concurrency (Besu caps peer-wide outstanding at 5; this keeps us competitive).
+      maxInFlightPerPeer = 5,
       max = 2.minutes,
       exponentCap = 10
     )
