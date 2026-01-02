@@ -108,6 +108,14 @@ class StorageRangeCoordinator(
   // batched requests, fall back to single-account requests.
   private var effectiveMaxAccountsPerBatch: Int = maxAccountsPerBatch
 
+  // Per-task empty-response tracking.
+  // Some peers legitimately return empty slotSets+proofs in cases we can't easily distinguish
+  // from “can’t serve this state”. If we keep re-queuing forever, sync can livelock.
+  // Track empty responses per (accountHash,next,last) and skip after a small threshold.
+  private case class StorageTaskKey(accountHash: ByteString, next: ByteString, last: ByteString)
+  private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
+  private val maxEmptyResponsesPerTask: Int = 3
+
   // Statistics
   private var slotsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -326,14 +334,51 @@ class StorageRangeCoordinator(
     )
 
     if (servedCount == 0) {
-      consecutiveEmptyResponses += 1
-
       if (tasks.size > 1 && effectiveMaxAccountsPerBatch > 1) {
         log.info(
           s"Received empty StorageRanges for a batched request (accounts=${tasks.size}); falling back to single-account requests"
         )
         effectiveMaxAccountsPerBatch = 1
       }
+
+      // Track empties per task to avoid re-queueing forever.
+      // If the same task yields empty responses repeatedly, skip it with a loud warning.
+      var skipped = 0
+      var requeued = 0
+      tasks.foreach { task =>
+        val key = StorageTaskKey(task.accountHash, task.next, task.last)
+        val attempts = emptyResponsesByTask.getOrElse(key, 0) + 1
+        emptyResponsesByTask.update(key, attempts)
+
+        if (attempts >= maxEmptyResponsesPerTask) {
+          skipped += 1
+          task.done = true
+          task.pending = false
+          completedTasks += task
+          log.warning(
+            s"Skipping storage task after $attempts empty StorageRanges replies: " +
+              s"account=${task.accountHash.toHex} storageRoot=${task.storageRoot.toHex} range=${task.rangeString}"
+          )
+        } else {
+          requeued += 1
+          task.pending = false
+          this.tasks.enqueue(task)
+          log.info(
+            s"Empty StorageRanges for task (attempt $attempts/$maxEmptyResponsesPerTask); re-queueing: " +
+              s"account=${task.accountHash.take(4).toHex} range=${task.rangeString}"
+          )
+        }
+      }
+
+      // If we skipped something, we made forward progress; don't let this feed global backoff.
+      if (skipped > 0) {
+        consecutiveEmptyResponses = 0
+        self ! StorageCheckCompletion
+        return
+      }
+
+      // No task was skipped; treat this as a transient “can’t serve” signal and apply backoff/cooldown.
+      consecutiveEmptyResponses += 1
 
       // If many peers consecutively return empty results, enter a global backoff so that
       // the coordinator doesn't endlessly requeue tasks while the pivot state is unavailable.
@@ -350,15 +395,16 @@ class StorageRangeCoordinator(
       }
 
       recordPeerCooldown(peer, "empty slots + empty proofs")
-      tasks.foreach { task =>
-        task.pending = false
-        this.tasks.enqueue(task)
-      }
       return
     }
 
     // Reset empty-response counter once we receive a non-empty reply
     consecutiveEmptyResponses = 0
+
+    // Clear empty-response counters for tasks that are now being served.
+    tasks.foreach { task =>
+      emptyResponsesByTask.remove(StorageTaskKey(task.accountHash, task.next, task.last))
+    }
 
     val servedTasks = tasks.take(servedCount)
     val unservedTasks = tasks.drop(servedCount)
