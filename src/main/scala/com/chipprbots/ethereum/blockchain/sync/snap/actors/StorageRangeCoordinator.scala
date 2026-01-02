@@ -78,6 +78,8 @@ class StorageRangeCoordinator(
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     maxAccountsPerBatch: Int,
+  maxInFlightRequests: Int,
+  requestTimeout: FiniteDuration,
     snapSyncController: ActorRef
 ) extends Actor
     with ActorLogging {
@@ -99,10 +101,6 @@ class StorageRangeCoordinator(
   private val maxConsecutiveEmptyResponses: Int = 10
   private val globalBackoffDuration: FiniteDuration = 2.minutes
   private var globalBackoffUntilMs: Option[Long] = None
-
-  // Worker management
-  private val workers = mutable.ArrayBuffer[ActorRef]()
-  private val maxWorkers = 8
 
   // Some peers refuse/struggle with multi-account StorageRanges. If we observe empty responses for
   // batched requests, fall back to single-account requests.
@@ -154,12 +152,18 @@ class StorageRangeCoordinator(
         log.info(s"Global storage backoff active; ignoring StoragePeerAvailable(${peer.id.value})")
       } else if (isPeerCoolingDown(peer)) {
         log.info(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
-      } else if (!isComplete && workers.size < maxWorkers) {
-        val worker = createWorker()
-        worker ! FetchStorageRanges(null, peer)
       } else if (!isComplete && tasks.nonEmpty) {
-        // Request from existing worker
-        requestNextRanges(peer)
+        // Nethermind-style dispatcher behavior: only keep a bounded number of in-flight requests.
+        // Important: do NOT create worker actors that re-emit StoragePeerAvailable (that causes
+        // recursive peer-available storms and request/timeouts under load).
+        if (activeTasks.size >= maxInFlightRequests) {
+          log.debug(
+            s"Storage in-flight limit reached (inFlight=${activeTasks.size}, limit=$maxInFlightRequests); " +
+              s"ignoring StoragePeerAvailable(${peer.id.value})"
+          )
+        } else {
+          requestNextRanges(peer)
+        }
       }
 
     case StorageRangesResponseMsg(response) =>
@@ -198,19 +202,6 @@ class StorageRangeCoordinator(
         progress = progress
       )
       sender() ! stats
-  }
-
-  private def createWorker(): ActorRef = {
-    val worker = context.actorOf(
-      StorageRangeWorker.props(
-        coordinator = self,
-        networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker
-      )
-    )
-    workers += worker
-    log.debug(s"Created storage worker, total: ${workers.size}")
-    worker
   }
 
   private def requestNextRanges(peer: Peer): Option[BigInt] = {
@@ -270,7 +261,7 @@ class StorageRangeCoordinator(
       requestId,
       peer,
       SNAPRequestTracker.RequestType.GetStorageRanges,
-      timeout = 30.seconds
+      timeout = requestTimeout
     ) {
       handleTimeout(requestId)
     }
@@ -586,6 +577,8 @@ object StorageRangeCoordinator {
       requestTracker: SNAPRequestTracker,
       mptStorage: MptStorage,
       maxAccountsPerBatch: Int,
+      maxInFlightRequests: Int,
+      requestTimeout: FiniteDuration,
       snapSyncController: ActorRef
   ): Props =
     Props(
@@ -595,6 +588,8 @@ object StorageRangeCoordinator {
         requestTracker,
         mptStorage,
         maxAccountsPerBatch,
+        maxInFlightRequests,
+        requestTimeout,
         snapSyncController
       )
     )

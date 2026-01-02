@@ -1004,6 +1004,8 @@ class SNAPSyncController(
             requestTracker = requestTracker,
             mptStorage = mptStorage,
             maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+            maxInFlightRequests = snapSyncConfig.storageConcurrency,
+            requestTimeout = snapSyncConfig.timeout,
             snapSyncController = self
           ),
           "storage-range-coordinator"
