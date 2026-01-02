@@ -953,13 +953,18 @@ class SNAPSyncController(
   private def requestStorageRanges(): Unit = {
     // Notify coordinator of available peers
     storageRangeCoordinator.foreach { coordinator =>
+      val pivot = pivotBlock.getOrElse(BigInt(0))
+
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (peerId, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
+      SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
+
       if (snapPeers.isEmpty) {
-        log.debug("No SNAP-capable peers available for storage range requests")
+        log.debug(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.StoragePeerAvailable(peer)

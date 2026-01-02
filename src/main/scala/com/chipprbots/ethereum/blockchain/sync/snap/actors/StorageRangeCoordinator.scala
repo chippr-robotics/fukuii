@@ -93,6 +93,13 @@ class StorageRangeCoordinator(
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
 
+  // Global backoff: if many peers return empty StorageRanges for the pivot state, pause storage
+  // requests for a short period to allow peers / pivot servers to catch up.
+  private var consecutiveEmptyResponses: Int = 0
+  private val maxConsecutiveEmptyResponses: Int = 10
+  private val globalBackoffDuration: FiniteDuration = 2.minutes
+  private var globalBackoffUntilMs: Option[Long] = None
+
   // Worker management
   private val workers = mutable.ArrayBuffer[ActorRef]()
   private val maxWorkers = 8
@@ -135,7 +142,9 @@ class StorageRangeCoordinator(
       log.debug(s"Added storage task for account ${task.accountString} to queue")
 
     case StoragePeerAvailable(peer) =>
-      if (isPeerCoolingDown(peer)) {
+      if (isGlobalBackoffActive) {
+        log.debug(s"Global storage backoff active; ignoring StoragePeerAvailable(${peer.id.value})")
+      } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
       } else if (!isComplete && workers.size < maxWorkers) {
         val worker = createWorker()
@@ -163,6 +172,12 @@ class StorageRangeCoordinator(
         log.info("Storage range sync complete!")
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       }
+
+    case ResumeStorageBackoff =>
+      globalBackoffUntilMs = None
+      consecutiveEmptyResponses = 0
+      effectiveMaxAccountsPerBatch = maxAccountsPerBatch
+      log.info(s"Global storage backoff ended; resuming storage requests (batchSize=$effectiveMaxAccountsPerBatch)")
 
     case StorageGetProgress =>
       val stats = StorageRangeCoordinator.SyncStatistics(
@@ -215,6 +230,15 @@ class StorageRangeCoordinator(
       }
 
     if (batchTasks.isEmpty) {
+      return None
+    }
+
+    if (isGlobalBackoffActive) {
+      // If we are in a global backoff, push the selected tasks back and avoid sending requests
+      // until the backoff expires.
+      batchTasks.foreach(_.pending = false)
+      batchTasks.foreach(this.tasks.enqueue(_))
+      log.debug("Global storage backoff active; deferring storage requests")
       return None
     }
 
@@ -297,12 +321,29 @@ class StorageRangeCoordinator(
     )
 
     if (servedCount == 0) {
+      consecutiveEmptyResponses += 1
+
       if (tasks.size > 1 && effectiveMaxAccountsPerBatch > 1) {
         log.info(
           s"Received empty StorageRanges for a batched request (accounts=${tasks.size}); falling back to single-account requests"
         )
         effectiveMaxAccountsPerBatch = 1
       }
+
+      // If many peers consecutively return empty results, enter a global backoff so that
+      // the coordinator doesn't endlessly requeue tasks while the pivot state is unavailable.
+      if (consecutiveEmptyResponses >= maxConsecutiveEmptyResponses && globalBackoffUntilMs.isEmpty) {
+        log.warning(
+          s"Multiple peers returned empty StorageRanges (${consecutiveEmptyResponses} in a row). " +
+            s"Entering global backoff for ${globalBackoffDuration.toMinutes} minute(s)."
+        )
+        globalBackoffUntilMs = Some(System.currentTimeMillis() + globalBackoffDuration.toMillis)
+        // Reduce batching to single-account while backoff is active
+        effectiveMaxAccountsPerBatch = 1
+        // Schedule resume
+        context.system.scheduler.scheduleOnce(globalBackoffDuration, self, ResumeStorageBackoff)(context.system.dispatcher)
+      }
+
       recordPeerCooldown(peer, "empty slots + empty proofs")
       tasks.foreach { task =>
         task.pending = false
@@ -310,6 +351,9 @@ class StorageRangeCoordinator(
       }
       return
     }
+
+    // Reset empty-response counter once we receive a non-empty reply
+    consecutiveEmptyResponses = 0
 
     val servedTasks = tasks.take(servedCount)
     val unservedTasks = tasks.drop(servedCount)
@@ -473,6 +517,9 @@ class StorageRangeCoordinator(
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
+
+  private def isGlobalBackoffActive: Boolean =
+    globalBackoffUntilMs.exists(_ > System.currentTimeMillis())
 
   private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
     val until = System.currentTimeMillis() + peerCooldownDefault.toMillis

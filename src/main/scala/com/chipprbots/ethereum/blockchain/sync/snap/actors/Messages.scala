@@ -74,6 +74,10 @@ object Messages {
   case class StorageRequestTimeout(requestId: BigInt) extends StorageRangeWorkerMessage
   case object StorageCheckIdle extends StorageRangeWorkerMessage
 
+  // When many peers return empty StorageRanges for the current pivot state, the coordinator
+  // backs off globally to avoid hammering the network and repeatedly re-queueing tasks.
+  case object ResumeStorageBackoff extends StorageRangeCoordinatorMessage
+
   // ========================================
   // TrieNodeHealing Messages
   // ========================================
