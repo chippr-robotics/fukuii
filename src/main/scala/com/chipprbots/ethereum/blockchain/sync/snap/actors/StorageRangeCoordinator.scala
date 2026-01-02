@@ -378,6 +378,15 @@ class StorageRangeCoordinator(
           s"Multiple peers returned empty StorageRanges (${consecutiveEmptyResponses} in a row). " +
             s"Entering global backoff for ${globalBackoffDuration.toMinutes} minute(s)."
         )
+
+        // Nethermind-style: interpret repeated empty payloads as an expired root hash.
+        // Propagate to the controller so it can select a fresher pivot/stateRoot.
+        snapSyncController ! SNAPSyncController.PivotStateUnservable(
+          rootHash = stateRoot,
+          reason = "empty StorageRanges (served=0, proofs=0)",
+          consecutiveEmptyResponses = consecutiveEmptyResponses
+        )
+
         globalBackoffUntilMs = Some(System.currentTimeMillis() + globalBackoffDuration.toMillis)
         // Reduce batching to single-account while backoff is active
         effectiveMaxAccountsPerBatch = 1

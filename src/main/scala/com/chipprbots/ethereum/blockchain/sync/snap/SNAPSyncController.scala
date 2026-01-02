@@ -197,6 +197,27 @@ class SNAPSyncController(
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
 
+    case PivotStateUnservable(rootHash, reason, emptyResponses) =>
+      // Nethermind-style behavior: treat many empty range replies as an "expired root" signal.
+      // This usually means the chosen pivot/stateRoot is no longer widely serveable.
+      if (currentPhase == StorageRangeSync) {
+        val now = System.currentTimeMillis()
+        if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
+          log.warning(
+            s"Ignoring PivotStateUnservable during StorageRangeSync due to restart guard " +
+              s"(emptyResponses=$emptyResponses, root=${rootHash.take(4).toHex}, reason=$reason)"
+          )
+        } else {
+          lastPivotRestartMs = now
+          restartSnapSync(
+            s"pivot state root appears unservable during StorageRangeSync " +
+              s"(emptyResponses=$emptyResponses, root=${rootHash.take(8).toHex}..., reason=$reason)"
+          )
+        }
+      } else {
+        log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
+      }
+
     // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
     // to keep phase-start logging idempotent and centralized.
 
@@ -1479,6 +1500,12 @@ object SNAPSyncController {
   case object StateHealingComplete
   case object StateValidationComplete
   case object GetProgress
+
+  /** Signal from coordinators that the current pivot/stateRoot is likely not serveable by peers.
+    *
+    * This is analogous to Nethermind's ExpiredRootHash detection (empty payload + empty proofs).
+    */
+  final case class PivotStateUnservable(rootHash: ByteString, reason: String, consecutiveEmptyResponses: Int)
 
   /** Progress updates emitted by worker coordinators.
     *
