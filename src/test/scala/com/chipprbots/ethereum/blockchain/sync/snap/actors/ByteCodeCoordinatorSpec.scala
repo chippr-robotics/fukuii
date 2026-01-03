@@ -28,6 +28,16 @@ class ByteCodeCoordinatorSpec
   override def afterAll(): Unit =
     TestKit.shutdownActorSystem(system)
 
+  // Shared cooldown config for tests that need fast retries
+  private val testCooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
+    baseEmpty = 50.millis,
+    baseTimeout = 50.millis,
+    baseInvalid = 50.millis,
+    maxInFlightPerPeer = 2,
+    max = 200.millis,
+    exponentCap = 3
+  )
+
   "ByteCodeCoordinator" should "initialize with empty task queue" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
@@ -238,15 +248,6 @@ class ByteCodeCoordinatorSpec
 
     val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
-    val cooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
-      baseEmpty = 50.millis,
-      baseTimeout = 50.millis,
-      baseInvalid = 50.millis,
-      maxInFlightPerPeer = 2,
-      max = 200.millis,
-      exponentCap = 3
-    )
-
     val coordinator = system.actorOf(
       ByteCodeCoordinator.props(
         evmCodeStorage = evmCodeStorage,
@@ -254,7 +255,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref,
-        cooldownConfig = cooldownConfig
+        cooldownConfig = testCooldownConfig
       )
     )
 
@@ -306,15 +307,6 @@ class ByteCodeCoordinatorSpec
 
     val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
-    val cooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
-      baseEmpty = 50.millis,
-      baseTimeout = 50.millis,
-      baseInvalid = 50.millis,
-      maxInFlightPerPeer = 2,
-      max = 200.millis,
-      exponentCap = 3
-    )
-
     val coordinator = system.actorOf(
       ByteCodeCoordinator.props(
         evmCodeStorage = evmCodeStorage,
@@ -322,7 +314,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref,
-        cooldownConfig = cooldownConfig
+        cooldownConfig = testCooldownConfig
       )
     )
 
@@ -367,15 +359,6 @@ class ByteCodeCoordinatorSpec
 
     val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
-    val cooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
-      baseEmpty = 50.millis,
-      baseTimeout = 50.millis,
-      baseInvalid = 50.millis,
-      maxInFlightPerPeer = 2,
-      max = 200.millis,
-      exponentCap = 3
-    )
-
     val coordinator = system.actorOf(
       ByteCodeCoordinator.props(
         evmCodeStorage = evmCodeStorage,
@@ -383,7 +366,7 @@ class ByteCodeCoordinatorSpec
         requestTracker = requestTracker,
         batchSize = 8,
         snapSyncController = snapSyncController.ref,
-        cooldownConfig = cooldownConfig
+        cooldownConfig = testCooldownConfig
       )
     )
 
