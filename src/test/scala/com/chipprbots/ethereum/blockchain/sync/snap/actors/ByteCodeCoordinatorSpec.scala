@@ -29,6 +29,8 @@ class ByteCodeCoordinatorSpec
     TestKit.shutdownActorSystem(system)
 
   // Shared cooldown config for tests that need fast retries
+  // Uses 50ms cooldowns (baseEmpty, baseTimeout, baseInvalid) to enable rapid testing
+  // while still verifying cooldown behavior with 80ms expectNoMessage waits
   private val testCooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
     baseEmpty = 50.millis,
     baseTimeout = 50.millis,
