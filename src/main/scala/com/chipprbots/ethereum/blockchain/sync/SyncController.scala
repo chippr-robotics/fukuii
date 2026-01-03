@@ -227,8 +227,14 @@ class SyncController(
         // Stop regular sync
         regularSync ! PoisonPill
         
-        // Notify SNAP sync controller that bootstrap is complete
-        originalSnapSyncRef ! BootstrapComplete
+        // Notify SNAP sync controller that bootstrap is complete, including the pivot header if available.
+        blockchainReader.getBlockHeaderByNumber(targetBlock) match {
+          case Some(header) =>
+            originalSnapSyncRef ! BootstrapComplete(Some(header))
+          case None =>
+            log.warning(s"Bootstrap reached target $targetBlock but pivot header not found locally; notifying SNAP without header")
+            originalSnapSyncRef ! BootstrapComplete()
+        }
         
         // Switch back to runningSnapSync state
         context.become(runningSnapSync(originalSnapSyncRef))
@@ -255,11 +261,11 @@ class SyncController(
     case RestartFastSyncNow =>
       doRestartFastSyncNow()
 
-    case PivotHeaderBootstrap.Completed(block) if block == targetBlock =>
+    case PivotHeaderBootstrap.Completed(block, header) if block == targetBlock =>
       log.info(s"Pivot header bootstrap complete for block $targetBlock - notifying SNAP sync")
       headerBootstrap ! PoisonPill
       peersClient ! PoisonPill
-      originalSnapSyncRef ! BootstrapComplete
+      originalSnapSyncRef ! BootstrapComplete(Some(header))
       context.become(runningSnapSync(originalSnapSyncRef))
 
     case PivotHeaderBootstrap.Failed(reason) =>

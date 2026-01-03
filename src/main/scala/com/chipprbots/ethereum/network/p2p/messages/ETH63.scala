@@ -68,11 +68,18 @@ object ETH63 {
               RLPValue(storageRootBytes),
               RLPValue(codeHashBytes)
             ) =>
+          // Some peers (notably in SNAP responses) can omit default values to save bandwidth,
+          // encoding empty storageRoot/codeHash as empty byte strings. Normalize these to the
+          // canonical empty values so the reconstructed trie root matches the pivot stateRoot.
+          val normalizedStorageRoot =
+            if (storageRootBytes.isEmpty) Account.EmptyStorageRootHash else ByteString(storageRootBytes)
+          val normalizedCodeHash =
+            if (codeHashBytes.isEmpty) Account.EmptyCodeHash else ByteString(codeHashBytes)
           Account(
             UInt256(ByteUtils.bytesToBigInt(nonceBytes)),
             UInt256(ByteUtils.bytesToBigInt(balanceBytes)),
-            ByteString(storageRootBytes),
-            ByteString(codeHashBytes)
+            normalizedStorageRoot,
+            normalizedCodeHash
           )
         case _ => throw new RuntimeException("Cannot decode Account")
       }

@@ -54,12 +54,14 @@ case class ByteCodeTask(
 
 object ByteCodeTask {
 
-  /** Default batch size for bytecode requests
+  /** Default batch size for bytecode requests.
     *
-    * Following core-geth, we batch multiple bytecode requests together. Typical contract bytecode is 5-50 KB, so 16
-    * codes per request gives reasonable response sizes (~100-500 KB).
+    * We send many code hashes per request and rely on the peer-side `responseBytes` soft limit to truncate the
+    * response as needed.
+    *
+    * Besu defaults to ~84 bytecodes/request; Nethermind commonly batches up to ~1000 and uses a dynamic byte-budget.
     */
-  val DEFAULT_BATCH_SIZE = 16
+  val DEFAULT_BATCH_SIZE = 1000
 
   /** Create bytecode tasks from a list of contract accounts
     *

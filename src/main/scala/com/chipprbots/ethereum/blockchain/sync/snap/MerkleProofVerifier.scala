@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -50,9 +51,11 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       endHash: ByteString
   ): Either[String, Unit] = {
 
-    // Empty proof is valid if there are no accounts
+    // For non-empty tries, even an empty account range must come with a proof proving non-existence.
+    // The only case where empty proof + empty accounts is valid is an empty trie.
     if (proof.isEmpty && accounts.isEmpty) {
-      return Right(())
+      if (rootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) return Right(())
+      return Left("Missing proof for empty account range")
     }
 
     // If we have accounts, we need a proof
@@ -208,7 +211,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
       case Some(extensionNode: ExtensionNode) =>
         // Extension node - match the shared key
-        val sharedNibbles = bytesToNibbles(extensionNode.sharedKey)
+        // NOTE: MptTraversals.decodeNode already HexPrefix-decodes the compact path encoding,
+        // so `sharedKey` here is already a sequence of nibbles (0-15), one nibble per byte.
+        val sharedNibbles = extensionNode.sharedKey.map(_.toInt)
         if (path.startsWith(sharedNibbles)) {
           extensionNode.next match {
             case hashNode: HashNode =>
@@ -286,17 +291,13 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     val firstNode = proofNodes.head
     val firstNodeHash = ByteString(firstNode.hash)
 
-    // Check if first node hash matches expected root
-    if (firstNodeHash == rootHash) {
-      Right(())
-    } else {
-      // In a partial proof, we might not have the full root
-      // This is acceptable as long as the proof is internally consistent
-      log.debug(
-        s"Proof root ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString} doesn't match expected root ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}"
+    // For AccountRange proofs we expect the first node to be the root (core-geth behavior).
+    if (firstNodeHash != rootHash) {
+      Left(
+        s"Proof root mismatch: got ${firstNodeHash.take(4).toArray.map("%02x".format(_)).mkString}..., " +
+          s"expected ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}..."
       )
-      Right(())
-    }
+    } else Right(())
   }
 
   /** Convert hash to nibbles (hex digits) for trie path
@@ -357,14 +358,33 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       endHash: ByteString
   ): Either[String, Unit] = {
 
-    // Empty proof is valid if there are no storage slots
-    if (proof.isEmpty && slots.isEmpty) {
-      return Right(())
+    val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+
+    // snap/1 nuance:
+    // - Proofs are only sent when the server needs to prove a boundary (non-zero origin) or
+    //   the response was capped. Full responses commonly have empty proofs.
+    // - A reply with no slots and no proofs is only meaningful if the expected storageRoot is empty.
+    //   Otherwise it usually indicates the peer can't serve the requested state.
+    if (slots.isEmpty && proof.isEmpty) {
+      return if (rootHash == emptyRoot) Right(())
+      else Left("Empty StorageRanges response (no slots, no proof) for non-empty storageRoot")
     }
 
-    // If we have slots, we need a proof
+    // Without proofs, we can still validate basic invariants (ordering + bounds) and accept.
     if (proof.isEmpty && slots.nonEmpty) {
-      return Left(s"Missing proof for ${slots.size} storage slots")
+      return validateStorageSlotsBasic(slots, startHash, endHash)
+    }
+
+    // If we have proofs but no slots, this can be a valid proof-of-absence for sparse tries.
+    if (slots.isEmpty && proof.nonEmpty) {
+      try {
+        val proofNodes = decodeProofNodes(proof)
+        return verifyProofRoot(proofNodes).left.map(err => s"Storage proof root verification failed: $err")
+      } catch {
+        case e: Exception =>
+          log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
+          return Left(s"Storage verification error: ${e.getMessage}")
+      }
     }
 
     try {
@@ -400,6 +420,50 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
         log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
         Left(s"Storage verification error: ${e.getMessage}")
     }
+  }
+
+  private def validateStorageSlotsBasic(
+      slots: Seq[(ByteString, ByteString)],
+      startHash: ByteString,
+      endHash: ByteString
+  ): Either[String, Unit] = {
+    def cmp(a: ByteString, b: ByteString): Int = {
+      val aa = a.toArray
+      val bb = b.toArray
+      var i = 0
+      while (i < math.min(aa.length, bb.length)) {
+        val ai = aa(i) & 0xff
+        val bi = bb(i) & 0xff
+        if (ai != bi) return ai - bi
+        i += 1
+      }
+      aa.length - bb.length
+    }
+
+    // Monotonic strictly increasing
+    var i = 1
+    while (i < slots.size) {
+      val prev = slots(i - 1)._1
+      val cur = slots(i)._1
+      if (cmp(prev, cur) >= 0) {
+        return Left("Storage slots not monotonically increasing")
+      }
+      i += 1
+    }
+
+    // Bounds (best-effort; endHash is treated as an exclusive upper bound when provided)
+    if (slots.nonEmpty) {
+      val first = slots.head._1
+      if (startHash.nonEmpty && cmp(first, startHash) < 0) {
+        return Left("First storage slot is before requested start")
+      }
+      val last = slots.last._1
+      if (endHash.nonEmpty && cmp(last, endHash) >= 0) {
+        return Left("Last storage slot is at/after requested limit")
+      }
+    }
+
+    Right(())
   }
 
   /** Verify a storage slot exists in the proof
@@ -493,7 +557,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
       case Some(extensionNode: ExtensionNode) =>
         // Extension node - match the shared key
-        val sharedNibbles = bytesToNibbles(extensionNode.sharedKey)
+        // NOTE: MptTraversals.decodeNode already HexPrefix-decodes the compact path encoding,
+        // so `sharedKey` here is already a sequence of nibbles (0-15), one nibble per byte.
+        val sharedNibbles = extensionNode.sharedKey.map(_.toInt)
         if (path.startsWith(sharedNibbles)) {
           extensionNode.next match {
             case hashNode: HashNode =>

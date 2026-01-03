@@ -39,6 +39,8 @@ class StorageRangeCoordinatorSpec
         requestTracker = requestTracker,
         mptStorage = storage,
         maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
         snapSyncController = snapSyncController.ref
       )
     )
@@ -63,6 +65,8 @@ class StorageRangeCoordinatorSpec
         requestTracker = requestTracker,
         mptStorage = storage,
         maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
         snapSyncController = snapSyncController.ref
       )
     )
@@ -89,6 +93,8 @@ class StorageRangeCoordinatorSpec
         requestTracker = requestTracker,
         mptStorage = storage,
         maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
         snapSyncController = snapSyncController.ref
       )
     )
@@ -114,6 +120,8 @@ class StorageRangeCoordinatorSpec
         requestTracker = requestTracker,
         mptStorage = storage,
         maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
         snapSyncController = snapSyncController.ref
       )
     )
@@ -139,6 +147,8 @@ class StorageRangeCoordinatorSpec
         requestTracker = requestTracker,
         mptStorage = storage,
         maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
         snapSyncController = snapSyncController.ref
       )
     )

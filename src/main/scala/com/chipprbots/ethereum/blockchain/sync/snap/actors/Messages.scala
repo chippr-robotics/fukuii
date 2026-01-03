@@ -16,11 +16,16 @@ object Messages {
 
   case class StartAccountRangeSync(stateRoot: ByteString) extends AccountRangeCoordinatorMessage
   case class PeerAvailable(peer: Peer) extends AccountRangeCoordinatorMessage
-  case class TaskComplete(requestId: BigInt, result: Either[String, (Int, Seq[(ByteString, com.chipprbots.ethereum.domain.Account)])]) extends AccountRangeCoordinatorMessage
+  case class TaskComplete(
+      requestId: BigInt,
+      result: Either[String, (Int, Seq[(ByteString, com.chipprbots.ethereum.domain.Account)], Seq[ByteString])]
+  ) extends AccountRangeCoordinatorMessage
   case class TaskFailed(requestId: BigInt, reason: String) extends AccountRangeCoordinatorMessage
   case object GetProgress extends AccountRangeCoordinatorMessage
   case object GetContractAccounts extends AccountRangeCoordinatorMessage
   case class ContractAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
+  case object GetContractStorageAccounts extends AccountRangeCoordinatorMessage
+  case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   sealed trait AccountRangeWorkerMessage
@@ -68,6 +73,10 @@ object Messages {
   case class StorageRangesResponseMsg(response: StorageRanges) extends StorageRangeWorkerMessage
   case class StorageRequestTimeout(requestId: BigInt) extends StorageRangeWorkerMessage
   case object StorageCheckIdle extends StorageRangeWorkerMessage
+
+  // When many peers return empty StorageRanges for the current pivot state, the coordinator
+  // backs off globally to avoid hammering the network and repeatedly re-queueing tasks.
+  case object ResumeStorageBackoff extends StorageRangeCoordinatorMessage
 
   // ========================================
   // TrieNodeHealing Messages

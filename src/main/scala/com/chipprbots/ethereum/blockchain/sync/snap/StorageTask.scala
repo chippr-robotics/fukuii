@@ -120,7 +120,21 @@ object StorageTask {
     StorageTask(
       accountHash = original.accountHash,
       storageRoot = original.storageRoot,
-      next = lastSlotHash,
+      next = incrementHash32(lastSlotHash),
       last = original.last
     )
+
+  private def incrementHash32(hash: ByteString): ByteString = {
+    require(hash.length == 32, s"Expected 32-byte hash, got ${hash.length}")
+    val bytes = hash.toArray
+    var i = bytes.length - 1
+    var carry = 1
+    while (i >= 0 && carry != 0) {
+      val sum = (bytes(i) & 0xff) + carry
+      bytes(i) = (sum & 0xff).toByte
+      carry = if (sum > 0xff) 1 else 0
+      i -= 1
+    }
+    ByteString(bytes)
+  }
 }

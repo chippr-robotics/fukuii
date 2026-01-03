@@ -112,7 +112,7 @@ class PeerDiscoveryManager(
           context.become(started(discovery, release))
 
         case Left(ex) =>
-          log.debug("Failed to start peer discovery: {}", ex.getMessage)
+          log.warning("Failed to start peer discovery; will keep running without discovery (static/known nodes only).", ex)
           context.become(init)
       }
   }
@@ -140,7 +140,7 @@ class PeerDiscoveryManager(
           stopDiscoveryService(release)
 
         case Left(ex) =>
-          log.debug("Failed to start peer discovery: {}", ex.getMessage)
+          log.warning("Failed to start peer discovery while stopping; discovery will remain disabled.", ex)
           context.become(init)
       }
 

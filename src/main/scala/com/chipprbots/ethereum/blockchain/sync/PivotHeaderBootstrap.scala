@@ -12,7 +12,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.blockchain.sync.PeersClient.{BestPeer, NoSuitablePeer, Request, RequestFailed}
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.{BestSnapPeer, NoSuitablePeer, Request, RequestFailed}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Fetches and persists a single pivot header (by block number) so SNAP can start without importing blocks.
@@ -54,7 +54,7 @@ final class PivotHeaderBootstrap(
     case Fetched(header) =>
       try {
         blockchainWriter.storeBlockHeader(header).commit()
-        context.parent ! Completed(targetBlock)
+        context.parent ! Completed(targetBlock, header)
       } catch {
         case t: Throwable =>
           context.parent ! Failed(s"failed storing pivot header $targetBlock: ${t.getMessage}")
@@ -77,7 +77,7 @@ final class PivotHeaderBootstrap(
     val msg = ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(targetBlock), maxHeaders = 1, skip = 0, reverse = false)
 
     // ETH66.GetBlockHeaders is already MessageSerializable, so the serializer is identity.
-    val req = Request[ETH66.GetBlockHeaders](msg, BestPeer, (m: ETH66.GetBlockHeaders) => m)
+    val req = Request[ETH66.GetBlockHeaders](msg, BestSnapPeer, (m: ETH66.GetBlockHeaders) => m)
 
     (peersClient ? req).map {
       case PeersClient.Response(_, eth66: ETH66BlockHeaders) =>
@@ -119,6 +119,6 @@ object PivotHeaderBootstrap {
   private final case class Retry(reason: String)
   private final case class Fetched(header: BlockHeader)
 
-  final case class Completed(targetBlock: BigInt)
+  final case class Completed(targetBlock: BigInt, header: BlockHeader)
   final case class Failed(reason: String)
 }
