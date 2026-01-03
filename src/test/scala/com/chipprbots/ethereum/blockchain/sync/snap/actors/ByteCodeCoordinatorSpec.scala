@@ -286,10 +286,11 @@ class ByteCodeCoordinatorSpec
       }
     }
 
-    // Wait for cooldown to expire
-    Thread.sleep(70)
+    // Verify peer is in cooldown by attempting immediate retry
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectNoMessage(80.millis)
 
-    // Drive retry
+    // Drive retry after cooldown expires
     coordinator ! Messages.ByteCodePeerAvailable(peer)
     val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
     val req2 = send2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
@@ -346,10 +347,11 @@ class ByteCodeCoordinatorSpec
       awaitAssert(evmCodeStorage.get(h1) shouldEqual None)
     }
 
-    // Wait for cooldown to expire
-    Thread.sleep(70)
+    // Verify peer is in cooldown by attempting immediate retry
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectNoMessage(80.millis)
 
-    // Drive retry (task should be re-queued)
+    // Drive retry after cooldown expires (task should be re-queued)
     coordinator ! Messages.ByteCodePeerAvailable(peer)
     val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
     val req2 = send2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
