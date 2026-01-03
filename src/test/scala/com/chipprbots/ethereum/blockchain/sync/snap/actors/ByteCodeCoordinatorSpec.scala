@@ -388,8 +388,7 @@ class ByteCodeCoordinatorSpec
     coordinator ! Messages.ByteCodePeerAvailable(peer)
     networkPeerManager.expectNoMessage(80.millis)
 
-    // After cooldown elapses, the coordinator should be willing to send again
-    Thread.sleep(70)
+    // After cooldown elapses (already waited 80ms above, cooldown is 50ms), coordinator should send again
     coordinator ! Messages.ByteCodePeerAvailable(peer)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
