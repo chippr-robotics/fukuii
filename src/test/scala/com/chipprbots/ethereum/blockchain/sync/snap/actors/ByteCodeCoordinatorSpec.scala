@@ -238,13 +238,23 @@ class ByteCodeCoordinatorSpec
 
     val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
+    val cooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
+      baseEmpty = 50.millis,
+      baseTimeout = 50.millis,
+      baseInvalid = 50.millis,
+      maxInFlightPerPeer = 2,
+      max = 200.millis,
+      exponentCap = 3
+    )
+
     val coordinator = system.actorOf(
       ByteCodeCoordinator.props(
         evmCodeStorage = evmCodeStorage,
         networkPeerManager = networkPeerManager.ref,
         requestTracker = requestTracker,
         batchSize = 8,
-        snapSyncController = snapSyncController.ref
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = cooldownConfig
       )
     )
 
@@ -276,6 +286,9 @@ class ByteCodeCoordinatorSpec
       }
     }
 
+    // Wait for cooldown to expire
+    Thread.sleep(70)
+
     // Drive retry
     coordinator ! Messages.ByteCodePeerAvailable(peer)
     val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
@@ -292,13 +305,23 @@ class ByteCodeCoordinatorSpec
 
     val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
 
+    val cooldownConfig = ByteCodeCoordinator.ByteCodePeerCooldownConfig(
+      baseEmpty = 50.millis,
+      baseTimeout = 50.millis,
+      baseInvalid = 50.millis,
+      maxInFlightPerPeer = 2,
+      max = 200.millis,
+      exponentCap = 3
+    )
+
     val coordinator = system.actorOf(
       ByteCodeCoordinator.props(
         evmCodeStorage = evmCodeStorage,
         networkPeerManager = networkPeerManager.ref,
         requestTracker = requestTracker,
         batchSize = 8,
-        snapSyncController = snapSyncController.ref
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = cooldownConfig
       )
     )
 
@@ -322,6 +345,9 @@ class ByteCodeCoordinatorSpec
     within(3.seconds) {
       awaitAssert(evmCodeStorage.get(h1) shouldEqual None)
     }
+
+    // Wait for cooldown to expire
+    Thread.sleep(70)
 
     // Drive retry (task should be re-queued)
     coordinator ! Messages.ByteCodePeerAvailable(peer)
