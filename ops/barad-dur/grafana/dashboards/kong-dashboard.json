@@ -1,60 +1,60 @@
 {
-  "dashboard": {
-    "title": "Kong API Gateway - Fukuii",
-    "tags": ["kong", "fukuii", "api-gateway"],
-    "timezone": "browser",
-    "schemaVersion": 16,
-    "version": 1,
-    "refresh": "10s",
-    "panels": [
-      {
-        "id": 1,
-        "title": "Request Rate",
-        "type": "graph",
-        "targets": [
-          {
-            "expr": "rate(kong_http_requests_total[5m])",
-            "legendFormat": "{{service}} - {{route}}"
-          }
-        ],
-        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
-      },
-      {
-        "id": 2,
-        "title": "Response Time (p95)",
-        "type": "graph",
-        "targets": [
-          {
-            "expr": "histogram_quantile(0.95, rate(kong_latency_bucket[5m]))",
-            "legendFormat": "{{service}}"
-          }
-        ],
-        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
-      },
-      {
-        "id": 3,
-        "title": "HTTP Status Codes",
-        "type": "graph",
-        "targets": [
-          {
-            "expr": "rate(kong_http_requests_total[5m])",
-            "legendFormat": "{{code}}"
-          }
-        ],
-        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}
-      },
-      {
-        "id": 4,
-        "title": "Bandwidth",
-        "type": "graph",
-        "targets": [
-          {
-            "expr": "rate(kong_bandwidth_bytes[5m])",
-            "legendFormat": "{{type}}"
-          }
-        ],
-        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}
-      }
-    ]
-  }
+  "title": "Kong API Gateway - Fukuii",
+  "uid": "fukuii-kong",
+  "tags": ["kong", "fukuii", "api-gateway"],
+  "timezone": "browser",
+  "schemaVersion": 16,
+  "version": 1,
+  "refresh": "10s",
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request Rate",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(kong_http_requests_total[5m])",
+          "legendFormat": "{{service}} - {{route}}"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "id": 2,
+      "title": "Response Time (p95)",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(kong_latency_bucket[5m]))",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "id": 3,
+      "title": "HTTP Status Codes",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(kong_http_requests_total[5m])",
+          "legendFormat": "{{code}}"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}
+    },
+    {
+      "id": 4,
+      "title": "Bandwidth",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(kong_bandwidth_bytes[5m])",
+          "legendFormat": "{{type}}"
+        }
+      ],
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}
+    }
+  ]
 }

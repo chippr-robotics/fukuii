@@ -111,7 +111,7 @@ services:
       - "${FUKUII_PRIMARY_METRICS_PORT:-9095}:9095" # Metrics
     volumes:
       - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
-      - ./fukuii-conf:/app/conf:ro
+      - ./fukuii-conf-1:/app/conf:ro
     environment:
       - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
     networks:
@@ -135,7 +135,7 @@ services:
       - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095" # Metrics
     volumes:
       - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
-      - ./fukuii-conf:/app/conf:ro
+      - ./fukuii-conf-2:/app/conf:ro
     environment:
       - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
     networks:
