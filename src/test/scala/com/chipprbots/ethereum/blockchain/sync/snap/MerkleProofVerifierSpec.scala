@@ -153,7 +153,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "accept empty storage proof for empty slots" taggedAs UnitTest in {
-    val storageRoot = kec256(ByteString("test-storage-root"))
+    val storageRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val verifier = MerkleProofVerifier(storageRoot)
 
     val result = verifier.verifyStorageRange(

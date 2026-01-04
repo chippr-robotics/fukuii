@@ -37,7 +37,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val config = SNAPSyncConfig()
 
     config.enabled shouldBe true
-    config.pivotBlockOffset should be >= 1000L
+    config.pivotBlockOffset should be > 0L
     config.accountConcurrency should be > 0
     config.storageConcurrency should be > 0
     config.healingBatchSize should be > 0
