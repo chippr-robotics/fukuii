@@ -204,6 +204,11 @@ class FastSync(
     private val startTime: Long = System.currentTimeMillis()
     private def totalMinutesTaken(): Long = TimeUnit.MILLISECONDS.toMinutes(System.currentTimeMillis() - startTime)
 
+    // Progress logging state (for rates)
+    private var lastProgressLogMs: Long = startTime
+    private var lastLoggedFullBlock: BigInt = initialSyncState.lastFullBlockNumber
+    private var lastLoggedStateNodes: Long = initialSyncState.downloadedNodesCount
+
     def handleStatus: Receive = {
       case SyncProtocol.GetStatus => sender() ! currentSyncingStatus
       case SyncStateSchedulerActor.StateSyncStats(saved, missing) =>
@@ -709,14 +714,79 @@ class FastSync(
       def formatPeerEntry(entry: PeerWithInfo): String = formatPeer(entry.peer)
       def formatPeer(peer: Peer): String =
         s"${peer.remoteAddress.getAddress.getHostAddress}:${peer.remoteAddress.getPort}"
+
+      def pct(done: BigInt, total: BigInt): Int =
+        if (total <= 0) 0
+        else {
+          val p = ((done.toDouble / total.toDouble) * 100.0).toInt
+          p.max(0).min(100)
+        }
+
+      def formatRate(valuePerSec: Double): String =
+        f"$valuePerSec%.2f/s"
+
+      def wormToBrainBar(percent: Int, travelSlots: Int = 24): String = {
+        val p = percent.max(0).min(100)
+        val slots = travelSlots.max(4)
+        val wormPos = ((p.toDouble / 100.0) * (slots - 1)).round.toInt.max(0).min(slots - 1)
+        val sb = new StringBuilder(slots + 3)
+        sb.append('[')
+        var i = 0
+        while (i < slots) {
+          if (i < wormPos) sb.append('=')
+          else if (i == wormPos) sb.append("🪱")
+          else sb.append('.')
+          i += 1
+        }
+        sb.append("🧠")
+        sb.append(']')
+        sb.toString
+      }
+
+      val nowMs = System.currentTimeMillis()
+      val dtSeconds = ((nowMs - lastProgressLogMs).toDouble / 1000.0).max(0.001)
+
+      // Prefer the persisted fast-sync view of progress (lastFullBlockNumber), but also show current best.
+      val bestBlockNow = blockchainReader.getBestBlockNumber()
+      val lastFull = syncState.lastFullBlockNumber.max(bestBlockNow)
+
+      val deltaBlocks = (lastFull - lastLoggedFullBlock).toDouble
+      val blocksPerSec = deltaBlocks / dtSeconds
+
+      val savedNodes = syncState.downloadedNodesCount
+      val totalNodes = syncState.totalNodesCount.max(1)
+      val deltaNodes = (savedNodes - lastLoggedStateNodes).toDouble
+      val nodesPerSec = deltaNodes / dtSeconds
+
+      val blockTarget = syncState.pivotBlock.number.max(1)
+      val blockPercent = pct(lastFull, blockTarget)
+      val nodePercent = (((savedNodes.toDouble / totalNodes.toDouble) * 100.0).toInt).max(0).min(100)
+
+      val blocksToBrain = wormToBrainBar(blockPercent)
+
+      val phase =
+        if (!syncState.isBlockchainWorkFinished) {
+          if (syncState.receiptsQueue.nonEmpty) "Receipts"
+          else if (syncState.blockBodiesQueue.nonEmpty) "BlockBodies"
+          else "BlockHeaders"
+        } else if (!syncState.stateSyncFinished) {
+          "State"
+        } else {
+          "Finalizing"
+        }
+
       val blacklistedIds = blacklist.keys
       log.info(
-        s"""|Block: {}/${syncState.pivotBlock.number}.
-            |Peers waiting_for_response/connected: ${assignedHandlers.size}/${handshakedPeers.size} (${blacklistedIds.size} blacklisted).
-            |State: ${syncState.downloadedNodesCount}/${syncState.totalNodesCount} nodes.
-            |""".stripMargin.replace("\n", " "),
-        blockchainReader.getBestBlockNumber()
+        s"""|🧠🪱 FastSync Progress: phase=$phase, blocks=$lastFull/$blockTarget (${blockPercent}%), state=$savedNodes/$totalNodes (${nodePercent}%),
+        |to_brain=$blocksToBrain, rates=${formatRate(blocksPerSec)} blocks, ${formatRate(nodesPerSec)} nodes, queues=bodies=${syncState.blockBodiesQueue.size}, receipts=${syncState.receiptsQueue.size},
+            |peers=waiting=${assignedHandlers.size}, connected=${handshakedPeers.size}, blacklisted=${blacklistedIds.size}, elapsed=${totalMinutesTaken()}m
+            |""".stripMargin.replace("\n", " ")
       )
+
+      lastProgressLogMs = nowMs
+      lastLoggedFullBlock = lastFull
+      lastLoggedStateNodes = savedNodes
+
       log.debug(
         s"""|Connection status: connected({})/
             |handshaked({})
