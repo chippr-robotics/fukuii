@@ -55,12 +55,34 @@ object NodeParser extends Logger {
 
   type Error = String
 
-  private def validateTcpAddress(uri: URI): Either[Error, URI] =
-    Try(InetAddress.getByName(uri.getHost) -> uri.getPort) match {
-      case Success(tcpAddress) if tcpAddress._2 != -1 => Right(uri)
-      case Success(_)                                 => Left(s"No defined port for uri $uri")
-      case Failure(_)                                 => Left(s"Error parsing ip address for $uri")
+  private def validateTcpAddress(uri: URI): Either[Error, URI] = {
+    val hostOpt = Option(uri.getHost)
+    val port = uri.getPort
+
+    hostOpt match {
+      case None =>
+        Left(s"No defined host for uri $uri")
+
+      case Some(_) if port == -1 =>
+        Left(s"No defined port for uri $uri")
+
+      case Some(host) =>
+        // Docker Compose service DNS entries can race container startup. For static nodes like
+        // enode://...@coregeth:30304, allow a short retry window so we don't permanently drop
+        // the node during initial boot.
+        def resolveWithRetry(attemptsLeft: Int): Either[Error, Unit] =
+          Try(InetAddress.getByName(host)) match {
+            case Success(_) => Right(())
+            case Failure(_: UnknownHostException) if attemptsLeft > 0 =>
+              Thread.sleep(100L)
+              resolveWithRetry(attemptsLeft - 1)
+            case Failure(t) =>
+              Left(s"Error resolving host '$host' for uri $uri: ${t.getMessage}")
+          }
+
+        resolveWithRetry(attemptsLeft = 20).map(_ => uri)
     }
+  }
 
   private def validateScheme(uri: URI): Either[Error, URI] = {
     val scheme = Option(uri.getScheme).toRight(s"No defined scheme for uri $uri")

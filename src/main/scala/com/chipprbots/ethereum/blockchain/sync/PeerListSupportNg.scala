@@ -64,6 +64,12 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
   def getPeerWithHighestBlock: Option[PeerWithInfo] =
     peersToDownloadFrom.values.toList.sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering).headOption
 
+  def getSnapPeerWithHighestBlock: Option[PeerWithInfo] =
+    peersToDownloadFrom.values.toList
+      .filter(_.peerInfo.remoteStatus.supportsSnap)
+      .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+      .headOption
+
   def blacklistIfHandshaked(peerId: PeerId, duration: FiniteDuration, reason: BlacklistReason): Unit =
     handshakedPeers.get(peerId) match {
       case Some(peerWithInfo) =>

@@ -13,8 +13,23 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
-  "MerkleProofVerifier" should "accept empty proof for empty account list" taggedAs UnitTest in {
+  "MerkleProofVerifier" should "reject empty proof for empty account list when trie is non-empty" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-root"))
+    val verifier = MerkleProofVerifier(stateRoot)
+
+    val result = verifier.verifyAccountRange(
+      accounts = Seq.empty,
+      proof = Seq.empty,
+      startHash = ByteString.empty,
+      endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe a[Left[_, _]]
+    result.left.get should include("Missing proof for empty account range")
+  }
+
+  it should "accept empty proof for empty account list when trie is empty" taggedAs UnitTest in {
+    val stateRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val verifier = MerkleProofVerifier(stateRoot)
 
     val result = verifier.verifyAccountRange(
@@ -138,7 +153,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "accept empty storage proof for empty slots" taggedAs UnitTest in {
-    val storageRoot = kec256(ByteString("test-storage-root"))
+    val storageRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val verifier = MerkleProofVerifier(storageRoot)
 
     val result = verifier.verifyStorageRange(

@@ -78,6 +78,8 @@ class StorageRangeCoordinator(
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     maxAccountsPerBatch: Int,
+  maxInFlightRequests: Int,
+  requestTimeout: FiniteDuration,
     snapSyncController: ActorRef
 ) extends Actor
     with ActorLogging {
@@ -86,12 +88,31 @@ class StorageRangeCoordinator(
 
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
-  private val activeTasks = mutable.Map[BigInt, Seq[StorageTask]]()
+  private val activeTasks = mutable.Map[BigInt, (Peer, Seq[StorageTask])]()
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
 
-  // Worker management
-  private val workers = mutable.ArrayBuffer[ActorRef]()
-  private val maxWorkers = 8
+  // Peer cooldown (best-effort): used to avoid hammering peers that likely can't serve the pivot state.
+  private val peerCooldownUntilMs = mutable.Map[String, Long]()
+  private val peerCooldownDefault = 30.seconds
+
+  // Global backoff: if many peers return empty StorageRanges for the pivot state, pause storage
+  // requests for a short period to allow peers / pivot servers to catch up.
+  private var consecutiveEmptyResponses: Int = 0
+  private val maxConsecutiveEmptyResponses: Int = 10
+  private val globalBackoffDuration: FiniteDuration = 2.minutes
+  private var globalBackoffUntilMs: Option[Long] = None
+
+  // Some peers refuse/struggle with multi-account StorageRanges. If we observe empty responses for
+  // batched requests, fall back to single-account requests.
+  private var effectiveMaxAccountsPerBatch: Int = maxAccountsPerBatch
+
+  // Per-task empty-response tracking.
+  // Some peers legitimately return empty slotSets+proofs in cases we can't easily distinguish
+  // from “can’t serve this state”. If we keep re-queuing forever, sync can livelock.
+  // Track empty responses per (accountHash,next,last) and skip after a small threshold.
+  private case class StorageTaskKey(accountHash: ByteString, next: ByteString, last: ByteString)
+  private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
+  private val maxEmptyResponsesPerTask: Int = 3
 
   // Statistics
   private var slotsDownloaded: Long = 0
@@ -127,12 +148,22 @@ class StorageRangeCoordinator(
       log.debug(s"Added storage task for account ${task.accountString} to queue")
 
     case StoragePeerAvailable(peer) =>
-      if (!isComplete && workers.size < maxWorkers) {
-        val worker = createWorker()
-        worker ! FetchStorageRanges(null, peer)
+      if (isGlobalBackoffActive) {
+        log.info(s"Global storage backoff active; ignoring StoragePeerAvailable(${peer.id.value})")
+      } else if (isPeerCoolingDown(peer)) {
+        log.info(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
       } else if (!isComplete && tasks.nonEmpty) {
-        // Request from existing worker
-        requestNextRanges(peer)
+        // Nethermind-style dispatcher behavior: only keep a bounded number of in-flight requests.
+        // Important: do NOT create worker actors that re-emit StoragePeerAvailable (that causes
+        // recursive peer-available storms and request/timeouts under load).
+        if (activeTasks.size >= maxInFlightRequests) {
+          log.debug(
+            s"Storage in-flight limit reached (inFlight=${activeTasks.size}, limit=$maxInFlightRequests); " +
+              s"ignoring StoragePeerAvailable(${peer.id.value})"
+          )
+        } else {
+          requestNextRanges(peer)
+        }
       }
 
     case StorageRangesResponseMsg(response) =>
@@ -154,12 +185,18 @@ class StorageRangeCoordinator(
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       }
 
+    case ResumeStorageBackoff =>
+      globalBackoffUntilMs = None
+      consecutiveEmptyResponses = 0
+      effectiveMaxAccountsPerBatch = maxAccountsPerBatch
+      log.info(s"Global storage backoff ended; resuming storage requests (batchSize=$effectiveMaxAccountsPerBatch)")
+
     case StorageGetProgress =>
       val stats = StorageRangeCoordinator.SyncStatistics(
         slotsDownloaded = slotsDownloaded,
         bytesDownloaded = bytesDownloaded,
         tasksCompleted = completedTasks.size,
-        tasksActive = activeTasks.values.flatten.size,
+        tasksActive = activeTasks.values.map(_._2.size).sum,
         tasksPending = tasks.size,
         elapsedTimeMs = System.currentTimeMillis() - startTime,
         progress = progress
@@ -167,30 +204,40 @@ class StorageRangeCoordinator(
       sender() ! stats
   }
 
-  private def createWorker(): ActorRef = {
-    val worker = context.actorOf(
-      StorageRangeWorker.props(
-        coordinator = self,
-        networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker
-      )
-    )
-    workers += worker
-    log.debug(s"Created storage worker, total: ${workers.size}")
-    worker
-  }
-
   private def requestNextRanges(peer: Peer): Option[BigInt] = {
     if (tasks.isEmpty) {
-      log.debug("No more storage tasks available")
+      log.info("No more storage tasks available")
       return None
     }
 
-    val batchTasks = (0 until maxAccountsPerBatch).flatMap { _ =>
-      if (tasks.nonEmpty) Some(tasks.dequeue()) else None
-    }
+    val min = ByteString(Array.fill(32)(0.toByte))
+    val max = ByteString(Array.fill(32)(0xff.toByte))
+    def isInitialRange(t: StorageTask): Boolean = t.next == min && t.last == max
+
+    // snap/1 origin/limit semantics apply to the first account only. To avoid incorrect continuation
+    // behavior, only batch tasks that request the initial full range.
+    val first = tasks.dequeue()
+    val batchTasks: Seq[StorageTask] =
+      if (!isInitialRange(first) || effectiveMaxAccountsPerBatch <= 1) {
+        Seq(first)
+      } else {
+        val buf = mutable.ArrayBuffer[StorageTask](first)
+        while (buf.size < effectiveMaxAccountsPerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
+          buf += tasks.dequeue()
+        }
+        buf.toSeq
+      }
 
     if (batchTasks.isEmpty) {
+      return None
+    }
+
+    if (isGlobalBackoffActive) {
+      // If we are in a global backoff, push the selected tasks back and avoid sending requests
+      // until the backoff expires.
+      batchTasks.foreach(_.pending = false)
+      batchTasks.foreach(this.tasks.enqueue(_))
+      log.debug("Global storage backoff active; deferring storage requests")
       return None
     }
 
@@ -208,20 +255,32 @@ class StorageRangeCoordinator(
     )
 
     batchTasks.foreach(_.pending = true)
-    activeTasks.put(requestId, batchTasks)
+    activeTasks.put(requestId, (peer, batchTasks))
 
     requestTracker.trackRequest(
       requestId,
       peer,
       SNAPRequestTracker.RequestType.GetStorageRanges,
-      timeout = 30.seconds
+      timeout = requestTimeout
     ) {
       handleTimeout(requestId)
     }
 
-    log.debug(
-      s"Requesting storage ranges for ${batchTasks.size} accounts from peer ${peer.id} (request ID: $requestId)"
+    val rootPrefix = stateRoot.take(4).toHex
+    val startPrefix = firstTask.next.take(4).toHex
+    val limitPrefix = firstTask.last.take(4).toHex
+    val accountsPreview = accountHashes.take(3).map(_.take(4).toHex).mkString(",")
+
+    // Increased visibility: log full request details at INFO to aid debugging malformed or unexpected replies
+    log.info(
+      s"Sending GetStorageRanges to peer ${peer.id.value}: requestId=$requestId accounts=${batchTasks.size} " +
+        s"root=${stateRoot.toHex} start=${firstTask.next.toHex} limit=${firstTask.last.toHex} " +
+        s"bytes=$maxResponseSize accountsPreview=${accountHashes.take(5).map(_.toHex).mkString(",")}" 
     )
+
+    // Log per-account storageRoot mapping for this batch to help debug which accounts are requested
+    val perAccountInfo = batchTasks.map(task => s"account=${task.accountHash.toHex},storageRoot=${task.storageRoot.toHex}").mkString("; ")
+    log.info(s"GetStorageRanges batch details: requestId=$requestId ${perAccountInfo}")
 
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
     val messageSerializable: MessageSerializable = new GetStorageRangesEnc(request)
@@ -245,39 +304,144 @@ class StorageRangeCoordinator(
               case None =>
                 log.warning(s"No active tasks for request ID ${response.requestId}")
 
-              case Some(batchTasks) =>
-                processStorageRanges(batchTasks, validResponse)
+              case Some((peer, batchTasks)) =>
+                processStorageRanges(peer, batchTasks, validResponse)
             }
         }
     }
   }
 
-  private def processStorageRanges(tasks: Seq[StorageTask], response: StorageRanges): Unit = {
-    log.info(s"Processing storage ranges for ${tasks.size} accounts, received ${response.slots.size} slot sets")
+  private def processStorageRanges(peer: Peer, tasks: Seq[StorageTask], response: StorageRanges): Unit = {
+    // A response may legitimately return fewer slot-sets than requested accounts.
+    // Some clients may also return proofs with zero slot-sets to indicate proof-of-absence.
+    val servedCount: Int =
+      if (response.slots.nonEmpty) response.slots.size
+      else if (response.proof.nonEmpty) math.min(1, tasks.size)
+      else 0
 
-    if (response.slots.size > tasks.size) {
-      log.warning(s"Received more slot sets (${response.slots.size}) than requested accounts (${tasks.size})")
+    log.info(
+      s"Processing storage ranges for ${tasks.size} accounts from peer ${peer.id.value}, " +
+        s"received ${response.slots.size} slot sets (served=$servedCount, proofs=${response.proof.size})"
+    )
+
+    if (servedCount == 0) {
+      if (tasks.size > 1 && effectiveMaxAccountsPerBatch > 1) {
+        log.info(
+          s"Received empty StorageRanges for a batched request (accounts=${tasks.size}); falling back to single-account requests"
+        )
+        effectiveMaxAccountsPerBatch = 1
+      }
+
+      // Track empties per task to avoid re-queueing forever.
+      // If the same task yields empty responses repeatedly, skip it with a loud warning.
+      var skipped = 0
+      var requeued = 0
+      tasks.foreach { task =>
+        val key = StorageTaskKey(task.accountHash, task.next, task.last)
+        val attempts = emptyResponsesByTask.getOrElse(key, 0) + 1
+        emptyResponsesByTask.update(key, attempts)
+
+        if (attempts >= maxEmptyResponsesPerTask) {
+          skipped += 1
+          task.done = true
+          task.pending = false
+          completedTasks += task
+          log.warning(
+            s"Skipping storage task after $attempts empty StorageRanges replies: " +
+              s"account=${task.accountHash.toHex} storageRoot=${task.storageRoot.toHex} range=${task.rangeString}"
+          )
+        } else {
+          requeued += 1
+          task.pending = false
+          this.tasks.enqueue(task)
+          log.info(
+            s"Empty StorageRanges for task (attempt $attempts/$maxEmptyResponsesPerTask); re-queueing: " +
+              s"account=${task.accountHash.take(4).toHex} range=${task.rangeString}"
+          )
+        }
+      }
+
+      // If we skipped something, we made forward progress; don't let this feed global backoff.
+      if (skipped > 0) {
+        consecutiveEmptyResponses = 0
+        self ! StorageCheckCompletion
+        return
+      }
+
+      // No task was skipped; treat this as a transient “can’t serve” signal and apply backoff/cooldown.
+      consecutiveEmptyResponses += 1
+
+      // If many peers consecutively return empty results, enter a global backoff so that
+      // the coordinator doesn't endlessly requeue tasks while the pivot state is unavailable.
+      if (consecutiveEmptyResponses >= maxConsecutiveEmptyResponses && globalBackoffUntilMs.isEmpty) {
+        log.warning(
+          s"Multiple peers returned empty StorageRanges (${consecutiveEmptyResponses} in a row). " +
+            s"Entering global backoff for ${globalBackoffDuration.toMinutes} minute(s)."
+        )
+
+        // Nethermind-style: interpret repeated empty payloads as an expired root hash.
+        // Propagate to the controller so it can select a fresher pivot/stateRoot.
+        snapSyncController ! SNAPSyncController.PivotStateUnservable(
+          rootHash = stateRoot,
+          reason = "empty StorageRanges (served=0, proofs=0)",
+          consecutiveEmptyResponses = consecutiveEmptyResponses
+        )
+
+        globalBackoffUntilMs = Some(System.currentTimeMillis() + globalBackoffDuration.toMillis)
+        // Reduce batching to single-account while backoff is active
+        effectiveMaxAccountsPerBatch = 1
+        // Schedule resume
+        context.system.scheduler.scheduleOnce(globalBackoffDuration, self, ResumeStorageBackoff)(context.system.dispatcher)
+      }
+
+      recordPeerCooldown(peer, "empty slots + empty proofs")
+      return
     }
 
-    tasks.zipWithIndex.foreach { case (task, idx) =>
-      val accountSlots = if (idx < response.slots.size) response.slots(idx) else Seq.empty
+    // Reset empty-response counter once we receive a non-empty reply
+    consecutiveEmptyResponses = 0
+
+    // Clear empty-response counters for tasks that are now being served.
+    tasks.foreach { task =>
+      emptyResponsesByTask.remove(StorageTaskKey(task.accountHash, task.next, task.last))
+    }
+
+    val servedTasks = tasks.take(servedCount)
+    val unservedTasks = tasks.drop(servedCount)
+
+    if (unservedTasks.nonEmpty) {
+      log.debug(s"Re-queueing ${unservedTasks.size} unserved storage tasks")
+      unservedTasks.foreach { task =>
+        task.pending = false
+        this.tasks.enqueue(task)
+      }
+    }
+
+    servedTasks.zipWithIndex.foreach { case (task, idx) =>
+      val accountSlots =
+        if (response.slots.nonEmpty && idx < response.slots.size) response.slots(idx)
+        else Seq.empty
+
+      // Best-practice: apply proof nodes only to the last served slot-set.
+      val proofForThisTask = if (idx == servedCount - 1) response.proof else Seq.empty
 
       log.debug(s"Processing ${accountSlots.size} slots for account ${task.accountString}")
 
       task.slots = accountSlots
-      task.proof = response.proof
+      task.proof = proofForThisTask
 
       val verifier = getOrCreateVerifier(task.storageRoot)
-      verifier.verifyStorageRange(accountSlots, response.proof, task.next, task.last) match {
+      verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, task.last) match {
         case Left(error) =>
           log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
+          recordPeerCooldown(peer, s"verification failed: $error")
           task.pending = false
           this.tasks.enqueue(task)
 
         case Right(_) =>
           log.debug(s"Storage proof verified successfully for ${accountSlots.size} slots")
 
-          storeStorageSlots(task.accountHash, accountSlots) match {
+          storeStorageSlots(task, accountSlots) match {
             case Left(error) =>
               log.warning(s"Failed to store storage slots for account ${task.accountString}: $error")
               task.pending = false
@@ -287,6 +451,9 @@ class StorageRangeCoordinator(
               log.debug(s"Successfully stored ${accountSlots.size} storage slots")
 
               slotsDownloaded += accountSlots.size
+              if (accountSlots.nonEmpty) {
+                snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(accountSlots.size.toLong)
+              }
               val slotBytes = accountSlots.map { case (hash, value) => hash.size + value.size }.sum
               bytesDownloaded += slotBytes
 
@@ -307,77 +474,64 @@ class StorageRangeCoordinator(
           }
       }
     }
+
+    // The coordinator previously relied on StorageTaskComplete messages that are not emitted by
+    // the current actor-based storage pipeline. Explicitly check completion after each response.
+    self ! StorageCheckCompletion
   }
 
   private def storeStorageSlots(
-      accountHash: ByteString,
+      task: StorageTask,
       slots: Seq[(ByteString, ByteString)]
   ): Either[String, Unit] =
     try {
       import com.chipprbots.ethereum.mpt.{byteStringSerializer, MerklePatriciaTrie}
-      import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException
 
       if (slots.nonEmpty) {
-        val storageTaskOpt = tasks
-          .find(_.accountHash == accountHash)
-          .orElse(activeTasks.values.flatten.find(_.accountHash == accountHash))
-          .orElse(completedTasks.find(_.accountHash == accountHash))
+        val accountHash = task.accountHash
 
-        storageTaskOpt match {
-          case None =>
-            log.warning(s"No storage task found for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-            Left(s"No storage task found for account")
-            
-          case Some(storageTask) =>
-            val storageTrie = storageTrieCache.getOrElseUpdate(
-              accountHash, {
-                val storageRoot = storageTask.storageRoot
-                if (storageRoot.isEmpty || storageRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
-                  log.debug(s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-                  MerklePatriciaTrie[ByteString, ByteString](mptStorage)
-                } else {
-                  try {
-                    log.debug(s"Loading storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-                    MerklePatriciaTrie[ByteString, ByteString](storageRoot.toArray, mptStorage)
-                  } catch {
-                    case e: MissingRootNodeException =>
-                      log.warning(s"Storage root not found for account, creating new trie")
-                      MerklePatriciaTrie[ByteString, ByteString](mptStorage)
-                  }
-                }
-              }
+        val storageTrie = storageTrieCache.getOrElseUpdate(
+          accountHash, {
+            // Important: the storageRoot in account data refers to the *remote* (pivot) trie.
+            // We generally do not have its nodes locally yet, so constructing a trie at that
+            // root and then calling put() will immediately fail with MissingRootNodeException.
+            // Start from an empty trie and grow it as ranges arrive.
+            log.debug(
+              s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
             )
+            MerklePatriciaTrie[ByteString, ByteString](mptStorage)
+          }
+        )
 
-            var currentTrie = storageTrie
-            slots.foreach { case (slotHash, slotValue) =>
-              log.debug(
-                s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
-                  s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
-              )
-              currentTrie = currentTrie.put(slotHash, slotValue)
-            }
-
-            storageTrieCache.put(accountHash, currentTrie)
-
-            log.info(
-              s"Inserted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} (cache size: ${storageTrieCache.size})"
-            )
-
-            val computedRoot = ByteString(currentTrie.getRootHash)
-            val expectedRoot = storageTask.storageRoot
-            if (computedRoot != expectedRoot) {
-              log.warning(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
-            }
-
-            mptStorage.synchronized {
-              mptStorage.persist()
-            }
-
-            log.info(
-              s"Successfully persisted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
-            )
-            Right(())
+        var currentTrie = storageTrie
+        slots.foreach { case (slotHash, slotValue) =>
+          log.debug(
+            s"Storing storage slot ${slotHash.take(4).toArray.map("%02x".format(_)).mkString} = " +
+              s"${slotValue.take(4).toArray.map("%02x".format(_)).mkString} for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
+          )
+          currentTrie = currentTrie.put(slotHash, slotValue)
         }
+
+        storageTrieCache.put(accountHash, currentTrie)
+
+        log.info(
+          s"Inserted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} (cache size: ${storageTrieCache.size})"
+        )
+
+        val computedRoot = ByteString(currentTrie.getRootHash)
+        val expectedRoot = task.storageRoot
+        if (computedRoot != expectedRoot) {
+          log.debug(s"Storage root mismatch for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}")
+        }
+
+        mptStorage.synchronized {
+          mptStorage.persist()
+        }
+
+        log.info(
+          s"Successfully persisted ${slots.size} storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
+        )
+        Right(())
       } else {
         Right(())
       }
@@ -391,8 +545,9 @@ class StorageRangeCoordinator(
     proofVerifiers.getOrElseUpdate(storageRoot, MerkleProofVerifier(storageRoot))
 
   private def handleTimeout(requestId: BigInt): Unit = {
-    activeTasks.remove(requestId).foreach { batchTasks =>
+    activeTasks.remove(requestId).foreach { case (peer, batchTasks) =>
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts")
+      recordPeerCooldown(peer, "request timeout")
       batchTasks.foreach { task =>
         task.pending = false
         tasks.enqueue(task)
@@ -401,13 +556,26 @@ class StorageRangeCoordinator(
   }
 
   private def progress: Double = {
-    val total = completedTasks.size + activeTasks.values.flatten.size + tasks.size
+    val activeCount = activeTasks.values.map(_._2.size).sum
+    val total = completedTasks.size + activeCount + tasks.size
     if (total == 0) 1.0
     else completedTasks.size.toDouble / total
   }
 
   private def isComplete: Boolean = {
     tasks.isEmpty && activeTasks.isEmpty
+  }
+
+  private def isPeerCoolingDown(peer: Peer): Boolean =
+    peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
+
+  private def isGlobalBackoffActive: Boolean =
+    globalBackoffUntilMs.exists(_ > System.currentTimeMillis())
+
+  private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
+    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+    peerCooldownUntilMs.put(peer.id.value, until)
+    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
   }
 }
 
@@ -418,6 +586,8 @@ object StorageRangeCoordinator {
       requestTracker: SNAPRequestTracker,
       mptStorage: MptStorage,
       maxAccountsPerBatch: Int,
+      maxInFlightRequests: Int,
+      requestTimeout: FiniteDuration,
       snapSyncController: ActorRef
   ): Props =
     Props(
@@ -427,6 +597,8 @@ object StorageRangeCoordinator {
         requestTracker,
         mptStorage,
         maxAccountsPerBatch,
+        maxInFlightRequests,
+        requestTimeout,
         snapSyncController
       )
     )
