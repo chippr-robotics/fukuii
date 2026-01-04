@@ -10,6 +10,7 @@ import scala.collection.mutable
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
@@ -58,8 +59,19 @@ class SNAPSyncController(
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[ByteString] = None
 
+  // Guards to prevent duplicate phase-starts when upstream coordinators emit duplicate completion signals.
+  private var bytecodeSyncStarting: Boolean = false
+  private var storageRangeSyncStarting: Boolean = false
+
   // Contract accounts collected for bytecode download
   private var contractAccounts = Seq.empty[(ByteString, ByteString)]
+  private var contractStorageAccounts = Seq.empty[(ByteString, ByteString)]
+
+  // Internal message used to deliver contract-account query results back through the actor mailbox.
+  private case class ContractAccountsReady(
+      bytecodeAccounts: Seq[(ByteString, ByteString)],
+      storageAccounts: Seq[(ByteString, ByteString)]
+  )
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -73,15 +85,25 @@ class SNAPSyncController(
 
   // Retry counter for bootstrap-to-SNAP transition
   private var bootstrapRetryCount: Int = 0
-  private val MaxBootstrapRetries = 10
   private val BootstrapRetryDelay = 2.seconds
+
+  // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
+  private var lastPivotRestartMs: Long = 0L
+  private val MinPivotRestartInterval: FiniteDuration = 30.seconds
 
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
   private var storageRangeRequestTask: Option[Cancellable] = None
+  private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   private var bootstrapCheckTask: Option[Cancellable] = None
+
+  // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
+  // This addresses the common case where peers no longer serve the chosen pivot/state window.
+  private val StorageStagnationThreshold: FiniteDuration = 10.minutes
+  private val StorageStagnationCheckInterval: FiniteDuration = 30.seconds
+  private var lastStorageProgressMs: Long = System.currentTimeMillis()
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
@@ -93,6 +115,7 @@ class SNAPSyncController(
     accountRangeRequestTask.foreach(_.cancel())
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
+    storageStagnationCheckTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
@@ -139,68 +162,133 @@ class SNAPSyncController(
     case msg: AccountRange =>
       log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
 
-      // Actor-based: forward message to all account range workers
-      // The workers will check if the requestId matches their current task
-      context.children.foreach { child =>
-        child ! actors.Messages.AccountRangeResponseMsg(msg)
-      }
+      // Forward to the account range coordinator (it owns the workers).
+      // Forwarding only to this actor's direct children is insufficient because workers are children of coordinators.
+      accountRangeCoordinator.foreach(_ ! actors.Messages.AccountRangeResponseMsg(msg))
 
     case msg: ByteCodes =>
       log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
 
-      // Forward message to all bytecode workers
-      context.children.foreach { child =>
-        child ! actors.Messages.ByteCodesResponseMsg(msg)
-      }
+      // Forward to the bytecode coordinator (it owns the workers).
+      bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodesResponseMsg(msg))
 
     case msg: StorageRanges =>
       log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
 
-      // Actor-based: forward message to all storage workers
-      context.children.foreach { child =>
-        child ! actors.Messages.StorageRangesResponseMsg(msg)
-      }
+      // Forward to the storage range coordinator (it owns the workers).
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StorageRangesResponseMsg(msg))
 
     case msg: TrieNodes =>
       log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
 
-      // Forward message to all healing workers
-      context.children.foreach { child =>
-        child ! actors.Messages.TrieNodesResponseMsg(msg)
+      // Forward to the trie node healing coordinator (it owns the workers).
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.TrieNodesResponseMsg(msg))
+
+    case ProgressAccountsSynced(count) =>
+      progressMonitor.incrementAccountsSynced(count)
+
+    case ProgressBytecodesDownloaded(count) =>
+      progressMonitor.incrementBytecodesDownloaded(count)
+
+    case ProgressStorageSlotsSynced(count) =>
+      progressMonitor.incrementStorageSlotsSynced(count)
+      lastStorageProgressMs = System.currentTimeMillis()
+
+    case ProgressNodesHealed(count) =>
+      progressMonitor.incrementNodesHealed(count)
+
+    case PivotStateUnservable(rootHash, reason, emptyResponses) =>
+      // Nethermind-style behavior: treat many empty range replies as an "expired root" signal.
+      // This usually means the chosen pivot/stateRoot is no longer widely serveable.
+      if (currentPhase == StorageRangeSync) {
+        val now = System.currentTimeMillis()
+        if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
+          log.warning(
+            s"Ignoring PivotStateUnservable during StorageRangeSync due to restart guard " +
+              s"(emptyResponses=$emptyResponses, root=${rootHash.take(4).toHex}, reason=$reason)"
+          )
+        } else {
+          lastPivotRestartMs = now
+          restartSnapSync(
+            s"pivot state root appears unservable during StorageRangeSync " +
+              s"(emptyResponses=$emptyResponses, root=${rootHash.take(8).toHex}..., reason=$reason)"
+          )
+        }
+      } else {
+        log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
       }
 
+    // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
+    // to keep phase-start logging idempotent and centralized.
+
     case AccountRangeSyncComplete =>
-      log.info("Account range sync complete. Starting bytecode sync...")
-      
-      // Query the coordinator for contract accounts
-      import org.apache.pekko.pattern.ask
-      import org.apache.pekko.util.Timeout
-      import scala.concurrent.duration._
-      implicit val timeout: Timeout = Timeout(5.seconds)
-      
-      accountRangeCoordinator.foreach { coordinator =>
-        import context.dispatcher
-        (coordinator ? actors.Messages.GetContractAccounts).mapTo[actors.Messages.ContractAccountsResponse].foreach { response =>
-          contractAccounts = response.accounts
-          log.info(s"Collected ${contractAccounts.size} contract accounts for bytecode sync from coordinator")
-          // Proceed with bytecode sync
-          progressMonitor.startPhase(ByteCodeSync)
-          currentPhase = ByteCodeSync
-          startBytecodeSync()
+      if (storageRangeSyncStarting || currentPhase != AccountRangeSync) {
+        log.info(
+          s"Ignoring AccountRangeSyncComplete in phase=$currentPhase (storageRangeSyncStarting=$storageRangeSyncStarting)"
+        )
+      } else {
+        storageRangeSyncStarting = true
+        log.info("Account range sync complete. Starting storage range sync...")
+
+        import org.apache.pekko.pattern.{ ask, pipe }
+        import org.apache.pekko.util.Timeout
+        import scala.concurrent.duration._
+        implicit val timeout: Timeout = Timeout(5.seconds)
+
+        accountRangeCoordinator match {
+          case Some(coordinator) =>
+            val bytecodeAccountsF = (coordinator ? actors.Messages.GetContractAccounts)
+              .mapTo[actors.Messages.ContractAccountsResponse]
+              .map(_.accounts)
+
+            val storageAccountsF = (coordinator ? actors.Messages.GetContractStorageAccounts)
+              .mapTo[actors.Messages.ContractStorageAccountsResponse]
+              .map(_.accounts)
+
+            (for {
+              bytecodeAccounts <- bytecodeAccountsF
+              storageAccounts <- storageAccountsF
+            } yield ContractAccountsReady(bytecodeAccounts, storageAccounts))
+              .recover { case ex =>
+                log.warning(s"Failed to query contract accounts for bytecode/storage sync: ${ex.getMessage}")
+                ContractAccountsReady(Seq.empty, Seq.empty)
+              }
+              .pipeTo(self)
+          case None =>
+            self ! ContractAccountsReady(Seq.empty, Seq.empty)
         }
       }
 
+    case ContractAccountsReady(bytecodeAccounts, storageAccounts) =>
+      if (currentPhase != AccountRangeSync) {
+        log.info(s"Ignoring ContractAccountsReady in phase=$currentPhase")
+      } else {
+        contractAccounts = bytecodeAccounts
+        contractStorageAccounts = storageAccounts
+        log.info(
+          s"Collected ${contractAccounts.size} contract accounts for bytecode sync and ${contractStorageAccounts.size} for storage sync from coordinator"
+        )
+        currentPhase = ByteCodeSync
+        startBytecodeSync()
+      }
+
     case ByteCodeSyncComplete =>
-      log.info("ByteCode sync complete. Starting storage range sync...")
-      progressMonitor.startPhase(StorageRangeSync)
-      currentPhase = StorageRangeSync
-      startStorageRangeSync()
+      if (currentPhase != ByteCodeSync) {
+        log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase")
+      } else {
+        log.info("ByteCode sync complete. Starting storage range sync...")
+        currentPhase = StorageRangeSync
+        startStorageRangeSync()
+      }
 
     case StorageRangeSyncComplete =>
-      log.info("Storage range sync complete. Starting state healing...")
-      progressMonitor.startPhase(StateHealing)
-      currentPhase = StateHealing
-      startStateHealing()
+      if (currentPhase != StorageRangeSync) {
+        log.info(s"Ignoring StorageRangeSyncComplete in phase=$currentPhase")
+      } else {
+        log.info("Storage range sync complete. Starting state healing...")
+        currentPhase = StateHealing
+        startStateHealing()
+      }
 
     case StateHealingComplete =>
       log.info("State healing complete. Validating state...")
@@ -222,8 +310,46 @@ class SNAPSyncController(
       log.debug(s"Unhandled message in syncing state: $msg")
   }
 
+  // Internal message for periodic storage stagnation checks
+  private case object CheckStorageStagnation
+
+  private case class StorageCoordinatorProgress(stats: actors.StorageRangeCoordinator.SyncStatistics)
+
+  private def scheduleStorageStagnationChecks(): Unit = {
+    storageStagnationCheckTask.foreach(_.cancel())
+    storageStagnationCheckTask = Some(
+      scheduler.scheduleWithFixedDelay(
+        StorageStagnationCheckInterval,
+        StorageStagnationCheckInterval,
+        self,
+        CheckStorageStagnation
+      )(ec)
+    )
+  }
+
+  private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
+    if (currentPhase != StorageRangeSync) return
+
+    // Only consider it a stall if there is still work to do.
+    val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
+    if (!workRemaining) return
+
+    val now = System.currentTimeMillis()
+    val stalledForMs = now - lastStorageProgressMs
+    if (stalledForMs < StorageStagnationThreshold.toMillis) return
+
+    // Avoid noisy rapid restarts.
+    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
+    lastPivotRestartMs = now
+
+    restartSnapSync(
+      s"storage sync stalled: no storage slot progress for ${stalledForMs / 1000}s " +
+        s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, tasksActive=${stats.tasksActive}"
+    )
+  }
+
   def bootstrapping: Receive = handlePeerListMessages.orElse {
-    case BootstrapComplete =>
+    case BootstrapComplete(pivotHeaderOpt) =>
       log.info("=" * 80)
       log.info("✅ Bootstrap phase complete - transitioning to SNAP sync")
       log.info("=" * 80)
@@ -240,49 +366,111 @@ class SNAPSyncController(
       // Reset retry counter
       bootstrapRetryCount = 0
       
-      // If we have a bootstrap target and we've reached it, use that as our pivot
-      // This ensures we use the pivot we bootstrapped to, not a recalculated one
-      bootstrapTarget match {
-        case Some(targetPivot) =>
-          // Header-only bootstrap may complete without importing blocks; treat pivot as ready if header exists.
-          if (localBestBlock >= targetPivot)
-            log.info(s"Using bootstrap target $targetPivot as pivot (blocks imported up to target)")
-          else
-            log.info(s"Using bootstrap target $targetPivot as pivot (header-only bootstrap)")
+      // Helper: compute current best height from SNAP-capable peers (subject to bootstrapPivot floor).
+      def currentNetworkBestFromSnapPeers(bootstrapPivot: BigInt): Option[BigInt] = {
+        val snapPeersForPivot =
+          peersToDownloadFrom.values.toList
+            .filter(_.peerInfo.remoteStatus.supportsSnap)
+            .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
 
-          blockchainReader.getBlockHeaderByNumber(targetPivot) match {
-            case Some(header) =>
-              pivotBlock = Some(targetPivot)
-              stateRoot = Some(header.stateRoot)
-              appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-              appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+        snapPeersForPivot
+          .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+          .headOption
+          .map(_.peerInfo.maxBlockNumber)
+      }
 
-              SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+      def pivotTooStaleAgainstNetworkHead(pivot: BigInt): Boolean = {
+        val bootstrapPivot = appStateStorage.getBootstrapPivotBlock()
+        currentNetworkBestFromSnapPeers(bootstrapPivot) match {
+          case Some(networkBest) if networkBest > 0 =>
+            val delta = networkBest - pivot
+            if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
+              log.warning(
+                s"Bootstrapped pivot $pivot is now $delta blocks behind current network best $networkBest; " +
+                  s"exceeds maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}. Re-selecting a fresher pivot."
+              )
+              true
+            } else {
+              log.info(
+                s"Bootstrapped pivot freshness: pivot=$pivot, networkBest=$networkBest, delta=$delta, " +
+                  s"maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}"
+              )
+              false
+            }
+          case _ =>
+            // If we can't see any suitable SNAP peers right now, don't block on freshness.
+            false
+        }
+      }
 
-              log.info("=" * 80)
-              log.info("🎯 SNAP Sync Ready (from bootstrap)")
-              log.info("=" * 80)
-              log.info(s"Local best block: $localBestBlock")
-              log.info(s"Using bootstrapped pivot block: $targetPivot")
-              log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-              log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
-              log.info("=" * 80)
+      pivotHeaderOpt match {
+        case Some(header) =>
+          val targetPivot = header.number
 
-              // Start account range sync
-              currentPhase = AccountRangeSync
-              startAccountRangeSync(header.stateRoot)
-              context.become(syncing)
+          if (pivotTooStaleAgainstNetworkHead(targetPivot)) {
+            // Don't commit a pivot that peers are unlikely to serve.
+            startSnapSync()
+          } else {
+            pivotBlock = Some(targetPivot)
+            stateRoot = Some(header.stateRoot)
+            appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
+            appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
+            SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+
+            log.info("=" * 80)
+            log.info("🎯 SNAP Sync Ready (from bootstrap)")
+            log.info("=" * 80)
+            log.info(s"Local best block: $localBestBlock")
+            log.info(s"Using bootstrapped pivot block: $targetPivot")
+            log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+            log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+            log.info("=" * 80)
+
+            currentPhase = AccountRangeSync
+            startAccountRangeSync(header.stateRoot)
+            context.become(syncing)
+          }
+
+        case None =>
+          // Backward-compat / fallback: use the stored bootstrap target and local header.
+          bootstrapTarget match {
+            case Some(targetPivot) =>
+              if (pivotTooStaleAgainstNetworkHead(targetPivot)) {
+                startSnapSync()
+              } else {
+                blockchainReader.getBlockHeaderByNumber(targetPivot) match {
+                  case Some(header) =>
+                    pivotBlock = Some(targetPivot)
+                    stateRoot = Some(header.stateRoot)
+                    appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
+                    appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+
+                    SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
+
+                    log.info("=" * 80)
+                    log.info("🎯 SNAP Sync Ready (from bootstrap, local header)")
+                    log.info("=" * 80)
+                    log.info(s"Local best block: $localBestBlock")
+                    log.info(s"Using bootstrapped pivot block: $targetPivot")
+                    log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+                    log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+                    log.info("=" * 80)
+
+                    currentPhase = AccountRangeSync
+                    startAccountRangeSync(header.stateRoot)
+                    context.become(syncing)
+
+                  case None =>
+                    log.warning(s"Bootstrap complete but pivot header $targetPivot not available yet")
+                    log.warning("Falling back to recalculating pivot from current network state")
+                    startSnapSync()
+                }
+              }
             case None =>
-              log.warning(s"Bootstrap complete but pivot header $targetPivot not available yet")
-              log.warning("Falling back to recalculating pivot from current network state")
+              log.info("No bootstrap target stored - calculating pivot from network state")
               startSnapSync()
           }
-          
-        case None =>
-          // No bootstrap target stored - fall back to normal pivot selection
-          log.info("No bootstrap target stored - calculating pivot from network state")
-          startSnapSync()
       }
     
     case RetrySnapSyncStart =>
@@ -378,9 +566,26 @@ class SNAPSyncController(
     
     // Get local and network state for pivot selection
     val localBestBlock = appStateStorage.getBestBlockNumber()
+
+    // If bootstrap checkpoints are configured, we should not start SNAP from a peer that is behind
+    // the highest trusted checkpoint. SNAP servers only guarantee serving very recent state; picking
+    // an ancient pivot (e.g. millions of blocks behind the network head) will cause peers to return
+    // empty/no-proof AccountRange responses.
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     
-    // Query peers to find the highest block in the network
-    val networkBestBlockOpt = getPeerWithHighestBlock.map(_.peerInfo.maxBlockNumber)
+    // Query SNAP-capable peers to find the highest block in the network.
+    // SNAP must NOT start until we have a SNAP-capable peer that is at/above the bootstrap pivot
+    // (when configured). Falling back to non-SNAP peers here would select an unreachable state root.
+    val snapPeersForPivot =
+      peersToDownloadFrom.values.toList
+        .filter(_.peerInfo.remoteStatus.supportsSnap)
+        .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
+
+    val networkBestBlockOpt =
+      snapPeersForPivot
+        .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+        .headOption
+        .map(_.peerInfo.maxBlockNumber)
 
     // Diagnostics: show what heights we can actually see from connected peers.
     // If this list tops out near the Core-Geth "start height", it means we simply don't have any peer
@@ -391,7 +596,7 @@ class SNAPSyncController(
         .take(5)
         .map(p => s"${p.peer.remoteAddress}=${p.peerInfo.maxBlockNumber}")
         .mkString(", ")
-    log.info(s"SNAP pivot selection: visible peer heights (top 5) = [$topPeerHeights]")
+    log.info(s"SNAP pivot selection: bootstrapPivot=$bootstrapPivotBlock, visible peer heights (top 5) = [$topPeerHeights]")
     
     // Core-geth approach: Calculate pivot from network height
     // pivot = networkHeight - pivotBlockOffset (e.g., 23M - 64 = ~23M)
@@ -428,24 +633,18 @@ class SNAPSyncController(
       // state root, which most peers won't serve.
       pivotSelectionSource match {
         case LocalPivot =>
-          if (bootstrapRetryCount < MaxBootstrapRetries) {
-            bootstrapRetryCount += 1
-            log.warning("No peers available yet; network height is unknown. Deferring SNAP start until peers are available")
-            log.warning(s"Retrying SNAP start in $BootstrapRetryDelay... (attempt ${bootstrapRetryCount}/$MaxBootstrapRetries)")
+          bootstrapRetryCount += 1
+          log.warning("No peers available yet; network height is unknown. Deferring SNAP start until peers are available")
+          log.warning(s"Retrying SNAP start in $BootstrapRetryDelay... (attempt $bootstrapRetryCount)")
 
-            bootstrapCheckTask = Some(
-              scheduler.scheduleOnce(BootstrapRetryDelay) {
-                self ! RetrySnapSyncStart
-              }(ec)
-            )
-            context.become(bootstrapping)
-            return
-          } else {
-            log.error("Max retries exceeded waiting for peers. Falling back to fast sync.")
-            bootstrapRetryCount = 0
-            context.parent ! FallbackToFastSync
-            return
-          }
+          bootstrapCheckTask.foreach(_.cancel())
+          bootstrapCheckTask = Some(
+            scheduler.scheduleOnce(BootstrapRetryDelay) {
+              self ! RetrySnapSyncStart
+            }(ec)
+          )
+          context.become(bootstrapping)
+          return
 
         case NetworkPivot =>
           // proceed with genesis pivot handling below
@@ -502,23 +701,17 @@ class SNAPSyncController(
       pivotSelectionSource match {
         case LocalPivot =>
           // No peers available - schedule retry
-          if (bootstrapRetryCount < MaxBootstrapRetries) {
-            bootstrapRetryCount += 1
-            log.warning(s"No peers available for pivot selection. Retrying in $BootstrapRetryDelay... (attempt ${bootstrapRetryCount}/$MaxBootstrapRetries)")
-            
-            bootstrapCheckTask = Some(
-              scheduler.scheduleOnce(BootstrapRetryDelay) {
-                self ! RetrySnapSyncStart
-              }(ec)
-            )
-            context.become(bootstrapping)
-            return
-          } else {
-            log.error("Max retries exceeded waiting for peers. Falling back to fast sync.")
-            bootstrapRetryCount = 0
-            context.parent ! FallbackToFastSync
-            return
-          }
+          bootstrapRetryCount += 1
+          log.warning(s"No peers available for pivot selection. Retrying in $BootstrapRetryDelay... (attempt $bootstrapRetryCount)")
+
+          bootstrapCheckTask.foreach(_.cancel())
+          bootstrapCheckTask = Some(
+            scheduler.scheduleOnce(BootstrapRetryDelay) {
+              self ! RetrySnapSyncStart
+            }(ec)
+          )
+          context.become(bootstrapping)
+          return
         
         case NetworkPivot =>
           // Pivot is at or behind local state - this means we're already synced or very close
@@ -530,6 +723,20 @@ class SNAPSyncController(
       }
     } else {
       // Pivot is valid and ahead of local state
+
+      // Even if we have a local header for this block number, fetch the pivot header from the network
+      // to avoid starting SNAP from a stale/reorged or otherwise non-canonical header.
+      // This is a header-only bootstrap.
+      pivotSelectionSource match {
+        case NetworkPivot =>
+          log.info(s"Fetching pivot header from network for block $pivotBlockNumber before starting SNAP")
+          appStateStorage.putSnapSyncBootstrapTarget(pivotBlockNumber).commit()
+          context.parent ! StartRegularSyncBootstrap(pivotBlockNumber)
+          context.become(bootstrapping)
+          return
+        case LocalPivot =>
+          // Fall through to local-header availability checks below
+      }
       
       // Check if we have the pivot block header locally
       blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
@@ -539,29 +746,21 @@ class SNAPSyncController(
 
           // Update metrics - pivot block
           SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
-          
-          stateRoot = Some(header.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
-          appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+              log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1})")
 
-          log.info("=" * 80)
-          log.info("🎯 SNAP Sync Ready")
-          log.info("=" * 80)
-          log.info(s"Local best block: $localBestBlock")
-          networkBestBlockOpt.foreach(netBest => log.info(s"Network best block: $netBest"))
-          log.info(s"Selected pivot block: $pivotBlockNumber (source: ${pivotSelectionSource.name})")
-          log.info(s"Pivot offset: ${snapSyncConfig.pivotBlockOffset} blocks")
-          log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-          log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
-          log.info("=" * 80)
+              bootstrapRetryCount += 1
+              log.info(s"   Retrying in $BootstrapRetryDelay...")
 
-          // Reset bootstrap retry counter on success
-          bootstrapRetryCount = 0
+              // Schedule a retry and store the cancellable for proper cleanup
+              bootstrapCheckTask.foreach(_.cancel())
+              bootstrapCheckTask = Some(
+                scheduler.scheduleOnce(BootstrapRetryDelay) {
+                  self ! RetrySnapSyncStart
+                }(ec)
+              )
 
-          // Start account range sync
-          currentPhase = AccountRangeSync
-          startAccountRangeSync(header.stateRoot)
-          context.become(syncing)
+              // Transition to bootstrapping state to handle the retry
+              context.become(bootstrapping)
 
         case None =>
           // Pivot block header not available locally
@@ -598,29 +797,21 @@ class SNAPSyncController(
               if (bootstrapRetryCount == 0) {
                 log.info("⏳ Waiting for pivot block header to become available...")
               }
-              log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1}/$MaxBootstrapRetries)")
-              
-              if (bootstrapRetryCount < MaxBootstrapRetries) {
-                bootstrapRetryCount += 1
-                log.info(s"   Retrying in $BootstrapRetryDelay...")
-                
-                // Schedule a retry and store the cancellable for proper cleanup
-                bootstrapCheckTask = Some(
-                  scheduler.scheduleOnce(BootstrapRetryDelay) {
-                    self ! RetrySnapSyncStart
-                  }(ec)
-                )
-                
-                // Transition to bootstrapping state to handle the retry
-                context.become(bootstrapping)
-              } else {
-                log.error("=" * 80)
-                log.error(s"❌ Pivot block header not available after $MaxBootstrapRetries retries")
-                log.error("   SNAP sync cannot proceed - falling back to fast sync")
-                log.error("=" * 80)
-                bootstrapRetryCount = 0
-                context.parent ! FallbackToFastSync
-              }
+              log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1})")
+
+              bootstrapRetryCount += 1
+              log.info(s"   Retrying in $BootstrapRetryDelay...")
+
+              // Schedule a retry and store the cancellable for proper cleanup
+              bootstrapCheckTask.foreach(_.cancel())
+              bootstrapCheckTask = Some(
+                scheduler.scheduleOnce(BootstrapRetryDelay) {
+                  self ! RetrySnapSyncStart
+                }(ec)
+              )
+
+              // Transition to bootstrapping state to handle the retry
+              context.become(bootstrapping)
           }
       }
     }
@@ -724,10 +915,14 @@ class SNAPSyncController(
   private case object RequestAccountRanges
 
   private def requestAccountRanges(): Unit = {
+    if (maybeRestartIfPivotTooStale("AccountRangeSync")) return
     // Notify coordinator of available peers
     accountRangeCoordinator.foreach { coordinator =>
+      val pivot = pivotBlock.getOrElse(BigInt(0))
+
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
@@ -745,6 +940,11 @@ class SNAPSyncController(
 
   private def startBytecodeSync(): Unit = {
     log.info(s"Starting bytecode sync with batch size ${ByteCodeTask.DEFAULT_BATCH_SIZE}")
+
+    if (bytecodeCoordinator.nonEmpty) {
+      log.warning("Bytecode sync already started (bytecodeCoordinator is defined); skipping duplicate start")
+      return
+    }
 
     if (contractAccounts.isEmpty) {
       log.info("No contract accounts found, skipping bytecode sync")
@@ -788,6 +988,7 @@ class SNAPSyncController(
   private case object RequestByteCodes
 
   private def requestByteCodes(): Unit = {
+    if (maybeRestartIfPivotTooStale("ByteCodeSync")) return
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -808,6 +1009,11 @@ class SNAPSyncController(
   private def startStorageRangeSync(): Unit = {
     log.info(s"Starting storage range sync with concurrency ${snapSyncConfig.storageConcurrency}")
 
+    if (storageRangeCoordinator.nonEmpty) {
+      log.warning("Storage range sync already started (storageRangeCoordinator is defined); skipping duplicate start")
+      return
+    }
+
     stateRoot.foreach { root =>
       log.info("Using actor-based concurrency for storage range sync")
       
@@ -819,6 +1025,8 @@ class SNAPSyncController(
             requestTracker = requestTracker,
             mptStorage = mptStorage,
             maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+            maxInFlightRequests = snapSyncConfig.storageConcurrency,
+            requestTimeout = snapSyncConfig.timeout,
             snapSyncController = self
           ),
           "storage-range-coordinator"
@@ -827,6 +1035,26 @@ class SNAPSyncController(
       
       // Start the coordinator
       storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(root))
+
+      // Enqueue initial storage tasks derived from contract accounts found during AccountRangeSync.
+      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+      val (nonEmptyStorage, emptyStorage) = contractStorageAccounts.partition { case (_, storageRoot) =>
+        storageRoot.nonEmpty && storageRoot != emptyRoot
+      }
+      if (emptyStorage.nonEmpty) {
+        log.info(s"Skipping ${emptyStorage.size} contract accounts with empty storageRoot")
+      }
+
+      val storageTasks = StorageTask.createStorageTasks(nonEmptyStorage)
+      if (storageTasks.isEmpty) {
+        log.warning(
+          "No contract accounts with non-empty storageRoot; completing StorageRangeSync immediately"
+        )
+        self ! StorageRangeSyncComplete
+      } else {
+        log.info(s"Enqueuing ${storageTasks.size} storage tasks (non-empty storageRoot only)")
+        storageRangeCoordinator.foreach(_ ! actors.Messages.AddStorageTasks(storageTasks))
+      }
       
       // Periodically send peer availability notifications
       storageRangeRequestTask = Some(
@@ -838,6 +1066,10 @@ class SNAPSyncController(
         )(ec)
       )
 
+      // Start/refresh storage stagnation watchdog state.
+      lastStorageProgressMs = System.currentTimeMillis()
+      scheduleStorageStagnationChecks()
+
       progressMonitor.startPhase(StorageRangeSync)
     }
   }
@@ -846,21 +1078,62 @@ class SNAPSyncController(
   private case object RequestStorageRanges
 
   private def requestStorageRanges(): Unit = {
+    if (maybeRestartIfPivotTooStale("StorageRangeSync")) return
     // Notify coordinator of available peers
     storageRangeCoordinator.foreach { coordinator =>
+      val pivot = pivotBlock.getOrElse(BigInt(0))
+
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (peerId, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
+      SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
+
       if (snapPeers.isEmpty) {
-        log.debug("No SNAP-capable peers available for storage range requests")
+        log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.StoragePeerAvailable(peer)
         }
       }
     }
+  }
+
+  // Handle storage stagnation checks in the actor mailbox so we can safely ask the coordinator.
+  override def aroundReceive(receive: Receive, msg: Any): Unit = msg match {
+    case CheckStorageStagnation if currentPhase == StorageRangeSync =>
+      storageRangeCoordinator match {
+        case Some(coordinator) =>
+          import org.apache.pekko.pattern.{ ask, pipe }
+          import org.apache.pekko.util.Timeout
+          implicit val timeout: Timeout = Timeout(2.seconds)
+
+          (coordinator ? actors.Messages.StorageGetProgress)
+            .mapTo[actors.StorageRangeCoordinator.SyncStatistics]
+            .map(StorageCoordinatorProgress.apply)
+            .recover { case ex =>
+              log.debug(s"Storage stagnation check failed to query coordinator: ${ex.getMessage}")
+              // No stats; do nothing.
+              StorageCoordinatorProgress(
+                actors.StorageRangeCoordinator.SyncStatistics(0, 0, 0, 0, 0, 0, 0.0)
+              )
+            }
+            .pipeTo(self)
+        case None =>
+          ()
+      }
+      super.aroundReceive(receive, msg)
+
+    case StorageCoordinatorProgress(stats) if currentPhase == StorageRangeSync =>
+      // Ignore the dummy stats used on recover.
+      if (stats.elapsedTimeMs > 0 || stats.tasksPending > 0 || stats.tasksActive > 0 || stats.tasksCompleted > 0)
+        maybeRestartIfStorageStagnant(stats)
+      super.aroundReceive(receive, msg)
+
+    case _ =>
+      super.aroundReceive(receive, msg)
   }
 
   private def startStateHealing(): Unit = {
@@ -904,6 +1177,7 @@ class SNAPSyncController(
   private case object RequestTrieNodeHealing
 
   private def requestTrieNodeHealing(): Unit = {
+    if (maybeRestartIfPivotTooStale("StateHealing")) return
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -1003,6 +1277,77 @@ class SNAPSyncController(
         log.error("Missing state root or pivot block for validation")
         log.error("Sync cannot complete - missing state root or pivot block")
     }
+  }
+
+  private def currentNetworkBestFromSnapPeers(): Option[BigInt] = {
+    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    peersToDownloadFrom.values.toList
+      .filter(_.peerInfo.remoteStatus.supportsSnap)
+      .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
+      .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
+      .headOption
+      .map(_.peerInfo.maxBlockNumber)
+  }
+
+  private def maybeRestartIfPivotTooStale(contextLabel: String): Boolean = {
+    val now = System.currentTimeMillis()
+    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return false
+
+    (pivotBlock, currentNetworkBestFromSnapPeers()) match {
+      case (Some(pivot), Some(networkBest)) if networkBest > 0 && networkBest > pivot =>
+        val delta = networkBest - pivot
+        if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
+          lastPivotRestartMs = now
+          restartSnapSync(
+            s"pivot=$pivot is $delta blocks behind visible networkBest=$networkBest in $contextLabel " +
+              s"(maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks})"
+          )
+          true
+        } else {
+          false
+        }
+      case _ =>
+        false
+    }
+  }
+
+  private def restartSnapSync(reason: String): Unit = {
+    log.warning(s"Restarting SNAP sync with a fresher pivot: $reason")
+
+    // Cancel periodic phase request ticks
+    accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
+    bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
+    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+    healingRequestTask.foreach(_.cancel()); healingRequestTask = None
+    bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
+
+    // Stop coordinators so we don't double-run phases
+    accountRangeCoordinator.foreach(context.stop); accountRangeCoordinator = None
+    bytecodeCoordinator.foreach(context.stop); bytecodeCoordinator = None
+    storageRangeCoordinator.foreach(context.stop); storageRangeCoordinator = None
+    trieNodeHealingCoordinator.foreach(context.stop); trieNodeHealingCoordinator = None
+
+    // Clear inflight request timeouts and internal phase state
+    requestTracker.clear()
+
+    // Clear phase start guards and cached contract accounts
+    bytecodeSyncStarting = false
+    storageRangeSyncStarting = false
+    contractAccounts = Seq.empty
+    contractStorageAccounts = Seq.empty
+
+    // Reset pivot/state root so a new selection is committed
+    pivotBlock = None
+    stateRoot = None
+    currentPhase = Idle
+
+    // Reset progress counters so logs/ETA reflect the new attempt
+    progressMonitor.reset()
+
+    // Re-run pivot selection/bootstrap with the latest visible peer set
+    context.become(idle)
+    startSnapSync()
   }
 
   /** Trigger healing for a list of missing node hashes */
@@ -1147,7 +1492,7 @@ object SNAPSyncController {
   case object Done
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
-  case object BootstrapComplete // Signal from SyncController that bootstrap is done
+  final case class BootstrapComplete(pivotHeader: Option[BlockHeader] = None) // Signal from SyncController that bootstrap is done
   private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
@@ -1155,6 +1500,21 @@ object SNAPSyncController {
   case object StateHealingComplete
   case object StateValidationComplete
   case object GetProgress
+
+  /** Signal from coordinators that the current pivot/stateRoot is likely not serveable by peers.
+    *
+    * This is analogous to Nethermind's ExpiredRootHash detection (empty payload + empty proofs).
+    */
+  final case class PivotStateUnservable(rootHash: ByteString, reason: String, consecutiveEmptyResponses: Int)
+
+  /** Progress updates emitted by worker coordinators.
+    *
+    * These are deltas (increments), not absolute totals.
+    */
+  final case class ProgressAccountsSynced(count: Long)
+  final case class ProgressBytecodesDownloaded(count: Long)
+  final case class ProgressStorageSlotsSynced(count: Long)
+  final case class ProgressNodesHealed(count: Long)
 
   def props(
       blockchainReader: BlockchainReader,
@@ -1184,7 +1544,12 @@ object SNAPSyncController {
 
 case class SNAPSyncConfig(
     enabled: Boolean = true,
-    pivotBlockOffset: Long = 1024,
+  // How far behind the perceived head to place the pivot.
+  // SNAP servers generally only guarantee serving *very recent* state; keeping this small improves storage serving.
+  pivotBlockOffset: Long = 64,
+  // If bootstrap takes too long and the selected pivot drifts too far behind the current network head,
+  // abandon it and re-select a fresher pivot.
+  maxPivotStalenessBlocks: Long = 4096,
     accountConcurrency: Int = 16,
     storageConcurrency: Int = 8,
     storageBatchSize: Int = 8,
@@ -1202,6 +1567,10 @@ object SNAPSyncConfig {
     SNAPSyncConfig(
       enabled = snapConfig.getBoolean("enabled"),
       pivotBlockOffset = snapConfig.getLong("pivot-block-offset"),
+      maxPivotStalenessBlocks =
+        if (snapConfig.hasPath("max-pivot-staleness-blocks"))
+          snapConfig.getLong("max-pivot-staleness-blocks")
+        else 4096,
       accountConcurrency = snapConfig.getInt("account-concurrency"),
       storageConcurrency = snapConfig.getInt("storage-concurrency"),
       storageBatchSize = snapConfig.getInt("storage-batch-size"),
@@ -1493,12 +1862,38 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     periodicLogTask = None
   }
 
+  /** Reset all counters/ETA state for a fresh SNAP attempt */
+  def reset(): Unit = synchronized {
+    currentPhaseState = Idle
+    accountsSynced = 0
+    bytecodesDownloaded = 0
+    storageSlotsSynced = 0
+    nodesHealed = 0
+
+    estimatedTotalAccounts = 0
+    estimatedTotalBytecodes = 0
+    estimatedTotalSlots = 0
+
+    phaseStartTime = System.currentTimeMillis()
+    lastLogTime = System.currentTimeMillis()
+
+    accountsHistory.clear()
+    bytecodesHistory.clear()
+    slotsHistory.clear()
+    nodesHistory.clear()
+  }
+
   def startPhase(phase: SyncPhase): Unit = {
     val previousPhase = currentPhaseState
-    currentPhaseState = phase
-    phaseStartTime = System.currentTimeMillis()
 
-    log.info(s"📊 SNAP Sync phase transition: $previousPhase → $phase")
+    // Idempotency: callers may invoke startPhase(phase) more than once.
+    // Only treat it as a transition when the phase actually changes.
+    if (previousPhase != phase) {
+      currentPhaseState = phase
+      phaseStartTime = System.currentTimeMillis()
+      log.info(s"📊 SNAP Sync phase transition: $previousPhase → $phase")
+    }
+
     logProgress()
   }
 
@@ -1692,6 +2087,40 @@ case class SyncProgress(
     startTime: Long,
     phaseStartTime: Long
 ) {
+
+  private def wormChasesBrainBar: String = {
+    import SNAPSyncController._
+
+    // Global “stage” progress across phases; within-stage progress uses `phaseProgress` when available.
+    val stages = Vector[SyncPhase](
+      AccountRangeSync,
+      ByteCodeSync,
+      StorageRangeSync,
+      StateHealing,
+      StateValidation,
+      Completed
+    )
+
+    val stageIndex = stages.indexOf(phase) match {
+      case -1 => 0
+      case i  => i
+    }
+
+    val stageSize = if (stages.size <= 1) 1.0 else 1.0 / (stages.size - 1)
+    val withinStage =
+      if (phaseProgress > 0 && phaseProgress <= 100) (phaseProgress / 100.0) * stageSize else 0.0
+
+    val globalProgress = math.max(0.0, math.min(1.0, stageIndex * stageSize + withinStage))
+
+    val trackLen = 18
+    val wormPos = math.max(0, math.min(trackLen, math.round(globalProgress * trackLen).toInt))
+    val remaining = trackLen - wormPos
+
+    val headroom = " " * wormPos
+    val distance = "-" * remaining
+    s"[$headroom🪱$distance🧠]"
+  }
+
   override def toString: String =
     s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
       s"bytecodes=$bytecodesDownloaded (${bytecodesPerSec.toInt}/s), " +
@@ -1702,23 +2131,23 @@ case class SyncProgress(
     phase match {
       case SNAPSyncController.AccountRangeSync =>
         val progressStr = if (estimatedTotalAccounts > 0) s" (${phaseProgress}%)" else ""
-        s"phase=AccountRange$progressStr, accounts=$accountsSynced@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=AccountRange$progressStr, accounts=$accountsSynced@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.ByteCodeSync =>
         val progressStr = if (estimatedTotalBytecodes > 0) s" (${phaseProgress}%)" else ""
-        s"phase=ByteCode$progressStr, codes=$bytecodesDownloaded@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=ByteCode$progressStr, codes=$bytecodesDownloaded@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StorageRangeSync =>
         val progressStr = if (estimatedTotalSlots > 0) s" (${phaseProgress}%)" else ""
-        s"phase=Storage$progressStr, slots=$storageSlotsSynced@${recentSlotsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=Storage$progressStr, slots=$storageSlotsSynced@${recentSlotsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StateHealing =>
-        s"phase=Healing, nodes=$nodesHealed@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=Healing, nodes=$nodesHealed@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StateValidation =>
-        s"phase=Validation, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=Validation, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case _ =>
-        s"phase=$phase, elapsed=${elapsedSeconds.toInt}s"
+        s"phase=$phase, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
     }
 }

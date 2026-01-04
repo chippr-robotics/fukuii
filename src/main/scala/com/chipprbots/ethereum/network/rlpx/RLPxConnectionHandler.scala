@@ -680,11 +680,10 @@ class RLPxConnectionHandler(
                 // This stays INFO so it shows up even when other receive logs are DEBUG.
                 if (msg.code >= CanonicalSnapBase && msg.code < CanonicalSnapBase + CanonicalSnapSize) {
                   log.info(
-                    "RECV_SNAP_MSG: peer={}, msg[{}] type={}, code=0x{}",
+                    "RECV_SNAP_MSG: peer={}, msg[{}] {}",
                     peerId,
                     idx,
-                    msg.getClass.getSimpleName,
-                    msg.code.toHexString
+                    msg.toShortString
                   )
                 }
               case Left(err) =>

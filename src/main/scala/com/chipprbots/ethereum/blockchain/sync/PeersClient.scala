@@ -146,6 +146,17 @@ class PeersClient(
       case BestPeer =>
         log.debug("Selecting best peer from {} available peers", peersToDownloadFrom.size)
         bestPeer(peersToDownloadFrom, log)
+
+      case BestSnapPeer =>
+        val snapPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.remoteStatus.supportsSnap
+        }
+        log.debug(
+          "Selecting best SNAP-capable peer from {} available peers ({} SNAP-capable)",
+          peersToDownloadFrom.size,
+          snapPeers.size
+        )
+        bestPeer(snapPeers, log)
     }
 
   /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
@@ -268,6 +279,7 @@ object PeersClient {
 
   sealed trait PeerSelector
   case object BestPeer extends PeerSelector
+  case object BestSnapPeer extends PeerSelector
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],
