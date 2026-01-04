@@ -10,6 +10,7 @@ import scala.util.Success
 import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
@@ -73,6 +74,16 @@ abstract class BaseNode extends Node {
     Metrics.configure(metricsConfig) match {
       case Success(_) =>
         log.info("Metrics started")
+
+        if (metricsConfig.enabled) {
+          val snapSyncEnabled =
+            Try(fukuiiConfig.getConfig("sync").getBoolean("do-snap-sync")).getOrElse(false)
+
+          if (snapSyncEnabled) {
+            // Ensure app_snapsync_* series exist even before SNAP sync starts.
+            val _ = SNAPSyncMetrics
+          }
+        }
       case Failure(exception) => throw exception
     }
   }

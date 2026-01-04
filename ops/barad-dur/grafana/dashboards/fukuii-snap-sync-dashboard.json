@@ -121,7 +121,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "(app_fastsync_state_totalNodes_gauge{instance=~\"$node\"} > 0)",
+          "expr": "app_snapsync_phase_current_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
@@ -181,7 +181,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "clamp_max(app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"} / clamp_min(app_fastsync_state_totalNodes_gauge{instance=~\"$node\"}, 1) * 100, 100) or vector(0)",
+          "expr": "clamp_max(app_snapsync_accounts_synced_gauge{instance=~\"$node\"} / clamp_min(app_snapsync_accounts_estimated_total_gauge{instance=~\"$node\"}, 1) * 100, 100) or vector(0)",
           "refId": "A"
         }
       ],
@@ -232,7 +232,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_fastsync_totaltime_minutes_gauge{instance=~\"$node\"} * 60",
+          "expr": "app_snapsync_phase_time_seconds_gauge{instance=~\"$node\"}",
           "refId": "A"
         }
       ],
@@ -283,7 +283,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_fastsync_totaltime_minutes_gauge{instance=~\"$node\"} * 60",
+          "expr": "app_snapsync_totaltime_minutes_gauge{instance=~\"$node\"} * 60",
           "refId": "A"
         }
       ],
@@ -375,7 +375,7 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"}",
+          "expr": "app_snapsync_accounts_synced_gauge{instance=~\"$node\"}",
           "legendFormat": "Accounts Synced",
           "refId": "A"
         }
@@ -454,12 +454,12 @@
       "pluginVersion": "7.5.0",
       "targets": [
         {
-          "expr": "rate(app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"}[$__rate_interval])",
+          "expr": "app_snapsync_accounts_throughput_overall_gauge{instance=~\"$node\"}",
           "legendFormat": "Account Rate (Overall)",
           "refId": "A"
         },
         {
-          "expr": "irate(app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"}[5m])",
+          "expr": "app_snapsync_accounts_throughput_recent_gauge{instance=~\"$node\"}",
           "legendFormat": "Recent Rate (60s)",
           "refId": "B"
         }
