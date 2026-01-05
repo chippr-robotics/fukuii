@@ -87,7 +87,11 @@ object BlockchainTest {
       pre <- cursor.downField("pre").as[Map[String, AccountState]]
       // Make blocks optional - some VM tests may not have blocks field
       blocks <- cursor.downField("blocks").as[Option[Seq[TestBlock]]].map(_.getOrElse(Seq.empty))
-      postState <- cursor.downField("postState").as[Map[String, AccountState]]
+      // Make postState optional - some VM tests may use "post" field or have different structure
+      postState <- cursor
+        .downField("postState")
+        .as[Option[Map[String, AccountState]]]
+        .map(_.getOrElse(Map.empty))
       network <- cursor.downField("network").as[String]
       genesisBlockHeader <- cursor.downField("genesisBlockHeader").as[Option[TestBlockHeader]]
     } yield BlockchainTest(pre, blocks, postState, network, genesisBlockHeader)
