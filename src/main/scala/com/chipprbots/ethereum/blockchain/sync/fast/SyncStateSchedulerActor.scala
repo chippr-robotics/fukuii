@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.Scheduler
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncResponse
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor._
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -50,10 +51,36 @@ class SyncStateSchedulerActor(
   implicit private val monixScheduler: IORuntime = IORuntime.global
   implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
-  private def getFreePeers(state: DownloaderState): List[Peer] =
-    peersToDownloadFrom.collect {
-      case (_, PeerWithInfo(peer, _)) if !state.activeRequests.contains(peer.id) => peer
+  /** Check if a capability supports GetNodeData message.
+    * GetNodeData is available in ETH63-67 but removed in ETH68 per EIP-4938.
+    */
+  private def supportsGetNodeData(capability: Capability): Boolean = capability match {
+    case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
+    case Capability.ETH68 | Capability.SNAP1 => false
+  }
+
+  private def getFreePeers(state: DownloaderState): List[Peer] = {
+    val allPeers = peersToDownloadFrom
+    val freePeers = allPeers.collect {
+      case (_, PeerWithInfo(peer, peerInfo)) 
+          if !state.activeRequests.contains(peer.id) && supportsGetNodeData(peerInfo.remoteStatus.capability) =>
+        peer
     }.toList
+    
+    val filteredByCapability = allPeers.count { case (_, PeerWithInfo(_, peerInfo)) =>
+      !supportsGetNodeData(peerInfo.remoteStatus.capability)
+    }
+    
+    if (filteredByCapability > 0) {
+      log.debug(
+        "Filtered out {} peers not supporting GetNodeData (ETH68+ peers). {} peers available for state sync.",
+        filteredByCapability,
+        freePeers.size
+      )
+    }
+    
+    freePeers
+  }
 
   private def requestNodes(request: PeerRequest): ActorRef = {
     log.debug("Requesting {} from peer {}", request.nodes.size, request.peer.id)

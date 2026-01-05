@@ -53,19 +53,16 @@ object Config {
   // Geth advertises: eth/66, eth/67, eth/68, snap/1
   // We advertise: eth/65, eth/66, eth/67, eth/68, snap/1 to maximize compatibility
   // 
-  // Note: ETH63 and ETH64 are legacy protocols from 2016-2019 but are included
-  // in the supported capabilities list for backward compatibility with older
-  // clients and to support GetNodeData/NodeData messages (available in ETH63-67,
-  // removed in ETH68). These protocols are needed for state sync operations that
-  // require node data. ETH65+ are the primary protocols used in modern Ethereum networks.
+  // Note: ETH63 and ETH64 are legacy protocols from 2016-2019 and are not actively
+  // advertised in the Hello message. However, they remain supported during the
+  // negotiation phase for backward compatibility with very old clients.
+  // ETH65+ are advertised as they are still commonly used in the ecosystem.
   // 
   // Historical note: ETC64 protocol support was removed in favor of standard ETH protocols.
   // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
   // See docs/validation/ETC64_REMOVAL_VALIDATION.md for details.
   import com.chipprbots.ethereum.network.p2p.messages.Capability
   val supportedCapabilities: List[Capability] = List(
-    Capability.ETH63,
-    Capability.ETH64,
     Capability.ETH65,
     Capability.ETH66,
     Capability.ETH67,
