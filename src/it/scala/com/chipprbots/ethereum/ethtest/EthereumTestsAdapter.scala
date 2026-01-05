@@ -87,7 +87,8 @@ object BlockchainTest {
       pre <- cursor.downField("pre").as[Map[String, AccountState]]
       // Make blocks optional - some VM tests may not have blocks field
       blocks <- cursor.downField("blocks").as[Option[Seq[TestBlock]]].map(_.getOrElse(Seq.empty))
-      // Make postState optional - some VM tests may use "post" field or have different structure
+      // Make postState optional - VM tests may have different structure than blockchain tests
+      // Some tests may not include post-state validation fields
       postState <- cursor
         .downField("postState")
         .as[Option[Map[String, AccountState]]]
