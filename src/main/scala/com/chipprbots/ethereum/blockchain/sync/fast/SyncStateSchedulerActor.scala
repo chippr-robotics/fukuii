@@ -54,6 +54,9 @@ class SyncStateSchedulerActor(
   /** Check if a capability supports GetNodeData message.
     * GetNodeData is available in ETH63-67 but removed in ETH68 per EIP-4938.
     * SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
+    * 
+    * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added
+    * in the future, this method will need to be updated accordingly.
     */
   private def supportsGetNodeData(capability: Capability): Boolean = capability match {
     case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
@@ -62,29 +65,27 @@ class SyncStateSchedulerActor(
   }
 
   private def getFreePeers(state: DownloaderState): List[Peer] = {
-    val allPeers = peersToDownloadFrom
-    
-    // Collect free peers that support GetNodeData, tracking filtered count
-    var filteredCount = 0
-    val freePeers = allPeers.collect {
-      case (_, PeerWithInfo(peer, peerInfo)) if !state.activeRequests.contains(peer.id) =>
-        if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
-          Some(peer)
+    // Partition peers into compatible and incompatible for GetNodeData
+    val (compatiblePeers, incompatibleCount) = peersToDownloadFrom.foldLeft((List.empty[Peer], 0)) {
+      case ((peers, count), (_, PeerWithInfo(peer, peerInfo))) =>
+        if (state.activeRequests.contains(peer.id)) {
+          (peers, count) // Skip peers with active requests
+        } else if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
+          (peer :: peers, count) // Compatible peer
         } else {
-          filteredCount += 1
-          None
+          (peers, count + 1) // Incompatible peer, increment count
         }
-    }.flatten.toList
+    }
     
-    if (filteredCount > 0) {
+    if (incompatibleCount > 0) {
       log.debug(
         "Filtered out {} peers not supporting GetNodeData (ETH68/SNAP peers). {} peers available for state sync.",
-        filteredCount,
-        freePeers.size
+        incompatibleCount,
+        compatiblePeers.size
       )
     }
     
-    freePeers
+    compatiblePeers
   }
 
   private def requestNodes(request: PeerRequest): ActorRef = {
