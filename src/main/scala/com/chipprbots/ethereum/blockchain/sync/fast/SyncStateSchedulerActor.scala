@@ -53,28 +53,33 @@ class SyncStateSchedulerActor(
 
   /** Check if a capability supports GetNodeData message.
     * GetNodeData is available in ETH63-67 but removed in ETH68 per EIP-4938.
+    * SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
     */
   private def supportsGetNodeData(capability: Capability): Boolean = capability match {
     case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
-    case Capability.ETH68 | Capability.SNAP1 => false
+    case Capability.ETH68 => false // GetNodeData removed in ETH68 per EIP-4938
+    case Capability.SNAP1 => false // SNAP uses different sync protocol
   }
 
   private def getFreePeers(state: DownloaderState): List[Peer] = {
     val allPeers = peersToDownloadFrom
+    
+    // Collect free peers that support GetNodeData, tracking filtered count
+    var filteredCount = 0
     val freePeers = allPeers.collect {
-      case (_, PeerWithInfo(peer, peerInfo)) 
-          if !state.activeRequests.contains(peer.id) && supportsGetNodeData(peerInfo.remoteStatus.capability) =>
-        peer
-    }.toList
+      case (_, PeerWithInfo(peer, peerInfo)) if !state.activeRequests.contains(peer.id) =>
+        if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
+          Some(peer)
+        } else {
+          filteredCount += 1
+          None
+        }
+    }.flatten.toList
     
-    val filteredByCapability = allPeers.count { case (_, PeerWithInfo(_, peerInfo)) =>
-      !supportsGetNodeData(peerInfo.remoteStatus.capability)
-    }
-    
-    if (filteredByCapability > 0) {
+    if (filteredCount > 0) {
       log.debug(
-        "Filtered out {} peers not supporting GetNodeData (ETH68+ peers). {} peers available for state sync.",
-        filteredByCapability,
+        "Filtered out {} peers not supporting GetNodeData (ETH68/SNAP peers). {} peers available for state sync.",
+        filteredCount,
         freePeers.size
       )
     }
