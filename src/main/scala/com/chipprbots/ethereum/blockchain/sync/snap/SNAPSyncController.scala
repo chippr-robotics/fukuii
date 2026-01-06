@@ -95,6 +95,7 @@ class SNAPSyncController(
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
   private var storageRangeRequestTask: Option[Cancellable] = None
+  private var accountStagnationCheckTask: Option[Cancellable] = None
   private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   private var bootstrapCheckTask: Option[Cancellable] = None
@@ -104,6 +105,12 @@ class SNAPSyncController(
   private val StorageStagnationThreshold: FiniteDuration = 10.minutes
   private val StorageStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
+
+  // AccountRange stagnation watchdog: if tasks stop completing, repivot/restart (and possibly fallback).
+  private val AccountStagnationThreshold: FiniteDuration = 5.minutes
+  private val AccountStagnationCheckInterval: FiniteDuration = 30.seconds
+  private var lastAccountProgressMs: Long = System.currentTimeMillis()
+  private var lastAccountTasksCompleted: Int = 0
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
@@ -115,6 +122,7 @@ class SNAPSyncController(
     accountRangeRequestTask.foreach(_.cancel())
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
+    accountStagnationCheckTask.foreach(_.cancel())
     storageStagnationCheckTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
@@ -186,6 +194,9 @@ class SNAPSyncController(
 
     case ProgressAccountsSynced(count) =>
       progressMonitor.incrementAccountsSynced(count)
+      // AccountRange can legitimately produce empty segments (count=0) while still progressing.
+      // Treat any progress update as a liveness signal.
+      lastAccountProgressMs = System.currentTimeMillis()
 
     case ProgressBytecodesDownloaded(count) =>
       progressMonitor.incrementBytecodesDownloaded(count)
@@ -345,6 +356,23 @@ class SNAPSyncController(
     restartSnapSync(
       s"storage sync stalled: no storage slot progress for ${stalledForMs / 1000}s " +
         s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, tasksActive=${stats.tasksActive}"
+    )
+  }
+
+  // Internal message for periodic account stagnation checks
+  private case object CheckAccountStagnation
+
+  private case class AccountCoordinatorProgress(progress: actors.AccountRangeProgress)
+
+  private def scheduleAccountStagnationChecks(): Unit = {
+    accountStagnationCheckTask.foreach(_.cancel())
+    accountStagnationCheckTask = Some(
+      scheduler.scheduleWithFixedDelay(
+        AccountStagnationCheckInterval,
+        AccountStagnationCheckInterval,
+        self,
+        CheckAccountStagnation
+      )(ec)
     )
   }
 
@@ -880,6 +908,10 @@ class SNAPSyncController(
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
     log.info(s"Starting account range sync with concurrency ${snapSyncConfig.accountConcurrency}")
     log.info("Using actor-based concurrency for account range sync")
+
+    // Reset stagnation tracking for this phase.
+    lastAccountProgressMs = System.currentTimeMillis()
+    lastAccountTasksCompleted = 0
     
     accountRangeCoordinator = Some(
       context.actorOf(
@@ -907,6 +939,8 @@ class SNAPSyncController(
         RequestAccountRanges
       )(ec)
     )
+
+    scheduleAccountStagnationChecks()
 
     progressMonitor.startPhase(AccountRangeSync)
   }
@@ -1103,6 +1137,43 @@ class SNAPSyncController(
 
   // Handle storage stagnation checks in the actor mailbox so we can safely ask the coordinator.
   override def aroundReceive(receive: Receive, msg: Any): Unit = msg match {
+    case CheckAccountStagnation if currentPhase == AccountRangeSync =>
+      accountRangeCoordinator match {
+        case Some(coordinator) =>
+          import org.apache.pekko.pattern.{ ask, pipe }
+          import org.apache.pekko.util.Timeout
+          implicit val timeout: Timeout = Timeout(2.seconds)
+
+          (coordinator ? actors.Messages.GetProgress)
+            .mapTo[actors.AccountRangeProgress]
+            .map(AccountCoordinatorProgress.apply)
+            .recover { case ex =>
+              log.debug(s"Account stagnation check failed to query coordinator: ${ex.getMessage}")
+              AccountCoordinatorProgress(
+                actors.AccountRangeProgress(
+                  accountsDownloaded = 0L,
+                  bytesDownloaded = 0L,
+                  tasksCompleted = 0,
+                  tasksActive = 0,
+                  tasksPending = 0,
+                  progress = 0.0,
+                  elapsedTimeMs = 0L,
+                  contractAccountsFound = 0
+                )
+              )
+            }
+            .pipeTo(self)
+        case None =>
+          ()
+      }
+      super.aroundReceive(receive, msg)
+
+    case AccountCoordinatorProgress(progress) if currentPhase == AccountRangeSync =>
+      // Ignore the dummy progress used on recover.
+      if (progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0)
+        maybeRestartIfAccountStagnant(progress)
+      super.aroundReceive(receive, msg)
+
     case CheckStorageStagnation if currentPhase == StorageRangeSync =>
       storageRangeCoordinator match {
         case Some(coordinator) =>
@@ -1318,6 +1389,7 @@ class SNAPSyncController(
     accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
     bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
     storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
     storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
     healingRequestTask.foreach(_.cancel()); healingRequestTask = None
     bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
@@ -1449,6 +1521,40 @@ class SNAPSyncController(
       blocksProgress = SyncProtocol.Status.Progress(currentBlock, currentBlock),
       stateNodesProgress = Some(SyncProtocol.Status.Progress(BigInt(pulledStates), BigInt(knownStates)))
     )
+  }
+
+  private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeProgress): Unit = {
+    if (currentPhase != AccountRangeSync) return
+
+    // Only consider it a stall if there is still work to do.
+    val workRemaining = progress.tasksPending > 0 || progress.tasksActive > 0
+    if (!workRemaining) return
+
+    // Update liveness based on task completions (even if accountsDownloaded stays flat).
+    if (progress.tasksCompleted > lastAccountTasksCompleted) {
+      lastAccountTasksCompleted = progress.tasksCompleted
+      lastAccountProgressMs = System.currentTimeMillis()
+      return
+    }
+
+    val now = System.currentTimeMillis()
+    val stalledForMs = now - lastAccountProgressMs
+    if (stalledForMs < AccountStagnationThreshold.toMillis) return
+
+    // Avoid noisy rapid restarts.
+    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
+    lastPivotRestartMs = now
+
+    val context =
+      s"account range sync stalled: no task completions for ${stalledForMs / 1000}s " +
+        s"(threshold=${AccountStagnationThreshold.toSeconds}s), accountsDownloaded=${progress.accountsDownloaded}, " +
+        s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}"
+
+    if (recordCriticalFailure(context)) {
+      fallbackToFastSync()
+    } else {
+      restartSnapSync(context)
+    }
   }
 
   private def completeSnapSync(): Unit =
