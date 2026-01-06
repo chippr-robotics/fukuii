@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.Scheduler
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncResponse
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor._
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -50,10 +51,52 @@ class SyncStateSchedulerActor(
   implicit private val monixScheduler: IORuntime = IORuntime.global
   implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
-  private def getFreePeers(state: DownloaderState): List[Peer] =
-    peersToDownloadFrom.collect {
-      case (_, PeerWithInfo(peer, _)) if !state.activeRequests.contains(peer.id) => peer
-    }.toList
+  /** Check if a capability supports GetNodeData message.
+    * GetNodeData is available in ETH63-67 but removed in ETH68 per EIP-4938.
+    * SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
+    * 
+    * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added
+    * in the future, this method will need to be updated accordingly.
+    */
+  private def supportsGetNodeData(capability: Capability): Boolean = capability match {
+    case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
+    case Capability.ETH68 => false // GetNodeData removed in ETH68 per EIP-4938
+    case Capability.SNAP1 => false // SNAP uses different sync protocol
+  }
+
+  private def getFreePeers(state: DownloaderState): List[Peer] = {
+    // Partition peers into compatible, incompatible, and all free peers
+    val (compatiblePeers, incompatiblePeers, incompatibleCount) = peersToDownloadFrom.foldLeft((List.empty[Peer], List.empty[Peer], 0)) {
+      case ((compat, incompat, count), (_, PeerWithInfo(peer, peerInfo))) =>
+        if (state.activeRequests.contains(peer.id)) {
+          (compat, incompat, count) // Skip peers with active requests
+        } else if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
+          (peer :: compat, incompat, count) // Compatible peer
+        } else {
+          (compat, peer :: incompat, count + 1) // Incompatible peer, increment count
+        }
+    }
+    
+    if (incompatibleCount > 0) {
+      log.debug(
+        "Filtered out {} peers not supporting GetNodeData (ETH68/SNAP peers). {} peers available for state sync.",
+        incompatibleCount,
+        compatiblePeers.size
+      )
+    }
+    
+    // If no compatible peers available but we have incompatible peers, fall back to using them
+    // This ensures backward compatibility and allows tests to work
+    if (compatiblePeers.isEmpty && incompatiblePeers.nonEmpty) {
+      log.warning(
+        "No ETH63-67 peers available for GetNodeData. Attempting to use {} incompatible peers as fallback.",
+        incompatiblePeers.size
+      )
+      incompatiblePeers
+    } else {
+      compatiblePeers
+    }
+  }
 
   private def requestNodes(request: PeerRequest): ActorRef = {
     log.debug("Requesting {} from peer {}", request.nodes.size, request.peer.id)
