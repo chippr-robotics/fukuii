@@ -105,10 +105,13 @@ services:
     container_name: fukuii-primary
     restart: unless-stopped
     ports:
-      - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"     # JSON-RPC HTTP (internal)
-      - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"       # JSON-RPC WebSocket (internal)
-      - "${FUKUII_PRIMARY_P2P_PORT:-30303}:30303"   # P2P
-      - "${FUKUII_PRIMARY_METRICS_PORT:-9095}:9095" # Metrics
+      - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"       # JSON-RPC HTTP (internal)
+      - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"         # JSON-RPC WebSocket (internal)
+      # P2P/TCP listens on 9076 inside the container; expose it on the host P2P port
+      - "${FUKUII_PRIMARY_P2P_PORT:-30303}:9076/tcp"
+      # Discovery uses UDP/30303
+      - "${FUKUII_PRIMARY_DISCOVERY_PORT:-30303}:30303/udp"
+      - "${FUKUII_PRIMARY_METRICS_PORT:-9095}:9095"   # Metrics
     volumes:
       - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
       - ./fukuii-conf-1:/app/conf:ro
@@ -129,10 +132,11 @@ services:
     container_name: fukuii-secondary
     restart: unless-stopped
     ports:
-      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"     # JSON-RPC HTTP (internal)
-      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"       # JSON-RPC WebSocket (internal)
-      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30303"   # P2P
-      - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095" # Metrics
+      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"       # JSON-RPC HTTP (internal)
+      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"         # JSON-RPC WebSocket (internal)
+      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:9076/tcp"   # P2P
+      - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30303/udp" # Discovery
+      - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"   # Metrics
     volumes:
       - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
       - ./fukuii-conf-2:/app/conf:ro
