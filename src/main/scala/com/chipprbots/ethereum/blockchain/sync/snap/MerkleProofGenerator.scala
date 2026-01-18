@@ -16,8 +16,9 @@ import com.chipprbots.ethereum.utils.Logger
 /** Generates Merkle Patricia Trie proofs for SNAP/1 protocol responses.
   *
   * The SNAP protocol requires boundary proofs that prove:
-  *   1. The first key in a range is the actual first key >= startHash 2. The last key in a range is the actual last key
-  *      <= limitHash (or the range continues) 3. All keys between first and last are consecutive with no gaps
+  *   1. The first key in a range is the actual first key >= startHash
+  *   2. The last key in a range is the actual last key <= limitHash (or the range continues)
+  *   3. All keys between first and last are consecutive with no gaps
   *
   * Boundary proofs include all trie nodes on the path from root to the first and last keys, allowing clients to verify
   * the range is complete.
