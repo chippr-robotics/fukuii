@@ -129,7 +129,7 @@ class SNAPServerServiceSpec extends AnyFlatSpec with Matchers with MockitoSugar 
 
     response.requestId shouldBe 5
     // With budget of 500 * 0.6 = 300, and code size 1000, we get 0 codes
-    response.codes.size should be <= 1
+    response.codes.size shouldBe 0
   }
 
   it should "return empty TrieNodes when state root not found" in new TestSetup {

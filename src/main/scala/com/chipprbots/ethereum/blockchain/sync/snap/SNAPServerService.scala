@@ -658,11 +658,41 @@ class SNAPServerService(
     ByteString(bytes)
   }
 
+  /** Decode a compact-encoded trie path (hex-prefix encoding) into nibbles. */
+  private def decodeCompactPath(path: ByteString): Seq[Int] = {
+    if (path.isEmpty) {
+      Seq.empty
+    } else {
+      val bytes = path.toArray
+      val first = bytes(0) & 0xff
+      val flagNibble = (first >> 4) & NibbleMask
+      val isOddLength = (flagNibble & 0x1) != 0
+      // val isLeaf = (flagNibble & 0x2) != 0 // Leaf/extension flag is not needed here
+
+      val nibbles = mutable.ArrayBuffer.empty[Int]
+
+      if (isOddLength) {
+        // Low nibble of first byte is the first path nibble
+        nibbles += (first & NibbleMask)
+      }
+
+      var i = 1
+      while (i < bytes.length) {
+        val b = bytes(i) & 0xff
+        nibbles += ((b >> 4) & NibbleMask)
+        nibbles += (b & NibbleMask)
+        i += 1
+      }
+
+      nibbles.toSeq
+    }
+  }
+
   /** Convert a path to hash (for GetTrieNodes) */
-  private def pathToHash(path: ByteString): ByteString =
-    // The path may be compact-encoded; for simplicity, treat it as the hash directly
-    // In production, this should properly decode compact encoding
-    path.padTo(32, 0.toByte).take(32)
+  private def pathToHash(path: ByteString): ByteString = {
+    val nibbles = decodeCompactPath(path)
+    nibblesToHash(nibbles)
+  }
 
   /** Compare two hashes lexicographically */
   private def compareHashes(a: ByteString, b: ByteString): Int = {
