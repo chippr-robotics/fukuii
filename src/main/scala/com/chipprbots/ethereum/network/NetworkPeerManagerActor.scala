@@ -6,6 +6,7 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPServerService
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
@@ -46,7 +47,8 @@ class NetworkPeerManagerActor(
     peerEventBusActor: ActorRef,
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
-    initialSnapSyncControllerOpt: Option[ActorRef] = None
+    initialSnapSyncControllerOpt: Option[ActorRef] = None,
+    snapServerServiceOpt: Option[SNAPServerService] = None
 ) extends Actor
     with ActorLogging {
 
@@ -396,26 +398,23 @@ class NetworkPeerManagerActor(
       peerId: PeerId,
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
-    // Note: This is an optional server-side implementation
-    // Fukuii primarily acts as a client, so we log and ignore for now
     log.debug(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side account range retrieval
-    // 1. Verify we have the requested state root
-    // 2. Retrieve accounts from startingHash to limitHash (up to responseBytes)
-    // 3. Generate Merkle proofs for the range
-    // 4. Send AccountRange response
-
-    // For now, send an empty response to indicate we don't serve SNAP data
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = AccountRange(
-        requestId = msg.requestId,
-        accounts = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val response = snapServerServiceOpt match {
+        case Some(service) =>
+          service.handleGetAccountRange(msg)
+        case None =>
+          // No server service configured - send empty response
+          AccountRange(
+            requestId = msg.requestId,
+            accounts = Seq.empty,
+            proof = Seq.empty
+          )
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
   }
 
@@ -437,20 +436,18 @@ class NetworkPeerManagerActor(
       s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side storage range retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each account, retrieve storage slots from startingHash to limitHash
-    // 3. Generate Merkle proofs for each account's storage
-    // 4. Send StorageRanges response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = StorageRanges(
-        requestId = msg.requestId,
-        slots = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val response = snapServerServiceOpt match {
+        case Some(service) =>
+          service.handleGetStorageRanges(msg)
+        case None =>
+          StorageRanges(
+            requestId = msg.requestId,
+            slots = Seq.empty,
+            proof = Seq.empty
+          )
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
   }
 
@@ -472,18 +469,17 @@ class NetworkPeerManagerActor(
       s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side trie node retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each path, retrieve the trie node
-    // 3. Send TrieNodes response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = TrieNodes(
-        requestId = msg.requestId,
-        nodes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val response = snapServerServiceOpt match {
+        case Some(service) =>
+          service.handleGetTrieNodes(msg)
+        case None =>
+          TrieNodes(
+            requestId = msg.requestId,
+            nodes = Seq.empty
+          )
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
   }
 
@@ -505,17 +501,17 @@ class NetworkPeerManagerActor(
       s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side bytecode retrieval
-    // 1. For each code hash, retrieve the bytecode from EvmCodeStorage
-    // 2. Send ByteCodes response (up to responseBytes limit)
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = ByteCodes(
-        requestId = msg.requestId,
-        codes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val response = snapServerServiceOpt match {
+        case Some(service) =>
+          service.handleGetByteCodes(msg)
+        case None =>
+          ByteCodes(
+            requestId = msg.requestId,
+            codes = Seq.empty
+          )
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
   }
 
@@ -682,7 +678,8 @@ object NetworkPeerManagerActor {
       peerEventBusActor: ActorRef,
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
-      snapSyncControllerOpt: Option[ActorRef] = None
+      snapSyncControllerOpt: Option[ActorRef] = None,
+      snapServerServiceOpt: Option[SNAPServerService] = None
   ): Props =
     Props(
       new NetworkPeerManagerActor(
@@ -690,7 +687,8 @@ object NetworkPeerManagerActor {
         peerEventBusActor,
         appStateStorage,
         forkResolverOpt,
-        snapSyncControllerOpt
+        snapSyncControllerOpt,
+        snapServerServiceOpt
       )
     )
 }

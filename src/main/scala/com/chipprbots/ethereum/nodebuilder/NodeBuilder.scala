@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.SyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPServerService
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
@@ -315,11 +316,28 @@ trait NetworkPeerManagerActorBuilder {
     with PeerManagerActorBuilder
     with PeerEventBusBuilder
     with ForkResolverBuilder
-    with StorageBuilder =>
+    with StorageBuilder
+    with BlockchainBuilder =>
+
+  /** SNAP server service for handling incoming SNAP requests from peers.
+    * This enables bidirectional SNAP - serving state data in addition to requesting it.
+    */
+  lazy val snapServerService: SNAPServerService = SNAPServerService(
+    blockchainReader,
+    storagesInstance.storages.stateStorage,
+    storagesInstance.storages.evmCodeStorage
+  )
 
   lazy val networkPeerManager: ActorRef = system.actorOf(
     NetworkPeerManagerActor
-      .props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, forkResolverOpt),
+      .props(
+        peerManager,
+        peerEventBus,
+        storagesInstance.storages.appStateStorage,
+        forkResolverOpt,
+        snapSyncControllerOpt = None,
+        snapServerServiceOpt = Some(snapServerService)
+      ),
     "network-peer-manager"
   )
 
