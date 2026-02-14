@@ -28,6 +28,15 @@ object Messages {
   case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
+  // Internal message for chunked account storage (avoids blocking the actor for minutes)
+  private[actors] case class StoreAccountChunk(
+      task: AccountTask,
+      remaining: Seq[(ByteString, com.chipprbots.ethereum.domain.Account)],
+      totalCount: Int,
+      storedSoFar: Int,
+      isTaskRangeComplete: Boolean
+  ) extends AccountRangeCoordinatorMessage
+
   sealed trait AccountRangeWorkerMessage
   case class FetchAccountRange(task: AccountTask, peer: Peer, requestId: BigInt) extends AccountRangeWorkerMessage
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage

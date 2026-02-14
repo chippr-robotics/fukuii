@@ -60,6 +60,10 @@ class TrieNodeHealingCoordinator(
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
 
+  // Track last known available peers so we can re-dispatch after task failures
+  // without waiting for the next HealingPeerAvailable message.
+  private val knownAvailablePeers = mutable.Set[Peer]()
+
   // Configuration
   private val MAX_RESPONSE_SIZE = BigInt(1024 * 1024)
 
@@ -83,6 +87,7 @@ class TrieNodeHealingCoordinator(
       queueNodes(nodes)
 
     case HealingPeerAvailable(peer) =>
+      knownAvailablePeers += peer
       if (!isComplete && workers.size < maxWorkers) {
         val worker = createWorker()
         worker ! FetchTrieNodes(null, peer)
@@ -296,6 +301,19 @@ class TrieNodeHealingCoordinator(
     activeTasks = activeTasks.filterNot(tasks.contains)
 
     log.info(s"Re-queued ${tasks.size} timed-out healing tasks (pending: ${pendingTasks.size})")
+    // Re-dispatch re-queued tasks to any known available peer.
+    // Without this, tasks sit in the queue until the next HealingPeerAvailable message arrives.
+    tryRedispatchPendingTasks()
+  }
+
+  private def tryRedispatchPendingTasks(): Unit = {
+    if (pendingTasks.isEmpty) return
+    val eligiblePeers = knownAvailablePeers.toList
+    if (eligiblePeers.isEmpty) return
+
+    for (peer <- eligiblePeers if pendingTasks.nonEmpty) {
+      requestNextBatch(peer)
+    }
   }
 
   private def calculateProgress(): Double = {

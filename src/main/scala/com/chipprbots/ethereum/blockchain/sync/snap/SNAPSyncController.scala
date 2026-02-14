@@ -9,7 +9,7 @@ import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage, StateStorage}
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.PeerId
@@ -22,7 +22,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 class SNAPSyncController(
     blockchainReader: BlockchainReader,
     appStateStorage: AppStateStorage,
-    mptStorage: MptStorage,
+    stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
@@ -39,6 +39,19 @@ class SNAPSyncController(
   // Blacklist for PeerListSupportNg trait
   val blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
 
+  // Writable MptStorage, lazily created when pivot block number is known.
+  // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
+  // correct block number for proper reference counting in pruning modes.
+  private var mptStorage: Option[MptStorage] = None
+
+  private def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
+    mptStorage.getOrElse {
+      val storage = stateStorage.getBackingStorage(pivotBlockNumber)
+      mptStorage = Some(storage)
+      log.info(s"Created writable MptStorage for pivot block $pivotBlockNumber")
+      storage
+    }
+
   // Error handler for retry logic and peer blacklisting
   private val errorHandler = new SNAPErrorHandler(
     maxRetries = snapSyncConfig.maxRetries,
@@ -52,6 +65,10 @@ class SNAPSyncController(
   private var bytecodeCoordinator: Option[ActorRef] = None
   private var storageRangeCoordinator: Option[ActorRef] = None
   private var trieNodeHealingCoordinator: Option[ActorRef] = None
+
+  // Monotonic counter appended to coordinator actor names so restarts don't collide
+  // with still-stopping actors from the previous cycle.
+  private var coordinatorGeneration: Long = 0
 
   private val requestTracker = new SNAPRequestTracker()(scheduler)
 
@@ -102,12 +119,15 @@ class SNAPSyncController(
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
-  private val StorageStagnationThreshold: FiniteDuration = 10.minutes
+  // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
+  private val StorageStagnationThreshold: FiniteDuration = 20.minutes
   private val StorageStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
 
   // AccountRange stagnation watchdog: if tasks stop completing, repivot/restart (and possibly fallback).
-  private val AccountStagnationThreshold: FiniteDuration = 5.minutes
+  // Threshold must be generous enough to allow large chains to complete within the SNAP serve window
+  // (~128 blocks * ~13s = ~28 min on ETC). Too aggressive causes infinite restart loops.
+  private val AccountStagnationThreshold: FiniteDuration = 15.minutes
   private val AccountStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
@@ -913,17 +933,19 @@ class SNAPSyncController(
     lastAccountProgressMs = System.currentTimeMillis()
     lastAccountTasksCompleted = 0
     
+    val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
     accountRangeCoordinator = Some(
       context.actorOf(
         actors.AccountRangeCoordinator.props(
           stateRoot = rootHash,
           networkPeerManager = networkPeerManager,
           requestTracker = requestTracker,
-          mptStorage = mptStorage,
+          mptStorage = storage,
           concurrency = snapSyncConfig.accountConcurrency,
           snapSyncController = self
         ),
-        "account-range-coordinator"
+        s"account-range-coordinator-$coordinatorGeneration"
       )
     )
     
@@ -998,7 +1020,7 @@ class SNAPSyncController(
           batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
           snapSyncController = self
         ),
-        "bytecode-coordinator"
+        s"bytecode-coordinator-$coordinatorGeneration"
       )
     )
     
@@ -1050,20 +1072,22 @@ class SNAPSyncController(
 
     stateRoot.foreach { root =>
       log.info("Using actor-based concurrency for storage range sync")
-      
+
+      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
       storageRangeCoordinator = Some(
         context.actorOf(
           actors.StorageRangeCoordinator.props(
             stateRoot = root,
             networkPeerManager = networkPeerManager,
             requestTracker = requestTracker,
-            mptStorage = mptStorage,
+            mptStorage = storage,
             maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
             maxInFlightRequests = snapSyncConfig.storageConcurrency,
             requestTimeout = snapSyncConfig.timeout,
             snapSyncController = self
           ),
-          "storage-range-coordinator"
+          s"storage-range-coordinator-$coordinatorGeneration"
         )
       )
       
@@ -1212,18 +1236,20 @@ class SNAPSyncController(
 
     stateRoot.foreach { root =>
       log.info("Using actor-based concurrency for state healing")
-      
+
+      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
       trieNodeHealingCoordinator = Some(
         context.actorOf(
           actors.TrieNodeHealingCoordinator.props(
             stateRoot = root,
             networkPeerManager = networkPeerManager,
             requestTracker = requestTracker,
-            mptStorage = mptStorage,
+            mptStorage = storage,
             batchSize = snapSyncConfig.healingBatchSize,
             snapSyncController = self
           ),
-          "trie-node-healing-coordinator"
+          s"trie-node-healing-coordinator-$coordinatorGeneration"
         )
       )
       
@@ -1281,7 +1307,8 @@ class SNAPSyncController(
         
         // With actor-based coordination, state is persisted directly to MPT storage
         // No need for finalization - just validate what's in storage
-        val validator = new StateValidator(mptStorage)
+        val storage = getOrCreateMptStorage(pivot)
+        val validator = new StateValidator(storage)
 
         // Validate account trie and collect missing nodes
         validator.validateAccountTrie(expectedRoot) match {
@@ -1409,10 +1436,12 @@ class SNAPSyncController(
     contractAccounts = Seq.empty
     contractStorageAccounts = Seq.empty
 
-    // Reset pivot/state root so a new selection is committed
+    // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None
     stateRoot = None
+    mptStorage = None
     currentPhase = Idle
+    coordinatorGeneration += 1
 
     // Reset progress counters so logs/ETA reflect the new attempt
     progressMonitor.reset()
@@ -1625,7 +1654,7 @@ object SNAPSyncController {
   def props(
       blockchainReader: BlockchainReader,
       appStateStorage: AppStateStorage,
-      mptStorage: MptStorage,
+      stateStorage: StateStorage,
       evmCodeStorage: EvmCodeStorage,
       networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
@@ -1637,7 +1666,7 @@ object SNAPSyncController {
       new SNAPSyncController(
         blockchainReader,
         appStateStorage,
-        mptStorage,
+        stateStorage,
         evmCodeStorage,
         networkPeerManager,
         peerEventBus,

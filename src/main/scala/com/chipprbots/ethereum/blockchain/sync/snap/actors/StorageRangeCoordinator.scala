@@ -106,6 +106,10 @@ class StorageRangeCoordinator(
   // batched requests, fall back to single-account requests.
   private var effectiveMaxAccountsPerBatch: Int = maxAccountsPerBatch
 
+  // Track last known available peers so we can re-dispatch after task failures
+  // without waiting for the next StoragePeerAvailable message.
+  private val knownAvailablePeers = mutable.Set[Peer]()
+
   // Per-task empty-response tracking.
   // Some peers legitimately return empty slotSets+proofs in cases we can't easily distinguish
   // from “can’t serve this state”. If we keep re-queuing forever, sync can livelock.
@@ -148,6 +152,7 @@ class StorageRangeCoordinator(
       log.debug(s"Added storage task for account ${task.accountString} to queue")
 
     case StoragePeerAvailable(peer) =>
+      knownAvailablePeers += peer
       if (isGlobalBackoffActive) {
         log.info(s"Global storage backoff active; ignoring StoragePeerAvailable(${peer.id.value})")
       } else if (isPeerCoolingDown(peer)) {
@@ -552,6 +557,19 @@ class StorageRangeCoordinator(
         task.pending = false
         tasks.enqueue(task)
       }
+    }
+    // Re-dispatch re-queued tasks to any known available peer that isn't on cooldown.
+    // Without this, tasks sit in the queue until the next StoragePeerAvailable message arrives.
+    tryRedispatchPendingTasks()
+  }
+
+  private def tryRedispatchPendingTasks(): Unit = {
+    if (tasks.isEmpty || isGlobalBackoffActive) return
+    val eligiblePeers = knownAvailablePeers.filterNot(isPeerCoolingDown).toList
+    if (eligiblePeers.isEmpty) return
+
+    for (peer <- eligiblePeers if tasks.nonEmpty && activeTasks.size < maxInFlightRequests) {
+      requestNextRanges(peer)
     }
   }
 

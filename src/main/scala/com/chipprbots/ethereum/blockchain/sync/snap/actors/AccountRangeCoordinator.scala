@@ -8,7 +8,7 @@ import scala.collection.mutable
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, MptStorage}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -100,15 +100,24 @@ class AccountRangeCoordinator(
   // Contract accounts collected for storage download (accountHash -> storageRoot)
   private val contractStorageAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
 
+  // Track last known available peers so we can re-dispatch after task failures
+  // without waiting for the next PeerAvailable message.
+  private val knownAvailablePeers = mutable.Set[Peer]()
+
   // Merkle proof verifier
   private val proofVerifier = MerkleProofVerifier(stateRoot)
 
+  // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
+  // keeping all trie nodes in memory. This avoids the per-put collapse (RLP encode + Keccak-256 hash)
+  // and database write that was causing insertion to degrade from ~300/s to ~20/s.
+  // Nodes are flushed to RocksDB in a single batch at response boundaries via flushTrieToStorage().
+  private val deferredStorage = new DeferredWriteMptStorage(mptStorage)
+
   // State trie for storing accounts.
-  // In SNAP, we typically start with an empty local DB and rebuild the state trie from downloaded ranges.
-  // Attempting to "load" the pivot stateRoot will fail because the root node isn't present locally yet.
+  // In SNAP, we start with an empty local DB and rebuild the state trie from downloaded ranges.
   private var stateTrie: MerklePatriciaTrie[ByteString, Account] = {
     import com.chipprbots.ethereum.mpt.byteStringSerializer
-    MerklePatriciaTrie[ByteString, Account](mptStorage)
+    MerklePatriciaTrie[ByteString, Account](deferredStorage)
   }
 
   override def preStart(): Unit = {
@@ -143,6 +152,7 @@ class AccountRangeCoordinator(
       }
 
     case PeerAvailable(peer) =>
+      knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
       } else if (pendingTasks.isEmpty) {
@@ -181,6 +191,9 @@ class AccountRangeCoordinator(
 
     case GetContractStorageAccounts =>
       sender() ! ContractStorageAccountsResponse(contractStorageAccounts.toSeq)
+
+    case StoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete) =>
+      handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
 
     case CheckCompletion =>
       if (isComplete) {
@@ -224,6 +237,11 @@ class AccountRangeCoordinator(
     worker ! FetchAccountRange(task, peer, requestId)
   }
 
+  // How many accounts to insert per chunk before yielding to the actor mailbox.
+  // With DeferredWriteMptStorage, puts are purely in-memory (~1-10μs each), so we can
+  // process much larger chunks. 2000 accounts takes ~2-20ms in-memory.
+  private val storeChunkSize = 2000
+
   private def handleTaskComplete(
       requestId: BigInt,
       result: Either[String, (Int, Seq[(ByteString, Account)], Seq[ByteString])]
@@ -232,43 +250,24 @@ class AccountRangeCoordinator(
       result match {
         case Right((accountCount, accounts, _)) =>
           log.info(s"Task completed successfully: $accountCount accounts")
-          
+
           // Identify contract accounts
           identifyContractAccounts(accounts)
-          
-          // Store accounts to database
-          storeAccounts(accounts) match {
-            case Left(error) =>
-              log.warning(s"Failed to store accounts: $error")
-              // Re-queue task for retry
-              task.pending = false
-              pendingTasks.enqueue(task)
 
-            case Right(_) =>
-              accountsDownloaded += accountCount
-              snapSyncController ! SNAPSyncController.ProgressAccountsSynced(accountCount.toLong)
+          // Update task progress before starting async storage.
+          // This sets task.next so re-queuing (if needed) uses the correct start.
+          val isTaskDone = updateTaskProgress(task, accounts)
+          task.pending = false
 
-              // Update statistics
-              val accountBytes = accounts.map { case (hash, _) =>
-                hash.size + 32 // Rough estimate
-              }.sum
-              bytesDownloaded += accountBytes
+          // Update statistics
+          val accountBytes = accounts.map { case (hash, _) =>
+            hash.size + 32 // Rough estimate
+          }.sum
+          bytesDownloaded += accountBytes
 
-              // Advance the task through its range.
-              val isTaskComplete = updateTaskProgress(task, accounts)
-              task.pending = false
-
-              if (isTaskComplete) {
-                task.done = true
-                completedTasks += task
-              } else {
-                // Need more requests for the same interval; re-queue with updated `next`.
-                pendingTasks.enqueue(task)
-              }
-          }
-
-          // Check if complete
-          self ! CheckCompletion
+          // Start chunked async storage - this yields back to the actor mailbox between chunks
+          // so the coordinator can still process PeerAvailable, AccountRangeResponseMsg, etc.
+          self ! StoreAccountChunk(task, accounts, accountCount, storedSoFar = 0, isTaskRangeComplete = isTaskDone)
 
         case Left(error) =>
           log.warning(s"Task completed with error: $error")
@@ -349,48 +348,94 @@ class AccountRangeCoordinator(
       task.pending = false
       pendingTasks.enqueue(task)
     }
+    // Re-dispatch re-queued tasks to any known available peer that isn't on cooldown.
+    // Without this, tasks sit in the queue until the next PeerAvailable message arrives.
+    tryRedispatchPendingTasks()
   }
 
-  /** Store accounts to MptStorage
-    *
-    * Inserts verified accounts into the state trie using proper MPT structure.
-    *
-    * @param accounts
-    *   Accounts to store (accountHash -> account)
-    * @return
-    *   Either error or success
-    */
-  private def storeAccounts(accounts: Seq[(ByteString, Account)]): Either[String, Unit] =
-    try {
-      if (accounts.nonEmpty) {
-        // Build new trie by folding over accounts
-        var currentTrie = stateTrie
-        accounts.foreach { case (accountHash, account) =>
-          log.debug(
-            s"Storing account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} " +
-              s"(balance: ${account.balance}, nonce: ${account.nonce})"
-          )
+  private def tryRedispatchPendingTasks(): Unit = {
+    if (pendingTasks.isEmpty) return
+    val eligiblePeers = knownAvailablePeers.filterNot(isPeerCoolingDown).toList
+    if (eligiblePeers.isEmpty) return
 
-          // Create new trie version - MPT is immutable
-          currentTrie = currentTrie.put(accountHash, account)
+    for (peer <- eligiblePeers if pendingTasks.nonEmpty) {
+      val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
+      val worker = maybeIdleWorker.orElse {
+        if (workers.size < concurrency) Some(createWorker()) else None
+      }
+      worker.foreach(w => dispatchNextTaskToWorker(w, peer))
+    }
+  }
+
+  /** Handle a chunk of account storage, inserting a batch into the in-memory trie and yielding
+    * back to the actor mailbox between chunks. With DeferredWriteMptStorage, puts are purely
+    * in-memory (no collapse, no encoding, no hashing, no DB writes). The trie is flushed to
+    * RocksDB in a single batch when all chunks for a response are done.
+    */
+  private def handleStoreAccountChunk(
+      task: AccountTask,
+      remaining: Seq[(ByteString, Account)],
+      totalCount: Int,
+      storedSoFar: Int,
+      isTaskRangeComplete: Boolean
+  ): Unit = {
+    val (chunk, rest) = remaining.splitAt(storeChunkSize)
+
+    try {
+      var currentTrie = stateTrie
+      chunk.foreach { case (accountHash, account) =>
+        currentTrie = currentTrie.put(accountHash, account)
+      }
+      stateTrie = currentTrie
+      // No persist per chunk — DeferredWriteMptStorage buffers everything in memory
+
+      val newStored = storedSoFar + chunk.size
+      // Report incremental progress so the stagnation watchdog sees activity
+      accountsDownloaded += chunk.size
+      snapSyncController ! SNAPSyncController.ProgressAccountsSynced(chunk.size.toLong)
+
+      if (rest.nonEmpty) {
+        log.info(s"Stored chunk: $newStored/$totalCount accounts (${rest.size} remaining)")
+        // Yield to actor mailbox - other messages (PeerAvailable, responses) process before next chunk
+        self ! StoreAccountChunk(task, rest, totalCount, newStored, isTaskRangeComplete)
+      } else {
+        // All chunks for this response done — flush the in-memory trie to RocksDB in one batch
+        log.info(s"Stored all $totalCount accounts in-memory, flushing trie to storage...")
+        flushTrieToStorage()
+
+        if (isTaskRangeComplete) {
+          task.done = true
+          completedTasks += task
+        } else {
+          // Need more requests for the same interval; re-queue with updated `next`.
+          pendingTasks.enqueue(task)
         }
 
-        // Update stateTrie
-        stateTrie = currentTrie
-
-        log.info(s"Inserted ${accounts.size} accounts into state trie")
+        // Check if all tasks are complete
+        self ! CheckCompletion
       }
-
-      // Persist
-      mptStorage.persist()
-
-      log.info(s"Successfully persisted ${accounts.size} accounts to storage")
-      Right(())
     } catch {
       case e: Exception =>
-        log.error(e, s"Failed to store accounts: ${e.getMessage}")
-        Left(s"Storage error: ${e.getMessage}")
+        log.error(e, s"Failed to store account chunk: ${e.getMessage}")
+        // Re-queue task for retry
+        task.pending = false
+        task.done = false
+        pendingTasks.enqueue(task)
     }
+  }
+
+  /** Flush all in-memory trie nodes to RocksDB in a single batch.
+    * This collapses the entire in-memory trie (RLP-encode + Keccak-256 hash all nodes),
+    * then writes everything to RocksDB via one WriteBatch. After flush, the trie is rebuilt
+    * from the persisted root hash so old in-memory nodes can be garbage collected.
+    */
+  private def flushTrieToStorage(): Unit = {
+    deferredStorage.flush().foreach { rootHash =>
+      import com.chipprbots.ethereum.mpt.byteStringSerializer
+      stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash, deferredStorage)
+      log.info(s"Flushed trie to storage, root=${rootHash.take(8).map("%02x".format(_)).mkString}...")
+    }
+  }
 
   /** Identify contract accounts (those with non-empty code hash)
     *
@@ -422,56 +467,23 @@ class AccountRangeCoordinator(
     */
   private def finalizeTrie(): Either[String, Unit] =
     try {
-      log.info("Finalizing state trie and ensuring all nodes are persisted...")
-      
-      // Get the current root hash for logging
+      log.info("Finalizing state trie...")
+
+      // Flush any remaining deferred writes to RocksDB
+      flushTrieToStorage()
+
       val currentRootHash = ByteString(stateTrie.getRootHash)
-      log.info(s"Current state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
+      log.info(s"Final state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
 
       // Validate that the reconstructed root matches the expected pivot stateRoot.
       if (stateRoot.nonEmpty && stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash) && currentRootHash != stateRoot) {
         val expected = stateRoot.take(8).toArray.map("%02x".format(_)).mkString
         val actual = currentRootHash.take(8).toArray.map("%02x".format(_)).mkString
-        throw new RuntimeException(s"Reconstructed state root does not match expected pivot root (expected=$expected..., actual=$actual...)")
-      }
-      
-      // Check if we have a non-empty trie
-      if (currentRootHash.isEmpty || currentRootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
-        log.warning("State trie is empty, nothing to finalize")
+        Left(s"Root mismatch: expected=$expected..., actual=$actual...")
       } else {
-        log.info("State trie has content, proceeding with finalization")
-        
-        // Force the root node to be explicitly persisted to storage
-        val dummyKey = ByteString("__snap_finalize_dummy__")
-        val dummyValue = Account(
-          nonce = com.chipprbots.ethereum.domain.UInt256.Zero,
-          balance = com.chipprbots.ethereum.domain.UInt256.Zero,
-          storageRoot = ByteString(MerklePatriciaTrie.EmptyRootHash),
-          codeHash = ByteString(Account.EmptyCodeHash)
-        )
-        
-        // Put dummy account and immediately remove it
-        val tempTrie = stateTrie.put(dummyKey, dummyValue)
-        stateTrie = tempTrie.remove(dummyKey)
-        
-        log.info(s"Forced root node persistence through dummy operation")
-        
-        // Verify the root hash hasn't changed
-        val finalRootHash = ByteString(stateTrie.getRootHash)
-        if (finalRootHash != currentRootHash) {
-          log.error(s"Root hash changed after dummy operation!")
-          throw new RuntimeException("Root hash changed during finalization")
-        }
-        
-        log.info("Root node finalization verified")
+        log.info("State trie finalization complete")
+        Right(())
       }
-      
-      // Flush all pending writes to disk
-      mptStorage.persist()
-      log.info("Flushed all trie nodes to disk")
-      
-      log.info("State trie finalization complete")
-      Right(())
     } catch {
       case e: Exception =>
         log.error(e, s"Failed to finalize trie: ${e.getMessage}")

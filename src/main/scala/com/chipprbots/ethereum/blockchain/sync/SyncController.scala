@@ -365,13 +365,11 @@ class SyncController(
 
     val snapSyncConfig = loadSnapSyncConfig()
 
-    val mptStorage = stateStorage.getReadOnlyStorage
-
     val snapSync = context.actorOf(
       SNAPSyncController.props(
         blockchainReader,
         appStateStorage,
-        mptStorage,
+        stateStorage,
         evmCodeStorage,
         networkPeerManager,
         peerEventBus,
