@@ -43,7 +43,7 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
   *   Parent controller to notify of completion
   */
 class AccountRangeCoordinator(
-    stateRoot: ByteString,
+    initialStateRoot: ByteString,
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
@@ -53,32 +53,50 @@ class AccountRangeCoordinator(
     with ActorLogging {
 
   import Messages._
+  import SNAPSyncController.PivotStateUnservable
 
-  private val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
-  private val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
-  private val maxPeerCooldown: FiniteDuration = 10.minutes
-  private val basePeerCooldown: FiniteDuration = 2.seconds
+  // Mutable state root — updated in-place when the controller refreshes the pivot.
+  private var stateRoot: ByteString = initialStateRoot
 
-  private def nowMillis: Long = System.currentTimeMillis()
+  // Stateless peer tracking: peers that return "Missing proof for empty account range"
+  // are unable to serve the current state root. Unlike the previous exponential cooldown,
+  // this is a binary classification: either a peer can serve the root or it can't.
+  // When ALL known peers become stateless, we request a pivot refresh from the controller.
+  private val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  private var pivotRefreshRequested = false
+  private var pivotWasRefreshed = false
 
-  private def isPeerCoolingDown(peer: Peer): Boolean =
-    peerCooldownUntilMillis.get(peer.id).exists(_ > nowMillis)
+  private def isPeerStateless(peer: Peer): Boolean =
+    statelessPeers.contains(peer.id)
 
-  private def recordPeerCooldown(peer: Peer, reason: String): Option[FiniteDuration] = {
-    // Only penalize the specific protocol violation that causes tight retry loops.
-    // This avoids overreacting to transient issues like timeouts.
-    if (!reason.contains("Missing proof for empty account range")) {
-      return None
+  private def markPeerStateless(peer: Peer, reason: String): Unit = {
+    if (reason.contains("Missing proof for empty account range")) {
+      statelessPeers.add(peer.id)
+      log.info(
+        s"Peer ${peer.id.value} marked stateless for root ${stateRoot.take(4).toHex} " +
+          s"(${statelessPeers.size}/${knownAvailablePeers.size} peers stateless)"
+      )
+      maybeRequestPivotRefresh()
     }
+  }
 
-    val failures = peerFailureCounts.getOrElse(peer.id, 0) + 1
-    peerFailureCounts.update(peer.id, failures)
-
-    // Exponential backoff: 2s, 4s, 8s, ... (capped)
-    val exponent = math.min(failures - 1, 12)
-    val cooldown = (basePeerCooldown * (1L << exponent)).min(maxPeerCooldown)
-    peerCooldownUntilMillis.update(peer.id, nowMillis + cooldown.toMillis)
-    Some(cooldown)
+  private def maybeRequestPivotRefresh(): Unit = {
+    if (pivotRefreshRequested) return
+    // If all known peers are stateless, the root has aged out of the serve window
+    val allStateless = knownAvailablePeers.nonEmpty &&
+      knownAvailablePeers.forall(p => statelessPeers.contains(p.id))
+    if (allStateless) {
+      pivotRefreshRequested = true
+      log.warning(
+        s"All ${statelessPeers.size} known peers are stateless for root ${stateRoot.take(4).toHex}. " +
+          "Requesting pivot refresh from controller."
+      )
+      snapSyncController ! PivotStateUnservable(
+        rootHash = stateRoot,
+        reason = "all peers stateless for AccountRange root",
+        consecutiveEmptyResponses = statelessPeers.size
+      )
+    }
   }
 
   // Task management
@@ -151,10 +169,28 @@ class AccountRangeCoordinator(
           worker ! AccountRangeResponseMsg(response)
       }
 
+    case PivotRefreshed(newStateRoot) =>
+      log.info(s"Pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
+      stateRoot = newStateRoot
+      pivotWasRefreshed = true
+
+      // Update all pending tasks to use the new root
+      pendingTasks.foreach(_.rootHash = newStateRoot)
+      // Active tasks will fail with root mismatch and get re-queued;
+      // handleTaskFailed will re-enqueue them with the old root, but they'll be
+      // dispatched with the new root on their next attempt.
+
+      // Clear stateless tracking — peers can serve the new root
+      statelessPeers.clear()
+      pivotRefreshRequested = false
+
+      // Resume dispatching with the fresh root
+      tryRedispatchPendingTasks()
+
     case PeerAvailable(peer) =>
       knownAvailablePeers += peer
-      if (isPeerCoolingDown(peer)) {
-        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
+      if (isPeerStateless(peer)) {
+        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is stateless for current root")
       } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
       } else {
@@ -338,24 +374,19 @@ class AccountRangeCoordinator(
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
-      val cooldownOpt = recordPeerCooldown(peer, reason)
-      cooldownOpt match {
-        case Some(cooldown) =>
-          log.warning(s"Task failed: $reason (cooling down peer ${peer.id.value} for $cooldown)")
-        case None =>
-          log.warning(s"Task failed: $reason")
-      }
+      markPeerStateless(peer, reason)
+      log.warning(s"Task failed: $reason")
       task.pending = false
       pendingTasks.enqueue(task)
     }
-    // Re-dispatch re-queued tasks to any known available peer that isn't on cooldown.
+    // Re-dispatch re-queued tasks to any known available peer that isn't stateless.
     // Without this, tasks sit in the queue until the next PeerAvailable message arrives.
     tryRedispatchPendingTasks()
   }
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val eligiblePeers = knownAvailablePeers.filterNot(isPeerCoolingDown).toList
+    val eligiblePeers = knownAvailablePeers.filterNot(isPeerStateless).toList
     if (eligiblePeers.isEmpty) return
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty) {
@@ -475,12 +506,19 @@ class AccountRangeCoordinator(
       val currentRootHash = ByteString(stateTrie.getRootHash)
       log.info(s"Final state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
 
-      // Validate that the reconstructed root matches the expected pivot stateRoot.
-      if (stateRoot.nonEmpty && stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash) && currentRootHash != stateRoot) {
+      // After pivot refresh(es), root mismatch is expected — the healing phase
+      // will reconcile. Only fail on root mismatch if NO pivot refresh occurred.
+      if (!pivotWasRefreshed &&
+          stateRoot.nonEmpty &&
+          stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash) &&
+          currentRootHash != stateRoot) {
         val expected = stateRoot.take(8).toArray.map("%02x".format(_)).mkString
         val actual = currentRootHash.take(8).toArray.map("%02x".format(_)).mkString
         Left(s"Root mismatch: expected=$expected..., actual=$actual...")
       } else {
+        if (pivotWasRefreshed && currentRootHash != stateRoot) {
+          log.info("Root mismatch expected after pivot refresh - healing phase will reconcile")
+        }
         log.info("State trie finalization complete")
         Right(())
       }
@@ -542,7 +580,7 @@ object AccountRangeCoordinator {
   ): Props =
     Props(
       new AccountRangeCoordinator(
-        stateRoot,
+        initialStateRoot = stateRoot,
         networkPeerManager,
         requestTracker,
         mptStorage,

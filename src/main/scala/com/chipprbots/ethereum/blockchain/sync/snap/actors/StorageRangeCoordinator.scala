@@ -73,7 +73,7 @@ private class StorageTrieCache(maxSize: Int = 10000) {
   *   Parent controller
   */
 class StorageRangeCoordinator(
-    stateRoot: ByteString,
+    initialStateRoot: ByteString,
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
@@ -85,6 +85,9 @@ class StorageRangeCoordinator(
     with ActorLogging {
 
   import Messages._
+
+  // Mutable state root — updated in-place when the controller refreshes the pivot.
+  private var stateRoot: ByteString = initialStateRoot
 
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
@@ -195,6 +198,20 @@ class StorageRangeCoordinator(
       consecutiveEmptyResponses = 0
       effectiveMaxAccountsPerBatch = maxAccountsPerBatch
       log.info(s"Global storage backoff ended; resuming storage requests (batchSize=$effectiveMaxAccountsPerBatch)")
+
+    case StoragePivotRefreshed(newStateRoot) =>
+      log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
+      stateRoot = newStateRoot
+
+      // Clear global backoff and empty-response tracking — peers can serve the new root
+      globalBackoffUntilMs = None
+      consecutiveEmptyResponses = 0
+      effectiveMaxAccountsPerBatch = maxAccountsPerBatch
+      peerCooldownUntilMs.clear()
+      emptyResponsesByTask.clear()
+
+      // Resume dispatching with the fresh root
+      tryRedispatchPendingTasks()
 
     case StorageGetProgress =>
       val stats = StorageRangeCoordinator.SyncStatistics(
@@ -610,7 +627,7 @@ object StorageRangeCoordinator {
   ): Props =
     Props(
       new StorageRangeCoordinator(
-        stateRoot,
+        initialStateRoot = stateRoot,
         networkPeerManager,
         requestTracker,
         mptStorage,

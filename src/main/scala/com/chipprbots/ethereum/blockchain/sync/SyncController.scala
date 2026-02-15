@@ -283,9 +283,10 @@ class SyncController(
         stateNodesProgress = None
       )
 
-    case other =>
-      // Ignore unrelated messages while we bootstrap the pivot header.
-      log.debug("Ignoring message during pivot header bootstrap: {}", other.getClass.getSimpleName)
+    case msg =>
+      // Forward coordinator and protocol messages to SNAP sync during the brief bootstrap.
+      // This keeps coordinators functional while we fetch the pivot header (~1-5 seconds).
+      originalSnapSyncRef.forward(msg)
   }
 
   def start(): Unit = {

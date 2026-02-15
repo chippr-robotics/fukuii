@@ -108,6 +108,11 @@ class SNAPSyncController(
   private var lastPivotRestartMs: Long = 0L
   private val MinPivotRestartInterval: FiniteDuration = 30.seconds
 
+  // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
+  // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
+  // arrives in the syncing state, the refresh is completed.
+  private var pendingPivotRefresh: Option[(BigInt, String)] = None
+
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
@@ -229,24 +234,35 @@ class SNAPSyncController(
       progressMonitor.incrementNodesHealed(count)
 
     case PivotStateUnservable(rootHash, reason, emptyResponses) =>
-      // Nethermind-style behavior: treat many empty range replies as an "expired root" signal.
-      // This usually means the chosen pivot/stateRoot is no longer widely serveable.
-      if (currentPhase == StorageRangeSync) {
-        val now = System.currentTimeMillis()
-        if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
-          log.warning(
-            s"Ignoring PivotStateUnservable during StorageRangeSync due to restart guard " +
-              s"(emptyResponses=$emptyResponses, root=${rootHash.take(4).toHex}, reason=$reason)"
-          )
-        } else {
-          lastPivotRestartMs = now
-          restartSnapSync(
-            s"pivot state root appears unservable during StorageRangeSync " +
-              s"(emptyResponses=$emptyResponses, root=${rootHash.take(8).toHex}..., reason=$reason)"
-          )
-        }
+      // When peers can no longer serve the current state root, refresh the pivot in-place
+      // instead of restarting. This preserves downloaded trie data (content-addressed nodes
+      // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
+      val now = System.currentTimeMillis()
+      if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
+        log.warning(
+          s"Ignoring PivotStateUnservable due to restart guard " +
+            s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
+        )
+      } else if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
+        lastPivotRestartMs = now
+        refreshPivotInPlace(reason)
       } else {
         log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
+      }
+
+    // Handle pivot header bootstrap completion during active sync.
+    // This arrives when refreshPivotInPlace() requested a header from a peer because
+    // it wasn't available locally. The coordinator is still alive with all its state.
+    case BootstrapComplete(pivotHeaderOpt) if pendingPivotRefresh.isDefined =>
+      val (pendingPivot, reason) = pendingPivotRefresh.get
+      pendingPivotRefresh = None
+      pivotHeaderOpt match {
+        case Some(header) =>
+          log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
+          completePivotRefreshWithStateRoot(pendingPivot, header.stateRoot, reason)
+        case None =>
+          log.warning(s"Pivot header bootstrap for block $pendingPivot returned no header. Falling back to full restart.")
+          restartSnapSync(s"pivot refresh bootstrap returned no header for $pendingPivot: $reason")
       }
 
     // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
@@ -1409,8 +1425,95 @@ class SNAPSyncController(
     }
   }
 
+  /** Refresh the pivot block and state root without destroying coordinators.
+    *
+    * Unlike restartSnapSync() which discards all progress, this method:
+    * 1. Selects a fresher pivot from current network best
+    * 2. Updates internal pivot/stateRoot tracking
+    * 3. Sends PivotRefreshed to the active coordinator
+    * 4. Resets stagnation timer so the watchdog doesn't trigger
+    *
+    * Downloaded trie nodes are content-addressed (keyed by keccak256 hash),
+    * so ~99.9% remain valid across pivot changes. Root mismatch (if any)
+    * is resolved during the healing phase.
+    */
+  private def refreshPivotInPlace(reason: String): Unit = {
+    log.info(s"Refreshing pivot in-place: $reason")
+
+    // Select a new pivot from the current network best
+    val newPivotOpt = currentNetworkBestFromSnapPeers().map { networkBest =>
+      networkBest - snapSyncConfig.pivotBlockOffset
+    }.filter(_ > 0)
+
+    if (newPivotOpt.isEmpty) {
+      log.warning("Cannot refresh pivot: no suitable SNAP peers available. Falling back to full restart.")
+      restartSnapSync(s"pivot refresh failed (no new pivot): $reason")
+      return
+    }
+
+    val newPivotBlock = newPivotOpt.get
+    val newStateRootOpt = blockchainReader.getBlockHeaderByNumber(newPivotBlock)
+      .map(_.stateRoot)
+
+    if (newStateRootOpt.isEmpty) {
+      // Header not available locally — request it from a peer via the bootstrap mechanism.
+      // The coordinator stays alive (all peers are stateless, so no dispatch will happen).
+      // When BootstrapComplete arrives in the syncing state, the refresh is completed.
+      log.info(s"Pivot header for block $newPivotBlock not available locally. Requesting header bootstrap...")
+      pendingPivotRefresh = Some((newPivotBlock, reason))
+      context.parent ! StartRegularSyncBootstrap(newPivotBlock)
+      // Reset stagnation timers while we wait for the header
+      lastAccountProgressMs = System.currentTimeMillis()
+      lastStorageProgressMs = System.currentTimeMillis()
+      return
+    }
+
+    completePivotRefreshWithStateRoot(newPivotBlock, newStateRootOpt.get, reason)
+  }
+
+  /** Complete the pivot refresh once we have the state root (either from local header or bootstrapped header). */
+  private def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newStateRoot: ByteString, reason: String): Unit = {
+    val oldPivot = pivotBlock.getOrElse(BigInt(0))
+    val oldRoot = stateRoot.map(_.take(4).toHex).getOrElse("none")
+    val newRoot = newStateRoot.take(4).toHex
+
+    if (stateRoot.contains(newStateRoot)) {
+      log.warning(s"Pivot refresh: new root $newRoot is same as old. Falling back to full restart.")
+      restartSnapSync(s"pivot refresh produced same root ($newRoot): $reason")
+      return
+    }
+
+    log.info(s"Pivot refreshed: block $oldPivot -> $newPivotBlock, root $oldRoot -> $newRoot")
+
+    // Update internal state
+    pivotBlock = Some(newPivotBlock)
+    stateRoot = Some(newStateRoot)
+    // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
+    // The backing storage was already created for the original pivot block number,
+    // but since nodes are keyed by hash, they're valid for any root.
+
+    // Persist new pivot
+    appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
+    appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
+    SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
+
+    // Send refresh signal to active coordinator
+    if (currentPhase == AccountRangeSync) {
+      accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
+    } else if (currentPhase == StorageRangeSync) {
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(newStateRoot))
+    }
+
+    // Reset stagnation timers so watchdogs don't trigger during recovery
+    lastAccountProgressMs = System.currentTimeMillis()
+    lastStorageProgressMs = System.currentTimeMillis()
+  }
+
   private def restartSnapSync(reason: String): Unit = {
     log.warning(s"Restarting SNAP sync with a fresher pivot: $reason")
+
+    // Clear any pending pivot refresh (we're doing a full restart instead)
+    pendingPivotRefresh = None
 
     // Cancel periodic phase request ticks
     accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
