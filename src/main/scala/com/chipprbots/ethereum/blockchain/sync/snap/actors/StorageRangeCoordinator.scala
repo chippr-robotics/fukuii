@@ -110,6 +110,14 @@ class StorageRangeCoordinator(
   private val statelessPeers = mutable.Set[String]()
   private var pivotRefreshRequested = false
 
+  // Pivot refresh backoff: prevents rapid refresh loops when no peers can serve any recent root.
+  // After each unproductive refresh (one that doesn't yield real slot data), the backoff interval
+  // doubles from 60s up to 5 minutes. Resets to 0 when we receive actual storage slots.
+  private var consecutiveUnproductiveRefreshes: Int = 0
+  private var lastPivotRefreshTimeMs: Long = 0
+  private val minRefreshIntervalMs: Long = 60000L   // 1 minute minimum between refreshes
+  private val maxRefreshIntervalMs: Long = 300000L   // 5 minutes maximum backoff
+
   private def isPeerStateless(peer: Peer): Boolean =
     statelessPeers.contains(peer.id.value)
 
@@ -127,10 +135,33 @@ class StorageRangeCoordinator(
     val allStateless = knownAvailablePeers.nonEmpty &&
       knownAvailablePeers.forall(p => statelessPeers.contains(p.id.value))
     if (allStateless) {
+      val now = System.currentTimeMillis()
+      val backoffMs = math.min(
+        maxRefreshIntervalMs,
+        minRefreshIntervalMs * (1L << math.min(consecutiveUnproductiveRefreshes, 3))
+      )
+      val elapsed = now - lastPivotRefreshTimeMs
+      if (lastPivotRefreshTimeMs > 0 && elapsed < backoffMs) {
+        val remainingMs = backoffMs - elapsed
+        log.info(
+          s"All peers stateless but backing off pivot refresh " +
+            s"(${elapsed / 1000}s / ${backoffMs / 1000}s, attempt ${consecutiveUnproductiveRefreshes + 1}). " +
+            s"Retrying in ${remainingMs / 1000}s."
+        )
+        // Schedule a retry after the backoff period
+        import context.dispatcher
+        context.system.scheduler.scheduleOnce(remainingMs.millis) {
+          self ! StorageCheckCompletion // triggers re-evaluation
+        }
+        return
+      }
+
       pivotRefreshRequested = true
+      consecutiveUnproductiveRefreshes += 1
+      lastPivotRefreshTimeMs = now
       log.warning(
         s"All ${statelessPeers.size} known peers are stateless for root ${stateRoot.take(4).toHex}. " +
-          "Requesting pivot refresh from controller."
+          s"Requesting pivot refresh from controller (attempt $consecutiveUnproductiveRefreshes)."
       )
       snapSyncController ! SNAPSyncController.PivotStateUnservable(
         rootHash = stateRoot,
@@ -160,7 +191,7 @@ class StorageRangeCoordinator(
   // Track empty responses per (accountHash,next,last) and skip after a small threshold.
   private case class StorageTaskKey(accountHash: ByteString, next: ByteString, last: ByteString)
   private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
-  private val maxEmptyResponsesPerTask: Int = 3
+  private val maxEmptyResponsesPerTask: Int = 5
 
   // Statistics
   private var slotsDownloaded: Long = 0
@@ -267,6 +298,11 @@ class StorageRangeCoordinator(
         deferredStorage.flush()
         log.info("Storage range sync complete!")
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+      } else if (tasks.nonEmpty && activeTasks.isEmpty) {
+        // All tasks pending but nothing in-flight — try to dispatch or request pivot refresh.
+        // This handles the case where the backoff timer fires and we need to re-evaluate.
+        maybeRequestPivotRefresh()
+        tryRedispatchPendingTasks()
       }
 
     case StoragePivotRefreshed(newStateRoot) =>
@@ -401,11 +437,15 @@ class StorageRangeCoordinator(
   }
 
   private def processStorageRanges(peer: Peer, tasks: Seq[StorageTask], requestedBytes: BigInt, response: StorageRanges): Unit = {
-    // A response may legitimately return fewer slot-sets than requested accounts.
-    // Some clients may also return proofs with zero slot-sets to indicate proof-of-absence.
+    // Count only responses that actually contain slot data as "served".
+    // Proof-only responses (0 slot-sets, non-empty proofs) are NOT counted as served because:
+    //  1. After a pivot refresh, peers may return proof-of-absence for stale task roots
+    //  2. The proof root may not match the task's storageRoot (undetected by lenient verification)
+    //  3. Treating proof-only as served prevents stateless detection, causing indefinite stalls
+    // Legitimate empty-storage accounts will be completed via the empty-response skip mechanism
+    // after maxEmptyResponsesPerTask attempts.
     val servedCount: Int =
       if (response.slots.nonEmpty) response.slots.size
-      else if (response.proof.nonEmpty) math.min(1, tasks.size)
       else 0
 
     log.info(
@@ -454,19 +494,21 @@ class StorageRangeCoordinator(
         }
       }
 
-      // If we skipped something, we made forward progress.
+      // Always mark this peer as stateless for the current root on empty response.
+      // Even if some tasks were skipped, the peer still couldn't serve any data.
+      // This ensures stateless detection triggers pivot refresh when ALL peers fail,
+      // rather than silently draining tasks as "empty" one by one.
+      markPeerStateless(peer)
+
       if (skipped > 0) {
         self ! StorageCheckCompletion
-        return
       }
-
-      // No task was skipped — mark this peer as potentially stateless for current root.
-      markPeerStateless(peer)
       return
     }
 
-    // Non-empty response — clear stateless marking for this peer if present
+    // Non-empty response with actual slot data — clear stateless marking and reset backoff.
     statelessPeers.remove(peer.id.value)
+    consecutiveUnproductiveRefreshes = 0
 
     // Clear empty-response counters for tasks that are now being served.
     tasks.foreach { task =>
