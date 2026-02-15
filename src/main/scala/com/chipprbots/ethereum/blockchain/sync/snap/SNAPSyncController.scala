@@ -1789,7 +1789,7 @@ case class SNAPSyncConfig(
   // abandon it and re-select a fresher pivot.
   maxPivotStalenessBlocks: Long = 4096,
     accountConcurrency: Int = 16,
-    storageConcurrency: Int = 8,
+    storageConcurrency: Int = 16,
     storageBatchSize: Int = 8,
     healingBatchSize: Int = 16,
     stateValidationEnabled: Boolean = true,

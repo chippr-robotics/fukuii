@@ -87,13 +87,21 @@ object Messages {
   case class StorageRequestTimeout(requestId: BigInt) extends StorageRangeWorkerMessage
   case object StorageCheckIdle extends StorageRangeWorkerMessage
 
-  // When many peers return empty StorageRanges for the current pivot state, the coordinator
-  // backs off globally to avoid hammering the network and repeatedly re-queueing tasks.
-  case object ResumeStorageBackoff extends StorageRangeCoordinatorMessage
-
   /** Sent by SNAPSyncController when a fresher pivot has been selected during storage sync.
-    * Coordinator updates state root and clears backoff state. */
+    * Coordinator updates state root and clears per-peer adaptive state. */
   case class StoragePivotRefreshed(newStateRoot: ByteString) extends StorageRangeCoordinatorMessage
+
+  // Internal message for chunked storage slot persistence (avoids blocking the actor)
+  private[actors] case class StoreStorageSlotChunk(
+      task: StorageTask,
+      remainingSlots: Seq[(ByteString, ByteString)],
+      totalCount: Int,
+      storedSoFar: Int,
+      proof: Seq[ByteString],
+      peer: com.chipprbots.ethereum.network.Peer,
+      requestedBytes: BigInt,
+      isLastServedTask: Boolean
+  ) extends StorageRangeCoordinatorMessage
 
   // ========================================
   // TrieNodeHealing Messages
