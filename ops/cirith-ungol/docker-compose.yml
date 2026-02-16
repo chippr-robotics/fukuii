@@ -75,6 +75,8 @@ services:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
       - ./conf/logback.xml:/app/conf/logback.xml:ro
+      # Custom JVM settings: 6GB heap + G1GC for SNAP sync trie finalization
+      - ./conf/application.ini:/app/fukuii/conf/application.ini:ro
       # Override built-in chain configs with workspace versions (keeps ops harness in sync with repo changes)
       - ../../src/main/resources/conf/base/chains/mordor-chain.conf:/app/conf/base/chains/mordor-chain.conf:ro
       - ../../src/main/resources/conf/base/chains/gorgoroth-chain.conf:/app/conf/base/chains/gorgoroth-chain.conf:ro

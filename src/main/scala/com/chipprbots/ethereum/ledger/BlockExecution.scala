@@ -62,18 +62,22 @@ class BlockExecution(
   private def executeBlock(
       block: Block
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
-    for {
-      parentHeader <- blockchainReader
-        .getBlockHeaderByHash(block.header.parentHash)
-        .toRight(MissingParentError) // Should not never occur because validated earlier
-      initialWorld = buildInitialWorld(block, parentHeader)
-      execResult <- executeBlockTransactions(block, initialWorld)
-      worldToPersist <- Either
-        .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
-        .leftMap(BlockExecutionError.MPTError.apply)
-      // State root hash needs to be up-to-date for validateBlockAfterExecution
-      worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
-    } yield execResult.copy(worldState = worldPersisted)
+    try {
+      for {
+        parentHeader <- blockchainReader
+          .getBlockHeaderByHash(block.header.parentHash)
+          .toRight(MissingParentError) // Should not never occur because validated earlier
+        initialWorld = buildInitialWorld(block, parentHeader)
+        execResult <- executeBlockTransactions(block, initialWorld)
+        worldToPersist <- Either
+          .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
+          .leftMap(BlockExecutionError.MPTError.apply)
+        // State root hash needs to be up-to-date for validateBlockAfterExecution
+        worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
+      } yield execResult.copy(worldState = worldPersisted)
+    } catch {
+      case e: MPTException => Left(BlockExecutionError.MPTError(e))
+    }
 
   protected def buildInitialWorld(block: Block, parentHeader: BlockHeader)(implicit
       blockchainConfig: BlockchainConfig

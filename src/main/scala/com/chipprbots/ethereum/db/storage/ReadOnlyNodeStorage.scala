@@ -12,13 +12,17 @@ import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 class ReadOnlyNodeStorage private (wrapped: NodesKeyValueStorage) extends NodesKeyValueStorage {
   val buffer: mutable.Map[NodeHash, Option[NodeEncoded]] = mutable.Map.empty[NodeHash, Option[NodeEncoded]]
 
-  private def changes: (Seq[NodeHash], Seq[(NodeHash, NodeEncoded)]) =
-    buffer.foldLeft(Seq.empty[NodeHash] -> Seq.empty[(NodeHash, NodeEncoded)]) { (acc, cachedItem) =>
-      cachedItem match {
-        case (key, Some(value)) => (acc._1, acc._2 :+ key -> value)
-        case (key, None)        => (acc._1 :+ key, acc._2)
+  private def changes: (Seq[NodeHash], Seq[(NodeHash, NodeEncoded)]) = {
+    // Use List prepend (O(1)) instead of Seq append (O(n)) to avoid O(n²) for large buffers
+    val (removeAcc, upsertAcc) =
+      buffer.foldLeft((List.empty[NodeHash], List.empty[(NodeHash, NodeEncoded)])) { (acc, cachedItem) =>
+        cachedItem match {
+          case (key, Some(value)) => (acc._1, (key -> value) :: acc._2)
+          case (key, None)        => (key :: acc._1, acc._2)
+        }
       }
-    }
+    (removeAcc, upsertAcc)
+  }
 
   /** This function obtains the value asociated with the key passed, if there exists one.
     *

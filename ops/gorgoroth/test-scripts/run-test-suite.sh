@@ -100,6 +100,12 @@ run_test \
   "$SCRIPT_DIR/test-consensus.sh 5" \
   "$RESULTS_DIR/04-consensus.log"
 
+# Test 5: SNAP Sync (node3 syncs via SNAP protocol)
+run_test \
+  "SNAP Sync" \
+  "$SCRIPT_DIR/test-snap-sync.sh" \
+  "$RESULTS_DIR/05-snap-sync.log"
+
 # Generate summary report
 echo "========================================="
 echo "Generating Summary Report"
@@ -114,7 +120,7 @@ echo "========================================="
 echo "Test Suite Complete"
 echo "========================================="
 echo ""
-echo "Total tests: 4"
+echo "Total tests: 5"
 echo "Failed tests: ${#FAILED_TESTS[@]}"
 echo ""
 

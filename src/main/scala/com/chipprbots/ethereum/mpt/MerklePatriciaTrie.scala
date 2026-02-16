@@ -34,6 +34,18 @@ object MerklePatriciaTrie {
   class MissingRootNodeException(hash: ByteString)
       extends MissingNodeException(hash, s"Root node not found ${Hex.toHexString(hash.toArray)}")
 
+  class MissingStorageNodeException(hash: ByteString, val accountAddress: ByteString)
+      extends MissingNodeException(
+        hash,
+        s"Storage node not found ${Hex.toHexString(hash.toArray)} for account ${Hex.toHexString(accountAddress.toArray)}"
+      )
+
+  class MissingAccountNodeException(hash: ByteString, val accountAddress: ByteString)
+      extends MissingNodeException(
+        hash,
+        s"Account trie node not found ${Hex.toHexString(hash.toArray)} while accessing account ${Hex.toHexString(accountAddress.toArray)}"
+      )
+
   val EmptyEncoded: Array[Byte] = encodeRLP(Array.empty[Byte])
   val EmptyRootHash: Array[Byte] = Node.hashFn(EmptyEncoded)
 

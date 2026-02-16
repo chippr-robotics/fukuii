@@ -75,6 +75,11 @@ class ByteCodeCoordinator(
     cooldown
   }
 
+  // Per-hash failure tracking: prevents infinite re-queuing of hashes no peer can serve.
+  // After maxFailuresPerHash attempts across all peers, the hash is skipped with a warning.
+  private val hashFailureCounts = mutable.Map.empty[ByteString, Int]
+  private val maxFailuresPerHash: Int = 10
+
   // Task management
   private val pendingTasks = mutable.Queue[ByteCodeTask]()
   private final case class ActiveByteCodeRequest(
@@ -316,18 +321,37 @@ class ByteCodeCoordinator(
                 // - non-empty response: peer is useful; clear failures
                 if (validated.matchedHashes.isEmpty) {
                   recordPeerCooldown(peer, cooldownConfig.baseEmpty, "empty ByteCodes response")
+                  // Increment per-hash failure counters for all hashes in the task
+                  task.codeHashes.foreach { hash =>
+                    hashFailureCounts.update(hash, hashFailureCounts.getOrElse(hash, 0) + 1)
+                  }
                 } else {
                   clearPeerFailures(peer)
+                  // Clear failure counters for successfully received hashes
+                  validated.matchedHashes.foreach(hashFailureCounts.remove)
                 }
 
                 if (remainingHashes.nonEmpty) {
-                  val accountByCodeHash = task.codeHashes.zip(task.accountHashes).toMap
-                  val remainingAccounts = remainingHashes.flatMap(accountByCodeHash.get)
-                  log.info(
-                    s"ByteCodes response contained ${validated.matchedHashes.size}/${task.codeHashes.size} requested codes; " +
-                      s"re-queuing remaining ${remainingHashes.size} hashes"
-                  )
-                  pendingTasks.enqueue(ByteCodeTask(remainingHashes, remainingAccounts))
+                  // Filter out hashes that have exceeded max retries (no peer can serve them)
+                  val (exhausted, retryable) = remainingHashes.partition { hash =>
+                    hashFailureCounts.getOrElse(hash, 0) >= maxFailuresPerHash
+                  }
+                  if (exhausted.nonEmpty) {
+                    log.warning(
+                      s"Skipping ${exhausted.size} bytecode hashes after $maxFailuresPerHash failures each " +
+                        s"(no peer could serve them). Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
+                    )
+                    exhausted.foreach(hashFailureCounts.remove)
+                  }
+                  if (retryable.nonEmpty) {
+                    val accountByCodeHash = task.codeHashes.zip(task.accountHashes).toMap
+                    val retryableAccounts = retryable.flatMap(accountByCodeHash.get)
+                    log.info(
+                      s"ByteCodes response contained ${validated.matchedHashes.size}/${task.codeHashes.size} requested codes; " +
+                        s"re-queuing remaining ${retryable.size} hashes"
+                    )
+                    pendingTasks.enqueue(ByteCodeTask(retryable, retryableAccounts))
+                  }
                 }
 
                 val bytecodeCount = response.codes.size
