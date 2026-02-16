@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.db.storage
 
+import org.apache.pekko.util.ByteString
+
 import com.chipprbots.ethereum.mpt.MptNode
 
 /** An MptStorage wrapper that defers all collapse and write operations for bulk trie insertion.
@@ -29,6 +31,9 @@ class DeferredWriteMptStorage(val backing: MptStorage) extends MptStorage {
   }
 
   override def persist(): Unit = () // No-op during bulk insertion
+
+  override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
+    backing.storeRawNodes(nodes)
 
   /** Flush all deferred trie nodes to backing storage in one batch.
     *

@@ -13,26 +13,15 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
-import com.chipprbots.ethereum.mpt.LeafNode
 
-/** TrieNodeHealingCoordinator manages trie node healing workers and orchestrates the healing phase.
+/** TrieNodeHealingCoordinator manages the healing phase of SNAP sync.
   *
-  * State healing is the final phase of SNAP sync that detects and downloads missing trie nodes that were not included
-  * in account/storage range downloads. This coordinator manages the healing process by detecting missing nodes,
-  * batching requests, validating and storing received nodes, and iteratively healing until complete.
+  * State healing downloads missing trie nodes (intermediate branch/extension nodes that snap sync
+  * skips) by requesting them from peers via GetTrieNodes. Nodes are identified by their trie path
+  * (HP-encoded) and stored directly by hash in the node storage.
   *
-  * @param stateRoot
-  *   State root hash
-  * @param networkPeerManager
-  *   Network manager
-  * @param requestTracker
-  *   Request tracker
-  * @param mptStorage
-  *   MPT storage
-  * @param batchSize
-  *   Batch size for healing requests
-  * @param snapSyncController
-  *   Parent controller
+  * The coordinator receives missing node descriptions from SNAPSyncController (which discovers them
+  * via trie walks) and dispatches GetTrieNodes requests to available peers.
   */
 class TrieNodeHealingCoordinator(
     stateRoot: ByteString,
@@ -40,36 +29,91 @@ class TrieNodeHealingCoordinator(
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     batchSize: Int,
-    snapSyncController: ActorRef
+    snapSyncController: ActorRef,
+    concurrency: Int
 ) extends Actor
     with ActorLogging {
 
   import Messages._
 
-  // Task management
-  private var pendingTasks: Seq[HealingTask] = Seq.empty
-  private var activeTasks: Seq[HealingTask] = Seq.empty
-  private var completedTasks: Seq[HealingTask] = Seq.empty
+  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification)
+  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
+  private var pendingTasks: Seq[HealingEntry] = Seq.empty
+  private var completedTaskCount: Int = 0
 
-  // Worker management
-  private val workers = mutable.ArrayBuffer[ActorRef]()
-  private val maxWorkers = 8
+  // Active request tracking: maps requestId -> (tasks, peer, requestedBytes)
+  private case class ActiveRequest(tasks: Seq[HealingEntry], peer: Peer, requestedBytes: BigInt)
+  private val activeRequests = mutable.Map[BigInt, ActiveRequest]()
+
+  // Worker management (unused for direct dispatch but kept for concurrency tracking)
+  private val maxConcurrentRequests = concurrency
 
   // Statistics
   private var totalNodesHealed: Int = 0
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
 
-  // Track last known available peers so we can re-dispatch after task failures
-  // without waiting for the next HealingPeerAvailable message.
+  // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
 
-  // Configuration
-  private val MAX_RESPONSE_SIZE = BigInt(1024 * 1024)
+  // Per-peer adaptive byte budgeting
+  private val minResponseBytes: BigInt = 50 * 1024
+  private val maxResponseBytes: BigInt = 2 * 1024 * 1024
+  private val initialResponseBytes: BigInt = 512 * 1024
+  private val increaseFactor: Double = 1.25
+  private val decreaseFactor: Double = 0.5
 
-  override def preStart(): Unit = {
-    log.info("TrieNodeHealingCoordinator starting")
+  private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+
+  private def responseBytesTargetFor(peer: Peer): BigInt =
+    peerResponseBytesTarget
+      .getOrElseUpdate(peer.id.value, initialResponseBytes)
+      .max(minResponseBytes)
+      .min(maxResponseBytes)
+
+  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
+    if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
+      val next = (requested.toDouble * increaseFactor).toLong
+      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
+    }
+
+  private def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = {
+    val cur = responseBytesTargetFor(peer)
+    val next = (cur.toDouble * decreaseFactor).toLong
+    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
+    log.debug(
+      s"Reducing healing responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
+    )
   }
+
+  // Peer cooldown
+  private val peerCooldownUntilMs = mutable.Map[String, Long]()
+  private val peerCooldownDefault = 30.seconds
+
+  private def isPeerCoolingDown(peer: Peer): Boolean =
+    peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
+
+  private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
+    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+    peerCooldownUntilMs.put(peer.id.value, until)
+    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+  }
+
+  // Batched raw node storage: accumulate nodes and persist periodically
+  private var rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
+  private val rawFlushThreshold = 1000
+
+  private def flushRawNodes(): Unit =
+    if (rawNodeBuffer.nonEmpty) {
+      mptStorage.storeRawNodes(rawNodeBuffer.toSeq)
+      mptStorage.persist()
+      val count = rawNodeBuffer.size
+      rawNodeBuffer.clear()
+      log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
+    }
+
+  override def preStart(): Unit =
+    log.info(s"TrieNodeHealingCoordinator starting (concurrency=$concurrency)")
 
   override val supervisorStrategy: SupervisorStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) {
@@ -85,13 +129,14 @@ class TrieNodeHealingCoordinator(
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
       queueNodes(nodes)
+      // Immediately dispatch to any known available peers
+      tryRedispatchPendingTasks()
 
     case HealingPeerAvailable(peer) =>
       knownAvailablePeers += peer
-      if (!isComplete && workers.size < maxWorkers) {
-        val worker = createWorker()
-        worker ! FetchTrieNodes(null, peer)
-      } else if (!isComplete && pendingTasks.nonEmpty) {
+      if (isPeerCoolingDown(peer)) {
+        log.debug(s"Peer ${peer.id.value} is cooling down, skipping dispatch")
+      } else if (pendingTasks.nonEmpty && activeRequests.size < maxConcurrentRequests) {
         requestNextBatch(peer)
       }
 
@@ -110,17 +155,19 @@ class TrieNodeHealingCoordinator(
 
     case HealingCheckCompletion =>
       if (isComplete) {
-        log.info("Trie node healing complete!")
+        flushRawNodes()
+        log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
 
     case HealingGetProgress =>
+      val activeTaskCount = activeRequests.values.map(_.tasks.size).sum
       val stats = HealingStatistics(
         totalNodes = totalNodesHealed,
         totalBytes = totalBytesReceived,
         pendingTasks = pendingTasks.size,
-        activeTasks = activeTasks.size,
-        completedTasks = completedTasks.size,
+        activeTasks = activeTaskCount,
+        completedTasks = completedTaskCount,
         nodesPerSecond = calculateNodesPerSecond(),
         kilobytesPerSecond = calculateKilobytesPerSecond(),
         progress = calculateProgress()
@@ -128,45 +175,12 @@ class TrieNodeHealingCoordinator(
       sender() ! stats
   }
 
-  private def createWorker(): ActorRef = {
-    val worker = context.actorOf(
-      TrieNodeHealingWorker.props(
-        coordinator = self,
-        networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker
-      )
-    )
-    workers += worker
-    log.debug(s"Created healing worker, total: ${workers.size}")
-    worker
-  }
-
-  private def queueNode(nodeHash: ByteString): Unit = {
-    val task = HealingTask(
-      path = Seq.empty,
-      hash = nodeHash,
-      rootHash = stateRoot,
-      pending = true,
-      done = false,
-      nodeData = None
-    )
-    pendingTasks = pendingTasks :+ task
-    log.debug(s"Queued node for healing: hash=${Hex.toHexString(nodeHash.take(4).toArray)}")
-  }
-
-  private def queueNodes(nodeHashes: Seq[ByteString]): Unit = {
-    val tasks = nodeHashes.map { nodeHash =>
-      HealingTask(
-        path = Seq.empty,
-        hash = nodeHash,
-        rootHash = stateRoot,
-        pending = true,
-        done = false,
-        nodeData = None
-      )
+  private def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit = {
+    val entries = pathsAndHashes.map { case (pathset, hash) =>
+      HealingEntry(pathset = pathset, hash = hash)
     }
-    pendingTasks = pendingTasks ++ tasks
-    log.info(s"Queued ${nodeHashes.size} nodes for healing. Total pending: ${pendingTasks.size}")
+    pendingTasks = pendingTasks ++ entries
+    log.info(s"Queued ${entries.size} nodes for healing. Total pending: ${pendingTasks.size}")
   }
 
   private def requestNextBatch(peer: Peer): Option[BigInt] = {
@@ -178,21 +192,23 @@ class TrieNodeHealingCoordinator(
     val batch = pendingTasks.take(batchSize)
     pendingTasks = pendingTasks.drop(batchSize)
 
-    batch.foreach(_.pending = false)
-    activeTasks = activeTasks ++ batch
-
     val requestId = requestTracker.generateRequestId()
-    val paths = batch.map(_.path)
+    val responseBytes = responseBytesTargetFor(peer)
+
+    // Build the paths list for GetTrieNodes — each entry's pathset is a Seq[ByteString]
+    val paths = batch.map(_.pathset)
 
     val request = GetTrieNodes(
       requestId = requestId,
       rootHash = stateRoot,
       paths = paths,
-      responseBytes = MAX_RESPONSE_SIZE
+      responseBytes = responseBytes
     )
 
+    activeRequests(requestId) = ActiveRequest(batch, peer, responseBytes)
+
     requestTracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetTrieNodes) {
-      handleTimeout(requestId, batch)
+      handleTimeout(requestId, batch, peer)
     }
 
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
@@ -200,8 +216,8 @@ class TrieNodeHealingCoordinator(
     networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
 
     log.debug(
-      s"Requested ${batch.size} trie nodes from peer $peer " +
-        s"(reqId=$requestId, pending=${pendingTasks.size})"
+      s"Requested ${batch.size} trie nodes from peer ${peer.id.value} " +
+        s"(reqId=$requestId, responseBytes=$responseBytes, pending=${pendingTasks.size})"
     )
 
     Some(requestId)
@@ -213,113 +229,109 @@ class TrieNodeHealingCoordinator(
 
     log.debug(s"Received TrieNodes response: reqId=$requestId, nodes=${nodes.size}")
 
-    val tasksForRequest = activeTasks.filter(task =>
-      requestTracker.getPendingRequest(requestId).exists(_.requestType == SNAPRequestTracker.RequestType.GetTrieNodes)
-    )
-
-    if (tasksForRequest.isEmpty) {
-      log.warning(s"No active healing tasks found for request $requestId")
-      return
+    val activeReq = activeRequests.get(requestId) match {
+      case Some(req) => req
+      case None =>
+        log.warning(s"No active healing request found for requestId=$requestId")
+        return
     }
 
+    val tasksForRequest = activeReq.tasks
+    val peer = activeReq.peer
+    val requestedBytes = activeReq.requestedBytes
+
     var healedCount = 0
-    for ((nodeData, task) <- nodes.zip(tasksForRequest))
-      validateAndStoreNode(nodeData, task) match {
-        case Right(_) =>
-          task.nodeData = Some(nodeData)
-          task.done = true
-          healedCount += 1
-          totalNodesHealed += 1
-          totalBytesReceived += nodeData.length
-          log.debug(s"Healed node: ${task.toShortString}")
+    var receivedBytes: Long = 0
 
-        case Left(error) =>
-          log.warning(s"Failed to heal node: ${task.toShortString} - $error")
-          task.pending = true
-          pendingTasks = pendingTasks :+ task
+    // Match response nodes to request tasks positionally
+    for ((nodeData, task) <- nodes.zip(tasksForRequest)) {
+      val nodeHash = ByteString(org.bouncycastle.jcajce.provider.digest.Keccak.Digest256().digest(nodeData.toArray))
+      if (nodeHash == task.hash) {
+        // Valid node — store directly by hash
+        rawNodeBuffer += ((nodeHash, nodeData.toArray))
+        healedCount += 1
+        totalNodesHealed += 1
+        receivedBytes += nodeData.length
+        totalBytesReceived += nodeData.length
+      } else {
+        log.warning(
+          s"Node hash mismatch: expected ${Hex.toHexString(task.hash.take(4).toArray)}, " +
+            s"got ${Hex.toHexString(nodeHash.take(4).toArray)}"
+        )
+        // Re-queue this task for retry
+        pendingTasks = pendingTasks :+ task
       }
+    }
 
-    val (completed, stillActive) = tasksForRequest.partition(_.done)
-    completedTasks = completedTasks ++ completed
-    activeTasks = activeTasks.filterNot(completed.contains)
+    // Re-queue unmatched tasks (server returned fewer nodes than requested)
+    val unmatchedTasks = tasksForRequest.drop(nodes.size)
+    unmatchedTasks.foreach { task =>
+      pendingTasks = pendingTasks :+ task
+    }
 
+    completedTaskCount += healedCount
+    activeRequests.remove(requestId)
     requestTracker.completeRequest(requestId)
 
+    // Adaptive byte budget
+    if (healedCount > 0) {
+      adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
+    } else {
+      adjustResponseBytesOnFailure(peer, "empty healing response")
+      recordPeerCooldown(peer, "empty healing response")
+    }
+
     log.info(
-      s"Healed $healedCount/${nodes.size} trie nodes " +
-        s"(total: $totalNodesHealed, pending: ${pendingTasks.size}, active: ${activeTasks.size})"
+      s"Healed $healedCount/${nodes.size} trie nodes from peer ${peer.id.value} " +
+        s"(total: $totalNodesHealed, pending: ${pendingTasks.size}, active: ${activeRequests.size} reqs, " +
+        s"responseBytes=${responseBytesTargetFor(peer)})"
     )
 
     if (healedCount > 0) {
       snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
-    }
-  }
 
-  private def validateAndStoreNode(nodeData: ByteString, task: HealingTask): Either[String, Unit] =
-    try {
-      val nodeHash = ByteString(org.bouncycastle.jcajce.provider.digest.Keccak.Digest256().digest(nodeData.toArray))
-      if (nodeHash != task.hash) {
-        return Left(s"Node hash mismatch: expected ${Hex.toHexString(task.hash.take(4).toArray)}, got ${Hex.toHexString(nodeHash.take(4).toArray)}")
+      // Periodic flush of raw node buffer
+      if (rawNodeBuffer.size >= rawFlushThreshold) {
+        flushRawNodes()
       }
-
-      storeTrieNode(nodeData, nodeHash)
-
-      log.debug(s"Stored healed trie node: hash=${Hex.toHexString(nodeHash.take(4).toArray)}, size=${nodeData.length} bytes")
-      Right(())
-    } catch {
-      case e: Exception =>
-        Left(s"Failed to store healed node: ${e.getMessage}")
     }
 
-  private def storeTrieNode(nodeData: ByteString, nodeHash: ByteString): Unit = {
-    val leafNode = LeafNode(
-      key = nodeHash,
-      value = nodeData,
-      cachedHash = Some(nodeHash.toArray),
-      cachedRlpEncoded = Some(nodeData.toArray),
-      parsedRlp = None
-    )
+    // Dispatch more work to this peer if available
+    if (pendingTasks.nonEmpty && !isPeerCoolingDown(peer) && activeRequests.size < maxConcurrentRequests) {
+      requestNextBatch(peer)
+    }
 
-    mptStorage.updateNodesInStorage(
-      newRoot = Some(leafNode),
-      toRemove = Seq.empty
-    )
-
-    mptStorage.persist()
-
-    log.debug(s"Persisted healed trie node: hash=${Hex.toHexString(nodeHash.take(4).toArray)}")
+    self ! HealingCheckCompletion
   }
 
-  private def handleTimeout(requestId: BigInt, tasks: Seq[HealingTask]): Unit = {
-    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}")
+  private def handleTimeout(requestId: BigInt, tasks: Seq[HealingEntry], peer: Peer): Unit = {
+    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value}")
 
-    tasks.foreach { task =>
-      task.pending = true
-      task.done = false
-    }
     pendingTasks = pendingTasks ++ tasks
-    activeTasks = activeTasks.filterNot(tasks.contains)
+    activeRequests.remove(requestId)
+
+    recordPeerCooldown(peer, "request timeout")
+    adjustResponseBytesOnFailure(peer, "request timeout")
 
     log.info(s"Re-queued ${tasks.size} timed-out healing tasks (pending: ${pendingTasks.size})")
-    // Re-dispatch re-queued tasks to any known available peer.
-    // Without this, tasks sit in the queue until the next HealingPeerAvailable message arrives.
     tryRedispatchPendingTasks()
   }
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val eligiblePeers = knownAvailablePeers.toList
+    val eligiblePeers = knownAvailablePeers.toList.filterNot(isPeerCoolingDown)
     if (eligiblePeers.isEmpty) return
 
-    for (peer <- eligiblePeers if pendingTasks.nonEmpty) {
+    for (peer <- eligiblePeers if pendingTasks.nonEmpty && activeRequests.size < maxConcurrentRequests) {
       requestNextBatch(peer)
     }
   }
 
   private def calculateProgress(): Double = {
-    val total = pendingTasks.size + activeTasks.size + completedTasks.size
+    val activeTaskCount = activeRequests.values.map(_.tasks.size).sum
+    val total = pendingTasks.size + activeTaskCount + completedTaskCount
     if (total == 0) 1.0
-    else completedTasks.size.toDouble / total
+    else completedTaskCount.toDouble / total
   }
 
   private def calculateNodesPerSecond(): Double = {
@@ -332,9 +344,8 @@ class TrieNodeHealingCoordinator(
     if (elapsedSec > 0) (totalBytesReceived / 1024.0) / elapsedSec else 0.0
   }
 
-  private def isComplete: Boolean = {
-    pendingTasks.isEmpty && activeTasks.isEmpty
-  }
+  private def isComplete: Boolean =
+    pendingTasks.isEmpty && activeRequests.isEmpty
 }
 
 object TrieNodeHealingCoordinator {
@@ -344,7 +355,8 @@ object TrieNodeHealingCoordinator {
       requestTracker: SNAPRequestTracker,
       mptStorage: MptStorage,
       batchSize: Int,
-      snapSyncController: ActorRef
+      snapSyncController: ActorRef,
+      concurrency: Int = 16
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -353,7 +365,8 @@ object TrieNodeHealingCoordinator {
         requestTracker,
         mptStorage,
         batchSize,
-        snapSyncController
+        snapSyncController,
+        concurrency
       )
     )
 }

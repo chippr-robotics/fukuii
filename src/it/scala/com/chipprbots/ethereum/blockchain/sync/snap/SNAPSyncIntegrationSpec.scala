@@ -171,11 +171,15 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
             )
           )
 
-          // Queue missing nodes for healing
+          // Queue missing nodes for healing (pathset, hash pairs)
           val missingNode1 = kec256(ByteString("missing1"))
           val missingNode2 = kec256(ByteString("missing2"))
+          val emptyPath = ByteString(Array[Byte](0x00))
 
-          coordinator ! Messages.QueueMissingNodes(Seq(missingNode1, missingNode2))
+          coordinator ! Messages.QueueMissingNodes(Seq(
+            (Seq(emptyPath), missingNode1),
+            (Seq(emptyPath), missingNode2)
+          ))
           
           // Verify coordinator accepts the nodes
           coordinator ! Messages.HealingGetProgress

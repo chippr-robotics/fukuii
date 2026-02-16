@@ -305,6 +305,16 @@ class StorageRangeCoordinator(
         tryRedispatchPendingTasks()
       }
 
+    case ForceCompleteStorage =>
+      val abandoned = tasks.size + activeTasks.size
+      log.warning(
+        s"Force-completing storage sync: flushing $slotsDownloaded downloaded slots to disk, " +
+        s"abandoning $abandoned remaining tasks (healing phase will recover missing data)"
+      )
+      deferredStorage.flush()
+      log.info("Storage range sync force-completed (promoting to healing phase)")
+      snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+
     case StoragePivotRefreshed(newStateRoot) =>
       log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
       stateRoot = newStateRoot

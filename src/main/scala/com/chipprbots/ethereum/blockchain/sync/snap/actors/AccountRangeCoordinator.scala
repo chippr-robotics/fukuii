@@ -1,11 +1,13 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy, Status}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.concurrent.{Future, blocking}
 import scala.concurrent.duration._
+import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, MptStorage}
@@ -85,18 +87,39 @@ class AccountRangeCoordinator(
     // If all known peers are stateless, the root has aged out of the serve window
     val allStateless = knownAvailablePeers.nonEmpty &&
       knownAvailablePeers.forall(p => statelessPeers.contains(p.id))
-    if (allStateless) {
-      pivotRefreshRequested = true
-      log.warning(
-        s"All ${statelessPeers.size} known peers are stateless for root ${stateRoot.take(4).toHex}. " +
-          "Requesting pivot refresh from controller."
+    if (!allStateless) return
+
+    // Exponential backoff: don't hammer the controller with rapid refresh requests
+    val now = System.currentTimeMillis()
+    val backoffMs = math.min(
+      minRefreshIntervalMs * (1L << math.min(consecutiveUnproductiveRefreshes, 3)),
+      maxRefreshIntervalMs
+    )
+    val elapsed = now - lastPivotRefreshTimeMs
+    if (lastPivotRefreshTimeMs > 0 && elapsed < backoffMs) {
+      log.info(
+        s"All ${statelessPeers.size} peers stateless but backing off pivot refresh " +
+          s"(${elapsed / 1000}s / ${backoffMs / 1000}s elapsed, attempt=${consecutiveUnproductiveRefreshes + 1}). " +
+          "Will retry after backoff."
       )
-      snapSyncController ! PivotStateUnservable(
-        rootHash = stateRoot,
-        reason = "all peers stateless for AccountRange root",
-        consecutiveEmptyResponses = statelessPeers.size
-      )
+      // Schedule a re-check after the remaining backoff period
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce((backoffMs - elapsed).millis, self, CheckCompletion)
+      return
     }
+
+    pivotRefreshRequested = true
+    lastPivotRefreshTimeMs = now
+    consecutiveUnproductiveRefreshes += 1
+    log.warning(
+      s"All ${statelessPeers.size} known peers are stateless for root ${stateRoot.take(4).toHex}. " +
+        s"Requesting pivot refresh from controller (attempt=$consecutiveUnproductiveRefreshes, backoff=${backoffMs / 1000}s)."
+    )
+    snapSyncController ! PivotStateUnservable(
+      rootHash = stateRoot,
+      reason = "all peers stateless for AccountRange root",
+      consecutiveEmptyResponses = statelessPeers.size
+    )
   }
 
   // Task management
@@ -121,6 +144,61 @@ class AccountRangeCoordinator(
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
+
+  // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
+  // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
+  // on responsive peers, scaling down on failures.
+  private val minResponseBytes: BigInt = 50 * 1024 // 50KB floor
+  private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
+  private val initialResponseBytes: BigInt = 512 * 1024 // 512KB starting point
+  private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
+  private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
+
+  private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+
+  private def responseBytesTargetFor(peer: Peer): BigInt =
+    peerResponseBytesTarget
+      .getOrElseUpdate(peer.id.value, initialResponseBytes)
+      .max(minResponseBytes)
+      .min(maxResponseBytes)
+
+  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
+    if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
+      val next = (requested.toDouble * increaseFactor).toLong
+      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
+    }
+
+  private def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = {
+    val cur = responseBytesTargetFor(peer)
+    val next = (cur.toDouble * decreaseFactor).toLong
+    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
+    log.debug(
+      s"Reducing account responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
+    )
+  }
+
+  // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
+  private val peerCooldownUntilMs = mutable.Map[String, Long]()
+  private val peerCooldownDefault = 30.seconds
+
+  private def isPeerCoolingDown(peer: Peer): Boolean =
+    peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
+
+  private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
+    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+    peerCooldownUntilMs.put(peer.id.value, until)
+    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+  }
+
+  // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
+  // Exponential backoff from 60s to 5min.
+  private var consecutiveUnproductiveRefreshes: Int = 0
+  private var lastPivotRefreshTimeMs: Long = 0L
+  private val minRefreshIntervalMs: Long = 60000L // 60s minimum between refreshes
+  private val maxRefreshIntervalMs: Long = 300000L // 5min ceiling
+
+  // Internal message for async trie finalization result
+  private case class TrieFlushComplete(result: Either[String, Unit])
 
   // Merkle proof verifier
   private val proofVerifier = MerkleProofVerifier(stateRoot)
@@ -184,6 +262,12 @@ class AccountRangeCoordinator(
       statelessPeers.clear()
       pivotRefreshRequested = false
 
+      // Clear per-peer adaptive state (new root = new response characteristics)
+      peerResponseBytesTarget.clear()
+      peerCooldownUntilMs.clear()
+      // Note: do NOT reset consecutiveUnproductiveRefreshes here.
+      // Only reset when we receive real account data (proof the new root is servable).
+
       // Resume dispatching with the fresh root
       tryRedispatchPendingTasks()
 
@@ -191,6 +275,8 @@ class AccountRangeCoordinator(
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is stateless for current root")
+      } else if (isPeerCoolingDown(peer)) {
+        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is cooling down")
       } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
       } else {
@@ -234,16 +320,59 @@ class AccountRangeCoordinator(
     case CheckCompletion =>
       if (isComplete) {
         log.info("Account range sync complete!")
-        // Finalize trie before reporting completion
-        finalizeTrie() match {
-          case Right(_) =>
-            log.info("State trie finalized successfully")
-            snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
-          case Left(error) =>
-            log.error(s"Failed to finalize trie: $error")
-            snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
-        }
+        log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
+        // Notify controller so progress monitor shows finalization status
+        snapSyncController ! SNAPSyncController.ProgressAccountsFinalizingTrie
+        // Switch to finalizing state so no message can touch the trie during flush
+        context.become(finalizing)
+
+        // Run the expensive flush (O(n*log(n)) trie collapse + RocksDB write) on a
+        // separate thread to avoid blocking the Pekko dispatcher for 10+ minutes.
+        val selfRef = self
+        Future {
+          blocking { finalizeTrie() }
+        }(scala.concurrent.ExecutionContext.global)
+          .onComplete {
+            case Success(result) => selfRef ! TrieFlushComplete(result)
+            case Failure(ex)     => selfRef ! Status.Failure(ex)
+          }(context.dispatcher)
       }
+  }
+
+  /** Receive state during async trie finalization.
+    * The in-memory trie is being collapsed and written to RocksDB on a background thread.
+    * No message should touch stateTrie or deferredStorage during this phase.
+    */
+  private def finalizing: Receive = {
+    case TrieFlushComplete(Right(_)) =>
+      log.info("State trie finalized successfully")
+      snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
+
+    case TrieFlushComplete(Left(error)) =>
+      log.error(s"Failed to finalize trie: $error")
+      snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
+
+    case Status.Failure(ex) =>
+      log.error(ex, s"Trie finalization failed with exception: ${ex.getMessage}")
+      snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
+
+    case _: PeerAvailable =>
+      // Ignore — no more tasks to dispatch during finalization
+
+    case _: PivotRefreshed =>
+      log.info("Ignoring PivotRefreshed during trie finalization")
+
+    case GetProgress =>
+      sender() ! calculateProgress()
+
+    case GetContractAccounts =>
+      sender() ! ContractAccountsResponse(contractAccounts.toSeq)
+
+    case GetContractStorageAccounts =>
+      sender() ! ContractStorageAccountsResponse(contractStorageAccounts.toSeq)
+
+    case CheckCompletion =>
+      // Already finalizing, ignore
   }
 
   private def createWorker(): ActorRef = {
@@ -269,14 +398,21 @@ class AccountRangeCoordinator(
 
     val requestId = requestTracker.generateRequestId()
     activeTasks.put(requestId, (task, worker, peer))
+    val responseBytes = responseBytesTargetFor(peer)
 
-    worker ! FetchAccountRange(task, peer, requestId)
+    worker ! FetchAccountRange(task, peer, requestId, responseBytes)
   }
 
   // How many accounts to insert per chunk before yielding to the actor mailbox.
   // With DeferredWriteMptStorage, puts are purely in-memory (~1-10μs each), so we can
   // process much larger chunks. 2000 accounts takes ~2-20ms in-memory.
   private val storeChunkSize = 2000
+
+  // No intermediate flushing during account download.
+  // DeferredWriteMptStorage.flush() collapses the ENTIRE in-memory trie (O(n*log(n))) which
+  // blocks the actor for minutes (72s+ at 200K accounts, worse as trie grows). With 4GB heap,
+  // the full ETC state (~2.3M accounts, ~1-2GB) fits in memory. All accounts are inserted
+  // purely in-memory, and the single flush happens at finalization in finalizeTrie().
 
   private def handleTaskComplete(
       requestId: BigInt,
@@ -285,7 +421,16 @@ class AccountRangeCoordinator(
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       result match {
         case Right((accountCount, accounts, _)) =>
-          log.info(s"Task completed successfully: $accountCount accounts")
+          log.info(s"Task completed successfully: $accountCount accounts (responseBytes=${responseBytesTargetFor(peer)})")
+
+          // Adjust adaptive byte budget — estimate received bytes from account count
+          val estimatedBytes = BigInt(accountCount * 100) // ~100 bytes per account (hash + RLP)
+          adjustResponseBytesOnSuccess(peer, responseBytesTargetFor(peer), estimatedBytes)
+
+          // Reset pivot refresh backoff on receiving real account data
+          if (accountCount > 0) {
+            consecutiveUnproductiveRefreshes = 0
+          }
 
           // Identify contract accounts
           identifyContractAccounts(accounts)
@@ -378,6 +523,13 @@ class AccountRangeCoordinator(
       log.warning(s"Task failed: $reason")
       task.pending = false
       pendingTasks.enqueue(task)
+
+      // Apply cooldown and reduce byte budget for failing peers (unless stateless-marked,
+      // which already blocks them from dispatch)
+      if (!reason.contains("Missing proof for empty account range")) {
+        recordPeerCooldown(peer, reason)
+        adjustResponseBytesOnFailure(peer, reason)
+      }
     }
     // Re-dispatch re-queued tasks to any known available peer that isn't stateless.
     // Without this, tasks sit in the queue until the next PeerAvailable message arrives.
@@ -386,7 +538,10 @@ class AccountRangeCoordinator(
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val eligiblePeers = knownAvailablePeers.filterNot(isPeerStateless).toList
+    val eligiblePeers = knownAvailablePeers
+      .filterNot(isPeerStateless)
+      .filterNot(isPeerCoolingDown)
+      .toList
     if (eligiblePeers.isEmpty) return
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty) {
@@ -430,9 +585,9 @@ class AccountRangeCoordinator(
         // Yield to actor mailbox - other messages (PeerAvailable, responses) process before next chunk
         self ! StoreAccountChunk(task, rest, totalCount, newStored, isTaskRangeComplete)
       } else {
-        // All chunks for this response done — flush the in-memory trie to RocksDB in one batch
-        log.info(s"Stored all $totalCount accounts in-memory, flushing trie to storage...")
-        flushTrieToStorage()
+        // All chunks for this response stored in-memory. No flush here — the entire trie
+        // stays in memory and is flushed once at the end in finalizeTrie().
+        log.info(s"Stored all $totalCount accounts in-memory ($accountsDownloaded total)")
 
         if (isTaskRangeComplete) {
           task.done = true

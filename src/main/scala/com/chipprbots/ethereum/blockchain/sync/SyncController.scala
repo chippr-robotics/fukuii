@@ -369,6 +369,7 @@ class SyncController(
     val snapSync = context.actorOf(
       SNAPSyncController.props(
         blockchainReader,
+        blockchainWriter,
         appStateStorage,
         stateStorage,
         evmCodeStorage,

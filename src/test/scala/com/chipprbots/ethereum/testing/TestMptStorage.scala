@@ -58,4 +58,10 @@ class TestMptStorage extends MptStorage {
   override def persist(): Unit = {
     // No-op for in-memory storage
   }
+
+  override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
+    rawNodes.foreach { case (hash, encoded) =>
+      val node = MptTraversals.decodeNode(encoded).withCachedHash(hash.toArray).withCachedRlpEncoded(encoded)
+      nodes(hash) = node
+    }
 }

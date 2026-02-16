@@ -8,6 +8,10 @@ import com.chipprbots.ethereum.db.storage._
 import com.chipprbots.ethereum.domain
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
+import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.vm.Storage
 import com.chipprbots.ethereum.vm.WorldStateProxy
 
@@ -160,7 +164,12 @@ class InMemoryWorldStateProxy(
     val ethCompatibleStorage: Boolean
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage] {
 
-  override def getAccount(address: Address): Option[Account] = accountsStateTrie.get(address)
+  override def getAccount(address: Address): Option[Account] =
+    try accountsStateTrie.get(address)
+    catch {
+      case e: MissingNodeException =>
+        throw new MissingAccountNodeException(e.hash, address.bytes)
+    }
 
   override def getEmptyAccount: Account = Account.empty(accountStartNonce)
 
@@ -216,7 +225,19 @@ class InMemoryWorldStateProxy(
     val storageRoot = getAccount(address)
       .map(account => account.storageRoot)
       .getOrElse(Account.EmptyStorageRootHash)
-    createProxiedContractStorageTrie(stateStorage, storageRoot)
+    val contextStorage = new MptStorage {
+      override def get(nodeId: Array[Byte]): MptNode =
+        try stateStorage.get(nodeId)
+        catch {
+          case _: MissingNodeException =>
+            throw new MissingStorageNodeException(ByteString(nodeId), address.bytes)
+        }
+      override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] =
+        stateStorage.updateNodesInStorage(newRoot, toRemove)
+      override def persist(): Unit = stateStorage.persist()
+      override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = stateStorage.storeRawNodes(nodes)
+    }
+    createProxiedContractStorageTrie(contextStorage, storageRoot)
   }
 
   private def copyWith(
