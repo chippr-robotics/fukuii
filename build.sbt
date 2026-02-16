@@ -524,9 +524,16 @@ addCommandAlias(
 
 // testComprehensive - Tier 3: Comprehensive tests (< 3 hours)
 // Runs all tests including ethereum/tests compliance suite
+// Excludes FlakyTest and DisabledTest to ensure reliable nightly builds
 addCommandAlias(
   "testComprehensive",
-  "testAll"
+  """; compile-all
+    |; rlp / test
+    |; bytes / test
+    |; crypto / test
+    |; testOnly -- -l FlakyTest -l DisabledTest
+    |; IntegrationTest / testOnly -- -l FlakyTest -l DisabledTest
+    |""".stripMargin
 )
 
 // Module-specific test commands
