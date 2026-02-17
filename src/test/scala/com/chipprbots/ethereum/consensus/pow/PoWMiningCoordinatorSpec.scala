@@ -69,12 +69,12 @@ class PoWMiningCoordinatorSpec
     ) in new TestSetup {
       override def coordinatorName = "RecurrentMiningSetup"
       setBlockForMining(parentBlock)
-      
+
       coordinator ! SetMiningMode(RecurrentMining)
-      
-      // Give the coordinator time to process the message
-      Thread.sleep(100)
-      
+
+      // Give the coordinator time to process the message using expectNoMessage instead of Thread.sleep
+      sync.expectNoMessage(100.millis)
+
       coordinator ! StopMining
     }
 
@@ -84,12 +84,12 @@ class PoWMiningCoordinatorSpec
       SlowTest
     ) in new TestSetup {
       override def coordinatorName = "OnDemandMining"
-      
+
       coordinator ! SetMiningMode(OnDemandMining)
-      
-      // Give the coordinator time to process the message
-      Thread.sleep(100)
-      
+
+      // Give the coordinator time to process the message using expectNoMessage instead of Thread.sleep
+      sync.expectNoMessage(100.millis)
+
       coordinator ! StopMining
     }
 
@@ -102,12 +102,12 @@ class PoWMiningCoordinatorSpec
         override def coordinatorName = "EthashMining"
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
-        
+
         coordinator ! SetMiningMode(RecurrentMining)
-        
-        // Give the coordinator time to process the message and start mining
-        Thread.sleep(100)
-        
+
+        // Give the coordinator time to process the message using expectNoMessage instead of Thread.sleep
+        sync.expectNoMessage(100.millis)
+
         coordinator ! StopMining
       }
 
@@ -130,15 +130,15 @@ class PoWMiningCoordinatorSpec
           "KeccakMining"
         )
         probe.watch(coordinator.ref.toClassic)
-        
+
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
 
         coordinator ! SetMiningMode(RecurrentMining)
-        
-        // Give the coordinator time to process the message and start mining
-        Thread.sleep(100)
-        
+
+        // Give the coordinator time to process the message using expectNoMessage instead of Thread.sleep
+        sync.expectNoMessage(100.millis)
+
         coordinator ! StopMining
         probe.expectTerminated(coordinator.ref.toClassic)
       }

@@ -9,9 +9,8 @@ import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage}
-import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage, StateStorage}
+import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -21,8 +20,9 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 class SNAPSyncController(
     blockchainReader: BlockchainReader,
+    blockchainWriter: BlockchainWriter,
     appStateStorage: AppStateStorage,
-    mptStorage: MptStorage,
+    stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
@@ -39,6 +39,19 @@ class SNAPSyncController(
   // Blacklist for PeerListSupportNg trait
   val blacklist: Blacklist = CacheBasedBlacklist.empty(1000)
 
+  // Writable MptStorage, lazily created when pivot block number is known.
+  // Uses getBackingStorage(pivotBlockNumber) to ensure nodes are tagged with the
+  // correct block number for proper reference counting in pruning modes.
+  private var mptStorage: Option[MptStorage] = None
+
+  private def getOrCreateMptStorage(pivotBlockNumber: BigInt): MptStorage =
+    mptStorage.getOrElse {
+      val storage = stateStorage.getBackingStorage(pivotBlockNumber)
+      mptStorage = Some(storage)
+      log.info(s"Created writable MptStorage for pivot block $pivotBlockNumber")
+      storage
+    }
+
   // Error handler for retry logic and peer blacklisting
   private val errorHandler = new SNAPErrorHandler(
     maxRetries = snapSyncConfig.maxRetries,
@@ -52,6 +65,10 @@ class SNAPSyncController(
   private var bytecodeCoordinator: Option[ActorRef] = None
   private var storageRangeCoordinator: Option[ActorRef] = None
   private var trieNodeHealingCoordinator: Option[ActorRef] = None
+
+  // Monotonic counter appended to coordinator actor names so restarts don't collide
+  // with still-stopping actors from the previous cycle.
+  private var coordinatorGeneration: Long = 0
 
   private val requestTracker = new SNAPRequestTracker()(scheduler)
 
@@ -91,6 +108,11 @@ class SNAPSyncController(
   private var lastPivotRestartMs: Long = 0L
   private val MinPivotRestartInterval: FiniteDuration = 30.seconds
 
+  // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
+  // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
+  // arrives in the syncing state, the refresh is completed.
+  private var pendingPivotRefresh: Option[(BigInt, String)] = None
+
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
@@ -102,12 +124,15 @@ class SNAPSyncController(
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
-  private val StorageStagnationThreshold: FiniteDuration = 10.minutes
+  // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
+  private val StorageStagnationThreshold: FiniteDuration = 20.minutes
   private val StorageStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
 
   // AccountRange stagnation watchdog: if tasks stop completing, repivot/restart (and possibly fallback).
-  private val AccountStagnationThreshold: FiniteDuration = 5.minutes
+  // Threshold must be generous enough to allow large chains to complete within the SNAP serve window
+  // (~128 blocks * ~13s = ~28 min on ETC). Too aggressive causes infinite restart loops.
+  private val AccountStagnationThreshold: FiniteDuration = 15.minutes
   private val AccountStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
@@ -194,6 +219,9 @@ class SNAPSyncController(
 
     case ProgressAccountsSynced(count) =>
       progressMonitor.incrementAccountsSynced(count)
+
+    case ProgressAccountsFinalizingTrie =>
+      progressMonitor.setFinalizingTrie(true)
       // AccountRange can legitimately produce empty segments (count=0) while still progressing.
       // Treat any progress update as a liveness signal.
       lastAccountProgressMs = System.currentTimeMillis()
@@ -209,24 +237,35 @@ class SNAPSyncController(
       progressMonitor.incrementNodesHealed(count)
 
     case PivotStateUnservable(rootHash, reason, emptyResponses) =>
-      // Nethermind-style behavior: treat many empty range replies as an "expired root" signal.
-      // This usually means the chosen pivot/stateRoot is no longer widely serveable.
-      if (currentPhase == StorageRangeSync) {
-        val now = System.currentTimeMillis()
-        if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
-          log.warning(
-            s"Ignoring PivotStateUnservable during StorageRangeSync due to restart guard " +
-              s"(emptyResponses=$emptyResponses, root=${rootHash.take(4).toHex}, reason=$reason)"
-          )
-        } else {
-          lastPivotRestartMs = now
-          restartSnapSync(
-            s"pivot state root appears unservable during StorageRangeSync " +
-              s"(emptyResponses=$emptyResponses, root=${rootHash.take(8).toHex}..., reason=$reason)"
-          )
-        }
+      // When peers can no longer serve the current state root, refresh the pivot in-place
+      // instead of restarting. This preserves downloaded trie data (content-addressed nodes
+      // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
+      val now = System.currentTimeMillis()
+      if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
+        log.warning(
+          s"Ignoring PivotStateUnservable due to restart guard " +
+            s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
+        )
+      } else if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
+        lastPivotRestartMs = now
+        refreshPivotInPlace(reason)
       } else {
         log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
+      }
+
+    // Handle pivot header bootstrap completion during active sync.
+    // This arrives when refreshPivotInPlace() requested a header from a peer because
+    // it wasn't available locally. The coordinator is still alive with all its state.
+    case BootstrapComplete(pivotHeaderOpt) if pendingPivotRefresh.isDefined =>
+      val (pendingPivot, reason) = pendingPivotRefresh.get
+      pendingPivotRefresh = None
+      pivotHeaderOpt match {
+        case Some(header) =>
+          log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
+          completePivotRefreshWithStateRoot(pendingPivot, header.stateRoot, reason)
+        case None =>
+          log.warning(s"Pivot header bootstrap for block $pendingPivot returned no header. Falling back to full restart.")
+          restartSnapSync(s"pivot refresh bootstrap returned no header for $pendingPivot: $reason")
       }
 
     // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
@@ -302,10 +341,47 @@ class SNAPSyncController(
       }
 
     case StateHealingComplete =>
-      log.info("State healing complete. Validating state...")
-      progressMonitor.startPhase(StateValidation)
-      currentPhase = StateValidation
-      validateState()
+      log.info("State healing round complete. Running trie walk to check for more missing nodes...")
+      // Re-walk the trie to find any newly-discoverable missing nodes
+      // (each round of healing exposes deeper missing nodes)
+      stateRoot.foreach { root =>
+        val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+        scala.concurrent.Future {
+          val validator = new StateValidator(storage)
+          validator.findMissingNodesWithPaths(root)
+        }(ec).foreach {
+          case Right(missingNodes) => self ! TrieWalkResult(missingNodes)
+          case Left(error) => self ! TrieWalkFailed(error)
+        }(ec)
+      }
+
+    case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
+      if (missingNodes.isEmpty) {
+        log.info("Trie walk found no missing nodes — healing complete!")
+        progressMonitor.startPhase(StateValidation)
+        currentPhase = StateValidation
+        validateState()
+      } else {
+        log.info(s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing")
+        trieNodeHealingCoordinator.foreach { coordinator =>
+          coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+        }
+      }
+
+    case TrieWalkFailed(error) if currentPhase == StateHealing =>
+      log.error(s"Trie walk failed: $error. Retrying after delay...")
+      scheduler.scheduleOnce(5.seconds) {
+        stateRoot.foreach { root =>
+          val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+          scala.concurrent.Future {
+            val validator = new StateValidator(storage)
+            validator.findMissingNodesWithPaths(root)
+          }(ec).foreach {
+            case Right(missingNodes) => self ! TrieWalkResult(missingNodes)
+            case Left(error2) => self ! TrieWalkFailed(error2)
+          }(ec)
+        }
+      }(ec)
 
     case StateValidationComplete =>
       log.info("State validation complete. SNAP sync finished!")
@@ -353,10 +429,22 @@ class SNAPSyncController(
     if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
     lastPivotRestartMs = now
 
-    restartSnapSync(
-      s"storage sync stalled: no storage slot progress for ${stalledForMs / 1000}s " +
-        s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, tasksActive=${stats.tasksActive}"
+    // Instead of restarting the entire sync from scratch (which discards all downloaded
+    // accounts, bytecodes, and storage), promote to the healing phase. The healing phase
+    // walks the state trie via GetTrieNodes (content-addressed by hash), which works even
+    // when peers can't serve StorageRanges at the current pivot block.
+    log.warning(
+      s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
+        s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, " +
+        s"tasksActive=${stats.tasksActive}. Promoting to healing phase (preserving downloaded state)."
     )
+
+    // Cancel storage-phase timers
+    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+
+    // Tell coordinator to flush downloaded data and report completion
+    storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
   }
 
   // Internal message for periodic account stagnation checks
@@ -913,17 +1001,19 @@ class SNAPSyncController(
     lastAccountProgressMs = System.currentTimeMillis()
     lastAccountTasksCompleted = 0
     
+    val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
     accountRangeCoordinator = Some(
       context.actorOf(
         actors.AccountRangeCoordinator.props(
           stateRoot = rootHash,
           networkPeerManager = networkPeerManager,
           requestTracker = requestTracker,
-          mptStorage = mptStorage,
+          mptStorage = storage,
           concurrency = snapSyncConfig.accountConcurrency,
           snapSyncController = self
         ),
-        "account-range-coordinator"
+        s"account-range-coordinator-$coordinatorGeneration"
       )
     )
     
@@ -998,7 +1088,7 @@ class SNAPSyncController(
           batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
           snapSyncController = self
         ),
-        "bytecode-coordinator"
+        s"bytecode-coordinator-$coordinatorGeneration"
       )
     )
     
@@ -1050,20 +1140,22 @@ class SNAPSyncController(
 
     stateRoot.foreach { root =>
       log.info("Using actor-based concurrency for storage range sync")
-      
+
+      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
       storageRangeCoordinator = Some(
         context.actorOf(
           actors.StorageRangeCoordinator.props(
             stateRoot = root,
             networkPeerManager = networkPeerManager,
             requestTracker = requestTracker,
-            mptStorage = mptStorage,
+            mptStorage = storage,
             maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
             maxInFlightRequests = snapSyncConfig.storageConcurrency,
             requestTimeout = snapSyncConfig.timeout,
             snapSyncController = self
           ),
-          "storage-range-coordinator"
+          s"storage-range-coordinator-$coordinatorGeneration"
         )
       )
       
@@ -1207,29 +1299,36 @@ class SNAPSyncController(
       super.aroundReceive(receive, msg)
   }
 
+  // Internal message for async trie walk result
+  private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
+  private case class TrieWalkFailed(error: String)
+
   private def startStateHealing(): Unit = {
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
     stateRoot.foreach { root =>
       log.info("Using actor-based concurrency for state healing")
-      
+
+      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
       trieNodeHealingCoordinator = Some(
         context.actorOf(
           actors.TrieNodeHealingCoordinator.props(
             stateRoot = root,
             networkPeerManager = networkPeerManager,
             requestTracker = requestTracker,
-            mptStorage = mptStorage,
+            mptStorage = storage,
             batchSize = snapSyncConfig.healingBatchSize,
-            snapSyncController = self
+            snapSyncController = self,
+            concurrency = snapSyncConfig.healingConcurrency
           ),
-          "trie-node-healing-coordinator"
+          s"trie-node-healing-coordinator-$coordinatorGeneration"
         )
       )
-      
+
       // Start the coordinator
       trieNodeHealingCoordinator.foreach(_ ! actors.Messages.StartTrieNodeHealing(root))
-      
+
       // Periodically send peer availability notifications
       healingRequestTask = Some(
         scheduler.scheduleWithFixedDelay(
@@ -1241,6 +1340,17 @@ class SNAPSyncController(
       )
 
       progressMonitor.startPhase(StateHealing)
+
+      // Run trie walk asynchronously to discover missing nodes
+      log.info("Starting trie walk to discover missing nodes for healing...")
+      val selfRef = self
+      scala.concurrent.Future {
+        val validator = new StateValidator(storage)
+        validator.findMissingNodesWithPaths(root)
+      }(ec).foreach {
+        case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
+        case Left(error) => selfRef ! TrieWalkFailed(error)
+      }(ec)
     }
   }
 
@@ -1281,7 +1391,8 @@ class SNAPSyncController(
         
         // With actor-based coordination, state is persisted directly to MPT storage
         // No need for finalization - just validate what's in storage
-        val validator = new StateValidator(mptStorage)
+        val storage = getOrCreateMptStorage(pivot)
+        val validator = new StateValidator(storage)
 
         // Validate account trie and collect missing nodes
         validator.validateAccountTrie(expectedRoot) match {
@@ -1382,8 +1493,100 @@ class SNAPSyncController(
     }
   }
 
+  /** Refresh the pivot block and state root without destroying coordinators.
+    *
+    * Unlike restartSnapSync() which discards all progress, this method:
+    * 1. Selects a fresher pivot from current network best
+    * 2. Updates internal pivot/stateRoot tracking
+    * 3. Sends PivotRefreshed to the active coordinator
+    * 4. Resets stagnation timer so the watchdog doesn't trigger
+    *
+    * Downloaded trie nodes are content-addressed (keyed by keccak256 hash),
+    * so ~99.9% remain valid across pivot changes. Root mismatch (if any)
+    * is resolved during the healing phase.
+    */
+  private def refreshPivotInPlace(reason: String): Unit = {
+    log.info(s"Refreshing pivot in-place: $reason")
+
+    // Select a new pivot from the current network best
+    val newPivotOpt = currentNetworkBestFromSnapPeers().map { networkBest =>
+      networkBest - snapSyncConfig.pivotBlockOffset
+    }.filter(_ > 0)
+
+    if (newPivotOpt.isEmpty) {
+      log.warning("Cannot refresh pivot: no suitable SNAP peers available. Falling back to full restart.")
+      restartSnapSync(s"pivot refresh failed (no new pivot): $reason")
+      return
+    }
+
+    val newPivotBlock = newPivotOpt.get
+    val newStateRootOpt = blockchainReader.getBlockHeaderByNumber(newPivotBlock)
+      .map(_.stateRoot)
+
+    if (newStateRootOpt.isEmpty) {
+      // Header not available locally — request it from a peer via the bootstrap mechanism.
+      // The coordinator stays alive (all peers are stateless, so no dispatch will happen).
+      // When BootstrapComplete arrives in the syncing state, the refresh is completed.
+      log.info(s"Pivot header for block $newPivotBlock not available locally. Requesting header bootstrap...")
+      pendingPivotRefresh = Some((newPivotBlock, reason))
+      context.parent ! StartRegularSyncBootstrap(newPivotBlock)
+      // Reset account stagnation timer while we wait for the header.
+      // Note: do NOT reset lastStorageProgressMs here — if storage has been stalled with
+      // no actual slot progress, the stagnation timer must continue counting so it can
+      // eventually trigger a full restart rather than cycling pivots indefinitely.
+      lastAccountProgressMs = System.currentTimeMillis()
+      return
+    }
+
+    completePivotRefreshWithStateRoot(newPivotBlock, newStateRootOpt.get, reason)
+  }
+
+  /** Complete the pivot refresh once we have the state root (either from local header or bootstrapped header). */
+  private def completePivotRefreshWithStateRoot(newPivotBlock: BigInt, newStateRoot: ByteString, reason: String): Unit = {
+    val oldPivot = pivotBlock.getOrElse(BigInt(0))
+    val oldRoot = stateRoot.map(_.take(4).toHex).getOrElse("none")
+    val newRoot = newStateRoot.take(4).toHex
+
+    if (stateRoot.contains(newStateRoot)) {
+      log.warning(s"Pivot refresh: new root $newRoot is same as old. Falling back to full restart.")
+      restartSnapSync(s"pivot refresh produced same root ($newRoot): $reason")
+      return
+    }
+
+    log.info(s"Pivot refreshed: block $oldPivot -> $newPivotBlock, root $oldRoot -> $newRoot")
+
+    // Update internal state
+    pivotBlock = Some(newPivotBlock)
+    stateRoot = Some(newStateRoot)
+    // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
+    // The backing storage was already created for the original pivot block number,
+    // but since nodes are keyed by hash, they're valid for any root.
+
+    // Persist new pivot
+    appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
+    appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
+    SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
+
+    // Send refresh signal to active coordinator
+    if (currentPhase == AccountRangeSync) {
+      accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
+    } else if (currentPhase == StorageRangeSync) {
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(newStateRoot))
+    }
+
+    // Reset account stagnation timer during pivot refresh recovery.
+    // Note: do NOT reset lastStorageProgressMs — only actual slot downloads (via
+    // ProgressStorageSlotsSynced) should reset the storage stagnation timer.
+    // This ensures that repeated stateless-peer pivot cycles don't prevent the
+    // stagnation watchdog from eventually triggering a full restart.
+    lastAccountProgressMs = System.currentTimeMillis()
+  }
+
   private def restartSnapSync(reason: String): Unit = {
     log.warning(s"Restarting SNAP sync with a fresher pivot: $reason")
+
+    // Clear any pending pivot refresh (we're doing a full restart instead)
+    pendingPivotRefresh = None
 
     // Cancel periodic phase request ticks
     accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
@@ -1409,10 +1612,12 @@ class SNAPSyncController(
     contractAccounts = Seq.empty
     contractStorageAccounts = Seq.empty
 
-    // Reset pivot/state root so a new selection is committed
+    // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None
     stateRoot = None
+    mptStorage = None
     currentPhase = Idle
+    coordinatorGeneration += 1
 
     // Reset progress counters so logs/ETA reflect the new attempt
     progressMonitor.reset()
@@ -1422,36 +1627,22 @@ class SNAPSyncController(
     startSnapSync()
   }
 
-  /** Trigger healing for a list of missing node hashes */
+  /** Trigger healing by re-running the trie walk with path tracking.
+    * Called from validateState() when missing nodes are discovered.
+    * The passed hashes are just an indicator — we re-walk to get proper paths for GetTrieNodes.
+    */
   private def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = {
-    log.info(s"Queueing ${missingNodes.size} missing nodes for healing")
-
-    // Add missing nodes to the healing coordinator
-    trieNodeHealingCoordinator match {
-      case Some(coordinator) =>
-        // Send missing nodes to coordinator for healing
-        coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
-
-        // Transition back to healing phase
-        currentPhase = StateHealing
-        log.info(s"Transitioning to StateHealing phase to heal ${missingNodes.size} missing nodes")
-
-        // Start healing requests
-        scheduler.scheduleOnce(100.millis) {
-          self ! RequestTrieNodeHealing
-        }(ec)
-      case None =>
-        log.error("Cannot heal missing nodes - TrieNodeHealingCoordinator not initialized")
-        log.info("Restarting healing phase to initialize coordinator")
-        currentPhase = StateHealing
-        startStateHealing()
-        
-        // After coordinator is started, queue the nodes
-        scheduler.scheduleOnce(500.millis) {
-          trieNodeHealingCoordinator.foreach { coordinator =>
-            coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
-          }
-        }(ec)
+    log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")
+    currentPhase = StateHealing
+    stateRoot.foreach { root =>
+      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+      scala.concurrent.Future {
+        val validator = new StateValidator(storage)
+        validator.findMissingNodesWithPaths(root)
+      }(ec).foreach {
+        case Right(nodes) => self ! TrieWalkResult(nodes)
+        case Left(error) => self ! TrieWalkFailed(error)
+      }(ec)
     }
   }
 
@@ -1560,11 +1751,46 @@ class SNAPSyncController(
   private def completeSnapSync(): Unit =
     pivotBlock.foreach { pivot =>
       appStateStorage.snapSyncDone().commit()
-      appStateStorage.putBestBlockNumber(pivot).commit()
+
+      // Look up the pivot header so we can store a complete "best block" anchor.
+      // RegularSync's BranchResolution needs: header, body, number→hash mapping,
+      // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
+      // from the pivot.
+      blockchainReader.getBlockHeaderByNumber(pivot) match {
+        case Some(pivotHeader) =>
+          val pivotHash = pivotHeader.hash
+
+          // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
+          // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
+          // the header, but storeBlock ensures the mapping is present even if the header was
+          // stored by a different code path during pivot refresh.
+          blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
+
+          // Store a ChainWeight so compareBranch() can evaluate new blocks.
+          // We estimate totalDifficulty ≈ difficulty × blockNumber. This doesn't need
+          // to be exact — it just needs to exist so branch resolution doesn't error,
+          // and subsequent blocks will accumulate from this baseline.
+          val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
+          blockchainWriter.storeChainWeight(
+            pivotHash,
+            ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
+          ).commit()
+
+          // Set best block info with BOTH hash and number (putBestBlockNumber only
+          // sets the number, leaving getBestBlockInfo().hash empty).
+          appStateStorage.putBestBlockInfo(
+            com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
+          ).commit()
+
+          log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
+
+        case None =>
+          // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
+          log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
+          appStateStorage.putBestBlockNumber(pivot).commit()
+      }
 
       progressMonitor.complete()
-
-      log.info(s"SNAP sync completed successfully at block $pivot")
       log.info(progressMonitor.currentProgress.toString)
 
       context.become(completed)
@@ -1618,14 +1844,16 @@ object SNAPSyncController {
     * These are deltas (increments), not absolute totals.
     */
   final case class ProgressAccountsSynced(count: Long)
+  case object ProgressAccountsFinalizingTrie
   final case class ProgressBytecodesDownloaded(count: Long)
   final case class ProgressStorageSlotsSynced(count: Long)
   final case class ProgressNodesHealed(count: Long)
 
   def props(
       blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
       appStateStorage: AppStateStorage,
-      mptStorage: MptStorage,
+      stateStorage: StateStorage,
       evmCodeStorage: EvmCodeStorage,
       networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
@@ -1636,8 +1864,9 @@ object SNAPSyncController {
     Props(
       new SNAPSyncController(
         blockchainReader,
+        blockchainWriter,
         appStateStorage,
-        mptStorage,
+        stateStorage,
         evmCodeStorage,
         networkPeerManager,
         peerEventBus,
@@ -1657,9 +1886,10 @@ case class SNAPSyncConfig(
   // abandon it and re-select a fresher pivot.
   maxPivotStalenessBlocks: Long = 4096,
     accountConcurrency: Int = 16,
-    storageConcurrency: Int = 8,
+    storageConcurrency: Int = 16,
     storageBatchSize: Int = 8,
     healingBatchSize: Int = 16,
+    healingConcurrency: Int = 16,
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
@@ -1681,6 +1911,10 @@ object SNAPSyncConfig {
       storageConcurrency = snapConfig.getInt("storage-concurrency"),
       storageBatchSize = snapConfig.getInt("storage-batch-size"),
       healingBatchSize = snapConfig.getInt("healing-batch-size"),
+      healingConcurrency =
+        if (snapConfig.hasPath("healing-concurrency"))
+          snapConfig.getInt("healing-concurrency")
+        else 16,
       stateValidationEnabled = snapConfig.getBoolean("state-validation-enabled"),
       maxRetries = snapConfig.getInt("max-retries"),
       timeout = snapConfig.getDuration("timeout").toMillis.millis,
@@ -1924,6 +2158,164 @@ class StateValidator(mptStorage: MptStorage) {
         ()
     }
   }
+
+  // ========================================
+  // Path-tracking trie walk for GetTrieNodes healing
+  // ========================================
+
+  /** Find all missing trie nodes with GetTrieNodes-compatible pathsets.
+    * Walks the account trie and each account's storage trie, tracking the hex nibble path
+    * to each missing node and encoding it as an HP-encoded compact path for GetTrieNodes.
+    *
+    * @return (pathset, hash) pairs ready for TrieNodeHealingCoordinator.QueueMissingNodes
+    */
+  def findMissingNodesWithPaths(stateRoot: ByteString): Either[String, Seq[(Seq[ByteString], ByteString)]] = {
+    import com.chipprbots.ethereum.domain.Account.accountSerializer
+
+    val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+
+    try {
+      val rootNode = mptStorage.get(stateRoot.toArray)
+
+      // Walk the account trie — missing account nodes get single-element pathsets
+      traverseAccountTrieWithPaths(
+        rootNode, mptStorage, Array.empty[Byte], result,
+        mutable.Set.empty
+      )
+
+      Right(result.toSeq)
+    } catch {
+      case e: MerklePatriciaTrie.MissingNodeException =>
+        // Root node itself is missing
+        val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+        result += ((Seq(compactPath), e.hash))
+        Right(result.toSeq)
+      case e: Exception =>
+        Left(s"Trie walk failed: ${e.getMessage}")
+    }
+  }
+
+  /** Walk the account trie, tracking nibble paths for missing nodes.
+    * Also checks storage tries for each account found.
+    */
+  private def traverseAccountTrieWithPaths(
+      node: MptNode,
+      storage: MptStorage,
+      currentNibblePath: Array[Byte],
+      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
+      visited: mutable.Set[ByteString]
+  ): Unit = {
+    import com.chipprbots.ethereum.domain.Account.accountSerializer
+
+    val nodeHash = ByteString(node.hash)
+    if (visited.contains(nodeHash)) return
+    visited += nodeHash
+
+    node match {
+      case leaf: LeafNode =>
+        // Leaf node — the accumulated path + leaf key = full account hash (as nibbles).
+        // Check the account's storage trie for missing nodes.
+        try {
+          val account = accountSerializer.fromBytes(leaf.value.toArray)
+          if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
+            // Reconstruct the full 32-byte account hash from nibble path + leaf key
+            val leafKeyNibbles = leaf.key.toArray // Already decoded nibbles
+            val fullNibblePath = currentNibblePath ++ leafKeyNibbles
+            val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
+
+            // Walk the storage trie for this account
+            try {
+              val storageRoot = storage.get(account.storageRoot.toArray)
+              traverseStorageTrieWithPaths(
+                storageRoot, storage, Array.empty[Byte],
+                ByteString(accountHashBytes), result, mutable.Set.empty
+              )
+            } catch {
+              case e: MerklePatriciaTrie.MissingNodeException =>
+                // Storage root node is missing
+                val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                result += ((Seq(ByteString(accountHashBytes), compactPath), e.hash))
+            }
+          }
+        } catch {
+          case _: Exception => () // Can't decode account — skip
+        }
+
+      case ext: ExtensionNode =>
+        val sharedKeyNibbles = ext.sharedKey.toArray // Already decoded to nibbles
+        val newPath = currentNibblePath ++ sharedKeyNibbles
+        traverseAccountTrieWithPaths(ext.next, storage, newPath, result, visited)
+
+      case branch: BranchNode =>
+        for (i <- 0 until 16) {
+          val child = branch.children(i)
+          if (!child.isNull) {
+            val newPath = currentNibblePath :+ i.toByte
+            traverseAccountTrieWithPaths(child, storage, newPath, result, visited)
+          }
+        }
+
+      case hash: HashNode =>
+        try {
+          val resolvedNode = storage.get(hash.hash)
+          traverseAccountTrieWithPaths(resolvedNode, storage, currentNibblePath, result, visited)
+        } catch {
+          case _: MerklePatriciaTrie.MissingNodeException =>
+            // This account trie node is missing — record it with a single-element pathset
+            val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
+            result += ((Seq(compactPath), ByteString(hash.hash)))
+        }
+
+      case NullNode => ()
+    }
+  }
+
+  /** Walk a storage trie, tracking nibble paths for missing nodes.
+    * Missing nodes get two-element pathsets: [account_hash, compact_storage_path].
+    */
+  private def traverseStorageTrieWithPaths(
+      node: MptNode,
+      storage: MptStorage,
+      currentNibblePath: Array[Byte],
+      accountHash: ByteString,
+      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
+      visited: mutable.Set[ByteString]
+  ): Unit = {
+    val nodeHash = ByteString(node.hash)
+    if (visited.contains(nodeHash)) return
+    visited += nodeHash
+
+    node match {
+      case _: LeafNode => () // Storage leaf — no children to check
+
+      case ext: ExtensionNode =>
+        val sharedKeyNibbles = ext.sharedKey.toArray
+        val newPath = currentNibblePath ++ sharedKeyNibbles
+        traverseStorageTrieWithPaths(ext.next, storage, newPath, accountHash, result, visited)
+
+      case branch: BranchNode =>
+        for (i <- 0 until 16) {
+          val child = branch.children(i)
+          if (!child.isNull) {
+            val newPath = currentNibblePath :+ i.toByte
+            traverseStorageTrieWithPaths(child, storage, newPath, accountHash, result, visited)
+          }
+        }
+
+      case hash: HashNode =>
+        try {
+          val resolvedNode = storage.get(hash.hash)
+          traverseStorageTrieWithPaths(resolvedNode, storage, currentNibblePath, accountHash, result, visited)
+        } catch {
+          case _: MerklePatriciaTrie.MissingNodeException =>
+            // Missing storage trie node — pathset is [account_hash, compact_storage_path]
+            val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
+            result += ((Seq(accountHash, compactPath), ByteString(hash.hash)))
+        }
+
+      case NullNode => ()
+    }
+  }
 }
 
 class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
@@ -1938,6 +2330,10 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   private var nodesHealed: Long = 0
   private val startTime: Long = System.currentTimeMillis()
   private var phaseStartTime: Long = System.currentTimeMillis()
+
+  // Whether the account range download is complete and the trie is being flushed to disk
+  private var finalizingTrie: Boolean = false
+  private var finalizeStartTimeMs: Long = 0
 
   // Estimated totals for ETA calculation (updated during sync)
   private var estimatedTotalAccounts: Long = 0
@@ -1968,6 +2364,11 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     periodicLogTask = None
   }
 
+  def setFinalizingTrie(value: Boolean): Unit = synchronized {
+    finalizingTrie = value
+    if (value) finalizeStartTimeMs = System.currentTimeMillis()
+  }
+
   /** Reset all counters/ETA state for a fresh SNAP attempt */
   def reset(): Unit = synchronized {
     currentPhaseState = Idle
@@ -1975,6 +2376,7 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     bytecodesDownloaded = 0
     storageSlotsSynced = 0
     nodesHealed = 0
+    finalizingTrie = false
 
     estimatedTotalAccounts = 0
     estimatedTotalBytecodes = 0
@@ -2144,6 +2546,8 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
       case _ => 0
     }
 
+    val finalizeElapsedSec = if (finalizingTrie) ((System.currentTimeMillis() - finalizeStartTimeMs) / 1000.0).toInt else 0
+
     SyncProgress(
       phase = currentPhaseState,
       accountsSynced = accountsSynced,
@@ -2165,7 +2569,9 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
       estimatedTotalBytecodes = estimatedTotalBytecodes,
       estimatedTotalSlots = estimatedTotalSlots,
       startTime = startTime,
-      phaseStartTime = phaseStartTime
+      phaseStartTime = phaseStartTime,
+      isFinalizingTrie = finalizingTrie,
+      finalizeElapsedSeconds = finalizeElapsedSec
     )
   }
 }
@@ -2191,7 +2597,9 @@ case class SyncProgress(
     estimatedTotalBytecodes: Long,
     estimatedTotalSlots: Long,
     startTime: Long,
-    phaseStartTime: Long
+    phaseStartTime: Long,
+    isFinalizingTrie: Boolean = false,
+    finalizeElapsedSeconds: Int = 0
 ) {
 
   private def wormChasesBrainBar: String = {
@@ -2235,6 +2643,9 @@ case class SyncProgress(
 
   def formattedString: String =
     phase match {
+      case SNAPSyncController.AccountRangeSync if isFinalizingTrie =>
+        s"phase=AccountRange [FINALIZING TRIE - writing ${accountsSynced} accounts to disk, ${finalizeElapsedSeconds}s elapsed], elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+
       case SNAPSyncController.AccountRangeSync =>
         val progressStr = if (estimatedTotalAccounts > 0) s" (${phaseProgress}%)" else ""
         s"phase=AccountRange$progressStr, accounts=$accountsSynced@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
