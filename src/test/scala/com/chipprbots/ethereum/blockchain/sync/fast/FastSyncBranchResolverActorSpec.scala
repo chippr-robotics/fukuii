@@ -112,7 +112,7 @@ class FastSyncBranchResolverActorSpec
       }
 
       "The chain is repaired doing binary searching with the new master peer and then remove the last invalid blocks" - {
-        "highest common block is in the middle" in new TestSetup {
+        "highest common block is in the middle" taggedAs (UnitTest, SyncTest) in new TestSetup {
           implicit override lazy val system = self.system
           implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -149,7 +149,7 @@ class FastSyncBranchResolverActorSpec
           } yield response).unsafeRunSync()
           assert(getBestPeers.contains(response.masterPeer))
         }
-        "highest common block is in the first half" in new TestSetup {
+        "highest common block is in the first half" taggedAs (UnitTest, SyncTest) in new TestSetup {
           implicit override lazy val system = self.system
           implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -188,7 +188,7 @@ class FastSyncBranchResolverActorSpec
           assert(getBestPeers.contains(response.masterPeer))
         }
 
-        "highest common block is in the second half" in new TestSetup {
+        "highest common block is in the second half" taggedAs (UnitTest, SyncTest) in new TestSetup {
           implicit override lazy val system = self.system
           implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -227,7 +227,7 @@ class FastSyncBranchResolverActorSpec
         }
       }
 
-      "No common block is found" in new TestSetup {
+      "No common block is found" taggedAs (UnitTest, SyncTest) in new TestSetup {
         implicit override lazy val system = self.system
         implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
