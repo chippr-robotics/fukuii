@@ -99,6 +99,12 @@ class StorageRangeCoordinator(
   private val activeTasks = mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
 
+  // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.
+  // This handles the case where ETC mainnet peers silently stop responding (timeout) when
+  // their snap serve window expires, rather than returning empty responses with proofs.
+  private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
+  private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
@@ -109,6 +115,12 @@ class StorageRangeCoordinator(
   // This replaces the slow counter-based global backoff (was: 10 empties → 2 min pause).
   private val statelessPeers = mutable.Set[String]()
   private var pivotRefreshRequested = false
+
+  // Contract completion tracking for progress estimation.
+  // totalStorageContracts counts unique contracts added via AddStorageTasks.
+  // completedAccountHashes tracks unique contracts that have been fully synced.
+  private var totalStorageContracts: Int = 0
+  private val completedAccountHashes = mutable.Set[ByteString]()
 
   // Pivot refresh backoff: prevents rapid refresh loops when no peers can serve any recent root.
   // After each unproductive refresh (one that doesn't yield real slot data), the backoff interval
@@ -256,7 +268,8 @@ class StorageRangeCoordinator(
 
     case AddStorageTasks(storageTasks) =>
       tasks.enqueueAll(storageTasks)
-      log.info(s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size})")
+      totalStorageContracts += storageTasks.map(_.accountHash).distinct.size
+      log.info(s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)")
 
     case AddStorageTask(task) =>
       tasks.enqueue(task)
@@ -293,6 +306,8 @@ class StorageRangeCoordinator(
       }
 
     case StorageCheckCompletion =>
+      // Update contract completion progress for the progress monitor
+      updateContractProgress()
       if (isComplete) {
         // Final flush before reporting completion
         deferredStorage.flush()
@@ -323,6 +338,7 @@ class StorageRangeCoordinator(
       statelessPeers.clear()
       pivotRefreshRequested = false
       peerCooldownUntilMs.clear()
+      peerConsecutiveTimeouts.clear()
       peerBatchSize.clear()
       peerResponseBytesTarget.clear()
       emptyResponsesByTask.clear()
@@ -518,6 +534,7 @@ class StorageRangeCoordinator(
 
     // Non-empty response with actual slot data — clear stateless marking and reset backoff.
     statelessPeers.remove(peer.id.value)
+    peerConsecutiveTimeouts.remove(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
 
     // Clear empty-response counters for tasks that are now being served.
@@ -688,6 +705,16 @@ class StorageRangeCoordinator(
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
       adjustResponseBytesOnFailure(peer, "request timeout")
+
+      // Track consecutive timeouts — on ETC mainnet, peers silently stop responding when
+      // the snap serve window expires. After N consecutive timeouts, treat as stateless.
+      val count = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
+      peerConsecutiveTimeouts.update(peer.id.value, count)
+      if (count >= consecutiveTimeoutThreshold) {
+        log.info(s"Peer ${peer.id.value} hit $count consecutive storage timeouts — treating as stateless")
+        markPeerStateless(peer)
+      }
+
       batchTasks.foreach { task =>
         task.pending = false
         tasks.enqueue(task)
@@ -718,6 +745,20 @@ class StorageRangeCoordinator(
 
   private def isComplete: Boolean = {
     tasks.isEmpty && activeTasks.isEmpty
+  }
+
+  /** Update contract completion counts and send progress to controller. */
+  private def updateContractProgress(): Unit = {
+    if (totalStorageContracts <= 0) return
+    // Count unique completed accounts from completedTasks
+    val uniqueCompleted = completedTasks.map(_.accountHash).toSet.size
+    if (uniqueCompleted != completedAccountHashes.size) {
+      completedAccountHashes.clear()
+      completedTasks.foreach(t => completedAccountHashes.add(t.accountHash))
+      snapSyncController ! SNAPSyncController.ProgressStorageContracts(
+        completedAccountHashes.size, totalStorageContracts
+      )
+    }
   }
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
