@@ -12,7 +12,7 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.blockchain.sync.PeersClient.{BestSnapPeer, NoSuitablePeer, Request, RequestFailed}
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.{BestPeer, NoSuitablePeer, Request, RequestFailed}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Fetches and persists a single pivot header (by block number) so SNAP can start without importing blocks.
@@ -26,7 +26,8 @@ final class PivotHeaderBootstrap(
     syncConfig: SyncConfig,
     scheduler: Scheduler,
     maxAttempts: Int,
-    retryDelay: FiniteDuration
+    initialRetryDelay: FiniteDuration,
+    maxRetryDelay: FiniteDuration
 )(implicit ec: ExecutionContext)
     extends Actor
     with ActorLogging {
@@ -34,6 +35,15 @@ final class PivotHeaderBootstrap(
   import PivotHeaderBootstrap._
 
   private var attempt: Int = 0
+
+  private def currentRetryDelay: FiniteDuration = {
+    // Exponential backoff: initialRetryDelay * 2^(attempt-1), capped at maxRetryDelay
+    val backoffMs = math.min(
+      initialRetryDelay.toMillis * (1L << math.min(attempt - 1, 20)),
+      maxRetryDelay.toMillis
+    )
+    backoffMs.millis
+  }
 
   implicit private val timeout: Timeout = syncConfig.peerResponseTimeout + 2.seconds
 
@@ -70,14 +80,16 @@ final class PivotHeaderBootstrap(
         targetBlock,
         reason
       )
-      scheduler.scheduleOnce(retryDelay, self, Fetch)(context.dispatcher)
+      val delay = currentRetryDelay
+      log.info("Scheduling pivot header retry in {} (attempt {}/{})", delay, attempt, maxAttempts)
+      scheduler.scheduleOnce(delay, self, Fetch)(context.dispatcher)
   }
 
   private def fetchOnce(): Unit = {
     val msg = ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(targetBlock), maxHeaders = 1, skip = 0, reverse = false)
 
     // ETH66.GetBlockHeaders is already MessageSerializable, so the serializer is identity.
-    val req = Request[ETH66.GetBlockHeaders](msg, BestSnapPeer, (m: ETH66.GetBlockHeaders) => m)
+    val req = Request[ETH66.GetBlockHeaders](msg, BestPeer, (m: ETH66.GetBlockHeaders) => m)
 
     (peersClient ? req).map {
       case PeersClient.Response(_, eth66: ETH66BlockHeaders) =>
@@ -110,10 +122,11 @@ object PivotHeaderBootstrap {
       targetBlock: BigInt,
       syncConfig: SyncConfig,
       scheduler: Scheduler,
-      maxAttempts: Int = 10,
-      retryDelay: FiniteDuration = 1.second
+      maxAttempts: Int = 30,
+      initialRetryDelay: FiniteDuration = 2.seconds,
+      maxRetryDelay: FiniteDuration = 15.seconds
   )(implicit ec: ExecutionContext): Props =
-    Props(new PivotHeaderBootstrap(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler, maxAttempts, retryDelay))
+    Props(new PivotHeaderBootstrap(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler, maxAttempts, initialRetryDelay, maxRetryDelay))
 
   private case object Fetch
   private final case class Retry(reason: String)

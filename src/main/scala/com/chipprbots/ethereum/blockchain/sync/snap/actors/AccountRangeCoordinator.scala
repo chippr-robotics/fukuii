@@ -72,7 +72,27 @@ class AccountRangeCoordinator(
     statelessPeers.contains(peer.id)
 
   private def markPeerStateless(peer: Peer, reason: String): Unit = {
-    if (reason.contains("Missing proof for empty account range")) {
+    val shouldMark = if (reason.contains("Missing proof for empty account range")) {
+      // Peer explicitly returned empty response — immediately stateless
+      true
+    } else if (reason.contains("Request timeout")) {
+      // Peer timed out — track consecutive timeouts.
+      // On ETC mainnet, peers silently stop responding when the snap serve window expires
+      // rather than returning explicit empty responses. After N consecutive timeouts,
+      // we treat the peer as stateless so pivot refresh can trigger.
+      val count = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
+      peerConsecutiveTimeouts.update(peer.id.value, count)
+      if (count >= consecutiveTimeoutThreshold) {
+        log.info(s"Peer ${peer.id.value} hit $count consecutive timeouts — treating as stateless")
+        true
+      } else {
+        false
+      }
+    } else {
+      false
+    }
+
+    if (shouldMark) {
       statelessPeers.add(peer.id)
       log.info(
         s"Peer ${peer.id.value} marked stateless for root ${stateRoot.take(4).toHex} " +
@@ -177,6 +197,12 @@ class AccountRangeCoordinator(
     )
   }
 
+  // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.
+  // This handles the case where ETC mainnet peers silently stop responding (timeout) when
+  // their snap serve window expires, rather than returning empty responses with proofs.
+  private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
+  private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
@@ -265,6 +291,7 @@ class AccountRangeCoordinator(
       // Clear per-peer adaptive state (new root = new response characteristics)
       peerResponseBytesTarget.clear()
       peerCooldownUntilMs.clear()
+      peerConsecutiveTimeouts.clear()
       // Note: do NOT reset consecutiveUnproductiveRefreshes here.
       // Only reset when we receive real account data (proof the new root is servable).
 
@@ -318,6 +345,9 @@ class AccountRangeCoordinator(
       handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
 
     case CheckCompletion =>
+      computeKeyspaceEstimate().foreach { est =>
+        snapSyncController ! SNAPSyncController.ProgressAccountEstimate(est)
+      }
       if (isComplete) {
         log.info("Account range sync complete!")
         log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
@@ -426,6 +456,9 @@ class AccountRangeCoordinator(
           // Adjust adaptive byte budget — estimate received bytes from account count
           val estimatedBytes = BigInt(accountCount * 100) // ~100 bytes per account (hash + RLP)
           adjustResponseBytesOnSuccess(peer, responseBytesTargetFor(peer), estimatedBytes)
+
+          // Reset consecutive timeout counter — peer is responsive
+          peerConsecutiveTimeouts.remove(peer.id.value)
 
           // Reset pivot refresh backoff on receiving real account data
           if (accountCount > 0) {
@@ -721,6 +754,38 @@ class AccountRangeCoordinator(
 
   private def isComplete: Boolean = {
     pendingTasks.isEmpty && activeTasks.isEmpty
+  }
+
+  /** Estimate total accounts from keyspace coverage.
+    * Uses completed tasks' ranges to compute keyspace density (accounts per unit of keyspace),
+    * then extrapolates to the full 2^256 space. Only considers tasks that have actually been
+    * explored, avoiding inflation from un-dispatched chunks.
+    */
+  private def computeKeyspaceEstimate(): Option[Long] = {
+    if (accountsDownloaded < 10000) return None // too early for reliable estimate
+
+    val keyspaceSize = BigInt(2).pow(256)
+    val nonCompleteTasks = pendingTasks.toSeq ++ activeTasks.values.map(_._1)
+    val remaining = if (nonCompleteTasks.isEmpty) {
+      BigInt(0)
+    } else {
+      nonCompleteTasks.foldLeft(BigInt(0)) { case (sum, task) =>
+        val taskEnd = BigInt(1, task.last.toArray)
+        val taskPos = BigInt(1, task.next.toArray)
+        sum + (taskEnd - taskPos).max(0)
+      }
+    }
+
+    val covered = keyspaceSize - remaining
+    if (covered <= 0) return None
+
+    val fraction = covered.toDouble / keyspaceSize.toDouble
+    // Require at least 1% keyspace coverage for a reliable estimate.
+    // With 16 chunks and 3 peers, this takes ~2 minutes to reach.
+    if (fraction < 0.01) return None
+
+    val estimated = (accountsDownloaded / fraction).toLong
+    Some(estimated)
   }
 }
 

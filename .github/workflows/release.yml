@@ -1,14 +1,34 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+        description: 'Version to release (e.g., 0.1.240)'
+      release_tier:
+        required: false
+        type: string
+        default: 'patch'
+        description: 'Release tier: patch (JAR+ZIP only) or full (+ Docker, signing, SBOM)'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.240)'
+        required: true
+        type: string
+      release_tier:
+        description: 'Release tier'
+        required: false
+        type: choice
+        default: 'patch'
+        options:
+          - patch
+          - full
 
-# Ensure only one release build at a time
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.version }}
   cancel-in-progress: false
 
 env:
@@ -23,22 +43,23 @@ jobs:
     permissions:
       contents: write
     outputs:
-      version: ${{ steps.extract-version.outputs.version }}
-    
+      version: ${{ inputs.version }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
-      
+          ref: v${{ inputs.version }}
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
           cache: 'sbt'
-      
+
       - name: Set up SBT
         run: |
           echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
@@ -46,42 +67,24 @@ jobs:
           curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
           sudo apt-get update
           sudo apt-get install sbt
-      
+
       - name: Build distribution and assembly
         run: |
           sbt assembly
           sbt dist
+          sbt "Universal/packageZipTarball"
         env:
           FUKUII_DEV: false
-      
-      - name: Extract version
-        id: extract-version
-        run: |
-          # Extract version from tag or use version from version.sbt
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION=$(grep -oP '(?<=version.*:= ")[\d.]+' version.sbt)
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-      
-      - name: Install CycloneDX for SBOM generation
-        run: |
-          # Install CycloneDX SBT plugin dependencies
-          mkdir -p ~/.sbt/1.0/plugins
-          echo 'addSbtPlugin("net.vonbuchholtz" % "sbt-dependency-check" % "5.1.0")' > ~/.sbt/1.0/plugins/sbom.sbt
-      
+
       - name: Generate SBOM
+        if: inputs.release_tier == 'full'
         run: |
-          VERSION="${{ steps.extract-version.outputs.version }}"
+          VERSION="${{ inputs.version }}"
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           UUID=$(uuidgen || echo "00000000-0000-0000-0000-000000000000")
-          
-          # Generate dependency tree
-          sbt "node/dependencyTree" > dependency-tree.txt || true
-          
-          # Generate SBOM in CycloneDX JSON format
+
+          sbt "dependencyTree" > dependency-tree.txt || true
+
           cat > sbom.json << EOFSBOM
           {
             "bomFormat": "CycloneDX",
@@ -115,138 +118,152 @@ jobs:
             "components": []
           }
           EOFSBOM
-          
-          echo "SBOM generated at sbom.json"
-      
-      - name: Generate CHANGELOG
-        run: |
-          VERSION="${{ steps.extract-version.outputs.version }}"
-          
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          
-          # Generate changelog
-          echo "# Changelog" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "All notable changes to this project will be documented in this file." >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> CHANGELOG.md
-          echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          
-          # Add current version
-          echo "## [${VERSION}] - $(date +%Y-%m-%d)" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          
-          if [ -z "$PREV_TAG" ]; then
-            echo "### Added" >> CHANGELOG.md
-            echo "- Initial release of Fukuii Ethereum Client" >> CHANGELOG.md
-          else
-            # Group commits by type
-            echo "### Added" >> CHANGELOG.md
-            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^feat\|^add" | sed 's/^/- /' >> CHANGELOG.md || echo ""
-            echo "" >> CHANGELOG.md
-            
-            echo "### Changed" >> CHANGELOG.md
-            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^change\|^update\|^refactor" | sed 's/^/- /' >> CHANGELOG.md || echo ""
-            echo "" >> CHANGELOG.md
-            
-            echo "### Fixed" >> CHANGELOG.md
-            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^fix\|^bug" | sed 's/^/- /' >> CHANGELOG.md || echo ""
-            echo "" >> CHANGELOG.md
-            
-            echo "### Security" >> CHANGELOG.md
-            git log --pretty=format:"%s" ${PREV_TAG}..HEAD | grep -i "^security\|^vuln" | sed 's/^/- /' >> CHANGELOG.md || echo ""
-            echo "" >> CHANGELOG.md
-            
-            echo "### All Changes" >> CHANGELOG.md
-            git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD >> CHANGELOG.md
-          fi
-          
-          echo "" >> CHANGELOG.md
-          echo "Full Changelog: https://github.com/chippr-robotics/fukuii/compare/${PREV_TAG}...v${VERSION}" >> CHANGELOG.md
-          
-          cat CHANGELOG.md
-      
-      - name: Extract release notes
-        id: extract-notes
-        run: |
-          VERSION="${{ steps.extract-version.outputs.version }}"
-          
-          # Copy the generated CHANGELOG as release notes
-          cp CHANGELOG.md release_notes.md
-      
+
       - name: Prepare artifacts
         run: |
-          VERSION="${{ steps.extract-version.outputs.version }}"
-          
-          # Find and rename artifacts
+          VERSION="${{ inputs.version }}"
           mkdir -p release-artifacts
-          
+
           # Copy distribution zip
-          cp target/universal/*.zip release-artifacts/ || echo "No dist zip found"
-          
-          # Copy assembly JAR (it's in target/scala-*/fukuii-assembly-*.jar)
-          find target -name "*-assembly-*.jar" -exec cp {} release-artifacts/fukuii-assembly-${VERSION}.jar \; || echo "No assembly JAR found"
-          
-          # Copy SBOM
-          cp sbom.json release-artifacts/fukuii-sbom-${VERSION}.json
-          
-          # Copy CHANGELOG
-          cp CHANGELOG.md release-artifacts/
-          
-          # List artifacts
+          cp target/universal/*.zip release-artifacts/ || echo "Warning: No dist zip found"
+
+          # Copy distribution tarball
+          cp target/universal/*.tgz release-artifacts/ || echo "Warning: No dist tgz found"
+
+          # Copy assembly JAR
+          find target -name "*-assembly-*.jar" -exec cp {} release-artifacts/fukuii-assembly-${VERSION}.jar \; || echo "Warning: No assembly JAR found"
+
+          # Copy SBOM (full releases only)
+          if [ -f sbom.json ]; then
+            cp sbom.json release-artifacts/fukuii-sbom-${VERSION}.json
+          fi
+
+          # Generate SHA256 checksums
+          cd release-artifacts
+          sha256sum * > SHA256SUMS.txt
+
           echo "Release artifacts:"
-          ls -lh release-artifacts/
-      
+          ls -lh
+
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fukuii-distribution-${{ steps.extract-version.outputs.version }}
+          name: fukuii-distribution-${{ inputs.version }}
           path: release-artifacts/*
           retention-days: 90
           if-no-files-found: error
-      
+
+      - name: Generate release body
+        id: release-body
+        run: |
+          VERSION="${{ inputs.version }}"
+          TIER="${{ inputs.release_tier }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          cat > release_notes.md << 'HEADER'
+          ## Quick Start
+
+          **Universal JAR** (requires JDK 21+):
+          ```bash
+          HEADER
+          echo "java -jar fukuii-assembly-${VERSION}.jar" >> release_notes.md
+          echo '```' >> release_notes.md
+
+          cat >> release_notes.md << 'DISTRO'
+
+          **Distribution Package** (includes launch scripts and config):
+          ```bash
+          DISTRO
+          echo "# Linux/Mac" >> release_notes.md
+          echo "tar xzf fukuii-${VERSION}.tgz && cd fukuii-${VERSION} && bin/fukuii" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Or use ZIP" >> release_notes.md
+          echo "unzip fukuii-${VERSION}.zip && cd fukuii-${VERSION} && bin/fukuii" >> release_notes.md
+          echo '```' >> release_notes.md
+
+          if [ "$TIER" = "full" ]; then
+            cat >> release_notes.md << DOCKER
+
+          **Docker**:
+          \`\`\`bash
+          docker pull ghcr.io/chippr-robotics/chordodes_fukuii:${VERSION}
+          docker run -p 8545:8545 -p 30303:30303 ghcr.io/chippr-robotics/chordodes_fukuii:${VERSION}
+          \`\`\`
+          DOCKER
+          fi
+
+          echo "" >> release_notes.md
+          echo "## Artifacts" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "| File | Description | Platform |" >> release_notes.md
+          echo "|------|-------------|----------|" >> release_notes.md
+          echo "| \`fukuii-assembly-${VERSION}.jar\` | Standalone executable JAR | All (JDK 21+) |" >> release_notes.md
+          echo "| \`fukuii-${VERSION}.zip\` | Distribution with launch scripts + config | All |" >> release_notes.md
+          echo "| \`fukuii-${VERSION}.tgz\` | Distribution tarball | Linux/Mac |" >> release_notes.md
+          echo "| \`SHA256SUMS.txt\` | Checksums for all artifacts | - |" >> release_notes.md
+          if [ "$TIER" = "full" ]; then
+            echo "| \`fukuii-sbom-${VERSION}.json\` | Software Bill of Materials (CycloneDX) | - |" >> release_notes.md
+          fi
+
+          echo "" >> release_notes.md
+          echo "## Verify Checksums" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "sha256sum -c SHA256SUMS.txt" >> release_notes.md
+          echo '```' >> release_notes.md
+
+          # Add changes section
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD | grep -v "chore: bump version" || true)
+            if [ -n "$COMMITS" ]; then
+              echo "" >> release_notes.md
+              echo "## Changes since ${PREV_TAG}" >> release_notes.md
+              echo "" >> release_notes.md
+              echo "$COMMITS" >> release_notes.md
+              echo "" >> release_notes.md
+              echo "**Full Changelog**: https://github.com/chippr-robotics/fukuii/compare/${PREV_TAG}...v${VERSION}" >> release_notes.md
+            fi
+          fi
+
+          cat release_notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: v${{ inputs.version }}
+          name: v${{ inputs.version }}
           body_path: release_notes.md
           draft: false
-          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          prerelease: ${{ inputs.release_tier != 'full' }}
           files: |
             release-artifacts/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Update milestone
-        if: ${{ !contains(github.ref, 'alpha') && !contains(github.ref, 'beta') && !contains(github.ref, 'rc') }}
+        if: inputs.release_tier == 'full'
         uses: actions/github-script@v7
         with:
           script: |
-            const version = '${{ steps.extract-version.outputs.version }}';
-            
-            // Get all milestones
+            const version = '${{ inputs.version }}';
+
             const milestones = await github.rest.issues.listMilestones({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open'
             });
-            
-            // Find milestone matching the version
-            const milestone = milestones.data.find(m => 
+
+            const milestone = milestones.data.find(m =>
               m.title === version || m.title === `v${version}` || m.title.includes(version)
             );
-            
+
             if (milestone) {
-              // Close the milestone
               await github.rest.issues.updateMilestone({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 milestone_number: milestone.number,
                 state: 'closed'
               });
-              
               console.log(`Closed milestone: ${milestone.title}`);
             } else {
               console.log(`No matching milestone found for version ${version}`);
@@ -254,41 +271,43 @@ jobs:
 
   build-and-push-image:
     name: Build and Push Container Image
+    if: inputs.release_tier == 'full'
     runs-on: ubuntu-latest
     needs: create-release
     permissions:
       contents: read
       packages: write
-      id-token: write  # Required for cosign and SLSA provenance
+      id-token: write
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
       image-tags: ${{ steps.meta.outputs.tags }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      
+          ref: v${{ inputs.version }}
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 # v3.4.0
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb # v3.3.0
-      
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@0d4c9c5ea7693da7b068278f7b52bda2a190a446 # v3.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Log in to Docker Hub
         uses: docker/login-action@0d4c9c5ea7693da7b068278f7b52bda2a190a446 # v3.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      
+
       - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
@@ -297,16 +316,15 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
             ${{ env.DOCKERHUB_IMAGE }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=raw,value=latest,enable=${{ !contains(github.ref, 'alpha') && !contains(github.ref, 'beta') && !contains(github.ref, 'rc') }}
+            type=raw,value=${{ inputs.version }}
+            type=raw,value=latest
           labels: |
             org.opencontainers.image.title=Fukuii Ethereum Client
             org.opencontainers.image.description=Fukuii - A Scala-based Ethereum Classic client
             org.opencontainers.image.vendor=Chippr Robotics LLC
             org.opencontainers.image.licenses=Apache-2.0
-      
+            org.opencontainers.image.version=${{ inputs.version }}
+
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
@@ -321,7 +339,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=release
           provenance: true
           sbom: true
-      
+
       - name: Sign container image with Cosign
         env:
           COSIGN_EXPERIMENTAL: 1
@@ -329,50 +347,31 @@ jobs:
           echo "Signing image with digest: ${{ steps.build.outputs.digest }}"
           cosign sign --yes \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-      
+
       - name: Output image information
         run: |
-          echo "## Container Image Published to Multiple Registries 🐳" >> $GITHUB_STEP_SUMMARY
+          echo "## Container Image Published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### GitHub Container Registry (Signed)" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry:** \`${{ env.REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Digest (Immutable):**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Pull by digest:**" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Signature verification:**" >> $GITHUB_STEP_SUMMARY
+          echo "**Verify signature:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "cosign verify \\" >> $GITHUB_STEP_SUMMARY
           echo "  --certificate-identity-regexp=https://github.com/${{ github.repository }} \\" >> $GITHUB_STEP_SUMMARY
           echo "  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \\" >> $GITHUB_STEP_SUMMARY
           echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Image signed with Cosign (keyless, using GitHub OIDC)" >> $GITHUB_STEP_SUMMARY
-          echo "✅ SBOM and provenance attestations attached" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Docker Hub (Unsigned)" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry:** \`docker.io\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**All Tags:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Pull from Docker Hub:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.DOCKERHUB_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   generate-slsa-provenance:
     name: Generate SLSA Provenance
+    if: inputs.release_tier == 'full'
     needs: [create-release, build-and-push-image]
     permissions:
       actions: read

@@ -230,10 +230,11 @@ upstreams:
         weight: 100
         tags:
           - primary
-      - target: fukuii-secondary:8546
-        weight: 100
-        tags:
-          - secondary
+      # Secondary disabled - single node mode
+      # - target: fukuii-secondary:8546
+      #   weight: 100
+      #   tags:
+      #     - secondary
 
 # Consumers for authentication
 # ⚠️ WARNING: The credentials below are EXAMPLES ONLY for demonstration purposes.

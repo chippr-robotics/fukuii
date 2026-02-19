@@ -73,7 +73,8 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     val formattedString = progress.formattedString
     formattedString should include("AccountRange")
-    formattedString should include("accounts=1000")
+    formattedString should include("(50%)")
+    formattedString should include("accounts=1.0K/~2.0K")
   }
 
   it should "handle different phases correctly" taggedAs UnitTest in {
@@ -232,5 +233,106 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
                           storageProgress.bytecodesDownloaded + 
                           storageProgress.storageSlotsSynced
     totalWithStorage shouldBe 4500
+  }
+
+  "SyncProgress formatCount" should "format large numbers with K/M suffixes" taggedAs UnitTest in {
+    import SNAPSyncController._
+
+    val progress = SyncProgress(
+      phase = AccountRangeSync,
+      accountsSynced = 13200000,
+      bytecodesDownloaded = 0,
+      storageSlotsSynced = 0,
+      nodesHealed = 0,
+      elapsedSeconds = 100.0,
+      phaseElapsedSeconds = 100.0,
+      accountsPerSec = 132000,
+      bytecodesPerSec = 0,
+      slotsPerSec = 0,
+      nodesPerSec = 0,
+      recentAccountsPerSec = 5000,
+      recentBytecodesPerSec = 0,
+      recentSlotsPerSec = 0,
+      recentNodesPerSec = 0,
+      phaseProgress = 100,
+      estimatedTotalAccounts = 13200000,
+      estimatedTotalBytecodes = 0,
+      estimatedTotalSlots = 0,
+      startTime = System.currentTimeMillis() - 100000,
+      phaseStartTime = System.currentTimeMillis() - 100000
+    )
+
+    val formatted = progress.formattedString
+    formatted should include("13.2M")
+    formatted should include("(100%)")
+  }
+
+  it should "show ByteCode phase with total and percentage" taggedAs UnitTest in {
+    import SNAPSyncController._
+
+    val progress = SyncProgress(
+      phase = ByteCodeSync,
+      accountsSynced = 2700000,
+      bytecodesDownloaded = 95200,
+      storageSlotsSynced = 0,
+      nodesHealed = 0,
+      elapsedSeconds = 300.0,
+      phaseElapsedSeconds = 60.0,
+      accountsPerSec = 9000,
+      bytecodesPerSec = 1586,
+      slotsPerSec = 0,
+      nodesPerSec = 0,
+      recentAccountsPerSec = 0,
+      recentBytecodesPerSec = 593,
+      recentSlotsPerSec = 0,
+      recentNodesPerSec = 0,
+      phaseProgress = 65,
+      estimatedTotalAccounts = 2700000,
+      estimatedTotalBytecodes = 146000,
+      estimatedTotalSlots = 0,
+      startTime = System.currentTimeMillis() - 300000,
+      phaseStartTime = System.currentTimeMillis() - 60000
+    )
+
+    val formatted = progress.formattedString
+    formatted should include("ByteCode")
+    formatted should include("(65%)")
+    formatted should include("95.2K/146.0K")
+  }
+
+  it should "show Storage phase with contracts progress" taggedAs UnitTest in {
+    import SNAPSyncController._
+
+    val progress = SyncProgress(
+      phase = StorageRangeSync,
+      accountsSynced = 2700000,
+      bytecodesDownloaded = 146000,
+      storageSlotsSynced = 44500,
+      nodesHealed = 0,
+      elapsedSeconds = 600.0,
+      phaseElapsedSeconds = 120.0,
+      accountsPerSec = 4500,
+      bytecodesPerSec = 243,
+      slotsPerSec = 370,
+      nodesPerSec = 0,
+      recentAccountsPerSec = 0,
+      recentBytecodesPerSec = 0,
+      recentSlotsPerSec = 370,
+      recentNodesPerSec = 0,
+      phaseProgress = 12,
+      estimatedTotalAccounts = 2700000,
+      estimatedTotalBytecodes = 146000,
+      estimatedTotalSlots = 370000,
+      startTime = System.currentTimeMillis() - 600000,
+      phaseStartTime = System.currentTimeMillis() - 120000,
+      storageContractsCompleted = 1823,
+      storageContractsTotal = 15234
+    )
+
+    val formatted = progress.formattedString
+    formatted should include("Storage")
+    formatted should include("(12%)")
+    formatted should include("44.5K")
+    formatted should include("contracts=1823/15234")
   }
 }

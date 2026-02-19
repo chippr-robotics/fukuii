@@ -7,8 +7,8 @@ data/
 *.db
 *.idb
 
-# Ignore any local test scripts or notes
-test-*.sh
+# Ignore any ad-hoc local test scripts or notes (test-scripts/ dir is tracked)
+/test-*.sh
 notes.txt
 TODO.txt
 
@@ -28,3 +28,6 @@ Thumbs.db
 # Local testing configurations
 *-local.yml
 *-local.conf
+
+# Private keys and secrets
+keys/

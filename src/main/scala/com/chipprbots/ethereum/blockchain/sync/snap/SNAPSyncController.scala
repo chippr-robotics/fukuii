@@ -121,6 +121,9 @@ class SNAPSyncController(
   private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   private var bootstrapCheckTask: Option[Cancellable] = None
+  private var pivotBootstrapRetryTask: Option[Cancellable] = None
+
+  private case object RetryPivotRefresh
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
@@ -151,6 +154,7 @@ class SNAPSyncController(
     storageStagnationCheckTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
+    pivotBootstrapRetryTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
     // Log final error handler statistics
@@ -236,6 +240,17 @@ class SNAPSyncController(
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
 
+    case ProgressAccountEstimate(estimatedTotal) =>
+      progressMonitor.updateEstimates(accounts = estimatedTotal)
+
+    case ProgressStorageContracts(completed, total) =>
+      progressMonitor.updateStorageContracts(completed, total)
+      if (completed > 0 && total > 0) {
+        val currentSlots = progressMonitor.getStorageSlotsSynced
+        val estimatedTotalSlots = (currentSlots.toDouble / completed * total).toLong
+        progressMonitor.updateEstimates(slots = estimatedTotalSlots)
+      }
+
     case PivotStateUnservable(rootHash, reason, emptyResponses) =>
       // When peers can no longer serve the current state root, refresh the pivot in-place
       // instead of restarting. This preserves downloaded trie data (content-addressed nodes
@@ -266,6 +281,29 @@ class SNAPSyncController(
         case None =>
           log.warning(s"Pivot header bootstrap for block $pendingPivot returned no header. Falling back to full restart.")
           restartSnapSync(s"pivot refresh bootstrap returned no header for $pendingPivot: $reason")
+      }
+
+    // Handle pivot header bootstrap failure. The bootstrap exhausted all retries (with exponential
+    // backoff) without fetching the header. Schedule a retry after 60s to give peers time to recover.
+    case PivotBootstrapFailed(reason) if pendingPivotRefresh.isDefined =>
+      val (pendingPivot, originalReason) = pendingPivotRefresh.get
+      pendingPivotRefresh = None
+      log.warning(
+        s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, " +
+        s"original: $originalReason). Scheduling retry in 60s."
+      )
+      pivotBootstrapRetryTask.foreach(_.cancel())
+      pivotBootstrapRetryTask = Some(
+        scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher)
+      )
+
+    case RetryPivotRefresh =>
+      pivotBootstrapRetryTask = None
+      if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
+        log.info("Retrying pivot refresh after bootstrap failure...")
+        refreshPivotInPlace("retry after bootstrap failure")
+      } else {
+        log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
       }
 
     // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
@@ -1106,6 +1144,7 @@ class SNAPSyncController(
     )
 
     progressMonitor.startPhase(ByteCodeSync)
+    progressMonitor.updateEstimates(bytecodes = contractAccounts.size.toLong)
   }
 
   // Internal message for periodic bytecode requests
@@ -1596,6 +1635,7 @@ class SNAPSyncController(
     storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
     healingRequestTask.foreach(_.cancel()); healingRequestTask = None
     bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
+    pivotBootstrapRetryTask.foreach(_.cancel()); pivotBootstrapRetryTask = None
 
     // Stop coordinators so we don't double-run phases
     accountRangeCoordinator.foreach(context.stop); accountRangeCoordinator = None
@@ -1825,6 +1865,7 @@ object SNAPSyncController {
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
   final case class BootstrapComplete(pivotHeader: Option[BlockHeader] = None) // Signal from SyncController that bootstrap is done
+  final case class PivotBootstrapFailed(reason: String) // Signal from SyncController that pivot header bootstrap exhausted retries
   private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
@@ -1848,6 +1889,8 @@ object SNAPSyncController {
   final case class ProgressBytecodesDownloaded(count: Long)
   final case class ProgressStorageSlotsSynced(count: Long)
   final case class ProgressNodesHealed(count: Long)
+  final case class ProgressAccountEstimate(estimatedTotal: Long)
+  final case class ProgressStorageContracts(completedContracts: Int, totalContracts: Int)
 
   def props(
       blockchainReader: BlockchainReader,
@@ -2340,6 +2383,10 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   private var estimatedTotalBytecodes: Long = 0
   private var estimatedTotalSlots: Long = 0
 
+  // Storage contract completion tracking
+  private var storageContractsCompleted: Int = 0
+  private var storageContractsTotal: Int = 0
+
   // Periodic logging
   private var lastLogTime: Long = System.currentTimeMillis()
   private val logInterval: Long = 30000 // Log every 30 seconds
@@ -2381,6 +2428,8 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     estimatedTotalAccounts = 0
     estimatedTotalBytecodes = 0
     estimatedTotalSlots = 0
+    storageContractsCompleted = 0
+    storageContractsTotal = 0
 
     phaseStartTime = System.currentTimeMillis()
     lastLogTime = System.currentTimeMillis()
@@ -2445,6 +2494,15 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     if (accounts > 0) estimatedTotalAccounts = accounts
     if (bytecodes > 0) estimatedTotalBytecodes = bytecodes
     if (slots > 0) estimatedTotalSlots = slots
+  }
+
+  /** Get current storage slots synced count */
+  def getStorageSlotsSynced: Long = synchronized { storageSlotsSynced }
+
+  /** Update storage contract completion counts for display */
+  def updateStorageContracts(completed: Int, total: Int): Unit = synchronized {
+    storageContractsCompleted = completed
+    storageContractsTotal = total
   }
 
   /** Remove old entries from history (keep only last N seconds) */
@@ -2571,7 +2629,9 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
       startTime = startTime,
       phaseStartTime = phaseStartTime,
       isFinalizingTrie = finalizingTrie,
-      finalizeElapsedSeconds = finalizeElapsedSec
+      finalizeElapsedSeconds = finalizeElapsedSec,
+      storageContractsCompleted = storageContractsCompleted,
+      storageContractsTotal = storageContractsTotal
     )
   }
 }
@@ -2599,7 +2659,9 @@ case class SyncProgress(
     startTime: Long,
     phaseStartTime: Long,
     isFinalizingTrie: Boolean = false,
-    finalizeElapsedSeconds: Int = 0
+    finalizeElapsedSeconds: Int = 0,
+    storageContractsCompleted: Int = 0,
+    storageContractsTotal: Int = 0
 ) {
 
   private def wormChasesBrainBar: String = {
@@ -2635,6 +2697,11 @@ case class SyncProgress(
     s"[$headroom🪱$distance🧠]"
   }
 
+  private def formatCount(n: Long): String =
+    if (n >= 1000000) f"${n / 1000000.0}%.1fM"
+    else if (n >= 1000) f"${n / 1000.0}%.1fK"
+    else n.toString
+
   override def toString: String =
     s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
       s"bytecodes=$bytecodesDownloaded (${bytecodesPerSec.toInt}/s), " +
@@ -2644,22 +2711,25 @@ case class SyncProgress(
   def formattedString: String =
     phase match {
       case SNAPSyncController.AccountRangeSync if isFinalizingTrie =>
-        s"phase=AccountRange [FINALIZING TRIE - writing ${accountsSynced} accounts to disk, ${finalizeElapsedSeconds}s elapsed], elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"phase=AccountRange [FINALIZING TRIE - writing ${formatCount(accountsSynced)} accounts to disk, ${finalizeElapsedSeconds}s elapsed], elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.AccountRangeSync =>
         val progressStr = if (estimatedTotalAccounts > 0) s" (${phaseProgress}%)" else ""
-        s"phase=AccountRange$progressStr, accounts=$accountsSynced@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        val totalStr = if (estimatedTotalAccounts > 0) s"/~${formatCount(estimatedTotalAccounts)}" else ""
+        s"phase=AccountRange$progressStr, accounts=${formatCount(accountsSynced)}$totalStr@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.ByteCodeSync =>
         val progressStr = if (estimatedTotalBytecodes > 0) s" (${phaseProgress}%)" else ""
-        s"phase=ByteCode$progressStr, codes=$bytecodesDownloaded@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        val totalStr = if (estimatedTotalBytecodes > 0) s"/${formatCount(estimatedTotalBytecodes)}" else ""
+        s"phase=ByteCode$progressStr, codes=${formatCount(bytecodesDownloaded)}$totalStr@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StorageRangeSync =>
         val progressStr = if (estimatedTotalSlots > 0) s" (${phaseProgress}%)" else ""
-        s"phase=Storage$progressStr, slots=$storageSlotsSynced@${recentSlotsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        val contractsStr = if (storageContractsTotal > 0) s", contracts=$storageContractsCompleted/$storageContractsTotal" else ""
+        s"phase=Storage$progressStr, slots=${formatCount(storageSlotsSynced)}@${recentSlotsPerSec.toInt}/s$contractsStr, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StateHealing =>
-        s"phase=Healing, nodes=$nodesHealed@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"phase=Healing, nodes=${formatCount(nodesHealed)}@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StateValidation =>
         s"phase=Validation, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
