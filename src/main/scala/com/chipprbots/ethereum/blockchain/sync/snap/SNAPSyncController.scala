@@ -121,6 +121,9 @@ class SNAPSyncController(
   private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   private var bootstrapCheckTask: Option[Cancellable] = None
+  private var pivotBootstrapRetryTask: Option[Cancellable] = None
+
+  private case object RetryPivotRefresh
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
@@ -151,6 +154,7 @@ class SNAPSyncController(
     storageStagnationCheckTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
+    pivotBootstrapRetryTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
     // Log final error handler statistics
@@ -277,6 +281,29 @@ class SNAPSyncController(
         case None =>
           log.warning(s"Pivot header bootstrap for block $pendingPivot returned no header. Falling back to full restart.")
           restartSnapSync(s"pivot refresh bootstrap returned no header for $pendingPivot: $reason")
+      }
+
+    // Handle pivot header bootstrap failure. The bootstrap exhausted all retries (with exponential
+    // backoff) without fetching the header. Schedule a retry after 60s to give peers time to recover.
+    case PivotBootstrapFailed(reason) if pendingPivotRefresh.isDefined =>
+      val (pendingPivot, originalReason) = pendingPivotRefresh.get
+      pendingPivotRefresh = None
+      log.warning(
+        s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, " +
+        s"original: $originalReason). Scheduling retry in 60s."
+      )
+      pivotBootstrapRetryTask.foreach(_.cancel())
+      pivotBootstrapRetryTask = Some(
+        scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher)
+      )
+
+    case RetryPivotRefresh =>
+      pivotBootstrapRetryTask = None
+      if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
+        log.info("Retrying pivot refresh after bootstrap failure...")
+        refreshPivotInPlace("retry after bootstrap failure")
+      } else {
+        log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
       }
 
     // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
@@ -1608,6 +1635,7 @@ class SNAPSyncController(
     storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
     healingRequestTask.foreach(_.cancel()); healingRequestTask = None
     bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
+    pivotBootstrapRetryTask.foreach(_.cancel()); pivotBootstrapRetryTask = None
 
     // Stop coordinators so we don't double-run phases
     accountRangeCoordinator.foreach(context.stop); accountRangeCoordinator = None
@@ -1837,6 +1865,7 @@ object SNAPSyncController {
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
   final case class BootstrapComplete(pivotHeader: Option[BlockHeader] = None) // Signal from SyncController that bootstrap is done
+  final case class PivotBootstrapFailed(reason: String) // Signal from SyncController that pivot header bootstrap exhausted retries
   private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
