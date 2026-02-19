@@ -17,6 +17,8 @@ jobs:
   publish-to-launchpad:
     name: Publish to Launchpad PPA (${{ matrix.ubuntu_series }})
     runs-on: ubuntu-latest
+    # Only publish for full releases (not pre-releases from patch builds)
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     permissions:
       contents: read
     strategy:
