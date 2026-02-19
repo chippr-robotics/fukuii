@@ -82,7 +82,7 @@ class JsonRpcControllerSpec
   }
 
   it should "Handle net_peerCount request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    (netService.peerCount _).expects(*).returning(IO.pure(Right(PeerCountResponse(123))))
+    netService.peerCountFn = _ => IO.pure(Right(PeerCountResponse(123)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_peerCount")
 
@@ -92,7 +92,7 @@ class JsonRpcControllerSpec
   }
 
   it should "Handle net_listening request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    (netService.listening _).expects(*).returning(IO.pure(Right(ListeningResponse(false))))
+    netService.listeningFn = _ => IO.pure(Right(ListeningResponse(false)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_listening")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -103,7 +103,7 @@ class JsonRpcControllerSpec
   it should "Handle net_version request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val netVersion = "99"
 
-    (netService.version _).expects(*).returning(IO.pure(Right(VersionResponse(netVersion))))
+    netService.versionFn = _ => IO.pure(Right(VersionResponse(netVersion)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_version")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()

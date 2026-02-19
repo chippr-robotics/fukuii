@@ -29,8 +29,13 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66B
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetNodeData => ETH66GetNodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetReceipts => ETH66GetReceipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class PeersClient(
@@ -157,6 +162,20 @@ class PeersClient(
           snapPeers.size
         )
         bestPeer(snapPeers, log)
+
+      case BestNodeDataPeer =>
+        val nodeDataPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.remoteStatus.capability match {
+            case Capability.ETH68 => false // ETH68 removed GetNodeData
+            case _                => true
+          }
+        }
+        log.debug(
+          "Selecting best GetNodeData-capable peer from {} available peers ({} capable)",
+          peersToDownloadFrom.size,
+          nodeDataPeers.size
+        )
+        bestPeer(nodeDataPeers, log)
     }
 
   /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
@@ -188,6 +207,13 @@ class PeersClient(
           case eth63: ETH63.GetReceipts if usesRequestId =>
             // Convert ETH63 format to ETH66 format for newer peers
             ETH66GetReceipts(ETH66.nextRequestId, eth63.blockHashes)
+          // GetNodeData adaptation
+          case eth66: ETH66GetNodeData if !usesRequestId =>
+            // Convert ETH66 format to ETH63 format for older peers
+            GetNodeData(eth66.mptElementsHashes)
+          case eth63: GetNodeData if usesRequestId =>
+            // Convert ETH63 format to ETH66 format for newer peers
+            ETH66GetNodeData(ETH66.nextRequestId, eth63.mptElementsHashes)
           case _ => message // Already in correct format
         }
       case None =>
@@ -204,6 +230,8 @@ class PeersClient(
       case _: ETH66GetReceipts      => implicitly[ClassTag[ETH66Receipts]]
       case _: ETH63.GetReceipts     => implicitly[ClassTag[ETH63.Receipts]]
       case _: GetNodeData           => implicitly[ClassTag[NodeData]]
+      case _: ETH66GetNodeData      => implicitly[ClassTag[ETH66NodeData]]
+      case _: GetTrieNodes          => implicitly[ClassTag[TrieNodes]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
@@ -212,6 +240,8 @@ class PeersClient(
       case _: ETH66GetBlockBodies | _: ETH62.GetBlockBodies   => Codes.BlockBodiesCode
       case _: ETH66GetReceipts | _: ETH63.GetReceipts         => Codes.ReceiptsCode
       case _: GetNodeData                                     => Codes.NodeDataCode
+      case _: ETH66GetNodeData                                => Codes.NodeDataCode
+      case _: GetTrieNodes                                    => SNAP.Codes.TrieNodesCode
     }
 
   private def printStatus(requesters: Requesters): Unit = {
@@ -280,6 +310,7 @@ object PeersClient {
   sealed trait PeerSelector
   case object BestPeer extends PeerSelector
   case object BestSnapPeer extends PeerSelector
+  case object BestNodeDataPeer extends PeerSelector
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],

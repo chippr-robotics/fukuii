@@ -25,55 +25,59 @@ jobs:
     if: github.event_name == 'push'
     permissions:
       contents: write
-    
+    outputs:
+      version: ${{ steps.new-version.outputs.version }}
+      increment_type: ${{ steps.version-type.outputs.increment_type }}
+      version_changed: ${{ steps.commit-version.outputs.version_changed }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Configure git
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      
+
       - name: Determine version increment type
         id: version-type
         run: |
           # Check if this is a milestone (look for milestone in commit message)
           IS_MILESTONE=false
-          
+
           # Check commit message for milestone marker
           git log -1 --pretty=%B | grep -qi "milestone" && IS_MILESTONE=true
-          
+
           if [ "$IS_MILESTONE" = true ]; then
-            echo "increment_type=minor" >> $GITHUB_OUTPUT
+            echo "increment_type=full" >> $GITHUB_OUTPUT
             echo "This is a milestone - will increment by 0.1.0"
           else
             echo "increment_type=patch" >> $GITHUB_OUTPUT
             echo "Regular commit - will increment by 0.0.1"
           fi
-      
+
       - name: Read current version
         id: current-version
         run: |
           VERSION=$(grep 'ThisBuild / version' version.sbt | grep -oP '\d+\.\d+\.\d+')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Current version: $VERSION"
-      
+
       - name: Calculate new version
         id: new-version
         run: |
           CURRENT="${{ steps.current-version.outputs.version }}"
           INCREMENT_TYPE="${{ steps.version-type.outputs.increment_type }}"
-          
+
           IFS='.' read -ra VERSION_PARTS <<< "$CURRENT"
           MAJOR=${VERSION_PARTS[0]}
           MINOR=${VERSION_PARTS[1]}
           PATCH=${VERSION_PARTS[2]}
-          
-          if [ "$INCREMENT_TYPE" = "minor" ]; then
+
+          if [ "$INCREMENT_TYPE" = "full" ]; then
             # Milestone: increment minor version, reset patch
             MINOR=$((MINOR + 1))
             PATCH=0
@@ -81,42 +85,61 @@ jobs:
             # Regular commit: increment patch version
             PATCH=$((PATCH + 1))
           fi
-          
+
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "New version: $NEW_VERSION"
-      
+
       - name: Update version.sbt
         run: |
           NEW_VERSION="${{ steps.new-version.outputs.version }}"
           sed -i "s/(ThisBuild \/ version) := \"[^\"]*\"/(ThisBuild \/ version) := \"$NEW_VERSION\"/" version.sbt
-          
+
           echo "Updated version.sbt:"
           cat version.sbt
-      
+
       - name: Commit and push version update
+        id: commit-version
         run: |
           NEW_VERSION="${{ steps.new-version.outputs.version }}"
-          
+
           git add version.sbt
-          
+
           # Check if there are changes to commit
           if git diff --staged --quiet; then
             echo "No version changes to commit"
+            echo "version_changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
           git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
           git push
-          
+
+          echo "version_changed=true" >> $GITHUB_OUTPUT
           echo "Version bumped to $NEW_VERSION and pushed"
-      
+
       - name: Create version tag
+        if: steps.commit-version.outputs.version_changed == 'true'
         run: |
           NEW_VERSION="${{ steps.new-version.outputs.version }}"
-          
+
           # Create annotated tag
           git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
           git push origin "v$NEW_VERSION"
-          
+
           echo "Created and pushed tag v$NEW_VERSION"
+
+  trigger-release:
+    name: Trigger Release
+    needs: auto-version
+    if: needs.auto-version.outputs.version_changed == 'true'
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.auto-version.outputs.version }}
+      release_tier: ${{ needs.auto-version.outputs.increment_type }}
+    secrets: inherit

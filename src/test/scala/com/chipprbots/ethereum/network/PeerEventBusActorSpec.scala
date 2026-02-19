@@ -17,12 +17,15 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
+import org.apache.pekko.testkit.TestKit
+
 import org.scalatest.concurrent.ScalaFutures
-import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.NormalPatience
+import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
@@ -37,7 +40,13 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Pong
 import com.chipprbots.ethereum.testing.Tags._
 import scala.concurrent.Future
 
-class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience {
+class PeerEventBusActorSpec
+    extends TestKit(ActorSystem("PeerEventBusActorSpec_System"))
+    with AnyFlatSpecLike
+    with WithActorSystemShutDown
+    with Matchers
+    with ScalaFutures
+    with NormalPatience {
 
   "PeerEventBusActor" should "relay messages received to subscribers" taggedAs (
     UnitTest,
@@ -95,12 +104,11 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
 
     val msgFromPeer: MessageFromPeer = MessageFromPeer(Ping(), PeerId("1"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer)
+    // wait for first publish to propagate before sending second (prevents stream buffer overflow)
+    syncProbe.expectMsg(msgFromPeer)
 
     val msgFromPeer2: MessageFromPeer = MessageFromPeer(Ping(), PeerId("99"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer2)
-
-    // wait for publications to be done
-    syncProbe.expectMsg(msgFromPeer)
     syncProbe.expectMsg(msgFromPeer2)
 
     peerEventBusProbe.ref ! PoisonPill
@@ -323,8 +331,6 @@ class PeerEventBusActorSpec extends AnyFlatSpec with Matchers with ScalaFutures 
   }
 
   trait TestSetup {
-    implicit val system: ActorSystem = ActorSystem("test-system")
-
     val peerEventBusActor: ActorRef = system.actorOf(PeerEventBusActor.props)
 
     val peerStatus: RemoteStatus = RemoteStatus(

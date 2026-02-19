@@ -64,9 +64,11 @@ class TrieNodeHealingCoordinatorSpec
       )
     )
 
+    val node1Hash = kec256(ByteString("node1"))
+    val node2Hash = kec256(ByteString("node2"))
     val missingNodes = Seq(
-      kec256(ByteString("node1")),
-      kec256(ByteString("node2"))
+      (Seq(ByteString(Array[Byte](0x00))), node1Hash),
+      (Seq(ByteString(Array[Byte](0x00))), node2Hash)
     )
 
     coordinator ! Messages.QueueMissingNodes(missingNodes)
@@ -97,7 +99,8 @@ class TrieNodeHealingCoordinatorSpec
       )
     )
 
-    val missingNodes = Seq(kec256(ByteString("node1")))
+    val nodeHash = kec256(ByteString("node1"))
+    val missingNodes = Seq((Seq(ByteString(Array[Byte](0x00))), nodeHash))
 
     coordinator ! Messages.StartTrieNodeHealing(stateRoot)
     coordinator ! Messages.QueueMissingNodes(missingNodes)

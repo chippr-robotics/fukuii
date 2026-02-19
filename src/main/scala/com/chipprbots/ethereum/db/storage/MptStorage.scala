@@ -12,6 +12,12 @@ trait MptStorage {
   def get(nodeId: Array[Byte]): MptNode
   def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode]
   def persist(): Unit
+
+  /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse.
+    * Used by state healing to insert individual nodes fetched from peers.
+    */
+  def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
+    throw new UnsupportedOperationException("Raw node storage not supported by this implementation")
 }
 
 class SerializingMptStorage(storage: NodesKeyValueStorage) extends MptStorage {
@@ -32,6 +38,9 @@ class SerializingMptStorage(storage: NodesKeyValueStorage) extends MptStorage {
 
   override def persist(): Unit =
     storage.persist()
+
+  override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
+    storage.update(Seq.empty, nodes)
 }
 
 object MptStorage {

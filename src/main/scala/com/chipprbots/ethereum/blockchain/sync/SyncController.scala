@@ -13,7 +13,7 @@ import scala.concurrent.duration._
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
-import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{StartRegularSyncBootstrap, BootstrapComplete}
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{StartRegularSyncBootstrap, BootstrapComplete, PivotBootstrapFailed}
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -55,16 +55,25 @@ class SyncController(
 
   private case object RestartFastSyncNow
 
+  // Generation counter for bootstrap actor names to prevent Pekko name collisions
+  // (context.stop is async — new actors can race with still-stopping ones).
+  private var bootstrapGeneration: Long = 0
+
   private def stopSyncChildren(): Unit = {
-    val names = Seq(
+    val fixedNames = Seq(
       "fast-sync",
       "regular-sync",
       "peers-client",
       "snap-sync",
-      "regular-sync-bootstrap",
-      "peers-client-bootstrap"
+      "regular-sync-bootstrap"
     )
-    names.flatMap(context.child).foreach(_ ! PoisonPill)
+    fixedNames.flatMap(context.child).foreach(_ ! PoisonPill)
+
+    // Stop any generation-numbered bootstrap children
+    context.children.filter { child =>
+      val n = child.path.name
+      n.startsWith("peers-client-bootstrap") || n.startsWith("pivot-header-bootstrap")
+    }.foreach(_ ! PoisonPill)
 
     // Ensure snap-sync routing is not left pointing at a dead actor.
     networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
@@ -167,16 +176,17 @@ class SyncController(
       log.info(s"SNAP sync requested bootstrap to pivot ${targetBlock}")
 
       // Prefer a header-only bootstrap: SNAP only needs the pivot header (stateRoot).
-      // Falling back to full regular sync bootstrap if we can't fetch/store the header.
+      bootstrapGeneration += 1
+      val gen = bootstrapGeneration
       val peersClient =
         context.actorOf(
           PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
-          "peers-client-bootstrap"
+          s"peers-client-bootstrap-$gen"
         )
       val headerBootstrap =
         context.actorOf(
           PivotHeaderBootstrap.props(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler),
-          "pivot-header-bootstrap"
+          s"pivot-header-bootstrap-$gen"
         )
 
       context.become(runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock, snapSync))
@@ -269,11 +279,11 @@ class SyncController(
       context.become(runningSnapSync(originalSnapSyncRef))
 
     case PivotHeaderBootstrap.Failed(reason) =>
-      log.warning(s"Pivot header bootstrap failed (reason: $reason). Falling back to regular sync bootstrap")
+      log.warning(s"Pivot header bootstrap failed (reason: $reason). Notifying SNAP sync controller.")
       headerBootstrap ! PoisonPill
       peersClient ! PoisonPill
-      val regularSync = startRegularSyncForBootstrap()
-      context.become(runningRegularSyncBootstrap(regularSync, targetBlock, originalSnapSyncRef))
+      originalSnapSyncRef ! PivotBootstrapFailed(reason)
+      context.become(runningSnapSync(originalSnapSyncRef))
 
     case SyncProtocol.GetStatus =>
       // Expose progress as a generic syncing state.
@@ -283,9 +293,10 @@ class SyncController(
         stateNodesProgress = None
       )
 
-    case other =>
-      // Ignore unrelated messages while we bootstrap the pivot header.
-      log.debug("Ignoring message during pivot header bootstrap: {}", other.getClass.getSimpleName)
+    case msg =>
+      // Forward coordinator and protocol messages to SNAP sync during the brief bootstrap.
+      // This keeps coordinators functional while we fetch the pivot header (~1-5 seconds).
+      originalSnapSyncRef.forward(msg)
   }
 
   def start(): Unit = {
@@ -365,13 +376,12 @@ class SyncController(
 
     val snapSyncConfig = loadSnapSyncConfig()
 
-    val mptStorage = stateStorage.getReadOnlyStorage
-
     val snapSync = context.actorOf(
       SNAPSyncController.props(
         blockchainReader,
+        blockchainWriter,
         appStateStorage,
-        mptStorage,
+        stateStorage,
         evmCodeStorage,
         networkPeerManager,
         peerEventBus,

@@ -107,7 +107,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
 
   val appStateStorage: AppStateStorage = mock[AppStateStorage]
   val web3Service = new Web3Service
-  val netService: NetServiceAPI = mock[NetServiceAPI]
+  val netService: TestNetService = new TestNetService
 
   val ethInfoService = new EthInfoService(
     blockchain,
@@ -158,7 +158,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     filterManager.ref,
     filterConfig
   )
-  val personalService: PersonalServiceAPI = mock[PersonalServiceAPI]
+  val personalService: TestPersonalService = new TestPersonalService
   val debugService: DebugService = mock[DebugService]
   val qaService: QAService = mock[QAService]
   val checkpointingService: CheckpointingService = mock[CheckpointingService]

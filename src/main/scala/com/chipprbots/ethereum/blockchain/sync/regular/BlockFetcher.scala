@@ -304,9 +304,9 @@ class BlockFetcher(
         // Ensure state is cleared and attempt to fetch if there are waiting headers
         fetchBlocks(state)
 
-      case FetchStateNode(hash, replyTo) =>
+      case FetchStateNode(hash, replyTo, stateRoot, pathset) =>
         log.debug("Fetching state node for hash {}", ByteStringUtils.hash2string(hash))
-        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo)
+        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo, stateRoot, pathset)
         Behaviors.same
 
       case AdaptedMessageFromEventBus(NewBlockHashes(hashes), _) =>
@@ -519,7 +519,12 @@ object BlockFetcher {
 
   sealed trait FetchCommand
   final case class Start(importer: ClassicActorRef, fromBlock: BigInt) extends FetchCommand
-  final case class FetchStateNode(hash: ByteString, replyTo: ClassicActorRef) extends FetchCommand
+  final case class FetchStateNode(
+      hash: ByteString,
+      replyTo: ClassicActorRef,
+      stateRoot: Option[ByteString] = None,
+      pathset: Option[Seq[ByteString]] = None
+  ) extends FetchCommand
   case object RetryFetchStateNode extends FetchCommand
   final case class PickBlocks(amount: Int, replyTo: ClassicActorRef) extends FetchCommand
   final case class StrictPickBlocks(from: BigInt, atLEastWith: BigInt, replyTo: ClassicActorRef) extends FetchCommand

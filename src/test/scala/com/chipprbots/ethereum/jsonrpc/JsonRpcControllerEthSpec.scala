@@ -642,15 +642,7 @@ class JsonRpcControllerEthSpec
 
   it should "eth_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
 
-    (personalService.sign _)
-      .expects(
-        SignRequest(
-          ByteString(Hex.decode("deadbeaf")),
-          Address(ByteString(Hex.decode("9b2055d370f73ec7d8a03e965129118dc8f5bf83"))),
-          None
-        )
-      )
-      .returns(IO.pure(Right(SignResponse(sig))))
+    personalService.signFn = _ => IO.pure(Right(SignResponse(sig)))
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_sign",

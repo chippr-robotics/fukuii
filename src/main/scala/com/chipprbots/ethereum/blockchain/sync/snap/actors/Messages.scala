@@ -28,8 +28,21 @@ object Messages {
   case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
+  /** Sent by SNAPSyncController when a fresher pivot has been selected.
+    * Coordinator updates pending tasks with the new root and resumes downloading. */
+  case class PivotRefreshed(newStateRoot: ByteString) extends AccountRangeCoordinatorMessage
+
+  // Internal message for chunked account storage (avoids blocking the actor for minutes)
+  private[actors] case class StoreAccountChunk(
+      task: AccountTask,
+      remaining: Seq[(ByteString, com.chipprbots.ethereum.domain.Account)],
+      totalCount: Int,
+      storedSoFar: Int,
+      isTaskRangeComplete: Boolean
+  ) extends AccountRangeCoordinatorMessage
+
   sealed trait AccountRangeWorkerMessage
-  case class FetchAccountRange(task: AccountTask, peer: Peer, requestId: BigInt) extends AccountRangeWorkerMessage
+  case class FetchAccountRange(task: AccountTask, peer: Peer, requestId: BigInt, responseBytes: BigInt = BigInt(512 * 1024)) extends AccountRangeWorkerMessage
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage
   case class RequestTimeout(requestId: BigInt) extends AccountRangeWorkerMessage
 
@@ -74,9 +87,25 @@ object Messages {
   case class StorageRequestTimeout(requestId: BigInt) extends StorageRangeWorkerMessage
   case object StorageCheckIdle extends StorageRangeWorkerMessage
 
-  // When many peers return empty StorageRanges for the current pivot state, the coordinator
-  // backs off globally to avoid hammering the network and repeatedly re-queueing tasks.
-  case object ResumeStorageBackoff extends StorageRangeCoordinatorMessage
+  /** Sent by SNAPSyncController when a fresher pivot has been selected during storage sync.
+    * Coordinator updates state root and clears per-peer adaptive state. */
+  case class StoragePivotRefreshed(newStateRoot: ByteString) extends StorageRangeCoordinatorMessage
+
+  /** Sent by SNAPSyncController when storage sync has stagnated and should promote to healing.
+    * Coordinator flushes deferred writes and reports StorageRangeSyncComplete. */
+  case object ForceCompleteStorage extends StorageRangeCoordinatorMessage
+
+  // Internal message for chunked storage slot persistence (avoids blocking the actor)
+  private[actors] case class StoreStorageSlotChunk(
+      task: StorageTask,
+      remainingSlots: Seq[(ByteString, ByteString)],
+      totalCount: Int,
+      storedSoFar: Int,
+      proof: Seq[ByteString],
+      peer: com.chipprbots.ethereum.network.Peer,
+      requestedBytes: BigInt,
+      isLastServedTask: Boolean
+  ) extends StorageRangeCoordinatorMessage
 
   // ========================================
   // TrieNodeHealing Messages
@@ -85,7 +114,12 @@ object Messages {
   sealed trait TrieNodeHealingCoordinatorMessage
 
   case class StartTrieNodeHealing(stateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
-  case class QueueMissingNodes(nodes: Seq[ByteString]) extends TrieNodeHealingCoordinatorMessage
+  /** Queue missing trie nodes for healing.
+    * Each entry is (pathset, hash) where pathset is the GetTrieNodes path encoding:
+    *   - Account trie node: Seq(compact_path)
+    *   - Storage trie node: Seq(account_hash, compact_storage_path)
+    */
+  case class QueueMissingNodes(nodes: Seq[(Seq[ByteString], ByteString)]) extends TrieNodeHealingCoordinatorMessage
   case class HealingPeerAvailable(peer: Peer) extends TrieNodeHealingCoordinatorMessage
   case class HealingTaskComplete(requestId: BigInt, result: Either[String, Int]) extends TrieNodeHealingCoordinatorMessage
   case class HealingTaskFailed(requestId: BigInt, reason: String) extends TrieNodeHealingCoordinatorMessage

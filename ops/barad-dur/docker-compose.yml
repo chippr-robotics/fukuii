@@ -127,29 +127,32 @@ services:
       start_period: 60s
 
   # Fukuii Ethereum Client - Secondary Instance (for HADR)
-  fukuii-secondary:
-    image: chipprbots/fukuii:latest
-    container_name: fukuii-secondary
-    restart: unless-stopped
-    ports:
-      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"       # JSON-RPC HTTP (internal)
-      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"         # JSON-RPC WebSocket (internal)
-      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:9076/tcp"   # P2P
-      - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30303/udp" # Discovery
-      - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"   # Metrics
-    volumes:
-      - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
-      - ./fukuii-conf-2:/app/conf:ro
-    environment:
-      - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
-    networks:
-      - fukuii-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+  # DISABLED: Running single node until SNAP sync and peer discovery are stabilized.
+  # Two nodes on the same external IP confuse Kademlia DHT enrollment and compete
+  # for the same limited ETC mainnet peer pool.
+  # fukuii-secondary:
+  #   image: chipprbots/fukuii:latest
+  #   container_name: fukuii-secondary
+  #   restart: unless-stopped
+  #   ports:
+  #     - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"
+  #     - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"
+  #     - "${FUKUII_SECONDARY_P2P_PORT:-30304}:9076/tcp"
+  #     - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30303/udp"
+  #     - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"
+  #   volumes:
+  #     - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
+  #     - ./fukuii-conf-2:/app/conf:ro
+  #   environment:
+  #     - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
+  #   networks:
+  #     - fukuii-network
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
 
   # Prometheus for metrics collection
   prometheus:
@@ -172,7 +175,7 @@ services:
       - fukuii-network
     depends_on:
       - fukuii-primary
-      - fukuii-secondary
+      # - fukuii-secondary  # DISABLED: single node mode
       - kong
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]

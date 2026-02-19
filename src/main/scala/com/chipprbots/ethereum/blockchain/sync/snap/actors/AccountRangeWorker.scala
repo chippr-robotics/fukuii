@@ -52,8 +52,8 @@ class AccountRangeWorker(
   override def receive: Receive = idle
 
   def idle: Receive = {
-    case FetchAccountRange(task, peer, requestId) =>
-      log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id}")
+    case FetchAccountRange(task, peer, requestId, responseBytes) =>
+      log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id} (responseBytes=$responseBytes)")
 
       // Send request directly via network peer manager
       // Create GetAccountRange message
@@ -62,7 +62,7 @@ class AccountRangeWorker(
         rootHash = task.rootHash,
         startingHash = task.next,
         limitHash = task.last,
-        responseBytes = BigInt(512 * 1024)
+        responseBytes = responseBytes
       )
       
       // Track the request with timeout
@@ -149,7 +149,7 @@ class AccountRangeWorker(
           log.debug(s"Timeout for old or unknown request $reqId")
       }
 
-    case FetchAccountRange(task, peer, _) =>
+    case FetchAccountRange(task, peer, _, _) =>
       log.warning("Worker is busy, cannot accept new task")
       coordinator ! TaskFailed(0, "Worker busy")
   }
