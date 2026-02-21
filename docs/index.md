@@ -77,6 +77,7 @@ This documentation is organized by audience:
 - **[For Operators/SRE](for-operators/index.md)** — Production deployment and monitoring
 - **[For Developers](for-developers/index.md)** — Architecture, contributing, and API docs
 - **[Reference](specifications/README.md)** — Specifications, ADRs, and technical details
+- **[Research](research/README.md)** — Research analysis and impact studies for ECIPs and protocol changes
 - **[Troubleshooting](troubleshooting/README.md)** — Common issues and solutions
 
 ## Community
