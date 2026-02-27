@@ -274,6 +274,7 @@ class SNAPSyncController(
       } else if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
         lastPivotRestartMs = now
         consecutivePivotRefreshes += 1
+        log.info(s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes")
         if (consecutivePivotRefreshes >= MaxConsecutivePivotRefreshes) {
           // Peers are consistently stateless across multiple pivot refreshes.
           // This strongly indicates no peer has a snapshot database — SNAP sync
@@ -1653,8 +1654,10 @@ class SNAPSyncController(
     // Clear any pending pivot refresh (we're doing a full restart instead)
     pendingPivotRefresh = None
 
-    // Reset pivot refresh counter for the new cycle
-    consecutivePivotRefreshes = 0
+    // NOTE: do NOT reset consecutivePivotRefreshes here. restartSnapSync is often called
+    // from refreshPivotInPlace when no new pivot is available, which means the counter would
+    // reset on every failed cycle and never reach the threshold. The counter only resets on
+    // actual account download progress (ProgressAccountsSynced) or at startSnapSync().
 
     // Cancel periodic phase request ticks
     accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
