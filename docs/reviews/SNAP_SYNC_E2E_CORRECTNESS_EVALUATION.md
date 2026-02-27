@@ -61,15 +61,25 @@ The `SNAPMessagesSpec` explicitly tests:
 
 This matches the RLP canonical encoding rules. Well-tested.
 
-### 1.4 Account Body Encoding — NEEDS VERIFICATION
+### 1.4 Account Body Encoding — CORRECT (Decode) / ACCEPTABLE (Encode)
 
-**Finding F2 (HIGH):** The spec defines account body as the "slim" RLP encoding: `[nonce, balance, storageRoot, codeHash]`. Fukuii uses `account.toRLPEncodable` via `AccountImplicits._`. If the `Account` serializer uses full encoding (with additional fields or different ordering), this would cause silent data corruption. The decode path uses `rlp.encode(accountRLP).toAccount`, which double-encodes if accountRLP is already an RLPList.
+The spec defines account body as the "slim" RLP encoding where empty `storageRoot` and `codeHash` are encoded as empty bytes `[]` instead of the full 32-byte empty hashes. This saves 64 bytes per externally-owned account.
+
+**Decode path (receiving from peers) — CORRECT:** `AccountDec.toAccount` in `ETH63.scala:71-77` properly normalizes slim encoding:
+```scala
+val normalizedStorageRoot =
+  if (storageRootBytes.isEmpty) Account.EmptyStorageRootHash else ByteString(storageRootBytes)
+val normalizedCodeHash =
+  if (codeHashBytes.isEmpty) Account.EmptyCodeHash else ByteString(codeHashBytes)
+```
+
+**Encode path (sending to peers):** `AccountEnc.toRLPEncodable` always encodes full 32-byte hashes, not the slim format. Since fukuii is a SNAP *client* (requesting data), not a SNAP *server* (serving data), the encode path for `AccountRange` is only used in tests and outbound account data. This is acceptable but not bandwidth-optimal.
 
 **Comparison:**
-- **Geth:** Uses `types.SlimAccount` for SNAP, distinct from full account encoding
-- **Nethermind:** Explicit slim encoding `Account.Slim.Encode()`
-- **Besu:** `SlimAccount` vs `WorldState` account encoding
-- **Fukuii:** Reuses the same `Account` serializer for both ETH and SNAP contexts
+- **Geth:** Uses `types.SlimAccount` for SNAP server responses
+- **Nethermind:** `AccountDecoder.Slim.GetLength()` for size estimation; `AccountCollector` for decode
+- **Besu:** `AccountRangeMessage.toSlimAccount()` for slim encoding on server side
+- **Fukuii:** Slim-aware decode, full-encode (acceptable for client-only usage)
 
 ---
 
@@ -379,7 +389,6 @@ The `SNAPSyncIntegrationSpec` tests coordinator lifecycle and message flow but *
 
 | ID | Finding | Impact |
 |---|---|---|
-| F2 | Account body encoding uses shared serializer, not slim encoding | Could cause encoding mismatch with strict peers |
 | F7 | GetTrieNodes path semantics depend on unverified path producer | Incorrect paths would cause healing failures |
 
 ### MEDIUM
@@ -399,32 +408,86 @@ None — all findings are MEDIUM or above.
 
 ---
 
-## 11. Recommendations (Priority Order)
+## 11. Detailed Peer Implementation Comparison
 
-1. **Fix F3+F4 (CRITICAL):** Implement full range proof verification following geth's `trie.VerifyRangeProof()`. This requires building a partial trie from the proof nodes and verifying that the delivered accounts/slots are the *complete* set between the proven boundaries. This is the single most important correctness fix.
+### 11.1 Nethermind (C#) Key Details
 
-2. **Fix F2 (HIGH):** Audit the Account RLP serializer used in SNAP contexts. Ensure it produces the "slim" 4-tuple `[nonce, balance, storageRoot, codeHash]` and nothing else. Add a dedicated test comparing encoded output against known-good geth/Nethermind vectors.
+From the Nethermind source (`Nethermind.State/SnapServer/`, `Nethermind.Trie/RangeQueryVisitor.cs`):
 
-3. **Fix F7 (HIGH):** Audit `StateValidator.findMissingNodesWithPaths()` to ensure it produces spec-compliant path sets: single-element for account trie nodes, two-element `[accountPath, storagePath]` for storage trie nodes.
+- **Hard response byte limit:** 2,000,000 bytes (2 MB), same as geth's `softResponseLimit`
+- **Hard response node limit:** 100,000 nodes per range query
+- **GetTrieNodes has NO byte limit enforcement** — processes all paths until completion or `MissingTrieNodeException`. Notable deviation from geth.
+- **Proof generation:** `RangeQueryVisitor` tracks `_leftmostNodes[]` and `_rightmostNodes[]` during trie traversal. Proofs are deduplicated via `HashSet<byte[]>`.
+- **Proof verification (client):** `SnapProviderHelper.CommitRange()` builds a `proofDict` mapping `Keccak(nodeRlp) -> TrieNode`, reconstructs boundary paths, clears children inside the range, bulk-inserts received data, then verifies `tree.RootHash == expectedRootHash`. **This is the full range proof algorithm that fukuii is missing (F3).**
+- **Storage early-out:** Stops adding new accounts when `< 10KB` budget remains — prevents starting expensive storage scans with insufficient budget.
+- **Missing codes/nodes are silently skipped** — no placeholders, matches spec.
+- **LimitHash=0 treated as MaxValue** for storage (defensive normalization).
+- **Serving disabled → peer disconnect** with `DisconnectReason.SnapServerNotImplemented`.
 
-4. **Fix F1 (MEDIUM):** Compute SNAP protocol offset dynamically from capability negotiation rather than hardcoding `0x21`.
+### 11.2 Besu (Java) Key Details
 
-5. **Fix F6 (MEDIUM):** For proof-less storage responses, rebuild the storage trie from received slots and verify the root matches `account.storageRoot`.
+From the Besu source (`ethereum/eth/.../snap/SnapServer.java`):
 
-6. **Fix F8 (MEDIUM):** Interleave storage range download with account range download. Start fetching storage for accounts as they arrive rather than waiting for all accounts to complete.
+- **Hard response size:** 2 MB (`MAX_RESPONSE_SIZE = 2 * 1024 * 1024`), matching geth.
+- **Max entries per request:** 100,000 (but 2MB byte limit hit first in practice).
+- **Max code lookups:** 1,024 per request (matches geth).
+- **Max trie lookups:** 1,024 per request (matches geth).
+- **Time-based throttling:** 4-second per-request timeout (`MAX_MILLIS_PER_REQUEST = 4000`). Unique to Besu.
+- **ExceedingPredicate pattern:** Allows one entry past the limit before stopping (matching geth's post-add limit check). Added in PR #7399 to pass hive tests.
+- **RLP size fudge factor:** `rawBytes * 1.1` (110%) for bytecodes/trie nodes. Marked as a "hack" with TODO.
+- **Slim account encoding:** `AccountRangeMessage.toSlimAccount()` — null for empty storageRoot/codeHash.
+- **Proof verification (client):** `WorldStateProofProvider.isValidRangeProof()` reconstructs trie from proofs, discovers inner nodes in range, removes them, re-inserts received keys, verifies root hash. **Full range proof, same algorithm as geth and Nethermind.**
+- **Multi-account storage:** When `hashes.size() > 1`, forces `startKey=0x00, endKey=0xFF..FF`, ignoring request boundaries. Matches spec.
+- **Empty range handling:** Fetches the first account after range end (proof of non-existence pattern), matching geth.
+- **Snap server defaults to OFF** (requires `--snapsync-server-enabled=true`).
+- **Bonsai-only** — Forest mode not supported for serving snap data.
 
-7. **Fix F9+F10 (MEDIUM):** Add comprehensive round-trip encoding tests for all 8 SNAP message types. Add integration tests using real Merkle proofs (can be generated from a small in-memory trie).
+### 11.3 Geth (Go) Key Details (Reference Implementation)
+
+- **softResponseLimit:** 2 MB
+- **maxCodeLookups:** 1,024
+- **maxTrieNodeLookups:** 1,024
+- **maxTrieNodeTimeSpent:** 5 seconds
+- **stateLookupSlack:** 0.1 (10% overshoot for storage)
+- **accountConcurrency:** 16 parallel chunks (interleaved with storage)
+- **VerifyRangeProof:** Unsets internal references for covered range, reconstructs trie from proof + data, compares root hash. The canonical range proof algorithm.
+- **trienodeHealThrottle:** Adaptive (1.33x up, 1.25x down), range 1-1024
 
 ---
 
-## 12. Comparison Matrix
+## 12. Recommendations (Priority Order)
+
+1. **Fix F3+F4 (CRITICAL):** Implement full range proof verification following geth's `trie.VerifyRangeProof()`. The algorithm (used by all three reference implementations):
+   - Build a partial trie from the proof nodes
+   - Record the left and right boundary paths
+   - Clear all internal references between the boundaries (these will be replaced by the received data)
+   - Insert all received accounts/slots into the trie
+   - Verify the root hash matches the expected state root
+   - If it doesn't match, the data is incomplete or corrupted
+
+   This is the single most important correctness fix. The current per-item existence check (F4: `case None => Right(())`) must be replaced with a range-completeness proof.
+
+2. **Fix F7 (HIGH):** Audit `StateValidator.findMissingNodesWithPaths()` to ensure it produces spec-compliant path sets: single-element `[accPath]` for account trie nodes, two-element `[accPath, storagePath]` for storage trie nodes. Compare output against geth's `trieTask` path grouping.
+
+3. **Fix F1 (MEDIUM):** Compute SNAP protocol offset dynamically from capability negotiation rather than hardcoding `0x21`. All three reference implementations compute this dynamically.
+
+4. **Fix F6 (MEDIUM):** For proof-less storage responses, rebuild the storage trie from received slots and verify the root matches `account.storageRoot`. Both Nethermind and Besu do this.
+
+5. **Fix F8 (MEDIUM):** Interleave storage range download with account range download. Start fetching storage for accounts as they arrive rather than waiting for all accounts to complete. All three reference implementations interleave these phases.
+
+6. **Fix F9+F10 (MEDIUM):** Add comprehensive round-trip encoding tests for all 8 SNAP message types. Add integration tests using real Merkle proofs (can be generated from a small in-memory trie). Consider porting test vectors from geth's `snap_test.go` or Besu's `SnapServerTest.java`.
+
+---
+
+## 13. Comparison Matrix
 
 | Feature | Spec | Geth | Nethermind | Besu | Fukuii |
 |---|---|---|---|---|---|
 | All 8 messages | Required | Yes | Yes | Yes | **Yes** |
 | Dynamic msg offset | Required | Yes | Yes | Yes | **No (F1)** |
-| Range proof verification | Required | Yes | Yes | Yes | **No (F3)** |
-| Slim account encoding | Required | Yes | Yes | Yes | **Unverified (F2)** |
+| Range proof verification | Required | Yes | Yes | Yes | **No (F3/F4)** |
+| Slim account decode | Required | Yes | Yes | Yes | **Yes** |
+| Slim account encode | Server-only | Yes | Yes | Yes | **No (client-only, acceptable)** |
 | Monotonic ordering check | Required | Yes | Yes | Yes | **Yes** |
 | Proof root verification | Required | Yes | Yes | Yes | **Yes** |
 | Interleaved download | Best practice | Yes | Yes | Yes | **No (F8)** |
@@ -432,13 +495,24 @@ None — all findings are MEDIUM or above.
 | Peer blacklisting | Best practice | Yes | Yes | Yes | **Yes** |
 | Stagnation detection | Best practice | Partial | Partial | Partial | **Yes** |
 | Pivot refresh | Best practice | Yes | Yes | Yes | **Yes** |
+| Server-side serving | Optional | Always on | Optional | Off by default | **Not implemented** |
+| Response byte ceiling | 2 MB | 2 MB | 2 MB | 2 MB | **2 MB (request)** |
+| Time-based request limit | Not spec'd | 5s (trie only) | None | 4s (all) | **30s timeout** |
+| ByteCode subsequence check | Not spec'd | No | No | No | **Yes (extra safety)** |
+| Per-hash failure tracking | Not spec'd | No | No | No | **Yes (extra safety)** |
 
 ---
 
 ## Conclusion
 
-Fukuii's SNAP/1 implementation is **structurally complete** and demonstrates **good engineering practices** in areas like adaptive byte budgeting, stagnation detection, and peer management. The wire protocol encoding appears correct. However, the **Merkle proof verification is fundamentally incomplete** (F3, F4) — it verifies that individual accounts exist in the proof but does not verify that the proven range is complete (no gaps). This is the same class of vulnerability that snap sync was specifically designed to protect against.
+Fukuii's SNAP/1 implementation is **structurally complete** and demonstrates **good engineering practices** in areas like adaptive byte budgeting, stagnation detection, peer management, and defensive features (bytecode subsequence checking, per-hash failure tracking) that go beyond what other implementations provide.
 
-The implementation currently relies on the final state root validation (phase 5) as a safety net. While this catches data integrity issues, it does so late — after potentially hours of sync work. Proper range proof verification (as done by Geth, Nethermind, and Besu) catches malicious or corrupted data immediately and identifies the offending peer.
+The wire protocol encoding is correct. The slim account decoding is properly handled. The sync pipeline covers all four SNAP message pairs.
 
-**Overall assessment: Functionally operational for honest networks, but not hardened against adversarial peers. Priority should be given to fixing F3/F4 (range proof verification) before production use on untrusted networks.**
+However, the **Merkle proof verification is fundamentally incomplete** (F3, F4). The current approach verifies that individual accounts exist at their expected paths in the proof, but does not verify that the proven range is **complete** — it cannot detect gaps where a malicious peer skipped accounts or storage slots. All three reference implementations (Geth, Nethermind, Besu) implement the full range proof algorithm: reconstruct a partial trie from proofs, clear internal references in the range, insert received data, and verify the root hash.
+
+The current `traversePath()` method returns `Right(())` (success) when a proof node is not found in the proof map (line 182-185 of `MerkleProofVerifier.scala`). This means ANY data passes verification if the proof is incomplete. This is the exact attack vector that SNAP's proof mechanism was designed to prevent.
+
+Fukuii's final state root validation (phase 5) acts as a safety net, catching integrity issues at the end. While this prevents data corruption in the database, it does so after potentially hours of sync work, and cannot identify which peer sent bad data.
+
+**Overall assessment:** Functionally operational for honest networks with ETC mainnet (where peer behavior is generally cooperative). The sequential phase ordering (F8) adds sync time but is not a correctness issue. **For production use on untrusted networks, F3/F4 (range proof verification) must be fixed.** The fix is well-understood — the algorithm is documented in the geth source and used identically by Nethermind and Besu.
