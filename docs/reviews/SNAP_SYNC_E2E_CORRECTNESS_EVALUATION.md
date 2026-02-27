@@ -28,15 +28,15 @@ Fukuii implements a functionally complete SNAP/1 client-side (requesting) sync p
 | GetTrieNodes | 0x06 | 0x27 | **Correct** |
 | TrieNodes | 0x07 | 0x28 | **Correct** |
 
-The offset of `0x21` is correct for the common negotiation where ETH/68 is the first capability. However, the devp2p spec computes capability offsets dynamically based on alphabetical capability ordering. Fukuii hardcodes this offset rather than computing it from capability negotiation.
+The offset of `0x21` is a canonical internal message space, not a wire-level hardcoded offset. Fukuii implements full dynamic offset computation via `InboundTranslator` in `RLPxConnectionHandler.scala` (lines 118-236).
 
-**Finding F1 (MEDIUM):** The `SnapProtocolOffset = 0x21` is hardcoded. If the peer negotiates capabilities in a different order or ETH message count changes, this breaks. Geth, Nethermind, and Besu all compute offsets dynamically.
+**Finding F1 — RESOLVED (non-issue):** The `SnapProtocolOffset = 0x21` is the **internal** canonical base, not the wire-level offset. The `InboundTranslator.computeInboundTranslator()` dynamically computes peer-specific offsets based on capability negotiation (alphabetical ordering). `translateType()` and `toPeerWireType()` handle bidirectional translation between canonical internal codes and peer-specific wire codes. This matches how Geth, Nethermind, and Besu handle capability offsets.
 
 **Comparison:**
 - **Geth:** Dynamic offset based on capability negotiation
 - **Nethermind:** Dynamic offset (ProtocolsManager computes per-capability offsets)
 - **Besu:** Dynamic offset (SubProtocol registry)
-- **Fukuii:** Hardcoded `0x21`
+- **Fukuii:** Dynamic offset via `InboundTranslator` — **CORRECT**
 
 ### 1.2 RLP Encoding Structure — CORRECT
 
@@ -236,24 +236,19 @@ The `maxFailuresPerHash = 10` limit prevents infinite re-queuing of hashes no pe
 
 ## 5. TrieNodes Handling
 
-### 5.1 Path Encoding — NEEDS VERIFICATION
+### 5.1 Path Encoding — CORRECT
 
-**Finding F7 (HIGH): GetTrieNodes path structure may be incorrect.**
-
-The spec defines paths as:
-> `paths: [[accPath: B, slotPath1: B, slotPath2: B, ...], ...]`
-
-Where:
-- A single-element path `[accPath]` requests an account trie node
-- Multi-element paths `[accPath, slotPath1, ...]` request storage trie nodes under that account
-
-Fukuii's `GetTrieNodes` encodes `paths: Seq[Seq[ByteString]]` which structurally matches. However, the `TrieNodeHealingCoordinator.queueNodes()` receives `(pathset: Seq[ByteString], hash: ByteString)` pairs from `StateValidator.findMissingNodesWithPaths()`. The semantic correctness depends on whether `StateValidator` produces spec-compliant path sets (account-path-prefix + storage-path-suffix) or just raw trie paths.
+**Finding F7 — RESOLVED (verified correct):** `StateValidator.findMissingNodesWithPaths()` produces spec-compliant path sets:
+- Account trie nodes: single-element `[compactPath]` — **correct**
+- Storage trie nodes: two-element `[accountHash, compactPath]` — **correct**
+- HP encoding with `isLeaf=false` — **correct per SNAP/1 compact encoding**
+- Code comments in `StateValidator` explicitly confirm SNAP/1 spec compliance
 
 **Comparison:**
 - **Geth:** `trieTask` explicitly separates account paths (`[][]byte{path}`) from storage paths (`[][]byte{accountPath, storagePath}`)
 - **Nethermind:** `PathGroup` class explicitly models the account/storage path hierarchy
 - **Besu:** `TrieNodePath` explicitly models the hierarchy
-- **Fukuii:** Generic `Seq[Seq[ByteString]]` — correct structure but semantic correctness depends on the path producer
+- **Fukuii:** `Seq[Seq[ByteString]]` with correct semantics from `StateValidator` — **CORRECT**
 
 ### 5.2 Node Hash Verification — CORRECT
 
@@ -378,29 +373,29 @@ The `SNAPSyncIntegrationSpec` tests coordinator lifecycle and message flow but *
 
 ## 10. Summary of Findings
 
-### CRITICAL
+### CRITICAL — FIXED
 
-| ID | Finding | Impact |
+| ID | Finding | Status |
 |---|---|---|
-| F3 | No range proof verification (gap detection) | Malicious peer can skip accounts; incomplete state goes undetected until validation |
-| F4 | Missing proof nodes treated as verification success | Any data passes proof verification with incomplete proofs |
+| F3 | No range proof verification (gap detection) | **FIXED** — `RangeProofVerifier` implements the full geth/Nethermind/Besu algorithm: reconstruct skeleton from proof, unset interior, insert data, verify root |
+| F4 | Missing proof nodes treated as verification success | **FIXED** — `MerkleProofVerifier` now delegates to `RangeProofVerifier`; the old `traversePath()` with `case None => Right(())` is removed |
 
-### HIGH
+### HIGH — RESOLVED (non-issues)
 
-| ID | Finding | Impact |
+| ID | Finding | Status |
 |---|---|---|
-| F7 | GetTrieNodes path semantics depend on unverified path producer | Incorrect paths would cause healing failures |
+| F7 | GetTrieNodes path semantics | **Non-issue** — `StateValidator` verified to produce spec-compliant paths |
 
 ### MEDIUM
 
-| ID | Finding | Impact |
+| ID | Finding | Status |
 |---|---|---|
-| F1 | Hardcoded protocol offset (0x21) | Breaks if capability negotiation order changes |
+| F1 | Hardcoded protocol offset (0x21) | **Non-issue** — `InboundTranslator` handles dynamic offset computation |
 | F5 | (Noted but correctly handled) | N/A |
-| F6 | No trie root verification for proof-less storage responses | Unverified data accepted |
-| F8 | Sequential phases instead of interleaved | Longer sync time, higher pivot staleness risk |
-| F9 | Minimal message encoding tests | Encoding bugs could go undetected |
-| F10 | No e2e test with real proofs | Proof verification logic not exercised in tests |
+| F6 | No trie root verification for proof-less storage responses | **FIXED** — `RangeProofVerifier.verifyEntireTrie()` rebuilds trie and verifies root |
+| F8 | Sequential phases instead of interleaved | Open — performance optimization, not correctness |
+| F9 | Minimal message encoding tests | Open |
+| F10 | No e2e test with real proofs | **FIXED** — `RangeProofVerifierSpec` and `MerkleProofVerifierSpec` test with real tries and genuine boundary proofs |
 
 ### LOW
 
@@ -457,25 +452,17 @@ From the Besu source (`ethereum/eth/.../snap/SnapServer.java`):
 
 ## 12. Recommendations (Priority Order)
 
-1. **Fix F3+F4 (CRITICAL):** Implement full range proof verification following geth's `trie.VerifyRangeProof()`. The algorithm (used by all three reference implementations):
-   - Build a partial trie from the proof nodes
-   - Record the left and right boundary paths
-   - Clear all internal references between the boundaries (these will be replaced by the received data)
-   - Insert all received accounts/slots into the trie
-   - Verify the root hash matches the expected state root
-   - If it doesn't match, the data is incomplete or corrupted
+1. ~~**Fix F3+F4 (CRITICAL):**~~ **DONE.** `RangeProofVerifier` implements the full range proof verification algorithm. `MerkleProofVerifier` delegates to it. The old broken `traversePath()` / `traverseStoragePath()` methods are removed.
 
-   This is the single most important correctness fix. The current per-item existence check (F4: `case None => Right(())`) must be replaced with a range-completeness proof.
+2. ~~**Fix F7 (HIGH):**~~ **Non-issue.** `StateValidator.findMissingNodesWithPaths()` verified to produce correct path sets.
 
-2. **Fix F7 (HIGH):** Audit `StateValidator.findMissingNodesWithPaths()` to ensure it produces spec-compliant path sets: single-element `[accPath]` for account trie nodes, two-element `[accPath, storagePath]` for storage trie nodes. Compare output against geth's `trieTask` path grouping.
+3. ~~**Fix F1 (MEDIUM):**~~ **Non-issue.** `InboundTranslator` already handles dynamic offset computation.
 
-3. **Fix F1 (MEDIUM):** Compute SNAP protocol offset dynamically from capability negotiation rather than hardcoding `0x21`. All three reference implementations compute this dynamically.
-
-4. **Fix F6 (MEDIUM):** For proof-less storage responses, rebuild the storage trie from received slots and verify the root matches `account.storageRoot`. Both Nethermind and Besu do this.
+4. ~~**Fix F6 (MEDIUM):**~~ **DONE.** `RangeProofVerifier.verifyEntireTrie()` rebuilds the storage trie from slots and verifies root when no proof is provided.
 
 5. **Fix F8 (MEDIUM):** Interleave storage range download with account range download. Start fetching storage for accounts as they arrive rather than waiting for all accounts to complete. All three reference implementations interleave these phases.
 
-6. **Fix F9+F10 (MEDIUM):** Add comprehensive round-trip encoding tests for all 8 SNAP message types. Add integration tests using real Merkle proofs (can be generated from a small in-memory trie). Consider porting test vectors from geth's `snap_test.go` or Besu's `SnapServerTest.java`.
+6. ~~**Fix F9+F10 (MEDIUM):**~~ **Partially done.** `RangeProofVerifierSpec` and `MerkleProofVerifierSpec` now test with real tries and genuine boundary proofs. Round-trip encoding tests for all 8 SNAP message types still needed.
 
 ---
 
@@ -484,8 +471,8 @@ From the Besu source (`ethereum/eth/.../snap/SnapServer.java`):
 | Feature | Spec | Geth | Nethermind | Besu | Fukuii |
 |---|---|---|---|---|---|
 | All 8 messages | Required | Yes | Yes | Yes | **Yes** |
-| Dynamic msg offset | Required | Yes | Yes | Yes | **No (F1)** |
-| Range proof verification | Required | Yes | Yes | Yes | **No (F3/F4)** |
+| Dynamic msg offset | Required | Yes | Yes | Yes | **Yes** (InboundTranslator) |
+| Range proof verification | Required | Yes | Yes | Yes | **Yes** (RangeProofVerifier) |
 | Slim account decode | Required | Yes | Yes | Yes | **Yes** |
 | Slim account encode | Server-only | Yes | Yes | Yes | **No (client-only, acceptable)** |
 | Monotonic ordering check | Required | Yes | Yes | Yes | **Yes** |
@@ -505,14 +492,25 @@ From the Besu source (`ethereum/eth/.../snap/SnapServer.java`):
 
 ## Conclusion
 
-Fukuii's SNAP/1 implementation is **structurally complete** and demonstrates **good engineering practices** in areas like adaptive byte budgeting, stagnation detection, peer management, and defensive features (bytecode subsequence checking, per-hash failure tracking) that go beyond what other implementations provide.
+Fukuii's SNAP/1 implementation is **structurally complete and now cryptographically sound**, with good engineering practices in areas like adaptive byte budgeting, stagnation detection, peer management, and defensive features (bytecode subsequence checking, per-hash failure tracking) that go beyond what other implementations provide.
 
-The wire protocol encoding is correct. The slim account decoding is properly handled. The sync pipeline covers all four SNAP message pairs.
+The wire protocol encoding is correct. The slim account decoding is properly handled. Dynamic capability offset negotiation is implemented via `InboundTranslator`. The sync pipeline covers all four SNAP message pairs.
 
-However, the **Merkle proof verification is fundamentally incomplete** (F3, F4). The current approach verifies that individual accounts exist at their expected paths in the proof, but does not verify that the proven range is **complete** — it cannot detect gaps where a malicious peer skipped accounts or storage slots. All three reference implementations (Geth, Nethermind, Besu) implement the full range proof algorithm: reconstruct a partial trie from proofs, clear internal references in the range, insert received data, and verify the root hash.
+### Fixes Applied
 
-The current `traversePath()` method returns `Right(())` (success) when a proof node is not found in the proof map (line 182-185 of `MerkleProofVerifier.scala`). This means ANY data passes verification if the proof is incomplete. This is the exact attack vector that SNAP's proof mechanism was designed to prevent.
+The critical proof verification gaps (F3, F4) have been resolved:
 
-Fukuii's final state root validation (phase 5) acts as a safety net, catching integrity issues at the end. While this prevents data corruption in the database, it does so after potentially hours of sync work, and cannot identify which peer sent bad data.
+- **`RangeProofVerifier`** (new) implements the full range proof verification algorithm used by geth, Nethermind, and Besu: reconstruct a partial trie skeleton from proof nodes, unset all interior references between boundary keys, insert delivered data, and verify the root hash matches the expected root. This detects gap attacks (skipped accounts/slots) and tampered data.
 
-**Overall assessment:** Functionally operational for honest networks with ETC mainnet (where peer behavior is generally cooperative). The sequential phase ordering (F8) adds sync time but is not a correctness issue. **For production use on untrusted networks, F3/F4 (range proof verification) must be fixed.** The fix is well-understood — the algorithm is documented in the geth source and used identically by Nethermind and Besu.
+- **`MerkleProofVerifier`** (rewritten) now delegates to `RangeProofVerifier` for both account and storage range verification. The old broken `traversePath()` / `traverseStoragePath()` methods — which silently accepted incomplete proofs (`case None => Right(())`) — are removed.
+
+- **F6 fix:** Proof-less storage responses now undergo full trie root verification via `RangeProofVerifier.verifyEntireTrie()`.
+
+- **Comprehensive tests** in `RangeProofVerifierSpec` and `MerkleProofVerifierSpec` exercise the algorithm with real Merkle Patricia Tries and genuine boundary proofs, covering entire-trie delivery, partial ranges, tampered data, gap attacks, and edge cases.
+
+### Remaining Items
+
+- **F8 (MEDIUM):** Sequential phase ordering (AccountRange → Storage) adds sync latency vs. interleaved download. Performance optimization, not a correctness issue.
+- **F9 (MEDIUM):** Round-trip encoding tests for all 8 SNAP message types still needed.
+
+**Overall assessment:** The implementation now matches geth, Nethermind, and Besu in proof verification rigor. Suitable for production use on untrusted networks. The sequential phase ordering (F8) is the main remaining optimization opportunity.
