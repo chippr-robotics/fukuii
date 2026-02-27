@@ -108,6 +108,14 @@ class SNAPSyncController(
   private var lastPivotRestartMs: Long = 0L
   private val MinPivotRestartInterval: FiniteDuration = 30.seconds
 
+  // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
+  // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
+  // PivotStateUnservable increments this; any successful account download resets it.
+  // After MaxConsecutivePivotRefreshes, we record a critical failure to accelerate
+  // fallback to fast sync instead of cycling pivots for 75+ minutes.
+  private var consecutivePivotRefreshes: Int = 0
+  private val MaxConsecutivePivotRefreshes = 3
+
   // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
   // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
   // arrives in the syncing state, the refresh is completed.
@@ -223,6 +231,8 @@ class SNAPSyncController(
 
     case ProgressAccountsSynced(count) =>
       progressMonitor.incrementAccountsSynced(count)
+      // Real account downloads mean SNAP is making progress — reset the pivot refresh counter.
+      if (count > 0) consecutivePivotRefreshes = 0
 
     case ProgressAccountsFinalizingTrie =>
       progressMonitor.setFinalizingTrie(true)
@@ -263,7 +273,23 @@ class SNAPSyncController(
         )
       } else if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
         lastPivotRestartMs = now
-        refreshPivotInPlace(reason)
+        consecutivePivotRefreshes += 1
+        if (consecutivePivotRefreshes >= MaxConsecutivePivotRefreshes) {
+          // Peers are consistently stateless across multiple pivot refreshes.
+          // This strongly indicates no peer has a snapshot database — SNAP sync
+          // cannot make progress regardless of which pivot we choose.
+          log.warning(
+            s"$consecutivePivotRefreshes consecutive pivot refreshes without progress. " +
+              "Peers likely lack snapshot databases."
+          )
+          if (recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes")) {
+            fallbackToFastSync()
+          } else {
+            restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
+          }
+        } else {
+          refreshPivotInPlace(reason)
+        }
       } else {
         log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
       }
@@ -1626,6 +1652,9 @@ class SNAPSyncController(
 
     // Clear any pending pivot refresh (we're doing a full restart instead)
     pendingPivotRefresh = None
+
+    // Reset pivot refresh counter for the new cycle
+    consecutivePivotRefreshes = 0
 
     // Cancel periodic phase request ticks
     accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
