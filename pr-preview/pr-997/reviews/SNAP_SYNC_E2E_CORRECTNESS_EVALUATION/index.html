@@ -6593,17 +6593,20 @@
 </tr>
 </tbody>
 </table>
-<p><strong>Finding F8 (MEDIUM): Sequential phase ordering is less efficient than interleaved.</strong></p>
-<p>Geth and Nethermind download storage ranges for accounts as soon as those accounts are received (interleaved with account range download). Fukuii waits until ALL accounts are downloaded before starting storage download. This has two consequences:</p>
-<ol>
-<li><strong>Performance:</strong> Adds latency — storage download can't start until account phase completes. On ETC mainnet (~2.3M accounts), this could add 10-30 minutes of idle time.</li>
-<li><strong>State root staleness:</strong> The longer the sync takes, the more likely the pivot's state root ages out of peers' serve window (128 blocks * ~13s = ~28 min on ETC). Fukuii mitigates this with pivot refresh, but interleaving would be more robust.</li>
-</ol>
+<p><strong>Finding F8 (MEDIUM): Sequential phase ordering is less efficient than interleaved — FIXED.</strong></p>
+<p><del>Geth and Nethermind download storage ranges for accounts as soon as those accounts are received (interleaved with account range download). Fukuii waits until ALL accounts are downloaded before starting storage download.</del></p>
+<p><strong>Fix:</strong> Implemented interleaved account + bytecode + storage downloading matching geth/Nethermind/Besu:
+- All three coordinators (AccountRange, ByteCode, StorageRange) are created and started together in <code>startAccountRangeSync()</code>
+- <code>AccountRangeCoordinator</code> streams discovered contract accounts to downstream coordinators via <code>AddByteCodeTasks</code> / <code>AddStorageTasks</code> messages as accounts are identified per-batch
+- <code>AllByteCodeTasksQueued</code> / <code>AllStorageTasksQueued</code> end-of-stream signals ensure coordinators don't report premature completion
+- Pekko actor message ordering guarantees all tasks are received before end-of-stream signals
+- Three-way completion tracking: StateHealing only starts when all three coordinators have finished
+- Pivot refresh signals are forwarded to all active coordinators</p>
 <p><strong>Comparison:</strong>
 - <strong>Geth:</strong> Interleaved — accounts and storage run concurrently
 - <strong>Nethermind:</strong> Interleaved — same
 - <strong>Besu:</strong> Interleaved — same
-- <strong>Fukuii:</strong> Sequential — AccountRange → ByteCode → StorageRange → Healing</p>
+- <strong>Fukuii:</strong> Interleaved — accounts, bytecodes, and storage now run concurrently — <strong>MATCHES</strong></p>
 <h3 id="62-pivot-selection-correct-with-good-defensive-measures">6.2 Pivot Selection — CORRECT with good defensive measures<a class="headerlink" href="#62-pivot-selection-correct-with-good-defensive-measures" title="Permanent link">&para;</a></h3>
 <p>Pivot selection follows the core-geth pattern: <code>pivot = networkBest - offset</code>. The offset of 128 blocks (configurable) is more conservative than geth's 64 (though the code comments say 64 while config shows 128). The implementation includes:
 - Peer height validation
@@ -6807,7 +6810,7 @@
 <tr>
 <td>F8</td>
 <td>Sequential phases instead of interleaved</td>
-<td>Open — performance optimization, not correctness</td>
+<td><strong>FIXED</strong> — interleaved account+bytecode+storage downloading matching geth/Nethermind/Besu</td>
 </tr>
 <tr>
 <td>F9</td>
@@ -7062,10 +7065,9 @@
 </ul>
 <h3 id="remaining-items">Remaining Items<a class="headerlink" href="#remaining-items" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>F8 (MEDIUM):</strong> Sequential phase ordering (AccountRange → Storage) adds sync latency vs. interleaved download. Performance optimization, not a correctness issue.</li>
 <li><strong>F9 (MEDIUM):</strong> Round-trip encoding tests for all 8 SNAP message types still needed.</li>
 </ul>
-<p><strong>Overall assessment:</strong> The implementation now matches geth, Nethermind, and Besu in proof verification rigor. Suitable for production use on untrusted networks. The sequential phase ordering (F8) is the main remaining optimization opportunity.</p>
+<p><strong>Overall assessment:</strong> The implementation now matches geth, Nethermind, and Besu in both proof verification rigor and download architecture. All three download phases (accounts, bytecodes, storage) run concurrently, matching the interleaved approach used by all major clients. Suitable for production use on untrusted networks. F9 (message encoding tests) is the only remaining open finding.</p>
 
 
 
