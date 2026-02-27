@@ -106,7 +106,7 @@ class StorageRangeCoordinatorSpec
     expectMsgType[Any](3.seconds)
   }
 
-  it should "report completion when no storage tasks" taggedAs UnitTest in {
+  it should "report completion when no storage tasks and AllStorageTasksQueued received" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
@@ -127,10 +127,80 @@ class StorageRangeCoordinatorSpec
     )
 
     coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    // Without AllStorageTasksQueued, completion should NOT be reported
     coordinator ! Messages.StorageCheckCompletion
-    
-    // Should complete immediately if no tasks
+    snapSyncController.expectNoMessage(500.millis)
+
+    // Now signal end-of-stream
+    coordinator ! Messages.AllStorageTasksQueued
+
+    // Should complete now
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncComplete)
+  }
+
+  // ===========================================================================
+  // Interleaved downloading tests
+  // ===========================================================================
+
+  it should "not report completion before AllStorageTasksQueued" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("test-state-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+    // Trigger completion check without AllStorageTasksQueued — should be a no-op
+    coordinator ! Messages.StorageCheckCompletion
+    snapSyncController.expectNoMessage(500.millis)
+  }
+
+  it should "accept incremental AddStorageTasks during interleaved downloading" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("test-state-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    // Simulate streaming storage tasks from AccountRangeCoordinator
+    val accountHash = kec256(ByteString("account1"))
+    val storageRoot = kec256(ByteString("storage-root-1"))
+    val tasks = StorageTask.createStorageTasks(Seq((accountHash, storageRoot)))
+    coordinator ! Messages.AddStorageTasks(tasks)
+
+    // Verify progress shows pending tasks
+    coordinator ! Messages.StorageGetProgress
+    val stats = expectMsgType[StorageRangeCoordinator.SyncStatistics](3.seconds)
+    stats.tasksPending shouldBe 1
   }
 
   it should "handle task failures" taggedAs UnitTest in {

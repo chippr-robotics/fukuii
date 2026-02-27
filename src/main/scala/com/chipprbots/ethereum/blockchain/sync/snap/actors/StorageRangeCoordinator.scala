@@ -122,6 +122,12 @@ class StorageRangeCoordinator(
   private var totalStorageContracts: Int = 0
   private val completedAccountHashes = mutable.Set[ByteString]()
 
+  // When true, all storage tasks have been queued (account range sync complete).
+  // Completion is only reported after this flag is set. Without it, the coordinator
+  // would prematurely report completion when started with an empty task queue during
+  // interleaved downloading.
+  private var allTasksQueued: Boolean = false
+
   // Pivot refresh backoff: prevents rapid refresh loops when no peers can serve any recent root.
   // After each unproductive refresh (one that doesn't yield real slot data), the backoff interval
   // doubles from 60s up to 5 minutes. Resets to 0 when we receive actual storage slots.
@@ -305,10 +311,16 @@ class StorageRangeCoordinator(
           log.warning(s"Storage task failed: $error")
       }
 
+    case AllStorageTasksQueued =>
+      allTasksQueued = true
+      log.info(s"All storage tasks queued (pending=${tasks.size}, active=${activeTasks.size}, completed=${completedTasks.size})")
+      // Check if we're already done (all streamed tasks already completed)
+      self ! StorageCheckCompletion
+
     case StorageCheckCompletion =>
       // Update contract completion progress for the progress monitor
       updateContractProgress()
-      if (isComplete) {
+      if (allTasksQueued && isComplete) {
         // Final flush before reporting completion
         deferredStorage.flush()
         log.info("Storage range sync complete!")

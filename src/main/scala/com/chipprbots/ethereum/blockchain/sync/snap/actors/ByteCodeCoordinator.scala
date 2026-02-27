@@ -98,6 +98,18 @@ class ByteCodeCoordinator(
   private val maxWorkers = 32
   private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
 
+  // When true, all bytecode tasks have been queued (account range sync complete).
+  // Completion is only reported after this flag is set. Without it, the coordinator
+  // would prematurely report completion when started with an empty task queue during
+  // interleaved downloading.
+  private var allTasksQueued: Boolean = false
+
+  // Cross-batch deduplication of code hashes for incremental AddByteCodeTasks.
+  // In the sequential flow, filterAndDedupeContractAccounts is called once with all
+  // contracts. In the interleaved flow, it's called per-batch, so we track seen
+  // hashes across batches to avoid requesting the same bytecode twice.
+  private val seenCodeHashes = mutable.HashSet.empty[ByteString]
+
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -153,10 +165,34 @@ class ByteCodeCoordinator(
     case StartByteCodeSync(contractAccounts) =>
       log.info(s"Starting bytecode sync for ${contractAccounts.size} contracts")
 
-      val filteredAccounts = filterAndDedupeContractAccounts(contractAccounts)
-      val newTasks = ByteCodeTask.createBytecodeTasksFromAccounts(filteredAccounts, batchSize)
-      pendingTasks.enqueueAll(newTasks)
-      log.info(s"Queued ${newTasks.size} bytecode tasks")
+      if (contractAccounts.nonEmpty) {
+        val filteredAccounts = filterAndDedupeContractAccounts(contractAccounts)
+        val newTasks = ByteCodeTask.createBytecodeTasksFromAccounts(filteredAccounts, batchSize)
+        pendingTasks.enqueueAll(newTasks)
+        log.info(s"Queued ${newTasks.size} bytecode tasks")
+      }
+
+      // In the sequential flow, StartByteCodeSync carries all contracts at once,
+      // so we can determine completion immediately.
+      if (!allTasksQueued) {
+        allTasksQueued = true
+      }
+
+    case AddByteCodeTasks(contracts) =>
+      // Incremental task addition during interleaved downloading.
+      if (contracts.nonEmpty) {
+        val filteredAccounts = filterAndDedupeContractAccounts(contracts)
+        if (filteredAccounts.nonEmpty) {
+          val newTasks = ByteCodeTask.createBytecodeTasksFromAccounts(filteredAccounts, batchSize)
+          pendingTasks.enqueueAll(newTasks)
+          log.info(s"Added ${newTasks.size} bytecode tasks from streaming (total pending: ${pendingTasks.size})")
+        }
+      }
+
+    case AllByteCodeTasksQueued =>
+      allTasksQueued = true
+      log.info(s"All bytecode tasks queued (pending=${pendingTasks.size}, active=${activeTasks.size})")
+      checkCompletion()
 
     case PeerAvailable(peer) =>
       if (isPeerCoolingDown(peer)) {
@@ -445,7 +481,7 @@ class ByteCodeCoordinator(
     }
 
   private def checkCompletion(): Unit = {
-    if (pendingTasks.isEmpty && activeTasks.isEmpty) {
+    if (allTasksQueued && pendingTasks.isEmpty && activeTasks.isEmpty) {
       log.info("Bytecode sync complete!")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
     }
@@ -477,7 +513,8 @@ class ByteCodeCoordinator(
   ): Seq[(ByteString, ByteString)] = {
     // Filter invalid hashes strictly; do not fabricate/pad/truncate.
     // Dedupe by codeHash (storage is keyed by codeHash; requesting duplicates is redundant).
-    val seen = mutable.HashSet.empty[ByteString]
+    // Uses the persistent seenCodeHashes set for cross-batch deduplication during
+    // interleaved downloading (where AddByteCodeTasks is sent per-batch).
     val invalidSamples = mutable.ArrayBuffer.empty[String]
 
     val filtered = contractAccounts.flatMap { case (accountHash, codeHash) =>
@@ -487,10 +524,10 @@ class ByteCodeCoordinator(
       } else if (codeHash == Account.EmptyCodeHash) {
         // Defensive: caller should already have filtered these out.
         None
-      } else if (seen.contains(codeHash)) {
+      } else if (seenCodeHashes.contains(codeHash)) {
         None
       } else {
-        seen += codeHash
+        seenCodeHashes += codeHash
         Some((accountHash, codeHash))
       }
     }
@@ -498,7 +535,7 @@ class ByteCodeCoordinator(
     if (invalidSamples.nonEmpty) {
       log.warning(
         s"Dropping ${invalidSamples.size} contract accounts with non-32-byte codeHash. " +
-          s"Sample: ${invalidSamples.take(10).mkString(", ")}" 
+          s"Sample: ${invalidSamples.take(10).mkString(", ")}"
       )
     }
 

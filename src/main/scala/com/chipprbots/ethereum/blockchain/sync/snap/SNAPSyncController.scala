@@ -76,19 +76,12 @@ class SNAPSyncController(
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[ByteString] = None
 
-  // Guards to prevent duplicate phase-starts when upstream coordinators emit duplicate completion signals.
-  private var bytecodeSyncStarting: Boolean = false
-  private var storageRangeSyncStarting: Boolean = false
-
-  // Contract accounts collected for bytecode download
-  private var contractAccounts = Seq.empty[(ByteString, ByteString)]
-  private var contractStorageAccounts = Seq.empty[(ByteString, ByteString)]
-
-  // Internal message used to deliver contract-account query results back through the actor mailbox.
-  private case class ContractAccountsReady(
-      bytecodeAccounts: Seq[(ByteString, ByteString)],
-      storageAccounts: Seq[(ByteString, ByteString)]
-  )
+  // Interleaved completion tracking: all three coordinators (account, bytecode, storage)
+  // run concurrently during AccountRangeSync phase. Each sets its flag when complete.
+  // When all three are done, we proceed to StateHealing.
+  private var accountRangeComplete: Boolean = false
+  private var bytecodeComplete: Boolean = false
+  private var storageComplete: Boolean = false
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -306,76 +299,56 @@ class SNAPSyncController(
         log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
       }
 
-    // Note: phase transitions are driven by the *start* methods (e.g. startBytecodeSync)
-    // to keep phase-start logging idempotent and centralized.
+    // Note: with interleaved downloading, all three coordinators (account, bytecode, storage)
+    // are started together in startAccountRangeSync(). Phase transitions below track completion.
+
+    // ---- Interleaved completion: account + bytecode + storage run concurrently ----
+    // All three coordinators are started during startAccountRangeSync(). Tasks are
+    // streamed from AccountRangeCoordinator to the bytecode/storage coordinators as
+    // accounts are discovered. Each coordinator reports completion independently.
+    // When all three are done, we proceed to StateHealing.
 
     case AccountRangeSyncComplete =>
-      if (storageRangeSyncStarting || currentPhase != AccountRangeSync) {
-        log.info(
-          s"Ignoring AccountRangeSyncComplete in phase=$currentPhase (storageRangeSyncStarting=$storageRangeSyncStarting)"
-        )
+      if (accountRangeComplete) {
+        log.info("Ignoring duplicate AccountRangeSyncComplete")
       } else {
-        storageRangeSyncStarting = true
-        log.info("Account range sync complete. Starting storage range sync...")
+        accountRangeComplete = true
+        log.info("Account range sync complete.")
+        // Cancel account-phase peer notifications and stagnation (accounts are done)
+        accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
+        accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
 
-        import org.apache.pekko.pattern.{ ask, pipe }
-        import org.apache.pekko.util.Timeout
-        import scala.concurrent.duration._
-        implicit val timeout: Timeout = Timeout(5.seconds)
-
-        accountRangeCoordinator match {
-          case Some(coordinator) =>
-            val bytecodeAccountsF = (coordinator ? actors.Messages.GetContractAccounts)
-              .mapTo[actors.Messages.ContractAccountsResponse]
-              .map(_.accounts)
-
-            val storageAccountsF = (coordinator ? actors.Messages.GetContractStorageAccounts)
-              .mapTo[actors.Messages.ContractStorageAccountsResponse]
-              .map(_.accounts)
-
-            (for {
-              bytecodeAccounts <- bytecodeAccountsF
-              storageAccounts <- storageAccountsF
-            } yield ContractAccountsReady(bytecodeAccounts, storageAccounts))
-              .recover { case ex =>
-                log.warning(s"Failed to query contract accounts for bytecode/storage sync: ${ex.getMessage}")
-                ContractAccountsReady(Seq.empty, Seq.empty)
-              }
-              .pipeTo(self)
-          case None =>
-            self ! ContractAccountsReady(Seq.empty, Seq.empty)
+        // If storage/bytecode are still running, transition to StorageRangeSync phase
+        // so that storage stagnation detection applies.
+        if (!bytecodeComplete || !storageComplete) {
+          currentPhase = StorageRangeSync
+          lastStorageProgressMs = System.currentTimeMillis()
+          scheduleStorageStagnationChecks()
+          progressMonitor.startPhase(StorageRangeSync)
         }
-      }
 
-    case ContractAccountsReady(bytecodeAccounts, storageAccounts) =>
-      if (currentPhase != AccountRangeSync) {
-        log.info(s"Ignoring ContractAccountsReady in phase=$currentPhase")
-      } else {
-        contractAccounts = bytecodeAccounts
-        contractStorageAccounts = storageAccounts
-        log.info(
-          s"Collected ${contractAccounts.size} contract accounts for bytecode sync and ${contractStorageAccounts.size} for storage sync from coordinator"
-        )
-        currentPhase = ByteCodeSync
-        startBytecodeSync()
+        checkInterleavedCompletion()
       }
 
     case ByteCodeSyncComplete =>
-      if (currentPhase != ByteCodeSync) {
-        log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase")
+      if (bytecodeComplete) {
+        log.info("Ignoring duplicate ByteCodeSyncComplete")
       } else {
-        log.info("ByteCode sync complete. Starting storage range sync...")
-        currentPhase = StorageRangeSync
-        startStorageRangeSync()
+        bytecodeComplete = true
+        log.info("ByteCode sync complete.")
+        bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
+        checkInterleavedCompletion()
       }
 
     case StorageRangeSyncComplete =>
-      if (currentPhase != StorageRangeSync) {
-        log.info(s"Ignoring StorageRangeSyncComplete in phase=$currentPhase")
+      if (storageComplete) {
+        log.info("Ignoring duplicate StorageRangeSyncComplete")
       } else {
-        log.info("Storage range sync complete. Starting state healing...")
-        currentPhase = StateHealing
-        startStateHealing()
+        storageComplete = true
+        log.info("Storage range sync complete.")
+        storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+        storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+        checkInterleavedCompletion()
       }
 
     case StateHealingComplete =>
@@ -439,6 +412,21 @@ class SNAPSyncController(
   private case object CheckStorageStagnation
 
   private case class StorageCoordinatorProgress(stats: actors.StorageRangeCoordinator.SyncStatistics)
+
+  /** Check if all interleaved phases (account, bytecode, storage) are complete.
+    * If so, proceed to StateHealing. Called each time a coordinator reports completion.
+    */
+  private def checkInterleavedCompletion(): Unit = {
+    log.info(
+      s"Interleaved completion check: accounts=$accountRangeComplete, " +
+        s"bytecodes=$bytecodeComplete, storage=$storageComplete"
+    )
+    if (accountRangeComplete && bytecodeComplete && storageComplete) {
+      log.info("All interleaved phases complete (accounts + bytecodes + storage). Starting state healing...")
+      currentPhase = StateHealing
+      startStateHealing()
+    }
+  }
 
   private def scheduleStorageStagnationChecks(): Unit = {
     storageStagnationCheckTask.foreach(_.cancel())
@@ -1031,16 +1019,28 @@ class SNAPSyncController(
     context.become(completed)
   }
 
+  /** Start interleaved account + bytecode + storage downloading.
+    *
+    * Creates all three coordinators (account, bytecode, storage) concurrently.
+    * The AccountRangeCoordinator streams discovered contract accounts to the
+    * bytecode and storage coordinators as they are identified — matching
+    * geth/Nethermind/Besu behavior. This reduces total wall time by overlapping
+    * the three download phases, keeping the sync within the SNAP serve window
+    * (~128 blocks * ~13s ≈ 28 min on ETC) and avoiding stale state roots.
+    */
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
-    log.info(s"Starting account range sync with concurrency ${snapSyncConfig.accountConcurrency}")
-    log.info("Using actor-based concurrency for account range sync")
+    log.info(s"Starting interleaved account+bytecode+storage sync (concurrency=${snapSyncConfig.accountConcurrency})")
 
-    // Reset stagnation tracking for this phase.
+    // Reset stagnation and completion tracking for this sync cycle.
     lastAccountProgressMs = System.currentTimeMillis()
     lastAccountTasksCompleted = 0
-    
+    accountRangeComplete = false
+    bytecodeComplete = false
+    storageComplete = false
+
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
 
+    // 1. Create AccountRangeCoordinator
     accountRangeCoordinator = Some(
       context.actorOf(
         actors.AccountRangeCoordinator.props(
@@ -1054,18 +1054,60 @@ class SNAPSyncController(
         s"account-range-coordinator-$coordinatorGeneration"
       )
     )
-    
-    // Start the coordinator
+
+    // 2. Create ByteCodeCoordinator (starts empty — tasks streamed from AccountRangeCoordinator)
+    bytecodeCoordinator = Some(
+      context.actorOf(
+        actors.ByteCodeCoordinator.props(
+          evmCodeStorage = evmCodeStorage,
+          networkPeerManager = networkPeerManager,
+          requestTracker = requestTracker,
+          batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
+          snapSyncController = self
+        ),
+        s"bytecode-coordinator-$coordinatorGeneration"
+      )
+    )
+
+    // 3. Create StorageRangeCoordinator (starts empty — tasks streamed from AccountRangeCoordinator)
+    storageRangeCoordinator = Some(
+      context.actorOf(
+        actors.StorageRangeCoordinator.props(
+          stateRoot = rootHash,
+          networkPeerManager = networkPeerManager,
+          requestTracker = requestTracker,
+          mptStorage = storage,
+          maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+          maxInFlightRequests = snapSyncConfig.storageConcurrency,
+          requestTimeout = snapSyncConfig.timeout,
+          snapSyncController = self
+        ),
+        s"storage-range-coordinator-$coordinatorGeneration"
+      )
+    )
+
+    // Wire up interleaved downloading: AccountRangeCoordinator streams tasks to downstream coordinators
+    (accountRangeCoordinator, storageRangeCoordinator, bytecodeCoordinator) match {
+      case (Some(acctCoord), Some(storCoord), Some(bcCoord)) =>
+        acctCoord ! actors.Messages.SetDownstreamCoordinators(storCoord, bcCoord)
+      case _ =>
+        log.error("Failed to create coordinators for interleaved downloading")
+    }
+
+    // Start coordinators
     accountRangeCoordinator.foreach(_ ! actors.Messages.StartAccountRangeSync(rootHash))
-    
-    // Periodically send peer availability notifications
+    storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootHash))
+    // ByteCodeCoordinator doesn't need a Start message — it receives tasks via AddByteCodeTasks
+
+    // Schedule periodic peer availability notifications for all three coordinators
     accountRangeRequestTask = Some(
-      scheduler.scheduleWithFixedDelay(
-        0.seconds,
-        1.second,
-        self,
-        RequestAccountRanges
-      )(ec)
+      scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestAccountRanges)(ec)
+    )
+    bytecodeRequestTask = Some(
+      scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec)
+    )
+    storageRangeRequestTask = Some(
+      scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec)
     )
 
     scheduleAccountStagnationChecks()
@@ -1100,53 +1142,6 @@ class SNAPSyncController(
     }
   }
 
-  private def startBytecodeSync(): Unit = {
-    log.info(s"Starting bytecode sync with batch size ${ByteCodeTask.DEFAULT_BATCH_SIZE}")
-
-    if (bytecodeCoordinator.nonEmpty) {
-      log.warning("Bytecode sync already started (bytecodeCoordinator is defined); skipping duplicate start")
-      return
-    }
-
-    if (contractAccounts.isEmpty) {
-      log.info("No contract accounts found, skipping bytecode sync")
-      self ! ByteCodeSyncComplete
-      return
-    }
-
-    log.info(s"Found ${contractAccounts.size} contract accounts for bytecode download")
-    log.info("Using actor-based concurrency for bytecode sync")
-    
-    bytecodeCoordinator = Some(
-      context.actorOf(
-        actors.ByteCodeCoordinator.props(
-          evmCodeStorage = evmCodeStorage,
-          networkPeerManager = networkPeerManager,
-          requestTracker = requestTracker,
-          batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
-          snapSyncController = self
-        ),
-        s"bytecode-coordinator-$coordinatorGeneration"
-      )
-    )
-    
-    // Start the coordinator with contract accounts
-    bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(contractAccounts))
-    
-    // Periodically send peer availability notifications
-    bytecodeRequestTask = Some(
-      scheduler.scheduleWithFixedDelay(
-        0.seconds,
-        1.second,
-        self,
-        RequestByteCodes
-      )(ec)
-    )
-
-    progressMonitor.startPhase(ByteCodeSync)
-    progressMonitor.updateEstimates(bytecodes = contractAccounts.size.toLong)
-  }
-
   // Internal message for periodic bytecode requests
   private case object RequestByteCodes
 
@@ -1166,76 +1161,6 @@ class SNAPSyncController(
           coordinator ! actors.Messages.ByteCodePeerAvailable(peer)
         }
       }
-    }
-  }
-
-  private def startStorageRangeSync(): Unit = {
-    log.info(s"Starting storage range sync with concurrency ${snapSyncConfig.storageConcurrency}")
-
-    if (storageRangeCoordinator.nonEmpty) {
-      log.warning("Storage range sync already started (storageRangeCoordinator is defined); skipping duplicate start")
-      return
-    }
-
-    stateRoot.foreach { root =>
-      log.info("Using actor-based concurrency for storage range sync")
-
-      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
-
-      storageRangeCoordinator = Some(
-        context.actorOf(
-          actors.StorageRangeCoordinator.props(
-            stateRoot = root,
-            networkPeerManager = networkPeerManager,
-            requestTracker = requestTracker,
-            mptStorage = storage,
-            maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
-            maxInFlightRequests = snapSyncConfig.storageConcurrency,
-            requestTimeout = snapSyncConfig.timeout,
-            snapSyncController = self
-          ),
-          s"storage-range-coordinator-$coordinatorGeneration"
-        )
-      )
-      
-      // Start the coordinator
-      storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(root))
-
-      // Enqueue initial storage tasks derived from contract accounts found during AccountRangeSync.
-      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-      val (nonEmptyStorage, emptyStorage) = contractStorageAccounts.partition { case (_, storageRoot) =>
-        storageRoot.nonEmpty && storageRoot != emptyRoot
-      }
-      if (emptyStorage.nonEmpty) {
-        log.info(s"Skipping ${emptyStorage.size} contract accounts with empty storageRoot")
-      }
-
-      val storageTasks = StorageTask.createStorageTasks(nonEmptyStorage)
-      if (storageTasks.isEmpty) {
-        log.warning(
-          "No contract accounts with non-empty storageRoot; completing StorageRangeSync immediately"
-        )
-        self ! StorageRangeSyncComplete
-      } else {
-        log.info(s"Enqueuing ${storageTasks.size} storage tasks (non-empty storageRoot only)")
-        storageRangeCoordinator.foreach(_ ! actors.Messages.AddStorageTasks(storageTasks))
-      }
-      
-      // Periodically send peer availability notifications
-      storageRangeRequestTask = Some(
-        scheduler.scheduleWithFixedDelay(
-          0.seconds,
-          1.second,
-          self,
-          RequestStorageRanges
-        )(ec)
-      )
-
-      // Start/refresh storage stagnation watchdog state.
-      lastStorageProgressMs = System.currentTimeMillis()
-      scheduleStorageStagnationChecks()
-
-      progressMonitor.startPhase(StorageRangeSync)
     }
   }
 
@@ -1606,12 +1531,10 @@ class SNAPSyncController(
     appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
 
-    // Send refresh signal to active coordinator
-    if (currentPhase == AccountRangeSync) {
-      accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
-    } else if (currentPhase == StorageRangeSync) {
-      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(newStateRoot))
-    }
+    // Send refresh signal to ALL active coordinators. With interleaved downloading,
+    // account, bytecode, and storage coordinators may all be active during AccountRangeSync phase.
+    accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
+    storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(newStateRoot))
 
     // Reset account stagnation timer during pivot refresh recovery.
     // Note: do NOT reset lastStorageProgressMs — only actual slot downloads (via
@@ -1646,11 +1569,10 @@ class SNAPSyncController(
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
 
-    // Clear phase start guards and cached contract accounts
-    bytecodeSyncStarting = false
-    storageRangeSyncStarting = false
-    contractAccounts = Seq.empty
-    contractStorageAccounts = Seq.empty
+    // Reset interleaved completion flags
+    accountRangeComplete = false
+    bytecodeComplete = false
+    storageComplete = false
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None
@@ -1709,15 +1631,20 @@ class SNAPSyncController(
     // SNAP sync involves multiple phases: accounts, bytecode, storage, healing
     val (pulledStates, knownStates) = currentPhase match {
       case AccountRangeSync =>
-        // In account range sync, we track accounts synced
-        (progress.accountsSynced, estimateOrActual(progress.estimatedTotalAccounts, progress.accountsSynced))
-      
+        // With interleaved downloading, accounts + bytecodes + storage run concurrently
+        val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
+        val known = estimateOrActual(progress.estimatedTotalAccounts, progress.accountsSynced) +
+                   estimateOrActual(progress.estimatedTotalBytecodes, progress.bytecodesDownloaded) +
+                   estimateOrActual(progress.estimatedTotalSlots, progress.storageSlotsSynced)
+        (pulled, known)
+
       case ByteCodeSync =>
-        // In bytecode sync, we add accounts + bytecodes
+        // Legacy: ByteCodeSync phase is no longer used with interleaved downloading,
+        // but kept for backward compatibility.
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded
         val known = progress.estimatedTotalAccounts + estimateOrActual(progress.estimatedTotalBytecodes, progress.bytecodesDownloaded)
         (pulled, known)
-      
+
       case StorageRangeSync =>
         // In storage sync, we add accounts + bytecodes + storage slots
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced

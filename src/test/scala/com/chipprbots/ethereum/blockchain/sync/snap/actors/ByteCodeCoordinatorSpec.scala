@@ -352,6 +352,127 @@ class ByteCodeCoordinatorSpec
     req2.hashes shouldEqual Seq(h1)
   }
 
+  // ===========================================================================
+  // Interleaved downloading tests
+  // ===========================================================================
+
+  it should "not report completion before AllByteCodeTasksQueued" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Without sending StartByteCodeSync or AllByteCodeTasksQueued, the coordinator
+    // should NOT report completion even though it has no pending/active tasks.
+    coordinator ! Messages.ByteCodeCheckCompletion
+    snapSyncController.expectNoMessage(500.millis)
+  }
+
+  it should "report completion after AllByteCodeTasksQueued with empty queue" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Simulate: account range found zero contracts. Signal end-of-stream.
+    coordinator ! Messages.AllByteCodeTasksQueued
+
+    // Now completion should fire
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
+  }
+
+  it should "handle incremental AddByteCodeTasks during interleaved downloading" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val code1 = ByteString("code1")
+    val h1 = kec256(code1)
+
+    // Stream a batch of contracts (simulating AccountRangeCoordinator discovering contracts)
+    coordinator ! Messages.AddByteCodeTasks(Seq((ByteString("account1"), h1)))
+
+    // Peer available should trigger download
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[Any](3.seconds)
+  }
+
+  it should "deduplicate code hashes across AddByteCodeTasks batches" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("test-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val code1 = ByteString("code1")
+    val h1 = kec256(code1)
+
+    // Send the same code hash in two batches
+    coordinator ! Messages.AddByteCodeTasks(Seq((ByteString("account1"), h1)))
+    coordinator ! Messages.AddByteCodeTasks(Seq((ByteString("account2"), h1)))  // duplicate codeHash
+
+    // Only one task should be created (deduplicated across batches)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req1.hashes should have size 1
+    req1.hashes.head shouldEqual h1
+
+    // Respond successfully
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(
+      ByteCodes(req1.requestId, Seq(code1))
+    )
+
+    // Signal end-of-stream, should complete
+    coordinator ! Messages.AllByteCodeTasksQueued
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
+  }
+
   it should "cool down peers after empty ByteCodes responses" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)

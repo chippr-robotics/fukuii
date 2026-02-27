@@ -277,18 +277,23 @@ Response nodes are matched positionally to request paths (`nodes.zip(tasksForReq
 | 4 | Healing | Healing | Healing |
 | 5 | Validation | Validation | Validation |
 
-**Finding F8 (MEDIUM): Sequential phase ordering is less efficient than interleaved.**
+**Finding F8 (MEDIUM): Sequential phase ordering is less efficient than interleaved — FIXED.**
 
-Geth and Nethermind download storage ranges for accounts as soon as those accounts are received (interleaved with account range download). Fukuii waits until ALL accounts are downloaded before starting storage download. This has two consequences:
+~~Geth and Nethermind download storage ranges for accounts as soon as those accounts are received (interleaved with account range download). Fukuii waits until ALL accounts are downloaded before starting storage download.~~
 
-1. **Performance:** Adds latency — storage download can't start until account phase completes. On ETC mainnet (~2.3M accounts), this could add 10-30 minutes of idle time.
-2. **State root staleness:** The longer the sync takes, the more likely the pivot's state root ages out of peers' serve window (128 blocks * ~13s = ~28 min on ETC). Fukuii mitigates this with pivot refresh, but interleaving would be more robust.
+**Fix:** Implemented interleaved account + bytecode + storage downloading matching geth/Nethermind/Besu:
+- All three coordinators (AccountRange, ByteCode, StorageRange) are created and started together in `startAccountRangeSync()`
+- `AccountRangeCoordinator` streams discovered contract accounts to downstream coordinators via `AddByteCodeTasks` / `AddStorageTasks` messages as accounts are identified per-batch
+- `AllByteCodeTasksQueued` / `AllStorageTasksQueued` end-of-stream signals ensure coordinators don't report premature completion
+- Pekko actor message ordering guarantees all tasks are received before end-of-stream signals
+- Three-way completion tracking: StateHealing only starts when all three coordinators have finished
+- Pivot refresh signals are forwarded to all active coordinators
 
 **Comparison:**
 - **Geth:** Interleaved — accounts and storage run concurrently
 - **Nethermind:** Interleaved — same
 - **Besu:** Interleaved — same
-- **Fukuii:** Sequential — AccountRange → ByteCode → StorageRange → Healing
+- **Fukuii:** Interleaved — accounts, bytecodes, and storage now run concurrently — **MATCHES**
 
 ### 6.2 Pivot Selection — CORRECT with good defensive measures
 
@@ -393,7 +398,7 @@ The `SNAPSyncIntegrationSpec` tests coordinator lifecycle and message flow but *
 | F1 | Hardcoded protocol offset (0x21) | **Non-issue** — `InboundTranslator` handles dynamic offset computation |
 | F5 | (Noted but correctly handled) | N/A |
 | F6 | No trie root verification for proof-less storage responses | **FIXED** — `RangeProofVerifier.verifyEntireTrie()` rebuilds trie and verifies root |
-| F8 | Sequential phases instead of interleaved | Open — performance optimization, not correctness |
+| F8 | Sequential phases instead of interleaved | **FIXED** — interleaved account+bytecode+storage downloading matching geth/Nethermind/Besu |
 | F9 | Minimal message encoding tests | Open |
 | F10 | No e2e test with real proofs | **FIXED** — `RangeProofVerifierSpec` and `MerkleProofVerifierSpec` test with real tries and genuine boundary proofs |
 
@@ -510,7 +515,6 @@ The critical proof verification gaps (F3, F4) have been resolved:
 
 ### Remaining Items
 
-- **F8 (MEDIUM):** Sequential phase ordering (AccountRange → Storage) adds sync latency vs. interleaved download. Performance optimization, not a correctness issue.
 - **F9 (MEDIUM):** Round-trip encoding tests for all 8 SNAP message types still needed.
 
-**Overall assessment:** The implementation now matches geth, Nethermind, and Besu in proof verification rigor. Suitable for production use on untrusted networks. The sequential phase ordering (F8) is the main remaining optimization opportunity.
+**Overall assessment:** The implementation now matches geth, Nethermind, and Besu in both proof verification rigor and download architecture. All three download phases (accounts, bytecodes, storage) run concurrently, matching the interleaved approach used by all major clients. Suitable for production use on untrusted networks. F9 (message encoding tests) is the only remaining open finding.

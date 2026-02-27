@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
+import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.blockchain.sync.snap._
@@ -27,6 +28,13 @@ object Messages {
   case object GetContractStorageAccounts extends AccountRangeCoordinatorMessage
   case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object CheckCompletion extends AccountRangeCoordinatorMessage
+
+  /** Sent by SNAPSyncController to tell the AccountRangeCoordinator where to stream
+    * discovered contract accounts for concurrent bytecode and storage downloading. */
+  case class SetDownstreamCoordinators(
+      storageCoordinator: ActorRef,
+      bytecodeCoordinator: ActorRef
+  ) extends AccountRangeCoordinatorMessage
 
   /** Sent by SNAPSyncController when a fresher pivot has been selected.
     * Coordinator updates pending tasks with the new root and resumes downloading. */
@@ -59,6 +67,14 @@ object Messages {
   case object ByteCodeGetProgress extends ByteCodeCoordinatorMessage
   case object ByteCodeCheckCompletion extends ByteCodeCoordinatorMessage
 
+  /** Incrementally add bytecode tasks discovered during account range sync.
+    * Sent by AccountRangeCoordinator when contract accounts are identified per-batch. */
+  case class AddByteCodeTasks(contractAccounts: Seq[(ByteString, ByteString)]) extends ByteCodeCoordinatorMessage
+
+  /** Signals that no more bytecode tasks will be added (account range sync is complete).
+    * Only after receiving this can the coordinator determine true completion. */
+  case object AllByteCodeTasksQueued extends ByteCodeCoordinatorMessage
+
   sealed trait ByteCodeWorkerMessage
   case class FetchByteCodes(task: ByteCodeTask, peer: Peer) extends ByteCodeWorkerMessage
   case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt) extends ByteCodeWorkerMessage
@@ -80,6 +96,10 @@ object Messages {
   case class StorageTaskFailed(requestId: BigInt, reason: String) extends StorageRangeCoordinatorMessage
   case object StorageGetProgress extends StorageRangeCoordinatorMessage
   case object StorageCheckCompletion extends StorageRangeCoordinatorMessage
+
+  /** Signals that no more storage tasks will be added (account range sync is complete).
+    * Only after receiving this can the coordinator determine true completion. */
+  case object AllStorageTasksQueued extends StorageRangeCoordinatorMessage
 
   sealed trait StorageRangeWorkerMessage
   case class FetchStorageRanges(task: StorageTask, peer: Peer) extends StorageRangeWorkerMessage

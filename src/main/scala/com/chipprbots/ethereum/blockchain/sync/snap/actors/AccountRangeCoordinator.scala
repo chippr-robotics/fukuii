@@ -161,6 +161,12 @@ class AccountRangeCoordinator(
   // Contract accounts collected for storage download (accountHash -> storageRoot)
   private val contractStorageAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
 
+  // Downstream coordinator references for interleaved downloading.
+  // When set, contract accounts are streamed to these coordinators as they're discovered
+  // during account range sync, rather than waiting until all accounts are downloaded.
+  private var downstreamStorageCoordinator: Option[ActorRef] = None
+  private var downstreamBytecodeCoordinator: Option[ActorRef] = None
+
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -262,6 +268,11 @@ class AccountRangeCoordinator(
     case StartAccountRangeSync(root) =>
       log.info(s"Starting account range sync for state root ${root.take(8).toHex}")
       // Tasks already initialized in constructor
+
+    case SetDownstreamCoordinators(storageCoord, bytecodeCoord) =>
+      downstreamStorageCoordinator = Some(storageCoord)
+      downstreamBytecodeCoordinator = Some(bytecodeCoord)
+      log.info("Downstream coordinators set for interleaved downloading")
 
     case AccountRangeResponseMsg(response) =>
       activeTasks.get(response.requestId) match {
@@ -376,14 +387,17 @@ class AccountRangeCoordinator(
   private def finalizing: Receive = {
     case TrieFlushComplete(Right(_)) =>
       log.info("State trie finalized successfully")
+      signalDownstreamAllTasksQueued()
       snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
 
     case TrieFlushComplete(Left(error)) =>
       log.error(s"Failed to finalize trie: $error")
+      signalDownstreamAllTasksQueued()
       snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
 
     case Status.Failure(ex) =>
       log.error(ex, s"Trie finalization failed with exception: ${ex.getMessage}")
+      signalDownstreamAllTasksQueued()
       snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
 
     case _: PeerAvailable =>
@@ -403,6 +417,22 @@ class AccountRangeCoordinator(
 
     case CheckCompletion =>
       // Already finalizing, ignore
+  }
+
+  /** Notify downstream coordinators that no more tasks will be added.
+    * Called once from the finalizing state after the account trie has been flushed.
+    * Pekko guarantees message ordering per sender-receiver pair, so all AddByteCodeTasks /
+    * AddStorageTasks sent from this actor are delivered before AllTasksQueued.
+    */
+  private def signalDownstreamAllTasksQueued(): Unit = {
+    downstreamBytecodeCoordinator.foreach { coord =>
+      log.info(s"Signaling AllByteCodeTasksQueued to bytecode coordinator (${contractAccounts.size} total contracts)")
+      coord ! AllByteCodeTasksQueued
+    }
+    downstreamStorageCoordinator.foreach { coord =>
+      log.info(s"Signaling AllStorageTasksQueued to storage coordinator (${contractStorageAccounts.size} total contracts)")
+      coord ! AllStorageTasksQueued
+    }
   }
 
   private def createWorker(): ActorRef = {
@@ -676,6 +706,26 @@ class AccountRangeCoordinator(
       contractAccounts.appendAll(contracts)
       contractStorageAccounts.appendAll(storageContracts)
       log.info(s"Identified ${contracts.size} contract accounts (total: ${contractAccounts.size})")
+
+      // Stream tasks to downstream coordinators for interleaved downloading.
+      // This sends bytecode and storage tasks as accounts are discovered, rather than
+      // waiting for all accounts to complete — matching geth/Nethermind/Besu behavior
+      // and staying within the SNAP serve window (~128 blocks * ~13s ≈ 28 min on ETC).
+      downstreamBytecodeCoordinator.foreach { coord =>
+        coord ! AddByteCodeTasks(contracts)
+      }
+
+      // Filter to non-empty storage roots before sending to storage coordinator.
+      val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
+      val nonEmptyStorage = storageContracts.filter { case (_, storageRoot) =>
+        storageRoot.nonEmpty && storageRoot != emptyRoot
+      }
+      if (nonEmptyStorage.nonEmpty) {
+        val storageTasks = StorageTask.createStorageTasks(nonEmptyStorage)
+        downstreamStorageCoordinator.foreach { coord =>
+          coord ! AddStorageTasks(storageTasks)
+        }
+      }
     }
   }
 
