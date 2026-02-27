@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.cli.CliLauncher
 import com.chipprbots.ethereum.crypto.SignatureValidator
 import com.chipprbots.ethereum.faucet.Faucet
 import com.chipprbots.ethereum.utils.Logger
+import com.typesafe.config.ConfigFactory
 
 object App extends Logger {
 
@@ -82,6 +83,11 @@ object App extends Logger {
           log.warn(s"Config file '$resourcePath' not found in filesystem or classpath, using default config")
         }
     }
+    // Invalidate cached config so ConfigFactory.load() picks up the new system properties.
+    // Without this, logback's ConfigPropertyDefiner may have already triggered a
+    // ConfigFactory.load() call during logger initialization, caching the default
+    // application.conf (with network="etc") before we set config.resource here.
+    ConfigFactory.invalidateCaches()
   }
 
   private def determineNetworkArg(args: Array[String]): Option[String] =
