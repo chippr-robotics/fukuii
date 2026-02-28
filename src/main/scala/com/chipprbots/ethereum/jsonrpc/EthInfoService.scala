@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 object EthInfoService {
@@ -121,6 +122,8 @@ class EthInfoService(
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
       doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   def ieleCall(req: IeleCallRequest): ServiceResponse[IeleCallResponse] = {
@@ -148,6 +151,8 @@ class EthInfoService(
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
       doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   private def doCall[A](req: CallRequest)(

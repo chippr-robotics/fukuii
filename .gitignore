@@ -64,7 +64,34 @@ ops/*/captured-logs/
 *.conf.backup.*
 
 # Claude Code
-.claude/
+.claude/SESSION_NOTES.md
+.claude/reports/
+.claude/debug.log
+
+# Planning & internal docs
+SESSION_NOTES.md
+PLANNING.md
+SCRATCH.md
+*.scratch.*
+*.draft.*
+
+# Secrets & credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account.json
+secrets/
+
+# Blockchain & crypto
+keystore/
+*.keystore
+wallet.json
+mnemonic.txt
 
 # Local run configs
 run-*.conf
