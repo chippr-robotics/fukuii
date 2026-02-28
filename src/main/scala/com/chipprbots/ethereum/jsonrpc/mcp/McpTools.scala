@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.{Address, BlockchainReader, SuccessOutcome, FailureOutcome, HashOutcome}
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.utils.{BlockchainConfig, BuildInfo, ByteStringUtils, NodeStatus}
 import com.chipprbots.ethereum.utils.ServerStatus
 
@@ -725,6 +726,221 @@ object ConvertUnitsTool {
   }
 }
 
+object GetEtcEmissionTool {
+  val name = "get_etc_emission"
+  val description = Some("Get ETC monetary policy: era duration, reward schedule, current era, and estimated supply")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      blockchainConfig: BlockchainConfig
+  ): IO[String] = IO {
+    val mp = blockchainConfig.monetaryPolicyConfig
+    val bestBlock = blockchainReader.getBestBlockNumber()
+    val currentEra = bestBlock / mp.eraDuration
+    val blocksIntoEra = bestBlock % mp.eraDuration
+    val blocksRemainingInEra = mp.eraDuration - blocksIntoEra
+
+    // Calculate current era reward
+    val weiPerEther = BigDecimal("1000000000000000000")
+    val currentReward: BigInt = if (currentEra == 0) {
+      mp.firstEraBlockReward
+    } else {
+      val reduction = Math.pow(1.0 - mp.rewardReductionRate, currentEra.toDouble)
+      (BigDecimal(mp.firstEraBlockReward) * BigDecimal(reduction)).toBigInt
+    }
+    val rewardInEtc = BigDecimal(currentReward) / weiPerEther
+
+    // Estimate total supply (simplified: sum of era rewards)
+    val totalSupply = (0L to currentEra.toLong).foldLeft(BigDecimal(0)) { (acc, era) =>
+      val eraBlocks: Long = if (era < currentEra) mp.eraDuration.toLong else blocksIntoEra.toLong
+      val eraReward = if (era == 0) {
+        BigDecimal(mp.firstEraBlockReward)
+      } else {
+        val reduction = Math.pow(1.0 - mp.rewardReductionRate, era.toDouble)
+        BigDecimal(mp.firstEraBlockReward) * BigDecimal(reduction)
+      }
+      acc + eraReward * eraBlocks / weiPerEther
+    }
+
+    s"""ETC Monetary Policy
+       |
+       |Era Duration: ${mp.eraDuration} blocks
+       |Reward Reduction Rate: ${(mp.rewardReductionRate * 100)}% per era
+       |First Era Block Reward: ${BigDecimal(mp.firstEraBlockReward) / weiPerEther} ETC
+       |
+       |Current State:
+       |• Current Era: $currentEra (of unlimited)
+       |• Best Block: $bestBlock
+       |• Blocks Into Era: $blocksIntoEra / ${mp.eraDuration}
+       |• Blocks Remaining In Era: $blocksRemainingInEra
+       |• Current Block Reward: $rewardInEtc ETC ($currentReward wei)
+       |
+       |Estimated Mined Supply: ~${totalSupply.setScale(2, BigDecimal.RoundingMode.HALF_UP)} ETC
+       |
+       |Note: ETC has no hard supply cap. Supply grows at a decreasing rate
+       |as block rewards reduce by ${(mp.rewardReductionRate * 100)}% every ${mp.eraDuration} blocks.""".stripMargin
+  }
+}
+
+object GetEtcForksTool {
+  val name = "get_etc_forks"
+  val description = Some("Get all ETC fork activation block numbers including Atlantis, Agharta, Phoenix, Magneto, Mystique, Spiral, and ECIPs")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      blockchainConfig: BlockchainConfig
+  ): IO[String] = IO {
+    val f = blockchainConfig.forkBlockNumbers
+    val bestBlock = blockchainReader.getBestBlockNumber()
+
+    def forkStatus(blockNum: BigInt): String =
+      if (bestBlock >= blockNum) s"ACTIVE (block $blockNum)" else s"PENDING (block $blockNum, ${blockNum - bestBlock} blocks away)"
+
+    def optForkStatus(blockNum: Option[BigInt]): String = blockNum match {
+      case Some(n) => forkStatus(n)
+      case None => "NOT SCHEDULED"
+    }
+
+    s"""ETC Fork History (Chain ID: ${blockchainConfig.chainId})
+       |Best Block: $bestBlock
+       |
+       |== Ethereum-Heritage Forks ==
+       |Frontier:       ${forkStatus(f.frontierBlockNumber)}
+       |Homestead:      ${forkStatus(f.homesteadBlockNumber)}
+       |EIP-150 (Gas):  ${forkStatus(f.eip150BlockNumber)}
+       |EIP-155 (Replay): ${forkStatus(f.eip155BlockNumber)}
+       |EIP-160:        ${forkStatus(f.eip160BlockNumber)}
+       |EIP-161:        ${forkStatus(f.eip161BlockNumber)}
+       |Byzantium:      ${forkStatus(f.byzantiumBlockNumber)}
+       |Constantinople: ${forkStatus(f.constantinopleBlockNumber)}
+       |Petersburg:     ${forkStatus(f.petersburgBlockNumber)}
+       |Istanbul:       ${forkStatus(f.istanbulBlockNumber)}
+       |Muir Glacier:   ${forkStatus(f.muirGlacierBlockNumber)}
+       |Berlin:         ${forkStatus(f.berlinBlockNumber)}
+       |
+       |== ETC-Specific Forks ==
+       |Atlantis:       ${forkStatus(f.atlantisBlockNumber)}
+       |Agharta:        ${forkStatus(f.aghartaBlockNumber)}
+       |Phoenix:        ${forkStatus(f.phoenixBlockNumber)}
+       |Magneto:        ${forkStatus(f.magnetoBlockNumber)}
+       |Mystique:       ${forkStatus(f.mystiqueBlockNumber)}
+       |Spiral:         ${forkStatus(f.spiralBlockNumber)}
+       |
+       |== ECIPs ==
+       |ECIP-1097 (Strict Difficulty): ${forkStatus(f.ecip1097BlockNumber)}
+       |ECIP-1098 (Treasury):          ${forkStatus(f.ecip1098BlockNumber)}
+       |ECIP-1099 (DAG Epoch 60k):     ${forkStatus(f.ecip1099BlockNumber)}
+       |ECIP-1049 (SHA-3):             ${optForkStatus(f.ecip1049BlockNumber)}
+       |
+       |== Difficulty Bomb ==
+       |Pause:    ${forkStatus(f.difficultyBombPauseBlockNumber)}
+       |Continue: ${forkStatus(f.difficultyBombContinueBlockNumber)}
+       |Removal:  ${forkStatus(f.difficultyBombRemovalBlockNumber)}""".stripMargin
+  }
+}
+
+object GetTreasuryStatusTool {
+  val name = "get_treasury_status"
+  val description = Some("Get ETC treasury address and balance from the ECIP-1098 treasury configuration")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      blockchainConfig: BlockchainConfig
+  ): IO[String] = IO {
+    val treasuryAddr = blockchainConfig.treasuryAddress
+    val bestBlock = blockchainReader.getBestBlockNumber()
+    val f = blockchainConfig.forkBlockNumbers
+
+    val treasuryActive = bestBlock >= f.ecip1098BlockNumber
+    val activationBlock = f.ecip1098BlockNumber
+
+    // Try to get treasury account balance
+    val bestBranch = blockchainReader.getBestBranch()
+    val accountOpt = blockchainReader.getAccount(bestBranch, Address(treasuryAddr.toArray), bestBlock)
+
+    val balanceInfo = accountOpt match {
+      case Some(account) =>
+        val weiPerEther = BigDecimal("1000000000000000000")
+        val balanceEtc = BigDecimal(account.balance.toBigInt) / weiPerEther
+        s"""Balance: ${account.balance.toBigInt} wei ($balanceEtc ETC)
+           |Nonce: ${account.nonce}""".stripMargin
+      case None =>
+        "Balance: Account not found in state trie (node may still be syncing)"
+    }
+
+    s"""ETC Treasury Status
+       |
+       |Treasury Address: 0x${Hex.toHexString(treasuryAddr.toArray)}
+       |ECIP-1098 Activation: Block $activationBlock
+       |Status: ${if (treasuryActive) "ACTIVE" else s"PENDING (${activationBlock - bestBlock} blocks away)"}
+       |Current Block: $bestBlock
+       |
+       |$balanceInfo
+       |
+       |The treasury receives a portion of block rewards per ECIP-1098.
+       |Funds are governed by the ETC community.""".stripMargin
+  }
+}
+
+object VerifyEthashBlockTool {
+  val name = "verify_ethash_block"
+  val description = Some("Get Ethash proof-of-work details for a block: epoch, difficulty, nonce, mixHash, and DAG size")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      blockchainConfig: BlockchainConfig,
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val blockArg = arguments.flatMap { a =>
+      (a \ "block") match {
+        case JString(s) => Some(s)
+        case _ => None
+      }
+    }.getOrElse("latest")
+
+    val headerOpt = if (blockArg == "latest") {
+      val bestNum = blockchainReader.getBestBlockNumber()
+      blockchainReader.getBlockHeaderByNumber(bestNum)
+    } else if (blockArg.startsWith("0x") && blockArg.length == 66) {
+      val hash = ByteString(Hex.decode(blockArg.drop(2)))
+      blockchainReader.getBlockHeaderByHash(hash)
+    } else {
+      scala.util.Try(BigInt(blockArg)).toOption.flatMap(n =>
+        blockchainReader.getBlockHeaderByNumber(n)
+      )
+    }
+
+    headerOpt match {
+      case None => s"Block not found: $blockArg"
+      case Some(h) =>
+        val blockNum = h.number.toLong
+        val ecip1099Block = blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
+        val epochNum = EthashUtils.epoch(blockNum, ecip1099Block)
+        val epochLength = if (blockNum < ecip1099Block) EthashUtils.EPOCH_LENGTH_BEFORE_ECIP_1099 else EthashUtils.EPOCH_LENGTH_AFTER_ECIP_1099
+        val dagSizeBytes = EthashUtils.dagSize(epochNum)
+        val dagSizeMB = dagSizeBytes / (1024L * 1024L)
+        val cacheSizeBytes = EthashUtils.cacheSize(epochNum)
+        val cacheSizeMB = cacheSizeBytes / (1024L * 1024L)
+
+        s"""Ethash PoW Details — Block ${h.number}
+           |
+           |Block Hash: 0x${ByteStringUtils.hash2string(h.hash)}
+           |Difficulty: ${h.difficulty}
+           |Nonce: 0x${Hex.toHexString(h.nonce.toArray)}
+           |MixHash: 0x${ByteStringUtils.hash2string(h.mixHash)}
+           |
+           |Ethash Parameters:
+           |• Epoch: $epochNum
+           |• Epoch Length: $epochLength blocks ${if (blockNum >= ecip1099Block) "(ECIP-1099 doubled)" else "(pre-ECIP-1099)"}
+           |• DAG Size: $dagSizeMB MB ($dagSizeBytes bytes)
+           |• Cache Size: $cacheSizeMB MB ($cacheSizeBytes bytes)
+           |
+           |ECIP-1099 (DAG epoch doubling): ${if (blockNum >= ecip1099Block) "ACTIVE" else "NOT YET ACTIVE"}
+           |ECIP-1099 Activation Block: $ecip1099Block""".stripMargin
+    }
+  }
+}
+
 object McpToolRegistry {
 
   def getAllTools(): List[McpToolDefinition] = List(
@@ -743,7 +959,11 @@ object McpToolRegistry {
     McpToolDefinition(DecodeCalldataTool.name, DecodeCalldataTool.description),
     McpToolDefinition(GetNetworkHealthTool.name, GetNetworkHealthTool.description),
     McpToolDefinition(DetectReorgTool.name, DetectReorgTool.description),
-    McpToolDefinition(ConvertUnitsTool.name, ConvertUnitsTool.description)
+    McpToolDefinition(ConvertUnitsTool.name, ConvertUnitsTool.description),
+    McpToolDefinition(GetEtcEmissionTool.name, GetEtcEmissionTool.description),
+    McpToolDefinition(GetEtcForksTool.name, GetEtcForksTool.description),
+    McpToolDefinition(GetTreasuryStatusTool.name, GetTreasuryStatusTool.description),
+    McpToolDefinition(VerifyEthashBlockTool.name, VerifyEthashBlockTool.description)
   )
 
   def executeTool(
@@ -790,6 +1010,14 @@ object McpToolRegistry {
         DetectReorgTool.execute(blockchainReader, arguments)
       case ConvertUnitsTool.name =>
         ConvertUnitsTool.execute(arguments)
+      case GetEtcEmissionTool.name =>
+        GetEtcEmissionTool.execute(blockchainReader, blockchainConfig)
+      case GetEtcForksTool.name =>
+        GetEtcForksTool.execute(blockchainReader, blockchainConfig)
+      case GetTreasuryStatusTool.name =>
+        GetTreasuryStatusTool.execute(blockchainReader, blockchainConfig)
+      case VerifyEthashBlockTool.name =>
+        VerifyEthashBlockTool.execute(blockchainReader, blockchainConfig, arguments)
       case _ =>
         IO.pure(s"Unknown tool: $toolName. Use tools/list to see available tools.")
     }
