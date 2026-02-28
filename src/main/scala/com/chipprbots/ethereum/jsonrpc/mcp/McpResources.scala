@@ -9,9 +9,11 @@ import java.util.concurrent.atomic.AtomicReference
 
 import scala.concurrent.ExecutionContext
 
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.{Address, BlockchainReader}
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.{BlockchainConfig, BuildInfo, ByteStringUtils, NodeStatus}
@@ -208,6 +210,142 @@ object SyncStatusResource {
   }
 }
 
+object BlockByNumberResource {
+  val uriTemplate = "fukuii://block/{number}"
+  val uriPrefix = "fukuii://block/"
+  val name = "Block by Number"
+  val description = Some("Get block details by number (use fukuii://block/123)")
+  val mimeType = Some("application/json")
+
+  def read(
+      blockNumber: BigInt,
+      blockchainReader: BlockchainReader
+  ): IO[String] = IO {
+    blockchainReader.getBlockHeaderByNumber(blockNumber) match {
+      case Some(h) =>
+        val bodyOpt = blockchainReader.getBlockBodyByHash(h.hash)
+        val txCount = bodyOpt.map(_.transactionList.size).getOrElse(0)
+        val uncleCount = bodyOpt.map(_.uncleNodesList.size).getOrElse(0)
+        s"""{
+          |  "number": ${h.number},
+          |  "hash": "0x${h.hashAsHexString}",
+          |  "parentHash": "0x${ByteStringUtils.hash2string(h.parentHash)}",
+          |  "timestamp": ${h.unixTimestamp},
+          |  "difficulty": "${h.difficulty}",
+          |  "gasLimit": ${h.gasLimit},
+          |  "gasUsed": ${h.gasUsed},
+          |  "miner": "0x${Hex.toHexString(h.beneficiary.toArray)}",
+          |  "transactionCount": $txCount,
+          |  "uncleCount": $uncleCount,
+          |  "stateRoot": "0x${ByteStringUtils.hash2string(h.stateRoot)}",
+          |  "nonce": "0x${Hex.toHexString(h.nonce.toArray)}"
+          |}""".stripMargin
+      case None =>
+        s"""{"error": "Block $blockNumber not found"}"""
+    }
+  }
+}
+
+object TransactionByHashResource {
+  val uriTemplate = "fukuii://tx/{hash}"
+  val uriPrefix = "fukuii://tx/"
+  val name = "Transaction by Hash"
+  val description = Some("Get transaction details by hash (use fukuii://tx/0x...)")
+  val mimeType = Some("application/json")
+
+  def read(
+      txHashHex: String,
+      blockchainReader: BlockchainReader
+  ): IO[String] = IO {
+    val cleanHash = txHashHex.replaceFirst("^0x", "")
+    if (cleanHash.length != 64) {
+      s"""{"error": "Invalid transaction hash: must be 64 hex characters"}"""
+    } else {
+      // Search recent blocks for the transaction
+      val bestBlock = blockchainReader.getBestBlockNumber()
+      val searchDepth = 1000
+      val startBlock = if (bestBlock > searchDepth) bestBlock - searchDepth else BigInt(0)
+
+      var found = false
+      var result = s"""{"error": "Transaction 0x$cleanHash not found in last $searchDepth blocks"}"""
+
+      var blockNum = bestBlock
+      while (!found && blockNum >= startBlock) {
+        blockchainReader.getBlockHeaderByNumber(blockNum).foreach { header =>
+          blockchainReader.getBlockBodyByHash(header.hash).foreach { body =>
+            body.transactionList.zipWithIndex.foreach { case (stx, idx) =>
+              if (ByteStringUtils.hash2string(stx.hash) == cleanHash) {
+                found = true
+                val to = stx.tx.receivingAddress.map(a => s""""0x${Hex.toHexString(a.bytes.toArray)}"""").getOrElse("null")
+                result = s"""{
+                  |  "hash": "0x$cleanHash",
+                  |  "blockNumber": ${header.number},
+                  |  "blockHash": "0x${header.hashAsHexString}",
+                  |  "transactionIndex": $idx,
+                  |  "from": "unknown",
+                  |  "to": $to,
+                  |  "value": "${stx.tx.value}",
+                  |  "gasPrice": "${stx.tx.gasPrice}",
+                  |  "gasLimit": ${stx.tx.gasLimit},
+                  |  "nonce": ${stx.tx.nonce}
+                  |}""".stripMargin
+              }
+            }
+          }
+        }
+        blockNum -= 1
+      }
+      result
+    }
+  }
+}
+
+object AccountByAddressResource {
+  val uriTemplate = "fukuii://account/{address}"
+  val uriPrefix = "fukuii://account/"
+  val name = "Account by Address"
+  val description = Some("Get account balance, nonce, and code at latest block (use fukuii://account/0x...)")
+  val mimeType = Some("application/json")
+
+  def read(
+      addressHex: String,
+      blockchainReader: BlockchainReader
+  ): IO[String] = IO {
+    scala.util.Try {
+      val addr = Address(addressHex)
+      val bestBlock = blockchainReader.getBestBlockNumber()
+      val bestBranch = blockchainReader.getBestBranch()
+      val accountOpt = blockchainReader.getAccount(bestBranch, addr, bestBlock)
+
+      accountOpt match {
+        case Some(account) =>
+          val weiPerEther = BigDecimal("1000000000000000000")
+          val balanceEtc = BigDecimal(account.balance.toBigInt) / weiPerEther
+          val codeHashHex = ByteStringUtils.hash2string(account.codeHash)
+          val storageRootHex = ByteStringUtils.hash2string(account.storageRoot)
+          s"""{
+            |  "address": "${addr.toString}",
+            |  "balance": "${account.balance.toBigInt}",
+            |  "balanceETC": "$balanceEtc",
+            |  "nonce": "${account.nonce}",
+            |  "codeHash": "0x$codeHashHex",
+            |  "storageRoot": "0x$storageRootHex",
+            |  "blockNumber": $bestBlock
+            |}""".stripMargin
+        case None =>
+          s"""{
+            |  "address": "${addr.toString}",
+            |  "balance": "0",
+            |  "balanceETC": "0",
+            |  "nonce": "0",
+            |  "note": "Account not found in state trie (may not exist or node still syncing)",
+            |  "blockNumber": $bestBlock
+            |}""".stripMargin
+      }
+    }.getOrElse(s"""{"error": "Invalid address: $addressHex"}""")
+  }
+}
+
 object McpResourceRegistry {
 
   def getAllResources(): List[McpResourceDefinition] = List(
@@ -222,7 +360,13 @@ object McpResourceRegistry {
     McpResourceDefinition(MiningRpcResource.uri, MiningRpcResource.name,
       MiningRpcResource.description, MiningRpcResource.mimeType),
     McpResourceDefinition(SyncStatusResource.uri, SyncStatusResource.name,
-      SyncStatusResource.description, SyncStatusResource.mimeType)
+      SyncStatusResource.description, SyncStatusResource.mimeType),
+    McpResourceDefinition(BlockByNumberResource.uriTemplate, BlockByNumberResource.name,
+      BlockByNumberResource.description, BlockByNumberResource.mimeType),
+    McpResourceDefinition(TransactionByHashResource.uriTemplate, TransactionByHashResource.name,
+      TransactionByHashResource.description, TransactionByHashResource.mimeType),
+    McpResourceDefinition(AccountByAddressResource.uriTemplate, AccountByAddressResource.name,
+      AccountByAddressResource.description, AccountByAddressResource.mimeType)
   )
 
   def readResource(
@@ -247,6 +391,18 @@ object McpResourceRegistry {
         Right(MiningRpcResource.read())
       case SyncStatusResource.uri =>
         Right(SyncStatusResource.read(syncController, blockchainReader))
+      case u if u.startsWith(BlockByNumberResource.uriPrefix) =>
+        val param = u.stripPrefix(BlockByNumberResource.uriPrefix)
+        scala.util.Try(BigInt(param)).toOption match {
+          case Some(num) => Right(BlockByNumberResource.read(num, blockchainReader))
+          case None => Left(s"Invalid block number: $param")
+        }
+      case u if u.startsWith(TransactionByHashResource.uriPrefix) =>
+        val param = u.stripPrefix(TransactionByHashResource.uriPrefix)
+        Right(TransactionByHashResource.read(param, blockchainReader))
+      case u if u.startsWith(AccountByAddressResource.uriPrefix) =>
+        val param = u.stripPrefix(AccountByAddressResource.uriPrefix)
+        Right(AccountByAddressResource.read(param, blockchainReader))
       case _ =>
         Left(s"Unknown resource: $uri. Use resources/list to see available resources.")
     }
