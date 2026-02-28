@@ -8,14 +8,19 @@ import cats.effect.IO
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.concurrent.ExecutionContext
+
+import org.apache.pekko.util.ByteString
+import org.bouncycastle.util.encoders.Hex
 import org.json4s.JsonAST._
+import org.json4s.MonadicJValue.jvalueToMonadic
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
+import com.chipprbots.ethereum.domain.{Address, BlockchainReader, SuccessOutcome, FailureOutcome, HashOutcome}
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.network.PeerManagerActor
-import com.chipprbots.ethereum.utils.{BlockchainConfig, BuildInfo, NodeStatus}
+import com.chipprbots.ethereum.utils.{BlockchainConfig, BuildInfo, ByteStringUtils, NodeStatus}
 import com.chipprbots.ethereum.utils.ServerStatus
 
 object NodeInfoTool {
@@ -261,6 +266,465 @@ object MiningRpcSummaryTool {
   }
 }
 
+object GetBlockTool {
+  val name = "get_block"
+  val description = Some("Get a block by number or hash, including header fields and transaction count")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val blockId = arguments.flatMap { a =>
+      (a \ "block") match {
+        case JString(s) => Some(s)
+        case JInt(n)    => Some(n.toString)
+        case _          => None
+      }
+    }.getOrElse("latest")
+
+    val blockOpt = if (blockId == "latest") {
+      blockchainReader.getBestBlock()
+    } else if (blockId.startsWith("0x") && blockId.length == 66) {
+      val hash = ByteString(Hex.decode(blockId.stripPrefix("0x")))
+      blockchainReader.getBlockByHash(hash)
+    } else {
+      val number = if (blockId.startsWith("0x")) BigInt(blockId.stripPrefix("0x"), 16) else BigInt(blockId)
+      val branch = blockchainReader.getBestBranch()
+      blockchainReader.getBlockByNumber(branch, number)
+    }
+
+    blockOpt match {
+      case Some(block) =>
+        val h = block.header
+        val txCount = block.body.transactionList.size
+        val uncleCount = block.body.uncleNodesList.size
+        val weight = blockchainReader.getChainWeightByHash(h.hash)
+        val td = weight.map(_.totalDifficulty.toString).getOrElse("unknown")
+        s"""Block ${h.number}:
+          |• Hash: 0x${h.hashAsHexString}
+          |• Parent Hash: 0x${ByteStringUtils.hash2string(h.parentHash)}
+          |• Miner: 0x${ByteStringUtils.hash2string(h.beneficiary)}
+          |• Timestamp: ${h.unixTimestamp} (${java.time.Instant.ofEpochSecond(h.unixTimestamp)})
+          |• Gas Used: ${h.gasUsed}
+          |• Gas Limit: ${h.gasLimit}
+          |• Difficulty: ${h.difficulty}
+          |• Total Difficulty: $td
+          |• Transactions: $txCount
+          |• Uncles: $uncleCount
+          |• State Root: 0x${ByteStringUtils.hash2string(h.stateRoot)}
+          |• Receipts Root: 0x${ByteStringUtils.hash2string(h.receiptsRoot)}
+          |• Extra Data: 0x${Hex.toHexString(h.extraData.toArray)}""".stripMargin
+      case None =>
+        s"Block not found: $blockId"
+    }
+  }
+}
+
+object GetTransactionTool {
+  val name = "get_transaction"
+  val description = Some("Get a transaction by hash, including block info, gas used, and status")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      transactionMappingStorage: Option[TransactionMappingStorage],
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val txHashStr = arguments.flatMap { a =>
+      (a \ "hash") match {
+        case JString(s) => Some(s)
+        case _          => None
+      }
+    }.getOrElse("")
+
+    if (txHashStr.isEmpty) {
+      "Error: 'hash' parameter is required (0x-prefixed transaction hash)"
+    } else transactionMappingStorage match {
+      case None =>
+        "Transaction lookup by hash is not available (transactionMappingStorage not configured)"
+      case Some(storage) =>
+        val txHash = ByteString(Hex.decode(txHashStr.stripPrefix("0x")))
+        storage.get(txHash.toIndexedSeq) match {
+          case Some(location) =>
+            val blockOpt = blockchainReader.getBlockByHash(location.blockHash)
+            val receiptsOpt = blockchainReader.getReceiptsByHash(location.blockHash)
+            blockOpt match {
+              case Some(block) =>
+                val tx = block.body.transactionList(location.txIndex)
+                val receipt = receiptsOpt.flatMap(_.lift(location.txIndex))
+                val gasUsed = receipt.map(_.cumulativeGasUsed.toString).getOrElse("unknown")
+                val status = receipt.map(_.postTransactionStateHash).map {
+                  case SuccessOutcome     => "success"
+                  case FailureOutcome     => "failed"
+                  case _: HashOutcome     => "pre-byzantium"
+                }.getOrElse("unknown")
+                val to = tx.tx.receivingAddress.map(_.toString).getOrElse("(contract creation)")
+                s"""Transaction 0x${ByteStringUtils.hash2string(txHash)}:
+                  |• Block: ${block.header.number} (0x${block.header.hashAsHexString})
+                  |• Index: ${location.txIndex}
+                  |• To: $to
+                  |• Value: ${tx.tx.value} wei
+                  |• Gas Limit: ${tx.tx.gasLimit}
+                  |• Gas Price: ${tx.tx.gasPrice} wei
+                  |• Gas Used: $gasUsed
+                  |• Status: $status
+                  |• Nonce: ${tx.tx.nonce}
+                  |• Data Size: ${tx.tx.payload.size} bytes""".stripMargin
+              case None =>
+                s"Transaction found in mapping but block 0x${ByteStringUtils.hash2string(location.blockHash)} not available"
+            }
+          case None =>
+            s"Transaction not found: $txHashStr"
+        }
+    }
+  }
+}
+
+object GetAccountTool {
+  val name = "get_account"
+  val description = Some("Get account balance, nonce, and code hash for an address at a given block")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val addressStr = arguments.flatMap { a =>
+      (a \ "address") match {
+        case JString(s) => Some(s)
+        case _          => None
+      }
+    }.getOrElse("")
+
+    val blockStr = arguments.flatMap { a =>
+      (a \ "block") match {
+        case JString(s) => Some(s)
+        case JInt(n)    => Some(n.toString)
+        case _          => None
+      }
+    }.getOrElse("latest")
+
+    if (addressStr.isEmpty) {
+      "Error: 'address' parameter is required (0x-prefixed Ethereum address)"
+    } else {
+      val address = Address(addressStr)
+      val blockNumber = if (blockStr == "latest") blockchainReader.getBestBlockNumber() else BigInt(blockStr)
+      val branch = blockchainReader.getBestBranch()
+
+      blockchainReader.getAccount(branch, address, blockNumber) match {
+        case Some(account) =>
+          val balanceWei = account.balance.toBigInt
+          val balanceEther = BigDecimal(balanceWei) / BigDecimal("1000000000000000000")
+          val hasCode = account.codeHash != com.chipprbots.ethereum.domain.Account.EmptyCodeHash
+          s"""Account $addressStr at block $blockNumber:
+            |• Balance: $balanceWei wei ($balanceEther ETC)
+            |• Nonce: ${account.nonce}
+            |• Has Code: $hasCode
+            |• Storage Root: 0x${ByteStringUtils.hash2string(account.storageRoot)}
+            |• Code Hash: 0x${ByteStringUtils.hash2string(account.codeHash)}""".stripMargin
+        case None =>
+          s"""Account $addressStr at block $blockNumber:
+            |• Balance: 0 wei (0 ETC)
+            |• Nonce: 0
+            |• Has Code: false
+            |• Note: Account does not exist (empty account)""".stripMargin
+      }
+    }
+  }
+}
+
+object GetBlockReceiptsTool {
+  val name = "get_block_receipts"
+  val description = Some("Get all transaction receipts for a block by number or hash")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val blockId = arguments.flatMap { a =>
+      (a \ "block") match {
+        case JString(s) => Some(s)
+        case JInt(n)    => Some(n.toString)
+        case _          => None
+      }
+    }.getOrElse("latest")
+
+    val blockOpt = if (blockId == "latest") {
+      blockchainReader.getBestBlock()
+    } else if (blockId.startsWith("0x") && blockId.length == 66) {
+      val hash = ByteString(Hex.decode(blockId.stripPrefix("0x")))
+      blockchainReader.getBlockByHash(hash)
+    } else {
+      val number = if (blockId.startsWith("0x")) BigInt(blockId.stripPrefix("0x"), 16) else BigInt(blockId)
+      val branch = blockchainReader.getBestBranch()
+      blockchainReader.getBlockByNumber(branch, number)
+    }
+
+    blockOpt match {
+      case Some(block) =>
+        val receiptsOpt = blockchainReader.getReceiptsByHash(block.header.hash)
+        val txs = block.body.transactionList
+        receiptsOpt match {
+          case Some(receipts) =>
+            val lines = txs.zip(receipts).zipWithIndex.map { case ((tx, receipt), idx) =>
+              val to = tx.tx.receivingAddress.map(_.toString).getOrElse("(create)")
+              val status = receipt.postTransactionStateHash match {
+                case SuccessOutcome => "ok"
+                case FailureOutcome => "fail"
+                case _              => "?"
+              }
+              val logs = receipt.logs.size
+              s"  $idx: 0x${ByteStringUtils.hash2string(tx.hash)} → $to [$status] gas=${receipt.cumulativeGasUsed} logs=$logs"
+            }
+            s"""Block ${block.header.number} Receipts (${receipts.size} transactions):
+              |${lines.mkString("\n")}""".stripMargin
+          case None =>
+            s"Receipts not available for block ${block.header.number}"
+        }
+      case None =>
+        s"Block not found: $blockId"
+    }
+  }
+}
+
+object GetGasPriceTool {
+  val name = "get_gas_price"
+  val description = Some("Estimate current gas price based on recent block headers")
+
+  def execute(
+      blockchainReader: BlockchainReader
+  ): IO[String] = IO {
+    val bestNum = blockchainReader.getBestBlockNumber()
+    val sampleSize = 20
+    val startBlock = if (bestNum > sampleSize) bestNum - sampleSize else BigInt(0)
+    val branch = blockchainReader.getBestBranch()
+
+    val gasPrices: IndexedSeq[BigInt] = (startBlock to bestNum).flatMap { num =>
+      blockchainReader.getBlockByNumber(branch, num).toSeq.flatMap { block =>
+        block.body.transactionList.map(_.tx.gasPrice)
+      }
+    }.sorted
+
+    if (gasPrices.isEmpty) {
+      s"""Gas Price Estimate:
+        |• No transactions in recent $sampleSize blocks
+        |• Blocks sampled: $startBlock to $bestNum
+        |• Suggested: Use minimum gas price (1 Gwei = 1000000000 wei)""".stripMargin
+    } else {
+      val median = gasPrices(gasPrices.size / 2)
+      val min = gasPrices.head
+      val max = gasPrices.last
+      val avg = gasPrices.sum / gasPrices.size
+      s"""Gas Price Estimate (from ${gasPrices.size} transactions in blocks $startBlock-$bestNum):
+        |• Median: $median wei (${BigDecimal(median) / BigDecimal("1000000000")} Gwei)
+        |• Average: $avg wei (${BigDecimal(avg) / BigDecimal("1000000000")} Gwei)
+        |• Min: $min wei
+        |• Max: $max wei""".stripMargin
+    }
+  }
+}
+
+object DecodeCalldataTool {
+  val name = "decode_calldata"
+  val description = Some("Decode hex calldata into function selector and ABI-encoded parameter words")
+
+  def execute(
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val dataStr = arguments.flatMap { a =>
+      (a \ "data") match {
+        case JString(s) => Some(s)
+        case _          => None
+      }
+    }.getOrElse("")
+
+    if (dataStr.isEmpty || dataStr.length < 10) {
+      "Error: 'data' parameter is required (0x-prefixed hex calldata, minimum 4 bytes for selector)"
+    } else {
+      val hex = dataStr.stripPrefix("0x")
+      val selector = hex.take(8)
+      val params = hex.drop(8)
+      val words = params.grouped(64).zipWithIndex.map { case (word, idx) =>
+        val padded = word.padTo(64, '0')
+        val asInt = BigInt(padded, 16)
+        s"  [$idx] 0x$padded ($asInt)"
+      }.toList
+
+      val result = new StringBuilder
+      result.append(s"Calldata Decode (${hex.length / 2} bytes):\n")
+      result.append(s"• Selector: 0x$selector\n")
+      result.append(s"• Parameters: ${words.size} words (${params.length / 2} bytes)")
+      if (words.nonEmpty) {
+        result.append("\n")
+        result.append(words.mkString("\n"))
+      }
+      result.toString
+    }
+  }
+}
+
+object GetNetworkHealthTool {
+  val name = "get_network_health"
+  val description = Some("Get a composite health assessment including sync lag, peer count, and block production rate")
+
+  def execute(
+      peerManager: ActorRef,
+      syncController: ActorRef,
+      blockchainReader: BlockchainReader,
+      nodeStatusHolder: AtomicReference[NodeStatus]
+  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
+    val syncStatusIO = syncController
+      .askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
+      .handleErrorWith(_ => IO.pure(SyncProtocol.Status.NotSyncing: SyncProtocol.Status))
+
+    val peersIO = peerManager
+      .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
+      .handleErrorWith(_ => IO.pure(PeerManagerActor.Peers(Map.empty)))
+
+    for {
+      syncStatus <- syncStatusIO
+      peers <- peersIO
+    } yield {
+      val bestBlockNum = blockchainReader.getBestBlockNumber()
+      val peerCount = peers.handshaked.size
+      val branch = blockchainReader.getBestBranch()
+
+      // Check block production rate from last 10 blocks
+      val blockRate = if (bestBlockNum > 10) {
+        val recent = blockchainReader.getBlockByNumber(branch, bestBlockNum)
+        val older = blockchainReader.getBlockByNumber(branch, bestBlockNum - 10)
+        (recent, older) match {
+          case (Some(r), Some(o)) =>
+            val timeDiff = r.header.unixTimestamp - o.header.unixTimestamp
+            if (timeDiff > 0) Some(f"${10.0 / timeDiff * 60}%.1f blocks/min (avg ${timeDiff / 10}s/block)")
+            else None
+          case _ => None
+        }
+      } else None
+
+      val (syncLag, syncing) = syncStatus match {
+        case SyncProtocol.Status.Syncing(_, blocks, _) =>
+          (Some(blocks.target - blocks.current), true)
+        case _ => (None, false)
+      }
+
+      // Health assessment
+      val issues = List.newBuilder[String]
+      if (peerCount == 0) issues += "NO PEERS - node is isolated"
+      else if (peerCount < 3) issues += s"LOW PEERS ($peerCount) - may have connectivity issues"
+      if (syncing) syncLag.foreach(lag => if (lag > 100) issues += s"SYNCING - $lag blocks behind")
+      val issueList = issues.result()
+      val status = if (issueList.isEmpty) "HEALTHY" else "DEGRADED"
+
+      val blockRateStr = blockRate.getOrElse("insufficient data")
+      val syncStr = if (syncing) s"yes (${syncLag.getOrElse(0)} blocks behind)" else "no"
+
+      s"""Network Health: $status
+        |• Peers: $peerCount
+        |• Best Block: $bestBlockNum
+        |• Syncing: $syncStr
+        |• Block Rate: $blockRateStr
+        |${if (issueList.nonEmpty) "• Issues:\n" + issueList.map(i => s"  ⚠ $i").mkString("\n") else "• No issues detected"}""".stripMargin
+    }
+  }
+}
+
+object DetectReorgTool {
+  val name = "detect_reorg"
+  val description = Some("Check recent blocks for chain reorganizations by verifying parent hash consistency")
+
+  def execute(
+      blockchainReader: BlockchainReader,
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val depth = arguments.flatMap { a =>
+      (a \ "depth") match {
+        case JInt(n)    => Some(n.toInt)
+        case JString(s) => scala.util.Try(s.toInt).toOption
+        case _          => None
+      }
+    }.getOrElse(10)
+
+    val bestNum = blockchainReader.getBestBlockNumber()
+    val startBlock = if (bestNum > depth) bestNum - depth else BigInt(1)
+    val branch = blockchainReader.getBestBranch()
+
+    val inconsistencies = List.newBuilder[String]
+    var prevHash: Option[ByteString] = None
+
+    (startBlock to bestNum).foreach { num =>
+      blockchainReader.getBlockByNumber(branch, num) match {
+        case Some(block) =>
+          prevHash.foreach { expected =>
+            if (block.header.parentHash != expected) {
+              inconsistencies += s"  Block $num: parentHash 0x${ByteStringUtils.hash2string(block.header.parentHash)} != expected 0x${ByteStringUtils.hash2string(expected)}"
+            }
+          }
+          prevHash = Some(block.header.hash)
+        case None =>
+          inconsistencies += s"  Block $num: MISSING from local chain"
+          prevHash = None
+      }
+    }
+
+    val issues = inconsistencies.result()
+    if (issues.isEmpty) {
+      s"""Reorg Check (blocks $startBlock to $bestNum): CLEAN
+        |• All $depth blocks have consistent parent hashes
+        |• Chain tip: $bestNum""".stripMargin
+    } else {
+      s"""Reorg Check (blocks $startBlock to $bestNum): INCONSISTENCIES FOUND
+        |• ${issues.size} issue(s) detected:
+        |${issues.mkString("\n")}""".stripMargin
+    }
+  }
+}
+
+object ConvertUnitsTool {
+  val name = "convert_units"
+  val description = Some("Convert between Ethereum denominations: wei, gwei, and ether/ETC")
+
+  def execute(
+      arguments: Option[JValue]
+  ): IO[String] = IO {
+    val value = arguments.flatMap { a =>
+      (a \ "value") match {
+        case JString(s) => Some(s)
+        case JInt(n)    => Some(n.toString)
+        case _          => None
+      }
+    }.getOrElse("")
+
+    val unit = arguments.flatMap { a =>
+      (a \ "unit") match {
+        case JString(s) => Some(s.toLowerCase)
+        case _          => None
+      }
+    }.getOrElse("wei")
+
+    if (value.isEmpty) {
+      "Error: 'value' parameter is required (numeric value to convert)"
+    } else {
+      val weiValueOpt: Option[BigDecimal] = unit match {
+        case "wei"           => Some(BigDecimal(value))
+        case "gwei"          => Some(BigDecimal(value) * BigDecimal("1000000000"))
+        case "ether" | "etc" => Some(BigDecimal(value) * BigDecimal("1000000000000000000"))
+        case _               => None
+      }
+      weiValueOpt match {
+        case None =>
+          s"Error: Unknown unit '$unit'. Use 'wei', 'gwei', or 'ether'/'etc'"
+        case Some(weiValue) =>
+          val weiStr = weiValue.toBigInt.toString
+          val gweiStr = (weiValue / BigDecimal("1000000000")).toString
+          val etherStr = (weiValue / BigDecimal("1000000000000000000")).toString
+          s"""Unit Conversion ($value $unit):
+            |• Wei: $weiStr
+            |• Gwei: $gweiStr
+            |• ETC: $etherStr""".stripMargin
+      }
+    }
+  }
+}
+
 object McpToolRegistry {
 
   def getAllTools(): List[McpToolDefinition] = List(
@@ -270,7 +734,16 @@ object McpToolRegistry {
     McpToolDefinition(SyncStatusTool.name, SyncStatusTool.description),
     McpToolDefinition(PeerListTool.name, PeerListTool.description),
     McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description),
-    McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description)
+    McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description),
+    McpToolDefinition(GetBlockTool.name, GetBlockTool.description),
+    McpToolDefinition(GetTransactionTool.name, GetTransactionTool.description),
+    McpToolDefinition(GetAccountTool.name, GetAccountTool.description),
+    McpToolDefinition(GetBlockReceiptsTool.name, GetBlockReceiptsTool.description),
+    McpToolDefinition(GetGasPriceTool.name, GetGasPriceTool.description),
+    McpToolDefinition(DecodeCalldataTool.name, DecodeCalldataTool.description),
+    McpToolDefinition(GetNetworkHealthTool.name, GetNetworkHealthTool.description),
+    McpToolDefinition(DetectReorgTool.name, DetectReorgTool.description),
+    McpToolDefinition(ConvertUnitsTool.name, ConvertUnitsTool.description)
   )
 
   def executeTool(
@@ -281,7 +754,8 @@ object McpToolRegistry {
       blockchainReader: BlockchainReader,
       blockchainConfig: BlockchainConfig,
       mining: Mining,
-      nodeStatusHolder: AtomicReference[NodeStatus]
+      nodeStatusHolder: AtomicReference[NodeStatus],
+      transactionMappingStorage: Option[TransactionMappingStorage] = None
   )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
     toolName match {
       case NodeStatusTool.name =>
@@ -298,6 +772,24 @@ object McpToolRegistry {
         SetEtherbaseTool.execute()
       case MiningRpcSummaryTool.name =>
         MiningRpcSummaryTool.execute()
+      case GetBlockTool.name =>
+        GetBlockTool.execute(blockchainReader, arguments)
+      case GetTransactionTool.name =>
+        GetTransactionTool.execute(blockchainReader, transactionMappingStorage, arguments)
+      case GetAccountTool.name =>
+        GetAccountTool.execute(blockchainReader, arguments)
+      case GetBlockReceiptsTool.name =>
+        GetBlockReceiptsTool.execute(blockchainReader, arguments)
+      case GetGasPriceTool.name =>
+        GetGasPriceTool.execute(blockchainReader)
+      case DecodeCalldataTool.name =>
+        DecodeCalldataTool.execute(arguments)
+      case GetNetworkHealthTool.name =>
+        GetNetworkHealthTool.execute(peerManager, syncController, blockchainReader, nodeStatusHolder)
+      case DetectReorgTool.name =>
+        DetectReorgTool.execute(blockchainReader, arguments)
+      case ConvertUnitsTool.name =>
+        ConvertUnitsTool.execute(arguments)
       case _ =>
         IO.pure(s"Unknown tool: $toolName. Use tools/list to see available tools.")
     }

@@ -13,6 +13,7 @@ import scala.concurrent.ExecutionContext
 import org.json4s.JsonAST.JValue
 
 import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.jsonrpc.mcp.{McpToolRegistry, McpResourceRegistry, McpPromptRegistry}
 import com.chipprbots.ethereum.utils.{BlockchainConfig, BuildInfo, NodeStatus}
@@ -99,7 +100,8 @@ class McpService(
     blockchainReader: BlockchainReader,
     blockchainConfig: BlockchainConfig,
     mining: Mining,
-    nodeStatusHolder: AtomicReference[NodeStatus]
+    nodeStatusHolder: AtomicReference[NodeStatus],
+    transactionMappingStorage: Option[TransactionMappingStorage] = None
 )(implicit val executionContext: ExecutionContext) {
   
   import McpService._
@@ -135,7 +137,8 @@ class McpService(
   def toolsCall(request: McpToolsCallRequest): ServiceResponse[McpToolsCallResponse] = {
     McpToolRegistry.executeTool(
       request.name, request.arguments,
-      peerManager, syncController, blockchainReader, blockchainConfig, mining, nodeStatusHolder
+      peerManager, syncController, blockchainReader, blockchainConfig, mining, nodeStatusHolder,
+      transactionMappingStorage
     ).map { text =>
       Right(McpToolsCallResponse(
         content = List(McpTextContent(text = text))
