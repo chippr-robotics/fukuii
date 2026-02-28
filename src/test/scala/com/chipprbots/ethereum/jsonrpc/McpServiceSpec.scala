@@ -54,7 +54,7 @@ class McpServiceSpec
 
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
-      result.protocolVersion shouldBe "2024-11-05"
+      result.protocolVersion shouldBe "2025-03-26"
       result.serverInfo.name shouldBe "Fukuii ETC Node MCP Server"
       result.capabilities.tools shouldBe defined
       result.capabilities.resources shouldBe defined
