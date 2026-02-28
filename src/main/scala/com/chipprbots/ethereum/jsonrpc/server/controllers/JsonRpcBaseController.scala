@@ -10,6 +10,7 @@ import scala.concurrent.duration.FiniteDuration
 
 import com.typesafe.config.{Config => TypesafeConfig}
 import org.json4s.DefaultFormats
+import org.json4s.JNull
 import org.json4s.JsonDSL._
 import org.json4s.native
 import org.json4s.native.Serialization
@@ -110,10 +111,10 @@ trait JsonRpcBaseController {
     }
 
   private def successResponse[T](req: JsonRpcRequest, result: T)(implicit enc: JsonEncoder[T]): JsonRpcResponse =
-    JsonRpcResponse(req.jsonrpc, Some(enc.encodeJson(result)), None, req.id.getOrElse(0))
+    JsonRpcResponse(req.jsonrpc, Some(enc.encodeJson(result)), None, req.id.getOrElse(JNull))
 
   def errorResponse[T](req: JsonRpcRequest, error: JsonRpcError): JsonRpcResponse =
-    JsonRpcResponse(req.jsonrpc, None, Some(error), req.id.getOrElse(0))
+    JsonRpcResponse(req.jsonrpc, None, Some(error), req.id.getOrElse(JNull))
 
 }
 

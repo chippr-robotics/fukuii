@@ -68,7 +68,8 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
 
   protected val rateLimit = new RateLimit(config.rateLimit)
 
-  val route: Route = cors(corsSettings) {
+  val route: Route = handleRejections(myRejectionHandler) {
+    cors(corsSettings) {
     (path("health") & pathEndOrSingleSlash & get) {
       handleHealth()
     } ~ (path("readiness") & pathEndOrSingleSlash & get) {
@@ -99,7 +100,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           }
       }
     }
-  }
+  }}
 
   def handleRequest(request: JsonRpcRequest): StandardRoute =
     complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture())
