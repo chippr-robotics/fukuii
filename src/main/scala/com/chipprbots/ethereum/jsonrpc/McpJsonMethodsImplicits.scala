@@ -116,10 +116,15 @@ object McpJsonMethodsImplicits extends JsonMethodsImplicits {
   }
   
   implicit val mcpToolEncoder: JsonEncoder[McpTool] = new JsonEncoder[McpTool] {
-    def encodeJson(tool: McpTool): JValue =
-      ("name" -> tool.name) ~
+    def encodeJson(tool: McpTool): JValue = {
+      val base = ("name" -> tool.name) ~
         ("description" -> tool.description) ~
         ("inputSchema" -> tool.inputSchema)
+      tool.annotations match {
+        case Some(ann) => base ~ ("annotations" -> ann)
+        case None => base
+      }
+    }
   }
   
   implicit val mcpToolsListResponseEncoder: JsonEncoder[McpToolsListResponse] = new JsonEncoder[McpToolsListResponse] {

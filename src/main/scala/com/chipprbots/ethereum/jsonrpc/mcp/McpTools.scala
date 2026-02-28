@@ -943,27 +943,70 @@ object VerifyEthashBlockTool {
 
 object McpToolRegistry {
 
+  import org.json4s.JsonDSL._
+
+  private def schema(properties: JValue, required: List[String] = Nil): Option[JValue] = {
+    val base: JValue = ("type" -> "object") ~ ("properties" -> properties)
+    val withReq = if (required.nonEmpty) base.asInstanceOf[JObject] ~ ("required" -> required) else base
+    Some(withReq)
+  }
+
+  private val noParams: Option[JValue] = Some(("type" -> "object") ~ ("properties" -> JObject()))
+
   def getAllTools(): List[McpToolDefinition] = List(
-    McpToolDefinition(NodeStatusTool.name, NodeStatusTool.description),
-    McpToolDefinition(NodeInfoTool.name, NodeInfoTool.description),
-    McpToolDefinition(BlockchainInfoTool.name, BlockchainInfoTool.description),
-    McpToolDefinition(SyncStatusTool.name, SyncStatusTool.description),
-    McpToolDefinition(PeerListTool.name, PeerListTool.description),
-    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description),
-    McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description),
-    McpToolDefinition(GetBlockTool.name, GetBlockTool.description),
-    McpToolDefinition(GetTransactionTool.name, GetTransactionTool.description),
-    McpToolDefinition(GetAccountTool.name, GetAccountTool.description),
-    McpToolDefinition(GetBlockReceiptsTool.name, GetBlockReceiptsTool.description),
-    McpToolDefinition(GetGasPriceTool.name, GetGasPriceTool.description),
-    McpToolDefinition(DecodeCalldataTool.name, DecodeCalldataTool.description),
-    McpToolDefinition(GetNetworkHealthTool.name, GetNetworkHealthTool.description),
-    McpToolDefinition(DetectReorgTool.name, DetectReorgTool.description),
-    McpToolDefinition(ConvertUnitsTool.name, ConvertUnitsTool.description),
-    McpToolDefinition(GetEtcEmissionTool.name, GetEtcEmissionTool.description),
-    McpToolDefinition(GetEtcForksTool.name, GetEtcForksTool.description),
-    McpToolDefinition(GetTreasuryStatusTool.name, GetTreasuryStatusTool.description),
-    McpToolDefinition(VerifyEthashBlockTool.name, VerifyEthashBlockTool.description)
+    // --- Status & Info tools (no params, read-only, idempotent) ---
+    McpToolDefinition(NodeStatusTool.name, NodeStatusTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(NodeInfoTool.name, NodeInfoTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(BlockchainInfoTool.name, BlockchainInfoTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(SyncStatusTool.name, SyncStatusTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(PeerListTool.name, PeerListTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description,
+      noParams, readOnlyHint = Some(true)),
+    McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    // --- Parameterized query tools ---
+    McpToolDefinition(GetBlockTool.name, GetBlockTool.description,
+      schema(("block" -> (("type" -> "string") ~ ("description" -> "Block number (decimal or 0x hex) or hash"))): JValue, List("block")),
+      readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(GetTransactionTool.name, GetTransactionTool.description,
+      schema(("hash" -> (("type" -> "string") ~ ("description" -> "Transaction hash (0x-prefixed)"))): JValue, List("hash")),
+      readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(GetAccountTool.name, GetAccountTool.description,
+      schema(("address" -> (("type" -> "string") ~ ("description" -> "Account address (0x-prefixed)"))) ~
+             ("block" -> (("type" -> "string") ~ ("description" -> "Block number or 'latest'") ~ ("default" -> "latest"))): JValue, List("address")),
+      readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(GetBlockReceiptsTool.name, GetBlockReceiptsTool.description,
+      schema(("block" -> (("type" -> "string") ~ ("description" -> "Block number (decimal or 0x hex)"))): JValue, List("block")),
+      readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(GetGasPriceTool.name, GetGasPriceTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(DecodeCalldataTool.name, DecodeCalldataTool.description,
+      schema(("data" -> (("type" -> "string") ~ ("description" -> "Hex-encoded calldata (0x-prefixed)"))): JValue, List("data")),
+      readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(GetNetworkHealthTool.name, GetNetworkHealthTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(DetectReorgTool.name, DetectReorgTool.description,
+      schema(("depth" -> (("type" -> "integer") ~ ("description" -> "Number of blocks to check") ~ ("default" -> 10))): JValue),
+      readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(ConvertUnitsTool.name, ConvertUnitsTool.description,
+      schema(("value" -> (("type" -> "string") ~ ("description" -> "Numeric value to convert"))) ~
+             ("from" -> (("type" -> "string") ~ ("description" -> "Source unit: wei, gwei, or ether"))): JValue, List("value", "from")),
+      readOnlyHint = Some(true), idempotentHint = Some(true)),
+    // --- ETC-specific tools ---
+    McpToolDefinition(GetEtcEmissionTool.name, GetEtcEmissionTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(GetEtcForksTool.name, GetEtcForksTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(GetTreasuryStatusTool.name, GetTreasuryStatusTool.description,
+      noParams, readOnlyHint = Some(true), idempotentHint = Some(true)),
+    McpToolDefinition(VerifyEthashBlockTool.name, VerifyEthashBlockTool.description,
+      schema(("block" -> (("type" -> "string") ~ ("description" -> "Block number, hash, or 'latest'") ~ ("default" -> "latest"))): JValue),
+      readOnlyHint = Some(true), idempotentHint = Some(true))
   )
 
   def executeTool(
@@ -1026,5 +1069,9 @@ object McpToolRegistry {
 
 case class McpToolDefinition(
     name: String,
-    description: Option[String]
+    description: Option[String],
+    inputSchema: Option[org.json4s.JsonAST.JValue] = None,
+    readOnlyHint: Option[Boolean] = None,
+    idempotentHint: Option[Boolean] = None,
+    openWorldHint: Option[Boolean] = None
 )

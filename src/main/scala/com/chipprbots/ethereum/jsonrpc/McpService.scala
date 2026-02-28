@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
-import org.json4s.JsonAST.JValue
+import org.json4s.JsonAST.{JBool, JObject, JValue}
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
@@ -46,7 +46,8 @@ object McpService {
   case class McpTool(
       name: String,
       description: Option[String],
-      inputSchema: JValue
+      inputSchema: JValue,
+      annotations: Option[JValue] = None
   )
   
   case class McpToolsCallRequest(name: String, arguments: Option[JValue])
@@ -121,16 +122,25 @@ class McpService(
   
   def toolsList(request: McpToolsListRequest): ServiceResponse[McpToolsListResponse] = {
     import org.json4s.JsonDSL._
-    
-    // Use the modular tool registry
+
+    val defaultSchema: JValue = ("type" -> "object") ~ ("properties" -> JObject())
+
     val tools = McpToolRegistry.getAllTools().map { toolDef =>
       McpTool(
         name = toolDef.name,
         description = toolDef.description,
-        inputSchema = ("type" -> "object") ~ ("properties" -> Map.empty[String, JValue]) ~ ("required" -> List.empty[String])
+        inputSchema = toolDef.inputSchema.getOrElse(defaultSchema),
+        annotations = {
+          val hints = List(
+            toolDef.readOnlyHint.map("readOnlyHint" -> JBool(_)),
+            toolDef.idempotentHint.map("idempotentHint" -> JBool(_)),
+            toolDef.openWorldHint.map("openWorldHint" -> JBool(_))
+          ).flatten
+          if (hints.nonEmpty) Some(JObject(hints)) else None
+        }
       )
     }
-    
+
     IO.pure(Right(McpToolsListResponse(tools)))
   }
   
