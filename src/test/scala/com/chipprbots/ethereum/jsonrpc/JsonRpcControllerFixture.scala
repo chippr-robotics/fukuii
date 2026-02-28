@@ -163,7 +163,12 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
   val qaService: QAService = mock[QAService]
   val checkpointingService: CheckpointingService = mock[CheckpointingService]
   val fukuiiService: FukuiiService = mock[FukuiiService]
-  val mcpService: McpService = mock[McpService]
+  // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
+  val mcpService: McpService = new McpService(
+    system.deadLetters, system.deadLetters,
+    blockchainReader, blockchainConfig, mining,
+    new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus]()
+  )(system.dispatcher)
 
   def jsonRpcController: JsonRpcController =
     JsonRpcController(

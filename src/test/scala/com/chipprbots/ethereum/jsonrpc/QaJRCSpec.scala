@@ -275,7 +275,14 @@ class QaJRCSpec
     val ethFilterService: EthFilterService = mock[EthFilterService]
     val checkpointingService: CheckpointingService = mock[CheckpointingService]
     val fukuiiService: FukuiiService = mock[FukuiiService]
-    val mcpService: McpService = mock[McpService]
+    // MIGRATION: Scala 3 mock cannot infer AtomicReference type parameter - create real instance
+    val mcpService: McpService = new McpService(
+      org.apache.pekko.testkit.TestProbe().ref, org.apache.pekko.testkit.TestProbe().ref,
+      mock[com.chipprbots.ethereum.domain.BlockchainReader],
+      Config.blockchains.blockchainConfig,
+      mock[com.chipprbots.ethereum.consensus.mining.Mining],
+      new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus]()
+    )(testSystem.dispatcher)
     val qaService: QAService = mock[QAService]
 
     val jsonRpcController =

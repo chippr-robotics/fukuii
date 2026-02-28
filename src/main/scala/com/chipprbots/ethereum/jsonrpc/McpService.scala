@@ -5,13 +5,17 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
 import org.json4s.JsonAST.JValue
 
+import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.jsonrpc.mcp.{McpToolRegistry, McpResourceRegistry, McpPromptRegistry}
-import com.chipprbots.ethereum.utils.BuildInfo
+import com.chipprbots.ethereum.utils.{BlockchainConfig, BuildInfo, NodeStatus}
 
 object McpService {
   // MCP Initialize
@@ -91,7 +95,11 @@ object McpService {
 
 class McpService(
     peerManager: ActorRef,
-    syncController: ActorRef
+    syncController: ActorRef,
+    blockchainReader: BlockchainReader,
+    blockchainConfig: BlockchainConfig,
+    mining: Mining,
+    nodeStatusHolder: AtomicReference[NodeStatus]
 )(implicit val executionContext: ExecutionContext) {
   
   import McpService._
@@ -125,8 +133,10 @@ class McpService(
   }
   
   def toolsCall(request: McpToolsCallRequest): ServiceResponse[McpToolsCallResponse] = {
-    // Use the modular tool registry for execution
-    McpToolRegistry.executeTool(request.name, peerManager, syncController).map { text =>
+    McpToolRegistry.executeTool(
+      request.name, request.arguments,
+      peerManager, syncController, blockchainReader, blockchainConfig, mining, nodeStatusHolder
+    ).map { text =>
       Right(McpToolsCallResponse(
         content = List(McpTextContent(text = text))
       ))
@@ -148,8 +158,9 @@ class McpService(
   }
   
   def resourcesRead(request: McpResourcesReadRequest): ServiceResponse[McpResourcesReadResponse] = {
-    // Use the modular resource registry for reading
-    McpResourceRegistry.readResource(request.uri, peerManager, syncController) match {
+    McpResourceRegistry.readResource(
+      request.uri, peerManager, syncController, blockchainReader, blockchainConfig, mining, nodeStatusHolder
+    ) match {
       case Right(contentIO) =>
         contentIO.map { content =>
           Right(McpResourcesReadResponse(

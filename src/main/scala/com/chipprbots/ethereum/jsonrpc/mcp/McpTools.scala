@@ -1,176 +1,268 @@
 package com.chipprbots.ethereum.jsonrpc.mcp
 
 import org.apache.pekko.actor.ActorRef
-import org.apache.pekko.pattern.ask
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
-import scala.concurrent.duration._
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.concurrent.ExecutionContext
+import org.json4s.JsonAST._
 
-import com.chipprbots.ethereum.jsonrpc.McpService._
-import com.chipprbots.ethereum.utils.BuildInfo
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
+import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.utils.{BlockchainConfig, BuildInfo, NodeStatus}
+import com.chipprbots.ethereum.utils.ServerStatus
 
-/**
- * Node information tool for MCP.
- * Provides detailed information about the Fukuii node.
- */
 object NodeInfoTool {
   val name = "mcp_node_info"
-  val description = Some("Get detailed information about the Fukuii node")
-  
-  def execute(): IO[String] = {
+  val description = Some("Get detailed information about the Fukuii node including version, network, and chain configuration")
+
+  def execute(
+      blockchainConfig: BlockchainConfig
+  ): IO[String] = {
+    val networkName = blockchainConfig.chainId match {
+      case id if id == 1  => "Ethereum Classic Mainnet"
+      case id if id == 63 => "Mordor Testnet"
+      case id if id == 6  => "Kotti Testnet"
+      case id             => s"Chain $id"
+    }
     IO.pure(s"""Fukuii Node Information:
       |• Version: ${BuildInfo.version}
       |• Scala Version: ${BuildInfo.scalaVersion}
       |• Git Commit: ${BuildInfo.gitHeadCommit}
       |• Git Branch: ${BuildInfo.gitCurrentBranch}
-      |• Network: ETC Mainnet
+      |• Network: $networkName
+      |• Chain ID: ${blockchainConfig.chainId}
+      |• Network ID: ${blockchainConfig.networkId}
       |• Client ID: Fukuii/${BuildInfo.version}""".stripMargin)
   }
 }
 
-/**
- * Node status tool for MCP.
- * Queries actual node state from actors.
- */
 object NodeStatusTool {
   val name = "mcp_node_status"
-  val description = Some("Get the current status of the Fukuii node")
-  
+  val description = Some("Get the current operational status of the Fukuii node including sync state, peer count, and best block")
+
   def execute(
       peerManager: ActorRef,
-      syncController: ActorRef
+      syncController: ActorRef,
+      blockchainReader: BlockchainReader,
+      nodeStatusHolder: AtomicReference[NodeStatus]
   )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query actual node state via actor refs
-    IO.pure("""Node Status:
-      |• Running: true
-      |• Syncing: checking...
-      |• Peers: querying...
-      |• Current Block: querying...
-      |• Best Known Block: querying...
-      |• Sync Progress: calculating...""".stripMargin)
+    val syncStatusIO = syncController
+      .askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
+      .handleErrorWith(_ => IO.pure(SyncProtocol.Status.NotSyncing: SyncProtocol.Status))
+
+    val peersIO = peerManager
+      .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
+      .handleErrorWith(_ => IO.pure(PeerManagerActor.Peers(Map.empty)))
+
+    for {
+      syncStatus <- syncStatusIO
+      peers <- peersIO
+    } yield {
+      val bestBlockNum = blockchainReader.getBestBlockNumber()
+      val peerCount = peers.handshaked.size
+      val nodeStatus = nodeStatusHolder.get()
+      val listening = nodeStatus.serverStatus match {
+        case _: ServerStatus.Listening => true
+        case ServerStatus.NotListening => false
+      }
+
+      val syncInfo = syncStatus match {
+        case SyncProtocol.Status.Syncing(start, blocks, stateNodes) =>
+          val progress = if (blocks.target > 0) {
+            f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.1f%%"
+          } else "calculating..."
+          s"""• Syncing: true
+            |• Sync Start Block: $start
+            |• Current Block: ${blocks.current}
+            |• Target Block: ${blocks.target}
+            |• Sync Progress: $progress""".stripMargin
+        case SyncProtocol.Status.SyncDone =>
+          s"• Syncing: false (sync complete)"
+        case SyncProtocol.Status.NotSyncing =>
+          s"• Syncing: false"
+      }
+
+      s"""Node Status:
+        |• Running: true
+        |• Listening: $listening
+        |• Peers: $peerCount
+        |• Best Block: $bestBlockNum
+        |$syncInfo""".stripMargin
+    }
   }
 }
 
-/**
- * Blockchain information tool for MCP.
- * Provides information about the blockchain state.
- */
 object BlockchainInfoTool {
   val name = "mcp_blockchain_info"
-  val description = Some("Get information about the blockchain state")
-  
+  val description = Some("Get information about the blockchain state including best block, chain ID, and total difficulty")
+
   def execute(
-      syncController: ActorRef
-  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query actual blockchain state
-    IO.pure("""Blockchain Information:
-      |• Network: Ethereum Classic (ETC)
-      |• Best Block Number: querying...
-      |• Best Block Hash: querying...
-      |• Chain ID: 61
-      |• Total Difficulty: querying...
-      |• Genesis Hash: 0xd4e5...6789""".stripMargin)
+      blockchainReader: BlockchainReader,
+      blockchainConfig: BlockchainConfig
+  ): IO[String] = IO {
+    val bestBlockNum = blockchainReader.getBestBlockNumber()
+    val genesisHeader = blockchainReader.genesisHeader
+    val genesisHash = s"0x${genesisHeader.hashAsHexString}"
+
+    val bestBlockInfo = blockchainReader.getBestBlock() match {
+      case Some(block) =>
+        val hash = s"0x${block.header.hashAsHexString}"
+        val weight = blockchainReader.getChainWeightByHash(block.header.hash)
+        val td = weight.map(_.totalDifficulty.toString).getOrElse("unknown")
+        s"""• Best Block Number: $bestBlockNum
+          |• Best Block Hash: $hash
+          |• Total Difficulty: $td""".stripMargin
+      case None =>
+        s"• Best Block Number: $bestBlockNum"
+    }
+
+    val networkName = blockchainConfig.chainId match {
+      case id if id == 1  => "Ethereum Classic (ETC)"
+      case id if id == 63 => "Mordor Testnet"
+      case id             => s"Chain $id"
+    }
+
+    s"""Blockchain Information:
+      |• Network: $networkName
+      |$bestBlockInfo
+      |• Chain ID: ${blockchainConfig.chainId}
+      |• Genesis Hash: $genesisHash""".stripMargin
   }
 }
 
-/**
- * Sync status tool for MCP.
- * Provides detailed synchronization status.
- */
 object SyncStatusTool {
   val name = "mcp_sync_status"
-  val description = Some("Get detailed synchronization status")
-  
+  val description = Some("Get detailed synchronization status including mode, progress, and block counts")
+
   def execute(
-      syncController: ActorRef
+      syncController: ActorRef,
+      blockchainReader: BlockchainReader
   )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query SyncController for actual status
-    IO.pure("""Sync Status:
-      |• Mode: Regular Sync
-      |• Syncing: checking...
-      |• Current Block: querying...
-      |• Target Block: querying...
-      |• Remaining Blocks: calculating...
-      |• Progress: calculating...
-      |• Sync Speed: measuring...""".stripMargin)
+    syncController
+      .askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
+      .map {
+        case SyncProtocol.Status.Syncing(startBlock, blocksProgress, stateNodesProgress) =>
+          val remaining = blocksProgress.target - blocksProgress.current
+          val progress = if (blocksProgress.target > 0) {
+            f"${(blocksProgress.current.toDouble / blocksProgress.target.toDouble * 100)}%.2f%%"
+          } else "0.00%"
+
+          val stateInfo = stateNodesProgress match {
+            case Some(sp) if sp.nonEmpty =>
+              s"""|• State Nodes Downloaded: ${sp.current}
+                  |• State Nodes Target: ${sp.target}""".stripMargin
+            case _ => ""
+          }
+
+          s"""Sync Status:
+            |• Syncing: true
+            |• Starting Block: $startBlock
+            |• Current Block: ${blocksProgress.current}
+            |• Target Block: ${blocksProgress.target}
+            |• Remaining Blocks: $remaining
+            |• Progress: $progress$stateInfo""".stripMargin
+
+        case SyncProtocol.Status.SyncDone =>
+          val bestBlock = blockchainReader.getBestBlockNumber()
+          s"""Sync Status:
+            |• Syncing: false
+            |• Status: Sync complete
+            |• Best Block: $bestBlock""".stripMargin
+
+        case SyncProtocol.Status.NotSyncing =>
+          val bestBlock = blockchainReader.getBestBlockNumber()
+          s"""Sync Status:
+            |• Syncing: false
+            |• Status: Not syncing
+            |• Best Block: $bestBlock""".stripMargin
+      }
+      .handleErrorWith { err =>
+        IO.pure(s"""Sync Status:
+          |• Error querying sync controller: ${err.getMessage}""".stripMargin)
+      }
   }
 }
 
-/**
- * Peer list tool for MCP.
- * Lists all connected peers.
- */
 object PeerListTool {
   val name = "mcp_peer_list"
-  val description = Some("List all connected peers")
-  
+  val description = Some("List all connected peers with their addresses and connection direction")
+
   def execute(
       peerManager: ActorRef
   )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query PeerManagerActor for actual peer list
-    IO.pure("""Connected Peers:
-      |Querying peer manager for current connections...""".stripMargin)
+    peerManager
+      .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
+      .map { peers =>
+        val handshaked = peers.handshaked
+        if (handshaked.isEmpty) {
+          "Connected Peers: 0\nNo peers currently connected."
+        } else {
+          val peerLines = handshaked.zipWithIndex.map { case (peer, idx) =>
+            val direction = if (peer.incomingConnection) "inbound" else "outbound"
+            val addr = peer.remoteAddress.toString
+            val nodeIdStr = peer.nodeId.map(id => s"0x${id.take(8).map("%02x".format(_)).mkString}...").getOrElse("unknown")
+            s"  ${idx + 1}. $addr ($direction) node=$nodeIdStr"
+          }
+          s"""Connected Peers: ${handshaked.size}
+            |${peerLines.mkString("\n")}""".stripMargin
+        }
+      }
+      .handleErrorWith { err =>
+        IO.pure(s"Connected Peers: error querying peer manager (${err.getMessage})")
+      }
   }
 }
 
-/**
- * Set etherbase tool for MCP.
- * Provides information about the eth_setEtherbase JSON-RPC method.
- * Note: This is an informational tool only. Use eth_setEtherbase JSON-RPC method to actually set the etherbase.
- */
 object SetEtherbaseTool {
   val name = "mcp_etherbase_info"
-  val description = Some("Get information about setting the etherbase (coinbase) address for mining rewards via JSON-RPC")
-  
+  val description = Some("Get information about the etherbase (coinbase) address configuration for mining rewards")
+
   def execute(): IO[String] = {
     IO.pure(s"""Etherbase (Coinbase) Configuration:
       |• Method: eth_setEtherbase
       |• Description: Sets the coinbase address for mining rewards
       |• Usage: Send JSON-RPC request with method "eth_setEtherbase" and address parameter
       |• Example: {"jsonrpc":"2.0","method":"eth_setEtherbase","params":["0x1234..."],"id":1}
+      |• Related Methods:
+      |  - eth_coinbase: Get current coinbase address
+      |  - miner_start: Start mining
+      |  - miner_stop: Stop mining
+      |  - miner_getStatus: Get mining status
       |• Note: Changes take effect immediately for newly generated blocks""".stripMargin)
   }
 }
 
-/**
- * Mining RPC summary tool for MCP.
- * Surfaces the exact mining endpoints exposed via JSON-RPC plus their latest observed responses.
- */
 object MiningRpcSummaryTool {
   val name = "mcp_mining_rpc_summary"
-  val description = Some("List Node1 mining RPC endpoints and the last verified responses")
-
-  private val nodeUrl = "http://127.0.0.1:8545"
-  private val verifiedAt = "2025-12-13T00:00:00Z"
+  val description = Some("List available mining RPC methods and their descriptions")
 
   def execute(): IO[String] = {
-    IO.pure(s"""Mining RPC endpoints (Node1 @$nodeUrl, verified $verifiedAt):
-      |• eth_mining -> result: false
-      |• eth_hashrate -> result: 0x0
-      |• eth_getWork -> powHash: 0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107, dagSeed: 0x0000000000000000000000000000000000000000000000000000000000000000, target: 0x4e8c16f1dc13d691ab85bd62a93a79ff1cf30dacdfd6a7c2ec31688eced2
-      |• eth_coinbase -> 0x1000000000000000000000000000000000000001
-      |• eth_submitWork -> params: [0x0000000000000001, 0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107, 0x0000000000000000000000000000000000000000000000000000000000000000], result: false
-      |• eth_submitHashrate -> params: [0x1, 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef], result: true
-      |• miner_start -> result: true
-      |• miner_stop -> result: true
-      |• miner_getStatus -> {isMining: true, coinbase: 0x1000000000000000000000000000000000000001, hashRate: 0x1}
-      |""".stripMargin)
+    IO.pure(s"""Mining RPC Methods:
+      |• eth_mining — Returns whether the node is actively mining
+      |• eth_hashrate — Returns the current hashrate (H/s)
+      |• eth_getWork — Returns current mining work: [powHash, seedHash, target]
+      |• eth_submitWork — Submit a PoW solution: [nonce, powHash, mixHash]
+      |• eth_submitHashrate — Report external miner hashrate: [hashrate, minerId]
+      |• eth_coinbase — Returns the current coinbase address
+      |• eth_setEtherbase — Set the coinbase address for mining rewards
+      |• miner_start — Start the CPU miner
+      |• miner_stop — Stop the CPU miner
+      |• miner_getStatus — Returns mining state: {isMining, coinbase, hashRate}
+      |
+      |Note: Use eth_mining and miner_getStatus to check current mining state.
+      |All methods are available via JSON-RPC on the node's HTTP endpoint.""".stripMargin)
   }
 }
 
-/**
- * Registry of all available MCP tools.
- * This makes it easy to add/remove tools and track changes.
- */
 object McpToolRegistry {
-  
-  /**
-   * Get all available tool definitions.
-   * Each tool is defined in its own object for modularity.
-   */
+
   def getAllTools(): List[McpToolDefinition] = List(
     McpToolDefinition(NodeStatusTool.name, NodeStatusTool.description),
     McpToolDefinition(NodeInfoTool.name, NodeInfoTool.description),
@@ -180,31 +272,38 @@ object McpToolRegistry {
     McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description),
     McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description)
   )
-  
-  /**
-   * Execute a tool by name.
-   */
+
   def executeTool(
       toolName: String,
+      arguments: Option[JValue],
       peerManager: ActorRef,
-      syncController: ActorRef
+      syncController: ActorRef,
+      blockchainReader: BlockchainReader,
+      blockchainConfig: BlockchainConfig,
+      mining: Mining,
+      nodeStatusHolder: AtomicReference[NodeStatus]
   )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
     toolName match {
-      case NodeStatusTool.name => NodeStatusTool.execute(peerManager, syncController)
-      case NodeInfoTool.name => NodeInfoTool.execute()
-      case BlockchainInfoTool.name => BlockchainInfoTool.execute(syncController)
-      case SyncStatusTool.name => SyncStatusTool.execute(syncController)
-      case PeerListTool.name => PeerListTool.execute(peerManager)
-      case SetEtherbaseTool.name => SetEtherbaseTool.execute()
-      case MiningRpcSummaryTool.name => MiningRpcSummaryTool.execute()
-      case _ => IO.pure(s"Unknown tool: $toolName")
+      case NodeStatusTool.name =>
+        NodeStatusTool.execute(peerManager, syncController, blockchainReader, nodeStatusHolder)
+      case NodeInfoTool.name =>
+        NodeInfoTool.execute(blockchainConfig)
+      case BlockchainInfoTool.name =>
+        BlockchainInfoTool.execute(blockchainReader, blockchainConfig)
+      case SyncStatusTool.name =>
+        SyncStatusTool.execute(syncController, blockchainReader)
+      case PeerListTool.name =>
+        PeerListTool.execute(peerManager)
+      case SetEtherbaseTool.name =>
+        SetEtherbaseTool.execute()
+      case MiningRpcSummaryTool.name =>
+        MiningRpcSummaryTool.execute()
+      case _ =>
+        IO.pure(s"Unknown tool: $toolName. Use tools/list to see available tools.")
     }
   }
 }
 
-/**
- * Simple tool definition for registration.
- */
 case class McpToolDefinition(
     name: String,
     description: Option[String]

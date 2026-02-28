@@ -6,18 +6,25 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.unsafe.implicits.global
 
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.concurrent.duration._
 
+import org.scalamock.scalatest.MockFactory
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 
+import com.chipprbots.ethereum.consensus.mining.Mining
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.jsonrpc.McpService._
+import com.chipprbots.ethereum.utils.{Config, NodeStatus}
 
 class McpServiceSpec
     extends TestKit(ActorSystem("McpServiceSpec"))
     with AnyWordSpecLike
     with Matchers
+    with MockFactory
     with BeforeAndAfterAll {
 
   override def afterAll(): Unit = {
@@ -29,8 +36,15 @@ class McpServiceSpec
 
   val peerManagerProbe = TestProbe()
   val syncControllerProbe = TestProbe()
+  val blockchainReader = mock[BlockchainReader]
+  val blockchainConfig = Config.blockchains.blockchainConfig
+  val mining = mock[Mining]
+  val nodeStatusHolder = new AtomicReference[NodeStatus]()
 
-  val service = new McpService(peerManagerProbe.ref, syncControllerProbe.ref)
+  val service = new McpService(
+    peerManagerProbe.ref, syncControllerProbe.ref,
+    blockchainReader, blockchainConfig, mining, nodeStatusHolder
+  )
 
   "McpService" should {
 
