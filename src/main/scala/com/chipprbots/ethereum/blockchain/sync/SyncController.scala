@@ -55,19 +55,25 @@ class SyncController(
 
   private case object RestartFastSyncNow
 
-  // Generation counter for bootstrap actor names to prevent Pekko name collisions
+  // Generation counters for actor names to prevent Pekko name collisions
   // (context.stop is async — new actors can race with still-stopping ones).
   private var bootstrapGeneration: Long = 0
+  private var syncGeneration: Long = 0
 
   private def stopSyncChildren(): Unit = {
-    val fixedNames = Seq(
+    // Stop all sync-related child actors. Names may have generation suffixes
+    // (e.g. "fast-sync-3") because PoisonPill is async and a new actor can
+    // race with a still-stopping one.
+    val prefixes = Seq(
       "fast-sync",
       "regular-sync",
       "peers-client",
-      "snap-sync",
-      "regular-sync-bootstrap"
+      "snap-sync"
     )
-    fixedNames.flatMap(context.child).foreach(_ ! PoisonPill)
+    context.children.filter { child =>
+      val n = child.path.name
+      prefixes.exists(p => n == p || n.startsWith(s"$p-"))
+    }.foreach(_ ! PoisonPill)
 
     // Stop any generation-numbered bootstrap children
     context.children.filter { child =>
@@ -346,6 +352,7 @@ class SyncController(
   }
 
   def startFastSync(): Unit = {
+    syncGeneration += 1
     val fastSync = context.actorOf(
       FastSync.props(
         fastSyncStateStorage,
@@ -365,7 +372,7 @@ class SyncController(
         scheduler,
         configBuilder
       ),
-      "fast-sync"
+      s"fast-sync-$syncGeneration"
     )
     fastSync ! SyncProtocol.Start
     context.become(runningFastSync(fastSync))
@@ -373,6 +380,7 @@ class SyncController(
 
   def startSnapSync(): Unit = {
     log.info("Starting SNAP sync mode")
+    syncGeneration += 1
 
     val snapSyncConfig = loadSnapSyncConfig()
 
@@ -389,7 +397,7 @@ class SyncController(
         snapSyncConfig,
         scheduler
       ),
-      "snap-sync"
+      s"snap-sync-$syncGeneration"
     )
 
     // Register SNAPSyncController with NetworkPeerManagerActor for message routing
@@ -400,10 +408,11 @@ class SyncController(
   }
 
   def startRegularSync(): Unit = {
+    syncGeneration += 1
     val peersClient =
       context.actorOf(
         PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
-        "peers-client"
+        s"peers-client-$syncGeneration"
       )
     val regularSync = context.actorOf(
       RegularSync.props(
@@ -422,7 +431,7 @@ class SyncController(
         scheduler,
         configBuilder
       ),
-      "regular-sync"
+      s"regular-sync-$syncGeneration"
     )
     regularSync ! SyncProtocol.Start
     context.become(runningRegularSync(regularSync))
