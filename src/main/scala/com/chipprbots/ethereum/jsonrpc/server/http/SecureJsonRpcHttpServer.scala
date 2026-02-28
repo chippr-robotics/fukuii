@@ -7,7 +7,6 @@ import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.apache.pekko.http.scaladsl.ConnectionContext
 import org.apache.pekko.http.scaladsl.Http
 
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.Failure
 import scala.util.Success
 
@@ -27,11 +26,13 @@ class SecureJsonRpcHttpServer(
     with Logger {
 
   def run(): Unit = {
+    implicit val ec: scala.concurrent.ExecutionContext = actorSystem.dispatcher
+
     val maybeHttpsContext = getSSLContext().map(sslContext => ConnectionContext.httpsServer(sslContext))
 
     maybeHttpsContext match {
       case Right(httpsContext) =>
-        val bindingResultF = Http().newServerAt(config.interface, config.port).enableHttps(httpsContext).bind(route)
+        val bindingResultF = Http(actorSystem).newServerAt(config.interface, config.port).enableHttps(httpsContext).bind(route)
 
         bindingResultF.onComplete {
           case Success(serverBinding) => log.info(s"JSON RPC HTTPS server listening on ${serverBinding.localAddress}")

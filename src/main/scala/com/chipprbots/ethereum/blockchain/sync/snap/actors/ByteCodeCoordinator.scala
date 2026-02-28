@@ -457,7 +457,7 @@ class ByteCodeCoordinator(
         coordinator = self,
         networkPeerManager = networkPeerManager,
         requestTracker = requestTracker
-      )
+      ).withDispatcher("sync-dispatcher")
     )
     workers += worker
     idleWorkers += worker

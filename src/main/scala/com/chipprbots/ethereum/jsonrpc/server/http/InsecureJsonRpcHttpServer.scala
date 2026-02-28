@@ -4,7 +4,6 @@ import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.cors.scaladsl.model.HttpOriginMatcher
 import org.apache.pekko.http.scaladsl.Http
 
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.Failure
 import scala.util.Success
 
@@ -22,6 +21,8 @@ class InsecureJsonRpcHttpServer(
     with Logger {
 
   def run(): Unit = {
+    implicit val ec: scala.concurrent.ExecutionContext = actorSystem.dispatcher
+
     val bindingResultF = Http(actorSystem).newServerAt(config.interface, config.port).bind(route)
 
     bindingResultF.onComplete {

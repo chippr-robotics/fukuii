@@ -371,7 +371,7 @@ class SyncController(
         syncConfig,
         scheduler,
         configBuilder
-      ),
+      ).withDispatcher("sync-dispatcher"),
       s"fast-sync-$syncGeneration"
     )
     fastSync ! SyncProtocol.Start
@@ -396,7 +396,7 @@ class SyncController(
         syncConfig,
         snapSyncConfig,
         scheduler
-      ),
+      ).withDispatcher("sync-dispatcher"),
       s"snap-sync-$syncGeneration"
     )
 
@@ -411,7 +411,8 @@ class SyncController(
     syncGeneration += 1
     val peersClient =
       context.actorOf(
-        PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+        PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler)
+          .withDispatcher("sync-dispatcher"),
         s"peers-client-$syncGeneration"
       )
     val regularSync = context.actorOf(
@@ -430,7 +431,7 @@ class SyncController(
         pendingTransactionsManager,
         scheduler,
         configBuilder
-      ),
+      ).withDispatcher("sync-dispatcher"),
       s"regular-sync-$syncGeneration"
     )
     regularSync ! SyncProtocol.Start

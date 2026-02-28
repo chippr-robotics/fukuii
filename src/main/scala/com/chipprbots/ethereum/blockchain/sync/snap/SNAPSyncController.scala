@@ -1077,7 +1077,7 @@ class SNAPSyncController(
           mptStorage = storage,
           concurrency = snapSyncConfig.accountConcurrency,
           snapSyncController = self
-        ),
+        ).withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
       )
     )
@@ -1152,7 +1152,7 @@ class SNAPSyncController(
           requestTracker = requestTracker,
           batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
           snapSyncController = self
-        ),
+        ).withDispatcher("sync-dispatcher"),
         s"bytecode-coordinator-$coordinatorGeneration"
       )
     )
@@ -1220,7 +1220,7 @@ class SNAPSyncController(
             maxInFlightRequests = snapSyncConfig.storageConcurrency,
             requestTimeout = snapSyncConfig.timeout,
             snapSyncController = self
-          ),
+          ).withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
         )
       )
@@ -1387,7 +1387,7 @@ class SNAPSyncController(
             batchSize = snapSyncConfig.healingBatchSize,
             snapSyncController = self,
             concurrency = snapSyncConfig.healingConcurrency
-          ),
+          ).withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
         )
       )

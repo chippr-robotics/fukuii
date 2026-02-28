@@ -411,7 +411,7 @@ class AccountRangeCoordinator(
         coordinator = self,
         networkPeerManager = networkPeerManager,
         requestTracker = requestTracker
-      )
+      ).withDispatcher("sync-dispatcher")
     )
     workers += worker
     log.debug(s"Created worker ${worker.path.name}, total workers: ${workers.size}")
