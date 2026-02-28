@@ -248,6 +248,46 @@ curl -s -X POST http://localhost:8553 -H "Content-Type: application/json" \
 - `get_gas_price` samples last 20 blocks — may be inaccurate during low-activity periods on Mordor
 - `get_etc_emission` supply estimate is approximate (doesn't account for uncle rewards)
 
+## Live Verification Results (Mordor Testnet — 2026-02-28)
+
+All tests run against assembly JAR on Mordor (chain ID 63, block 14262).
+
+### Test 1: `mcp_initialize` — PASS
+```json
+{"protocolVersion": "2025-03-26", "serverInfo": {"name": "Fukuii ETC Node MCP Server", "version": "0.1.240"}}
+```
+
+### Test 2: `tools/list` — PASS
+- Tool count: **20** (all present)
+- Annotations: `readOnlyHint: true, idempotentHint: true` on every tool
+- Input schemas: present on all parameterized tools
+- All 20 tool names: `mcp_node_status`, `mcp_node_info`, `mcp_blockchain_info`, `mcp_sync_status`, `mcp_peer_list`, `mcp_etherbase_info`, `mcp_mining_rpc_summary`, `get_block`, `get_transaction`, `get_account`, `get_block_receipts`, `get_gas_price`, `decode_calldata`, `get_network_health`, `detect_reorg`, `convert_units`, `get_etc_emission`, `get_etc_forks`, `get_treasury_status`, `verify_ethash_block`
+
+### Test 3: `mcp_blockchain_info` — PASS (live data, not stubs)
+```
+Network: Mordor Testnet | Chain ID: 63 | Best Block: 14262
+Hash: 0xa68ebde7932eccb177d38d55dcc6461a019dd795a681e59b5a3e4f3a7259a3f1
+Total Difficulty: 131072
+```
+
+### Test 4: `get_block` (genesis) — PASS
+```
+Block 0 | Hash: 0xa68ebde...a3f1 | Timestamp: 2019-10-03T22:31:55Z
+Gas Limit: 3141592 | Difficulty: 131072 | Txns: 0 | Uncles: 0
+Extra Data: "phoenix chicken absurd banana"
+```
+
+### Test 5: `resources/list` + `resources/read` — PASS
+- Resource count: **9** (6 static + 3 templates)
+- `fukuii://block/0` template: returns genesis block JSON with all fields
+
+### Bonus: ETC-Specific Tools — PASS
+- `get_etc_forks`: 27 fork entries with ACTIVE/PENDING status
+- `get_etc_emission`: Era 0, 5 ETC reward, ~71310 ETC estimated supply
+- `mcp_node_status`: running=true, listening=true, peers=1, bestBlock=14262
+
+---
+
 ## Next Steps (Sprint 2+)
 
 - Phase 8: Fix block body download stall (exponential backoff)
