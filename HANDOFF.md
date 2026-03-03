@@ -2,16 +2,16 @@
 
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
-**Date:** 2026-02-28
-**Commits:** 8 (6 bug fixes + 1 chore + 1 multi-fix)
+**Date:** 2026-03-03
+**Commits:** 12 (6 bug fixes + 1 chore + 1 multi-fix + 1 feature + 2 test suites + 1 docs)
 
 ---
 
 ## Summary
 
-The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed.** No new features, no architecture changes, no dependency updates — this is a pure bug-fix and reliability branch.
+The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring and comprehensive consensus test suites.
 
-**Test results:** 2,229 unit tests passing, clean compile, assembly JAR verified on Mordor.
+**Test results:** 2,267+ unit tests passing, clean compile, assembly JAR verified on Mordor.
 
 ---
 
@@ -172,6 +172,61 @@ The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over
 
 ---
 
+## Feature: ECBP-1100 (MESS) Wiring
+
+**Commit:** `609a09e77` — feat: wire ECBP-1100 (MESS) into block processing pipeline
+
+Modified Exponential Subjective Scoring (MESS) is ETC's anti-reorg protection mechanism defined in ECBP-1100. This commit wires the existing MESS scoring implementation into the block processing pipeline so it actively participates in branch resolution decisions.
+
+**Architecture:** `BlockQueue` → `MESSScorer` → `BranchResolution`
+
+**Key changes:**
+- `MESSConfig.scala` — Configuration parsing for activation/deactivation block windows
+- `MESSScorer.scala` — Scoring implementation (exponential decay, first-seen recording)
+- `BlockQueue.scala` — Integration point: MESS scores applied during block import
+- `BranchResolution.scala` — Scoring influences chain selection
+- `SyncController.scala` — Passes MESS config to sync subsystem
+- `NodeBuilder.scala` — Wires MESS into the node dependency graph
+- Chain configs (`etc-chain.conf`, `mordor-chain.conf`) — Activation windows:
+  - ETC mainnet: block 11,380,000 → 19,250,000
+  - Mordor: block 2,380,000 → 10,400,000
+
+**Tests:** 22 unit tests (`MESSConfigSpec` + `MESScorerSpec`) covering config validation, activation windows, scoring, decay, and first-seen recording.
+
+---
+
+## Test Suite: PoW/ETChash Consensus
+
+**Commit:** `0a9434088` — test: add comprehensive PoW/ETChash test suite
+
+25 unit tests + 16 live RPC validation tests covering Ethash mining and verification:
+
+| Test Class | Tests | Coverage |
+|------------|-------|----------|
+| `EthashEpochBoundarySpec` | 9 | ECIP-1099 epoch transitions (30K→60K), seed consistency, cache/DAG size, Mordor boundary |
+| `EthashDifficultyCalculatorSpec` | 9 | Difficulty adjustment (fast/slow blocks), min difficulty, bomb pause/continue/removal, uncle-aware post-Atlantis, calculator dispatch |
+| `BlockRewardCalculatorSpec` | +4 | Era 4 (2.048 ETC) and Era 5 (1.6384 ETC) block rewards, ommer rewards, era boundary transitions |
+| `MordorPoWMiningSpec` | 8 | Live RPC validation of real Mordor block headers against epoch/difficulty/PoW/reward calculations |
+| `MainnetPoWMiningSpec` | 8 | Live RPC validation of real ETC mainnet block headers |
+
+The live RPC tests validate against real chain data, confirming that Fukuii's consensus calculations match blocks already accepted by the network.
+
+---
+
+## Test Suite: Pre-Olympia Consensus Parity
+
+**Commit:** `a73449db6` — test: add pre-Olympia consensus parity tests
+
+38 tests across 3 files, covering gaps identified by cross-referencing Besu (`ClassicDifficultyCalculatorsTest`, `GenesisConfigClassicTest`, `ClassicProtocolSpecsTest`) and core-geth (`difficulty_test.go`, `backward_compat_test.go`) test suites:
+
+| Test Class | Tests | Coverage |
+|------------|-------|----------|
+| `ChainConfigValidationSpec` | 13 | ETC mainnet and Mordor fork block numbers, ECBP-1100 activation windows, ECIP-1099 epoch block, monetary policy era duration, fork ordering — all loaded from HOCON config |
+| `GasLimitValidationSpec` | 11 | Gas limit bounds (±parent/1024), exact boundary acceptance/rejection, MinGasLimit (5000) enforcement, ETC 8M target validation, EIP-106 MaxGasLimit overflow |
+| `PreOlympiaForkComplianceSpec` | 14 | Each pre-Olympia fork (Frontier→Spiral) selects correct EVM fee schedule and opcodes, Atlantis preferred over Byzantium, PUSH0 gated at Spiral, EtcForks enum ordering, EIP feature flag helpers |
+
+---
+
 ## Known Issues (Not Fixed)
 
 These were discovered during testing but are tuning/architecture issues, not code bugs:
@@ -202,12 +257,15 @@ These were discovered during testing but are tuning/architecture issues, not cod
 ## What Was NOT Changed
 
 - No dependency version updates
-- No new features or APIs added
 - No architecture changes (except adding sync-dispatcher isolation)
-- No modifications to consensus-critical code (EVM, Ethash, state trie, block validation)
+- No modifications to consensus-critical calculation code (EVM execution, Ethash mining, state trie operations, block validation logic remain identical)
 - No changes to submodules (bytes, crypto, rlp, scalanet)
 - No changes to CI/CD workflows or Docker configs
-- Test count: 2,229 (same as baseline, except SyncControllerSpec updated for actor name generation)
+
+**What WAS added beyond bug fixes:**
+- ECBP-1100 (MESS) wiring into block processing pipeline (feature, commit 9)
+- 63 new consensus tests across 3 test suites (commits 10-11)
+- Test count: 2,267+ (up from 2,229 baseline)
 
 ---
 
@@ -217,7 +275,7 @@ These were discovered during testing but are tuning/architecture issues, not cod
 ```bash
 git checkout alpha
 sbt compile          # Should complete cleanly
-sbt test             # 2,229+ tests, 0 failures
+sbt test             # 2,267+ tests, 0 failures
 sbt assembly          # Produces target/scala-3.3.4/fukuii-assembly-0.1.240.jar
 ```
 
