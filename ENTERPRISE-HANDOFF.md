@@ -1,9 +1,9 @@
 # Fukuii Enterprise Sprint 1 — MCP Live Tools & Resources
 
-**Branch:** `enterprise` (derived from `alpha` at v0.1.240)
+**Branch:** `enterprise` (fans out from `alpha` HEAD at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
-**Date:** 2026-02-28
-**Base:** Alpha stabilization (PR #998) — 9 bug fixes, 2,229 tests passing
+**Date:** 2026-03-03
+**Base:** Alpha stabilization (PR #998) — 9 bug fixes + MESS wiring + 3 test suites, 2,267+ tests passing
 **Build:** Scala 3.3.4 LTS, JDK 21, sbt 1.10.7
 
 ---
@@ -28,16 +28,18 @@ The `enterprise` branch transforms Fukuii's MCP server from a stub/demo implemen
 
 ---
 
-## Commits (6)
+## Commits (8)
 
 | # | Hash | Message |
 |---|------|---------|
-| 1 | `016b5ff40` | feat: wire MCP tools and resources to live node state |
-| 2 | `666a68845` | feat: add 9 Tier 1 MCP tools for blockchain queries |
-| 3 | `8881581cc` | feat: add 4 ETC-specific MCP tools |
-| 4 | `89740330f` | feat: add 3 MCP resource templates for block, tx, and account queries |
-| 5 | `ae7e8ebed` | feat: add tool annotations and input schemas per MCP spec |
-| 6 | `8ef4178c3` | feat: update MCP protocol version to 2025-03-26 |
+| 1 | `21c93a80b` | feat: wire MCP tools and resources to live node state |
+| 2 | `360ba5efc` | feat: add 9 Tier 1 MCP tools for blockchain queries |
+| 3 | `45c7fa1ce` | feat: add 4 ETC-specific MCP tools |
+| 4 | `26ca15228` | feat: add 3 MCP resource templates for block, tx, and account queries |
+| 5 | `32862c65d` | feat: add tool annotations and input schemas per MCP spec |
+| 6 | `7721796e8` | feat: update MCP protocol version to 2025-03-26 |
+| 7 | `935f03260` | docs: add enterprise handoff document for Sprint 1 MCP work |
+| 8 | `e83000a7a` | docs: add live Mordor verification results to enterprise handoff |
 
 ---
 
@@ -288,9 +290,12 @@ Extra Data: "phoenix chicken absurd banana"
 
 ---
 
-## Next Steps (Sprint 2+)
+## Next Steps (Enterprise Sprint 2+)
 
-- Phase 8: Fix block body download stall (exponential backoff)
-- Phase 9: Fix net_listPeers timeout under load (peer status cache)
-- Sprint 2: Olympia hard fork implementation (14 EIPs + treasury)
-- Sprint 3: Performance & monitoring improvements
+- WebSocket subscriptions (`eth_subscribe`)
+- TLS & JWT authentication
+- Structured logging (JSON-format audit logs)
+- Trace & debug APIs
+- MCP Streamable HTTP transport
+
+**Note:** The Olympia hard fork (ECIP-1111/1112/1121) is implemented on a separate `olympia` branch (PR #1001), which fans out independently from `alpha` — not from `enterprise`.
