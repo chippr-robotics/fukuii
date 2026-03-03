@@ -7,6 +7,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
 import com.chipprbots.ethereum.crypto.kec256
@@ -170,13 +171,24 @@ abstract class BlockGeneratorSkeleton(
     transactionsForBlock
   }
 
-  /*
-        Returns the same gas limit as the parent block
-
-        In Fukuii only testnets (and without this changed), this means that all blocks will have the same gasLimit as
-        the genesis block
-   */
-  protected def calculateGasLimit(parentGas: BigInt): BigInt = parentGas
+  /** Calculates the gas limit for the next block, converging toward the configured target at ±1/1024 per block. This
+    * mirrors the consensus-enforced bound: each block's gas limit may change by at most parent/GasLimitBoundDivisor - 1
+    * relative to the parent. The algorithm matches core-geth's CalcGasLimit() and besu's
+    * OlympiaTargetingGasLimitCalculator.
+    */
+  protected def calculateGasLimit(parentGas: BigInt): BigInt = {
+    val target = miningConfig.gasLimitTarget
+    val delta = parentGas / BlockHeaderValidator.GasLimitBoundDivisor - 1
+    if (parentGas < target) {
+      val next = parentGas + delta
+      if (next > target) target else next
+    } else if (parentGas > target) {
+      val next = parentGas - delta
+      if (next < target) target else next
+    } else {
+      parentGas
+    }
+  }
 
   protected def buildMpt[K](entities: Seq[K], vSerializable: ByteArraySerializable[K]): ByteString = {
     val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
