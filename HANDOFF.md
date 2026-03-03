@@ -246,7 +246,7 @@ These were discovered during testing but are tuning/architecture issues, not cod
 ### MCP Tools Return Stubs
 - All 7 MCP tools return hardcoded placeholder text, not live data
 - The MCP framework and routing work correctly — stubs are the original implementation
-- **Fix planned:** Sprint 1 of enterprise modernization (this PR's follow-up)
+- **Resolved:** PR #999 (`enterprise` branch) replaces all stubs with 20 live MCP tools + 9 resources
 
 ### `personal_sendTransaction` During Sync
 - Returns generic error when state isn't available
@@ -316,17 +316,12 @@ curl -X POST http://localhost:8553 -H "Content-Type: application/json" \
 
 ## Next Steps
 
-The `alpha` branch establishes a stable baseline. The next milestone is **enterprise modernization** on a new `enterprise` branch:
+The `alpha` branch establishes a stable pre-Olympia baseline. Two independent branches build on it:
 
-1. **MCP Live Tools & Resources** — Replace all stub MCP tools with live node queries (highest priority, first-mover)
-2. **WebSocket Subscriptions** — `eth_subscribe` for dApp ecosystems
-3. **TLS & JWT Authentication** — Enterprise security requirement
-4. **Structured Logging** — JSON-format audit logs for compliance
-5. **Trace & Debug APIs** — Block explorer and analytics support
-6. **TxPool API** — Mempool visibility
-7. **MCP Streamable HTTP** — Standard MCP client transport
-8. **OpenRPC Discovery** — ECIP-1053 API self-documentation
-9. **Missing eth_* Methods** — API completeness
-10. **Enterprise Security** — External signer, permissioning
-11. **GraphQL API** — Complex analytical queries
-12. **Performance & Reliability** — Production hardening
+### `enterprise` branch (PR #999) — MCP Live Tools
+Replaces all stub MCP tools with 20 live blockchain query tools and 9 resources. Makes Fukuii the first ETC client with a live MCP server. Further enterprise sprints planned: WebSocket subscriptions, TLS/JWT auth, structured logging, trace/debug APIs.
+
+### `olympia` branch (PR #1001) — Olympia Hard Fork
+Implements ECIP-1111/1112/1121: EIP-1559 fee market with treasury redirect, EVM modernization (TLOAD/TSTORE, MCOPY, BASEFEE), new precompiles (P256VERIFY), and Type-4 transactions (EIP-7702). Targets Mordor block 15,800,850 (~March 28, 2026).
+
+Both branches fan out independently from `alpha` HEAD and can be merged separately.
