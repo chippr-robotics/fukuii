@@ -48,9 +48,14 @@ class MESSScorer(
   def calculateMessDifficulty(
       blockHash: ByteString,
       difficulty: BigInt,
-      blockTimestamp: Long
+      blockTimestamp: Long,
+      blockNumber: Option[BigInt] = None
   ): BigInt = {
-    if (!config.enabled) {
+    val active = blockNumber match {
+      case Some(num) => config.isActiveAtBlock(num)
+      case None      => config.enabled
+    }
+    if (!active) {
       return difficulty
     }
 
@@ -89,7 +94,7 @@ class MESSScorer(
     // Convert unixTimestamp (seconds) to milliseconds, using safe multiplication
     // to avoid potential overflow for very far future timestamps
     val timestampMillis = header.unixTimestamp.toLong * 1000L
-    calculateMessDifficulty(header.hash, header.difficulty, timestampMillis)
+    calculateMessDifficulty(header.hash, header.difficulty, timestampMillis, Some(header.number))
   }
 
   /** Calculate the MESS multiplier for a block (for diagnostics/metrics).
@@ -101,8 +106,12 @@ class MESSScorer(
     * @return
     *   Multiplier in range [minWeightMultiplier, 1.0]
     */
-  def calculateMultiplier(blockHash: ByteString, blockTimestamp: Long): Double = {
-    if (!config.enabled) {
+  def calculateMultiplier(blockHash: ByteString, blockTimestamp: Long, blockNumber: Option[BigInt] = None): Double = {
+    val active = blockNumber match {
+      case Some(num) => config.isActiveAtBlock(num)
+      case None      => config.enabled
+    }
+    if (!active) {
       return 1.0
     }
 

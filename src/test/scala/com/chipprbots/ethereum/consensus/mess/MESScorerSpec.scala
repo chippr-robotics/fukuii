@@ -56,6 +56,69 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
     MESSConfig(minWeightMultiplier = 1.0)
     MESSConfig(minWeightMultiplier = 0.5)
   }
+
+  it should "have None activation/deactivation blocks by default" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig()
+    config.activationBlock shouldBe None
+    config.deactivationBlock shouldBe None
+  }
+
+  // ECBP-1100 block-based activation window tests
+
+  it should "report inactive when enabled=false regardless of block number" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = false, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(150) shouldBe false
+  }
+
+  it should "report active when enabled=true and within activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(100) shouldBe true  // activation is inclusive
+    config.isActiveAtBlock(150) shouldBe true
+    config.isActiveAtBlock(199) shouldBe true
+  }
+
+  it should "report inactive before activation block" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(99) shouldBe false
+    config.isActiveAtBlock(0) shouldBe false
+  }
+
+  it should "report inactive at and after deactivation block" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(200) shouldBe false  // deactivation is exclusive
+    config.isActiveAtBlock(201) shouldBe false
+  }
+
+  it should "report active with no deactivation block (never deactivates)" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100))
+    config.isActiveAtBlock(100) shouldBe true
+    config.isActiveAtBlock(BigInt("99999999999")) shouldBe true
+  }
+
+  it should "report active with no activation block (always active)" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, deactivationBlock = Some(200))
+    config.isActiveAtBlock(0) shouldBe true
+    config.isActiveAtBlock(199) shouldBe true
+    config.isActiveAtBlock(200) shouldBe false
+  }
+
+  it should "match Mordor ECBP-1100 activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(2380000), deactivationBlock = Some(10400000))
+    config.isActiveAtBlock(2379999) shouldBe false
+    config.isActiveAtBlock(2380000) shouldBe true
+    config.isActiveAtBlock(5000000) shouldBe true
+    config.isActiveAtBlock(10399999) shouldBe true
+    config.isActiveAtBlock(10400000) shouldBe false
+  }
+
+  it should "match ETC mainnet ECBP-1100 activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(11380000), deactivationBlock = Some(19250000))
+    config.isActiveAtBlock(11379999) shouldBe false
+    config.isActiveAtBlock(11380000) shouldBe true
+    config.isActiveAtBlock(15000000) shouldBe true
+    config.isActiveAtBlock(19249999) shouldBe true
+    config.isActiveAtBlock(19250000) shouldBe false
+  }
 }
 
 class MESScorerSpec extends AnyFlatSpec with Matchers {
@@ -268,5 +331,36 @@ class MESScorerSpec extends AnyFlatSpec with Matchers {
 
     val multiplier = scorer.calculateMultiplier(blockHash, blockTimestamp)
     multiplier shouldBe 1.0
+  }
+
+  // Block-number-aware scoring tests (ECBP-1100)
+
+  it should "return original difficulty for blocks outside activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    val storage = new InMemoryBlockFirstSeenStorage()
+    val scorer = new MESSScorer(config, storage, () => 1000000L)
+
+    val blockHash = ByteString("test-outside")
+    storage.put(blockHash, 0L) // seen 1000 seconds ago
+
+    val difficulty = BigInt(1000000)
+    // Block 50 is before activation — should return original difficulty
+    scorer.calculateMessDifficulty(blockHash, difficulty, 0L, Some(BigInt(50))) shouldBe difficulty
+    // Block 250 is after deactivation — should return original difficulty
+    scorer.calculateMessDifficulty(blockHash, difficulty, 0L, Some(BigInt(250))) shouldBe difficulty
+  }
+
+  it should "apply MESS penalty for blocks within activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    val storage = new InMemoryBlockFirstSeenStorage()
+    val scorer = new MESSScorer(config, storage, () => 1000000L)
+
+    val blockHash = ByteString("test-inside")
+    storage.put(blockHash, 0L) // seen 1000 seconds ago
+
+    val difficulty = BigInt(1000000)
+    // Block 150 is within activation window — should apply decay
+    val adjusted = scorer.calculateMessDifficulty(blockHash, difficulty, 0L, Some(BigInt(150)))
+    adjusted should be < difficulty
   }
 }

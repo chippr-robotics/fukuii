@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{StartRegularSyncBootstrap, BootstrapComplete, PivotBootstrapFailed}
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.mess.MESSScorer
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
@@ -49,6 +50,7 @@ class SyncController(
     blacklist: Blacklist,
     syncConfig: SyncConfig,
     configBuilder: BlockchainConfigBuilder,
+    messScorer: Option[MESSScorer] = None,
     externalSchedulerOpt: Option[Scheduler] = None
 ) extends Actor
     with ActorLogging {
@@ -423,7 +425,7 @@ class SyncController(
         consensus,
         blockchainReader,
         stateStorage,
-        new BranchResolution(blockchainReader),
+        { val br = new BranchResolution(blockchainReader); br.messScorer = messScorer; br },
         validators.blockValidator,
         blacklist,
         syncConfig,
@@ -454,7 +456,7 @@ class SyncController(
         consensus,
         blockchainReader,
         stateStorage,
-        new BranchResolution(blockchainReader),
+        { val br = new BranchResolution(blockchainReader); br.messScorer = messScorer; br },
         validators.blockValidator,
         blacklist,
         syncConfig,
@@ -491,7 +493,8 @@ object SyncController {
       networkPeerManager: ActorRef,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
-      configBuilder: BlockchainConfigBuilder
+      configBuilder: BlockchainConfigBuilder,
+      messScorer: Option[MESSScorer] = None
   ): Props =
     Props(
       new SyncController(
@@ -512,7 +515,8 @@ object SyncController {
         networkPeerManager,
         blacklist,
         syncConfig,
-        configBuilder
+        configBuilder,
+        messScorer
       )
     )
 }

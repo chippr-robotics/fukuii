@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.ledger
 
 import cats.data.NonEmptyList
 
+import com.chipprbots.ethereum.consensus.mess.MESSScorer
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -9,6 +10,9 @@ import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.Logger
 
 class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
+
+  /** Optional MESS scorer for anti-reorg protection. Set by SyncController when configured. */
+  private[ethereum] var messScorer: Option[MESSScorer] = None
 
   def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
     if (!doHeadersFormChain(headers)) {
@@ -55,8 +59,14 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
 
     maybeParentWeight match {
       case Some(Right(parentWeight)) =>
-        val oldWeight = oldBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.header))
-        val newWeight = newHeaders.foldLeft(parentWeight)((w, h) => w.increase(h))
+        val oldWeight = oldBlocks.foldLeft(parentWeight) { (w, b) =>
+          val messDiff = messScorer.map(_.calculateMessDifficulty(b.header))
+          w.increase(b.header, messDiff)
+        }
+        val newWeight = newHeaders.foldLeft(parentWeight) { (w, h) =>
+          val messDiff = messScorer.map(_.calculateMessDifficulty(h))
+          w.increase(h, messDiff)
+        }
 
         if (newWeight > oldWeight)
           NewBetterBranch(oldBlocks)

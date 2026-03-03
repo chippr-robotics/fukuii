@@ -195,6 +195,8 @@ object BlockchainConfig {
       val messConf = blockchainConfig.getConfig("mess")
       MESSConfig(
         enabled = Try(messConf.getBoolean("enabled")).getOrElse(false),
+        activationBlock = Try(BigInt(messConf.getString("ecbp1100-block-number"))).toOption,
+        deactivationBlock = Try(BigInt(messConf.getString("ecbp1100-deactivate-block-number"))).toOption,
         decayConstant = Try(messConf.getDouble("decay-constant")).getOrElse(0.0001),
         maxTimeDelta = Try(messConf.getLong("max-time-delta")).getOrElse(2592000L),
         minWeightMultiplier = Try(messConf.getDouble("min-weight-multiplier")).getOrElse(0.0001)

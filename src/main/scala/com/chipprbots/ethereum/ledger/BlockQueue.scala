@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import scala.annotation.tailrec
 import scala.jdk.CollectionConverters._
 
+import com.chipprbots.ethereum.consensus.mess.MESSScorer
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -16,12 +17,15 @@ object BlockQueue {
   case class QueuedBlock(block: Block, weight: Option[ChainWeight])
   case class Leaf(hash: ByteString, weight: ChainWeight)
 
-  def apply(blockchainReader: BlockchainReader, syncConfig: SyncConfig): BlockQueue =
-    new BlockQueue(
-      blockchainReader,
-      syncConfig.maxQueuedBlockNumberAhead,
-      syncConfig.maxQueuedBlockNumberBehind
-    )
+  def apply(
+      blockchainReader: BlockchainReader,
+      syncConfig: SyncConfig,
+      messScorer: Option[MESSScorer] = None
+  ): BlockQueue = {
+    val q = new BlockQueue(blockchainReader, syncConfig.maxQueuedBlockNumberAhead, syncConfig.maxQueuedBlockNumberBehind)
+    q.messScorer = messScorer
+    q
+  }
 }
 
 class BlockQueue(
@@ -29,6 +33,9 @@ class BlockQueue(
     val maxQueuedBlockNumberAhead: Int,
     val maxQueuedBlockNumberBehind: Int
 ) extends Logger {
+
+  /** Optional MESS scorer for anti-reorg protection. Set by factory method when configured. */
+  private[ethereum] var messScorer: Option[MESSScorer] = None
 
   // note these two maps make this class thread-unsafe
   private val blocks = new java.util.concurrent.ConcurrentHashMap[ByteString, QueuedBlock].asScala
@@ -64,6 +71,9 @@ class BlockQueue(
         None
 
       case None =>
+        // Record first-seen time for MESS scoring
+        messScorer.foreach(_.recordFirstSeen(hash))
+
         val parentWeight = blockchainReader.getChainWeightByHash(parentHash)
 
         parentWeight match {
@@ -180,7 +190,10 @@ class BlockQueue(
         case Some(children) if children.nonEmpty =>
           val updatedChildren = children
             .flatMap(blocks.get)
-            .map(qb => qb.copy(weight = Some(weight.increase(qb.block.header))))
+            .map { qb =>
+              val messDiff = messScorer.map(_.calculateMessDifficulty(qb.block.header))
+              qb.copy(weight = Some(weight.increase(qb.block.header, messDiff)))
+            }
           updatedChildren.foreach(qb => blocks += qb.block.header.hash -> qb)
           updatedChildren.flatMap(qb => updateChainWeights(qb.block.header.hash)).maxByOption(_.weight)
 
@@ -213,7 +226,8 @@ class BlockQueue(
   private def addBlock(block: Block, parentWeight: Option[ChainWeight]): Unit = {
     import block.header._
 
-    val weight = parentWeight.map(_.increase(block.header))
+    val messDiff = messScorer.map(_.calculateMessDifficulty(block.header))
+    val weight = parentWeight.map(_.increase(block.header, messDiff))
     blocks += hash -> QueuedBlock(block, weight)
 
     val siblings = parentToChildren.getOrElse(parentHash, Set.empty)

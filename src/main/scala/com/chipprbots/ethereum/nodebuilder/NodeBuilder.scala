@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
 import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
+import com.chipprbots.ethereum.consensus.mess.MESSScorer
 import com.chipprbots.ethereum.consensus.mining.MiningBuilder
 import com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder
 import com.chipprbots.ethereum.db.components.Storages.PruningModeComponent
@@ -180,10 +181,23 @@ trait BlockchainBuilder {
   lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
 }
 
-trait BlockQueueBuilder {
-  self: BlockchainBuilder with SyncConfigBuilder =>
+trait MESSBuilder {
+  self: BlockchainConfigBuilder with StorageBuilder =>
 
-  lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, syncConfig)
+  lazy val messScorer: Option[MESSScorer] = {
+    val config = blockchainConfig.messConfig
+    if (config.activationBlock.isDefined) {
+      Some(new MESSScorer(config, storagesInstance.storages.blockFirstSeenStorage))
+    } else {
+      None
+    }
+  }
+}
+
+trait BlockQueueBuilder {
+  self: BlockchainBuilder with SyncConfigBuilder with MESSBuilder =>
+
+  lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, syncConfig, messScorer)
 }
 
 trait ConsensusBuilder {
@@ -761,7 +775,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
     with SyncConfigBuilder
     with ShutdownHookBuilder
     with MiningBuilder
-    with BlacklistBuilder =>
+    with BlacklistBuilder
+    with MESSBuilder =>
 
   lazy val syncController: ActorRef = system.actorOf(
     SyncController.props(
@@ -782,7 +797,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
       networkPeerManager,
       blacklist,
       syncConfig,
-      this
+      this,
+      messScorer
     ),
     "sync-controller"
   )
@@ -892,6 +908,7 @@ trait Node
     with ActorSystemBuilder
     with StorageBuilder
     with BlockchainBuilder
+    with MESSBuilder
     with BlockQueueBuilder
     with ConsensusBuilder
     with NodeStatusBuilder
