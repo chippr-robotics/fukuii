@@ -2,8 +2,8 @@
 
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
-**Date:** 2026-03-03
-**Commits:** 13 (6 bug fixes + 1 chore + 1 multi-fix + 2 features + 2 test suites + 1 docs)
+**Date:** 2026-03-04
+**Commits:** 15 (6 bug fixes + 1 chore + 1 multi-fix + 2 features + 2 test suites + 1 cleanup + 1 config fix + 1 docs)
 
 ---
 
@@ -11,7 +11,7 @@
 
 The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring, comprehensive consensus test suites, and gas limit convergence logic.
 
-**Test results:** 2,274+ unit tests passing, clean compile, assembly JAR verified on Mordor.
+**Test results:** 2,189 unit tests passing, clean compile, assembly JAR verified on Mordor.
 
 ---
 
@@ -270,6 +270,44 @@ The live RPC tests validate against real chain data, confirming that Fukuii's co
 
 ---
 
+## Cleanup: ECIP-1098/1049/1097 Removal
+
+**Commit:** `8d5f82610` — chore: remove WITHDRAWN IOHK/Mantis ECIPs and fix flaky tests
+
+Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-1066 implementation:
+
+| ECIP | Name | What Was Removed |
+|------|------|-----------------|
+| ECIP-1098 | Proto-Treasury (80/20 split) | Treasury config, block reward splitting, treasury address handling, 26 treasury-specific tests |
+| ECIP-1049 | Keccak256 PoW | Keccak mining config, SHA-3 difficulty calculator, Keccak-specific tests |
+| ECIP-1097 | Checkpointing (Ouroboros BFT) | CheckpointingProtocol, `ChainWeight.lastCheckpointNumber` field, `BlockHeader.extraFields`/`HefEmpty`, checkpointing RPC API, 7 integration tests |
+
+**Scope:** 129 files changed, ~5,286 lines deleted. The `BlockHeader` case class was simplified from 16 to 15 fields (removed `extraFields`), and `ChainWeight` from 3 to 2 fields (removed `lastCheckpointNumber`).
+
+**Also fixed 2 pre-existing flaky tests:**
+- `PoWMiningCoordinatorSpec`: Made `Miner` injectable via `minerOpt: Option[Miner]` parameter on `PoWMiningCoordinator`. Tests now use `InstantMiner` (bypasses ~1GB Ethash DAG generation). Previously tagged `FlakyTest`, now reliable (54ms/49ms).
+- `SyncControllerSpec`: Fixed stale boopickle-generated pickler classes that referenced deleted `HefEmpty` singleton. Resolved by `sbt clean`.
+
+---
+
+## Config Fix: Stale Bootstrap Nodes
+
+**Commit:** (pending) — fix: update stale bootstrap node lists for Mordor and ETC mainnet
+
+**Problem:** Fukuii inherited ~57 stale bootstrap nodes from the Mantis era (27 for Mordor, 30 for ETC mainnet). None overlapped with core-geth's current bootnode lists. Result: peer discovery failed completely — the node could not find any peers on Mordor.
+
+**Fix:** Replaced both bootnode lists with core-geth's current entries:
+- **Mordor:** 1 ETC Cooperative bootnode (was 27 stale)
+- **ETC mainnet:** 3 ETC Cooperative bootnodes (was 30 stale)
+
+**Files changed:**
+- `src/main/resources/conf/base/chains/mordor-chain.conf` — bootstrap-nodes updated
+- `src/main/resources/conf/base/chains/etc-chain.conf` — bootstrap-nodes updated
+
+**Verify:** Start on Mordor → peers connect within 30 seconds (was: never)
+
+---
+
 ## Known Issues (Not Fixed)
 
 These were discovered during testing but are tuning/architecture issues, not code bugs:
@@ -305,11 +343,16 @@ These were discovered during testing but are tuning/architecture issues, not cod
 - No changes to submodules (bytes, crypto, rlp, scalanet)
 - No changes to CI/CD workflows or Docker configs
 
+**What WAS removed:**
+- 3 WITHDRAWN IOHK/Mantis ECIPs (ECIP-1098 proto-treasury, ECIP-1049 Keccak256 PoW, ECIP-1097 checkpointing) — 129 files, ~5,286 lines deleted. These are not part of any canonical ECIP-1066 implementation.
+- 57 stale Mantis-era bootstrap nodes replaced with current core-geth entries (4 total)
+
 **What WAS added beyond bug fixes:**
 - ECBP-1100 (MESS) wiring into block processing pipeline (feature, commit 9)
 - Gas limit convergence toward configurable target (feature, commit 13) — prerequisite for Olympia
 - 70 new consensus tests across 4 test suites (commits 10-11, 13)
-- Test count: 2,274+ (up from 2,229 baseline)
+- Injectable Miner pattern for reliable PoW test infrastructure
+- Test count: 2,189 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 70 new consensus tests)
 
 ---
 
@@ -319,7 +362,7 @@ These were discovered during testing but are tuning/architecture issues, not cod
 ```bash
 git checkout alpha
 sbt compile          # Should complete cleanly
-sbt test             # 2,274+ tests, 0 failures
+sbt test             # 2,189 tests, 0 failures
 sbt assembly          # Produces target/scala-3.3.4/fukuii-assembly-0.1.240.jar
 ```
 
