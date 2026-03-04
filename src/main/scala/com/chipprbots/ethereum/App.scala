@@ -191,7 +191,6 @@ object App extends Logger {
         |  --tui                  Enable the Terminal UI (disabled by default)
         |                         Shows real-time node status, peer count, sync progress
         |                         Console logs are suppressed while TUI is active
-        |  --force-pivot-sync     Disable checkpoint bootstrapping and force pivot sync
         |
         |Custom Configuration:
         |  Use JVM property to specify a custom config file:

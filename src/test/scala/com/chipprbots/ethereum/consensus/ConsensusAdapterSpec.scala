@@ -33,7 +33,6 @@ import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockQueue.Leaf
-import com.chipprbots.ethereum.ledger.CheckpointHelpers
 import com.chipprbots.ethereum.ledger.EphemBlockchain
 import com.chipprbots.ethereum.ledger.MockBlockchain
 import com.chipprbots.ethereum.ledger.OmmersTestSetup
@@ -88,7 +87,7 @@ class ConsensusAdapterSpec
     // Just to bypass metrics needs
     (blockchainReader.getBlockByHash _).expects(*).anyNumberOfTimes().returning(None)
     (blockchainWriter.save _).expects(*, *, *, *).returning(())
-    (blockchainWriter.saveBestKnownBlocks _).expects(*, *, *).returning(())
+    (blockchainWriter.saveBestKnownBlocks _).expects(*, *).returning(())
 
     (blockQueue.enqueueBlock _).expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
     (blockQueue.getBranch _).expects(hash, true).returning(List(block))
@@ -532,64 +531,6 @@ class ConsensusAdapterSpec
       blockQueue.isQueued(newBlock3.hash) shouldBe false
       blockQueue.isQueued(newBlock3bis.hash) shouldBe false
     }
-  }
-
-  it should "correctly import a checkpoint block" taggedAs (UnitTest, ConsensusTest) in new EphemBlockchain
-    with CheckpointHelpers {
-    val parentBlock: Block = getBlock(bestNum)
-    val regularBlock: Block = getBlock(bestNum + 1, difficulty = 200, parent = parentBlock.hash)
-    val checkpointBlock: Block = getCheckpointBlock(parentBlock)
-
-    val weightParent = ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty + 999)
-    val weightRegular = weightParent.increase(regularBlock.header)
-    val weightCheckpoint = weightParent.increase(checkpointBlock.header)
-
-    blockchainWriter.save(parentBlock, Nil, weightParent, saveAsBestBlock = true)
-    blockchainWriter.save(regularBlock, Nil, weightRegular, saveAsBestBlock = true)
-
-    val mockExecution = mock[BlockExecution]
-    (mockExecution
-      .executeAndValidateBlocks(_: List[Block], _: ChainWeight)(_: BlockchainConfig))
-      .expects(List(checkpointBlock), *, *)
-      .returning((List(BlockData(checkpointBlock, Nil, weightCheckpoint)), None))
-
-    val withMockedBlockExecution = blockImportWithMockedBlockExecution(mockExecution)
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(checkpointBlock).unsafeToFuture()) { result =>
-      result shouldEqual ChainReorganised(
-        List(regularBlock),
-        List(checkpointBlock),
-        List(weightCheckpoint)
-      )
-    }
-
-    // Saving new blocks, because it's part of executeBlocks method mechanism
-    blockchainWriter.save(checkpointBlock, Nil, weightCheckpoint, saveAsBestBlock = true)
-
-    blockchainReader.getBestBlock().get shouldEqual checkpointBlock
-    blockchainReader.getChainWeightByHash(checkpointBlock.hash) shouldEqual Some(weightCheckpoint)
-  }
-
-  it should "not import a block with higher difficulty that does not follow a checkpoint" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in new EphemBlockchain with CheckpointHelpers {
-
-    val parentBlock: Block = getBlock(bestNum)
-    val regularBlock: Block = getBlock(bestNum + 1, difficulty = 200, parent = parentBlock.hash)
-    val checkpointBlock: Block = getCheckpointBlock(parentBlock)
-
-    val weightParent = ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty + 999)
-    val weightCheckpoint = weightParent.increase(checkpointBlock.header)
-
-    blockchainWriter.save(parentBlock, Nil, weightParent, saveAsBestBlock = true)
-    blockchainWriter.save(checkpointBlock, Nil, weightCheckpoint, saveAsBestBlock = true)
-
-    val withMockedBlockExecution = blockImportWithMockedBlockExecution(mock[BlockExecution])
-    whenReady(withMockedBlockExecution.evaluateBranchBlock(regularBlock).unsafeToFuture())(
-      _ shouldEqual BlockEnqueued
-    )
-
-    blockchainReader.getBestBlock().get shouldEqual checkpointBlock
   }
 
   class ImportBlockTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain {

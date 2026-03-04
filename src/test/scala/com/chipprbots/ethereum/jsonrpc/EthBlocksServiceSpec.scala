@@ -102,7 +102,7 @@ class EthBlocksServiceSpec
     response.blockResponse shouldBe Some(
       BlockResponse(blockToRequest, fullTxs = true, weight = Some(blockWeight))
     )
-    response.blockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(blockWeight)
+    response.blockResponse.get.totalDifficulty shouldBe Some(blockWeight.totalDifficulty)
     response.blockResponse.get.transactions.toOption shouldBe Some(stxResponses)
   }
 
@@ -118,7 +118,7 @@ class EthBlocksServiceSpec
     }
 
     response.blockResponse shouldBe Some(BlockResponse(blockToRequest, fullTxs = true))
-    response.blockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe None
+    response.blockResponse.get.totalDifficulty shouldBe None
     response.blockResponse.get.transactions.toOption shouldBe Some(stxResponses)
   }
 
@@ -138,7 +138,7 @@ class EthBlocksServiceSpec
     response.blockResponse shouldBe Some(
       BlockResponse(blockToRequest, fullTxs = false, weight = Some(blockWeight))
     )
-    response.blockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(blockWeight)
+    response.blockResponse.get.totalDifficulty shouldBe Some(blockWeight.totalDifficulty)
     response.blockResponse.get.transactions.left.toOption shouldBe Some(blockToRequest.body.transactionList.map(_.hash))
   }
 
@@ -205,7 +205,7 @@ class EthBlocksServiceSpec
     response.blockResponse shouldBe Some(
       BlockResponse(blockToRequest, fullTxs = true, weight = Some(blockWeight))
     )
-    response.blockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(blockWeight)
+    response.blockResponse.get.totalDifficulty shouldBe Some(blockWeight.totalDifficulty)
     response.blockResponse.get.transactions.toOption shouldBe Some(stxResponses)
   }
 
@@ -223,7 +223,7 @@ class EthBlocksServiceSpec
     }
 
     response.blockResponse shouldBe Some(BlockResponse(blockToRequest, fullTxs = true))
-    response.blockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe None
+    response.blockResponse.get.totalDifficulty shouldBe None
     response.blockResponse.get.transactions.toOption shouldBe Some(stxResponses)
   }
 
@@ -245,7 +245,7 @@ class EthBlocksServiceSpec
     response.blockResponse shouldBe Some(
       BlockResponse(blockToRequest, fullTxs = false, weight = Some(blockWeight))
     )
-    response.blockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(blockWeight)
+    response.blockResponse.get.totalDifficulty shouldBe Some(blockWeight.totalDifficulty)
     response.blockResponse.get.transactions.left.toOption shouldBe Some(blockToRequest.body.transactionList.map(_.hash))
   }
 
@@ -337,7 +337,7 @@ class EthBlocksServiceSpec
       ethBlocksService.getUncleByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, None, pendingBlock = false))
-    response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe None
+    response.uncleBlockResponse.get.totalDifficulty shouldBe None
     response.uncleBlockResponse.get.transactions shouldBe Left(Nil)
     response.uncleBlockResponse.get.uncles shouldBe Nil
   }
@@ -358,7 +358,7 @@ class EthBlocksServiceSpec
       ethBlocksService.getUncleByBlockHashAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, Some(uncleWeight), pendingBlock = false))
-    response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(uncleWeight)
+    response.uncleBlockResponse.get.totalDifficulty shouldBe Some(uncleWeight.totalDifficulty)
     response.uncleBlockResponse.get.transactions shouldBe Left(Nil)
     response.uncleBlockResponse.get.uncles shouldBe Nil
   }
@@ -426,7 +426,7 @@ class EthBlocksServiceSpec
       ethBlocksService.getUncleByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, None, pendingBlock = false))
-    response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe None
+    response.uncleBlockResponse.get.totalDifficulty shouldBe None
     response.uncleBlockResponse.get.transactions shouldBe Left(Nil)
     response.uncleBlockResponse.get.uncles shouldBe Nil
   }
@@ -448,7 +448,7 @@ class EthBlocksServiceSpec
       ethBlocksService.getUncleByBlockNumberAndIndex(request).unsafeRunSync().toOption.get
 
     response.uncleBlockResponse shouldBe Some(BlockResponse(uncle, Some(uncleWeight), pendingBlock = false))
-    response.uncleBlockResponse.get.asInstanceOf[BlockResponse].chainWeight shouldBe Some(uncleWeight)
+    response.uncleBlockResponse.get.totalDifficulty shouldBe Some(uncleWeight.totalDifficulty)
     response.uncleBlockResponse.get.transactions shouldBe Left(Nil)
     response.uncleBlockResponse.get.uncles shouldBe Nil
   }

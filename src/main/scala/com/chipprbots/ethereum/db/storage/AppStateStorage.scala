@@ -75,21 +75,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   private def getBigInt(key: Key): BigInt =
     get(key).map(BigInt(_)).getOrElse(BigInt(BigInteger.ZERO))
 
-  /** It is safe to return zero in case of not having any checkpoint block, because we assume that genesis block is a
-    * kinda stable checkpoint block (without real checkpoint)
-    *
-    * @return
-    *   Latest CheckpointBlock Number
-    */
-  def getLatestCheckpointBlockNumber(): BigInt =
-    getBigInt(Keys.LatestCheckpointBlockNumber)
-
-  def removeLatestCheckpointBlockNumber(): DataSourceBatchUpdate =
-    update(toRemove = Seq(Keys.LatestCheckpointBlockNumber), toUpsert = Nil)
-
-  def putLatestCheckpointBlockNumber(latestCheckpointBlockNumber: BigInt): DataSourceBatchUpdate =
-    update(Nil, Seq(Keys.LatestCheckpointBlockNumber -> latestCheckpointBlockNumber.toString))
-
   /** Get the bootstrap pivot block number (highest bootstrap checkpoint)
     * @return
     *   Bootstrap pivot block number, or 0 if not set
@@ -240,7 +225,6 @@ object AppStateStorage {
     val FastSyncCooldownUntilMillis = "FastSyncCooldownUntilMillis"
     val EstimatedHighestBlock = "EstimatedHighestBlock"
     val SyncStartingBlock = "SyncStartingBlock"
-    val LatestCheckpointBlockNumber = "LatestCheckpointBlockNumber"
     val BootstrapPivotBlock = "BootstrapPivotBlock"
     val BootstrapPivotBlockHash = "BootstrapPivotBlockHash"
     val SnapSyncDone = "SnapSyncDone"

@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.consensus.mess.MESSScorer
 import com.chipprbots.ethereum.consensus.mining.MiningBuilder
 import com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder
@@ -561,35 +560,11 @@ trait PersonalServiceBuilder {
 }
 
 trait QaServiceBuilder {
-  self: MiningBuilder
-    with SyncControllerBuilder
-    with BlockchainBuilder
-    with BlockchainConfigBuilder
-    with CheckpointBlockGeneratorBuilder =>
+  self: MiningBuilder =>
 
   lazy val qaService =
     new QAService(
-      mining,
-      blockchainReader,
-      checkpointBlockGenerator,
-      blockchainConfig,
-      syncController
-    )
-}
-
-trait CheckpointingServiceBuilder {
-  self: BlockchainBuilder
-    with SyncControllerBuilder
-    with StxLedgerBuilder
-    with CheckpointBlockGeneratorBuilder
-    with BlockQueueBuilder =>
-
-  lazy val checkpointingService =
-    new CheckpointingService(
-      blockchainReader,
-      blockQueue,
-      checkpointBlockGenerator,
-      syncController
+      mining
     )
 }
 
@@ -627,11 +602,10 @@ trait ApisBuilder extends ApisBase {
     val Test = "test"
     val Iele = "iele"
     val Qa = "qa"
-    val Checkpointing = "checkpointing"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Checkpointing)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa)
 }
 
 trait JSONRpcConfigBuilder {
@@ -655,7 +629,6 @@ trait JSONRpcControllerBuilder {
     with DebugServiceBuilder
     with JSONRpcConfigBuilder
     with QaServiceBuilder
-    with CheckpointingServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder =>
 
@@ -675,7 +648,6 @@ trait JSONRpcControllerBuilder {
       testService,
       debugService,
       qaService,
-      checkpointingService,
       fukuiiService,
       mcpService,
       ethProofService,
@@ -752,10 +724,6 @@ trait StxLedgerBuilder {
       mining.blockPreparator,
       this
     )
-}
-
-trait CheckpointBlockGeneratorBuilder {
-  lazy val checkpointBlockGenerator = new CheckpointBlockGenerator()
 }
 
 trait SyncControllerBuilder extends SyncControllerRefBuilder {
@@ -885,16 +853,6 @@ trait GenesisDataLoaderBuilder {
 
 }
 
-trait BootstrapCheckpointLoaderBuilder {
-  self: BlockchainBuilder with StorageBuilder =>
-
-  lazy val bootstrapCheckpointLoader =
-    new com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader(
-      blockchainReader,
-      storagesInstance.storages.appStateStorage
-    )
-}
-
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
   * configuration.
   *
@@ -930,7 +888,6 @@ trait Node
     with PersonalServiceBuilder
     with DebugServiceBuilder
     with QaServiceBuilder
-    with CheckpointingServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with KeyStoreBuilder
@@ -944,7 +901,6 @@ trait Node
     with ShutdownHookBuilder
     with Logger
     with GenesisDataLoaderBuilder
-    with BootstrapCheckpointLoaderBuilder
     with BlockchainConfigBuilder
     with VmConfigBuilder
     with PeerEventBusBuilder
@@ -968,7 +924,6 @@ trait Node
     with StxLedgerBuilder
     with KeyStoreConfigBuilder
     with AsyncConfigBuilder
-    with CheckpointBlockGeneratorBuilder
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
     with BlacklistBuilder {

@@ -11,8 +11,6 @@ import org.scalacheck.Gen
 
 import com.chipprbots.ethereum.blockchain.sync.StateSyncUtils.MptNodeData
 import com.chipprbots.ethereum.crypto.ECDSASignature
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
@@ -198,11 +196,6 @@ trait ObjectGenerators {
     td <- bigIntGen
   } yield NewBlock(Block(blockHeader, BlockBody(stxs, uncles)), td)
 
-  def extraFieldsGen: Gen[HeaderExtraFields] = Gen.oneOf(
-    Gen.const(HefEmpty),
-    Gen.option(fakeCheckpointGen(0, 5)).map(cp => HefPostEcip1097(cp))
-  )
-
   def blockHeaderGen: Gen[BlockHeader] = for {
     parentHash <- byteStringOfLengthNGen(32)
     ommersHash <- byteStringOfLengthNGen(32)
@@ -219,7 +212,6 @@ trait ObjectGenerators {
     extraData <- byteStringOfLengthNGen(8)
     mixHash <- byteStringOfLengthNGen(8)
     nonce <- byteStringOfLengthNGen(8)
-    extraFields <- extraFieldsGen
   } yield BlockHeader(
     parentHash = parentHash,
     ommersHash = ommersHash,
@@ -235,17 +227,10 @@ trait ObjectGenerators {
     unixTimestamp = unixTimestamp,
     extraData = extraData,
     mixHash = mixHash,
-    nonce = nonce,
-    extraFields = extraFields
+    nonce = nonce
   )
 
   def seqBlockHeaderGen: Gen[Seq[BlockHeader]] = Gen.listOf(blockHeaderGen)
-
-  def fakeCheckpointGen(minSignatures: Int, maxSignatures: Int): Gen[Checkpoint] =
-    for {
-      n <- Gen.choose(minSignatures, maxSignatures)
-      signatures <- Gen.listOfN(n, fakeSignatureGen)
-    } yield Checkpoint(signatures)
 
   def fakeSignatureGen: Gen[ECDSASignature] =
     for {
@@ -274,9 +259,8 @@ trait ObjectGenerators {
   } yield list
 
   val chainWeightGen: Gen[ChainWeight] = for {
-    lcn <- bigIntGen
     td <- bigIntGen
-  } yield ChainWeight(lcn, td)
+  } yield ChainWeight.totalDifficultyOnly(td)
 }
 
 object ObjectGenerators extends ObjectGenerators

@@ -10,16 +10,13 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks.MockVM
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.ledger.BlockPreparator._
 import com.chipprbots.ethereum.ledger.BlockRewardCalculatorOps._
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
-import org.scalatest.prop.TableFor4
 import com.chipprbots.ethereum.testing.Tags._
 
 class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with MockFactory {
@@ -118,55 +115,6 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
       .balance shouldEqual (beforeExecutionBalance3 + ommersRewards)
   }
 
-  it should "correctly distribute block reward according to ECIP1098" in new TestSetup {
-    val blockNoPostTreasury: BigInt = blockchainConfig.forkBlockNumbers.ecip1098BlockNumber + 1
-    val blockReward: BigInt =
-      mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(sampleBlockNumber)
-    val blockRewardPostTreasury: BigInt =
-      mining.blockPreparator.blockRewardCalculator.calculateMiningRewardForBlock(blockNoPostTreasury)
-
-    val table: TableFor4[Boolean, BigInt, BigInt, BigInt] = Table[Boolean, BigInt, BigInt, BigInt](
-      ("contract deployed", "miner reward", "treasury reward", "block no"),
-      // ECIP1098 not activated
-      (true, blockReward, 0, sampleBlockNumber),
-      (false, blockReward, 0, sampleBlockNumber),
-      // ECIP1098 previously activated but contract destroyed
-      (false, blockRewardPostTreasury, 0, blockNoPostTreasury),
-      // ECIP1098 activated with contract in place
-      (
-        true,
-        MinerRewardPercentageAfterECIP1098 * blockRewardPostTreasury / 100,
-        TreasuryRewardPercentageAfterECIP1098 * blockRewardPostTreasury / 100,
-        blockNoPostTreasury
-      )
-    )
-
-    forAll(table) { case (contractDeployed, minerReward, treasuryReward, blockNo) =>
-      val minerAddress = validAccountAddress
-      val block = sampleBlock(minerAddress, Nil, blockNo)
-      val worldBeforeExecution =
-        if (contractDeployed) worldState
-        else {
-          val worldWithoutTreasury = worldState.deleteAccount(treasuryAddress)
-          InMemoryWorldStateProxy.persistState(worldWithoutTreasury)
-        }
-
-      val beforeExecutionMinerBalance: BigInt =
-        worldBeforeExecution.getAccount(minerAddress).fold(UInt256.Zero)(_.balance)
-      val beforeExecutionTreasuryBalance: BigInt =
-        worldBeforeExecution.getAccount(treasuryAddress).fold(UInt256.Zero)(_.balance)
-
-      val afterRewardWorldState: InMemoryWorldStateProxy =
-        mining.blockPreparator.payBlockReward(block, worldBeforeExecution)
-      val afterExecutionMinerBalance = afterRewardWorldState.getAccount(minerAddress).fold(UInt256.Zero)(_.balance)
-      val afterExecutionTreasuryBalance =
-        afterRewardWorldState.getAccount(treasuryAddress).fold(UInt256.Zero)(_.balance)
-
-      afterExecutionMinerBalance shouldEqual (beforeExecutionMinerBalance + minerReward)
-      afterExecutionTreasuryBalance shouldEqual (beforeExecutionTreasuryBalance + treasuryReward)
-    }
-  }
-
   // scalastyle:off magic.number
   trait TestSetup extends EphemBlockchainTestSetup {
     // + cake overrides
@@ -182,15 +130,9 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     val validAccountAddress5: Address = Address("0x29a2241af64e2223") // 3000000000002236963
     val validAccountAddress6: Address = Address("0x29a2241af6704445") // 3000000000004473925
 
-    val treasuryAddress = validAccountAddress2
     val baseBlockchainConfig = Config.blockchains.blockchainConfig
     private val forkBlockNumbers: ForkBlockNumbers = baseBlockchainConfig.forkBlockNumbers
     implicit override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
-      .copy(
-        treasuryAddress = treasuryAddress,
-        forkBlockNumbers = forkBlockNumbers
-          .copy(ecip1098BlockNumber = forkBlockNumbers.byzantiumBlockNumber + 100)
-      )
 
     val minerTwoOmmersReward: BigInt = BigInt("5312500000000000000")
     val ommerFiveBlocksDifferenceReward: BigInt = BigInt("1875000000000000000")
@@ -219,12 +161,10 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
         ommerMiners: Seq[Address] = Nil,
         blockNumber: BigInt = sampleBlockNumber
     ): Block = {
-      val extraFields = HefEmpty
       Block(
         header = Fixtures.Blocks.Genesis.header.copy(
           beneficiary = minerAddress.bytes,
-          number = blockNumber,
-          extraFields = extraFields
+          number = blockNumber
         ),
         body = Fixtures.Blocks.Genesis.body.copy(
           uncleNodesList = ommerMiners.map { address =>

@@ -16,24 +16,18 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Mocks
 import com.chipprbots.ethereum.NormalPatience
-import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter
-import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.NewCheckpoint
-import com.chipprbots.ethereum.checkpointing.CheckpointingTestHelpers
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator
 import com.chipprbots.ethereum.consensus.pow.validators.StdOmmersValidator
 import com.chipprbots.ethereum.consensus.validators.Validators
-import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
-import com.chipprbots.ethereum.crypto.ECDSASignature
 
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -123,59 +117,6 @@ class BlockImporterItSpec
     eventually(blockchainReader.getBestBlock().get shouldEqual newBlock4ParentOldBlock3)
   }
 
-  it should "switch to a branch with a checkpoint" taggedAs (IntegrationTest, SlowTest) in new StartedImportFixture() {
-
-    val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
-    val oldBlock5WithCheckpoint: Block = checkpointBlockGenerator.generate(oldBlock4, checkpoint)
-    blockchainWriter.save(oldBlock5WithCheckpoint, Nil, oldWeight4, saveAsBestBlock = true)
-
-    override val newBranch: List[Block] = List(newBlock2, newBlock3)
-
-    blockImporter ! BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(newBranch))
-
-    eventually(blockchainReader.getBestBlock().get shouldEqual oldBlock5WithCheckpoint)
-    eventually(blockchainReader.getLatestCheckpointBlockNumber() shouldEqual oldBlock5WithCheckpoint.header.number)
-  }
-
-  it should "switch to a branch with a newer checkpoint" taggedAs (
-    IntegrationTest,
-    SlowTest
-  ) in new StartedImportFixture() {
-
-    val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
-    val newBlock4WithCheckpoint: Block = checkpointBlockGenerator.generate(newBlock3, checkpoint)
-    blockchainWriter.save(newBlock4WithCheckpoint, Nil, newWeight3, saveAsBestBlock = true)
-
-    override val newBranch: List[Block] = List(newBlock4WithCheckpoint)
-
-    blockImporter ! BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(newBranch))
-
-    eventually(blockchainReader.getBestBlock().get shouldEqual newBlock4WithCheckpoint)
-    eventually(blockchainReader.getLatestCheckpointBlockNumber() shouldEqual newBlock4WithCheckpoint.header.number)
-  }
-
-  it should "return a correct checkpointed block after receiving a request for generating a new checkpoint" taggedAs (
-    IntegrationTest,
-    SlowTest
-  ) in new StartedImportFixture() {
-
-    val parent: Block = blockchainReader.getBestBlock().get
-    val newBlock5: Block = getBlock(genesisBlock.number + 5, difficulty = 104, parent = parent.header.hash)
-    val newWeight5: ChainWeight = newWeight3.increase(newBlock5.header)
-
-    blockchainWriter.save(newBlock5, Nil, newWeight5, saveAsBestBlock = true)
-
-    val signatures: Seq[ECDSASignature] = CheckpointingTestHelpers.createCheckpointSignatures(
-      Seq(crypto.generateKeyPair(secureRandom)),
-      newBlock5.hash
-    )
-    val checkpointBlock: Block = checkpointBlockGenerator.generate(newBlock5, Checkpoint(signatures))
-    blockImporter ! NewCheckpoint(checkpointBlock)
-
-    eventually(blockchainReader.getBestBlock().get shouldEqual checkpointBlock)
-    eventually(blockchainReader.getLatestCheckpointBlockNumber() shouldEqual newBlock5.header.number + 1)
-  }
-
   it should "ask BlockFetcher to resolve missing node" taggedAs (IntegrationTest, SlowTest) in new TestFixture() {
     val parent: Block = blockchainReader.getBestBlock().get
     val newBlock: Block = getBlock(genesisBlock.number + 5, difficulty = 104, parent = parent.header.hash)
@@ -225,8 +166,6 @@ class TestFixture extends TestSetupWithVmAndValidators {
   val genesisWeight: ChainWeight = ChainWeight.zero.increase(genesis.header)
 
   blockchainWriter.save(genesis, Seq(), genesisWeight, saveAsBestBlock = true)
-
-  lazy val checkpointBlockGenerator: CheckpointBlockGenerator = new CheckpointBlockGenerator
 
   val fetcherProbe: TestProbe = TestProbe()
   val ommersPoolProbe: TestProbe = TestProbe()

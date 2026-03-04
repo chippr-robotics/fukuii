@@ -8,7 +8,6 @@ import scala.util.Try
 import com.typesafe.config.ConfigRenderOptions
 import com.typesafe.config.{Config => TypesafeConfig}
 
-import com.chipprbots.ethereum.blockchain.data.BootstrapCheckpoint
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
@@ -30,14 +29,9 @@ case class BlockchainConfig(
     gasTieBreaker: Boolean,
     ethCompatibleStorage: Boolean,
     bootstrapNodes: Set[String],
-    checkpointPubKeys: Set[ByteString] = Set.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
-    bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
-    useBootstrapCheckpoints: Boolean = true,
     messConfig: MESSConfig = MESSConfig()
 ) {
-  val minRequireSignatures: Int = (Math.floor(checkpointPubKeys.size.toDouble / 2) + 1).toInt
-
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
 }
@@ -60,9 +54,6 @@ case class ForkBlockNumbers(
     aghartaBlockNumber: BigInt,
     phoenixBlockNumber: BigInt,
     petersburgBlockNumber: BigInt,
-    ecip1098BlockNumber: BigInt,
-    ecip1097BlockNumber: BigInt,
-    ecip1049BlockNumber: Option[BigInt],
     ecip1099BlockNumber: BigInt,
     muirGlacierBlockNumber: BigInt,
     magnetoBlockNumber: BigInt,
@@ -70,14 +61,8 @@ case class ForkBlockNumbers(
     mystiqueBlockNumber: BigInt,
     spiralBlockNumber: BigInt
 ) {
-  def all: List[BigInt] = this.productIterator.toList.flatMap {
-    case i: BigInt => Some(i)
-    case i: Option[_] =>
-      i.flatMap {
-        case n if n.isInstanceOf[BigInt] => Some(n.asInstanceOf[BigInt])
-        case _                           => None
-      }
-    case _ => None
+  def all: List[BigInt] = this.productIterator.toList.collect {
+    case i: BigInt => i
   }
 }
 
@@ -100,10 +85,7 @@ object ForkBlockNumbers {
     aghartaBlockNumber = Long.MaxValue,
     phoenixBlockNumber = Long.MaxValue,
     petersburgBlockNumber = Long.MaxValue,
-    ecip1098BlockNumber = Long.MaxValue,
-    ecip1097BlockNumber = Long.MaxValue,
     ecip1099BlockNumber = Long.MaxValue,
-    ecip1049BlockNumber = None,
     muirGlacierBlockNumber = Long.MaxValue,
     magnetoBlockNumber = Long.MaxValue,
     berlinBlockNumber = Long.MaxValue,
@@ -136,10 +118,6 @@ object BlockchainConfig {
     val phoenixBlockNumber: BigInt = BigInt(blockchainConfig.getString("phoenix-block-number"))
     val petersburgBlockNumber: BigInt = BigInt(blockchainConfig.getString("petersburg-block-number"))
     val treasuryAddress = Address(blockchainConfig.getString("treasury-address"))
-    val ecip1098BlockNumber: BigInt = BigInt(blockchainConfig.getString("ecip1098-block-number"))
-    val ecip1097BlockNumber: BigInt = BigInt(blockchainConfig.getString("ecip1097-block-number"))
-    val ecip1049BlockNumber: Option[BigInt] =
-      Try(blockchainConfig.getString("ecip1049-block-number")).map(BigInt(_)).toOption
 
     val maxCodeSize: Option[BigInt] = Try(BigInt(blockchainConfig.getString("max-code-size"))).toOption
     val difficultyBombPauseBlockNumber: BigInt = BigInt(
@@ -173,7 +151,6 @@ object BlockchainConfig {
     val ethCompatibleStorage: Boolean = blockchainConfig.getBoolean("eth-compatible-storage")
 
     val bootstrapNodes: Set[String] = blockchainConfig.getStringList("bootstrap-nodes").asScala.toSet
-    val checkpointPubKeys = readPubKeySet(blockchainConfig, "checkpoint-public-keys")
     val allowedMinersPublicKeys = readPubKeySet(blockchainConfig, "allowed-miners")
 
     val ecip1099BlockNumber: BigInt = BigInt(blockchainConfig.getString("ecip1099-block-number"))
@@ -182,14 +159,6 @@ object BlockchainConfig {
     val berlinBlockNumber: BigInt = BigInt(blockchainConfig.getString("berlin-block-number"))
     val mystiqueBlockNumber: BigInt = BigInt(blockchainConfig.getString("mystique-block-number"))
     val spiralBlockNumber: BigInt = BigInt(blockchainConfig.getString("spiral-block-number"))
-
-    val bootstrapCheckpoints: List[BootstrapCheckpoint] = ConfigUtils
-      .getOptionalValue(blockchainConfig, _.getStringList, "bootstrap-checkpoints")
-      .map(_.asScala.toList.flatMap(BootstrapCheckpoint.fromString))
-      .getOrElse(List.empty)
-
-    val useBootstrapCheckpoints: Boolean =
-      Try(blockchainConfig.getBoolean("use-bootstrap-checkpoints")).getOrElse(true)
 
     val messConfig: MESSConfig = Try {
       val messConf = blockchainConfig.getConfig("mess")
@@ -223,9 +192,6 @@ object BlockchainConfig {
         aghartaBlockNumber = aghartaBlockNumber,
         phoenixBlockNumber = phoenixBlockNumber,
         petersburgBlockNumber = petersburgBlockNumber,
-        ecip1098BlockNumber = ecip1098BlockNumber,
-        ecip1097BlockNumber = ecip1097BlockNumber,
-        ecip1049BlockNumber = ecip1049BlockNumber,
         ecip1099BlockNumber = ecip1099BlockNumber,
         muirGlacierBlockNumber = muirGlacierBlockNumber,
         magnetoBlockNumber = magnetoBlockNumber,
@@ -245,10 +211,7 @@ object BlockchainConfig {
       gasTieBreaker = gasTieBreaker,
       ethCompatibleStorage = ethCompatibleStorage,
       bootstrapNodes = bootstrapNodes,
-      checkpointPubKeys = checkpointPubKeys,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
-      bootstrapCheckpoints = bootstrapCheckpoints,
-      useBootstrapCheckpoints = useBootstrapCheckpoints,
       messConfig = messConfig
     )
   }

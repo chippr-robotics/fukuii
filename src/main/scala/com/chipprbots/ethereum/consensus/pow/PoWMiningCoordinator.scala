@@ -13,7 +13,6 @@ import scala.concurrent.duration.DurationInt
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator.CoordinatorProtocol
 import com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager
 import com.chipprbots.ethereum.consensus.pow.miners.EthashMiner
-import com.chipprbots.ethereum.consensus.pow.miners.KeccakMiner
 import com.chipprbots.ethereum.consensus.pow.miners.Miner
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -45,17 +44,13 @@ object PoWMiningCoordinator {
 
   case object MiningComplete extends MiningResponse
 
-  sealed trait MiningAlgorithm
-  case object EthashAlgorithm extends MiningAlgorithm
-  case object KeccakAlgorithm extends MiningAlgorithm
-
   def apply(
       syncController: ClassicActorRef,
       ethMiningService: EthMiningService,
       blockCreator: PoWBlockCreator,
       blockchainReader: BlockchainReader,
-      ecip1049BlockNumber: Option[BigInt],
-      configBuilder: BlockchainConfigBuilder
+      configBuilder: BlockchainConfigBuilder,
+      minerOpt: Option[Miner] = None
   ): Behavior[CoordinatorProtocol] =
     Behaviors
       .setup[CoordinatorProtocol](context =>
@@ -65,8 +60,8 @@ object PoWMiningCoordinator {
           ethMiningService,
           blockCreator,
           blockchainReader,
-          ecip1049BlockNumber,
-          configBuilder
+          configBuilder,
+          minerOpt
         )
       )
 }
@@ -77,8 +72,8 @@ class PoWMiningCoordinator private (
     ethMiningService: EthMiningService,
     blockCreator: PoWBlockCreator,
     blockchainReader: BlockchainReader,
-    ecip1049BlockNumber: Option[BigInt],
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    minerOpt: Option[Miner]
 ) extends AbstractBehavior[CoordinatorProtocol](context) {
 
   import configBuilder._
@@ -109,10 +104,7 @@ class PoWMiningCoordinator private (
           log.error("Unable to get block for mining: blockchainReader.getBestBlock() returned None")
           context.self ! MineNext
         } { block =>
-          getMiningAlgorithm(block.header.number) match {
-            case EthashAlgorithm => mineWithEthash(block)
-            case KeccakAlgorithm => mineWithKeccak(block)
-          }
+          mineWithEthash(block)
         }
       Behaviors.same
 
@@ -135,22 +127,12 @@ class PoWMiningCoordinator private (
     case OnDemandMining => handleMiningOnDemand()
   }
 
-  private def getMiningAlgorithm(currentBlockNumber: BigInt): MiningAlgorithm =
-    ecip1049BlockNumber match {
-      case None              => EthashAlgorithm
-      case Some(blockNumber) => if (currentBlockNumber + 1 >= blockNumber) KeccakAlgorithm else EthashAlgorithm
-    }
-
   private def mineWithEthash(bestBlock: Block): Unit = {
     log.debug("Mining with Ethash")
-    val ethashMiner = new EthashMiner(dagManager, blockCreator, syncController, ethMiningService)
-    mine(ethashMiner, bestBlock)
-  }
-
-  private def mineWithKeccak(bestBlock: Block): Unit = {
-    log.debug("Mining with Keccak")
-    val keccakMiner = new KeccakMiner(blockCreator, syncController, ethMiningService)
-    mine(keccakMiner, bestBlock)
+    val miner = minerOpt.getOrElse(
+      new EthashMiner(dagManager, blockCreator, syncController, ethMiningService)
+    )
+    mine(miner, bestBlock)
   }
 
   private def mine(miner: Miner, bestBlock: Block): Unit = {

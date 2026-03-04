@@ -14,7 +14,6 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BlockPreparator
 import com.chipprbots.ethereum.ledger.BlockResult
@@ -48,13 +47,7 @@ abstract class BlockGeneratorSkeleton(
       beneficiary: Address,
       blockTimestamp: Long,
       x: Ommers
-  )(implicit blockchainConfig: BlockchainConfig): BlockHeader = {
-    val extraFields =
-      if (blockNumber >= blockchainConfig.forkBlockNumbers.ecip1097BlockNumber)
-        HefPostEcip1097(None)
-      else
-        HefEmpty
-
+  )(implicit blockchainConfig: BlockchainConfig): BlockHeader =
     BlockHeader(
       parentHash = parent.header.hash,
       ommersHash = ByteString(kec256(x.toBytes: Array[Byte])),
@@ -73,10 +66,8 @@ abstract class BlockGeneratorSkeleton(
         .flatMap(daoForkConfig => daoForkConfig.getExtraData(blockNumber))
         .getOrElse(headerExtraData),
       mixHash = ByteString.empty,
-      nonce = ByteString.empty,
-      extraFields = extraFields
+      nonce = ByteString.empty
     )
-  }
 
   protected def prepareHeader(
       blockNumber: BigInt,

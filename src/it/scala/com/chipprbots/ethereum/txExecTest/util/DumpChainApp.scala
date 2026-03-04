@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.ProofService.EmptyStorageValueProof
 import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProof
@@ -165,8 +164,7 @@ class BlockchainMock(genesisHash: ByteString) extends Blockchain {
         0,
         ByteString.empty,
         ByteString.empty,
-        ByteString.empty,
-        HefEmpty
+        ByteString.empty
       ) {
     override lazy val hash: ByteString = genesisHash
   }

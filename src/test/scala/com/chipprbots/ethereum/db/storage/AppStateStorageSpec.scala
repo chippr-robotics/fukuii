@@ -63,31 +63,6 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(newAppStateStorage().getSyncStartingBlock() == 0)
     }
 
-    "update and remove latest checkpoint block number properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
-      forAll(ObjectGenerators.bigIntGen) { latestCheckpointBlockNumber =>
-        val storage = newAppStateStorage()
-
-        storage.putLatestCheckpointBlockNumber(latestCheckpointBlockNumber).commit()
-        assert(storage.getLatestCheckpointBlockNumber() == latestCheckpointBlockNumber)
-
-        storage.removeLatestCheckpointBlockNumber().commit()
-        assert(storage.getLatestCheckpointBlockNumber() == 0)
-      }
-    }
-
-    "update checkpoint block number and get it properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
-      forAll(ObjectGenerators.bigIntGen) { latestCheckpointBlockNumber =>
-        val storage = newAppStateStorage()
-        storage.putLatestCheckpointBlockNumber(latestCheckpointBlockNumber).commit()
-
-        assert(storage.getLatestCheckpointBlockNumber() == latestCheckpointBlockNumber)
-      }
-    }
-
-    "get zero as checkpoint block number when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
-      assert(newAppStateStorage().getBestBlockNumber() == 0)
-    }
-
     "insert and get bootstrap pivot block properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       val storage = newAppStateStorage()
       val pivotNumber = BigInt(10500000)

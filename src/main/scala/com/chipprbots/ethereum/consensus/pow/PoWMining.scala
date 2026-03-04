@@ -113,7 +113,6 @@ class PoWMining private (
                   node.ethMiningService,
                   blockCreator,
                   blockchainReader,
-                  node.blockchainConfig.forkBlockNumbers.ecip1049BlockNumber,
                   node
                 ),
                 "PoWMinerCoordinator",

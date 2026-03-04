@@ -490,7 +490,6 @@ class FastSync(
 
     // TODO [ETCM-676]: Move to blockchain and make sure it's atomic
     private def discardLastBlocks(startBlock: BigInt, blocksToDiscard: Int): Unit =
-      // TODO (maybe ETCM-77): Manage last checkpoint number too
       (startBlock to ((startBlock - blocksToDiscard).max(1)) by -1).foreach { n =>
         blockchainReader.getBlockHeaderByNumber(n).foreach { headerToRemove =>
           blockchain.removeBlock(headerToRemove.hash)

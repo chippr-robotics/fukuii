@@ -26,8 +26,6 @@ case class Block(header: BlockHeader, body: BlockBody) {
 
   def hash: ByteString = header.hash
 
-  val hasCheckpoint: Boolean = header.hasCheckpoint
-
   def isParentOf(child: Block): Boolean = header.isParentOf(child.header)
 }
 

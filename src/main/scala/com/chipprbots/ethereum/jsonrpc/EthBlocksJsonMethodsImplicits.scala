@@ -21,13 +21,6 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
 
   import org.json4s.CustomSerializer
 
-  // Manual encoder for CheckpointResponse to avoid Scala 3 reflection issues
-  private def encodeCheckpointResponse(checkpoint: CheckpointResponse): JValue =
-    JObject(
-      "signatures" -> JArray(checkpoint.signatures.toList.map(sig => encodeAsHex(sig.toBytes))),
-      "signers" -> JArray(checkpoint.signers.toList.map(encodeAsHex))
-    )
-
   // Custom serializer for json4s Extraction.decompose to work with BlockResponse in tests
   implicit val blockResponseCustomSerializer: CustomSerializer[BlockResponse] =
     new CustomSerializer[BlockResponse](_ =>
@@ -70,19 +63,7 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
       "uncles" -> JArray(block.uncles.toList.map(encodeAsHex))
     )
 
-    // Checkpoint-specific fields - only include when checkpoint is present
-    val checkpointFields = if (block.checkpoint.isDefined) {
-      List(
-        "lastCheckpointNumber" -> block.lastCheckpointNumber.map(encodeAsHex).getOrElse(JNull),
-        "checkpoint" -> block.checkpoint.map(encodeCheckpointResponse).getOrElse(JNull),
-        "signature" -> JString(block.signature),
-        "signer" -> JString(block.signer)
-      )
-    } else {
-      List.empty
-    }
-
-    JObject(baseFields ++ checkpointFields)
+    JObject(baseFields)
   }
 
   // Encoder for BaseBlockResponse (which is typically BlockResponse)

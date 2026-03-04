@@ -25,16 +25,7 @@ class BlockchainWriter(
 ) extends Logger {
 
   def save(block: Block, receipts: Seq[Receipt], weight: ChainWeight, saveAsBestBlock: Boolean): Unit = {
-    val updateBestBlocks = if (saveAsBestBlock && block.hasCheckpoint) {
-      log.debug(
-        "New best known block number - {}, new best checkpoint number - {}",
-        block.header.number,
-        block.header.number
-      )
-      appStateStorage
-        .putBestBlockInfo(BlockInfo(block.header.hash, block.header.number))
-        .and(appStateStorage.putLatestCheckpointBlockNumber(block.header.number))
-    } else if (saveAsBestBlock) {
+    val updateBestBlocks = if (saveAsBestBlock) {
       log.debug(
         "New best known block number - {}",
         block.header.number
@@ -78,28 +69,9 @@ class BlockchainWriter(
 
   def saveBestKnownBlocks(
       bestBlockHash: ByteString,
-      bestBlockNumber: BigInt,
-      latestCheckpointNumber: Option[BigInt] = None
+      bestBlockNumber: BigInt
   ): Unit =
-    latestCheckpointNumber match {
-      case Some(number) =>
-        saveBestKnownBlockAndLatestCheckpointNumber(bestBlockHash, bestBlockNumber, number)
-      case None =>
-        saveBestKnownBlock(bestBlockHash, bestBlockNumber)
-    }
-
-  private def saveBestKnownBlock(bestBlockHash: ByteString, bestBlockNumber: BigInt): Unit =
     appStateStorage.putBestBlockInfo(BlockInfo(bestBlockHash, bestBlockNumber)).commit()
-
-  private def saveBestKnownBlockAndLatestCheckpointNumber(
-      bestBlockHash: ByteString,
-      number: BigInt,
-      latestCheckpointNumber: BigInt
-  ): Unit =
-    appStateStorage
-      .putBestBlockInfo(BlockInfo(bestBlockHash, number))
-      .and(appStateStorage.putLatestCheckpointBlockNumber(latestCheckpointNumber))
-      .commit()
 
   private def saveBlockNumberMapping(number: BigInt, hash: ByteString): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash)

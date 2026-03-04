@@ -6,8 +6,6 @@ import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.consensus.pow.KeccakDataUtils
-import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderPoWError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.utils.Config
@@ -16,30 +14,13 @@ import com.chipprbots.ethereum.testing.Tags._
 class PoWBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers {
   import PoWBlockHeaderValidatorSpec._
 
-  "PoWBlockHeaderValidator" should "call KeccakBlockHeaderValidator when chain is taggedAs (UnitTest, ConsensusTest, SlowTest) in Keccak" in {
-    val keccakConfig = blockchainConfig.withUpdatedForkBlocks(_.copy(ecip1049BlockNumber = Some(10)))
-
-    PoWBlockHeaderValidator.validateEvenMore(validKeccakBlockHeader)(keccakConfig) shouldBe Right(BlockHeaderValid)
-
-    // to show that indeed the right validator needs to be called
-    PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(keccakConfig) shouldBe Left(HeaderPoWError)
-  }
-
-  it should "call EthashBlockHeaderValidator when chain is not taggedAs (UnitTest, ConsensusTest, SlowTest) in Keccak" in {
+  "PoWBlockHeaderValidator" should "validate Ethash block headers" taggedAs (UnitTest, ConsensusTest, SlowTest) in {
     PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(blockchainConfig) shouldBe Right(BlockHeaderValid)
-
-    // to show that indeed the right validator needs to be called
-    PoWBlockHeaderValidator.validateEvenMore(validKeccakBlockHeader)(blockchainConfig) shouldBe Left(HeaderPoWError)
   }
 }
 
 object PoWBlockHeaderValidatorSpec {
   val blockchainConfig = Config.blockchains.blockchainConfig
-
-  val validKeccakBlockHeader: BlockHeader = KeccakDataUtils.header.copy(
-    mixHash = ByteString(Hex.decode("d033f82e170ff16640e902fad569243c39bce9e4da948ccc298c541b34cd263b")),
-    nonce = ByteString(Hex.decode("f245822d3412da7f"))
-  )
 
   val validEthashBlockHeader: BlockHeader = BlockHeader(
     parentHash = ByteString(Hex.decode("d882d5c210bab4cb7ef0b9f3dc2130cb680959afcd9a8f9bf83ee6f13e2f9da3")),

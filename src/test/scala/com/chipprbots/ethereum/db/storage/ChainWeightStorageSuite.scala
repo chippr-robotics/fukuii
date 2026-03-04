@@ -63,12 +63,13 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   test("ChainWeightStorage handles legacy format without messScore", UnitTest, DatabaseTest) {
-    // This test simulates data that was serialized before the messScore field was added
+    // This test simulates data that was serialized before ECIP-1097 removal
+    // Legacy format had (lastCheckpointNumber, totalDifficulty) - checkpoint number is discarded on migration
     val blockHash = byteStringOfLengthNGen(32).sample.get
     val lastCheckpointNumber = BigInt(100)
     val totalDifficulty = BigInt(5000)
 
-    // Create legacy format data (2-field ChainWeight before messScore was added)
+    // Create legacy format data (2-field LegacyChainWeight with checkpoint number)
     val legacyData = LegacyChainWeight(lastCheckpointNumber, totalDifficulty)
     val serializedLegacyData = compactPickledBytes(Pickle.intoBytes(legacyData))
 
@@ -86,9 +87,9 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     )
 
     // Verify that legacy data can be read and is migrated to new format
+    // Legacy checkpoint number is discarded, only totalDifficulty is preserved
     val retrieved = storage.get(blockHash)
     assert(retrieved.isDefined, "Should successfully deserialize legacy format")
-    assert(retrieved.get.lastCheckpointNumber == lastCheckpointNumber)
     assert(retrieved.get.totalDifficulty == totalDifficulty)
     assert(retrieved.get.messScore.isEmpty, "messScore should be None for migrated legacy data")
   }
@@ -96,7 +97,7 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   test("ChainWeightStorage handles current format with messScore", UnitTest, DatabaseTest) {
     // This test verifies that new format with messScore works correctly
     val blockHash = byteStringOfLengthNGen(32).sample.get
-    val chainWeight = ChainWeight(BigInt(100), BigInt(5000), Some(BigInt(6000)))
+    val chainWeight = ChainWeight(BigInt(5000), Some(BigInt(6000)))
 
     val storage = new ChainWeightStorage(EphemDataSource())
     storage.put(blockHash, chainWeight).commit()
@@ -110,7 +111,7 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   test("ChainWeightStorage handles current format without messScore", UnitTest, DatabaseTest) {
     // This test verifies that new format with messScore = None works correctly
     val blockHash = byteStringOfLengthNGen(32).sample.get
-    val chainWeight = ChainWeight(BigInt(100), BigInt(5000), None)
+    val chainWeight = ChainWeight(BigInt(5000), None)
 
     val storage = new ChainWeightStorage(EphemDataSource())
     storage.put(blockHash, chainWeight).commit()

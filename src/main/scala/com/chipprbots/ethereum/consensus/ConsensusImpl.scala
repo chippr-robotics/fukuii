@@ -133,8 +133,7 @@ class ConsensusImpl(
   private def saveLastBlock(blocks: List[BlockData]): Unit = blocks.lastOption.foreach(b =>
     blockchainWriter.saveBestKnownBlocks(
       b.block.hash,
-      b.block.number,
-      Option.when(b.block.hasCheckpoint)(b.block.number)
+      b.block.number
     )
   )
 
@@ -210,8 +209,7 @@ class ConsensusImpl(
     executedBlocks.lastOption.foreach(b =>
       blockchainWriter.saveBestKnownBlocks(
         b.block.hash,
-        b.block.number,
-        Option.when(b.block.hasCheckpoint)(b.block.number)
+        b.block.number
       )
     )
 
@@ -220,8 +218,7 @@ class ConsensusImpl(
         executedBlocks.lastOption.foreach(b =>
           blockchainWriter.saveBestKnownBlocks(
             b.block.hash,
-            b.block.number,
-            Option.when(b.block.hasCheckpoint)(b.block.number)
+            b.block.number
           )
         )
 
@@ -252,12 +249,8 @@ class ConsensusImpl(
       blockchainWriter.save(block, receipts, weight, saveAsBestBlock = false)
     }
 
-    val checkpointNumber = oldBranch.collect {
-      case BlockData(block, _, _) if block.hasCheckpoint => block.number
-    }.maximumOption
-
     val bestHeader = oldBranch.last.block.header
-    blockchainWriter.saveBestKnownBlocks(bestHeader.hash, bestHeader.number, checkpointNumber)
+    blockchainWriter.saveBestKnownBlocks(bestHeader.hash, bestHeader.number)
   }
 
   /** Removes blocks from the [[Blockchain]] along with receipts and total difficulties.

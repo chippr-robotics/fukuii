@@ -150,9 +150,7 @@ trait ScenarioSetup extends EphemBlockchainTestSetup {
       atlantisBlockNumber = 0,
       aghartaBlockNumber = 0,
       phoenixBlockNumber = 0,
-      petersburgBlockNumber = 0,
-      ecip1098BlockNumber = 0,
-      ecip1097BlockNumber = 0
+      petersburgBlockNumber = 0
     ),
     chainId = 0x03,
     networkId = 1,

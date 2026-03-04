@@ -2,27 +2,20 @@ package com.chipprbots.ethereum.consensus.validators.std
 
 import org.apache.pekko.util.ByteString
 
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.checkpointing.CheckpointingTestHelpers
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator._
-import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BloomFilter
-import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.testing.Tags._
 
-class StdBlockValidatorSpec extends AnyFlatSpec with Matchers with SecureRandomBuilder {
+class StdBlockValidatorSpec extends AnyFlatSpec with Matchers {
 
   "Block based on valid data" should "pass validation" taggedAs (UnitTest, ConsensusTest) in {
     val block = Block(validBlockHeader, validBlockBody)
-    val blockWithCheckpoint = Block(validBlockHeaderWithCheckpoint, BlockBody(Nil, Nil))
     StdBlockValidator.validate(block, validReceipts) shouldBe Right(BlockValid)
-    StdBlockValidator.validate(blockWithCheckpoint, Nil) shouldBe Right(BlockValid)
   }
 
   it should "correctly handle the case where a block has no receipts" taggedAs (UnitTest, ConsensusTest) in {
@@ -32,22 +25,7 @@ class StdBlockValidatorSpec extends AnyFlatSpec with Matchers with SecureRandomB
     }
   }
 
-  "Invalid block" should "return a failure if block with checkpoint body has a tx" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    val block = Block(validBlockHeaderWithCheckpoint, validBlockBody)
-    StdBlockValidator
-      .validate(block, Nil) shouldBe Left(CheckpointBlockTransactionsNotEmptyError)
-  }
-
-  it should "return a failure if block with checkpoint body has a ommers" taggedAs (UnitTest, ConsensusTest) in {
-    val block = Block(validBlockHeaderWithCheckpoint, BlockBody(Nil, Seq(validBlockHeader)))
-    StdBlockValidator
-      .validate(block, Nil) shouldBe Left(CheckpointBlockOmmersNotEmptyError)
-  }
-
-  it should "return a failure if created based on invalid transactions header" taggedAs (UnitTest, ConsensusTest) in {
+  "Invalid block" should "return a failure if created based on invalid transactions header" taggedAs (UnitTest, ConsensusTest) in {
     StdBlockValidator.validate(Block(wrongTransactionsRootHeader, validBlockBody), validReceipts) match {
       case Left(BlockTransactionsHashError) => succeed
       case _                                => fail()
@@ -170,23 +148,6 @@ class StdBlockValidatorSpec extends AnyFlatSpec with Matchers with SecureRandomB
     ),
     uncleNodesList = Seq[BlockHeader]()
   )
-
-  val keys: Seq[AsymmetricCipherKeyPair] = Seq(
-    crypto.generateKeyPair(secureRandom),
-    crypto.generateKeyPair(secureRandom)
-  )
-
-  val validCheckpoint: Checkpoint = Checkpoint(
-    CheckpointingTestHelpers.createCheckpointSignatures(keys, validBlockHeader.hash)
-  )
-
-  val validBlockHeaderWithCheckpoint: BlockHeader =
-    new CheckpointBlockGenerator()
-      .generate(
-        Block(validBlockHeader, validBlockBody),
-        validCheckpoint
-      )
-      .header
 
   val validReceipts: Seq[Receipt] = Seq(
     LegacyReceipt.withHashOutcome(
