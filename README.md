@@ -61,7 +61,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 ### 🚀 Fast Initial Sync with Bootstrap Checkpoints
 
-**New in v1.1.0**: Fukuii now includes bootstrap checkpoints that significantly improve initial sync times:
+Fukuii includes bootstrap checkpoints that significantly improve initial sync times:
 
 - **No Peer Wait**: Begin syncing immediately without waiting for peer consensus
 - **Trusted Reference Points**: Uses well-known fork activation blocks as starting points
@@ -141,8 +141,8 @@ The easiest way to run Fukuii is using Docker. Images are available on both GitH
 # Pull the latest release
 docker pull chipprbots/fukuii:latest
 
-# Or pull a specific version
-docker pull chipprbots/fukuii:v1.0.0
+# Or pull a specific version (replace with actual release tag)
+docker pull chipprbots/fukuii:<version>
 
 # Run Fukuii
 docker run -d \
@@ -161,13 +161,13 @@ docker run -d \
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)
-docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:<version>
 
 # Verify the image signature (requires cosign)
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:<version>
 
 # Or pull the latest development version
 docker pull ghcr.io/chippr-robotics/fukuii:develop
@@ -180,7 +180,7 @@ docker run -d \
   -p 30303:30303 \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:<version>
 ```
 
 **Security Note:** Release images published to `ghcr.io/chippr-robotics/fukuii` are:
@@ -475,7 +475,7 @@ metadata:
 spec:
   containers:
   - name: fukuii
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    image: ghcr.io/chippr-robotics/fukuii:latest
     ports:
     - containerPort: 8546
       name: rpc
@@ -503,7 +503,7 @@ spec:
 version: '3.8'
 services:
   fukuii:
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    image: ghcr.io/chippr-robotics/fukuii:latest
     ports:
       - "8546:8546"
       - "30303:30303"

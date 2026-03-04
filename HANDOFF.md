@@ -3,7 +3,7 @@
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-04
-**Commits:** 16 (6 bug fixes + 1 multi-fix + 1 chore + 2 features + 2 test suites + 1 cleanup + 1 config fix + 2 docs)
+**Commits:** 20 (6 bug fixes + 1 multi-fix + 1 chore + 2 features + 2 test suites + 1 cleanup + 1 config fix + 6 docs)
 
 ---
 
