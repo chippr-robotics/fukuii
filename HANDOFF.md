@@ -3,7 +3,7 @@
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-04
-**Commits:** 20 (6 bug fixes + 1 multi-fix + 1 chore + 2 features + 2 test suites + 1 cleanup + 1 config fix + 6 docs)
+**Commits:** 21 (6 bug fixes + 1 multi-fix + 2 chores + 2 features + 2 test suites + 1 cleanup + 1 config fix + 6 docs)
 
 ---
 
@@ -12,6 +12,24 @@
 The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring, comprehensive consensus test suites, and gas limit convergence logic.
 
 **Test results:** 2,189 unit tests passing, clean compile, assembly JAR verified on Mordor.
+
+---
+
+## ECIP Alignment
+
+The `alpha` branch implements a canonical [ECIP-1066](https://ecips.ethereumclassic.org/ECIPs/ecip-1066) client — the Ethereum Classic Network Description that records all feature upgrades applied to ETC mainnet (Frontier through Spiral).
+
+### Multi-Client References
+
+| Client | Branch | Repository |
+|--------|--------|------------|
+| core-geth | `etc` | https://github.com/chris-mercer/core-geth/tree/etc |
+| Besu | `etc` | https://github.com/chris-mercer/besu/tree/etc |
+| Fukuii | `alpha` | https://github.com/chris-mercer/fukuii/tree/alpha |
+
+### Gorgoroth Trials (Local Network Testing)
+
+The alpha stabilization was validated through 16 phases of systematic testing ("Gorgoroth trials"), exercising every major subsystem on both Mordor testnet and ETC mainnet using the assembly JAR. Local devnet testing uses the multi-client stack from the maintained forks above (core-geth `etc`, Besu `etc`, Fukuii `alpha`) — not the deprecated upstream core-geth (last updated 2024) or upstream Besu. 9 bugs were found and fixed, with 2,189 unit tests passing.
 
 ---
 
