@@ -3,15 +3,15 @@
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-03
-**Commits:** 12 (6 bug fixes + 1 chore + 1 multi-fix + 1 feature + 2 test suites + 1 docs)
+**Commits:** 13 (6 bug fixes + 1 chore + 1 multi-fix + 2 features + 2 test suites + 1 docs)
 
 ---
 
 ## Summary
 
-The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring and comprehensive consensus test suites.
+The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring, comprehensive consensus test suites, and gas limit convergence logic.
 
-**Test results:** 2,267+ unit tests passing, clean compile, assembly JAR verified on Mordor.
+**Test results:** 2,274+ unit tests passing, clean compile, assembly JAR verified on Mordor.
 
 ---
 
@@ -195,6 +195,49 @@ Modified Exponential Subjective Scoring (MESS) is ETC's anti-reorg protection me
 
 ---
 
+## Feature: Gas Limit Convergence (Critical — Pre-Olympia Requirement)
+
+**Commit:** `2cc224c62` — fix: implement gas limit convergence toward configurable target
+
+**Problem:** `BlockGeneratorSkeleton.calculateGasLimit()` was a no-op — it returned `parentGas` unchanged. This meant Fukuii miners would never adjust the gas limit toward any target. Post-Olympia (when the target increases from 8M to 60M), Fukuii-mined blocks would stay at 8M forever, causing the client to fall behind core-geth and Besu miners who actively converge.
+
+**Root cause:** The method was a placeholder stub: `protected def calculateGasLimit(parentGas: BigInt): BigInt = parentGas`
+
+**Fix:** Implemented ±1/1024 per-block convergence matching core-geth's `CalcGasLimit()` (`core/block_validator.go:156-177`) and Besu's `TargetingGasLimitCalculator`. Added `gasLimitTarget` config field to `MiningConfig` (default: 8M for ETC mainnet).
+
+**Algorithm:**
+```
+delta = parentGas / GasLimitBoundDivisor - 1  (GasLimitBoundDivisor = 1024)
+if parentGas < target: next = min(parentGas + delta, target)
+if parentGas > target: next = max(parentGas - delta, target)
+if parentGas == target: next = parentGas  (stable)
+```
+
+**Cross-client verification:** All three clients converge from 8M to 60M in exactly **2,055 blocks** (~7.4 hours at 13s/block).
+
+**Files changed:**
+- `src/main/scala/.../consensus/mining/MiningConfig.scala` — Added `gasLimitTarget: BigInt` field + config parsing
+- `src/main/scala/.../consensus/blocks/BlockGeneratorSkeleton.scala` — Replaced no-op with convergence logic
+- `src/main/resources/conf/base/mining.conf` — Added `gas-limit-target = 8000000` default
+- `src/test/scala/.../consensus/mining/MiningConfigs.scala` — Updated test config constructor
+- `src/test/scala/.../consensus/blocks/GasLimitCalculationSpec.scala` — **7 new tests**
+
+**Tests (GasLimitCalculationSpec):**
+| Test | Assertion |
+|------|-----------|
+| Converge upward from 1M to 8M | Completes in 2,122 blocks |
+| Stable at target (8M) | `calcGasLimit(8M) == 8M` |
+| Converge downward from 10M to 8M | Completes in 219 blocks |
+| Respect ±1/1024 bound | First delta from 1M = 975 |
+| MinGasLimit (5000) floor | Never drops below 5000 |
+| Cross-client parity (8M→60M) | Exactly 2,055 blocks (matches core-geth + Besu) |
+| Snap to target when close | Overshoots clamped to exact target |
+
+**Reproduce before:** Set `gas-limit-target = 60000000` → mined blocks never change gas limit from parent
+**Verify after:** `sbt 'testOnly *GasLimitCalculationSpec'` → 7 tests pass, convergence times match core-geth
+
+---
+
 ## Test Suite: PoW/ETChash Consensus
 
 **Commit:** `0a9434088` — test: add comprehensive PoW/ETChash test suite
@@ -258,14 +301,15 @@ These were discovered during testing but are tuning/architecture issues, not cod
 
 - No dependency version updates
 - No architecture changes (except adding sync-dispatcher isolation)
-- No modifications to consensus-critical calculation code (EVM execution, Ethash mining, state trie operations, block validation logic remain identical)
+- No modifications to consensus-critical validation code (EVM execution, Ethash mining, state trie operations, block validation logic remain identical). Gas limit convergence is miner policy, not consensus validation.
 - No changes to submodules (bytes, crypto, rlp, scalanet)
 - No changes to CI/CD workflows or Docker configs
 
 **What WAS added beyond bug fixes:**
 - ECBP-1100 (MESS) wiring into block processing pipeline (feature, commit 9)
-- 63 new consensus tests across 3 test suites (commits 10-11)
-- Test count: 2,267+ (up from 2,229 baseline)
+- Gas limit convergence toward configurable target (feature, commit 13) — prerequisite for Olympia
+- 70 new consensus tests across 4 test suites (commits 10-11, 13)
+- Test count: 2,274+ (up from 2,229 baseline)
 
 ---
 
@@ -275,7 +319,7 @@ These were discovered during testing but are tuning/architecture issues, not cod
 ```bash
 git checkout alpha
 sbt compile          # Should complete cleanly
-sbt test             # 2,267+ tests, 0 failures
+sbt test             # 2,274+ tests, 0 failures
 sbt assembly          # Produces target/scala-3.3.4/fukuii-assembly-0.1.240.jar
 ```
 
@@ -322,6 +366,14 @@ The `alpha` branch establishes a stable pre-Olympia baseline. Two independent br
 Replaces all stub MCP tools with 20 live blockchain query tools and 9 resources. Makes Fukuii the first ETC client with a live MCP server. Further enterprise sprints planned: WebSocket subscriptions, TLS/JWT auth, structured logging, trace/debug APIs.
 
 ### `olympia` branch (PR #1001) — Olympia Hard Fork
-Implements ECIP-1111/1112/1121: EIP-1559 fee market with treasury redirect, EVM modernization (TLOAD/TSTORE, MCOPY, BASEFEE), new precompiles (P256VERIFY), and Type-4 transactions (EIP-7702). Targets Mordor block 15,800,850 (~March 28, 2026).
+Implements ECIP-1111/1112/1121: EIP-1559 fee market with treasury redirect, EVM modernization (TLOAD/TSTORE, MCOPY, BASEFEE), new precompiles (P256VERIFY), and Type-4 transactions (EIP-7702). Targets Mordor block 15,800,850 (~March 28, 2026). **Rebased on alpha HEAD** — inherits gas limit convergence; the olympia branch overrides the default target to 60M.
 
 Both branches fan out independently from `alpha` HEAD and can be merged separately.
+
+### Configuration Note: Gas Limit Target
+The `gas-limit-target` config defaults to 8M (ETC mainnet pre-Olympia). On the `olympia` branch, this should be updated to 60M (60,000,000) to match core-geth's `DefaultConfig.GasCeil` and Besu's `NetworkDefinition.CLASSIC.targetGasLimit`. Operators upgrading to Olympia should set:
+```hocon
+mining {
+  gas-limit-target = 60000000
+}
+```
