@@ -75,8 +75,7 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
   muir-glacier-block-number = "0"
   berlin-block-number = "0"
   
-  # ECIP checkpointing/treasury forks - may not be relevant for private enterprise chains
-  ecip1097-block-number = "1000000000000000000"
+  # ECIP forks - may not be relevant for private enterprise chains
   ecip1099-block-number = "1000000000000000000"
   
   # Disable difficulty bomb (not needed in private networks)

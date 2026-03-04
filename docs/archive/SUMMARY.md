@@ -1,3 +1,5 @@
+> **Archived:** This document is from the pre-alpha test phase (Nov 2025) and is preserved for historical reference. For current information, see [HANDOFF.md](../../HANDOFF.md).
+
 # Test Infrastructure Improvement Project — Complete
 
 > **Note**: This document is a historical record of our test infrastructure improvements completed in November 2025.

@@ -17,7 +17,6 @@
   - [FUKUII Namespace (1 endpoint)](#fukuii-namespace-1-endpoint)
   - [MCP Namespace (7 endpoints)](#mcp-namespace-7-endpoints)
   - [QA Namespace (3 endpoints)](#qa-namespace-3-endpoints)
-  - [CHECKPOINTING Namespace (2 endpoints)](#checkpointing-namespace-2-endpoints)
   - [IELE Namespace (2 endpoints)](#iele-namespace-2-endpoints)
   - [RPC Namespace (1 endpoint)](#rpc-namespace-1-endpoint)
 - [Endpoint Statistics](#endpoint-statistics)
@@ -284,17 +283,6 @@ Quality assurance and testing utilities.
 
 ---
 
-### CHECKPOINTING Namespace (2 endpoints)
-
-Ethereum Classic checkpointing functionality.
-
-| Endpoint | Safety | Production | MCP Status | Description |
-|----------|--------|------------|------------|-------------|
-| `checkpointing_getLatestBlock` | 🟢 | ✅ | ❌ | Gets latest checkpoint block |
-| `checkpointing_pushCheckpoint` | 🟡 | ✅ | ❌ | Pushes a checkpoint |
-
----
-
 ### IELE Namespace (2 endpoints)
 
 IELE VM support (if enabled).
@@ -331,7 +319,6 @@ RPC introspection.
 | FUKUII | 1 | 1 | 0 | 0 | 1 | 0 | 0 |
 | MCP | 7 | 6 | 1 | 0 | 7 | 0 | 0 |
 | QA | 3 | 1 | 0 | 2 | 0 | 0 | 3 |
-| CHECKPOINTING | 2 | 1 | 1 | 0 | 2 | 0 | 0 |
 | IELE | 2 | 1 | 1 | 0 | 2 | 0 | 0 |
 | RPC | 1 | 1 | 0 | 0 | 1 | 0 | 0 |
 | **TOTAL** | **97** | **67** | **20** | **10** | **76** | **11** | **10** |
@@ -388,7 +375,6 @@ RPC introspection.
 - All debug namespace endpoints (3)
 - All test namespace endpoints (7)
 - All QA namespace endpoints (3)
-- All checkpointing endpoints (2)
 - All IELE endpoints (2)
 - All Fukuii-specific endpoints (1)
 - Other utility endpoints (18)

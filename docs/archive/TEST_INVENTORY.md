@@ -1,3 +1,5 @@
+> **Archived:** This document is from the pre-alpha test phase (Nov 2025) and is preserved for historical reference. For current information, see [HANDOFF.md](../../HANDOFF.md).
+
 # Fukuii Test Inventory and Categorization Action Plan
 
 **Generated:** $(date)

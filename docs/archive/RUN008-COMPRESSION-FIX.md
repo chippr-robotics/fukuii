@@ -1,3 +1,5 @@
+> **Archived:** This document is from the pre-alpha test phase (Nov 2025) and is preserved for historical reference. For current information, see [HANDOFF.md](../../HANDOFF.md).
+
 # Fix for Run008: CoreGeth Compression Compatibility Issue
 
 ## Issue Summary

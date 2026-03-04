@@ -70,9 +70,8 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
   
-  # Treasury and checkpointing (ETC-specific, usually disabled for custom networks)
+  # Treasury (ETC-specific, usually disabled for custom networks)
   treasury-address = "0011223344556677889900112233445566778899"
-  ecip1097-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   
   # Difficulty bomb (usually disabled for custom networks)
@@ -291,7 +290,6 @@ For a simple private network, this minimal configuration is sufficient:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
   berlin-block-number = "1000000000000000000"
@@ -515,7 +513,6 @@ Perfect for local testing with all modern features enabled:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
   berlin-block-number = "1000000000000000000"
@@ -585,7 +582,6 @@ Configuration for a permissioned consortium network:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
   berlin-block-number = "1000000000000000000"
@@ -673,7 +669,6 @@ Configuration for a test network with planned fork activations:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
   

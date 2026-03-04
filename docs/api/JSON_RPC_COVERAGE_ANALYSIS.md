@@ -2,7 +2,9 @@
 
 This document provides a comprehensive analysis of fukuii's JSON-RPC implementation compared to the Ethereum JSON-RPC specification.
 
-**Date**: 2025-11-24  
+> **Note:** This analysis was written before the MCP namespace was added (Nov 2025). See [RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md) for the current 97-endpoint catalog.
+
+**Date**: 2025-11-24
 **Purpose**: Identify gaps in JSON-RPC endpoint coverage and plan for MCP server integration
 
 ## Executive Summary
@@ -118,11 +120,7 @@ Fukuii implements **78 JSON-RPC endpoints** across **11 namespaces**. The implem
 - ✅ `qa_generateCheckpoint` - Generate checkpoint
 - ✅ `qa_getFederationMembersInfo` - Get federation members info
 
-### 7. CHECKPOINTING Namespace (2 endpoints - ETC specific)
-- ✅ `checkpointing_getLatestBlock` - Get latest checkpoint block
-- ✅ `checkpointing_pushCheckpoint` - Push checkpoint with signatures
-
-### 8. FUKUII Namespace (1 endpoint - Custom)
+### 7. FUKUII Namespace (1 endpoint - Custom)
 - ✅ `fukuii_getAccountTransactions` - Get account transactions in block range
 
 ### 9. TEST Namespace (7 endpoints - Testing)
@@ -226,8 +224,7 @@ Based on the latest Ethereum JSON-RPC specification, the following standard meth
 1. **Complete Core Coverage**: All essential Ethereum JSON-RPC methods implemented
 2. **ETC Extensions**: Additional methods for Ethereum Classic specific features
 3. **Testing Support**: Comprehensive test/QA endpoints for development
-4. **Checkpoint Support**: Built-in checkpointing for network security
-5. **Well-Structured**: Clean separation of concerns across service files
+4. **Well-Structured**: Clean separation of concerns across service files
 
 ### Areas for Improvement
 1. **EIP-1559 Support**: Add fee market methods

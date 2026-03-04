@@ -4,7 +4,7 @@ This guide explains how to use the Fukuii Insomnia workspace to test and interac
 
 ## Overview
 
-The `insomnia_workspace.json` file contains a complete collection of all 77 JSON-RPC endpoints implemented in Fukuii, organized into 11 namespaces for easy navigation and testing.
+The `insomnia_workspace.json` file contains a complete collection of all 77 JSON-RPC endpoints implemented in Fukuii, organized into 11 namespaces for easy navigation and testing. See the [RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md) for the complete 97-endpoint catalog including the MCP namespace.
 
 ## Installation
 
@@ -131,12 +131,7 @@ Quality assurance and testing:
 - `qa_generateCheckpoint`
 - `qa_getFederationMembersInfo`
 
-### 7. CHECKPOINTING Namespace (2 endpoints)
-ETC-specific checkpointing:
-- `checkpointing_getLatestBlock`
-- `checkpointing_pushCheckpoint`
-
-### 8. FUKUII Namespace (1 endpoint)
+### 7. FUKUII Namespace (1 endpoint)
 Fukuii-specific methods:
 - `fukuii_getAccountTransactions`
 
@@ -220,7 +215,6 @@ The workspace uses Insomnia's environment variables system for flexibility. Use 
 
 #### ETC Extensions
 - Use `eth_getRawTransaction*` methods to get raw transaction data
-- Use `checkpointing_*` methods for checkpoint operations
 - Use `eth_getStorageRoot` for storage root queries
 
 #### Development Tools

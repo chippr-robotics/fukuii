@@ -21,7 +21,7 @@ This purely objective approach has limitations:
 
 ### Background on MESS
 
-Modified Exponential Subjective Scoring (MESS) is a consensus enhancement proposed for Ethereum Classic in ECIP-1097/ECBP-1100 (https://github.com/ethereumclassic/ECIPs/pull/373) and implemented in core-geth. MESS adds a subjective component to consensus by:
+Modified Exponential Subjective Scoring (MESS) is a consensus enhancement proposed for Ethereum Classic in ECBP-1100 (https://github.com/ethereumclassic/ECIPs/pull/373) and implemented in core-geth. MESS adds a subjective component to consensus by:
 
 1. **Tracking First-Seen Time**: Recording when each block is first observed by the node
 2. **Applying Time-Based Penalty**: Penalizing blocks that arrive late using an exponential decay function
@@ -353,7 +353,7 @@ Based on the core-geth implementation and Ethereum Classic community discussions
 
 ## References
 
-- **ECIP-1097/ECBP-1100**: https://github.com/ethereumclassic/ECIPs/pull/373
+- **ECBP-1100**: https://github.com/ethereumclassic/ECIPs/pull/373
 - **core-geth Implementation**: https://github.com/etclabscore/core-geth
 - **Related ADRs**:
   - [CON-002: Bootstrap Checkpoints](CON-002-bootstrap-checkpoints.md) - Complementary security enhancement

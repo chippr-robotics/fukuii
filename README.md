@@ -16,7 +16,7 @@ Fukuii is a continuation and re‑branding of the Ethereum Classic client previo
 Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
 - Executable scripts are renamed from mantis to fukuii.
 - Java/Scala packages under io.iohk have been moved to com.chipprbots.
-- Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
+- Environment variables and configuration keys prefixed with mantis have been changed to fukuii.
 
 #### Important Notes
 
@@ -239,7 +239,7 @@ The distribution’s bin/ directory contains a launcher script named fukuii. To 
 ./bin/fukuii etc
 
 
-The launcher accepts the same network names that Fukuii did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+The launcher accepts the same network names that Mantis did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
 
 #### Console UI
 

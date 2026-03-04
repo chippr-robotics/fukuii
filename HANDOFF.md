@@ -3,7 +3,7 @@
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-04
-**Commits:** 15 (6 bug fixes + 1 chore + 1 multi-fix + 2 features + 2 test suites + 1 cleanup + 1 config fix + 1 docs)
+**Commits:** 16 (6 bug fixes + 1 multi-fix + 1 chore + 2 features + 2 test suites + 1 cleanup + 1 config fix + 2 docs)
 
 ---
 
@@ -292,7 +292,7 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 
 ## Config Fix: Stale Bootstrap Nodes
 
-**Commit:** (pending) — fix: update stale bootstrap node lists for Mordor and ETC mainnet
+**Commit:** `a8ecb370d` — fix: replace stale Mantis-era bootstrap nodes with current core-geth entries
 
 **Problem:** Fukuii inherited ~57 stale bootstrap nodes from the Mantis era (27 for Mordor, 30 for ETC mainnet). None overlapped with core-geth's current bootnode lists. Result: peer discovery failed completely — the node could not find any peers on Mordor.
 

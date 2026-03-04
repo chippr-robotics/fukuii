@@ -4,7 +4,7 @@ This page provides an interactive, browsable reference for all Fukuii JSON-RPC A
 
 ## About This Reference
 
-This interactive API documentation is generated from the Insomnia workspace and covers all **83 JSON-RPC endpoints** across **11 namespaces**:
+This interactive API documentation is generated from the Insomnia workspace and covers all **97 JSON-RPC endpoints** across **11 namespaces**:
 
 - **ETH**: Core Ethereum blockchain operations
 - **WEB3**: Utility methods
@@ -12,7 +12,6 @@ This interactive API documentation is generated from the Insomnia workspace and 
 - **PERSONAL**: Account management (⚠️ dev/test only)
 - **DEBUG**: Debugging and diagnostics (⚠️ use with caution)
 - **QA**: Testing utilities (❌ test networks only)
-- **CHECKPOINTING**: ETC checkpointing system
 - **FUKUII**: Custom Fukuii extensions
 - **TEST**: Test harness methods (❌ test networks only)
 - **IELE**: IELE VM support (if enabled)

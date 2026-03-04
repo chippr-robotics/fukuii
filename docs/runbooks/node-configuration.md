@@ -354,7 +354,7 @@ fukuii {
       }
       
       # Enabled RPC APIs
-      apis = "eth,web3,net,personal,fukuii,debug,qa,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa"
     }
   }
 }
@@ -930,7 +930,7 @@ fukuii {
       }
       
       # Enable all APIs for testing
-      apis = "eth,web3,net,personal,fukuii,debug,qa,test,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa,test"
     }
     
     # Minimal peers for faster startup
