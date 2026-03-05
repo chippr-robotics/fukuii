@@ -100,7 +100,7 @@ object Dependencies {
   )
 
   val netty: Seq[ModuleID] = {
-    val nettyVersion = "4.1.115.Final" // Updated for security (CVE-2024-29025, CVE-2024-47535 fixed)
+    val nettyVersion = "4.1.131.Final" // Updated for security (CVE-2024-29025, CVE-2024-47535 fixed)
     Seq(
       "io.netty" % "netty-handler" % nettyVersion,
       "io.netty" % "netty-handler-proxy" % nettyVersion, // For Socks5ProxyHandler
@@ -129,8 +129,8 @@ object Dependencies {
   )
 
   val crypto = Seq(
-    "org.bouncycastle" % "bcprov-jdk18on" % "1.82", // Updated for JDK 18+ compatibility (jdk15on artifacts discontinued)
-    "org.bouncycastle" % "bcpkix-jdk18on" % "1.82"  // Additional bouncy castle package for X.509 certificates
+    "org.bouncycastle" % "bcprov-jdk18on" % "1.83", // Updated for JDK 18+ compatibility (jdk15on artifacts discontinued)
+    "org.bouncycastle" % "bcpkix-jdk18on" % "1.83"  // Additional bouncy castle package for X.509 certificates
   )
 
   val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
