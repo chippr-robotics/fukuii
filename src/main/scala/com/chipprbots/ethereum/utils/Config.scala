@@ -23,7 +23,6 @@ import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguratio
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.utils.VmConfig.VmMode
-import com.chipprbots.ethereum.utils.Logger
 
 import ConfigUtils._
 

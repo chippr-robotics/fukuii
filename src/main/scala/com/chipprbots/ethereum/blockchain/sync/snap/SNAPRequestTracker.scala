@@ -6,7 +6,6 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
-import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._

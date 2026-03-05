@@ -11,7 +11,6 @@ import scala.concurrent.duration.FiniteDuration
 import com.typesafe.config.{Config => TypesafeConfig}
 import org.json4s.DefaultFormats
 import org.json4s.JNull
-import org.json4s.JsonDSL._
 import org.json4s.native
 import org.json4s.native.Serialization
 

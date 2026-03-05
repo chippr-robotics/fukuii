@@ -56,7 +56,7 @@ object McpJsonMethodsImplicits extends JsonMethodsImplicits {
           case Some(JArray((obj: JObject) :: Nil)) =>
             (obj \ "uri").extractOpt[String]
               .toRight(JsonRpcError.InvalidParams("Missing 'uri' parameter"))
-              .map(McpResourcesReadRequest)
+              .map(McpResourcesReadRequest.apply)
           case _ => Left(JsonRpcError.InvalidParams())
         }
     }

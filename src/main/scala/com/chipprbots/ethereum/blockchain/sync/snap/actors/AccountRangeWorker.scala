@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
-import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
@@ -66,7 +65,6 @@ class AccountRangeWorker(
       )
       
       // Track the request with timeout
-      import context.dispatcher
       requestTracker.trackRequest(
         requestId,
         peer,

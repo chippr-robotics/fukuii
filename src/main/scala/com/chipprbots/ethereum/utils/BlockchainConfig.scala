@@ -11,7 +11,6 @@ import com.typesafe.config.{Config => TypesafeConfig}
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.utils.NumericUtils._
 
 case class BlockchainConfig(

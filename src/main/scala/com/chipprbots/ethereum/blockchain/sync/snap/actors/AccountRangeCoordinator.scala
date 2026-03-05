@@ -226,8 +226,6 @@ class AccountRangeCoordinator(
   // Internal message for async trie finalization result
   private case class TrieFlushComplete(result: Either[String, Unit])
 
-  // Merkle proof verifier
-  private val proofVerifier = MerkleProofVerifier(stateRoot)
 
   // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
   // keeping all trie nodes in memory. This avoids the per-put collapse (RLP encode + Keccak-256 hash)

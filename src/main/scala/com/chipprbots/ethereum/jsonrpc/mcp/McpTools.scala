@@ -1,12 +1,10 @@
 package com.chipprbots.ethereum.jsonrpc.mcp
 
 import org.apache.pekko.actor.ActorRef
-import org.apache.pekko.pattern.ask
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
-import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
 import com.chipprbots.ethereum.jsonrpc.McpService._

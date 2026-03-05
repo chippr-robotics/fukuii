@@ -8,7 +8,6 @@ import scala.concurrent.ExecutionContext
 import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
-import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage, StateStorage}
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
 import com.chipprbots.ethereum.network.PeerId
@@ -1018,27 +1017,6 @@ class SNAPSyncController(
     }
   }
 
-  /** Check if circuit breaker is open and trigger fallback if needed. This is a reusable helper for checking circuit
-    * breaker state across different download types (account range, storage, bytecode, healing).
-    *
-    * @param circuitName
-    *   The name of the circuit to check
-    * @param errorContext
-    *   Context about the error for logging
-    * @return
-    *   true if fallback to fast sync was triggered (caller should return early)
-    */
-  private def checkCircuitBreakerAndTriggerFallback(circuitName: String, errorContext: String): Boolean =
-    if (errorHandler.isCircuitOpen(circuitName)) {
-      if (recordCriticalFailure(s"Circuit breaker open for $circuitName: $errorContext")) {
-        fallbackToFastSync()
-        true
-      } else {
-        false
-      }
-    } else {
-      false
-    }
 
   /** Trigger fallback to fast sync due to repeated SNAP sync failures */
   private def fallbackToFastSync(): Unit = {
@@ -2245,8 +2223,6 @@ class StateValidator(mptStorage: MptStorage) {
     * @return (pathset, hash) pairs ready for TrieNodeHealingCoordinator.QueueMissingNodes
     */
   def findMissingNodesWithPaths(stateRoot: ByteString): Either[String, Seq[(Seq[ByteString], ByteString)]] = {
-    import com.chipprbots.ethereum.domain.Account.accountSerializer
-
     val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
 
     try {
@@ -2421,7 +2397,7 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
 
   // Periodic logging
   private var lastLogTime: Long = System.currentTimeMillis()
-  private val logInterval: Long = 30000 // Log every 30 seconds
+
   private var periodicLogTask: Option[Cancellable] = None
 
   // Metrics history for throughput averaging

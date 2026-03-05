@@ -100,7 +100,7 @@ class TrieNodeHealingCoordinator(
   }
 
   // Batched raw node storage: accumulate nodes and persist periodically
-  private var rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
+  private val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
   private val rawFlushThreshold = 1000
 
   private def flushRawNodes(): Unit =

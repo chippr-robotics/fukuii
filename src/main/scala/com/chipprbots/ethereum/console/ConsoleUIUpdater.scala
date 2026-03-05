@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.utils.Logger
   * This component queries various actors for status information and updates the console UI display.
   */
 class ConsoleUIUpdater(
-    consoleUI: ConsoleUI,
+    _consoleUI: ConsoleUI,
     peerManager: Option[Any],
     syncController: Option[Any],
     networkName: String,

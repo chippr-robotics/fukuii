@@ -15,8 +15,6 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class ConsoleUI extends Logger {
 
-  import ConsoleUI._
-
   // Delegate to new TUI module
   private val tui: Tui = new Tui(TuiConfig.default)
 

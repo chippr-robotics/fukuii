@@ -5,7 +5,6 @@ import org.apache.pekko.util.ByteString
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-import cats.implicits._
 
 import scala.annotation.tailrec
 

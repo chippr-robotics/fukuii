@@ -17,8 +17,8 @@ import org.slf4j.Logger
 
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestPeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
-import com.chipprbots.ethereum.blockchain.sync.regular.HeadersFetcher.HeadersFetcherCommand
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
+import com.chipprbots.ethereum.blockchain.sync.regular.HeadersFetcher.HeadersFetcherCommand
 
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.Message
