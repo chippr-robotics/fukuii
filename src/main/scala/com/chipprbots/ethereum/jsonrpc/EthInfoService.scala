@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthInfoService {
   case class ChainIdRequest()
@@ -70,6 +71,19 @@ object EthInfoService {
   case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
   case class IeleCallResponse(returnData: Seq[ByteString])
   case class EstimateGasResponse(gas: BigInt)
+
+  case class ConfigRequest()
+  case class ForkConfig(
+      activationBlock: BigInt,
+      chainId: BigInt,
+      precompiles: Map[String, Address],
+      systemContracts: Map[String, Address]
+  )
+  case class ConfigResponse(
+      current: Option[ForkConfig],
+      next: Option[ForkConfig],
+      last: Option[ForkConfig]
+  )
 }
 
 class EthInfoService(
@@ -146,6 +160,84 @@ class EthInfoService(
           })
       case Left(error) => IO.pure(Left(error))
     }
+  }
+
+  def config(req: ConfigRequest): ServiceResponse[ConfigResponse] = IO {
+    val forks = blockchainConfig.forkBlockNumbers
+    val bestBlockNumber = blockchainReader.getBestBlockNumber()
+    val chainIdVal = blockchainConfig.chainId
+
+    // Ordered list of (name, blockNumber) for all ETC forks
+    // Exclude unscheduled forks (set to Long.MaxValue)
+    val forkSchedule: List[(String, BigInt)] = List(
+      "frontier" -> forks.frontierBlockNumber,
+      "homestead" -> forks.homesteadBlockNumber,
+      "eip150" -> forks.eip150BlockNumber,
+      "eip155" -> forks.eip155BlockNumber,
+      "eip160" -> forks.eip160BlockNumber,
+      "eip161" -> forks.eip161BlockNumber,
+      "byzantium" -> forks.byzantiumBlockNumber,
+      "constantinople" -> forks.constantinopleBlockNumber,
+      "istanbul" -> forks.istanbulBlockNumber,
+      "atlantis" -> forks.atlantisBlockNumber,
+      "agharta" -> forks.aghartaBlockNumber,
+      "phoenix" -> forks.phoenixBlockNumber,
+      "petersburg" -> forks.petersburgBlockNumber,
+      "magneto" -> forks.magnetoBlockNumber,
+      "berlin" -> forks.berlinBlockNumber,
+      "mystique" -> forks.mystiqueBlockNumber,
+      "spiral" -> forks.spiralBlockNumber
+    ).filter(_._2 < BigInt(Long.MaxValue))
+
+    // Find current, next, and last fork relative to best block
+    val activeForks = forkSchedule.filter(_._2 <= bestBlockNumber)
+    val futureForks = forkSchedule.filter(_._2 > bestBlockNumber)
+
+    val currentFork = activeForks.lastOption
+    val lastFork = if (activeForks.size >= 2) activeForks.init.lastOption else None
+    val nextFork = futureForks.headOption
+
+    def precompilesForBlock(blockNumber: BigInt): Map[String, Address] = {
+      val base: Map[String, Address] = Map(
+        "ecRecover" -> PrecompiledContracts.EcDsaRecAddr,
+        "sha256" -> PrecompiledContracts.Sha256Addr,
+        "ripemd160" -> PrecompiledContracts.Rip160Addr,
+        "identity" -> PrecompiledContracts.IdAddr
+      )
+      val byzantiumAdd: Map[String, Address] = Map(
+        "modExp" -> PrecompiledContracts.ModExpAddr,
+        "bn128Add" -> PrecompiledContracts.Bn128AddAddr,
+        "bn128Mul" -> PrecompiledContracts.Bn128MulAddr,
+        "bn128Pairing" -> PrecompiledContracts.Bn128PairingAddr
+      )
+      val istanbulAdd: Map[String, Address] = Map(
+        "blake2b" -> PrecompiledContracts.Blake2bCompressionAddr
+      )
+
+      if (blockNumber >= forks.phoenixBlockNumber || blockNumber >= forks.istanbulBlockNumber)
+        base ++ byzantiumAdd ++ istanbulAdd
+      else if (blockNumber >= forks.atlantisBlockNumber || blockNumber >= forks.byzantiumBlockNumber)
+        base ++ byzantiumAdd
+      else
+        base
+    }
+
+    def systemContractsForBlock(blockNumber: BigInt): Map[String, Address] =
+      Map.empty
+
+    def buildForkConfig(name: String, blockNumber: BigInt): ForkConfig =
+      ForkConfig(
+        activationBlock = blockNumber,
+        chainId = chainIdVal,
+        precompiles = precompilesForBlock(blockNumber),
+        systemContracts = systemContractsForBlock(blockNumber)
+      )
+
+    Right(ConfigResponse(
+      current = currentFork.map { case (name, block) => buildForkConfig(name, block) },
+      next = nextFork.map { case (name, block) => buildForkConfig(name, block) },
+      last = lastFork.map { case (name, block) => buildForkConfig(name, block) }
+    ))
   }
 
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =

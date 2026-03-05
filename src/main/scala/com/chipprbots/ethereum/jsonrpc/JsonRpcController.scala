@@ -123,6 +123,8 @@ case class JsonRpcController(
       handle[ChainIdRequest, ChainIdResponse](ethInfoService.chainId, req)
     case req @ JsonRpcRequest(_, "eth_syncing", _, _) =>
       handle[SyncingRequest, SyncingResponse](ethInfoService.syncing, req)
+    case req @ JsonRpcRequest(_, "eth_config", _, _) =>
+      handle[ConfigRequest, ConfigResponse](ethInfoService.config, req)
     case req @ JsonRpcRequest(_, "eth_submitHashrate", _, _) =>
       handle[SubmitHashRateRequest, SubmitHashRateResponse](ethMiningService.submitHashRate, req)
     case req @ JsonRpcRequest(_, "eth_hashrate", _, _) =>
