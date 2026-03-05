@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
-import com.chipprbots.ethereum.consensus.mess.MESSScorer
+import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.mining.MiningBuilder
 import com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder
 import com.chipprbots.ethereum.db.components.Storages.PruningModeComponent
@@ -181,22 +181,18 @@ trait BlockchainBuilder {
 }
 
 trait MESSBuilder {
-  self: BlockchainConfigBuilder with StorageBuilder =>
+  self: BlockchainConfigBuilder =>
 
-  lazy val messScorer: Option[MESSScorer] = {
+  lazy val messConfigOpt: Option[MESSConfig] = {
     val config = blockchainConfig.messConfig
-    if (config.activationBlock.isDefined) {
-      Some(new MESSScorer(config, storagesInstance.storages.blockFirstSeenStorage))
-    } else {
-      None
-    }
+    if (config.activationBlock.isDefined) Some(config) else None
   }
 }
 
 trait BlockQueueBuilder {
-  self: BlockchainBuilder with SyncConfigBuilder with MESSBuilder =>
+  self: BlockchainBuilder with SyncConfigBuilder =>
 
-  lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, syncConfig, messScorer)
+  lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, syncConfig)
 }
 
 trait ConsensusBuilder {
@@ -766,7 +762,7 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
       blacklist,
       syncConfig,
       this,
-      messScorer
+      messConfigOpt
     ),
     "sync-controller"
   )

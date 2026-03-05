@@ -22,16 +22,16 @@ class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyVal
   val valueDeserializer: IndexedSeq[Byte] => ChainWeight = { bytes =>
     val buffer = byteSequenceToBuffer(bytes)
     try
-      // Try to deserialize as current format (totalDifficulty + optional messScore)
+      // Try to deserialize as current format (totalDifficulty only)
       Unpickle[ChainWeight].fromBytes(buffer)
     catch {
       case _: BufferUnderflowException =>
-        // Handle legacy format that had (lastCheckpointNumber, totalDifficulty) before ECIP-1097 removal
         buffer.rewind()
         try {
+          // Handle legacy format with (totalDifficulty, Option[messScore]) or
+          // older format with (lastCheckpointNumber, totalDifficulty)
           val legacy = Unpickle[LegacyChainWeight].fromBytes(buffer)
-          // Discard legacy checkpoint number, keep totalDifficulty
-          ChainWeight(legacy.totalDifficulty, None)
+          ChainWeight(legacy.totalDifficulty)
         } catch {
           case e: Exception =>
             throw new IllegalStateException(

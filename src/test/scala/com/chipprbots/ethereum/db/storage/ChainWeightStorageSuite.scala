@@ -91,13 +91,11 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     val retrieved = storage.get(blockHash)
     assert(retrieved.isDefined, "Should successfully deserialize legacy format")
     assert(retrieved.get.totalDifficulty == totalDifficulty)
-    assert(retrieved.get.messScore.isEmpty, "messScore should be None for migrated legacy data")
   }
 
-  test("ChainWeightStorage handles current format with messScore", UnitTest, DatabaseTest) {
-    // This test verifies that new format with messScore works correctly
+  test("ChainWeightStorage round-trips current format", UnitTest, DatabaseTest) {
     val blockHash = byteStringOfLengthNGen(32).sample.get
-    val chainWeight = ChainWeight(BigInt(5000), Some(BigInt(6000)))
+    val chainWeight = ChainWeight(BigInt(5000))
 
     val storage = new ChainWeightStorage(EphemDataSource())
     storage.put(blockHash, chainWeight).commit()
@@ -105,21 +103,7 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     val retrieved = storage.get(blockHash)
     assert(retrieved.isDefined)
     assert(retrieved.get == chainWeight)
-    assert(retrieved.get.messScore.contains(BigInt(6000)))
-  }
-
-  test("ChainWeightStorage handles current format without messScore", UnitTest, DatabaseTest) {
-    // This test verifies that new format with messScore = None works correctly
-    val blockHash = byteStringOfLengthNGen(32).sample.get
-    val chainWeight = ChainWeight(BigInt(5000), None)
-
-    val storage = new ChainWeightStorage(EphemDataSource())
-    storage.put(blockHash, chainWeight).commit()
-
-    val retrieved = storage.get(blockHash)
-    assert(retrieved.isDefined)
-    assert(retrieved.get == chainWeight)
-    assert(retrieved.get.messScore.isEmpty)
+    assert(retrieved.get.totalDifficulty == BigInt(5000))
   }
 
   test("ChainWeightStorage handles corrupted data gracefully", UnitTest, DatabaseTest) {

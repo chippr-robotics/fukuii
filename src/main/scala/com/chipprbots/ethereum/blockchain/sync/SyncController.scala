@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{StartRegularSyncBootstrap, BootstrapComplete, PivotBootstrapFailed}
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
-import com.chipprbots.ethereum.consensus.mess.MESSScorer
+import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
@@ -50,7 +50,7 @@ class SyncController(
     blacklist: Blacklist,
     syncConfig: SyncConfig,
     configBuilder: BlockchainConfigBuilder,
-    messScorer: Option[MESSScorer] = None,
+    messConfig: Option[MESSConfig] = None,
     externalSchedulerOpt: Option[Scheduler] = None
 ) extends Actor
     with ActorLogging {
@@ -425,7 +425,7 @@ class SyncController(
         consensus,
         blockchainReader,
         stateStorage,
-        { val br = new BranchResolution(blockchainReader); br.messScorer = messScorer; br },
+        { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
         validators.blockValidator,
         blacklist,
         syncConfig,
@@ -456,7 +456,7 @@ class SyncController(
         consensus,
         blockchainReader,
         stateStorage,
-        { val br = new BranchResolution(blockchainReader); br.messScorer = messScorer; br },
+        { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
         validators.blockValidator,
         blacklist,
         syncConfig,
@@ -494,7 +494,7 @@ object SyncController {
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       configBuilder: BlockchainConfigBuilder,
-      messScorer: Option[MESSScorer] = None
+      messConfig: Option[MESSConfig] = None
   ): Props =
     Props(
       new SyncController(
@@ -516,7 +516,7 @@ object SyncController {
         blacklist,
         syncConfig,
         configBuilder,
-        messScorer
+        messConfig
       )
     )
 }
