@@ -55,7 +55,7 @@ services:
     entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
-    image: ${FUKUII_IMAGE:-fukuii:latest}
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: fukuii-cirith-ungol
     restart: unless-stopped
     networks:

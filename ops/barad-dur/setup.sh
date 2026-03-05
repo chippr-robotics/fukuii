@@ -70,8 +70,8 @@ echo ""
 # Generate random passwords if they're still default
 echo -e "${YELLOW}Checking for default passwords...${NC}"
 if grep -q "change_me_in_production" "$SCRIPT_DIR/.env" 2>/dev/null; then
-    echo -e "${YELLOW}⚠ Warning: Default passwords detected in .env file${NC}"
-    echo -e "${YELLOW}  Please update the following in .env:${NC}"
+    echo -e "${RED}ERROR: Default credentials detected in .env file!${NC}"
+    echo -e "${RED}  Update the following before proceeding:${NC}"
     echo -e "${YELLOW}  - KONG_ADMIN_PASSWORD${NC}"
     echo -e "${YELLOW}  - POSTGRES_PASSWORD${NC}"
     echo -e "${YELLOW}  - BASIC_AUTH_ADMIN_PASSWORD${NC}"
@@ -80,13 +80,10 @@ if grep -q "change_me_in_production" "$SCRIPT_DIR/.env" 2>/dev/null; then
     echo -e "${YELLOW}  - API_KEY_DEV${NC}"
     echo -e "${YELLOW}  - JWT_SECRET${NC}"
     echo ""
-fi
-
-# Check if kong.yml needs password updates
-if grep -q "fukuii_admin_password" "$SCRIPT_DIR/kong.yml" 2>/dev/null; then
-    echo -e "${YELLOW}⚠ Warning: Default passwords detected in kong.yml${NC}"
-    echo -e "${YELLOW}  Please update consumer credentials in kong.yml${NC}"
-    echo ""
+    echo -e "${YELLOW}  Generate secure values:${NC}"
+    echo -e "${YELLOW}    Passwords: openssl rand -base64 32${NC}"
+    echo -e "${YELLOW}    API keys:  openssl rand -hex 32${NC}"
+    exit 1
 fi
 
 # Display configuration summary
