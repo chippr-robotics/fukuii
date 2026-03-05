@@ -100,6 +100,38 @@ fukuii-cli start mixed
 **Besu Nodes:**
 - 3 nodes, ports: 8557-8562
 
+## Docker Image Builds
+
+Gorgoroth compose files use environment variables for image names. Build all 3 clients with:
+
+```bash
+# Build pre-Olympia images (from alpha/etc branches)
+ops/tools/build-all-images.sh pre-olympia
+
+# Build Olympia images (from olympia branches)
+ops/tools/build-all-images.sh olympia
+```
+
+This builds sequentially (resource constraint) and tags each image:
+- `fukuii-etc:<target>` + `fukuii-etc:local`
+- `coregeth-etc:<target>` + `coregeth-etc:local`
+- `besu-etc:<target>` + `besu-etc:local`
+
+Use with compose via `--env-file`:
+
+```bash
+cd ops/gorgoroth
+docker compose --env-file .env.pre-olympia -f docker-compose-3nodes.yml up -d
+```
+
+### Image Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `.env.example` | Template with defaults (`:local` tags) |
+| `.env.pre-olympia` | Pre-Olympia branch images |
+| `.env.olympia` | Olympia branch images (created on olympia branch) |
+
 ## Quick Start
 
 ### Prerequisites

@@ -79,6 +79,8 @@ SCRATCH.md
 .env
 .env.*
 !.env.example
+!.env.pre-olympia
+!.env.olympia
 *.pem
 *.key
 *.p12
