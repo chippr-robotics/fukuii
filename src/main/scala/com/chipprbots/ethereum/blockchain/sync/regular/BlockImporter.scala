@@ -413,7 +413,7 @@ class BlockImporter(
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot = try {
                   Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case _: Exception => None }
+                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
                 val accountHash = kec256(e.accountAddress)
                 val pathset = parentStateRoot.flatMap { root =>
                   walkAccountPath(root, accountHash, e.hash)
@@ -432,7 +432,7 @@ class BlockImporter(
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot = try {
                   Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case _: Exception => None }
+                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
                 val accountHash = kec256(e.accountAddress)
                 val emptyPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
                 val pathset = Some(Seq(accountHash, emptyPath))
@@ -449,7 +449,7 @@ class BlockImporter(
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot = try {
                   Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case _: Exception => None }
+                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
                 val pathset = parentStateRoot.flatMap { root =>
                   findPathForMissingNode(root, e.hash)
                 }
