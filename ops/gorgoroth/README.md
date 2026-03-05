@@ -121,16 +121,21 @@ Use with compose via `--env-file`:
 
 ```bash
 cd ops/gorgoroth
+# Copy the template first, then use the copy:
+cp .env.pre-olympia.example .env.pre-olympia
 docker compose --env-file .env.pre-olympia -f docker-compose-3nodes.yml up -d
 ```
 
-### Image Configuration Files
+### Image Configuration Templates
 
-| File | Purpose |
-|------|---------|
-| `.env.example` | Template with defaults (`:local` tags) |
-| `.env.pre-olympia` | Pre-Olympia branch images |
-| `.env.olympia` | Olympia branch images (created on olympia branch) |
+| Template | Purpose |
+|----------|---------|
+| `.env.example` | Default template (`:local` tags) |
+| `.env.pre-olympia.example` | Pre-Olympia branch images |
+| `.env.olympia.example` | Olympia branch images (created on olympia branch) |
+
+Copy templates before use: `cp .env.example .env` — never edit templates directly.
+The `.env` copies are gitignored and safe for local customization.
 
 ## Quick Start
 

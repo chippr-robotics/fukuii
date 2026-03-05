@@ -163,4 +163,5 @@ docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "^
 echo ""
 echo -e "${YELLOW}Use with Gorgoroth:${NC}"
 echo "  cd ops/gorgoroth"
+echo "  cp .env.${TARGET}.example .env.${TARGET}  # copy template first"
 echo "  docker compose --env-file .env.${TARGET} -f docker-compose-3nodes.yml up -d"
