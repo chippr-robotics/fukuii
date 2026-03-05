@@ -1,18 +1,18 @@
-# Docker Compose file for Fukuii with monitoring stack
-# Compose file format: https://docs.docker.com/compose/compose-file/
+# Docker Compose file for Nethermind with monitoring stack
+# ETH reference client for comparison testing against Fukuii
 
 volumes:
     prometheus_data: {}
     grafana_data: {}
 
 networks:
-  fukuii-net:
+  nethermind-net:
     driver: bridge
 
 services:
   prometheus:
     image: prom/prometheus:v2.48.0
-    container_name: fukuii-prometheus
+    container_name: nethermind-prometheus
     restart: unless-stopped
     volumes:
       - ./prometheus/:/etc/prometheus/
@@ -27,35 +27,18 @@ services:
     ports:
       - "9090:9090"
     depends_on:
-      - fukuii
+      - nethermind
     networks:
-      - fukuii-net
+      - nethermind-net
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  fukuii:
-    image: ${FUKUII_IMAGE:-fukuii-etc:local}
-    container_name: fukuii
-    restart: unless-stopped
-    ports:
-      - "8546:8546"
-      - "13798:13798"
-      - "9095:9095"
-    networks:
-      - fukuii-net
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
   grafana:
     image: grafana/grafana:10.2.2
-    container_name: fukuii-grafana
+    container_name: nethermind-grafana
     restart: unless-stopped
     depends_on:
       - prometheus
@@ -66,13 +49,37 @@ services:
       - ./grafana/provisioning/:/etc/grafana/provisioning/
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-fukuii}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-nethermind}
     networks:
-      - fukuii-net
+      - nethermind-net
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-
+  nethermind:
+    image: nethermind/nethermind:latest
+    container_name: nethermind-node
+    restart: unless-stopped
+    ports:
+      - "8545:8545"
+      - "30303:30303"
+      - "6060:6060"
+    networks:
+      - nethermind-net
+    volumes:
+      - ${HOME}/.fukuii/development/nethermind:/nethermind/data
+    command:
+      - --JsonRpc.Enabled=true
+      - --JsonRpc.Host=0.0.0.0
+      - --JsonRpc.Port=8545
+      - --Metrics.Enabled=true
+      - --Metrics.ExposePort=6060
+      - --datadir=/nethermind/data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

@@ -11,7 +11,7 @@ networks:
 
 services:
   fukuii-node1:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -50,7 +50,7 @@ services:
       start_period: 60s
 
   fukuii-node2:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -90,7 +90,7 @@ services:
       start_period: 60s
 
   fukuii-node3:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped

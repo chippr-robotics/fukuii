@@ -9,7 +9,7 @@ networks:
 
 services:
   coregeth:
-    image: etclabscore/core-geth:latest
+    image: ${COREGETH_IMAGE:-coregeth-etc:local}
     container_name: coregeth-cirith-ungol
     restart: unless-stopped
     networks:
